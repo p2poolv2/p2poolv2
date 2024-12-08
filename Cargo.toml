@@ -7,4 +7,8 @@ edition = "2021"
 libp2p = { version = "0.53", features = ["tcp", "dns", "tokio", "noise", "yamux", "identify", "macros", "ping"] }
 tokio = { version = "1.0", features = ["full"] }
 futures = "0.3"
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+config = "0.13"
+serde = { version = "1.0", features = ["derive"] }
+clap = { version = "4.0", features = ["derive"] }

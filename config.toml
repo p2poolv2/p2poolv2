@@ -1,0 +1,4 @@
+[network]
+listen_address = "/ip4/0.0.0.0/tcp/6884"
+# Optional peer to dial on startup
+dial_peer = "" 
