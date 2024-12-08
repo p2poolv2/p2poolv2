@@ -20,6 +20,7 @@ use tracing_subscriber::EnvFilter;
 use tracing::debug;
 mod node;
 use crate::node::Node;
+mod behaviour;
 mod config;
 
 #[derive(Parser, Debug)]

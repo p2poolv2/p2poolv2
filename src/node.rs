@@ -14,39 +14,47 @@
 // You should have received a copy of the GNU General Public License along with 
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>. 
 
-
-use libp2p::futures::StreamExt;
+use futures::StreamExt;
 use libp2p::{
-    ping,
     swarm::SwarmEvent,
     Multiaddr,
     Swarm,
 };
-use tracing::{debug, info};
+use tracing::{debug, info, error};
 use std::time::Duration;
 use crate::config::Config;
+use crate::behaviour::P2PoolBehaviour;
 
 pub struct Node {
-    swarm: Swarm<ping::Behaviour>,
+    swarm: Swarm<P2PoolBehaviour>,
 }
 
 impl Node {
     pub fn new(config: &Config) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut swarm = libp2p::SwarmBuilder::with_new_identity()
+        let id_keys = libp2p::identity::Keypair::generate_ed25519();
+        let peer_id = id_keys.public().to_peer_id();
+
+        let behavior = match P2PoolBehaviour::new(&id_keys) {
+            Ok(behavior) => behavior,
+            Err(err) => {
+                error!("Failed to create P2PoolBehaviour: {}", err);
+                std::process::exit(1);
+            }
+        };
+
+        let mut swarm = libp2p::SwarmBuilder::with_existing_identity(id_keys)
             .with_tokio()
             .with_tcp(
                 libp2p::tcp::Config::default(),
                 libp2p::noise::Config::new,
                 libp2p::yamux::Config::default,
             )?
-            .with_behaviour(|_| ping::Behaviour::default())?
+            .with_behaviour(|_| behavior)?
             .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX)))
             .build();
 
-        // Listen on the configured address
         swarm.listen_on(config.network.listen_address.parse()?)?;
 
-        // Dial configured peers
         for peer_addr in &config.network.dial_peers {
             match peer_addr.parse::<Multiaddr>() {
                 Ok(remote) => {
