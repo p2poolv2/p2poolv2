@@ -23,7 +23,7 @@ use libp2p::{
 use tracing::{debug, info, error};
 use std::time::Duration;
 use crate::config::Config;
-use crate::behaviour::P2PoolBehaviour;
+use crate::behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 
 pub struct Node {
     swarm: Swarm<P2PoolBehaviour>,
@@ -75,7 +75,19 @@ impl Node {
         loop {
             match self.swarm.select_next_some().await {
                 SwarmEvent::NewListenAddr { address, .. } => info!("Listening on {address:?}"),
-                SwarmEvent::Behaviour(event) => info!("{event:?}"),
+                SwarmEvent::Behaviour(event) => {
+                    match event {
+                        P2PoolBehaviourEvent::Gossipsub(gossip_event) => {
+                            debug!("Gossipsub event: {:?}", gossip_event);
+                        },
+                        P2PoolBehaviourEvent::Kademlia(kad_event) => {
+                            debug!("Kademlia event: {:?}", kad_event);
+                        },
+                        P2PoolBehaviourEvent::Ping(ping_event) => {
+                            debug!("Ping event: {:?}", ping_event);
+                        },
+                    }
+                },
                 _ => {}
             }
         }
