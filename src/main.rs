@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_tokio()
         .with_tcp(
             libp2p::tcp::Config::default(),
-            libp2p::noise::Config::new,
+            libp2p::noise::Config::new, // Use the XX pattern as we don't need know the peer's identity
             libp2p::yamux::Config::default,
         )?
         .with_behaviour(|_| ping::Behaviour::default())?
@@ -78,8 +78,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     loop {
         match swarm.select_next_some().await {
-            SwarmEvent::NewListenAddr { address, .. } => println!("Listening on {address:?}"),
-            SwarmEvent::Behaviour(event) => println!("{event:?}"),
+            SwarmEvent::NewListenAddr { address, .. } => info!("Listening on {address:?}"),
+            SwarmEvent::Behaviour(event) => info!("{event:?}"),
             _ => {}
         }
     }

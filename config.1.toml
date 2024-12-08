@@ -1,6 +1,5 @@
 [network]
-listen_address = "/ip4/0.0.0.0/tcp/6885"
-# Optional peer to dial on startup
+listen_address = "/ip4/127.0.0.1/tcp/6885"
 dial_peers = [
-    "/ip4/1.2.3.4/tcp/6885",
+    "/ip4/127.0.0.1/tcp/6884",
 ] 
