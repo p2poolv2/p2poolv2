@@ -11,7 +11,7 @@ use tracing::{debug, info};
 #[derive(Debug, Deserialize)]
 struct NetworkConfig {
     listen_address: String,
-    dial_peer: String,
+    dial_peers: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,11 +62,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Listen on the configured address
     swarm.listen_on(config.network.listen_address.parse()?)?;
 
-    // Dial the peer if configured
-    if !config.network.dial_peer.is_empty() {
-        let remote: Multiaddr = config.network.dial_peer.parse()?;
-        swarm.dial(remote)?;
-        println!("Dialed {}", config.network.dial_peer);
+    // Dial configured peers
+    for peer_addr in &config.network.dial_peers {
+        match peer_addr.parse::<Multiaddr>() {
+            Ok(remote) => {
+                if let Err(e) = swarm.dial(remote) {
+                    debug!("Failed to dial {}: {}", peer_addr, e);
+                } else {
+                    info!("Dialed {}", peer_addr);
+                }
+            }
+            Err(e) => debug!("Invalid multiaddr {}: {}", peer_addr, e),
+        }
     }
 
     loop {
