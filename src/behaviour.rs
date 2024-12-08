@@ -16,6 +16,9 @@ pub struct P2PoolBehaviour {
     pub ping: ping::Behaviour,
 }
 
+/// The interval at which the node will send ping messages to peers
+const HEARTBEAT_INTERVAL: u64 = 15;
+
 // Define the events that can be emitted by our behavior
 #[derive(Debug)]
 pub enum P2PoolBehaviourEvent {
@@ -30,7 +33,7 @@ impl P2PoolBehaviour {
     ) -> Result<Self, Box<dyn Error>> {
         // Initialize gossipsub
         let gossipsub_config = gossipsub::ConfigBuilder::default()
-            .heartbeat_interval(std::time::Duration::from_secs(1))
+            .heartbeat_interval(std::time::Duration::from_secs(HEARTBEAT_INTERVAL))
             .validation_mode(gossipsub::ValidationMode::Strict)
             .build()
             .expect("Valid config");
