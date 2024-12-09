@@ -2,4 +2,4 @@
 listen_address = "/ip4/127.0.0.1/tcp/6885"
 dial_peers = [
     "/ip4/127.0.0.1/tcp/6884",
-] 
+]

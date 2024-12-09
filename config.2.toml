@@ -1,5 +1,5 @@
 [network]
 listen_address = "/ip4/127.0.0.1/tcp/6886"
 dial_peers = [
-    "/ip4/127.0.0.1/tcp/6884",
-] 
+    "/ip4/127.0.0.1/tcp/6885",
+]

@@ -19,11 +19,13 @@ use libp2p::{
     swarm::SwarmEvent,
     Multiaddr,
     Swarm,
+    kad::{Event as KademliaEvent, QueryResult},
 };
 use tracing::{debug, info, error};
 use std::time::Duration;
 use crate::config::Config;
 use crate::behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
+use libp2p::identify;
 
 pub struct Node {
     swarm: Swarm<P2PoolBehaviour>,
@@ -75,16 +77,38 @@ impl Node {
         loop {
             match self.swarm.select_next_some().await {
                 SwarmEvent::NewListenAddr { address, .. } => info!("Listening on {address:?}"),
+                SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+                    info!("Connected to peer: {peer_id}");
+                },
+                SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                    info!("Disconnected from peer: {peer_id}");
+                    self.swarm.behaviour_mut().remove_peer(&peer_id);
+                },
                 SwarmEvent::Behaviour(event) => {
                     match event {
-                        P2PoolBehaviourEvent::Gossipsub(gossip_event) => {
-                            debug!("Gossipsub event: {:?}", gossip_event);
+                        P2PoolBehaviourEvent::Identify(identify::Event::Received { peer_id, info }) => {
+                            info!("Identified Peer {} with protocol version {}", peer_id, info.protocol_version);
+                            // Add the peer's advertised addresses to Kademlia
+                            for addr in info.listen_addrs {
+                                self.swarm.behaviour_mut().add_peer_address(peer_id, addr.clone());
+                            }
                         },
+                        // P2PoolBehaviourEvent::Gossipsub(gossip_event) => {
+                        //     debug!("Gossipsub event: {:?}", gossip_event);
+                        // },
                         P2PoolBehaviourEvent::Kademlia(kad_event) => {
-                            debug!("Kademlia event: {:?}", kad_event);
+                            match kad_event {
+                                KademliaEvent::RoutingUpdated { peer, is_new_peer, addresses, bucket_range, old_peer } => {
+                                    info!("Routing updated for peer: {peer}, is_new_peer: {is_new_peer}, addresses: {addresses:?}, bucket_range: {bucket_range:?}, old_peer: {old_peer:?}");
+                                }
+                                _ => debug!("Other Kademlia event: {:?}", kad_event),
+                            }
                         },
-                        P2PoolBehaviourEvent::Ping(ping_event) => {
-                            debug!("Ping event: {:?}", ping_event);
+                        // P2PoolBehaviourEvent::Ping(ping_event) => {
+                        //     debug!("Ping event: {:?}", ping_event);
+                        // },
+                        P2PoolBehaviourEvent::Identify(identify_event) => {
+                            debug!("Other Identify event: {:?}", identify_event);
                         },
                     }
                 },
