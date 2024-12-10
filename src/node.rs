@@ -26,6 +26,7 @@ use std::time::Duration;
 use crate::config::Config;
 use crate::behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::identify;
+use libp2p::mdns::Event as MdnsEvent;
 
 pub struct Node {
     swarm: Swarm<P2PoolBehaviour>,
@@ -55,6 +56,7 @@ impl Node {
             .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX)))
             .build();
 
+        
         swarm.listen_on(config.network.listen_address.parse()?)?;
 
         for peer_addr in &config.network.dial_peers {
@@ -77,8 +79,8 @@ impl Node {
         loop {
             match self.swarm.select_next_some().await {
                 SwarmEvent::NewListenAddr { address, .. } => info!("Listening on {address:?}"),
-                SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                    info!("Connected to peer: {peer_id}");
+                SwarmEvent::ConnectionEstablished { peer_id, endpoint,.. } => {
+                    info!("Connected to peer: {peer_id} {endpoint:?}");
                 },
                 SwarmEvent::ConnectionClosed { peer_id, .. } => {
                     info!("Disconnected from peer: {peer_id}");
@@ -86,6 +88,30 @@ impl Node {
                 },
                 SwarmEvent::Behaviour(event) => {
                     match event {
+                        P2PoolBehaviourEvent::Mdns(mdns_event) => {
+                            info!("Mdns event: {:?}", mdns_event);
+                            match mdns_event {
+                                MdnsEvent::Discovered(discovered) => {
+                                    info!("Discovered peer: {:?}", discovered);
+                                    for (peer_id, addr) in discovered {
+                                        info!("CONNECTED?: {} {:?}", peer_id, self.swarm.is_connected(&peer_id));
+                                        // Check if we're not already connected to this peer
+                                        if !self.swarm.is_connected(&peer_id) {
+                                            // Try to dial the discovered peer
+                                            match self.swarm.dial(addr.clone()) {
+                                                Ok(_) => {
+                                                    info!("Dialing discovered peer {} at {}", peer_id, addr);
+                                                    // Add the peer's address to Kademlia
+                                                    self.swarm.behaviour_mut().add_address(peer_id, addr);
+                                                }
+                                                Err(e) => debug!("Failed to dial discovered peer {}: {}", peer_id, e),
+                                            }
+                                        }
+                                    }
+                                },
+                                _ => debug!("Other Mdns event: {:?}", mdns_event),
+                            }
+                        },
                         P2PoolBehaviourEvent::Identify(identify::Event::Received { peer_id, info }) => {
                             info!("Identified Peer {} with protocol version {}", peer_id, info.protocol_version);
                             // Add the peer's advertised addresses to Kademlia
@@ -104,7 +130,7 @@ impl Node {
                                 KademliaEvent::OutboundQueryProgressed { result, .. } => {
                                     match result {
                                         QueryResult::GetClosestPeers(Ok(ok)) => {
-                                            info!("Got closest peers: {:?}", ok.peers);
+                                            debug!("Got closest peers: {:?}", ok.peers);
                                         },
                                         QueryResult::GetClosestPeers(Err(err)) => {
                                             debug!("Failed to get closest peers: {err}");

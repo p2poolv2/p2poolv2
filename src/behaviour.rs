@@ -16,12 +16,11 @@
 
 use libp2p::{
     gossipsub, identify, 
-    identity::Keypair, kad::{self, store::MemoryStore, RecordKey}, 
+    identity::Keypair, kad::{self, store::MemoryStore}, 
     ping, swarm::NetworkBehaviour, Multiaddr, PeerId,
+    mdns::{tokio::Behaviour as MdnsTokio, Event as MdnsEvent, Config as MdnsConfig },
 };
 use std::error::Error;
-use tracing::{debug, info};
-use tokio::time::Duration;
 
 // Combine the behaviors we want to use
 #[derive(NetworkBehaviour)]
@@ -31,6 +30,7 @@ pub struct P2PoolBehaviour {
     pub kademlia: kad::Behaviour<MemoryStore>,
     // pub ping: ping::Behaviour,
     pub identify: identify::Behaviour,
+    pub mdns: MdnsTokio,
 }
 
 /// The interval at which the node will send ping messages to peers
@@ -43,6 +43,7 @@ pub enum P2PoolBehaviourEvent {
     Kademlia(kad::Event),
     // Ping(ping::Event),
     Identify(identify::Event),
+    Mdns(MdnsEvent),
 }
 
 impl P2PoolBehaviour {
@@ -79,11 +80,14 @@ impl P2PoolBehaviour {
             )
         );
 
+        let mdns_behaviour = MdnsTokio::new(MdnsConfig::default(), local_key.public().to_peer_id())?;
+
         Ok(P2PoolBehaviour {
             // gossipsub: gossipsub_behaviour,
             kademlia: kademlia_behaviour,
             // ping: libp2p::ping::Behaviour::new(ping::Config::new().with_interval(tokio::time::Duration::from_secs(HEARTBEAT_INTERVAL))),
             identify: identify_behaviour,
+            mdns: mdns_behaviour,
         })
     }
 
@@ -122,5 +126,11 @@ impl From<kad::Event> for P2PoolBehaviourEvent {
 impl From<identify::Event> for P2PoolBehaviourEvent {
     fn from(event: identify::Event) -> Self {
         P2PoolBehaviourEvent::Identify(event)
+    }
+}
+
+impl From<MdnsEvent> for P2PoolBehaviourEvent {
+    fn from(event: MdnsEvent) -> Self {
+        P2PoolBehaviourEvent::Mdns(event)
     }
 }
