@@ -90,7 +90,7 @@ impl Node {
                             info!("Identified Peer {} with protocol version {}", peer_id, info.protocol_version);
                             // Add the peer's advertised addresses to Kademlia
                             for addr in info.listen_addrs {
-                                self.swarm.behaviour_mut().add_peer_address(peer_id, addr.clone());
+                                self.swarm.behaviour_mut().add_address(peer_id, addr.clone());
                             }
                         },
                         // P2PoolBehaviourEvent::Gossipsub(gossip_event) => {
@@ -100,7 +100,18 @@ impl Node {
                             match kad_event {
                                 KademliaEvent::RoutingUpdated { peer, is_new_peer, addresses, bucket_range, old_peer } => {
                                     info!("Routing updated for peer: {peer}, is_new_peer: {is_new_peer}, addresses: {addresses:?}, bucket_range: {bucket_range:?}, old_peer: {old_peer:?}");
-                                }
+                                },
+                                KademliaEvent::OutboundQueryProgressed { result, .. } => {
+                                    match result {
+                                        QueryResult::GetClosestPeers(Ok(ok)) => {
+                                            info!("Got closest peers: {:?}", ok.peers);
+                                        },
+                                        QueryResult::GetClosestPeers(Err(err)) => {
+                                            debug!("Failed to get closest peers: {err}");
+                                        },
+                                        _ => debug!("Other query result: {:?}", result),
+                                    }
+                                },
                                 _ => debug!("Other Kademlia event: {:?}", kad_event),
                             }
                         },

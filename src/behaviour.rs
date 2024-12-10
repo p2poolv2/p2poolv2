@@ -87,9 +87,12 @@ impl P2PoolBehaviour {
         })
     }
 
-    pub fn add_peer_address(&mut self, peer_id: PeerId, addr: Multiaddr) {
+    /// Add a peer's address to Kademlia's routing table and get the closest peers so the peer availablility propagates across the network
+    pub fn add_address(&mut self, peer_id: PeerId, addr: Multiaddr) {
         // Add the peer's address to Kademlia's routing table
         self.kademlia.add_address(&peer_id, addr);
+        // Get the closest peers so the peer availablility propagates across the network
+        self.kademlia.get_closest_peers(peer_id);
     }
 
     pub fn remove_peer(&mut self, peer_id: &PeerId) {
