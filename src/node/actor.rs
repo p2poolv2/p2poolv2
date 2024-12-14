@@ -42,6 +42,20 @@ impl NodeHandle {
         Ok((Self { command_tx }, stopping_rx))
     }
 
+    /// Get a list of connected peers
+    pub async fn get_peers(&self) -> Result<Vec<libp2p::PeerId>, Box<dyn Error>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx.send(Command::GetPeers(tx)).await?;
+        Ok(rx.await?)
+    }
+
+    /// Shutdown the node
+    pub async fn shutdown(&self) -> Result<(), Box<dyn Error>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx.send(Command::Shutdown(tx)).await?;
+        Ok(rx.await?)
+    }
+
 }
 
 /// NodeActor runs the Node in a separate task and handles all its events
@@ -66,11 +80,15 @@ impl NodeActor {
                 },
                 command = self.command_rx.recv() => {
                     match command {
-                        Some(command) => {
-                            if let Err(e) = self.node.handle_command(command) {
-                                error!("Error handling command: {}", e);
-                            }
-                        }
+                        Some(Command::GetPeers(tx)) => {
+                            let peers = self.node.swarm.connected_peers().cloned().collect::<Vec<_>>();
+                            tx.send(peers).unwrap();
+                        },
+                        Some(Command::Shutdown(tx)) => {
+                            self.node.shutdown().unwrap();
+                            tx.send(()).unwrap();
+                            break;
+                        },
                         None => {
                             info!("Stopping node actor on channel close");
                             self.stopping_tx.send(()).unwrap();

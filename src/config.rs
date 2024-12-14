@@ -34,4 +34,25 @@ impl Config {
             .build()?
             .try_deserialize()
     }
+
+    pub fn with_listen_address(mut self, listen_address: String) -> Self {
+        self.network.listen_address = listen_address;
+        self
+    }
+
+    pub fn with_dial_peers(mut self, dial_peers: Vec<String>) -> Self {
+        self.network.dial_peers = dial_peers;
+        self
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            network: NetworkConfig {
+                listen_address: "/ip4/0.0.0.0/tcp/6884".to_string(),
+                dial_peers: vec![],
+            },
+        }
+    }
 }

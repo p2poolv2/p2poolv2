@@ -14,13 +14,14 @@
 // You should have received a copy of the GNU General Public License along with 
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>. 
 
-use tokio::sync::mpsc;
-use crate::shares;
+use tokio::sync::oneshot;
+// use crate::shares;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Command{
     /// Command telling node's event loop to send share to network
-    SendShare(shares::ShareBlock),
+    // SendShare(shares::ShareBlock, oneshot::Sender<()>),
+    /// Command to get a list of connected peers
+    GetPeers(oneshot::Sender<Vec<libp2p::PeerId>>),
     /// Command to shutdown node
-    Shutdown,
+    Shutdown(oneshot::Sender<()>),
 }
