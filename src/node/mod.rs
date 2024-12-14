@@ -14,7 +14,6 @@
 // You should have received a copy of the GNU General Public License along with 
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>. 
 
-use futures::StreamExt;
 use libp2p::{
     swarm::SwarmEvent,
     Multiaddr,
@@ -27,8 +26,10 @@ use crate::{command::Command, config::Config};
 use crate::behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::identify;
 use libp2p::mdns::Event as MdnsEvent;
-use tokio::sync::mpsc;
+pub mod actor;
 
+
+/// Node is the main struct that represents the node
 pub struct Node {
     swarm: Swarm<P2PoolBehaviour>,
 }
@@ -74,28 +75,6 @@ impl Node {
         }
 
         Ok(Self { swarm })
-    }
-
-    pub async fn run(&mut self, mut command_rx: mpsc::Receiver<Command>) {
-        loop {
-            tokio::select! {
-                event = self.swarm.select_next_some() => {
-                    self.handle_swarm_event(event);
-                },
-                command = command_rx.recv() => {
-                    if let Some(command) = command {
-                        match self.handle_command(command) {
-                            Ok(false) => break,
-                            Ok(true) => (),
-                            Err(e) => {
-                                error!("Failed to handle command: {}", e);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     /// Handle commands, these are commands that are sent to the node from the CLI or higher level logic

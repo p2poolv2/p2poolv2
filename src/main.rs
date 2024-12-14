@@ -17,14 +17,16 @@
 use clap::Parser;
 use std::error::Error;
 use tracing_subscriber::EnvFilter;
-use tracing::debug;
+use tracing::{debug, info};
 use tokio::sync::mpsc;
 mod node;
-use crate::node::Node;
 mod behaviour;
 mod config;
 mod shares;
 mod command;
+
+use crate::node::actor::NodeHandle;
+use tracing::error;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -46,11 +48,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Load configuration
     let config = config::Config::load(&args.config)?;
 
-    // Create a channel for sending commands to the node
-    let (command_tx, command_rx) = mpsc::channel::<command::Command>(32);
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
 
-    let mut node = Node::new(&config)?;
-    node.run(command_rx).await;
-
+    // let mut node = node::Node::new(&config)?;
+    if let Err(e) = NodeHandle::new(config, stop_tx).await {
+        error!("Exiting node: {}", e);
+        return Err(e);
+    }
+    stop_rx.await.unwrap();
+    info!("Exiting node");
     Ok(())
 }
