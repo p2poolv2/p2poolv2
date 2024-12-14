@@ -18,10 +18,13 @@ use clap::Parser;
 use std::error::Error;
 use tracing_subscriber::EnvFilter;
 use tracing::debug;
+use tokio::sync::mpsc;
 mod node;
 use crate::node::Node;
 mod behaviour;
 mod config;
+mod shares;
+mod command;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -43,8 +46,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Load configuration
     let config = config::Config::load(&args.config)?;
 
+    // Create a channel for sending commands to the node
+    let (command_tx, command_rx) = mpsc::channel::<command::Command>(32);
+
     let mut node = Node::new(&config)?;
-    node.run().await;
+    node.run(command_rx).await;
 
     Ok(())
 }
