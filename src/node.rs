@@ -21,7 +21,7 @@ use libp2p::{
     Swarm,
     kad::{Event as KademliaEvent, QueryResult},
 };
-use tracing::{debug, info, error};
+use tracing::{debug, error, info};
 use std::time::Duration;
 use crate::config::Config;
 use crate::behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
@@ -77,80 +77,88 @@ impl Node {
 
     pub async fn run(&mut self) {
         loop {
-            match self.swarm.select_next_some().await {
-                SwarmEvent::NewListenAddr { address, .. } => info!("Listening on {address:?}"),
-                SwarmEvent::ConnectionEstablished { peer_id, endpoint,.. } => {
-                    info!("Connected to peer: {peer_id} {endpoint:?}");
-                },
-                SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                    info!("Disconnected from peer: {peer_id}");
-                    self.swarm.behaviour_mut().remove_peer(&peer_id);
-                },
-                SwarmEvent::Behaviour(event) => {
-                    match event {
-                        P2PoolBehaviourEvent::Mdns(mdns_event) => {
-                            info!("Mdns event: {:?}", mdns_event);
-                            match mdns_event {
-                                MdnsEvent::Discovered(discovered) => {
-                                    info!("Discovered peer: {:?}", discovered);
-                                    for (peer_id, addr) in discovered {
-                                        info!("CONNECTED?: {} {:?}", peer_id, self.swarm.is_connected(&peer_id));
-                                        // Check if we're not already connected to this peer
-                                        if !self.swarm.is_connected(&peer_id) {
-                                            // Try to dial the discovered peer
-                                            match self.swarm.dial(addr.clone()) {
-                                                Ok(_) => {
-                                                    info!("Dialing discovered peer {} at {}", peer_id, addr);
-                                                    // Add the peer's address to Kademlia
-                                                    self.swarm.behaviour_mut().add_address(peer_id, addr);
-                                                }
-                                                Err(e) => debug!("Failed to dial discovered peer {}: {}", peer_id, e),
+            tokio::select! {
+                event = self.swarm.select_next_some() => {
+                    self.handle_swarm_event(event);
+                }
+            }
+        }
+    }
+
+    pub fn handle_swarm_event(&mut self, event: SwarmEvent<P2PoolBehaviourEvent>) {
+        match event {
+            SwarmEvent::NewListenAddr { address, .. } => info!("Listening on {address:?}"),
+            SwarmEvent::ConnectionEstablished { peer_id, endpoint,.. } => {
+                info!("Connected to peer: {peer_id} {endpoint:?}");
+            },
+            SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                info!("Disconnected from peer: {peer_id}");
+                self.swarm.behaviour_mut().remove_peer(&peer_id);
+            },
+            SwarmEvent::Behaviour(event) => {
+                match event {
+                    P2PoolBehaviourEvent::Mdns(mdns_event) => {
+                        info!("Mdns event: {:?}", mdns_event);
+                        match mdns_event {
+                            MdnsEvent::Discovered(discovered) => {
+                                info!("Discovered peer: {:?}", discovered);
+                                for (peer_id, addr) in discovered {
+                                    info!("CONNECTED?: {} {:?}", peer_id, self.swarm.is_connected(&peer_id));
+                                    // Check if we're not already connected to this peer
+                                    if !self.swarm.is_connected(&peer_id) {
+                                        // Try to dial the discovered peer
+                                        match self.swarm.dial(addr.clone()) {
+                                            Ok(_) => {
+                                                info!("Dialing discovered peer {} at {}", peer_id, addr);
+                                                // Add the peer's address to Kademlia
+                                                self.swarm.behaviour_mut().add_address(peer_id, addr);
                                             }
+                                            Err(e) => debug!("Failed to dial discovered peer {}: {}", peer_id, e),
                                         }
                                     }
-                                },
-                                _ => debug!("Other Mdns event: {:?}", mdns_event),
-                            }
-                        },
-                        P2PoolBehaviourEvent::Identify(identify::Event::Received { peer_id, info }) => {
-                            info!("Identified Peer {} with protocol version {}", peer_id, info.protocol_version);
-                            // Add the peer's advertised addresses to Kademlia
-                            for addr in info.listen_addrs {
-                                self.swarm.behaviour_mut().add_address(peer_id, addr.clone());
-                            }
-                        },
-                        // P2PoolBehaviourEvent::Gossipsub(gossip_event) => {
-                        //     debug!("Gossipsub event: {:?}", gossip_event);
-                        // },
-                        P2PoolBehaviourEvent::Kademlia(kad_event) => {
-                            match kad_event {
-                                KademliaEvent::RoutingUpdated { peer, is_new_peer, addresses, bucket_range, old_peer } => {
-                                    info!("Routing updated for peer: {peer}, is_new_peer: {is_new_peer}, addresses: {addresses:?}, bucket_range: {bucket_range:?}, old_peer: {old_peer:?}");
-                                },
-                                KademliaEvent::OutboundQueryProgressed { result, .. } => {
-                                    match result {
-                                        QueryResult::GetClosestPeers(Ok(ok)) => {
-                                            debug!("Got closest peers: {:?}", ok.peers);
-                                        },
-                                        QueryResult::GetClosestPeers(Err(err)) => {
-                                            debug!("Failed to get closest peers: {err}");
-                                        },
-                                        _ => debug!("Other query result: {:?}", result),
-                                    }
-                                },
-                                _ => debug!("Other Kademlia event: {:?}", kad_event),
-                            }
-                        },
-                        // P2PoolBehaviourEvent::Ping(ping_event) => {
-                        //     debug!("Ping event: {:?}", ping_event);
-                        // },
-                        P2PoolBehaviourEvent::Identify(identify_event) => {
-                            debug!("Other Identify event: {:?}", identify_event);
-                        },
-                    }
-                },
-                _ => {}
-            }
+                                }
+                            },
+                            _ => debug!("Other Mdns event: {:?}", mdns_event),
+                        }
+                    },
+                    P2PoolBehaviourEvent::Identify(identify::Event::Received { peer_id, info }) => {
+                        info!("Identified Peer {} with protocol version {}", peer_id, info.protocol_version);
+                        // Add the peer's advertised addresses to Kademlia
+                        for addr in info.listen_addrs {
+                            self.swarm.behaviour_mut().add_address(peer_id, addr.clone());
+                        }
+                    },
+                    // P2PoolBehaviourEvent::Gossipsub(gossip_event) => {
+                    //     debug!("Gossipsub event: {:?}", gossip_event);
+                    // },
+                    P2PoolBehaviourEvent::Kademlia(kad_event) => {
+                        match kad_event {
+                            KademliaEvent::RoutingUpdated { peer, is_new_peer, addresses, bucket_range, old_peer } => {
+                                info!("Routing updated for peer: {peer}, is_new_peer: {is_new_peer}, addresses: {addresses:?}, bucket_range: {bucket_range:?}, old_peer: {old_peer:?}");
+                            },
+                            KademliaEvent::OutboundQueryProgressed { result, .. } => {
+                                match result {
+                                    QueryResult::GetClosestPeers(Ok(ok)) => {
+                                        debug!("Got closest peers: {:?}", ok.peers);
+                                    },
+                                    QueryResult::GetClosestPeers(Err(err)) => {
+                                        debug!("Failed to get closest peers: {err}");
+                                    },
+                                    _ => debug!("Other query result: {:?}", result),
+                                }
+                            },
+                            _ => debug!("Other Kademlia event: {:?}", kad_event),
+                        }
+                    },
+                    // P2PoolBehaviourEvent::Ping(ping_event) => {
+                    //     debug!("Ping event: {:?}", ping_event);
+                    // },
+                    P2PoolBehaviourEvent::Identify(identify_event) => {
+                        debug!("Other Identify event: {:?}", identify_event);
+                    },
+                }
+            },
+            _ => {}
         }
     }
 } 
