@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use crate::shares;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) enum Command{
+pub enum Command{
     /// Command telling node's event loop to send share to network
     SendShare(shares::ShareBlock),
     /// Command to shutdown node
