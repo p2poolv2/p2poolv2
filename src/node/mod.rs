@@ -30,7 +30,7 @@ pub mod actor;
 
 
 /// Node is the main struct that represents the node
-pub struct Node {
+struct Node {
     swarm: Swarm<P2PoolBehaviour>,
 }
 

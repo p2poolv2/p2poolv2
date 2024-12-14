@@ -18,7 +18,6 @@ use clap::Parser;
 use std::error::Error;
 use tracing_subscriber::EnvFilter;
 use tracing::{debug, info};
-use tokio::sync::mpsc;
 mod node;
 mod behaviour;
 mod config;
@@ -48,14 +47,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Load configuration
     let config = config::Config::load(&args.config)?;
 
-    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
-
-    // let mut node = node::Node::new(&config)?;
-    if let Err(e) = NodeHandle::new(config, stop_tx).await {
-        error!("Exiting node: {}", e);
-        return Err(e);
+    if let Ok((node_handle, stopping_rx)) = NodeHandle::new(config).await {
+        info!("Node started");
+        stopping_rx.await?;
+        info!("Node stopped");
+    } else {
+        error!("Failed to start node");
     }
-    stop_rx.await.unwrap();
-    info!("Exiting node");
     Ok(())
 }
