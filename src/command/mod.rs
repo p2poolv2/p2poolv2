@@ -15,11 +15,11 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>. 
 
 use tokio::sync::oneshot;
-// use crate::shares;
+use crate::shares::ShareBlock;
 
 pub enum Command{
     /// Command telling node's event loop to send share to network
-    // SendShare(shares::ShareBlock, oneshot::Sender<()>),
+    SendShare(ShareBlock, oneshot::Sender<()>),
     /// Command to get a list of connected peers
     GetPeers(oneshot::Sender<Vec<libp2p::PeerId>>),
     /// Command to shutdown node

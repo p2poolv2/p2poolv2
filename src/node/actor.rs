@@ -20,7 +20,8 @@ use std::error::Error;
 use crate::config::Config;
 use crate::command::Command;
 use crate::node::Node;
-use tracing::{error, info}; 
+use crate::shares::ShareBlock;
+use tracing::info; 
 use tokio::sync::oneshot;
 
 
@@ -56,6 +57,13 @@ impl NodeHandle {
         Ok(rx.await?)
     }
 
+    /// Send a share to the network
+    pub async fn send_share(&self, share: ShareBlock) -> Result<(), Box<dyn Error>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx.send(Command::SendShare(share, tx)).await?;
+        Ok(rx.await?)
+    }
+
 }
 
 /// NodeActor runs the Node in a separate task and handles all its events
@@ -83,6 +91,10 @@ impl NodeActor {
                         Some(Command::GetPeers(tx)) => {
                             let peers = self.node.swarm.connected_peers().cloned().collect::<Vec<_>>();
                             tx.send(peers).unwrap();
+                        },
+                        Some(Command::SendShare(share, tx)) => {
+                            self.node.send_share(share);
+                            tx.send(()).unwrap();
                         },
                         Some(Command::Shutdown(tx)) => {
                             self.node.shutdown().unwrap();

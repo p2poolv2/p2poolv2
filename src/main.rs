@@ -26,6 +26,7 @@ mod command;
 
 use crate::node::actor::NodeHandle;
 use tracing::error;
+use crate::shares::ShareBlock;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -49,10 +50,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     if let Ok((node_handle, stopping_rx)) = NodeHandle::new(config).await {
         info!("Node started");
+        tokio::spawn(async move {
+            send_share(node_handle).await;
+        });
         stopping_rx.await?;
         info!("Node stopped");
     } else {
         error!("Failed to start node");
     }
     Ok(())
+}
+
+/// Place holder for sending shares to the network
+async fn send_share(node_handle: NodeHandle) {
+    loop {  
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        if let Err(e) = node_handle.send_share(ShareBlock::default()).await {
+            error!("Failed to send share: {}", e);
+        }
+    }
 }
