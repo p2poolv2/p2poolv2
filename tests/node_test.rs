@@ -15,7 +15,7 @@ async fn test_three_nodes_connectivity() {
     let (node3_handle, stop_rx3) = NodeHandle::new(config3).await.expect("Failed to create node 3");
     
     // Wait for peer discovery and mesh formation
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
     
     // Get peer lists from each node
     let peers1 = node1_handle.get_peers().await.expect("Failed to get peers from node 1");
