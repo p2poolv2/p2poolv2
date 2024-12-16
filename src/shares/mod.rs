@@ -15,7 +15,9 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>. 
 
 use libp2p::identity::secp256k1::PublicKey;
-use serde::{Serialize, Deserialize, Serializer, Deserializer};
+use prost;
+use prost::Message;
+// use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
 type Nonce =  Vec<u8>;
 type BlockHash = Vec<u8>;
@@ -23,45 +25,47 @@ type Timestamp = u64;
 type TxHash = Vec<u8>;
 
 /// Captures a block on the share chain
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Message)]
 pub struct ShareBlock{
-    // /// The nonce from the miner
-    // nonce: Nonce,
-    // /// The block hash of the block the share is generated for
-    // blockhash: BlockHash,
-    // /// The hash of the prev share block
-    // prev_share_blockhash: BlockHash,
-    // /// Pubkey identifying the miner the share is for
-    // #[serde(serialize_with = "serialize_pubkey")]
-    // #[serde(deserialize_with = "deserialize_pubkey")]
-    // miner_pubkey: PublicKey,
-    // /// Timestamp as unix timestamp for the share generation time
-    // timestamp: Timestamp,
-    // /// Any transactions to be included in the share block
-    // tx_hashes: Vec<TxHash>,
-    pub data: String,
+    /// The nonce from the miner
+    #[prost(bytes, tag = "1")]
+    pub nonce: Nonce,
+
+    /// The block hash of the block the share is generated for
+    #[prost(bytes, tag = "2")]
+    pub blockhash: BlockHash,
+
+    /// The hash of the prev share block
+    #[prost(bytes, tag = "3")]
+    pub prev_share_blockhash: BlockHash,
+
+    /// Compressed pubkey identifying the miner
+    #[prost(bytes, tag = "4")]
+    pub miner_pubkey: Vec<u8>,
+
+    /// Timestamp as unix timestamp for the share generation time
+    #[prost(uint64, tag = "5")]
+    pub timestamp: Timestamp,
+
+    /// Any transactions to be included in the share block
+    #[prost(bytes, repeated, tag = "6")]
+    pub tx_hashes: Vec<TxHash>,
 }
 
-impl Default for ShareBlock {
-    fn default() -> Self {
-        Self { data: "".to_string() }
-    }
-}
+// fn serialize_pubkey<S>(pubkey: &PublicKey, serializer: S) -> Result<S::Ok, S::Error>
+// where
+//     S: Serializer,
+// {
+//     // Convert public key to bytes
+//     let bytes = pubkey.to_bytes();
+//     bytes.serialize(serializer)
+// }
 
-fn serialize_pubkey<S>(pubkey: &PublicKey, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    // Convert public key to bytes
-    let bytes = pubkey.to_bytes();
-    bytes.serialize(serializer)
-}
-
-fn deserialize_pubkey<'de, D>(deserializer: D) -> Result<PublicKey, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let bytes: Vec<u8> = Vec::deserialize(deserializer)?;
-    PublicKey::try_from_bytes(bytes.as_slice())
-        .map_err(serde::de::Error::custom)
-}
+// fn deserialize_pubkey<'de, D>(deserializer: D) -> Result<PublicKey, D::Error>
+// where
+//     D: Deserializer<'de>,
+// {
+//     let bytes: Vec<u8> = Vec::deserialize(deserializer)?;
+//     PublicKey::try_from_bytes(bytes.as_slice())
+//         .map_err(serde::de::Error::custom)
+// }
