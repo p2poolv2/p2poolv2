@@ -14,10 +14,8 @@
 // You should have received a copy of the GNU General Public License along with 
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>. 
 
-use libp2p::identity::secp256k1::PublicKey;
 use prost;
 use prost::Message;
-// use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
 type Nonce =  Vec<u8>;
 type BlockHash = Vec<u8>;
@@ -51,21 +49,3 @@ pub struct ShareBlock{
     #[prost(bytes, repeated, tag = "6")]
     pub tx_hashes: Vec<TxHash>,
 }
-
-// fn serialize_pubkey<S>(pubkey: &PublicKey, serializer: S) -> Result<S::Ok, S::Error>
-// where
-//     S: Serializer,
-// {
-//     // Convert public key to bytes
-//     let bytes = pubkey.to_bytes();
-//     bytes.serialize(serializer)
-// }
-
-// fn deserialize_pubkey<'de, D>(deserializer: D) -> Result<PublicKey, D::Error>
-// where
-//     D: Deserializer<'de>,
-// {
-//     let bytes: Vec<u8> = Vec::deserialize(deserializer)?;
-//     PublicKey::try_from_bytes(bytes.as_slice())
-//         .map_err(serde::de::Error::custom)
-// }
