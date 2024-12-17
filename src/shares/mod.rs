@@ -15,7 +15,8 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>. 
 
 use std::error::Error;
-
+use crate::shares::store::Store;
+use hex;
 use prost::Message;
 pub mod store;
 pub mod chain;
@@ -70,6 +71,14 @@ pub struct ShareBlock{
 /// TODO: validate miner_pubkey is valid
 /// TODO: validate timestamp is within the last 10 minutes
 /// TODO: validate tx_hashes are valid
-pub fn validate(share: &ShareBlock) -> Result<(), Box<dyn Error>> {
+pub fn validate(share: &ShareBlock, store: &Store) -> Result<(), Box<dyn Error>> {
+    if share.uncles.len() > MAX_UNCLES {
+        return Err("Too many uncles".into());
+    }
+    for uncle in &share.uncles {
+        if store.get_share(uncle).is_none() {
+            return Err(format!("Uncle {} not found in store", hex::encode(&uncle)).into());
+        }
+    }
     Ok(())
 }

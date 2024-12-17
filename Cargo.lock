@@ -2338,6 +2338,7 @@ dependencies = [
  "clap",
  "config",
  "futures",
+ "hex",
  "libp2p",
  "prost",
  "serde",
