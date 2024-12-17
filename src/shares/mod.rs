@@ -69,7 +69,7 @@ impl ShareBlock {
     }
 
     /// Deserialize the share block from a byte vector
-    pub fn deserialize(buf: &mut [u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn deserialize(buf: &[u8]) -> Result<Self, Box<dyn Error>> {
         let share: Self = ciborium::de::from_reader(buf.as_ref()).unwrap();
         Ok(share)
     }
@@ -92,4 +92,35 @@ pub fn validate(share: &ShareBlock, store: &Store) -> Result<(), Box<dyn Error>>
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_share_serialization() {
+        let share = ShareBlock {
+            blockhash: vec![1, 2, 3],
+            nonce: vec![1, 2, 3],
+            prev_share_blockhash: vec![4, 5, 6],
+            uncles: vec![vec![7, 8, 9]],
+            miner_pubkey: vec![10, 11, 12],
+            timestamp: 1234567890,
+            tx_hashes: vec![vec![13, 14, 15]],
+            difficulty: 100,
+        };
+
+        let serialized = share.serialize().unwrap();
+        let deserialized = ShareBlock::deserialize(serialized.as_slice()).unwrap();
+
+        assert_eq!(share.blockhash, deserialized.blockhash);
+        assert_eq!(share.nonce, deserialized.nonce);
+        assert_eq!(share.prev_share_blockhash, deserialized.prev_share_blockhash);
+        assert_eq!(share.uncles, deserialized.uncles);
+        assert_eq!(share.miner_pubkey, deserialized.miner_pubkey);
+        assert_eq!(share.timestamp, deserialized.timestamp);
+        assert_eq!(share.tx_hashes, deserialized.tx_hashes);
+        assert_eq!(share.difficulty, deserialized.difficulty);
+    }
 }
