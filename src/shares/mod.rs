@@ -17,7 +17,8 @@
 use std::error::Error;
 use crate::shares::store::Store;
 use hex;
-use prost::Message;
+use serde::{Serialize, Deserialize};
+use tracing::error;
 pub mod store;
 pub mod chain;
 
@@ -29,40 +30,50 @@ pub type TxHash = Vec<u8>;
 const MAX_UNCLES: usize = 3;
 
 /// Captures a block on the share chain
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ShareBlock{
     /// The nonce from the miner
-    #[prost(bytes, tag = "1")]
     pub nonce: Nonce,
 
     /// The block hash of the block the share is generated for
-    #[prost(bytes, tag = "2")]
     pub blockhash: BlockHash,
 
     /// The hash of the prev share block
-    #[prost(bytes, tag = "3")]
     pub prev_share_blockhash: BlockHash,
 
     /// The uncles of the share
-    #[prost(bytes, repeated, tag = "4")]
     pub uncles: Vec<BlockHash>,
 
     /// Compressed pubkey identifying the miner
-    #[prost(bytes, tag = "5")]
     pub miner_pubkey: Vec<u8>,
 
     /// Timestamp as unix timestamp for the share generation time
-    #[prost(uint64, tag = "6")]
     pub timestamp: Timestamp,
 
     /// Any transactions to be included in the share block
-    #[prost(bytes, repeated, tag = "7")]
     pub tx_hashes: Vec<TxHash>,
 
     /// The difficulty of the share
-    #[prost(uint64, tag = "8")]
     pub difficulty: u64,
 }
+
+impl ShareBlock {
+    /// Serialize the share block to a byte vector
+    pub fn serialize(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        let mut buf = Vec::new();
+        if let Err(e) = ciborium::ser::into_writer(&self, &mut buf) {
+            error!("Failed to serialize share: {}", e);
+            return Err(e.into());
+        }
+        Ok(buf)
+    }
+
+    /// Deserialize the share block from a byte vector
+    pub fn deserialize(buf: &mut [u8]) -> Result<Self, Box<dyn Error>> {
+        let share: Self = ciborium::de::from_reader(buf.as_ref()).unwrap();
+        Ok(share)
+    }
+}   
 
 /// Validate the share block, returning Error in case of failure to validate
 /// TODO: validate nonce and blockhash meets difficulty

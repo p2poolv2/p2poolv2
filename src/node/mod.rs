@@ -18,7 +18,6 @@ use libp2p::{
     gossipsub, kad::{Event as KademliaEvent, QueryResult}, swarm::SwarmEvent, Multiaddr, Swarm
 };
 use tracing::{debug, error, info};
-use prost::Message;
 use std::time::Duration;
 use crate::{config::Config, shares::ShareBlock};
 use crate::behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
@@ -95,8 +94,7 @@ impl Node {
     
     /// Send a share to the network
     pub fn send_share(&mut self, share: ShareBlock) {
-        let mut buf = Vec::new();
-        share.encode(&mut buf).unwrap();
+        let buf = share.serialize().unwrap();
         if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(self.share_topic.clone(), buf) {
             error!("Failed to send share: {}", e);  
         }
