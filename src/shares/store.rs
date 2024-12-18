@@ -14,33 +14,44 @@
 // You should have received a copy of the GNU General Public License along with 
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>. 
 
-use std::collections::HashMap;
 use crate::shares::{ShareBlock, BlockHash};
+use rocksdb::{DB};
+use tracing::debug;
 
 /// A store for share blocks, for now it is just a simple in-memory store
 /// TODO: Implement a persistent store
 pub struct Store {
-    shares: HashMap<BlockHash, ShareBlock>,
+    path: String,
+    db: DB,
 }
 
 impl Store {
     /// Create a new share store
-    pub fn new() -> Self {
-        Self { shares: HashMap::new() }
+    pub fn new(path: Option<String>) -> Self {
+        let path = path.unwrap_or("store.db".to_string());
+        let path = format!("./store/{}", path);
+        let db = DB::open_default(path.clone()).unwrap();
+        Self { path, db }
     }
 
     /// Add a share to the store
     pub fn add_share(&mut self, share: ShareBlock) {
-        self.shares.insert(share.blockhash.clone(), share);
+        debug!("Adding share to store: {:?}", share.blockhash);
+        self.db.put(share.blockhash.clone(), share.serialize().unwrap()).unwrap();
     }
 
     /// Get a share from the store
-    pub fn get_share(&self, blockhash: &BlockHash) -> Option<&ShareBlock> {
-        self.shares.get(blockhash)
+    pub fn get_share(&self, blockhash: &BlockHash) -> Option<ShareBlock> {
+        if blockhash.is_empty() {
+            return None;
+        }
+        debug!("Getting share from store: {:?}", blockhash);
+        let share = self.db.get(blockhash).unwrap().unwrap();
+        ShareBlock::deserialize(share.as_slice()).ok()
     }
 
     /// Get the parent of a share as a ShareBlock
-    pub fn get_parent(&self, blockhash: &BlockHash) -> Option<&ShareBlock> {
+    pub fn get_parent(&self, blockhash: &BlockHash) -> Option<ShareBlock> {
         let share = self.get_share(blockhash)?;
         let parent_blockhash = share.prev_share_blockhash.clone();
         self.get_share(&parent_blockhash)
@@ -48,7 +59,7 @@ impl Store {
 
     /// Get the uncles of a share as a vector of ShareBlocks
     /// Panics if an uncle hash is not found in the store
-    pub fn get_uncles(&self, blockhash: &BlockHash) -> Vec<&ShareBlock> {
+    pub fn get_uncles(&self, blockhash: &BlockHash) -> Vec<ShareBlock> {
         let share = self.get_share(blockhash);
         if share.is_none() {
             return vec![];
@@ -60,18 +71,18 @@ impl Store {
     }
 
     /// Get entire chain from earliest known block to blockhash
-    pub fn get_chain_upto(&self, blockhash: &BlockHash) -> Vec<&ShareBlock> {
-        let mut chain = vec![];
-        let mut current = blockhash;
-        while let Some(share) = self.get_share(current) {
-            chain.push(share);
-            current = &share.prev_share_blockhash;
-        }
-        chain
+    pub fn get_chain_upto(&self, blockhash: &BlockHash) -> Vec<ShareBlock> {
+        debug!("Getting chain upto: {:?}", blockhash);
+        std::iter::successors(
+            self.get_share(blockhash),
+            |share| self.get_share(&share.prev_share_blockhash)
+        )
+        .collect()
     }
 
     /// Get common ancestor of two blockhashes
     pub fn get_common_ancestor(&self, blockhash1: &BlockHash, blockhash2: &BlockHash) -> Option<BlockHash> {
+        debug!("Getting common ancestor of: {:?} and {:?}", blockhash1, blockhash2);
         let chain1 = self.get_chain_upto(blockhash1);
         let chain2 = self.get_chain_upto(blockhash2);
         if let Some(blockhash) = chain1.iter().rev().find(|share| chain2.contains(share)) {
@@ -83,12 +94,20 @@ impl Store {
 }
 
 #[cfg(test)]
+impl Drop for Store {
+    // Drop created store db only for tests once a test is done
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(self.path.clone()).unwrap();
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_chain_with_uncles() {
-        let mut store = Store::new();
+        let mut store = Store::new(Some("test_chain_with_uncles.db".to_string()));
 
         // Create initial share
         let share1 = ShareBlock {
