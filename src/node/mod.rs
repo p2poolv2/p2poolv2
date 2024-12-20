@@ -14,18 +14,21 @@
 // You should have received a copy of the GNU General Public License along with 
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>. 
 
+pub mod behaviour;
+
 use libp2p::{
     gossipsub, kad::{Event as KademliaEvent, QueryResult}, swarm::SwarmEvent, Multiaddr, Swarm
 };
 use tracing::{debug, error, info};
 use std::time::Duration;
 use crate::{config::Config, shares::ShareBlock};
-use crate::behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::identify;
 use libp2p::mdns::Event as MdnsEvent;
 pub mod actor;
 pub mod messages;
 use crate::node::messages::Message;
+use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
+
 /// Node is the main struct that represents the node
 struct Node {
     swarm: Swarm<P2PoolBehaviour>,
