@@ -21,12 +21,11 @@ use libp2p::{
 };
 use tracing::{debug, error, info};
 use std::time::Duration;
-use crate::{config::Config, shares::ShareBlock};
+use crate::config::Config;
 use libp2p::identify;
 use libp2p::mdns::Event as MdnsEvent;
 pub mod actor;
 pub mod messages;
-use crate::node::messages::Message;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 
 /// Node is the main struct that represents the node
