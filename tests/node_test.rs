@@ -5,9 +5,9 @@ use std::time::Duration;
 async fn test_three_nodes_connectivity() {
     // Create three different configurations as strings
 
-    let config1 = Config::default().with_listen_address("/ip4/0.0.0.0/tcp/6884".to_string());
-    let config2 = Config::default().with_listen_address("/ip4/0.0.0.0/tcp/6885".to_string());
-    let config3 = Config::default().with_listen_address("/ip4/0.0.0.0/tcp/6886".to_string());
+    let config1 = Config::default().with_listen_address("/ip4/0.0.0.0/tcp/6884".to_string()).with_store_path("test_chain_1.db".to_string());
+    let config2 = Config::default().with_listen_address("/ip4/0.0.0.0/tcp/6885".to_string()).with_store_path("test_chain_2.db".to_string());
+    let config3 = Config::default().with_listen_address("/ip4/0.0.0.0/tcp/6886".to_string()).with_store_path("test_chain_3.db".to_string());
     
     // Start three nodes
     let (node1_handle, stop_rx1) = NodeHandle::new(config1).await.expect("Failed to create node 1");

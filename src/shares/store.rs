@@ -15,9 +15,11 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>. 
 
 use crate::shares::{ShareBlock, BlockHash};
-use rocksdb::{DB};
+use rocksdb::DB;
 use tracing::debug;
 use crate::node::messages::Message;
+use crate::config::Config;
+
 /// A store for share blocks, for now it is just a simple in-memory store
 /// TODO: Implement a persistent store
 pub struct Store {
@@ -27,9 +29,7 @@ pub struct Store {
 
 impl Store {
     /// Create a new share store
-    pub fn new(path: Option<String>) -> Self {
-        let path = path.unwrap_or("store.db".to_string());
-        let path = format!("./store/{}", path);
+    pub fn new(path: String) -> Self {
         let db = DB::open_default(path.clone()).unwrap();
         Self { path, db }
     }
@@ -112,7 +112,7 @@ mod tests {
 
     #[test]
     fn test_chain_with_uncles() {
-        let mut store = Store::new(Some("test_chain_with_uncles.db".to_string()));
+        let mut store = Store::new("test_chain_with_uncles.db".to_string());
 
         // Create initial share
         let share1 = ShareBlock {

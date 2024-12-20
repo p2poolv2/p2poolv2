@@ -106,7 +106,7 @@ mod tests {
     #[test]
     /// Setup a test chain with 3 shares on the main chain, where shares 2 and 3 have two uncles each
     fn test_chain_add_shares() {
-        let mut store = Store::new(Some("test_chain_add_shares.db".to_string()));
+        let mut store = Store::new("test_chain_add_shares.db".to_string());
         let mut chain = Chain::new(store);
 
         // Create initial share (1)
@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_confirmations() {
-        let mut store = Store::new(Some("test_confirmations.db".to_string()));
+        let mut store = Store::new("test_confirmations.db".to_string());
         let mut chain = Chain::new(store);
 
         // Create initial chain of MIN_CONFIRMATION_DEPTH + 1 blocks

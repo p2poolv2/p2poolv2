@@ -23,8 +23,14 @@ pub struct NetworkConfig {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct StoreConfig {
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Config {
     pub network: NetworkConfig,
+    pub store: StoreConfig,
 }
 
 impl Config {
@@ -44,6 +50,11 @@ impl Config {
         self.network.dial_peers = dial_peers;
         self
     }
+
+    pub fn with_store_path(mut self, store_path: String) -> Self {
+        self.store.path = store_path;
+        self
+    }
 }
 
 impl Default for Config {
@@ -52,6 +63,9 @@ impl Default for Config {
             network: NetworkConfig {
                 listen_address: "/ip4/0.0.0.0/tcp/6884".to_string(),
                 dial_peers: vec![],
+            },
+            store: StoreConfig {
+                path: "./store.db".to_string(),
             },
         }
     }

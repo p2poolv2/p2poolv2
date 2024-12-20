@@ -1,3 +1,6 @@
 [network]
 listen_address = "/ip4/0.0.0.0/tcp/6884"
 dial_peers = []
+
+[store]
+path = "./store.db"
