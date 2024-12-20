@@ -24,7 +24,7 @@ use crate::behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::identify;
 use libp2p::mdns::Event as MdnsEvent;
 pub mod actor;
-
+pub mod messages;
 
 /// Node is the main struct that represents the node
 struct Node {
