@@ -25,7 +25,7 @@ use libp2p::identify;
 use libp2p::mdns::Event as MdnsEvent;
 pub mod actor;
 pub mod messages;
-
+use crate::node::messages::Message;
 /// Node is the main struct that represents the node
 struct Node {
     swarm: Swarm<P2PoolBehaviour>,
@@ -94,7 +94,7 @@ impl Node {
     
     /// Send a share to the network
     pub fn send_share(&mut self, share: ShareBlock) {
-        let buf = share.serialize().unwrap();
+        let buf = share.cbor_serialize().unwrap();
         if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(self.share_topic.clone(), buf) {
             error!("Failed to send share: {}", e);  
         }

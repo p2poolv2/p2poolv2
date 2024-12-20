@@ -17,7 +17,7 @@
 use crate::shares::{ShareBlock, BlockHash};
 use rocksdb::{DB};
 use tracing::debug;
-
+use crate::node::messages::Message;
 /// A store for share blocks, for now it is just a simple in-memory store
 /// TODO: Implement a persistent store
 pub struct Store {
@@ -37,7 +37,7 @@ impl Store {
     /// Add a share to the store
     pub fn add_share(&mut self, share: ShareBlock) {
         debug!("Adding share to store: {:?}", share.blockhash);
-        self.db.put(share.blockhash.clone(), share.serialize().unwrap()).unwrap();
+        self.db.put(share.blockhash.clone(), share.cbor_serialize().unwrap()).unwrap();
     }
 
     /// Get a share from the store
@@ -47,7 +47,7 @@ impl Store {
         }
         debug!("Getting share from store: {:?}", blockhash);
         let share = self.db.get(blockhash).unwrap().unwrap();
-        ShareBlock::deserialize(share.as_slice()).ok()
+        ShareBlock::cbor_deserialize(&share).ok()
     }
 
     /// Get the parent of a share as a ShareBlock

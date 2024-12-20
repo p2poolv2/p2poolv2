@@ -21,6 +21,7 @@ use serde::{Serialize, Deserialize};
 use tracing::error;
 pub mod store;
 pub mod chain;
+use crate::node::messages::Message;
 
 pub type Nonce =  Vec<u8>;
 pub type BlockHash = Vec<u8>;
@@ -57,23 +58,8 @@ pub struct ShareBlock{
     pub difficulty: u64,
 }
 
-impl ShareBlock {
-    /// Serialize the share block to a byte vector
-    pub fn serialize(&self) -> Result<Vec<u8>, Box<dyn Error>> {
-        let mut buf = Vec::new();
-        if let Err(e) = ciborium::ser::into_writer(&self, &mut buf) {
-            error!("Failed to serialize share: {}", e);
-            return Err(e.into());
-        }
-        Ok(buf)
-    }
-
-    /// Deserialize the share block from a byte vector
-    pub fn deserialize(buf: &[u8]) -> Result<Self, Box<dyn Error>> {
-        let share: Self = ciborium::de::from_reader(buf.as_ref()).unwrap();
-        Ok(share)
-    }
-}   
+/// Implement the Message trait to provide serialization/deserialization
+impl Message for ShareBlock {}
 
 /// Validate the share block, returning Error in case of failure to validate
 /// TODO: validate nonce and blockhash meets difficulty
@@ -111,8 +97,8 @@ mod tests {
             difficulty: 100,
         };
 
-        let serialized = share.serialize().unwrap();
-        let deserialized = ShareBlock::deserialize(serialized.as_slice()).unwrap();
+        let serialized = share.cbor_serialize().unwrap();
+        let deserialized = ShareBlock::cbor_deserialize(&serialized).unwrap();
 
         assert_eq!(share.blockhash, deserialized.blockhash);
         assert_eq!(share.nonce, deserialized.nonce);
