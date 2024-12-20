@@ -58,10 +58,18 @@ impl NodeHandle {
     }
 
     /// Send a share to the network
-    pub async fn send_gossip(&self, message: impl Message) -> Result<(), Box<dyn Error>> {
+    pub async fn send_gossip(&self, message: Message) -> Result<(), Box<dyn Error>> {
         let (tx, rx) = oneshot::channel();
         let buf = message.cbor_serialize().unwrap();
         self.command_tx.send(Command::SendGossip(buf, tx)).await?;
+        Ok(rx.await?)
+    }
+
+    /// Send a message to a specific peer
+    pub async fn send_to_peer(&self, peer_id: libp2p::PeerId, message: Message) -> Result<(), Box<dyn Error>> {
+        let (tx, rx) = oneshot::channel();
+        let buf = message.cbor_serialize().unwrap();
+        self.command_tx.send(Command::SendToPeer(peer_id, buf, tx)).await?;
         Ok(rx.await?)
     }
 
@@ -95,6 +103,10 @@ impl NodeActor {
                         },
                         Some(Command::SendGossip(buf, tx)) => {
                             self.node.send_gossip(buf);
+                            tx.send(()).unwrap();
+                        },
+                        Some(Command::SendToPeer(peer_id, buf, tx)) => {
+                            self.node.send_to_peer(peer_id, buf);
                             tx.send(()).unwrap();
                         },
                         Some(Command::Shutdown(tx)) => {

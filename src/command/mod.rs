@@ -20,6 +20,8 @@ use tokio::sync::oneshot;
 pub enum Command{
     /// Command telling node's event loop to send share to network
     SendGossip(Vec<u8>, oneshot::Sender<()>),
+    /// Command telling node's event loop to send message to a specific peer
+    SendToPeer(libp2p::PeerId, Vec<u8>, oneshot::Sender<()>),
     /// Command to get a list of connected peers
     GetPeers(oneshot::Sender<Vec<libp2p::PeerId>>),
     /// Command to shutdown node

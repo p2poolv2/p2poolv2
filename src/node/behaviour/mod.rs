@@ -14,13 +14,18 @@
 // You should have received a copy of the GNU General Public License along with 
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>. 
 
+pub mod request_response;
 use libp2p::{
-    gossipsub, identify, 
+    gossipsub, identify,
     identity::Keypair, kad::{self, store::MemoryStore}, 
     ping, swarm::NetworkBehaviour, Multiaddr, PeerId,
     mdns::{tokio::Behaviour as MdnsTokio, Event as MdnsEvent, Config as MdnsConfig },
 };
 use std::error::Error;
+use request_response::{RequestResponseBehaviour, RequestResponseEvent};
+use crate::node::messages::InventoryMessage;
+use libp2p::request_response::ProtocolSupport;
+use request_response::P2PoolRequestResponseProtocol;
 
 // Combine the behaviors we want to use
 #[derive(NetworkBehaviour)]
@@ -31,6 +36,7 @@ pub struct P2PoolBehaviour {
     // pub ping: ping::Behaviour,
     pub identify: identify::Behaviour,
     pub mdns: MdnsTokio,
+    pub request_response: RequestResponseBehaviour<InventoryMessage, InventoryMessage>,
 }
 
 /// The interval at which the node will send ping messages to peers
@@ -44,6 +50,7 @@ pub enum P2PoolBehaviourEvent {
     // Ping(ping::Event),
     Identify(identify::Event),
     Mdns(MdnsEvent),
+    RequestResponse(RequestResponseEvent<InventoryMessage, InventoryMessage>),
 }
 
 impl P2PoolBehaviour {
@@ -88,6 +95,10 @@ impl P2PoolBehaviour {
             // ping: libp2p::ping::Behaviour::new(ping::Config::new().with_interval(tokio::time::Duration::from_secs(HEARTBEAT_INTERVAL))),
             identify: identify_behaviour,
             mdns: mdns_behaviour,
+            request_response: RequestResponseBehaviour::new(
+                [(P2PoolRequestResponseProtocol::new(), ProtocolSupport::Full)],
+                libp2p::request_response::Config::default(),
+            ),
         })
     }
 
@@ -133,5 +144,11 @@ impl From<identify::Event> for P2PoolBehaviourEvent {
 impl From<MdnsEvent> for P2PoolBehaviourEvent {
     fn from(event: MdnsEvent) -> Self {
         P2PoolBehaviourEvent::Mdns(event)
+    }
+}
+
+impl From<RequestResponseEvent<InventoryMessage, InventoryMessage>> for P2PoolBehaviourEvent {
+    fn from(event: RequestResponseEvent<InventoryMessage, InventoryMessage>) -> Self {
+        P2PoolBehaviourEvent::RequestResponse(event)
     }
 }

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-libp2p = { version = "0.53", features = ["tcp", "dns", "tokio", "noise", "yamux", "identify", "macros", "ping", "gossipsub", "kad", "mdns", "secp256k1"] }
+libp2p = { version = "0.53", features = ["tcp", "dns", "tokio", "noise", "yamux", "identify", "macros", "ping", "gossipsub", "kad", "mdns", "secp256k1", "request-response"] }
 tokio = { version = "1.0", features = ["full"] }
 futures = "0.3"
 tracing = "0.1"
@@ -15,6 +15,9 @@ clap = { version = "4.0", features = ["derive"] }
 hex = "0.4.3"
 ciborium = "0.2.2"
 rocksdb = "0.22.0"
+async-trait = "0.1.83"
+thiserror = "2.0.8"
+ciborium-io = "0.2.2"
 
 [lib]
 name = "p2poolv2"

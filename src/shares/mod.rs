@@ -31,7 +31,7 @@ pub type TxHash = Vec<u8>;
 const MAX_UNCLES: usize = 3;
 
 /// Captures a block on the share chain
-#[derive(Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, Default, Debug)]
 pub struct ShareBlock{
     /// The nonce from the miner
     pub nonce: Nonce,
@@ -57,9 +57,6 @@ pub struct ShareBlock{
     /// The difficulty of the share
     pub difficulty: u64,
 }
-
-/// Implement the Message trait to provide serialization/deserialization
-impl Message for ShareBlock {}
 
 /// Validate the share block, returning Error in case of failure to validate
 /// TODO: validate nonce and blockhash meets difficulty
@@ -97,8 +94,13 @@ mod tests {
             difficulty: 100,
         };
 
-        let serialized = share.cbor_serialize().unwrap();
-        let deserialized = ShareBlock::cbor_deserialize(&serialized).unwrap();
+        let serialized = Message::ShareBlock(share.clone()).cbor_serialize().unwrap();
+        let deserialized = Message::cbor_deserialize(&serialized).unwrap();
+
+        let deserialized = match deserialized {
+            Message::ShareBlock(share) => share,
+            _ => panic!("Expected ShareBlock variant"),
+        };
 
         assert_eq!(share.blockhash, deserialized.blockhash);
         assert_eq!(share.nonce, deserialized.nonce);

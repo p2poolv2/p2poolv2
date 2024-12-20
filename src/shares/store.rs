@@ -37,7 +37,7 @@ impl Store {
     /// Add a share to the store
     pub fn add_share(&mut self, share: ShareBlock) {
         debug!("Adding share to store: {:?}", share.blockhash);
-        self.db.put(share.blockhash.clone(), share.cbor_serialize().unwrap()).unwrap();
+        self.db.put(share.blockhash.clone(), Message::ShareBlock(share).cbor_serialize().unwrap()).unwrap();
     }
 
     /// Get a share from the store
@@ -47,7 +47,12 @@ impl Store {
         }
         debug!("Getting share from store: {:?}", blockhash);
         let share = self.db.get(blockhash).unwrap().unwrap();
-        ShareBlock::cbor_deserialize(&share).ok()
+        let share = Message::cbor_deserialize(&share).unwrap();
+        let share = match share {
+            Message::ShareBlock(share) => share,
+            _ => panic!("Expected ShareBlock variant"),
+        };
+        Some(share)
     }
 
     /// Get the parent of a share as a ShareBlock

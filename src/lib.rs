@@ -15,7 +15,6 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>. 
 
 pub mod node;
-pub mod behaviour;
 pub mod config;
 pub mod shares;
 pub mod command;

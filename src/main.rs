@@ -19,13 +19,13 @@ use std::error::Error;
 use tracing_subscriber::EnvFilter;
 use tracing::{debug, info};
 mod node;
-mod behaviour;
 mod config;
 mod shares;
 mod command;
 
 use crate::node::actor::NodeHandle;
 use tracing::error;
+use crate::node::messages::Message;
 use crate::shares::ShareBlock;
 
 #[derive(Parser, Debug)]
@@ -66,7 +66,7 @@ async fn send_share(node_handle: NodeHandle) {
     loop {  
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         let share = ShareBlock::default();
-        if let Err(e) = node_handle.send_gossip(share).await {
+        if let Err(e) = node_handle.send_gossip(Message::ShareBlock(share)).await {
             error!("Failed to send share: {}", e);
         }
     }
