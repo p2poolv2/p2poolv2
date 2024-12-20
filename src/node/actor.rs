@@ -20,7 +20,7 @@ use std::error::Error;
 use crate::config::Config;
 use crate::command::Command;
 use crate::node::Node;
-use crate::shares::ShareBlock;
+use crate::node::messages::Message;
 use tracing::info; 
 use tokio::sync::oneshot;
 
@@ -58,9 +58,10 @@ impl NodeHandle {
     }
 
     /// Send a share to the network
-    pub async fn send_share(&self, share: ShareBlock) -> Result<(), Box<dyn Error>> {
+    pub async fn send_gossip(&self, message: impl Message) -> Result<(), Box<dyn Error>> {
         let (tx, rx) = oneshot::channel();
-        self.command_tx.send(Command::SendShare(share, tx)).await?;
+        let buf = message.cbor_serialize().unwrap();
+        self.command_tx.send(Command::SendGossip(buf, tx)).await?;
         Ok(rx.await?)
     }
 
@@ -92,8 +93,8 @@ impl NodeActor {
                             let peers = self.node.swarm.connected_peers().cloned().collect::<Vec<_>>();
                             tx.send(peers).unwrap();
                         },
-                        Some(Command::SendShare(share, tx)) => {
-                            self.node.send_share(share);
+                        Some(Command::SendGossip(buf, tx)) => {
+                            self.node.send_gossip(buf);
                             tx.send(()).unwrap();
                         },
                         Some(Command::Shutdown(tx)) => {

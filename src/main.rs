@@ -66,7 +66,7 @@ async fn send_share(node_handle: NodeHandle) {
     loop {  
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         let share = ShareBlock::default();
-        if let Err(e) = node_handle.send_share(share).await {
+        if let Err(e) = node_handle.send_gossip(share).await {
             error!("Failed to send share: {}", e);
         }
     }

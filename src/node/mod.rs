@@ -93,8 +93,7 @@ impl Node {
     }
     
     /// Send a share to the network
-    pub fn send_share(&mut self, share: ShareBlock) {
-        let buf = share.cbor_serialize().unwrap();
+    pub fn send_gossip(&mut self, buf: Vec<u8>) {
         if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(self.share_topic.clone(), buf) {
             error!("Failed to send share: {}", e);  
         }
