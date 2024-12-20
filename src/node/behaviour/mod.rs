@@ -23,9 +23,9 @@ use libp2p::{
 };
 use std::error::Error;
 use request_response::{RequestResponseBehaviour, RequestResponseEvent};
-use crate::node::messages::InventoryMessage;
 use libp2p::request_response::ProtocolSupport;
 use request_response::P2PoolRequestResponseProtocol;
+use crate::node::messages::Message;
 
 // Combine the behaviors we want to use
 #[derive(NetworkBehaviour)]
@@ -36,7 +36,7 @@ pub struct P2PoolBehaviour {
     // pub ping: ping::Behaviour,
     pub identify: identify::Behaviour,
     pub mdns: MdnsTokio,
-    pub request_response: RequestResponseBehaviour<InventoryMessage, InventoryMessage>,
+    pub request_response: RequestResponseBehaviour<Message, Message>,
 }
 
 /// The interval at which the node will send ping messages to peers
@@ -50,7 +50,7 @@ pub enum P2PoolBehaviourEvent {
     // Ping(ping::Event),
     Identify(identify::Event),
     Mdns(MdnsEvent),
-    RequestResponse(RequestResponseEvent<InventoryMessage, InventoryMessage>),
+    RequestResponse(RequestResponseEvent<Message, Message>),
 }
 
 impl P2PoolBehaviour {
@@ -147,8 +147,8 @@ impl From<MdnsEvent> for P2PoolBehaviourEvent {
     }
 }
 
-impl From<RequestResponseEvent<InventoryMessage, InventoryMessage>> for P2PoolBehaviourEvent {
-    fn from(event: RequestResponseEvent<InventoryMessage, InventoryMessage>) -> Self {
+impl From<RequestResponseEvent<Message, Message>> for P2PoolBehaviourEvent {
+    fn from(event: RequestResponseEvent<Message, Message>) -> Self {
         P2PoolBehaviourEvent::RequestResponse(event)
     }
 }

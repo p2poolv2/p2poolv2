@@ -22,7 +22,7 @@ use crate::shares::{BlockHash, TxHash, ShareBlock};
 /// Message trait for network messages that can be serialized/deserialized
 /// The trait provides a default implementation for serialization/deserialization
 /// using the ciborium crate.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Message {
     Inventory(InventoryMessage),
     GetData(GetData),

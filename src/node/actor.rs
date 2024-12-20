@@ -68,8 +68,7 @@ impl NodeHandle {
     /// Send a message to a specific peer
     pub async fn send_to_peer(&self, peer_id: libp2p::PeerId, message: Message) -> Result<(), Box<dyn Error>> {
         let (tx, rx) = oneshot::channel();
-        let buf = message.cbor_serialize().unwrap();
-        self.command_tx.send(Command::SendToPeer(peer_id, buf, tx)).await?;
+        self.command_tx.send(Command::SendToPeer(peer_id, message, tx)).await?;
         Ok(rx.await?)
     }
 
@@ -105,8 +104,8 @@ impl NodeActor {
                             self.node.send_gossip(buf);
                             tx.send(()).unwrap();
                         },
-                        Some(Command::SendToPeer(peer_id, buf, tx)) => {
-                            self.node.send_to_peer(peer_id, buf);
+                        Some(Command::SendToPeer(peer_id, message, tx)) => {
+                            self.node.send_to_peer(peer_id, message);
                             tx.send(()).unwrap();
                         },
                         Some(Command::Shutdown(tx)) => {
