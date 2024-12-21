@@ -9,6 +9,13 @@ services:
       - "38333:38333" # P2P port
       - "38332:38332" # RPC port
     restart: unless-stopped
+  cpuminer:
+    build:
+      context: .
+      dockerfile: Dockerfile.cpuminer
+    depends_on:
+      - bitcoind
+    restart: unless-stopped
 
 volumes:
   bitcoin_data:

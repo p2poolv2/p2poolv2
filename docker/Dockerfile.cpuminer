@@ -1,0 +1,33 @@
+FROM alpine:latest as builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    build-base \
+    autoconf \
+    automake \
+    curl-dev \
+    jansson-dev \
+    git
+
+# Clone cpuminer repository
+RUN git clone https://github.com/pooler/cpuminer.git /cpuminer
+
+# Build cpuminer
+WORKDIR /cpuminer
+RUN ./autogen.sh
+RUN ./configure CFLAGS="-O3"
+RUN make -j$(nproc)
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    libcurl \
+    jansson \
+    libstdc++
+
+# Create miner user
+RUN adduser -S miner
+
+USER miner
+
+ENTRYPOINT ["minerd"]
+CMD ["--help"]
