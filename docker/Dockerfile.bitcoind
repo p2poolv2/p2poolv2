@@ -1,0 +1,53 @@
+FROM alpine:latest as builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    autoconf \
+    automake \
+    boost-dev \
+    build-base \
+    libtool \
+    linux-headers \
+    openssl-dev \
+    libevent-dev \
+    zeromq-dev \
+    sqlite-dev \
+    git \
+    curl
+
+# Clone the latest release from Bitcoin Core repository
+RUN git clone --depth 1 --branch v28.0 https://github.com/bitcoin/bitcoin.git /bitcoin
+
+# Build Bitcoin Core
+WORKDIR /bitcoin
+RUN ./autogen.sh
+RUN ./configure --with-miniupnpc=no --without-gui --disable-zmq --disable-tests --disable-bench
+RUN make -j$(nproc)
+RUN make install
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    boost-system \
+    boost-filesystem \
+    boost-thread \
+    libevent \
+    libzmq \
+    libstdc++ \
+    sqlite-libs
+
+# Create bitcoin user
+RUN adduser -S bitcoin
+RUN addgroup -S bitcoin
+
+# Create data directory
+RUN mkdir /data
+RUN chown bitcoin:bitcoin /data
+
+USER bitcoin
+VOLUME ["/data"]
+
+EXPOSE 8332 8333
+
+COPY bitcoin-signet.conf /bitcoin-signet.conf
+ENTRYPOINT ["bitcoind"]
+CMD ["-datadir=/data", "-conf=/bitcoin-signet.conf"]
