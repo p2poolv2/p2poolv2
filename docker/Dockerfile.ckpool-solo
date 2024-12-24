@@ -1,0 +1,44 @@
+# Use Debian Bullseye as the base image as alipine does not support fenv.h
+FROM ubuntu:latest AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    autoconf \
+    automake \
+    libtool \
+    git \
+    libjansson-dev \
+    libcurl4 \
+    libcurl4-openssl-dev \
+    yasm \
+    libzmq3-dev \
+    pkgconf \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone ckpool repository
+RUN git clone https://bitbucket.org/ckolivas/ckpool-solo.git /ckpool
+
+# Build ckpool
+WORKDIR /ckpool
+RUN ./autogen.sh
+RUN ./configure
+RUN make -j$(nproc)
+
+# Create ckpool user
+RUN useradd -r -s /bin/false ckpool
+
+# Create data directory
+RUN mkdir /data
+RUN mkdir /logs
+RUN chown ckpool:ckpool /data
+RUN chown ckpool:ckpool /logs
+COPY ckpool-solo.json /ckpool-solo.json
+
+USER ckpool
+VOLUME ["/data"]
+
+EXPOSE 3333
+
+ENTRYPOINT ["src/ckpool"]
+CMD ["--btcsolo", "--config=/ckpool-solo.json"]

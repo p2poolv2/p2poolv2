@@ -15,7 +15,15 @@ services:
       dockerfile: Dockerfile.cpuminer
     depends_on:
       - bitcoind
+      - ckpool-solo
     restart: unless-stopped
-
+  ckpool-solo:
+    build:
+      context: .
+      dockerfile: Dockerfile.ckpool-solo
+    depends_on:
+      - bitcoind
+    restart: unless-stopped
+    
 volumes:
   bitcoin_data:
