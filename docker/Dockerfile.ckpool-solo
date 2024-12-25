@@ -17,7 +17,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Clone ckpool repository
-RUN git clone https://bitbucket.org/ckolivas/ckpool-solo.git /ckpool
+RUN git clone https://bitbucket.org/p2pool-v2/ckpool-solo.git /ckpool && \
+    cd /ckpool && \
+    git checkout da5b810b066c9ec5ebf4e07ca4879e1e61f4bb59
 
 # Build ckpool
 WORKDIR /ckpool
@@ -41,4 +43,4 @@ VOLUME ["/data"]
 EXPOSE 3333
 
 ENTRYPOINT ["src/ckpool"]
-CMD ["--btcsolo", "--config=/ckpool-solo.json"]
+CMD ["--btcsolo", "--config=/ckpool-solo.json", "--loglevel=7"]

@@ -7,7 +7,7 @@
 		"notify" : false
 	}
 ],
-"btcaddress" : "14BMjogz69qe8hk9thyzbmR5pg34mVKB1e",
+"btcaddress" : "tb1qjc2zkm30zr0253clgc9dxjhtpp0j26v0wufeq3",
 "btcsig" : "/p2poolv2/",
 "blockpoll" : 100,
 "donation" : 2.0,
@@ -23,5 +23,6 @@
 "maxdiff" : 0,
 "maxclients" : 1,
 "zmqblock" : "tcp://bitcoind:28332",
-"logdir" : "/logs"
+"logdir" : "/tmp/logs",
+"btcnetwork" : "signet"
 }
