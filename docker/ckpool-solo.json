@@ -16,10 +16,10 @@
 "update_interval" : 30,
 "version_mask" : "1fffe000",
 "serverurl" : [
-	"localhost:3333"
+	"0.0.0.0:3333"
 ],
 "mindiff" : 1,
-"startdiff" : 42,
+"startdiff" : 1,
 "maxdiff" : 0,
 "maxclients" : 1,
 "zmqblock" : "tcp://bitcoind:28332",
