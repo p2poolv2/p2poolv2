@@ -15,12 +15,14 @@ services:
       dockerfile: Dockerfile.cpuminer
     depends_on:
       - bitcoind
-      - ckpool-solo
+      - ckpool
     restart: unless-stopped
-  ckpool-solo:
+  ckpool:
     build:
       context: .
       dockerfile: Dockerfile.ckpool-solo
+    ports:
+      - "3333:3333"
     depends_on:
       - bitcoind
     restart: unless-stopped
