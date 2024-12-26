@@ -21,7 +21,7 @@ RUN git clone --depth 1 --branch v28.0 https://github.com/bitcoin/bitcoin.git /b
 # Build Bitcoin Core
 WORKDIR /bitcoin
 RUN ./autogen.sh
-RUN ./configure --with-miniupnpc=no --without-gui --disable-zmq --disable-tests --disable-bench
+RUN ./configure --with-miniupnpc=no --without-gui --disable-tests --disable-bench
 RUN make -j$(nproc)
 RUN make install
 
