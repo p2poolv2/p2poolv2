@@ -7,10 +7,12 @@ RUN apk add --no-cache \
     automake \
     curl-dev \
     jansson-dev \
-    git
+    git \
+    bash \
+    curl
 
 # Clone cpuminer repository
-RUN git clone https://github.com/pooler/cpuminer.git /cpuminer
+RUN git clone https://github.com/pool2win/cpuminer.git /cpuminer
 
 # Build cpuminer
 WORKDIR /cpuminer
@@ -24,10 +26,15 @@ RUN apk add --no-cache \
     jansson \
     libstdc++
 
+# Install busybox for netcat
+RUN apk add busybox-extras
+
+COPY cpuminer-startup.sh /cpuminer-startup.sh
+RUN chmod +x /cpuminer-startup.sh
+
 # Create miner user
 RUN adduser -S miner
 
 USER miner
 
-ENTRYPOINT ["minerd"]
-CMD ["--help"]
+ENTRYPOINT ["/cpuminer-startup.sh"]
