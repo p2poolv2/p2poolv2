@@ -2,10 +2,10 @@
 
 Rebooting P2Pool
 
-1. share chain with uncles - all your work is accountied for
-2. pay large miners in coinbase - non custodial solution for top N miners
-3. support transactions - pay all miners with atomic swaps with market makers
-4. market makers buy shares from smaller miners - earning virgin coins
+1. Share chain with uncles - all your work is accountied for.
+2. Pay large miners in coinbase - non custodial solution for top N miners.
+3. Support transactions - pay all miners with atomic swaps with market makers.
+4. Market makers buy shares from smaller miners - earning virgin coins.
 
 == Run with Docker
 
