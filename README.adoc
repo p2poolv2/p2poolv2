@@ -7,7 +7,9 @@ Rebooting P2Pool
 3. support transactions - pay all miners with atomic swaps with market makers
 4. market makers buy shares from smaller miners - earning virgin coins
 
-== Setup with Docker
+== Run with Docker
+
+All docker commands are run from the docker directory.
 
 Start your local p2pool node:
 
@@ -16,6 +18,24 @@ Start your local p2pool node:
 Shutdown your local p2pool node:
 
 `docker compose down`
+
+=== Run individual docker containers
+
+During development, you may want to run individual containers.
+
+Remember, all docker commands are run from the docker directory.
+
+Start bitcoind signet
+
+`docker compose up bitcoind`
+
+Start ckpool-solo   
+
+`docker compose up ckpool-solo`
+
+Start cpuminer to start producing shares
+
+`docker compose up cpuminer`
 
 == Masochistic Setup
 
