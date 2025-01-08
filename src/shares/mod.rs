@@ -14,14 +14,17 @@
 // You should have received a copy of the GNU General Public License along with 
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>. 
 
+
+pub mod store;
+pub mod chain;
+pub mod miner_work;
+
 use std::error::Error;
 use crate::shares::store::Store;
 use hex;
 use serde::{Serialize, Deserialize};
-pub mod store;
-pub mod chain;
-pub mod miner_work;
 use crate::node::messages::Message;
+use crate::shares::miner_work::MinerWork;
 
 pub type Nonce =  Vec<u8>;
 pub type BlockHash = Vec<u8>;
@@ -56,6 +59,9 @@ pub struct ShareBlock{
 
     /// The difficulty of the share
     pub difficulty: u64,
+
+    /// The miner work for the share
+    pub miner_work: MinerWork,
 }
 
 /// Validate the share block, returning Error in case of failure to validate
@@ -92,6 +98,7 @@ mod tests {
             timestamp: 1234567890,
             tx_hashes: vec![vec![13, 14, 15]],
             difficulty: 100,
+            miner_work: MinerWork::default(),
         };
 
         let serialized = Message::ShareBlock(share.clone()).cbor_serialize().unwrap();
@@ -110,5 +117,6 @@ mod tests {
         assert_eq!(share.timestamp, deserialized.timestamp);
         assert_eq!(share.tx_hashes, deserialized.tx_hashes);
         assert_eq!(share.difficulty, deserialized.difficulty);
+        assert_eq!(share.miner_work, deserialized.miner_work);
     }
 }

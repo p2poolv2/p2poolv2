@@ -102,7 +102,7 @@ impl Chain {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use crate::shares::miner_work::MinerWork;
     #[test]
     /// Setup a test chain with 3 shares on the main chain, where shares 2 and 3 have two uncles each
     fn test_chain_add_shares() {
@@ -119,6 +119,7 @@ mod tests {
             timestamp: 1,
             tx_hashes: vec![],
             difficulty: 1,
+            miner_work: MinerWork::default(),
         };
         chain.add_share(share1.clone()).unwrap();
 
@@ -135,6 +136,7 @@ mod tests {
             timestamp: 2,
             tx_hashes: vec![],
             difficulty: 1,
+            miner_work: MinerWork::default(),
         };
         let uncle2_share2 = ShareBlock {
             nonce: vec![22], 
@@ -145,6 +147,7 @@ mod tests {
             timestamp: 2,
             tx_hashes: vec![],
             difficulty: 1,
+            miner_work: MinerWork::default(),
         };
         chain.add_share(uncle1_share2.clone()).unwrap();
         chain.add_share(uncle2_share2.clone()).unwrap();
@@ -163,6 +166,7 @@ mod tests {
             timestamp: 2,
             tx_hashes: vec![],
             difficulty: 2,
+            miner_work: MinerWork::default(),
         };
         chain.add_share(share2.clone()).unwrap();
 
@@ -179,6 +183,7 @@ mod tests {
             timestamp: 3,
             tx_hashes: vec![],
             difficulty: 1,
+            miner_work: MinerWork::default(),
         };
         let uncle2_share3 = ShareBlock {
             nonce: vec![32],
@@ -189,6 +194,7 @@ mod tests {
             timestamp: 3,
             tx_hashes: vec![],
             difficulty: 2,
+            miner_work: MinerWork::default(),
         };
         chain.add_share(uncle1_share3.clone()).unwrap();
         chain.add_share(uncle2_share3.clone()).unwrap();
@@ -206,6 +212,7 @@ mod tests {
             timestamp: 3,
             tx_hashes: vec![],
             difficulty: 3,
+            miner_work: MinerWork::default(),
         };
         chain.add_share(share3.clone()).unwrap();
 
@@ -233,6 +240,7 @@ mod tests {
                 timestamp: i as u64,
                 tx_hashes: vec![],
                 difficulty: 1,
+                miner_work: MinerWork::default(),
             };
             blocks.push(share.clone());
             chain.add_share(share.clone()).unwrap();

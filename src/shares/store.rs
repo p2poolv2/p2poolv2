@@ -109,7 +109,7 @@ impl Drop for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use crate::shares::miner_work::MinerWork;
     #[test]
     fn test_chain_with_uncles() {
         let mut store = Store::new("test_chain_with_uncles.db".to_string());
@@ -124,6 +124,7 @@ mod tests {
             timestamp: 1,
             tx_hashes: vec![],
             difficulty: 1,
+            miner_work: MinerWork::default(),
         };
 
         // Create uncles for share2
@@ -136,6 +137,7 @@ mod tests {
             timestamp: 2,
             tx_hashes: vec![],
             difficulty: 1,
+            miner_work: MinerWork::default(),
         };
 
         let uncle2_share2 = ShareBlock {
@@ -147,6 +149,7 @@ mod tests {
             timestamp: 2,
             tx_hashes: vec![],
             difficulty: 1,
+            miner_work: MinerWork::default(),
         };
 
         // Create share2 with uncles
@@ -159,6 +162,7 @@ mod tests {
             timestamp: 2,
             tx_hashes: vec![],
             difficulty: 1,
+            miner_work: MinerWork::default(),
         };
 
         // Create uncles for share3
@@ -171,6 +175,7 @@ mod tests {
             timestamp: 3,
             tx_hashes: vec![],
             difficulty: 1,
+            miner_work: MinerWork::default(),
         };
 
         let uncle2_share3 = ShareBlock {
@@ -182,6 +187,7 @@ mod tests {
             timestamp: 3,
             tx_hashes: vec![],
             difficulty: 1,
+            miner_work: MinerWork::default(),
         };
 
         // Create share3 with uncles
@@ -194,6 +200,7 @@ mod tests {
             timestamp: 3,
             tx_hashes: vec![],
             difficulty: 1,
+            miner_work: MinerWork::default(),
         };
 
         // Add all shares to store
