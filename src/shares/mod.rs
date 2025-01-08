@@ -18,9 +18,9 @@ use std::error::Error;
 use crate::shares::store::Store;
 use hex;
 use serde::{Serialize, Deserialize};
-use tracing::error;
 pub mod store;
 pub mod chain;
+pub mod miner_work;
 use crate::node::messages::Message;
 
 pub type Nonce =  Vec<u8>;
