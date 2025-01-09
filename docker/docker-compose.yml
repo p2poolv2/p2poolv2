@@ -23,6 +23,7 @@ services:
       dockerfile: Dockerfile.ckpool-solo
     ports:
       - "3333:3333"
+      - "8881:8881"
     depends_on:
       - bitcoind
     restart: unless-stopped
