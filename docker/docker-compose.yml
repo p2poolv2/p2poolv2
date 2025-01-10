@@ -27,6 +27,14 @@ services:
     depends_on:
       - bitcoind
     restart: unless-stopped
+  p2pool:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.p2pool
+    depends_on:
+      - bitcoind
+      - ckpool
+    restart: unless-stopped
     
 volumes:
   bitcoin_data:

@@ -1,0 +1,42 @@
+# Build stage
+FROM rust:1.83-slim-bullseye
+
+# Install required build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    clang \
+    pkg-config \
+    libzmq3-dev \
+    git \
+    cmake \
+    libzstd-dev \
+    libsnappy-dev \
+    libbz2-dev \
+    liblz4-dev \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build and install RocksDB
+RUN git clone --depth 1 --branch v7.10.2 https://github.com/facebook/rocksdb.git && \
+    cd rocksdb && \
+    PORTABLE=1 make -j$(nproc) shared_lib && \
+    cp librocksdb.so* /usr/lib/ && \
+    cp -r include/rocksdb /usr/include/ && \
+    cd .. && \
+    rm -rf rocksdb
+
+# Create and set working directory
+RUN mkdir -p /p2pool
+COPY src/ /p2pool/src
+COPY Cargo.lock /p2pool
+COPY Cargo.toml /p2pool
+WORKDIR /p2pool
+
+# Build p2pool
+RUN cargo build --release
+
+COPY config.toml /p2pool
+ENV RUST_LOG=info
+
+# Set the binary as the entrypoint
+ENTRYPOINT ["cargo", "run", "--release",  "--", "--config=config.toml"] 
