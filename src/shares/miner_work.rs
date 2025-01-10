@@ -42,6 +42,54 @@ pub struct MinerWork {
     pub agent: String,
 }
 
+impl MinerWork {
+    /// Validates the miner work against provided difficulty thresholds
+    /// 
+    /// # Arguments
+    /// * `max_diff` - Maximum allowed difficulty value
+    /// * `max_sdiff` - Maximum allowed share difficulty value
+    ///
+    /// # Returns
+    /// * `Ok(())` if validation passes
+    /// * `Err(String)` with error message if validation fails
+    pub fn validate(&self, max_diff: Decimal, max_sdiff: Decimal) -> Result<(), String> {
+        // Check difficulty thresholds
+        if self.diff > max_diff {
+            return Err(format!("Difficulty {} exceeds max diff {}", self.diff, max_diff));
+        }
+
+        if self.sdiff > max_sdiff {
+            return Err(format!("Share difficulty {} exceeds max sdiff {}", self.sdiff, max_sdiff));
+        }
+
+        // Verify the hash meets required share difficulty
+        // Convert hash to u256 for comparison
+        let hash_bytes = hex::decode(&self.hash)
+            .map_err(|e| format!("Invalid hash hex: {}", e))?;
+
+        if hash_bytes.len() != 32 {
+            return Err(format!("Invalid hash length: {}", hash_bytes.len()));
+        }
+
+        // Convert nonce to bytes for verification
+        let nonce_bytes = hex::decode(&self.nonce)
+            .map_err(|e| format!("Invalid nonce hex: {}", e))?;
+
+        if nonce_bytes.len() != 4 {
+            return Err(format!("Invalid nonce length: {}", nonce_bytes.len()));
+        }
+
+        // TODO: Implement actual hash verification against sdiff
+        // This would involve:
+        // 1. Reconstructing the block header with the nonce
+        // 2. Hashing it to verify it matches self.hash
+        // 3. Verifying the hash meets the required sdiff threshold
+        // For now we just validate the formats
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,5 +122,30 @@ mod tests {
         
         // Verify the round-trip
         assert_eq!(miner_work, deserialized);
+    }
+    #[test]
+    fn test_validate_share() {
+        let json = r#"{"workinfoid": 7452731920372203525, "clientid": 1, "enonce1": "336c6d67", "nonce2": "0000000000000000", "nonce": "2eb7b82b", "ntime": "676d6caa", "diff": 1.0, "sdiff": 1.9041854952356509, "hash": "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5", "result": true, "errn": 0, "createdate": "1735224559,536904211", "createby": "code", "createcode": "parse_submit", "createinet": "0.0.0.0:3333", "workername": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d", "username": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d", "address": "172.19.0.4", "agent": "cpuminer/2.5.1"}"#;
+
+        // Deserialize JSON to MinerWork
+        let miner_work: MinerWork = serde_json::from_str(json).unwrap();
+
+        // Validate the share
+        let result = miner_work.validate(dec!(1.0), dec!(1.9041854952356509));
+        assert!(result.is_ok());
+
+        // Test invalid nonce
+        let mut invalid_miner_work = miner_work.clone();
+        invalid_miner_work.nonce = "invalidhex".to_string();
+        let result: Result<(), String> = invalid_miner_work.validate(dec!(1.0), dec!(1.9041854952356509));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid nonce hex: Invalid character \'i\' at position 0");
+
+        // Test invalid nonce length
+        let mut invalid_miner_work = miner_work.clone();
+        invalid_miner_work.nonce = "2eb7b8".to_string();
+        let result = invalid_miner_work.validate(dec!(1.0), dec!(1.9041854952356509));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid nonce length: 3");
     }
 }
