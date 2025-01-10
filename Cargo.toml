@@ -2,6 +2,7 @@
 name = "p2pool-v2"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.83"
 
 [dependencies]
 libp2p = { version = "0.53", features = ["tcp", "dns", "tokio", "noise", "yamux", "identify", "macros", "ping", "gossipsub", "kad", "mdns", "secp256k1", "request-response"] }
