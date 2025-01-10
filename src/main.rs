@@ -16,6 +16,7 @@
 
 use clap::Parser;
 use std::error::Error;
+use std::thread;
 use tracing_subscriber::EnvFilter;
 use tracing::{debug, info};
 mod node;
@@ -26,7 +27,8 @@ mod command;
 use crate::node::actor::NodeHandle;
 use tracing::error;
 use crate::node::messages::Message;
-use crate::shares::ShareBlock;
+use crate::shares::miner_work::MinerWork;
+use crate::shares::receiver::receive;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -50,9 +52,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     if let Ok((node_handle, stopping_rx)) = NodeHandle::new(config).await {
         info!("Node started");
-        tokio::spawn(async move {
-            send_share(node_handle).await;
-        });
+        if let Err(e) = start_receiving_shares(node_handle.clone()) {
+            error!("Failed to start receiving shares: {}", e);
+            return Err(e.into());
+        }
         stopping_rx.await?;
         info!("Node stopped");
     } else {
@@ -61,13 +64,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Place holder for sending shares to the network
-async fn send_share(node_handle: NodeHandle) {
-    loop {  
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        let share = ShareBlock::default();
-        if let Err(e) = node_handle.send_gossip(Message::ShareBlock(share)).await {
-            error!("Failed to send share: {}", e);
+fn start_receiving_shares(node_handle: NodeHandle) -> Result<(), Box<dyn Error>> {
+    let (share_tx, mut share_rx) = tokio::sync::mpsc::channel::<serde_json::Value>(100);
+    thread::spawn(move || {
+        if let Err(e) = receive(share_tx) {
+            error!("Share receiver failed: {}", e);
         }
-    }
+    });
+    tokio::spawn(async move {
+        while let Some(miner_work_data) = share_rx.recv().await {
+            info!("Received share: {:?}", miner_work_data);
+            let miner_work: MinerWork = serde_json::from_value(miner_work_data).unwrap();
+            // if let Err(e) = node_handle.send_gossip(Message::MinerWork(miner_work)).await {
+            //     error!("Failed to send share: {}", e);
+            // }
+        }
+    });
+    Ok(())
 }

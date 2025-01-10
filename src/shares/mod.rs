@@ -18,6 +18,7 @@
 pub mod store;
 pub mod chain;
 pub mod miner_work;
+pub mod receiver;
 
 use std::error::Error;
 use crate::shares::store::Store;
