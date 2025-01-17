@@ -17,15 +17,14 @@
 
 pub mod store;
 pub mod chain;
-pub mod miner_work;
-pub mod receiver;
-
+pub mod miner_message;
+pub mod miner_socket;
 use std::error::Error;
 use crate::shares::store::Store;
 use hex;
 use serde::{Serialize, Deserialize};
 use crate::node::messages::Message;
-use crate::shares::miner_work::MinerWork;
+use crate::shares::miner_message::MinerShare;
 
 pub type Nonce =  Vec<u8>;
 pub type BlockHash = Vec<u8>;
@@ -62,8 +61,16 @@ pub struct ShareBlock{
     pub difficulty: u64,
 
     /// The miner work for the share
-    pub miner_work: MinerWork,
+    pub miner_share: MinerShare,
 }
+
+// impl ShareBlock{
+//     pub fn new(miner_work: MinerWork) -> Self {
+//         Self {
+//             miner_work,
+//         }
+//     }
+// }
 
 /// Validate the share block, returning Error in case of failure to validate
 /// TODO: validate nonce and blockhash meets difficulty
@@ -99,7 +106,7 @@ mod tests {
             timestamp: 1234567890,
             tx_hashes: vec![vec![13, 14, 15]],
             difficulty: 100,
-            miner_work: MinerWork::default(),
+            miner_share: MinerShare::default(),
         };
 
         let serialized = Message::ShareBlock(share.clone()).cbor_serialize().unwrap();
@@ -118,6 +125,6 @@ mod tests {
         assert_eq!(share.timestamp, deserialized.timestamp);
         assert_eq!(share.tx_hashes, deserialized.tx_hashes);
         assert_eq!(share.difficulty, deserialized.difficulty);
-        assert_eq!(share.miner_work, deserialized.miner_work);
+        assert_eq!(share.miner_share, deserialized.miner_share);
     }
 }

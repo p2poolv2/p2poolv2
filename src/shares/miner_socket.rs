@@ -7,12 +7,12 @@ const ENDPOINT: &str = "tcp://localhost:8881";
 
 // Define a trait for the socket operations we need
 // Use a trait to enable testing with a mock socket
-trait ShareSocket {
+trait MinerSocket {
     fn recv_string(&self) -> Result<Result<String, Vec<u8>>, zmq::Error>;
 }
 
 // Implement the trait for the real ZMQ socket
-impl ShareSocket for zmq::Socket {
+impl MinerSocket for zmq::Socket {
     fn recv_string(&self) -> Result<Result<String, Vec<u8>>, zmq::Error> {
         self.recv_string(0)
     }
@@ -29,7 +29,7 @@ fn create_zmq_socket() -> Result<zmq::Socket, Box<dyn Error>> {
 
 // Generic function to receive shares from any ShareSocket
 // This is generic to enable testing with a mock socket
-fn receive_shares<S: ShareSocket>(
+fn receive_shares<S: MinerSocket>(
     socket: &S,
     tx: tokio::sync::mpsc::Sender<Value>
 ) -> Result<(), Box<dyn Error>> {
@@ -88,7 +88,7 @@ mod tests {
         }
     }
 
-    impl ShareSocket for MockSocket {
+    impl MinerSocket for MockSocket {
         fn recv_string(&self) -> Result<Result<String, Vec<u8>>, zmq::Error> {
             if self.current >= self.messages.len() {
                 panic!("No more mock messages");

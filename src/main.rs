@@ -27,8 +27,8 @@ mod command;
 use crate::node::actor::NodeHandle;
 use tracing::error;
 use crate::node::messages::Message;
-use crate::shares::miner_work::MinerWork;
-use crate::shares::receiver::receive;
+use crate::shares::miner_message::MinerMessage;
+use crate::shares::miner_socket::receive;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -72,9 +72,10 @@ fn start_receiving_shares(node_handle: NodeHandle) -> Result<(), Box<dyn Error>>
         }
     });
     tokio::spawn(async move {
-        while let Some(miner_work_data) = share_rx.recv().await {
-            info!("Received share: {:?}", miner_work_data);
-            let miner_work: MinerWork = serde_json::from_value(miner_work_data).unwrap();
+        while let Some(miner_share_data) = share_rx.recv().await {
+            info!("Received miner message serialized: {:?}", miner_share_data);
+            let miner_message: MinerMessage = serde_json::from_value(miner_share_data).unwrap();
+            info!("ReceivedMiner message deserialized: {:?}", miner_message);
             // if let Err(e) = node_handle.send_gossip(Message::MinerWork(miner_work)).await {
             //     error!("Failed to send share: {}", e);
             // }
