@@ -17,6 +17,7 @@
 use serde::{Serialize, Deserialize};
 use std::error::Error;
 use crate::shares::{BlockHash, TxHash, ShareBlock};
+use crate::shares::miner_message::MinerWorkbase;
 
 
 /// Message trait for network messages that can be serialized/deserialized
@@ -27,6 +28,7 @@ pub enum Message {
     Inventory(InventoryMessage),
     GetData(GetData),
     ShareBlock(ShareBlock),
+    Workbase(MinerWorkbase),
 }
 
 impl Message {

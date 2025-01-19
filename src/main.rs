@@ -24,11 +24,13 @@ mod config;
 mod shares;
 mod command;
 
+#[mockall_double::double]
 use crate::node::actor::NodeHandle;
 use tracing::error;
 use crate::node::messages::Message;
 use crate::shares::miner_message::MinerMessage;
 use crate::shares::miner_socket::receive;
+use crate::shares::handle_mining_message::handle_mining_message;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -52,7 +54,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     if let Ok((node_handle, stopping_rx)) = NodeHandle::new(config).await {
         info!("Node started");
-        if let Err(e) = start_receiving_shares(node_handle.clone()) {
+        if let Err(e) = start_receiving_mining_messages(node_handle.clone()) {
             error!("Failed to start receiving shares: {}", e);
             return Err(e.into());
         }
@@ -64,21 +66,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn start_receiving_shares(node_handle: NodeHandle) -> Result<(), Box<dyn Error>> {
-    let (share_tx, mut share_rx) = tokio::sync::mpsc::channel::<serde_json::Value>(100);
+fn start_receiving_mining_messages(node_handle: NodeHandle) -> Result<(), Box<dyn Error>> {
+    let (mining_message_tx, mut mining_message_rx) = tokio::sync::mpsc::channel::<serde_json::Value>(100);
     thread::spawn(move || {
-        if let Err(e) = receive(share_tx) {
+        if let Err(e) = receive(mining_message_tx) {
             error!("Share receiver failed: {}", e);
         }
     });
     tokio::spawn(async move {
-        while let Some(miner_share_data) = share_rx.recv().await {
-            info!("Received miner message serialized: {:?}", miner_share_data);
-            let miner_message: MinerMessage = serde_json::from_value(miner_share_data).unwrap();
-            info!("ReceivedMiner message deserialized: {:?}", miner_message);
-            // if let Err(e) = node_handle.send_gossip(Message::MinerWork(miner_work)).await {
-            //     error!("Failed to send share: {}", e);
-            // }
+        while let Some(mining_message_data) = mining_message_rx.recv().await {
+            info!("Received mining message serialized: {:?}", mining_message_data);
+            let mining_message: MinerMessage = serde_json::from_value(mining_message_data).unwrap();
+            info!("Received mining message deserialized: {:?}", mining_message);
+    
+            if let Err(e) = handle_mining_message(mining_message, &node_handle).await {
+                error!("Failed to handle mining message: {}", e);
+            }
         }
     });
     Ok(())

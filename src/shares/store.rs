@@ -18,7 +18,8 @@ use crate::shares::{ShareBlock, BlockHash};
 use rocksdb::DB;
 use tracing::debug;
 use crate::node::messages::Message;
-use crate::config::Config;
+use crate::shares::miner_message::MinerWorkbase;
+use std::error::Error;
 
 /// A store for share blocks, for now it is just a simple in-memory store
 /// TODO: Implement a persistent store
@@ -38,6 +39,13 @@ impl Store {
     pub fn add_share(&mut self, share: ShareBlock) {
         debug!("Adding share to store: {:?}", share.blockhash);
         self.db.put(share.blockhash.clone(), Message::ShareBlock(share).cbor_serialize().unwrap()).unwrap();
+    }
+
+    /// Add a workbase to the store
+    pub fn add_workbase(&mut self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error>> {
+        debug!("Adding workbase to store: {:?}", workbase.workinfoid);
+        self.db.put(workbase.workinfoid.to_string().as_bytes(), Message::Workbase(workbase).cbor_serialize().unwrap()).unwrap();
+        Ok(())
     }
 
     /// Get a share from the store

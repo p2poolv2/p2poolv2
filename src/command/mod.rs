@@ -16,6 +16,10 @@
 
 use tokio::sync::oneshot;
 use crate::node::messages::Message;
+use crate::shares::ShareBlock;
+use crate::shares::miner_message::MinerWorkbase;
+use std::error::Error;
+
 /// Commands for communication between node handle and actor
 pub enum Command{
     /// Command telling node's event loop to send share to network
@@ -26,4 +30,8 @@ pub enum Command{
     GetPeers(oneshot::Sender<Vec<libp2p::PeerId>>),
     /// Command to shutdown node
     Shutdown(oneshot::Sender<()>),
+    /// Command to add share to the chain
+    AddShare(ShareBlock, oneshot::Sender<Result<(), Box<dyn Error + Send + Sync>>>),
+    /// Command to store workbase in the node's database
+    StoreWorkbase(MinerWorkbase, oneshot::Sender<Result<(), Box<dyn Error + Send + Sync>>>),
 }

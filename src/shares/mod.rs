@@ -19,6 +19,7 @@ pub mod store;
 pub mod chain;
 pub mod miner_message;
 pub mod miner_socket;
+pub mod handle_mining_message;
 use std::error::Error;
 use crate::shares::store::Store;
 use hex;
@@ -64,13 +65,22 @@ pub struct ShareBlock{
     pub miner_share: MinerShare,
 }
 
-// impl ShareBlock{
-//     pub fn new(miner_work: MinerWork) -> Self {
-//         Self {
-//             miner_work,
-//         }
-//     }
-// }
+impl ShareBlock{
+    pub fn new(miner_share: MinerShare) -> Self {
+        let share = miner_share.clone();
+        Self {
+            nonce: hex::decode(miner_share.nonce).unwrap(),
+            blockhash: hex::decode(miner_share.hash).unwrap(),
+            prev_share_blockhash: vec![],
+            uncles: vec![],
+            miner_pubkey: vec![],
+            timestamp: u64::from_str_radix(&miner_share.ntime, 16).unwrap(),
+            tx_hashes: vec![],
+            difficulty: miner_share.diff.to_string().parse::<f64>().unwrap(),
+            miner_share: share,
+        }
+    }
+}
 
 /// Validate the share block, returning Error in case of failure to validate
 /// TODO: validate nonce and blockhash meets difficulty
