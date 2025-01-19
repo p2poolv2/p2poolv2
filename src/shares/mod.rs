@@ -58,7 +58,7 @@ pub struct ShareBlock{
     pub tx_hashes: Vec<TxHash>,
 
     /// The difficulty of the share
-    pub difficulty: u64,
+    pub difficulty: f64,
 
     /// The miner work for the share
     pub miner_share: MinerShare,
@@ -105,7 +105,7 @@ mod tests {
             miner_pubkey: vec![10, 11, 12],
             timestamp: 1234567890,
             tx_hashes: vec![vec![13, 14, 15]],
-            difficulty: 100,
+            difficulty: 100.0,
             miner_share: MinerShare::default(),
         };
 

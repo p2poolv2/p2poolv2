@@ -123,7 +123,7 @@ mod tests {
             miner_pubkey: vec![1],
             timestamp: 1,
             tx_hashes: vec![],
-            difficulty: 1,
+            difficulty: 1.0,
             miner_share: MinerShare::default(),
         };
 
@@ -136,7 +136,7 @@ mod tests {
             miner_pubkey: vec![21],
             timestamp: 2,
             tx_hashes: vec![],
-            difficulty: 1,
+            difficulty: 1.0,
             miner_share: MinerShare::default(),
         };
 
@@ -148,7 +148,7 @@ mod tests {
             miner_pubkey: vec![22],
             timestamp: 2,
             tx_hashes: vec![],
-            difficulty: 1,
+            difficulty: 1.0,
             miner_share: MinerShare::default(),
         };
 
@@ -161,7 +161,7 @@ mod tests {
             miner_pubkey: vec![2],
             timestamp: 2,
             tx_hashes: vec![],
-            difficulty: 1,
+            difficulty: 1.0,
             miner_share: MinerShare::default(),
         };
 
@@ -174,7 +174,7 @@ mod tests {
             miner_pubkey: vec![31],
             timestamp: 3,
             tx_hashes: vec![],
-            difficulty: 1,
+            difficulty: 1.0,
             miner_share: MinerShare::default(),
         };
 
@@ -186,7 +186,7 @@ mod tests {
             miner_pubkey: vec![32],
             timestamp: 3,
             tx_hashes: vec![],
-            difficulty: 1,
+            difficulty: 1.0,
             miner_share: MinerShare::default(),
         };
 
@@ -199,7 +199,7 @@ mod tests {
             miner_pubkey: vec![3],
             timestamp: 3,
             tx_hashes: vec![],
-            difficulty: 1,
+            difficulty: 1.0,
             miner_share: MinerShare::default(),
         };
 
