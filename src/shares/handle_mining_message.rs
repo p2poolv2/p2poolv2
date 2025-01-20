@@ -86,5 +86,55 @@ mod tests {
         
         assert!(result.is_ok());
     }
+
+    #[tokio::test]
+    async fn test_handle_mining_message_share_send_gossip_error() {
+        let mut mock_handle = NodeHandle::default();
+        
+        // Setup expectations
+        mock_handle
+            .expect_add_share()
+            .times(1)
+            .returning(|_| Ok(()));
+        
+        mock_handle
+            .expect_send_gossip()
+            .times(1)
+            .returning(|_| Err("Failed to send gossip".into()));
+
+        let json = r#"{"workinfoid": 7452731920372203525, "clientid": 1, "enonce1": "336c6d67", "nonce2": "0000000000000000", "nonce": "2eb7b82b", "ntime": "676d6caa", "diff": 1.0, "sdiff": 1.9041854952356509, "hash": "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5", "result": true, "errn": 0, "createdate": "1735224559,536904211", "createby": "code", "createcode": "parse_submit", "createinet": "0.0.0.0:3333", "workername": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d", "username": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d", "address": "172.19.0.4", "agent": "cpuminer/2.5.1"}"#;
+        let miner_share: MinerShare = serde_json::from_str(json).unwrap();
+        let mining_message = MinerMessage::Share(miner_share);
+
+        let result = handle_mining_message(mining_message, &mock_handle).await;
+        
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Error sending share to network");
+    }
+
+    #[tokio::test]
+    async fn test_handle_mining_message_share_add_share_error() {
+        let mut mock_handle = NodeHandle::default();
+        
+        // Setup expectations
+        mock_handle
+            .expect_add_share()
+            .times(1)
+            .returning(|_| Err("Failed to add share".into()));
+        
+        // send_gossip should never be called
+        mock_handle
+            .expect_send_gossip()
+            .times(0);
+
+        let json = r#"{"workinfoid": 7452731920372203525, "clientid": 1, "enonce1": "336c6d67", "nonce2": "0000000000000000", "nonce": "2eb7b82b", "ntime": "676d6caa", "diff": 1.0, "sdiff": 1.9041854952356509, "hash": "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5", "result": true, "errn": 0, "createdate": "1735224559,536904211", "createby": "code", "createcode": "parse_submit", "createinet": "0.0.0.0:3333", "workername": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d", "username": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d", "address": "172.19.0.4", "agent": "cpuminer/2.5.1"}"#;
+        let miner_share: MinerShare = serde_json::from_str(json).unwrap();
+        let mining_message = MinerMessage::Share(miner_share);
+
+        let result = handle_mining_message(mining_message, &mock_handle).await;
+        
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Error adding share to chain");
+    }
 }
 
