@@ -26,6 +26,8 @@ use hex;
 use serde::{Serialize, Deserialize};
 use crate::node::messages::Message;
 use crate::shares::miner_message::MinerShare;
+use rust_decimal::Decimal;
+
 
 pub type Nonce =  Vec<u8>;
 pub type BlockHash = Vec<u8>;
@@ -59,7 +61,7 @@ pub struct ShareBlock{
     pub tx_hashes: Vec<TxHash>,
 
     /// The difficulty of the share
-    pub difficulty: f64,
+    pub difficulty: Decimal,
 
     /// The miner work for the share
     pub miner_share: MinerShare,
@@ -76,7 +78,7 @@ impl ShareBlock{
             miner_pubkey: vec![],
             timestamp: u64::from_str_radix(&miner_share.ntime, 16).unwrap(),
             tx_hashes: vec![],
-            difficulty: miner_share.diff.to_string().parse::<f64>().unwrap(),
+            difficulty: Decimal::from_str_radix(&miner_share.diff.to_string(), 10).unwrap(),
             miner_share: share,
         }
     }
@@ -98,12 +100,17 @@ pub fn validate(share: &ShareBlock, store: &Store) -> Result<(), Box<dyn Error>>
             return Err(format!("Uncle {} not found in store", hex::encode(&uncle)).into());
         }
     }
+    if let Err(e) = share.miner_share.validate(share.difficulty, share.difficulty) {
+        return Err(format!("Share validation failed: {}", e).into());
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rust_decimal_macros::dec;
+
 
     #[test]
     fn test_share_serialization() {
@@ -115,7 +122,7 @@ mod tests {
             miner_pubkey: vec![10, 11, 12],
             timestamp: 1234567890,
             tx_hashes: vec![vec![13, 14, 15]],
-            difficulty: 100.0,
+            difficulty: dec!(100.0),
             miner_share: MinerShare::default(),
         };
 

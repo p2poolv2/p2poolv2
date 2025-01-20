@@ -17,6 +17,8 @@
 use std::error::Error;
 use tracing::{error, info};
 use crate::shares::{ShareBlock, BlockHash, store::Store};
+use rust_decimal_macros::dec;
+use rust_decimal::Decimal;
 
 /// The minimum number of shares that must be on the chain for a share to be considered confirmed
 const MIN_CONFIRMATION_DEPTH: usize = 100;
@@ -25,13 +27,13 @@ const MIN_CONFIRMATION_DEPTH: usize = 100;
 /// The share chain reorgs when a share is found that has a higher total PoW than the current tip
 pub struct Chain {
     pub tip: Option<BlockHash>,
-    pub total_difficulty: f64,
+    pub total_difficulty: Decimal,
     pub store: Store,
 }
 
 impl Chain {
     pub fn new(store: Store) -> Self {
-        Self { tip: None, total_difficulty: 0.0, store }
+        Self { tip: None, total_difficulty: dec!(0.0), store }
     }
 
     /// Add a share to the chain and update the tip and total difficulty
@@ -68,7 +70,7 @@ impl Chain {
             let chain_upto_prev_share_blockhash = self.store.get_chain_upto(&prev_share_blockhash);
             let total_difficulty_upto_prev_share_blockhash = chain_upto_prev_share_blockhash.iter().map(
                 |share| share.difficulty
-            ).sum::<f64>();
+            ).sum::<Decimal>();
             if total_difficulty_upto_prev_share_blockhash + share_difficulty > self.total_difficulty {
                 let reorg_result =  self.reorg(share, total_difficulty_upto_prev_share_blockhash);
                 if reorg_result.is_err() {
@@ -88,7 +90,7 @@ impl Chain {
     /// 
     /// The solution above will work as long as all the blocks and transactions are in memory. Once we need to query the chain from disk, we will need to implement a more sophisticated solution.
     /// In favour of avoiding premature optimization, we will implement the solution above first and then optimize it later, if needed.
-    fn reorg(&mut self, share: ShareBlock, total_difficulty_upto_prev_share_blockhash: f64) -> Result<(), Box<dyn Error>> {
+    fn reorg(&mut self, share: ShareBlock, total_difficulty_upto_prev_share_blockhash: Decimal) -> Result<(), Box<dyn Error>> {
         self.tip = Some(share.blockhash);
         self.total_difficulty = total_difficulty_upto_prev_share_blockhash + share.difficulty;
         Ok(())
@@ -120,13 +122,13 @@ mod tests {
             miner_pubkey: vec![1],
             timestamp: 1,
             tx_hashes: vec![],
-            difficulty: 1.0,
+            difficulty: dec!(1.0),
             miner_share: MinerShare::default(),
         };
         chain.add_share(share1.clone()).unwrap();
 
         assert_eq!(chain.tip, Some(vec![1]));
-        assert_eq!(chain.total_difficulty, 1.0);
+        assert_eq!(chain.total_difficulty, dec!(1.0));
 
         // Create uncles for share2
         let uncle1_share2 = ShareBlock {
@@ -137,7 +139,7 @@ mod tests {
             miner_pubkey: vec![21],
             timestamp: 2,
             tx_hashes: vec![],
-            difficulty: 1.0,
+            difficulty: dec!(1.0),
             miner_share: MinerShare::default(),
         };
         let uncle2_share2 = ShareBlock {
@@ -148,7 +150,7 @@ mod tests {
             miner_pubkey: vec![22],
             timestamp: 2,
             tx_hashes: vec![],
-            difficulty: 1.0,
+            difficulty: dec!(1.0),
             miner_share: MinerShare::default(),
         };
         chain.add_share(uncle1_share2.clone()).unwrap();
@@ -156,7 +158,7 @@ mod tests {
 
         // difficulty remains the same as the previous tip, so there is no reorg
         assert_eq!(chain.tip, Some(vec![21]));
-        assert_eq!(chain.total_difficulty, 2.0);
+        assert_eq!(chain.total_difficulty, dec!(2.0));
 
         // Create share2 with its uncles
         let share2 = ShareBlock {
@@ -167,13 +169,13 @@ mod tests {
             miner_pubkey: vec![2],
             timestamp: 2,
             tx_hashes: vec![],
-            difficulty: 2.0,
+            difficulty: dec!(2.0),
             miner_share: MinerShare::default(),
         };
         chain.add_share(share2.clone()).unwrap();
 
         assert_eq!(chain.tip, Some(vec![2]));
-        assert_eq!(chain.total_difficulty, 3.0);
+        assert_eq!(chain.total_difficulty, dec!(3.0));
 
         // Create uncles for share3
         let uncle1_share3 = ShareBlock {
@@ -184,7 +186,7 @@ mod tests {
             miner_pubkey: vec![31],
             timestamp: 3,
             tx_hashes: vec![],
-            difficulty: 1.0,
+            difficulty: dec!(1.0),
             miner_share: MinerShare::default(),
         };
         let uncle2_share3 = ShareBlock {
@@ -195,14 +197,15 @@ mod tests {
             miner_pubkey: vec![32],
             timestamp: 3,
             tx_hashes: vec![],
-            difficulty: 2.0,
+            difficulty: dec!(1.0),
             miner_share: MinerShare::default(),
         };
         chain.add_share(uncle1_share3.clone()).unwrap();
         chain.add_share(uncle2_share3.clone()).unwrap();
 
-        assert_eq!(chain.tip, Some(vec![32]));
-        assert_eq!(chain.total_difficulty, 5.0);
+        // if same diff share is added, it doesn't change the tip or total difficulty
+        assert_eq!(chain.tip, Some(vec![31]));
+        assert_eq!(chain.total_difficulty, dec!(4.0));
 
         // Create share3 with its uncles
         let share3 = ShareBlock {
@@ -213,13 +216,13 @@ mod tests {
             miner_pubkey: vec![3],
             timestamp: 3,
             tx_hashes: vec![],
-            difficulty: 3.0,
+            difficulty: dec!(3.0),
             miner_share: MinerShare::default(),
         };
         chain.add_share(share3.clone()).unwrap();
 
         assert_eq!(chain.tip, Some(vec![3]));
-        assert_eq!(chain.total_difficulty, 6.0);
+        assert_eq!(chain.total_difficulty, dec!(6.0));
     }
 
     #[test]
@@ -241,7 +244,7 @@ mod tests {
                 miner_pubkey: vec![i as u8],
                 timestamp: i as u64,
                 tx_hashes: vec![],
-                difficulty: 100.0,
+                difficulty: dec!(100.0),
                 miner_share: MinerShare::default(),
             };
             blocks.push(share.clone());
