@@ -269,6 +269,10 @@ impl Node {
         match request {
             Message::ShareBlock(share_block) => {
                 info!("Received share block: {:?}", share_block);
+                if let Err(e) = share_block.miner_share.validate(share_block.difficulty, share_block.difficulty) {
+                    error!("Share block validation failed: {}", e);
+                    return Err("Share block validation failed".into());
+                }
                 if let Err(e) = self.chain.add_share(share_block.clone()) {
                     error!("Failed to add share: {}", e);
                     return Err("Error adding share to chain".into());
