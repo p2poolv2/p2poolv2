@@ -21,8 +21,8 @@ use crate::node::messages::Message;
 use crate::shares::miner_message::MinerWorkbase;
 use std::error::Error;
 
-/// A store for share blocks, for now it is just a simple in-memory store
-/// TODO: Implement a persistent store
+/// A store for share blocks.
+/// RocksDB as is used as the underlying database.
 pub struct Store {
     path: String,
     db: DB,
