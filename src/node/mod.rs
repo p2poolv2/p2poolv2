@@ -269,7 +269,7 @@ impl Node {
         match request {
             Message::ShareBlock(share_block) => {
                 info!("Received share block: {:?}", share_block);
-                if let Err(e) = share_block.miner_share.validate(share_block.difficulty, share_block.difficulty) {
+                if let Err(e) = share_block.miner_share.validate(share_block.miner_share.diff, share_block.miner_share.sdiff) {
                     error!("Share block validation failed: {}", e);
                     return Err("Share block validation failed".into());
                 }

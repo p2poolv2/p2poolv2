@@ -3,23 +3,23 @@
 //  This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free 
+// the terms of the GNU General Public License as published by the Free
 // Software Foundation, either version 3 of the License, or (at your option)
 // any later version.
 //
 // P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
 // FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 //
-// You should have received a copy of the GNU General Public License along with 
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>. 
+// You should have received a copy of the GNU General Public License along with
+// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::shares::{ShareBlock, BlockHash};
-use rocksdb::DB;
-use tracing::debug;
 use crate::node::messages::Message;
 use crate::shares::miner_message::MinerWorkbase;
+use crate::shares::{BlockHash, ShareBlock};
+use rocksdb::DB;
 use std::error::Error;
+use tracing::debug;
 
 /// A store for share blocks.
 /// RocksDB as is used as the underlying database.
@@ -38,13 +38,23 @@ impl Store {
     /// Add a share to the store
     pub fn add_share(&mut self, share: ShareBlock) {
         debug!("Adding share to store: {:?}", share.blockhash);
-        self.db.put(share.blockhash.clone(), Message::ShareBlock(share).cbor_serialize().unwrap()).unwrap();
+        self.db
+            .put(
+                share.blockhash.clone(),
+                Message::ShareBlock(share).cbor_serialize().unwrap(),
+            )
+            .unwrap();
     }
 
     /// Add a workbase to the store
     pub fn add_workbase(&mut self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error>> {
         debug!("Adding workbase to store: {:?}", workbase.workinfoid);
-        self.db.put(workbase.workinfoid.to_string().as_bytes(), Message::Workbase(workbase).cbor_serialize().unwrap()).unwrap();
+        self.db
+            .put(
+                workbase.workinfoid.to_string().as_bytes(),
+                Message::Workbase(workbase).cbor_serialize().unwrap(),
+            )
+            .unwrap();
         Ok(())
     }
 
@@ -78,24 +88,32 @@ impl Store {
             return vec![];
         }
         let share = share.unwrap();
-        share.uncles.iter().map(|uncle| {
-            self.get_share(uncle).unwrap()
-        }).collect()
+        share
+            .uncles
+            .iter()
+            .map(|uncle| self.get_share(uncle).unwrap())
+            .collect()
     }
 
     /// Get entire chain from earliest known block to blockhash
     pub fn get_chain_upto(&self, blockhash: &BlockHash) -> Vec<ShareBlock> {
         debug!("Getting chain upto: {:?}", blockhash);
-        std::iter::successors(
-            self.get_share(blockhash),
-            |share| self.get_share(&share.prev_share_blockhash)
-        )
+        std::iter::successors(self.get_share(blockhash), |share| {
+            self.get_share(&share.prev_share_blockhash)
+        })
         .collect()
     }
 
     /// Get common ancestor of two blockhashes
-    pub fn get_common_ancestor(&self, blockhash1: &BlockHash, blockhash2: &BlockHash) -> Option<BlockHash> {
-        debug!("Getting common ancestor of: {:?} and {:?}", blockhash1, blockhash2);
+    pub fn get_common_ancestor(
+        &self,
+        blockhash1: &BlockHash,
+        blockhash2: &BlockHash,
+    ) -> Option<BlockHash> {
+        debug!(
+            "Getting common ancestor of: {:?} and {:?}",
+            blockhash1, blockhash2
+        );
         let chain1 = self.get_chain_upto(blockhash1);
         let chain2 = self.get_chain_upto(blockhash2);
         if let Some(blockhash) = chain1.iter().rev().find(|share| chain2.contains(share)) {
@@ -117,9 +135,8 @@ impl Drop for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shares::miner_message::MinerShare;
+    use crate::test_utils::fixtures::simple_miner_share;
     use rust_decimal_macros::dec;
-
     #[test]
     fn test_chain_with_uncles() {
         let mut store = Store::new("test_chain_with_uncles.db".to_string());
@@ -133,33 +150,45 @@ mod tests {
             miner_pubkey: vec![1],
             timestamp: 1,
             tx_hashes: vec![],
-            difficulty: dec!(1.0),
-            miner_share: MinerShare::default(),
+            miner_share: simple_miner_share(
+                Some(7452731920372203525),
+                Some(1),
+                Some(dec!(1.0)),
+                Some(dec!(1.9041854952356509)),
+            ),
         };
 
         // Create uncles for share2
         let uncle1_share2 = ShareBlock {
             nonce: vec![21],
-            blockhash: vec![21], 
+            blockhash: vec![21],
             prev_share_blockhash: vec![1],
             uncles: vec![],
             miner_pubkey: vec![21],
             timestamp: 2,
             tx_hashes: vec![],
-            difficulty: dec!(1.0),
-            miner_share: MinerShare::default(),
+            miner_share: simple_miner_share(
+                Some(7452731920372203525 + 1),
+                Some(1),
+                Some(dec!(1.0)),
+                Some(dec!(1.9041854952356509)),
+            ),
         };
 
         let uncle2_share2 = ShareBlock {
             nonce: vec![22],
             blockhash: vec![22],
-            prev_share_blockhash: vec![1], 
+            prev_share_blockhash: vec![1],
             uncles: vec![],
             miner_pubkey: vec![22],
             timestamp: 2,
             tx_hashes: vec![],
-            difficulty: dec!(1.0),
-            miner_share: MinerShare::default(),
+            miner_share: simple_miner_share(
+                Some(7452731920372203525 + 2),
+                Some(1),
+                Some(dec!(1.0)),
+                Some(dec!(1.9041854952356509)),
+            ),
         };
 
         // Create share2 with uncles
@@ -171,8 +200,12 @@ mod tests {
             miner_pubkey: vec![2],
             timestamp: 2,
             tx_hashes: vec![],
-            difficulty: dec!(1.0),
-            miner_share: MinerShare::default(),
+            miner_share: simple_miner_share(
+                Some(7452731920372203525 + 3),
+                Some(1),
+                Some(dec!(1.0)),
+                Some(dec!(1.9041854952356509)),
+            ),
         };
 
         // Create uncles for share3
@@ -184,8 +217,12 @@ mod tests {
             miner_pubkey: vec![31],
             timestamp: 3,
             tx_hashes: vec![],
-            difficulty: dec!(1.0),
-            miner_share: MinerShare::default(),
+            miner_share: simple_miner_share(
+                Some(7452731920372203525 + 4),
+                Some(1),
+                Some(dec!(1.0)),
+                Some(dec!(1.9041854952356509)),
+            ),
         };
 
         let uncle2_share3 = ShareBlock {
@@ -196,8 +233,12 @@ mod tests {
             miner_pubkey: vec![32],
             timestamp: 3,
             tx_hashes: vec![],
-            difficulty: dec!(1.0),
-            miner_share: MinerShare::default(),
+            miner_share: simple_miner_share(
+                Some(7452731920372203525 + 5),
+                Some(1),
+                Some(dec!(1.0)),
+                Some(dec!(1.9041854952356509)),
+            ),
         };
 
         // Create share3 with uncles
@@ -209,8 +250,12 @@ mod tests {
             miner_pubkey: vec![3],
             timestamp: 3,
             tx_hashes: vec![],
-            difficulty: dec!(1.0),
-            miner_share: MinerShare::default(),
+            miner_share: simple_miner_share(
+                Some(7452731920372203525 + 6),
+                Some(1),
+                Some(dec!(1.0)),
+                Some(dec!(1.9041854952356509)),
+            ),
         };
 
         // Add all shares to store
@@ -239,7 +284,7 @@ mod tests {
         // Chain should contain share3, share2, share1 in reverse order
         assert_eq!(chain.len(), 3);
         assert_eq!(chain[0].blockhash, vec![3]);
-        assert_eq!(chain[1].blockhash, vec![2]); 
+        assert_eq!(chain[1].blockhash, vec![2]);
         assert_eq!(chain[2].blockhash, vec![1]);
 
         // Verify uncles of share2

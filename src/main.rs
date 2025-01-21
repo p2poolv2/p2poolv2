@@ -19,10 +19,12 @@ use std::error::Error;
 use std::thread;
 use tracing_subscriber::EnvFilter;
 use tracing::{debug, info};
+
 mod node;
 mod config;
 mod shares;
 mod command;
+mod test_utils;
 
 #[mockall_double::double]
 use crate::node::actor::NodeHandle;
@@ -31,6 +33,7 @@ use crate::node::messages::Message;
 use crate::shares::miner_message::MinerMessage;
 use crate::shares::miner_socket::receive;
 use crate::shares::handle_mining_message::handle_mining_message;
+
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
