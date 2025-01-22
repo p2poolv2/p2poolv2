@@ -61,11 +61,7 @@ mod tests {
     use super::*;
     #[mockall_double::double]
     use crate::node::actor::NodeHandle;
-    use crate::shares::miner_message::MinerShare;
-    use crate::shares::ShareBlock;
     use crate::test_utils::fixtures::simple_miner_share;
-    use mockall::mock;
-    use mockall::predicate::*;
     use rust_decimal_macros::dec;
 
     #[tokio::test]

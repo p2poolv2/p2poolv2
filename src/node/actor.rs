@@ -18,15 +18,14 @@ use crate::command::Command;
 use crate::config::Config;
 use crate::node::messages::Message;
 use crate::node::Node;
+use crate::node::SwarmSend;
 use crate::shares::chain::ChainHandle;
 use crate::shares::miner_message::MinerWorkbase;
 use crate::shares::ShareBlock;
 use libp2p::futures::StreamExt;
 use std::error::Error;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
-use tracing::error;
-use tracing::info;
+use tokio::sync::{mpsc, oneshot};
+use tracing::{debug, error, info};
 
 /// NodeHandle provides an interface to interact with a Node running in a separate task
 #[derive(Clone)]
@@ -43,6 +42,7 @@ impl NodeHandle {
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
         let (node_actor, stopping_rx) = NodeActor::new(config, chain_handle, command_rx).unwrap();
+
         tokio::spawn(async move {
             node_actor.run().await;
         });
@@ -173,6 +173,25 @@ impl NodeActor {
     async fn run(mut self) {
         loop {
             tokio::select! {
+                buf = self.node.swarm_rx.recv() => {
+                    match buf {
+                        Some(SwarmSend::Gossip(buf)) => {
+                            match self.node.swarm.behaviour_mut().gossipsub.publish(self.node.share_topic.clone(), buf) {
+                                Err(e) => error!("Error publishing share: {}", e),
+                                Ok(_) => {}
+                            }
+                        }
+                        Some(SwarmSend::Message(peer_id, msg)) => {
+                            let request_id =    self.node.swarm.behaviour_mut().request_response.send_request(&peer_id, msg);
+                            debug!("Sent message to peer: {peer_id}, request_id: {request_id}");
+                        }
+                        None => {
+                            info!("Stopping node actor on channel close");
+                            self.stopping_tx.send(()).unwrap();
+                            return;
+                        }
+                    }
+                },
                 event = self.node.swarm.select_next_some() => {
                     if let Err(e) = self.node.handle_swarm_event(event).await {
                         error!("Error handling swarm event: {}", e);

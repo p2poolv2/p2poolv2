@@ -25,19 +25,30 @@ use crate::shares::chain::ChainHandle;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::identify;
 use libp2p::mdns::Event as MdnsEvent;
+use libp2p::PeerId;
 use libp2p::{
     gossipsub,
     kad::{Event as KademliaEvent, QueryResult},
     swarm::SwarmEvent,
     Multiaddr, Swarm,
 };
+use request_response_handler::handle_request_response_event;
 use std::error::Error;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info};
+
+/// Capture send type for swarm p2p messages that can be sent to the swarm
+pub enum SwarmSend {
+    Gossip(Vec<u8>),
+    Message(PeerId, Message),
+}
 
 /// Node is the main struct that represents the node
 struct Node {
     swarm: Swarm<P2PoolBehaviour>,
+    swarm_tx: mpsc::Sender<SwarmSend>,
+    swarm_rx: mpsc::Receiver<SwarmSend>,
     share_topic: gossipsub::IdentTopic,
     chain_handle: ChainHandle,
 }
@@ -91,8 +102,12 @@ impl Node {
             error!("Failed to subscribe to share topic: {}", e);
         }
 
+        let (swarm_tx, swarm_rx) = mpsc::channel(100);
+
         Ok(Self {
             swarm,
+            swarm_tx,
+            swarm_rx,
             share_topic,
             chain_handle,
         })
@@ -178,8 +193,19 @@ impl Node {
                     Ok(())
                 }
                 P2PoolBehaviourEvent::RequestResponse(request_response_event) => {
-                    self.handle_request_response_event(request_response_event)
+                    let chain_handle = self.chain_handle.clone();
+                    let swarm_tx = self.swarm_tx.clone();
+                    // TODO: Limit the number of concurrent requests
+                    tokio::spawn(async move {
+                        handle_request_response_event(
+                            request_response_event,
+                            chain_handle,
+                            swarm_tx,
+                        )
                         .await
+                        .unwrap();
+                    });
+                    Ok(())
                 }
             },
             _ => Ok(()),
