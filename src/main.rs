@@ -30,9 +30,9 @@ mod test_utils;
 use crate::node::actor::NodeHandle;
 use crate::node::messages::Message;
 use crate::shares::chain::ChainHandle;
+use crate::shares::ckpool_socket::receive_from_ckpool;
 use crate::shares::handle_mining_message::handle_mining_message;
 use crate::shares::miner_message::MinerMessage;
-use crate::shares::miner_socket::receive;
 use tracing::error;
 
 #[derive(Parser, Debug)]
@@ -73,7 +73,7 @@ fn start_receiving_mining_messages(node_handle: NodeHandle) -> Result<(), Box<dy
     let (mining_message_tx, mut mining_message_rx) =
         tokio::sync::mpsc::channel::<serde_json::Value>(100);
     thread::spawn(move || {
-        if let Err(e) = receive(mining_message_tx) {
+        if let Err(e) = receive_from_ckpool(mining_message_tx) {
             error!("Share receiver failed: {}", e);
         }
     });

@@ -15,9 +15,9 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod chain;
+pub mod ckpool_socket;
 pub mod handle_mining_message;
 pub mod miner_message;
-pub mod miner_socket;
 pub mod store;
 use crate::node::messages::Message;
 use crate::shares::miner_message::MinerShare;

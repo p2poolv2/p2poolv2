@@ -1,7 +1,7 @@
-use std::error::Error;
-use zmq;
 use serde_json::Value;
+use std::error::Error;
 use tracing::{error, info};
+use zmq;
 
 const ENDPOINT: &str = "tcp://localhost:8881";
 
@@ -31,28 +31,26 @@ fn create_zmq_socket() -> Result<zmq::Socket, Box<dyn Error>> {
 // This is generic to enable testing with a mock socket
 fn receive_shares<S: MinerSocket>(
     socket: &S,
-    tx: tokio::sync::mpsc::Sender<Value>
+    tx: tokio::sync::mpsc::Sender<Value>,
 ) -> Result<(), Box<dyn Error>> {
     loop {
         match socket.recv_string() {
-            Ok(Ok(json_str)) => {
-                match serde_json::from_str(&json_str) {
-                    Ok(json_value) => {
-                        info!("Received share: {}", json_str);
-                        if let Err(e) = tx.blocking_send(json_value) {
-                            error!("Failed to send share to channel: {}", e);
-                        }
-                    },
-                    Err(e) => {
-                        error!("Failed to parse JSON: {}", e);
-                        return Err(Box::new(e));
+            Ok(Ok(json_str)) => match serde_json::from_str(&json_str) {
+                Ok(json_value) => {
+                    info!("Received share: {}", json_str);
+                    if let Err(e) = tx.blocking_send(json_value) {
+                        error!("Failed to send share to channel: {}", e);
                     }
+                }
+                Err(e) => {
+                    error!("Failed to parse JSON: {}", e);
+                    return Err(Box::new(e));
                 }
             },
             Ok(Err(e)) => {
                 error!("Failed to decode message: {:?}", e);
                 return Err(Box::new(zmq::Error::EINVAL));
-            },
+            }
             Err(e) => {
                 error!("Failed to receive message: {:?}", e);
                 return Err(Box::new(e));
@@ -63,7 +61,7 @@ fn receive_shares<S: MinerSocket>(
 
 // A receive function that clients use to receive shares
 // This function creates the ZMQ socket and passes it to the receive_shares function
-pub fn receive(tx: tokio::sync::mpsc::Sender<Value>) -> Result<(), Box<dyn Error>> {
+pub fn receive_from_ckpool(tx: tokio::sync::mpsc::Sender<Value>) -> Result<(), Box<dyn Error>> {
     let socket = create_zmq_socket()?;
     receive_shares(&socket, tx)
 }
@@ -100,10 +98,8 @@ mod tests {
     #[tokio::test]
     async fn test_receive_valid_json() {
         let (tx, mut rx) = mpsc::channel(100);
-        
-        let mock_messages = vec![
-            Ok(Ok(r#"{"share": "test", "value": 123}"#.to_string())),
-        ];
+
+        let mock_messages = vec![Ok(Ok(r#"{"share": "test", "value": 123}"#.to_string()))];
         let mock_socket = MockSocket::new(mock_messages);
 
         // Spawn the receive_shares function in a separate task
@@ -121,10 +117,8 @@ mod tests {
     #[tokio::test]
     async fn test_receive_invalid_json() {
         let (tx, _rx) = mpsc::channel(100);
-        
-        let mock_messages = vec![
-            Ok(Ok("invalid json".to_string())),
-        ];
+
+        let mock_messages = vec![Ok(Ok("invalid json".to_string()))];
         let mock_socket = MockSocket::new(mock_messages);
 
         let result = receive_shares(&mock_socket, tx);
@@ -134,7 +128,7 @@ mod tests {
     #[tokio::test]
     async fn test_receive_decode_error() {
         let (tx, _rx) = mpsc::channel(100);
-        
+
         let mock_messages = vec![
             Ok(Err(vec![1, 2, 3])), // Simulating decode error
         ];
