@@ -16,12 +16,8 @@
 
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::Message;
-use crate::node::Node;
-use crate::node::P2PoolBehaviourEvent;
 use crate::node::SwarmSend;
 use crate::shares::chain::ChainHandle;
-
-use libp2p::swarm::SwarmEvent;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
