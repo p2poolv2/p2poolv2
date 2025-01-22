@@ -69,6 +69,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Receives messages from ckpool and sends them to the node asynchronously
+/// Each new message received starts a new tokio task
+/// TODO: Add limits to how many concurrent tasks are run
 fn start_receiving_mining_messages(node_handle: NodeHandle) -> Result<(), Box<dyn Error>> {
     let (mining_message_tx, mut mining_message_rx) =
         tokio::sync::mpsc::channel::<serde_json::Value>(100);

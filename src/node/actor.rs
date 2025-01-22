@@ -174,7 +174,9 @@ impl NodeActor {
         loop {
             tokio::select! {
                 event = self.node.swarm.select_next_some() => {
-                    self.node.handle_swarm_event(event);
+                    if let Err(e) = self.node.handle_swarm_event(event).await {
+                        error!("Error handling swarm event: {}", e);
+                    }
                 },
                 command = self.command_rx.recv() => {
                     match command {
@@ -183,12 +185,22 @@ impl NodeActor {
                             tx.send(peers).unwrap();
                         },
                         Some(Command::SendGossip(buf, tx)) => {
-                            self.node.send_gossip(buf);
-                            tx.send(()).unwrap();
+                            match self.node.send_gossip(buf) {
+                                Ok(_) => tx.send(Ok(())).unwrap(),
+                                Err(e) => {
+                                    error!("Error sending gossip: {}", e);
+                                    tx.send(Err("Error sending gossip".into())).unwrap()
+                                },
+                            };
                         },
                         Some(Command::SendToPeer(peer_id, message, tx)) => {
-                            self.node.send_to_peer(peer_id, message);
-                            tx.send(()).unwrap();
+                            match self.node.send_to_peer(peer_id, message) {
+                                Ok(_) => tx.send(Ok(())).unwrap(),
+                                Err(e) => {
+                                    error!("Error sending message to peer: {}", e);
+                                    tx.send(Err("Error sending message to peer".into())).unwrap()
+                                },
+                            };
                         },
                         Some(Command::Shutdown(tx)) => {
                             self.node.shutdown().unwrap();
