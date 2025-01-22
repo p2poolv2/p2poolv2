@@ -23,7 +23,6 @@ use crate::node::messages::Message;
 use crate::shares::miner_message::MinerShare;
 use crate::shares::store::Store;
 use hex;
-use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 

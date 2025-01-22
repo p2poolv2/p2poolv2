@@ -3,29 +3,30 @@
 //  This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free 
+// the terms of the GNU General Public License as published by the Free
 // Software Foundation, either version 3 of the License, or (at your option)
 // any later version.
 //
 // P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
 // FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 //
-// You should have received a copy of the GNU General Public License along with 
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>. 
+// You should have received a copy of the GNU General Public License along with
+// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use libp2p::futures::StreamExt;
-use tokio::sync::mpsc;
-use std::error::Error;
-use crate::config::Config;
 use crate::command::Command;
-use crate::node::Node;
+use crate::config::Config;
 use crate::node::messages::Message;
-use tracing::info; 
-use tokio::sync::oneshot;
-use crate::shares::ShareBlock;
+use crate::node::Node;
+use crate::shares::chain::ChainHandle;
 use crate::shares::miner_message::MinerWorkbase;
+use crate::shares::ShareBlock;
+use libp2p::futures::StreamExt;
+use std::error::Error;
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tracing::error;
+use tracing::info;
 
 /// NodeHandle provides an interface to interact with a Node running in a separate task
 #[derive(Clone)]
@@ -36,9 +37,12 @@ pub struct NodeHandle {
 
 impl NodeHandle {
     /// Create a new Node and return a handle to interact with it
-    pub async fn new(config: Config) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
+    pub async fn new(
+        config: Config,
+        chain_handle: ChainHandle,
+    ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
-        let (node_actor, stopping_rx) = NodeActor::new(config, command_rx).unwrap();
+        let (node_actor, stopping_rx) = NodeActor::new(config, chain_handle, command_rx).unwrap();
         tokio::spawn(async move {
             node_actor.run().await;
         });
@@ -77,9 +81,15 @@ impl NodeHandle {
     }
 
     /// Send a message to a specific peer
-    pub async fn send_to_peer(&self, peer_id: libp2p::PeerId, message: Message) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn send_to_peer(
+        &self,
+        peer_id: libp2p::PeerId,
+        message: Message,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (tx, rx) = oneshot::channel();
-        self.command_tx.send(Command::SendToPeer(peer_id, message, tx)).await?;
+        self.command_tx
+            .send(Command::SendToPeer(peer_id, message, tx))
+            .await?;
         match rx.await {
             Ok(_) => Ok(()),
             Err(e) => Err(e.into()),
@@ -90,22 +100,26 @@ impl NodeHandle {
     pub async fn add_share(&self, share: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (tx, rx) = oneshot::channel();
         self.command_tx.send(Command::AddShare(share, tx)).await?;
-        match  rx.await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    /// Store workbase in the node's database
-    pub async fn store_workbase(&self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx.send(Command::StoreWorkbase(workbase, tx)).await?;
         match rx.await {
             Ok(_) => Ok(()),
             Err(e) => Err(e.into()),
         }
     }
 
+    /// Store workbase in the node's database
+    pub async fn store_workbase(
+        &self,
+        workbase: MinerWorkbase,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::StoreWorkbase(workbase, tx))
+            .await?;
+        match rx.await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -114,7 +128,7 @@ use mockall::mock;
 #[cfg(test)]
 mock! {
     pub NodeHandle {
-        pub async fn new(config: Config) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>>;
+        pub async fn new(config: Config, chain_handle: ChainHandle) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>>;
         pub async fn get_peers(&self) -> Result<Vec<libp2p::PeerId>, Box<dyn Error>>;
         pub async fn shutdown(&self) -> Result<(), Box<dyn Error>>;
         pub async fn send_gossip(&self, message: Message) -> Result<(), Box<dyn Error>>;
@@ -139,10 +153,21 @@ struct NodeActor {
 }
 
 impl NodeActor {
-    fn new(config: Config, command_rx: mpsc::Receiver<Command>) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>> {
-        let node = Node::new(&config)?;
+    fn new(
+        config: Config,
+        chain_handle: ChainHandle,
+        command_rx: mpsc::Receiver<Command>,
+    ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>> {
+        let node = Node::new(&config, chain_handle)?;
         let (stopping_tx, stopping_rx) = oneshot::channel();
-        Ok((Self { node, command_rx, stopping_tx }, stopping_rx))
+        Ok((
+            Self {
+                node,
+                command_rx,
+                stopping_tx,
+            },
+            stopping_rx,
+        ))
     }
 
     async fn run(mut self) {
@@ -171,7 +196,7 @@ impl NodeActor {
                             return;
                         },
                         Some(Command::AddShare(share, tx)) => {
-                            match self.node.chain.add_share(share) {
+                            match self.node.chain_handle.add_share(share).await {
                                 Ok(_) => tx.send(Ok(())).unwrap(),
                                 Err(e) => {
                                     error!("Error adding share to chain: {}", e);
@@ -180,7 +205,7 @@ impl NodeActor {
                             };
                         },
                         Some(Command::StoreWorkbase(workbase, tx)) => {
-                            match self.node.chain.store.add_workbase(workbase) {
+                            match self.node.chain_handle.add_workbase(workbase).await {
                                 Ok(_) => tx.send(Ok(())).unwrap(),
                                 Err(e) => {
                                     error!("Error storing workbase: {}", e);

@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::shares::miner_message::MinerWorkbase;
 use crate::shares::{store::Store, BlockHash, ShareBlock};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -99,11 +100,11 @@ impl Chain {
     ///
     /// The solution above will work as long as all the blocks and transactions are in memory. Once we need to query the chain from disk, we will need to implement a more sophisticated solution.
     /// In favour of avoiding premature optimization, we will implement the solution above first and then optimize it later, if needed.
-    fn reorg(
+    pub fn reorg(
         &mut self,
         share: ShareBlock,
         total_difficulty_upto_prev_share_blockhash: Decimal,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.tip = Some(share.blockhash);
         self.total_difficulty = total_difficulty_upto_prev_share_blockhash + share.miner_share.diff;
         Ok(())
@@ -112,6 +113,12 @@ impl Chain {
     /// Check if a share is confirmed according to the minimum confirmation depth
     pub fn is_confirmed(&self, share: ShareBlock) -> bool {
         self.store.get_chain_upto(&share.prev_share_blockhash).len() > MIN_CONFIRMATION_DEPTH
+    }
+
+    /// Add a workbase to the chain
+    pub fn add_workbase(&mut self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error>> {
+        self.store.add_workbase(workbase);
+        Ok(())
     }
 }
 

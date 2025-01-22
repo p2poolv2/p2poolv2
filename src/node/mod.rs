@@ -21,8 +21,7 @@ pub mod actor;
 pub mod messages;
 
 use crate::node::messages::{InventoryMessage, Message};
-use crate::shares::chain::Chain;
-use crate::shares::store::Store;
+use crate::shares::chain::ChainHandle;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::identify;
 use libp2p::mdns::Event as MdnsEvent;
@@ -40,14 +39,14 @@ use tracing::{debug, error, info};
 struct Node {
     swarm: Swarm<P2PoolBehaviour>,
     share_topic: gossipsub::IdentTopic,
-    chain: Chain,
+    chain_handle: ChainHandle,
 }
 
 impl Node {
-    pub fn new(config: &Config) -> Result<Self, Box<dyn std::error::Error>> {
-        let store = Store::new(config.store.path.clone());
-        let chain = Chain::new(store);
-
+    pub fn new(
+        config: &Config,
+        chain_handle: ChainHandle,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
         let peer_id = id_keys.public().to_peer_id();
 
@@ -95,7 +94,7 @@ impl Node {
         Ok(Self {
             swarm,
             share_topic,
-            chain,
+            chain_handle,
         })
     }
 
@@ -251,8 +250,8 @@ impl Node {
 
     /// Send inventory message to a specific peer
     /// For now we just send the tip of the chain
-    fn send_inventory(&mut self, peer_id: libp2p::PeerId) {
-        if let Some(tip) = self.chain.tip.clone() {
+    async fn send_inventory(&mut self, peer_id: libp2p::PeerId) {
+        if let Some(tip) = self.chain_handle.get_tip().await {
             info!("Sending inventory message to peer: {peer_id}, tip: {tip:?}");
             let inventory_msg = Message::Inventory(InventoryMessage {
                 have_shares: vec![tip],
