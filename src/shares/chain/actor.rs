@@ -206,7 +206,7 @@ impl ChainHandle {
 
         match response_receiver.recv().await {
             Some(ChainResponse::StoreWorkbaseResult(result)) => result,
-            _ => Err("Failed to receive store_workbase result".into()),
+            _ => Err("Failed to receive add workbase result".into()),
         }
     }
 }

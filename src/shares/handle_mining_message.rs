@@ -42,9 +42,9 @@ pub async fn handle_mining_message(
         }
         MinerMessage::Workbase(workbase) => {
             message = Message::Workbase(workbase.clone());
-            if let Err(e) = node_handle.store_workbase(workbase).await {
-                error!("Failed to store workbase: {}", e);
-                return Err("Error storing workbase".into());
+            if let Err(e) = node_handle.add_workbase(workbase).await {
+                error!("Failed to add workbase: {}", e);
+                return Err("Error adding workbase".into());
             }
         }
     };

@@ -107,7 +107,7 @@ impl NodeHandle {
     }
 
     /// Store workbase in the node's database
-    pub async fn store_workbase(
+    pub async fn add_workbase(
         &self,
         workbase: MinerWorkbase,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -134,7 +134,7 @@ mock! {
         pub async fn send_gossip(&self, message: Message) -> Result<(), Box<dyn Error>>;
         pub async fn send_to_peer(&self, peer_id: libp2p::PeerId, message: Message) -> Result<(), Box<dyn Error>>;
         pub async fn add_share(&self, share: ShareBlock) -> Result<(), Box<dyn Error>>;
-        pub async fn store_workbase(&self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error>>;
+        pub async fn add_workbase(&self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error>>;
     }
 
     // Provide a clone implementation for NodeHandle mock double
