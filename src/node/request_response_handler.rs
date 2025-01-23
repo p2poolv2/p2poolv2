@@ -136,6 +136,8 @@ mod tests {
     use super::*;
     #[mockall_double::double]
     use crate::shares::chain::actor::ChainHandle;
+    use crate::shares::miner_message::Gbt;
+    use crate::shares::miner_message::MinerWorkbase;
     use crate::shares::ShareBlock;
     use crate::test_utils::fixtures::simple_miner_share;
     use mockall::predicate::*;
@@ -234,6 +236,62 @@ mod tests {
             swarm_tx,
         )
         .await;
+
+        assert!(result.is_err());
+
+        // Verify no gossip message was sent
+        assert!(swarm_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_workbase_success() {
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let mut chain_handle = ChainHandle::default();
+
+        let workbase = MinerWorkbase {
+            workinfoid: 1,
+            gbt: Gbt::default(),
+        };
+
+        // Set up mock to return success
+        chain_handle
+            .expect_add_workbase()
+            .with(eq(workbase.clone()))
+            .returning(|_| Ok(()));
+
+        let result =
+            handle_request(peer_id, Message::Workbase(workbase), chain_handle, swarm_tx).await;
+
+        assert!(result.is_ok());
+
+        // Verify gossip message was sent
+        if let Some(SwarmSend::Gossip(_)) = swarm_rx.try_recv().ok() {
+            // Success
+        } else {
+            panic!("Expected gossip message");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_workbase_error() {
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let mut chain_handle = ChainHandle::default();
+
+        let workbase = MinerWorkbase {
+            workinfoid: 1,
+            gbt: Gbt::default(),
+        };
+
+        // Set up mock to return error
+        chain_handle
+            .expect_add_workbase()
+            .with(eq(workbase.clone()))
+            .returning(|_| Err("Failed to add workbase".into()));
+
+        let result =
+            handle_request(peer_id, Message::Workbase(workbase), chain_handle, swarm_tx).await;
 
         assert!(result.is_err());
 

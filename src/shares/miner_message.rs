@@ -3,26 +3,25 @@
 //  This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free 
+// the terms of the GNU General Public License as published by the Free
 // Software Foundation, either version 3 of the License, or (at your option)
 // any later version.
 //
 // P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
 // FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 //
-// You should have received a copy of the GNU General Public License along with 
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>. 
+// You should have received a copy of the GNU General Public License along with
+// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use serde::{Serialize, Deserialize};
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub enum MinerMessage {
     Share(MinerShare),
     Workbase(MinerWorkbase),
 }
-
 
 /// Represents the work done by a miner.
 /// We use Decimal for the diff and sdiff fields to avoid floating point precision issues.
@@ -51,7 +50,7 @@ pub struct MinerShare {
 
 impl MinerShare {
     /// Validates the miner work against provided difficulty thresholds
-    /// 
+    ///
     /// # Arguments
     /// * `max_diff` - Maximum allowed difficulty value
     /// * `max_sdiff` - Maximum allowed share difficulty value
@@ -62,25 +61,30 @@ impl MinerShare {
     pub fn validate(&self, max_diff: Decimal, max_sdiff: Decimal) -> Result<(), String> {
         // Check difficulty thresholds
         if self.diff > max_diff {
-            return Err(format!("Difficulty {} exceeds max diff {}", self.diff, max_diff));
+            return Err(format!(
+                "Difficulty {} exceeds max diff {}",
+                self.diff, max_diff
+            ));
         }
 
         if self.sdiff > max_sdiff {
-            return Err(format!("Share difficulty {} exceeds max sdiff {}", self.sdiff, max_sdiff));
+            return Err(format!(
+                "Share difficulty {} exceeds max sdiff {}",
+                self.sdiff, max_sdiff
+            ));
         }
 
         // Verify the hash meets required share difficulty
         // Convert hash to u256 for comparison
-        let hash_bytes = hex::decode(&self.hash)
-            .map_err(|e| format!("Invalid hash hex: {}", e))?;
+        let hash_bytes = hex::decode(&self.hash).map_err(|e| format!("Invalid hash hex: {}", e))?;
 
         if hash_bytes.len() != 32 {
             return Err(format!("Invalid hash length: {}", hash_bytes.len()));
         }
 
         // Convert nonce to bytes for verification
-        let nonce_bytes = hex::decode(&self.nonce)
-            .map_err(|e| format!("Invalid nonce hex: {}", e))?;
+        let nonce_bytes =
+            hex::decode(&self.nonce).map_err(|e| format!("Invalid nonce hex: {}", e))?;
 
         if nonce_bytes.len() != 4 {
             return Err(format!("Invalid nonce length: {}", nonce_bytes.len()));
@@ -100,8 +104,8 @@ impl MinerShare {
 /// Represents the Workbase used by ckpool
 #[derive(Clone, PartialEq, Serialize, Deserialize, Default, Debug)]
 pub struct MinerWorkbase {
-    pub gbt: Gbt,
     pub workinfoid: u64,
+    pub gbt: Gbt,
 }
 
 /// Represents the getblocktemplate used in ckpool as workbase
@@ -150,24 +154,32 @@ mod tests {
         assert_eq!(gbt_response.workinfoid, 7459044800742817807);
         assert_eq!(gbt_response.gbt.version, 536870912);
         assert_eq!(gbt_response.gbt.height, 98);
-        assert_eq!(gbt_response.gbt.previousblockhash, "00000000790ba17d9c06acf8749166014eb1499c8ea6dd598060dbec7eeae808");
+        assert_eq!(
+            gbt_response.gbt.previousblockhash,
+            "00000000790ba17d9c06acf8749166014eb1499c8ea6dd598060dbec7eeae808"
+        );
         assert_eq!(gbt_response.gbt.coinbasevalue, 5000000000);
         assert_eq!(gbt_response.gbt.diff, 0.001126515290698186);
 
         // Test serialization back to JSON
         let serialized: String = serde_json::to_string(&gbt_response).unwrap();
-        
+
         // Deserialize again to verify round-trip
         let deserialized: MinerWorkbase = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized.workinfoid, gbt_response.workinfoid);
         assert_eq!(deserialized.gbt.version, gbt_response.gbt.version);
         assert_eq!(deserialized.gbt.height, gbt_response.gbt.height);
-        assert_eq!(deserialized.gbt.previousblockhash, gbt_response.gbt.previousblockhash);
-        assert_eq!(deserialized.gbt.coinbasevalue, gbt_response.gbt.coinbasevalue);
+        assert_eq!(
+            deserialized.gbt.previousblockhash,
+            gbt_response.gbt.previousblockhash
+        );
+        assert_eq!(
+            deserialized.gbt.coinbasevalue,
+            gbt_response.gbt.coinbasevalue
+        );
         assert_eq!(deserialized.gbt.diff, gbt_response.gbt.diff);
     }
 }
-
 
 #[cfg(test)]
 mod miner_share_tests {
@@ -195,10 +207,10 @@ mod miner_share_tests {
 
         // Serialize back to JSON
         let serialized = serde_json::to_string(&miner_work).unwrap();
-        
+
         // Deserialize again to verify
         let deserialized: MinerShare = serde_json::from_str(&serialized).unwrap();
-        
+
         // Verify the round-trip
         assert_eq!(miner_work, deserialized);
     }
@@ -216,9 +228,13 @@ mod miner_share_tests {
         // Test invalid nonce
         let mut invalid_miner_work = miner_work.clone();
         invalid_miner_work.nonce = "invalidhex".to_string();
-        let result: Result<(), String> = invalid_miner_work.validate(dec!(1.0), dec!(1.9041854952356509));
+        let result: Result<(), String> =
+            invalid_miner_work.validate(dec!(1.0), dec!(1.9041854952356509));
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Invalid nonce hex: Invalid character \'i\' at position 0");
+        assert_eq!(
+            result.unwrap_err(),
+            "Invalid nonce hex: Invalid character \'i\' at position 0"
+        );
 
         // Test invalid nonce length
         let mut invalid_miner_work = miner_work.clone();
@@ -247,16 +263,16 @@ mod miner_share_tests {
                 assert_eq!(share.sdiff, dec!(1.9041854952356509));
                 assert_eq!(share.result, true);
                 assert_eq!(share.agent, "cpuminer/2.5.1");
-            },
-            _ => panic!("Expected Share variant")
+            }
+            _ => panic!("Expected Share variant"),
         }
 
         // Serialize back to JSON
         let serialized = serde_json::to_string(&miner_message).unwrap();
-        
+
         // Deserialize again to verify
         let deserialized: MinerMessage = serde_json::from_str(&serialized).unwrap();
-        
+
         // Verify the round-trip
         assert_eq!(miner_message, deserialized);
     }
@@ -275,18 +291,20 @@ mod miner_share_tests {
                 assert_eq!(workbase.workinfoid, 7460787496608071691);
                 assert_eq!(workbase.gbt.height, 99);
                 assert_eq!(workbase.gbt.bits, "1e0377ae");
-                assert_eq!(workbase.gbt.previousblockhash, 
-                    "00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc");
-            },
-            _ => panic!("Expected Workbase variant")
+                assert_eq!(
+                    workbase.gbt.previousblockhash,
+                    "00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc"
+                );
+            }
+            _ => panic!("Expected Workbase variant"),
         }
 
         // Serialize back to JSON
         let serialized = serde_json::to_string(&miner_message).unwrap();
-        
+
         // Deserialize again to verify
         let deserialized: MinerMessage = serde_json::from_str(&serialized).unwrap();
-        
+
         // Verify the round-trip
         assert_eq!(miner_message, deserialized);
     }
