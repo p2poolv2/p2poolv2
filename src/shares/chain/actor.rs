@@ -85,10 +85,22 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::AddShare(share_block) => {
-                    self.chain.add_share(share_block);
+                    let result = self.chain.add_share(share_block);
+                    if let Err(e) = response_sender
+                        .send(ChainResponse::AddShareResult(result))
+                        .await
+                    {
+                        error!("Failed to send add_share response: {}", e);
+                    }
                 }
                 ChainMessage::StoreWorkbase(workbase) => {
-                    self.chain.add_workbase(workbase);
+                    let result = self.chain.add_workbase(workbase);
+                    if let Err(e) = response_sender
+                        .send(ChainResponse::StoreWorkbaseResult(result))
+                        .await
+                    {
+                        error!("Failed to send store_workbase response: {}", e);
+                    }
                 }
             }
         }
@@ -229,5 +241,146 @@ mock! {
         fn clone(&self) -> Self {
             Self { sender: self.sender.clone() }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shares::miner_message::Gbt;
+    use crate::test_utils::fixtures::simple_miner_share;
+    use rust_decimal_macros::dec;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_get_tip() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+
+        let tip = chain_handle.get_tip().await;
+        assert_eq!(tip, None); // New chain should have no tip
+
+        // Add a share block
+        let share_block = ShareBlock {
+            nonce: vec![1],
+            blockhash: vec![1],
+            prev_share_blockhash: vec![],
+            uncles: vec![],
+            miner_pubkey: vec![1],
+            timestamp: 1,
+            tx_hashes: vec![],
+            miner_share: simple_miner_share(None, None, None, None),
+        };
+
+        // Add the share block
+        let result = chain_handle.add_share(share_block).await;
+        tracing::info!("result: {:?}", result);
+        assert!(result.is_ok());
+
+        // Get tip should now return the blockhash
+        let tip = chain_handle.get_tip().await;
+        assert_eq!(tip, Some(vec![1]));
+    }
+
+    #[tokio::test]
+    async fn test_reorg() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+
+        let share_block = ShareBlock {
+            nonce: vec![1],
+            blockhash: vec![1],
+            prev_share_blockhash: vec![],
+            uncles: vec![],
+            miner_pubkey: vec![1],
+            timestamp: 1,
+            tx_hashes: vec![],
+            miner_share: simple_miner_share(None, None, Some(dec!(1.0)), Some(dec!(1.0))),
+        };
+
+        // Add initial share block
+        let result = chain_handle.add_share(share_block.clone()).await;
+        assert!(result.is_ok());
+
+        // Create another share block with higher difficulty
+        let higher_diff_share = ShareBlock {
+            nonce: vec![2],
+            blockhash: vec![2],
+            prev_share_blockhash: vec![1], // Points to previous block
+            uncles: vec![],
+            miner_pubkey: vec![1],
+            timestamp: 2,
+            tx_hashes: vec![],
+            miner_share: simple_miner_share(None, None, Some(dec!(2.0)), Some(dec!(2.0))), // Higher difficulty
+        };
+
+        let result = chain_handle.reorg(higher_diff_share, dec!(1.0)).await;
+        assert!(result.is_ok());
+
+        // Check if the chain tip is updated
+        let tip = chain_handle.get_tip().await;
+        assert_eq!(tip, Some(vec![2]));
+    }
+
+    #[tokio::test]
+    async fn test_is_confirmed() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+
+        let share_block = ShareBlock {
+            nonce: vec![1],
+            blockhash: vec![1],
+            prev_share_blockhash: vec![],
+            uncles: vec![],
+            miner_pubkey: vec![1],
+            timestamp: 1,
+            tx_hashes: vec![],
+            miner_share: simple_miner_share(None, None, Some(dec!(1.0)), Some(dec!(1.0))),
+        };
+
+        let result = chain_handle.is_confirmed(share_block).await;
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // New block should not be confirmed
+    }
+
+    #[tokio::test]
+    async fn test_add_workbase() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+
+        let workbase = MinerWorkbase {
+            workinfoid: 1,
+            gbt: Gbt {
+                capabilities: vec!["proposal".to_string()],
+                version: 1,
+                rules: vec![],
+                vbavailable: serde_json::Value::Null,
+                vbrequired: 0,
+                previousblockhash: "prev_hash".to_string(),
+                transactions: vec![],
+                coinbaseaux: serde_json::Value::Null,
+                coinbasevalue: 5000000000,
+                longpollid: "longpoll".to_string(),
+                target: "target".to_string(),
+                mintime: 1,
+                mutable: vec!["time".to_string()],
+                noncerange: "00000000ffffffff".to_string(),
+                sigoplimit: 80000,
+                sizelimit: 4000000,
+                weightlimit: 4000000,
+                curtime: 1,
+                bits: "bits".to_string(),
+                height: 1,
+                signet_challenge: "51".to_string(),
+                default_witness_commitment: "commitment".to_string(),
+                diff: 1.0,
+                ntime: "ntime".to_string(),
+                bbversion: "20000000".to_string(),
+                nbit: "1e0377ae".to_string(),
+            },
+        };
+
+        let result = chain_handle.add_workbase(workbase).await;
+        assert!(result.is_ok());
     }
 }

@@ -124,13 +124,13 @@ impl Store {
     }
 }
 
-#[cfg(test)]
-impl Drop for Store {
-    // Drop created store db only for tests once a test is done
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(self.path.clone()).unwrap();
-    }
-}
+// #[cfg(test)]
+// impl Drop for Store {
+//     // Drop created store db only for tests once a test is done
+//     fn drop(&mut self) {
+//         std::fs::remove_dir_all(self.path.clone()).unwrap();
+//     }
+// }
 
 #[cfg(test)]
 mod tests {

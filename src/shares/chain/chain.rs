@@ -42,7 +42,7 @@ impl Chain {
     }
 
     /// Add a share to the chain and update the tip and total difficulty
-    pub fn add_share(&mut self, share: ShareBlock) -> Result<(), Box<dyn Error>> {
+    pub fn add_share(&mut self, share: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>> {
         info!("Adding share to chain: {:?}", share.blockhash);
         let blockhash = share.blockhash.clone();
         let prev_share_blockhash = share.prev_share_blockhash.clone();
@@ -116,7 +116,10 @@ impl Chain {
     }
 
     /// Add a workbase to the chain
-    pub fn add_workbase(&mut self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error>> {
+    pub fn add_workbase(
+        &mut self,
+        workbase: MinerWorkbase,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.store.add_workbase(workbase);
         Ok(())
     }
