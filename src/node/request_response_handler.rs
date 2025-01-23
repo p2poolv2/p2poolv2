@@ -198,4 +198,46 @@ mod tests {
             panic!("Expected gossip message");
         }
     }
+
+    #[tokio::test]
+    async fn test_handle_request_share_block_error() {
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let mut chain_handle = ChainHandle::default();
+
+        let share_block = ShareBlock {
+            nonce: vec![1],
+            blockhash: vec![1],
+            prev_share_blockhash: vec![],
+            uncles: vec![],
+            miner_pubkey: vec![1],
+            timestamp: 1,
+            tx_hashes: vec![],
+            miner_share: simple_miner_share(
+                Some(7452731920372203525),
+                Some(1),
+                Some(dec!(1.0)),
+                Some(dec!(1.9041854952356509)),
+            ),
+        };
+
+        // Set up mock to return error
+        chain_handle
+            .expect_add_share()
+            .with(eq(share_block.clone()))
+            .returning(|_| Err("Failed to add share".into()));
+
+        let result = handle_request(
+            peer_id,
+            Message::ShareBlock(share_block),
+            chain_handle,
+            swarm_tx,
+        )
+        .await;
+
+        assert!(result.is_err());
+
+        // Verify no gossip message was sent
+        assert!(swarm_rx.try_recv().is_err());
+    }
 }
