@@ -129,11 +129,13 @@ impl Chain {
 mod chain_tests {
     use super::*;
     use crate::test_utils::fixtures::simple_miner_share;
+    use tempfile::tempdir;
 
     #[test]
     /// Setup a test chain with 3 shares on the main chain, where shares 2 and 3 have two uncles each
     fn test_chain_add_shares() {
-        let mut store = Store::new("test_chain_add_shares.db".to_string());
+        let temp_dir = tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string());
         let mut chain = Chain::new(store);
 
         // Create initial share (1)
@@ -278,7 +280,8 @@ mod chain_tests {
 
     #[test]
     fn test_confirmations() {
-        let mut store = Store::new("test_confirmations.db".to_string());
+        let temp_dir = tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string());
         let mut chain = Chain::new(store);
 
         // Create initial chain of MIN_CONFIRMATION_DEPTH + 1 blocks

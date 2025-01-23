@@ -137,9 +137,11 @@ mod tests {
     use super::*;
     use crate::test_utils::fixtures::simple_miner_share;
     use rust_decimal_macros::dec;
+    use tempfile::tempdir;
     #[test]
     fn test_chain_with_uncles() {
-        let mut store = Store::new("test_chain_with_uncles.db".to_string());
+        let temp_dir = tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string());
 
         // Create initial share
         let share1 = ShareBlock {

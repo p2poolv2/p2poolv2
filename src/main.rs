@@ -24,6 +24,8 @@ mod command;
 mod config;
 mod node;
 mod shares;
+
+#[cfg(test)]
 mod test_utils;
 
 #[mockall_double::double]

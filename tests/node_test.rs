@@ -16,6 +16,7 @@
 
 use p2poolv2::{config::Config, node::actor::NodeHandle, shares::chain::ChainHandle};
 use std::time::Duration;
+use tempfile::tempdir;
 
 #[tokio::test]
 async fn test_three_nodes_connectivity() {
@@ -31,9 +32,13 @@ async fn test_three_nodes_connectivity() {
         .with_listen_address("/ip4/0.0.0.0/tcp/6886".to_string())
         .with_store_path("test_chain_3.db".to_string());
 
-    let chain_handle1 = ChainHandle::new(config1.store.path.clone());
-    let chain_handle2 = ChainHandle::new(config2.store.path.clone());
-    let chain_handle3 = ChainHandle::new(config3.store.path.clone());
+    let temp_dir1 = tempdir().unwrap();
+    let temp_dir2 = tempdir().unwrap();
+    let temp_dir3 = tempdir().unwrap();
+
+    let chain_handle1 = ChainHandle::new(temp_dir1.path().to_str().unwrap().to_string());
+    let chain_handle2 = ChainHandle::new(temp_dir2.path().to_str().unwrap().to_string());
+    let chain_handle3 = ChainHandle::new(temp_dir3.path().to_str().unwrap().to_string());
     // Start three nodes
     let (node1_handle, stop_rx1) = NodeHandle::new(config1, chain_handle1)
         .await
