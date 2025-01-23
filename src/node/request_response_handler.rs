@@ -17,7 +17,8 @@
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::Message;
 use crate::node::SwarmSend;
-use crate::shares::chain::ChainHandle;
+#[mockall_double::double]
+use crate::shares::chain::actor::ChainHandle;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
@@ -35,17 +36,13 @@ pub async fn handle_request_response_event(
             peer,
             message:
                 libp2p::request_response::Message::Request {
-                    request_id,
+                    request_id: _,
                     request,
-                    channel,
+                    channel: _,
                 },
         } => {
-            debug!(
-                "Received request with id: {} from peer: {}",
-                request_id, peer
-            );
-            if let Err(e) = handle_request(peer, request_id, request, chain_handle, swarm_tx).await
-            {
+            debug!("Received request from peer: {}", peer);
+            if let Err(e) = handle_request(peer, request, chain_handle, swarm_tx).await {
                 error!("Failed to handle request: {}", e);
                 return Err("Error handling request".into());
             }
@@ -55,7 +52,7 @@ pub async fn handle_request_response_event(
             message:
                 libp2p::request_response::Message::Response {
                     request_id,
-                    response,
+                    response: _,
                 },
         } => {
             debug!(
@@ -88,15 +85,11 @@ pub async fn handle_request_response_event(
 
 async fn handle_request(
     peer: libp2p::PeerId,
-    request_id: libp2p::request_response::InboundRequestId,
     request: Message,
     chain_handle: ChainHandle,
     swarm_tx: mpsc::Sender<SwarmSend>,
 ) -> Result<(), Box<dyn Error>> {
-    info!(
-        "Handling request with id: {} from peer: {}",
-        request_id, peer
-    );
+    info!("Handling request from peer: {}", peer);
     match request {
         Message::ShareBlock(share_block) => {
             info!("Received share block: {:?}", share_block);
@@ -134,6 +127,75 @@ async fn handle_request(
         _ => {
             info!("Received unknown request: {:?}", request);
             Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[mockall_double::double]
+    use crate::shares::chain::actor::ChainHandle;
+    use crate::shares::ShareBlock;
+    use crate::test_utils::fixtures::simple_miner_share;
+    use mockall::predicate::*;
+    use rust_decimal_macros::dec;
+
+    #[tokio::test]
+    async fn test_handle_share_block_request() {
+        let mut chain_handle = ChainHandle::default();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let peer_id = libp2p::PeerId::random();
+
+        // Create test share block
+        let share_block = ShareBlock {
+            nonce: vec![1],
+            blockhash: vec![1],
+            prev_share_blockhash: vec![],
+            uncles: vec![],
+            miner_pubkey: vec![1],
+            timestamp: 1,
+            tx_hashes: vec![],
+            miner_share: simple_miner_share(
+                Some(7452731920372203525),
+                Some(1),
+                Some(dec!(1.0)),
+                Some(dec!(1.9041854952356509)),
+            ),
+        };
+
+        // Set up mock expectations
+        chain_handle
+            .expect_add_share()
+            .with(eq(share_block.clone()))
+            .returning(|_| Ok(()));
+
+        // Test handle_request directly without request_id
+        let result = handle_request(
+            peer_id,
+            Message::ShareBlock(share_block.clone()),
+            chain_handle,
+            swarm_tx,
+        )
+        .await;
+
+        assert!(result.is_ok());
+
+        // Verify gossip message was sent
+        if let Some(SwarmSend::Gossip(buf)) = swarm_rx.try_recv().ok() {
+            let message = Message::cbor_deserialize(&buf).unwrap();
+            match message {
+                Message::ShareBlock(received_share) => {
+                    assert_eq!(received_share.blockhash, share_block.blockhash);
+                    assert_eq!(
+                        received_share.miner_share.diff,
+                        share_block.miner_share.diff
+                    );
+                }
+                _ => panic!("Expected ShareBlock message"),
+            }
+        } else {
+            panic!("Expected gossip message");
         }
     }
 }

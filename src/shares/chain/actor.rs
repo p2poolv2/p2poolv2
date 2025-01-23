@@ -210,3 +210,24 @@ impl ChainHandle {
         }
     }
 }
+
+#[cfg(test)]
+use mockall::mock;
+
+#[cfg(test)]
+mock! {
+    pub ChainHandle {
+        pub fn new(store_path: String) -> Self;
+        pub async fn get_tip(&self) -> Option<Vec<u8>>;
+        pub async fn reorg(&self, share_block: ShareBlock, total_difficulty_upto_prev_share_blockhash: Decimal) -> Result<(), Box<dyn Error + Send + Sync>>;
+        pub async fn is_confirmed(&self, share_block: ShareBlock) -> Result<bool, Box<dyn Error + Send + Sync>>;
+        pub async fn add_share(&self, share_block: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>>;
+        pub async fn add_workbase(&self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error + Send + Sync>>;
+    }
+
+    impl Clone for ChainHandle {
+        fn clone(&self) -> Self {
+            Self { sender: self.sender.clone() }
+        }
+    }
+}

@@ -29,7 +29,8 @@ mod test_utils;
 #[mockall_double::double]
 use crate::node::actor::NodeHandle;
 use crate::node::messages::Message;
-use crate::shares::chain::ChainHandle;
+#[mockall_double::double]
+use crate::shares::chain::actor::ChainHandle;
 use crate::shares::ckpool_socket::receive_from_ckpool;
 use crate::shares::handle_mining_message::handle_mining_message;
 use crate::shares::miner_message::MinerMessage;

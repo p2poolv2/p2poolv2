@@ -21,7 +21,8 @@ pub mod actor;
 pub mod messages;
 
 use crate::node::messages::{InventoryMessage, Message};
-use crate::shares::chain::ChainHandle;
+#[mockall_double::double]
+use crate::shares::chain::actor::ChainHandle;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::identify;
 use libp2p::mdns::Event as MdnsEvent;

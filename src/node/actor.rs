@@ -19,7 +19,8 @@ use crate::config::Config;
 use crate::node::messages::Message;
 use crate::node::Node;
 use crate::node::SwarmSend;
-use crate::shares::chain::ChainHandle;
+#[mockall_double::double]
+use crate::shares::chain::actor::ChainHandle;
 use crate::shares::miner_message::MinerWorkbase;
 use crate::shares::ShareBlock;
 use libp2p::futures::StreamExt;
