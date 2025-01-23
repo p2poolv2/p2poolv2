@@ -3,22 +3,21 @@
 //  This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free 
+// the terms of the GNU General Public License as published by the Free
 // Software Foundation, either version 3 of the License, or (at your option)
 // any later version.
 //
 // P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
 // FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 //
-// You should have received a copy of the GNU General Public License along with 
+// You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use serde::{Serialize, Deserialize};
-use std::error::Error;
-use crate::shares::{BlockHash, TxHash, ShareBlock};
 use crate::shares::miner_message::MinerWorkbase;
-
+use crate::shares::{BlockHash, ShareBlock, TxHash};
+use serde::{Deserialize, Serialize};
+use std::error::Error;
 
 /// Message trait for network messages that can be serialized/deserialized
 /// The trait provides a default implementation for serialization/deserialization
@@ -45,7 +44,7 @@ impl Message {
     pub fn cbor_deserialize(bytes: &[u8]) -> Result<Self, Box<dyn Error>> {
         match ciborium::de::from_reader(bytes) {
             Ok(msg) => Ok(msg),
-            Err(e) => Err(e.into())
+            Err(e) => Err(e.into()),
         }
     }
 }
@@ -70,11 +69,7 @@ mod tests {
     #[test]
     fn test_inventory_message_serde() {
         let msg = Message::Inventory(InventoryMessage {
-            have_shares: vec![
-                vec![1, 2, 3],
-                vec![4, 5, 6],
-                vec![7, 8, 9]
-            ]
+            have_shares: vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]],
         });
 
         // Test serialization
@@ -88,9 +83,12 @@ mod tests {
             _ => panic!("Expected Inventory variant"),
         };
         // Verify the deserialized message matches original
-        assert_eq!(deserialized.have_shares.len(), deserialized.have_shares.len());
+        assert_eq!(
+            deserialized.have_shares.len(),
+            deserialized.have_shares.len()
+        );
         assert_eq!(deserialized.have_shares[0], vec![1, 2, 3]);
-        assert_eq!(deserialized.have_shares[1], vec![4, 5, 6]); 
+        assert_eq!(deserialized.have_shares[1], vec![4, 5, 6]);
         assert_eq!(deserialized.have_shares[2], vec![7, 8, 9]);
     }
 
@@ -102,7 +100,7 @@ mod tests {
         let deserialized = Message::cbor_deserialize(&serialized).unwrap();
         match deserialized {
             Message::GetData(GetData::BlockHash(hash)) => assert_eq!(hash, vec![1, 2, 3]),
-            _ => panic!("Expected BlockHash variant")
+            _ => panic!("Expected BlockHash variant"),
         }
 
         // Test TxHash variant
@@ -111,7 +109,7 @@ mod tests {
         let deserialized = Message::cbor_deserialize(&serialized).unwrap();
         match deserialized {
             Message::GetData(GetData::TxHash(hash)) => assert_eq!(hash, vec![4, 5, 6]),
-            _ => panic!("Expected TxHash variant")
+            _ => panic!("Expected TxHash variant"),
         }
     }
 }
