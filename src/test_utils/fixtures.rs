@@ -19,6 +19,7 @@ use crate::shares::miner_message::MinerShare;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
+/// Build a simple miner share with consant values
 #[cfg(test)]
 pub fn simple_miner_share(
     workinfoid: Option<u64>,

@@ -23,6 +23,7 @@ pub mod messages;
 use crate::node::messages::{InventoryMessage, Message};
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
+use crate::shares::receive_mining_message::start_receiving_mining_messages;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::identify;
 use libp2p::mdns::Event as MdnsEvent;
@@ -104,6 +105,11 @@ impl Node {
         }
 
         let (swarm_tx, swarm_rx) = mpsc::channel(100);
+
+        if let Err(e) = start_receiving_mining_messages(chain_handle.clone(), swarm_tx.clone()) {
+            error!("Failed to start receiving shares: {}", e);
+            return Err(e.into());
+        }
 
         Ok(Self {
             swarm,

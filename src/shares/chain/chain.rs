@@ -43,7 +43,7 @@ impl Chain {
 
     /// Add a share to the chain and update the tip and total difficulty
     pub fn add_share(&mut self, share: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>> {
-        info!("Adding share to chain: {:?}", share.blockhash);
+        info!("Adding share to chain: {:?}", share);
         let blockhash = share.blockhash.clone();
         let prev_share_blockhash = share.prev_share_blockhash.clone();
         let share_difficulty = share.miner_share.diff;
@@ -105,6 +105,7 @@ impl Chain {
         share: ShareBlock,
         total_difficulty_upto_prev_share_blockhash: Decimal,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        info!("Reorging chain to share: {:?}", share.blockhash);
         self.tip = Some(share.blockhash);
         self.total_difficulty = total_difficulty_upto_prev_share_blockhash + share.miner_share.diff;
         Ok(())

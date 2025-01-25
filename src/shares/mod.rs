@@ -18,6 +18,7 @@ pub mod chain;
 pub mod ckpool_socket;
 pub mod handle_mining_message;
 pub mod miner_message;
+pub mod receive_mining_message;
 pub mod store;
 use crate::node::messages::Message;
 use crate::shares::miner_message::MinerShare;

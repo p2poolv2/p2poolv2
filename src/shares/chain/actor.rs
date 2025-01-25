@@ -114,6 +114,7 @@ pub struct ChainHandle {
 
 impl ChainHandle {
     pub fn new(store_path: String) -> Self {
+        tracing::info!("Creating ChainHandle with store_path: {}", store_path);
         let (sender, receiver) = mpsc::channel(1);
         let store = Store::new(store_path);
         let mut chain_actor = ChainActor::new(Chain::new(store), receiver);

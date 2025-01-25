@@ -14,12 +14,14 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-#[mockall_double::double]
-use crate::node::actor::NodeHandle;
 use crate::node::messages::Message;
-use crate::shares::miner_message::MinerMessage;
+use crate::node::SwarmSend;
+#[mockall_double::double]
+use crate::shares::chain::actor::ChainHandle;
+use crate::shares::miner_message::CkPoolMessage;
 use crate::shares::ShareBlock;
 use std::error::Error;
+use tokio::sync::mpsc;
 use tracing::error;
 
 /// Handle a mining message received from ckpool
@@ -27,29 +29,33 @@ use tracing::error;
 /// We store the received message in the node's database and send a gossip message to the network as this is our local share,
 /// we assume it is valid and add it to the chain.
 pub async fn handle_mining_message(
-    mining_message: MinerMessage,
-    node_handle: &NodeHandle,
+    mining_message: CkPoolMessage,
+    chain_handle: ChainHandle,
+    swarm_tx: mpsc::Sender<SwarmSend>,
 ) -> Result<(), Box<dyn Error>> {
     let message: Message;
+    tracing::info!("Received mining message: {:?}", mining_message);
     match mining_message {
-        MinerMessage::Share(share) => {
+        CkPoolMessage::Share(share) => {
             let share_block = ShareBlock::new(share);
+            tracing::debug!("Received ShareBlock: {:?}", share_block);
             message = Message::ShareBlock(share_block.clone());
-            if let Err(e) = node_handle.add_share(share_block).await {
+            if let Err(e) = chain_handle.add_share(share_block).await {
                 error!("Failed to add share: {}", e);
                 return Err("Error adding share to chain".into());
             }
         }
-        MinerMessage::Workbase(workbase) => {
+        CkPoolMessage::Workbase(workbase) => {
             message = Message::Workbase(workbase.clone());
-            if let Err(e) = node_handle.add_workbase(workbase).await {
+            if let Err(e) = chain_handle.add_workbase(workbase).await {
                 error!("Failed to add workbase: {}", e);
                 return Err("Error adding workbase".into());
             }
         }
     };
 
-    if let Err(e) = node_handle.send_gossip(message).await {
+    let serialized_message = message.cbor_serialize().unwrap();
+    if let Err(e) = swarm_tx.send(SwarmSend::Gossip(serialized_message)).await {
         error!("Failed to send share: {}", e);
         return Err("Error sending share to network".into());
     }
@@ -59,61 +65,54 @@ pub async fn handle_mining_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[mockall_double::double]
-    use crate::node::actor::NodeHandle;
     use crate::test_utils::fixtures::simple_miner_share;
     use rust_decimal_macros::dec;
 
     #[tokio::test]
     async fn test_handle_mining_message_share() {
-        let mut mock_handle = NodeHandle::default();
+        let mut mock_chain = ChainHandle::default();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(1);
 
         // Setup expectations
-        mock_handle
-            .expect_add_share()
-            .times(1)
-            .returning(|_| Ok(()));
+        mock_chain.expect_add_share().times(1).returning(|_| Ok(()));
 
-        mock_handle
-            .expect_send_gossip()
-            .times(1)
-            .returning(|_| Ok(()));
-
-        let mining_message = MinerMessage::Share(simple_miner_share(
+        let mining_message = CkPoolMessage::Share(simple_miner_share(
             Some(7452731920372203525),
             Some(1),
             Some(dec!(1.0)),
             Some(dec!(1.9041854952356509)),
         ));
 
-        let result = handle_mining_message(mining_message, &mock_handle).await;
+        let result = handle_mining_message(mining_message, mock_chain, swarm_tx).await;
 
         assert!(result.is_ok());
+
+        // Verify swarm message was sent
+        let swarm_msg = swarm_rx.try_recv().unwrap();
+        match swarm_msg {
+            SwarmSend::Gossip(_) => (),
+            _ => panic!("Expected gossip message"),
+        }
     }
 
     #[tokio::test]
     async fn test_handle_mining_message_share_send_gossip_error() {
-        let mut mock_handle = NodeHandle::default();
+        let mut mock_chain = ChainHandle::default();
+        // Create a channel that will be dropped immediately to simulate send error
+        let (swarm_tx, _swarm_rx) = mpsc::channel(1);
+        drop(_swarm_rx); // Force send error by dropping receiver
 
         // Setup expectations
-        mock_handle
-            .expect_add_share()
-            .times(1)
-            .returning(|_| Ok(()));
+        mock_chain.expect_add_share().times(1).returning(|_| Ok(()));
 
-        mock_handle
-            .expect_send_gossip()
-            .times(1)
-            .returning(|_| Err("Failed to send gossip".into()));
-
-        let mining_message = MinerMessage::Share(simple_miner_share(
+        let mining_message = CkPoolMessage::Share(simple_miner_share(
             Some(7452731920372203525),
             Some(1),
             Some(dec!(1.0)),
             Some(dec!(1.9041854952356509)),
         ));
 
-        let result = handle_mining_message(mining_message, &mock_handle).await;
+        let result = handle_mining_message(mining_message, mock_chain, swarm_tx).await;
 
         assert!(result.is_err());
         assert_eq!(
@@ -124,25 +123,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_mining_message_share_add_share_error() {
-        let mut mock_handle = NodeHandle::default();
+        let mut mock_chain = ChainHandle::default();
+        let (swarm_tx, _swarm_rx) = mpsc::channel(1);
+        drop(_swarm_rx); // Drop receiver so if send is called the test will fail
 
         // Setup expectations
-        mock_handle
+        mock_chain
             .expect_add_share()
             .times(1)
             .returning(|_| Err("Failed to add share".into()));
 
-        // send_gossip should never be called
-        mock_handle.expect_send_gossip().times(0);
-
-        let mining_message = MinerMessage::Share(simple_miner_share(
+        let mining_message = CkPoolMessage::Share(simple_miner_share(
             Some(7452731920372203525),
             Some(1),
             Some(dec!(1.0)),
             Some(dec!(1.9041854952356509)),
         ));
 
-        let result = handle_mining_message(mining_message, &mock_handle).await;
+        let result = handle_mining_message(mining_message, mock_chain, swarm_tx).await;
 
         assert!(result.is_err());
         assert_eq!(

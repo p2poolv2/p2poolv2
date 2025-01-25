@@ -16,7 +16,6 @@
 
 use clap::Parser;
 use std::error::Error;
-use std::thread;
 use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
 
@@ -33,9 +32,6 @@ use crate::node::actor::NodeHandle;
 use crate::node::messages::Message;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
-use crate::shares::ckpool_socket::receive_from_ckpool;
-use crate::shares::handle_mining_message::handle_mining_message;
-use crate::shares::miner_message::MinerMessage;
 use tracing::error;
 
 #[derive(Parser, Debug)]
@@ -60,42 +56,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let chain_handle = ChainHandle::new(config.store.path.clone());
     if let Ok((node_handle, stopping_rx)) = NodeHandle::new(config, chain_handle).await {
         info!("Node started");
-        if let Err(e) = start_receiving_mining_messages(node_handle.clone()) {
-            error!("Failed to start receiving shares: {}", e);
-            return Err(e.into());
-        }
         stopping_rx.await?;
         info!("Node stopped");
     } else {
         error!("Failed to start node");
     }
-    Ok(())
-}
-
-/// Receives messages from ckpool and sends them to the node asynchronously
-/// Each new message received starts a new tokio task
-/// TODO: Add limits to how many concurrent tasks are run
-fn start_receiving_mining_messages(node_handle: NodeHandle) -> Result<(), Box<dyn Error>> {
-    let (mining_message_tx, mut mining_message_rx) =
-        tokio::sync::mpsc::channel::<serde_json::Value>(100);
-    thread::spawn(move || {
-        if let Err(e) = receive_from_ckpool(mining_message_tx) {
-            error!("Share receiver failed: {}", e);
-        }
-    });
-    tokio::spawn(async move {
-        while let Some(mining_message_data) = mining_message_rx.recv().await {
-            info!(
-                "Received mining message serialized: {:?}",
-                mining_message_data
-            );
-            let mining_message: MinerMessage = serde_json::from_value(mining_message_data).unwrap();
-            info!("Received mining message deserialized: {:?}", mining_message);
-
-            if let Err(e) = handle_mining_message(mining_message, &node_handle).await {
-                error!("Failed to handle mining message: {}", e);
-            }
-        }
-    });
     Ok(())
 }

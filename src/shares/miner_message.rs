@@ -18,7 +18,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
-pub enum MinerMessage {
+pub enum CkPoolMessage {
     Share(MinerShare),
     Workbase(MinerWorkbase),
 }
@@ -249,11 +249,11 @@ mod miner_share_tests {
         let json = r#"{"Share": {"workinfoid": 7452731920372203525, "clientid": 1, "enonce1": "336c6d67", "nonce2": "0000000000000000", "nonce": "2eb7b82b", "ntime": "676d6caa", "diff": 1.0, "sdiff": 1.9041854952356509, "hash": "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5", "result": true, "errn": 0, "createdate": "1735224559,536904211", "createby": "code", "createcode": "parse_submit", "createinet": "0.0.0.0:3333", "workername": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d", "username": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d", "address": "172.19.0.4", "agent": "cpuminer/2.5.1"}}"#;
 
         // Deserialize JSON to MinerMessage
-        let miner_message: MinerMessage = serde_json::from_str(json).unwrap();
+        let miner_message: CkPoolMessage = serde_json::from_str(json).unwrap();
 
         // Verify it's a Share variant and check fields
         match &miner_message {
-            MinerMessage::Share(share) => {
+            CkPoolMessage::Share(share) => {
                 assert_eq!(share.workinfoid, 7452731920372203525);
                 assert_eq!(share.clientid, 1);
                 assert_eq!(share.enonce1, "336c6d67");
@@ -271,7 +271,7 @@ mod miner_share_tests {
         let serialized = serde_json::to_string(&miner_message).unwrap();
 
         // Deserialize again to verify
-        let deserialized: MinerMessage = serde_json::from_str(&serialized).unwrap();
+        let deserialized: CkPoolMessage = serde_json::from_str(&serialized).unwrap();
 
         // Verify the round-trip
         assert_eq!(miner_message, deserialized);
@@ -283,11 +283,11 @@ mod miner_share_tests {
         let json = r#"{"Workbase": {"gbt": {"bbversion": "20000000", "bits": "1e0377ae", "capabilities": ["proposal"], "coinbaseaux": {}, "coinbasevalue": 5000000000, "curtime": 1737100205, "default_witness_commitment": "6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9", "diff": 0.001126515290698186, "height": 99, "longpollid": "00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc1", "mintime": 1736687181, "mutable": ["time", "transactions", "prevblock"], "nbit": "1e0377ae", "noncerange": "00000000ffffffff", "ntime": "678a0bad", "previousblockhash": "00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc", "rules": ["csv", "!segwit", "!signet", "taproot"], "signet_challenge": "51", "sigoplimit": 80000, "sizelimit": 4000000, "target": "00000377ae000000000000000000000000000000000000000000000000000000", "transactions": [], "vbavailable": {}, "vbrequired": 0, "version": 536870912, "weightlimit": 4000000}, "workinfoid": 7460787496608071691}}"#;
 
         // Deserialize JSON to MinerMessage
-        let miner_message: MinerMessage = serde_json::from_str(json).unwrap();
+        let miner_message: CkPoolMessage = serde_json::from_str(json).unwrap();
 
         // Verify it's a Workbase variant and check fields
         match &miner_message {
-            MinerMessage::Workbase(workbase) => {
+            CkPoolMessage::Workbase(workbase) => {
                 assert_eq!(workbase.workinfoid, 7460787496608071691);
                 assert_eq!(workbase.gbt.height, 99);
                 assert_eq!(workbase.gbt.bits, "1e0377ae");
@@ -303,7 +303,7 @@ mod miner_share_tests {
         let serialized = serde_json::to_string(&miner_message).unwrap();
 
         // Deserialize again to verify
-        let deserialized: MinerMessage = serde_json::from_str(&serialized).unwrap();
+        let deserialized: CkPoolMessage = serde_json::from_str(&serialized).unwrap();
 
         // Verify the round-trip
         assert_eq!(miner_message, deserialized);
