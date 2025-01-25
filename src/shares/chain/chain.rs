@@ -121,8 +121,16 @@ impl Chain {
         &mut self,
         workbase: MinerWorkbase,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        self.store.add_workbase(workbase);
+        if let Err(e) = self.store.add_workbase(workbase) {
+            error!("Failed to add workbase to store: {}", e);
+            return Err("Error adding workbase to store".into());
+        }
         Ok(())
+    }
+
+    /// Get a workbase from the chain given a workinfoid
+    pub fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase> {
+        self.store.get_workbase(workinfoid)
     }
 }
 
@@ -316,5 +324,39 @@ mod chain_tests {
                 assert!(!chain.is_confirmed(share));
             }
         }
+    }
+
+    #[test]
+    fn test_add_workbase() {
+        use crate::shares::miner_message::CkPoolMessage;
+        use std::fs;
+
+        let temp_dir = tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string());
+        let mut chain = Chain::new(store);
+
+        // Load test data from JSON file
+        let test_data = fs::read_to_string("tests/test_data/single_node_simple.json")
+            .expect("Failed to read test data file");
+
+        // Deserialize into CkPoolMessage array
+        let ckpool_messages: Vec<CkPoolMessage> =
+            serde_json::from_str(&test_data).expect("Failed to deserialize test data");
+
+        // Find first workbase message
+        let workbase = ckpool_messages
+            .iter()
+            .find_map(|msg| match msg {
+                CkPoolMessage::Workbase(wb) => Some(wb.clone()),
+                _ => None,
+            })
+            .expect("No workbase found in test data");
+
+        // Add workbase and verify it succeeds
+        let result = chain.add_workbase(workbase.clone());
+        assert!(result.is_ok());
+
+        // Verify workbase was stored by checking it matches what we stored
+        assert_eq!(chain.get_workbase(workbase.workinfoid), Some(workbase));
     }
 }

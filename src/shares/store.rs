@@ -58,6 +58,21 @@ impl Store {
         Ok(())
     }
 
+    /// Get a workbase from the store
+    pub fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase> {
+        let workbase = self
+            .db
+            .get(workinfoid.to_string().as_bytes())
+            .unwrap()
+            .unwrap();
+        let workbase = Message::cbor_deserialize(&workbase).unwrap();
+        let workbase = match workbase {
+            Message::Workbase(workbase) => workbase,
+            _ => panic!("Expected Workbase variant"),
+        };
+        Some(workbase)
+    }
+
     /// Get a share from the store
     pub fn get_share(&self, blockhash: &BlockHash) -> Option<ShareBlock> {
         if blockhash.is_empty() {
@@ -123,14 +138,6 @@ impl Store {
         }
     }
 }
-
-// #[cfg(test)]
-// impl Drop for Store {
-//     // Drop created store db only for tests once a test is done
-//     fn drop(&mut self) {
-//         std::fs::remove_dir_all(self.path.clone()).unwrap();
-//     }
-// }
 
 #[cfg(test)]
 mod tests {
