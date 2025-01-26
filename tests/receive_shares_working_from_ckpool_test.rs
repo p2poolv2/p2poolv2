@@ -91,7 +91,7 @@ mod zmq_tests {
             .expect("Failed to shutdown node");
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_single_node_with_zmq_feed_of_shares_only() {
         tracing::info!("Starting test_single_node_with_zmq_feed");
 
@@ -153,6 +153,75 @@ mod zmq_tests {
 
         let workbase = chain_handle.get_workbase(7460801854683742211).await;
         assert!(workbase.is_none());
+
+        // Clean up
+        node_handle
+            .shutdown()
+            .await
+            .expect("Failed to shutdown node");
+    }
+
+    #[tokio::test]
+    async fn test_single_node_with_shares_and_workbases() {
+        tracing::info!("Starting test_single_node_with_shares_and_workbases");
+
+        // Create configuration for a single node
+        let config = Config::default()
+            .with_listen_address("/ip4/0.0.0.0/tcp/6889".to_string())
+            .with_store_path("test_chain_zmq.db".to_string())
+            .with_ckpool_port(8883);
+
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // Start the node
+        let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone())
+            .await
+            .expect("Failed to create node");
+
+        // Load test data from JSON file
+        let test_data = fs::read_to_string("tests/test_data/single_node_simple.json")
+            .expect("Failed to read test data file");
+
+        // Start ZMQ publishing socket
+        let ctx = zmq::Context::new();
+        let publisher = ctx
+            .socket(zmq::PUB)
+            .expect("Failed to create ZMQ PUB socket");
+        publisher
+            .bind(format!("tcp://*:{}", config.ckpool.port).as_str())
+            .expect("Failed to bind ZMQ socket");
+
+        // Give the node time to start up
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Deserialize into MinerMessage array
+        let ckpool_messages: Vec<CkPoolMessage> =
+            serde_json::from_str(&test_data).expect("Failed to deserialize test data");
+
+        // Publish each message from test data
+        for message in ckpool_messages {
+            let serialized = serde_json::to_string(&message).unwrap();
+            tracing::debug!("Publishing message: {:?}", &message);
+            publisher
+                .send(&serialized, 0)
+                .expect("Failed to publish message");
+
+            // Small delay between messages to avoid overwhelming the system
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // Verify the node received and processed the data
+        assert!(chain_handle
+            .get_share("00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172".into())
+            .await
+            .is_some());
+
+        let workbase = chain_handle
+            .get_workbase(7460801854683742211)
+            .await
+            .unwrap();
+        assert_eq!(workbase.gbt.height, 109);
 
         // Clean up
         node_handle
