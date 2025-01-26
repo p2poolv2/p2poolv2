@@ -1,0 +1,48 @@
+[
+    {
+        "Share": {
+            "workinfoid": 7460801854683742211,
+            "clientid": 1,
+            "enonce1": "c3178a67",
+            "nonce2": "0000000000000000",
+            "nonce": "b4e32983",
+            "ntime": "678a17fe",
+            "diff": 1.0,
+            "sdiff": 1.1493093889529222,
+            "hash": "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172",
+            "result": true,
+            "errn": 0,
+            "createdate": "1737103378,341141594",
+            "createby": "code",
+            "createcode": "parse_submit",
+            "createinet": "0.0.0.0:3333",
+            "workername": "tb1q5fyv7tue73y4zxezh2c685qpwx0cfngfxlrgxh",
+            "username": "tb1q5fyv7tue73y4zxezh2c685qpwx0cfngfxlrgxh",
+            "address": "127.0.0.1",
+            "agent": "cpuminer/2.5.1"
+        }
+    },
+    {
+        "Share": {
+            "workinfoid": 7460801854683742211,
+            "clientid": 1,
+            "enonce1": "c3178a67",
+            "nonce2": "0000000000000000",
+            "nonce": "b4e32983",
+            "ntime": "678a17fe",
+            "diff": 1.0,
+            "sdiff": 1.1493093889529222,
+            "hash": "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173",
+            "result": true,
+            "errn": 0,
+            "createdate": "1737103378,341141595",
+            "createby": "code",
+            "createcode": "parse_submit",
+            "createinet": "0.0.0.0:3333",
+            "workername": "tb1q5fyv7tue73y4zxezh2c685qpwx0cfngfxlrgxh",
+            "username": "tb1q5fyv7tue73y4zxezh2c685qpwx0cfngfxlrgxh",
+            "address": "127.0.0.1",
+            "agent": "cpuminer/2.5.1"
+        }
+    }
+]

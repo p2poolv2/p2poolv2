@@ -51,18 +51,20 @@ fn receive_shares<S: MinerSocket>(
 ) -> Result<(), Box<dyn Error>> {
     loop {
         match socket.recv_string() {
-            Ok(Ok(json_str)) => match serde_json::from_str(&json_str) {
-                Ok(json_value) => {
-                    info!("Received share: {}", json_str);
-                    if let Err(e) = tx.blocking_send(json_value) {
-                        error!("Failed to send share to channel: {}", e);
+            Ok(Ok(json_str)) => {
+                tracing::debug!("Received json from ckpool: {}", json_str);
+                match serde_json::from_str(&json_str) {
+                    Ok(json_value) => {
+                        if let Err(e) = tx.blocking_send(json_value) {
+                            error!("Failed to send share to channel: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to parse JSON: {}", e);
+                        return Err(Box::new(e));
                     }
                 }
-                Err(e) => {
-                    error!("Failed to parse JSON: {}", e);
-                    return Err(Box::new(e));
-                }
-            },
+            }
             Ok(Err(e)) => {
                 error!("Failed to decode message: {:?}", e);
                 return Err(Box::new(zmq::Error::EINVAL));

@@ -39,8 +39,8 @@ impl Store {
     pub fn add_share(&mut self, share: ShareBlock) {
         debug!("Adding share to store: {:?}", share.blockhash);
         self.db
-            .put(
-                share.blockhash.clone(),
+            .put::<&[u8], Vec<u8>>(
+                share.blockhash.clone().as_ref(),
                 Message::ShareBlock(share).cbor_serialize().unwrap(),
             )
             .unwrap();
@@ -60,12 +60,11 @@ impl Store {
 
     /// Get a workbase from the store
     pub fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase> {
-        let workbase = self
-            .db
-            .get(workinfoid.to_string().as_bytes())
-            .unwrap()
-            .unwrap();
-        let workbase = Message::cbor_deserialize(&workbase).unwrap();
+        let workbase = self.db.get(workinfoid.to_string().as_bytes()).unwrap();
+        if workbase.is_none() {
+            return None;
+        }
+        let workbase = Message::cbor_deserialize(&workbase.unwrap()).unwrap();
         let workbase = match workbase {
             Message::Workbase(workbase) => workbase,
             _ => panic!("Expected Workbase variant"),
@@ -79,7 +78,7 @@ impl Store {
             return None;
         }
         debug!("Getting share from store: {:?}", blockhash);
-        let share = self.db.get(blockhash).unwrap().unwrap();
+        let share = self.db.get::<&[u8]>(blockhash).unwrap().unwrap();
         let share = Message::cbor_deserialize(&share).unwrap();
         let share = match share {
             Message::ShareBlock(share) => share,
@@ -153,10 +152,10 @@ mod tests {
         // Create initial share
         let share1 = ShareBlock {
             nonce: vec![1],
-            blockhash: vec![1],
-            prev_share_blockhash: vec![],
+            blockhash: vec![1].into(),
+            prev_share_blockhash: vec![].into(),
             uncles: vec![],
-            miner_pubkey: vec![1],
+            miner_pubkey: vec![1].into(),
             timestamp: 1,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -170,10 +169,10 @@ mod tests {
         // Create uncles for share2
         let uncle1_share2 = ShareBlock {
             nonce: vec![21],
-            blockhash: vec![21],
-            prev_share_blockhash: vec![1],
+            blockhash: vec![21].into(),
+            prev_share_blockhash: vec![1].into(),
             uncles: vec![],
-            miner_pubkey: vec![21],
+            miner_pubkey: vec![21].into(),
             timestamp: 2,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -185,11 +184,11 @@ mod tests {
         };
 
         let uncle2_share2 = ShareBlock {
-            nonce: vec![22],
-            blockhash: vec![22],
-            prev_share_blockhash: vec![1],
-            uncles: vec![],
-            miner_pubkey: vec![22],
+            nonce: vec![22].into(),
+            blockhash: vec![22].into(),
+            prev_share_blockhash: vec![1].into(),
+            uncles: vec![].into(),
+            miner_pubkey: vec![22].into(),
             timestamp: 2,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -203,10 +202,10 @@ mod tests {
         // Create share2 with uncles
         let share2 = ShareBlock {
             nonce: vec![2],
-            blockhash: vec![2],
-            prev_share_blockhash: vec![1],
-            uncles: vec![vec![21], vec![22]],
-            miner_pubkey: vec![2],
+            blockhash: vec![2].into(),
+            prev_share_blockhash: vec![1].into(),
+            uncles: vec![vec![21].into(), vec![22].into()],
+            miner_pubkey: vec![2].into(),
             timestamp: 2,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -220,10 +219,10 @@ mod tests {
         // Create uncles for share3
         let uncle1_share3 = ShareBlock {
             nonce: vec![31],
-            blockhash: vec![31],
-            prev_share_blockhash: vec![2],
-            uncles: vec![],
-            miner_pubkey: vec![31],
+            blockhash: vec![31].into(),
+            prev_share_blockhash: vec![2].into(),
+            uncles: vec![].into(),
+            miner_pubkey: vec![31].into(),
             timestamp: 3,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -236,10 +235,10 @@ mod tests {
 
         let uncle2_share3 = ShareBlock {
             nonce: vec![32],
-            blockhash: vec![32],
-            prev_share_blockhash: vec![2],
-            uncles: vec![],
-            miner_pubkey: vec![32],
+            blockhash: vec![32].into(),
+            prev_share_blockhash: vec![2].into(),
+            uncles: vec![].into(),
+            miner_pubkey: vec![32].into(),
             timestamp: 3,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -253,10 +252,10 @@ mod tests {
         // Create share3 with uncles
         let share3 = ShareBlock {
             nonce: vec![3],
-            blockhash: vec![3],
-            prev_share_blockhash: vec![2],
-            uncles: vec![vec![31], vec![32]],
-            miner_pubkey: vec![3],
+            blockhash: vec![3].into(),
+            prev_share_blockhash: vec![2].into(),
+            uncles: vec![vec![31].into(), vec![32].into()],
+            miner_pubkey: vec![3].into(),
             timestamp: 3,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -277,35 +276,35 @@ mod tests {
         store.add_share(share3.clone());
 
         // Get chain up to share3
-        let chain = store.get_chain_upto(&vec![3]);
+        let chain = store.get_chain_upto(&vec![3].into());
 
         // Get common ancestor of share3 and share2
-        let common_ancestor = store.get_common_ancestor(&vec![3], &vec![2]);
-        assert_eq!(common_ancestor, Some(vec![1]));
+        let common_ancestor = store.get_common_ancestor(&vec![3].into(), &vec![2].into());
+        assert_eq!(common_ancestor, Some(vec![1].into()));
 
         // Get chain up to uncle1_share3 (share31)
-        let chain_to_uncle = store.get_chain_upto(&vec![31]);
+        let chain_to_uncle = store.get_chain_upto(&vec![31].into());
         assert_eq!(chain_to_uncle.len(), 3);
-        assert_eq!(chain_to_uncle[0].blockhash, vec![31]);
-        assert_eq!(chain_to_uncle[1].blockhash, vec![2]);
-        assert_eq!(chain_to_uncle[2].blockhash, vec![1]);
+        assert_eq!(chain_to_uncle[0].blockhash, vec![31].into());
+        assert_eq!(chain_to_uncle[1].blockhash, vec![2].into());
+        assert_eq!(chain_to_uncle[2].blockhash, vec![1].into());
 
         // Chain should contain share3, share2, share1 in reverse order
         assert_eq!(chain.len(), 3);
-        assert_eq!(chain[0].blockhash, vec![3]);
-        assert_eq!(chain[1].blockhash, vec![2]);
-        assert_eq!(chain[2].blockhash, vec![1]);
+        assert_eq!(chain[0].blockhash, vec![3].into());
+        assert_eq!(chain[1].blockhash, vec![2].into());
+        assert_eq!(chain[2].blockhash, vec![1].into());
 
         // Verify uncles of share2
-        let uncles_share2 = store.get_uncles(&vec![2]);
+        let uncles_share2 = store.get_uncles(&vec![2].into());
         assert_eq!(uncles_share2.len(), 2);
-        assert!(uncles_share2.iter().any(|u| u.blockhash == vec![21]));
-        assert!(uncles_share2.iter().any(|u| u.blockhash == vec![22]));
+        assert!(uncles_share2.iter().any(|u| u.blockhash == vec![21].into()));
+        assert!(uncles_share2.iter().any(|u| u.blockhash == vec![22].into()));
 
         // Verify uncles of share3
-        let uncles_share3 = store.get_uncles(&vec![3]);
+        let uncles_share3 = store.get_uncles(&vec![3].into());
         assert_eq!(uncles_share3.len(), 2);
-        assert!(uncles_share3.iter().any(|u| u.blockhash == vec![31]));
-        assert!(uncles_share3.iter().any(|u| u.blockhash == vec![32]));
+        assert!(uncles_share3.iter().any(|u| u.blockhash == vec![31].into()));
+        assert!(uncles_share3.iter().any(|u| u.blockhash == vec![32].into()));
     }
 }

@@ -38,7 +38,6 @@ pub async fn handle_mining_message(
     match mining_message {
         CkPoolMessage::Share(share) => {
             let share_block = ShareBlock::new(share);
-            tracing::debug!("Received ShareBlock: {:?}", share_block);
             message = Message::ShareBlock(share_block.clone());
             if let Err(e) = chain_handle.add_share(share_block).await {
                 error!("Failed to add share: {}", e);

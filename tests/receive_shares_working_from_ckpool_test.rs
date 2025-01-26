@@ -23,24 +23,9 @@ mod zmq_tests {
     use tempfile::tempdir;
     use zmq;
 
-    #[test_log::test(tokio::test)]
-    async fn test_single_node_with_zmq_feed() {
+    #[tokio::test]
+    async fn test_single_node_with_zmq_feed_of_workbases_only() {
         tracing::info!("Starting test_single_node_with_zmq_feed");
-        // Load test data from JSON file
-        let test_data = fs::read_to_string("tests/test_data/single_node_simple.json")
-            .expect("Failed to read test data file");
-
-        // Set up ZMQ publisher
-        let ctx = zmq::Context::new();
-        let publisher = ctx
-            .socket(zmq::PUB)
-            .expect("Failed to create ZMQ PUB socket");
-        publisher
-            .bind("tcp://*:8881")
-            .expect("Failed to bind ZMQ socket");
-
-        // Give the node time to start up
-        tokio::time::sleep(Duration::from_millis(500)).await;
 
         // Create configuration for a single node
         let config = Config::default()
@@ -55,6 +40,22 @@ mod zmq_tests {
             .await
             .expect("Failed to create node");
 
+        // Load test data from JSON file
+        let test_data = fs::read_to_string("tests/test_data/workbases_only.json")
+            .expect("Failed to read test data file");
+
+        // Start ZMQ publishing socket
+        let ctx = zmq::Context::new();
+        let publisher = ctx
+            .socket(zmq::PUB)
+            .expect("Failed to create ZMQ PUB socket");
+        publisher
+            .bind("tcp://*:8881")
+            .expect("Failed to bind ZMQ socket");
+
+        // Give the node time to start up
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
         // Deserialize into MinerMessage array
         let ckpool_messages: Vec<CkPoolMessage> =
             serde_json::from_str(&test_data).expect("Failed to deserialize test data");
@@ -62,6 +63,7 @@ mod zmq_tests {
         // Publish each message from test data
         for message in ckpool_messages {
             let serialized = serde_json::to_string(&message).unwrap();
+            tracing::debug!("Publishing message: {:?}", &message);
             publisher
                 .send(&serialized, 0)
                 .expect("Failed to publish message");
@@ -70,17 +72,86 @@ mod zmq_tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        // Give some time for shares to be processed
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        let workbase = chain_handle
+            .get_workbase(7460801854683742211)
+            .await
+            .unwrap();
+        assert_eq!(workbase.gbt.height, 109);
+
+        let workbase = chain_handle
+            .get_workbase(7460801854683742212)
+            .await
+            .unwrap();
+        assert_eq!(workbase.gbt.height, 109);
+
+        // Clean up
+        node_handle
+            .shutdown()
+            .await
+            .expect("Failed to shutdown node");
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_single_node_with_zmq_feed_of_shares_only() {
+        tracing::info!("Starting test_single_node_with_zmq_feed");
+
+        // Create configuration for a single node
+        let config = Config::default()
+            .with_listen_address("/ip4/0.0.0.0/tcp/6887".to_string())
+            .with_store_path("test_chain_zmq.db".to_string());
+
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // Start the node
+        let (node_handle, _stop_rx) = NodeHandle::new(config, chain_handle.clone())
+            .await
+            .expect("Failed to create node");
+
+        // Load test data from JSON file
+        let test_data = fs::read_to_string("tests/test_data/shares_only.json")
+            .expect("Failed to read test data file");
+
+        // Start ZMQ publishing socket
+        let ctx = zmq::Context::new();
+        let publisher = ctx
+            .socket(zmq::PUB)
+            .expect("Failed to create ZMQ PUB socket");
+        publisher
+            .bind("tcp://*:8881")
+            .expect("Failed to bind ZMQ socket");
+
+        // Give the node time to start up
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Deserialize into MinerMessage array
+        let ckpool_messages: Vec<CkPoolMessage> =
+            serde_json::from_str(&test_data).expect("Failed to deserialize test data");
+
+        // Publish each message from test data
+        for message in ckpool_messages {
+            let serialized = serde_json::to_string(&message).unwrap();
+            tracing::debug!("Publishing message: {:?}", &message);
+            publisher
+                .send(&serialized, 0)
+                .expect("Failed to publish message");
+
+            // Small delay between messages to avoid overwhelming the system
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
 
         // Verify the node received and processed the data
-        // You might want to add specific verification logic here depending on your implementation
-        let tip = chain_handle.get_tip().await.unwrap();
-        assert_eq!(
-            tip,
-            hex::decode("00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172")
-                .unwrap()
-        );
+        assert!(chain_handle
+            .get_share("00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172".into())
+            .await
+            .is_some());
+        assert!(chain_handle
+            .get_share("00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173".into())
+            .await
+            .is_some());
+
+        let workbase = chain_handle.get_workbase(7460801854683742211).await;
+        assert!(workbase.is_none());
 
         // Clean up
         node_handle

@@ -128,6 +128,11 @@ impl Chain {
         Ok(())
     }
 
+    /// Get a share from the chain given a share hash
+    pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock> {
+        self.store.get_share(share_hash)
+    }
+
     /// Get a workbase from the chain given a workinfoid
     pub fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase> {
         self.store.get_workbase(workinfoid)
@@ -150,8 +155,8 @@ mod chain_tests {
         // Create initial share (1)
         let share1 = ShareBlock {
             nonce: vec![1],
-            blockhash: vec![1],
-            prev_share_blockhash: vec![],
+            blockhash: vec![1].into(),
+            prev_share_blockhash: vec![].into(),
             uncles: vec![],
             miner_pubkey: vec![1],
             timestamp: 1,
@@ -165,14 +170,14 @@ mod chain_tests {
         };
         chain.add_share(share1.clone()).unwrap();
 
-        assert_eq!(chain.tip, Some(vec![1]));
+        assert_eq!(chain.tip, Some(vec![1].into()));
         assert_eq!(chain.total_difficulty, dec!(1.0));
 
         // Create uncles for share2
         let uncle1_share2 = ShareBlock {
             nonce: vec![21],
-            blockhash: vec![21],
-            prev_share_blockhash: vec![1],
+            blockhash: vec![21].into(),
+            prev_share_blockhash: vec![1].into(),
             uncles: vec![],
             miner_pubkey: vec![21],
             timestamp: 2,
@@ -186,8 +191,8 @@ mod chain_tests {
         };
         let uncle2_share2 = ShareBlock {
             nonce: vec![22],
-            blockhash: vec![22],
-            prev_share_blockhash: vec![1],
+            blockhash: vec![22].into(),
+            prev_share_blockhash: vec![1].into(),
             uncles: vec![],
             miner_pubkey: vec![22],
             timestamp: 2,
@@ -203,16 +208,16 @@ mod chain_tests {
         chain.add_share(uncle2_share2.clone()).unwrap();
 
         // difficulty remains the same as the previous tip, so there is no reorg
-        assert_eq!(chain.tip, Some(vec![21]));
+        assert_eq!(chain.tip, Some(vec![21].into()));
         assert_eq!(chain.total_difficulty, dec!(2.0));
 
         // Create share2 with its uncles
         let share2 = ShareBlock {
-            nonce: vec![2],
-            blockhash: vec![2],
-            prev_share_blockhash: vec![1],
-            uncles: vec![vec![21], vec![22]],
-            miner_pubkey: vec![2],
+            nonce: vec![2].into(),
+            blockhash: vec![2].into(),
+            prev_share_blockhash: vec![1].into(),
+            uncles: vec![vec![21].into(), vec![22].into()],
+            miner_pubkey: vec![2].into(),
             timestamp: 2,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -224,16 +229,16 @@ mod chain_tests {
         };
         chain.add_share(share2.clone()).unwrap();
 
-        assert_eq!(chain.tip, Some(vec![2]));
+        assert_eq!(chain.tip, Some(vec![2].into()));
         assert_eq!(chain.total_difficulty, dec!(3.0));
 
         // Create uncles for share3
         let uncle1_share3 = ShareBlock {
-            nonce: vec![31],
-            blockhash: vec![31],
-            prev_share_blockhash: vec![2],
+            nonce: vec![31].into(),
+            blockhash: vec![31].into(),
+            prev_share_blockhash: vec![2].into(),
             uncles: vec![],
-            miner_pubkey: vec![31],
+            miner_pubkey: vec![31].into(),
             timestamp: 3,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -244,11 +249,11 @@ mod chain_tests {
             ),
         };
         let uncle2_share3 = ShareBlock {
-            nonce: vec![32],
-            blockhash: vec![32],
-            prev_share_blockhash: vec![2],
+            nonce: vec![32].into(),
+            blockhash: vec![32].into(),
+            prev_share_blockhash: vec![2].into(),
             uncles: vec![],
-            miner_pubkey: vec![32],
+            miner_pubkey: vec![32].into(),
             timestamp: 3,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -262,16 +267,16 @@ mod chain_tests {
         chain.add_share(uncle2_share3.clone()).unwrap();
 
         // if same diff share is added, it doesn't change the tip or total difficulty
-        assert_eq!(chain.tip, Some(vec![31]));
+        assert_eq!(chain.tip, Some(vec![31].into()));
         assert_eq!(chain.total_difficulty, dec!(4.0));
 
         // Create share3 with its uncles
         let share3 = ShareBlock {
-            nonce: vec![3],
-            blockhash: vec![3],
-            prev_share_blockhash: vec![2],
-            uncles: vec![vec![31], vec![32]],
-            miner_pubkey: vec![3],
+            nonce: vec![3].into(),
+            blockhash: vec![3].into(),
+            prev_share_blockhash: vec![2].into(),
+            uncles: vec![vec![31].into(), vec![32].into()],
+            miner_pubkey: vec![3].into(),
             timestamp: 3,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -283,7 +288,7 @@ mod chain_tests {
         };
         chain.add_share(share3.clone()).unwrap();
 
-        assert_eq!(chain.tip, Some(vec![3]));
+        assert_eq!(chain.tip, Some(vec![3].into()));
         assert_eq!(chain.total_difficulty, dec!(6.0));
     }
 
@@ -301,10 +306,10 @@ mod chain_tests {
         for i in 0..=MIN_CONFIRMATION_DEPTH + 1 {
             let share = ShareBlock {
                 nonce: vec![i as u8],
-                blockhash: vec![i as u8],
-                prev_share_blockhash: prev_hash,
+                blockhash: vec![i as u8].into(),
+                prev_share_blockhash: prev_hash.into(),
                 uncles: vec![],
-                miner_pubkey: vec![i as u8],
+                miner_pubkey: vec![i as u8].into(),
                 timestamp: i as u64,
                 tx_hashes: vec![],
                 miner_share: simple_miner_share(

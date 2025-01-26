@@ -69,7 +69,11 @@ mod tests {
     #[test]
     fn test_inventory_message_serde() {
         let msg = Message::Inventory(InventoryMessage {
-            have_shares: vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]],
+            have_shares: vec![
+                vec![1, 2, 3].into(),
+                vec![4, 5, 6].into(),
+                vec![7, 8, 9].into(),
+            ],
         });
 
         // Test serialization
@@ -87,24 +91,24 @@ mod tests {
             deserialized.have_shares.len(),
             deserialized.have_shares.len()
         );
-        assert_eq!(deserialized.have_shares[0], vec![1, 2, 3]);
-        assert_eq!(deserialized.have_shares[1], vec![4, 5, 6]);
-        assert_eq!(deserialized.have_shares[2], vec![7, 8, 9]);
+        assert_eq!(deserialized.have_shares[0], vec![1, 2, 3].into());
+        assert_eq!(deserialized.have_shares[1], vec![4, 5, 6].into());
+        assert_eq!(deserialized.have_shares[2], vec![7, 8, 9].into());
     }
 
     #[test]
     fn test_get_data_message_serde() {
         // Test BlockHash variant
-        let block_msg = Message::GetData(GetData::BlockHash(vec![1, 2, 3]));
+        let block_msg = Message::GetData(GetData::BlockHash(vec![1, 2, 3].into()));
         let serialized = block_msg.cbor_serialize().unwrap();
         let deserialized = Message::cbor_deserialize(&serialized).unwrap();
         match deserialized {
-            Message::GetData(GetData::BlockHash(hash)) => assert_eq!(hash, vec![1, 2, 3]),
+            Message::GetData(GetData::BlockHash(hash)) => assert_eq!(hash, vec![1, 2, 3].into()),
             _ => panic!("Expected BlockHash variant"),
         }
 
         // Test TxHash variant
-        let tx_msg = Message::GetData(GetData::TxHash(vec![4, 5, 6]));
+        let tx_msg = Message::GetData(GetData::TxHash(vec![4, 5, 6].into()));
         let serialized = tx_msg.cbor_serialize().unwrap();
         let deserialized = Message::cbor_deserialize(&serialized).unwrap();
         match deserialized {

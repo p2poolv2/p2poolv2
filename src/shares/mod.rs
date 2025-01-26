@@ -25,10 +25,56 @@ use crate::shares::miner_message::MinerShare;
 use crate::shares::store::Store;
 use hex;
 use serde::{Deserialize, Serialize};
-use std::error::Error;
+use std::{error::Error, fmt::Display};
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Default, Debug)]
+pub struct BlockHash(pub Vec<u8>);
+
+impl From<String> for BlockHash {
+    fn from(s: String) -> Self {
+        BlockHash(hex::decode(s).unwrap_or_default())
+    }
+}
+
+impl From<&str> for BlockHash {
+    fn from(s: &str) -> Self {
+        BlockHash(hex::decode(s).unwrap_or_default())
+    }
+}
+
+impl std::ops::Deref for BlockHash {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for BlockHash {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<Vec<u8>> for BlockHash {
+    fn from(v: Vec<u8>) -> Self {
+        BlockHash(v)
+    }
+}
+
+impl From<&[u8]> for BlockHash {
+    fn from(v: &[u8]) -> Self {
+        BlockHash(v.to_vec())
+    }
+}
+
+impl Display for BlockHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(&self.0))
+    }
+}
 
 pub type Nonce = Vec<u8>;
-pub type BlockHash = Vec<u8>;
 pub type Timestamp = u64;
 pub type TxHash = Vec<u8>;
 
@@ -67,8 +113,8 @@ impl ShareBlock {
         let share = miner_share.clone();
         Self {
             nonce: hex::decode(miner_share.nonce).unwrap(),
-            blockhash: hex::decode(miner_share.hash).unwrap(),
-            prev_share_blockhash: vec![],
+            blockhash: miner_share.hash.into(),
+            prev_share_blockhash: vec![].into(),
             uncles: vec![],
             miner_pubkey: vec![],
             timestamp: u64::from_str_radix(&miner_share.ntime, 16).unwrap(),
@@ -91,7 +137,7 @@ pub fn validate(share: &ShareBlock, store: &Store) -> Result<(), Box<dyn Error>>
     }
     for uncle in &share.uncles {
         if store.get_share(uncle).is_none() {
-            return Err(format!("Uncle {} not found in store", hex::encode(&uncle)).into());
+            return Err(format!("Uncle {} not found in store", uncle.to_string()).into());
         }
     }
     if let Err(e) = share
@@ -112,10 +158,10 @@ mod tests {
     #[test]
     fn test_share_serialization() {
         let share = ShareBlock {
-            blockhash: vec![1, 2, 3],
+            blockhash: vec![1, 2, 3].into(),
             nonce: vec![1, 2, 3],
-            prev_share_blockhash: vec![4, 5, 6],
-            uncles: vec![vec![7, 8, 9]],
+            prev_share_blockhash: vec![4, 5, 6].into(),
+            uncles: vec![vec![7, 8, 9].into()],
             miner_pubkey: vec![10, 11, 12],
             timestamp: 1234567890,
             tx_hashes: vec![vec![13, 14, 15]],

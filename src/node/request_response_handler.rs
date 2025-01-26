@@ -152,10 +152,10 @@ mod tests {
         // Create test share block
         let share_block = ShareBlock {
             nonce: vec![1],
-            blockhash: vec![1],
-            prev_share_blockhash: vec![],
+            blockhash: vec![1].into(),
+            prev_share_blockhash: vec![].into(),
             uncles: vec![],
-            miner_pubkey: vec![1],
+            miner_pubkey: vec![1].into(),
             timestamp: 1,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -209,10 +209,10 @@ mod tests {
 
         let share_block = ShareBlock {
             nonce: vec![1],
-            blockhash: vec![1],
-            prev_share_blockhash: vec![],
+            blockhash: vec![1].into(),
+            prev_share_blockhash: vec![].into(),
             uncles: vec![],
-            miner_pubkey: vec![1],
+            miner_pubkey: vec![1].into(),
             timestamp: 1,
             tx_hashes: vec![],
             miner_share: simple_miner_share(

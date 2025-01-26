@@ -15,9 +15,9 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::chain::Chain;
-use crate::shares::miner_message::MinerWorkbase;
 use crate::shares::store::Store;
 use crate::shares::ShareBlock;
+use crate::shares::{miner_message::MinerWorkbase, BlockHash};
 use rust_decimal::Decimal;
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -30,15 +30,19 @@ pub enum ChainMessage {
     IsConfirmed(ShareBlock),
     AddShare(ShareBlock),
     StoreWorkbase(MinerWorkbase),
+    GetWorkbase(u64),
+    GetShare(BlockHash),
 }
 
 #[derive(Debug)]
 pub enum ChainResponse {
-    Tip(Option<Vec<u8>>),
+    Tip(Option<BlockHash>),
     ReorgResult(Result<(), Box<dyn Error + Send + Sync>>),
     IsConfirmedResult(bool),
     AddShareResult(Result<(), Box<dyn Error + Send + Sync>>),
     StoreWorkbaseResult(Result<(), Box<dyn Error + Send + Sync>>),
+    GetWorkbaseResult(Option<MinerWorkbase>),
+    GetShareResult(Option<ShareBlock>),
 }
 
 pub struct ChainActor {
@@ -102,6 +106,24 @@ impl ChainActor {
                         error!("Failed to send store_workbase response: {}", e);
                     }
                 }
+                ChainMessage::GetWorkbase(workinfoid) => {
+                    let result = self.chain.get_workbase(workinfoid);
+                    if let Err(e) = response_sender
+                        .send(ChainResponse::GetWorkbaseResult(result))
+                        .await
+                    {
+                        error!("Failed to send get_workbase response: {}", e);
+                    }
+                }
+                ChainMessage::GetShare(share_hash) => {
+                    let result = self.chain.get_share(&share_hash);
+                    if let Err(e) = response_sender
+                        .send(ChainResponse::GetShareResult(result))
+                        .await
+                    {
+                        error!("Failed to send get_share response: {}", e);
+                    }
+                }
             }
         }
     }
@@ -122,7 +144,7 @@ impl ChainHandle {
         Self { sender }
     }
 
-    pub async fn get_tip(&self) -> Option<Vec<u8>> {
+    pub async fn get_tip(&self) -> Option<BlockHash> {
         let (response_sender, mut response_receiver) = mpsc::channel(1);
         if let Err(e) = self
             .sender
@@ -203,10 +225,27 @@ impl ChainHandle {
         }
     }
 
+    pub async fn get_share(&self, share_hash: BlockHash) -> Option<ShareBlock> {
+        let (response_sender, mut response_receiver) = mpsc::channel(1);
+        if let Err(e) = self
+            .sender
+            .send((ChainMessage::GetShare(share_hash), response_sender))
+            .await
+        {
+            error!("Failed to send GetShare message: {}", e);
+            return None;
+        }
+        match response_receiver.recv().await {
+            Some(ChainResponse::GetShareResult(result)) => result,
+            _ => None,
+        }
+    }
+
     pub async fn add_workbase(
         &self,
         workbase: MinerWorkbase,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        tracing::debug!("Adding workbase to chain: {:?}", workbase.workinfoid);
         let (response_sender, mut response_receiver) = mpsc::channel(1);
         if let Err(e) = self
             .sender
@@ -220,6 +259,18 @@ impl ChainHandle {
         match response_receiver.recv().await {
             Some(ChainResponse::StoreWorkbaseResult(result)) => result,
             _ => Err("Failed to receive add workbase result".into()),
+        }
+    }
+
+    pub async fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase> {
+        let (response_sender, mut response_receiver) = mpsc::channel(1);
+        self.sender
+            .send((ChainMessage::GetWorkbase(workinfoid), response_sender))
+            .await
+            .unwrap();
+        match response_receiver.recv().await {
+            Some(ChainResponse::GetWorkbaseResult(result)) => result,
+            _ => None,
         }
     }
 }
@@ -236,6 +287,7 @@ mock! {
         pub async fn is_confirmed(&self, share_block: ShareBlock) -> Result<bool, Box<dyn Error + Send + Sync>>;
         pub async fn add_share(&self, share_block: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn add_workbase(&self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error + Send + Sync>>;
+        pub async fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase>;
     }
 
     impl Clone for ChainHandle {
@@ -264,8 +316,8 @@ mod tests {
         // Add a share block
         let share_block = ShareBlock {
             nonce: vec![1],
-            blockhash: vec![1],
-            prev_share_blockhash: vec![],
+            blockhash: vec![1].into(),
+            prev_share_blockhash: vec![].into(),
             uncles: vec![],
             miner_pubkey: vec![1],
             timestamp: 1,
@@ -280,7 +332,7 @@ mod tests {
 
         // Get tip should now return the blockhash
         let tip = chain_handle.get_tip().await;
-        assert_eq!(tip, Some(vec![1]));
+        assert_eq!(tip, Some(vec![1].into()));
     }
 
     #[tokio::test]
@@ -290,8 +342,8 @@ mod tests {
 
         let share_block = ShareBlock {
             nonce: vec![1],
-            blockhash: vec![1],
-            prev_share_blockhash: vec![],
+            blockhash: vec![1].into(),
+            prev_share_blockhash: vec![].into(),
             uncles: vec![],
             miner_pubkey: vec![1],
             timestamp: 1,
@@ -306,8 +358,8 @@ mod tests {
         // Create another share block with higher difficulty
         let higher_diff_share = ShareBlock {
             nonce: vec![2],
-            blockhash: vec![2],
-            prev_share_blockhash: vec![1], // Points to previous block
+            blockhash: vec![2].into(),
+            prev_share_blockhash: vec![1].into(), // Points to previous block
             uncles: vec![],
             miner_pubkey: vec![1],
             timestamp: 2,
@@ -320,7 +372,7 @@ mod tests {
 
         // Check if the chain tip is updated
         let tip = chain_handle.get_tip().await;
-        assert_eq!(tip, Some(vec![2]));
+        assert_eq!(tip, Some(vec![2].into()));
     }
 
     #[tokio::test]
@@ -330,8 +382,8 @@ mod tests {
 
         let share_block = ShareBlock {
             nonce: vec![1],
-            blockhash: vec![1],
-            prev_share_blockhash: vec![],
+            blockhash: vec![1].into(),
+            prev_share_blockhash: vec![].into(),
             uncles: vec![],
             miner_pubkey: vec![1],
             timestamp: 1,
