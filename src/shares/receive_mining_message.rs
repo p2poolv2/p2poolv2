@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::node::Config;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::handle_mining_message::handle_mining_message;
@@ -28,13 +29,15 @@ use tracing::{error, info};
 /// Each new message received starts a new tokio task
 /// TODO: Add limits to how many concurrent tasks are run
 pub fn start_receiving_mining_messages(
+    config: &Config,
     chain_handle: ChainHandle,
     swarm_tx: mpsc::Sender<SwarmSend>,
 ) -> Result<(), Box<dyn Error>> {
     let (mining_message_tx, mut mining_message_rx) =
         tokio::sync::mpsc::channel::<serde_json::Value>(100);
+    let ckpool_config = config.ckpool.clone();
     thread::spawn(move || {
-        if let Err(e) = receive_from_ckpool(mining_message_tx) {
+        if let Err(e) = receive_from_ckpool(&ckpool_config, mining_message_tx) {
             error!("Share receiver failed: {}", e);
         }
     });

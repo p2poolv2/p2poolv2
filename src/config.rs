@@ -16,21 +16,28 @@
 
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct NetworkConfig {
     pub listen_address: String,
     pub dial_peers: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct StoreConfig {
     pub path: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
+pub struct CkPoolConfig {
+    pub host: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub network: NetworkConfig,
     pub store: StoreConfig,
+    pub ckpool: CkPoolConfig,
 }
 
 impl Config {
@@ -55,6 +62,16 @@ impl Config {
         self.store.path = store_path;
         self
     }
+
+    pub fn with_ckpool_host(mut self, ckpool_host: String) -> Self {
+        self.ckpool.host = ckpool_host;
+        self
+    }
+
+    pub fn with_ckpool_port(mut self, ckpool_port: u16) -> Self {
+        self.ckpool.port = ckpool_port;
+        self
+    }
 }
 
 impl Default for Config {
@@ -66,6 +83,10 @@ impl Default for Config {
             },
             store: StoreConfig {
                 path: "./store.db".to_string(),
+            },
+            ckpool: CkPoolConfig {
+                host: "localhost".to_string(),
+                port: 8881,
             },
         }
     }

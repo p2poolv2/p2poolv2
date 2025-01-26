@@ -36,7 +36,7 @@ mod zmq_tests {
         let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
 
         // Start the node
-        let (node_handle, _stop_rx) = NodeHandle::new(config, chain_handle.clone())
+        let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone())
             .await
             .expect("Failed to create node");
 
@@ -50,7 +50,7 @@ mod zmq_tests {
             .socket(zmq::PUB)
             .expect("Failed to create ZMQ PUB socket");
         publisher
-            .bind("tcp://*:8881")
+            .bind(format!("tcp://*:{}", config.ckpool.port).as_str())
             .expect("Failed to bind ZMQ socket");
 
         // Give the node time to start up
@@ -97,14 +97,15 @@ mod zmq_tests {
 
         // Create configuration for a single node
         let config = Config::default()
-            .with_listen_address("/ip4/0.0.0.0/tcp/6887".to_string())
-            .with_store_path("test_chain_zmq.db".to_string());
+            .with_listen_address("/ip4/0.0.0.0/tcp/6888".to_string())
+            .with_store_path("test_chain_zmq.db".to_string())
+            .with_ckpool_port(8882);
 
         let temp_dir = tempdir().unwrap();
         let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
 
         // Start the node
-        let (node_handle, _stop_rx) = NodeHandle::new(config, chain_handle.clone())
+        let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone())
             .await
             .expect("Failed to create node");
 
@@ -118,7 +119,7 @@ mod zmq_tests {
             .socket(zmq::PUB)
             .expect("Failed to create ZMQ PUB socket");
         publisher
-            .bind("tcp://*:8881")
+            .bind(format!("tcp://*:{}", config.ckpool.port).as_str())
             .expect("Failed to bind ZMQ socket");
 
         // Give the node time to start up

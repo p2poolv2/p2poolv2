@@ -14,12 +14,11 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::config::CkPoolConfig;
 use serde_json::Value;
 use std::error::Error;
 use tracing::{error, info};
 use zmq;
-
-const ENDPOINT: &str = "tcp://localhost:8881";
 
 // Define a trait for the socket operations we need
 // Use a trait to enable testing with a mock socket
@@ -35,11 +34,12 @@ impl MinerSocket for zmq::Socket {
 }
 
 // Function to create the real ZMQ socket
-fn create_zmq_socket() -> Result<zmq::Socket, Box<dyn Error>> {
+fn create_zmq_socket(config: &CkPoolConfig) -> Result<zmq::Socket, Box<dyn Error>> {
     let ctx = zmq::Context::new();
     let socket = ctx.socket(zmq::SUB)?;
-    socket.connect(ENDPOINT)?;
+    socket.connect(format!("tcp://{}:{}", config.host, config.port).as_str())?;
     socket.set_subscribe(b"")?;
+    info!("Connected to ckpool at {}:{}", config.host, config.port);
     Ok(socket)
 }
 
@@ -79,8 +79,11 @@ fn receive_shares<S: MinerSocket>(
 
 // A receive function that clients use to receive shares
 // This function creates the ZMQ socket and passes it to the receive_shares function
-pub fn receive_from_ckpool(tx: tokio::sync::mpsc::Sender<Value>) -> Result<(), Box<dyn Error>> {
-    let socket = create_zmq_socket()?;
+pub fn receive_from_ckpool(
+    config: &CkPoolConfig,
+    tx: tokio::sync::mpsc::Sender<Value>,
+) -> Result<(), Box<dyn Error>> {
+    let socket = create_zmq_socket(config)?;
     receive_shares(&socket, tx)
 }
 

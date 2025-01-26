@@ -6,3 +6,7 @@ dial_peers = [
 
 [store]
 path = "./store.2.db"
+
+[ckpool]
+host = "localhost"
+port = 8881

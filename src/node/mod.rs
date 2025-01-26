@@ -106,7 +106,9 @@ impl Node {
 
         let (swarm_tx, swarm_rx) = mpsc::channel(100);
 
-        if let Err(e) = start_receiving_mining_messages(chain_handle.clone(), swarm_tx.clone()) {
+        if let Err(e) =
+            start_receiving_mining_messages(&config, chain_handle.clone(), swarm_tx.clone())
+        {
             error!("Failed to start receiving shares: {}", e);
             return Err(e.into());
         }
