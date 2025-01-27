@@ -67,7 +67,7 @@ impl Store {
         let workbase = Message::cbor_deserialize(&workbase.unwrap()).unwrap();
         let workbase = match workbase {
             Message::Workbase(workbase) => workbase,
-            _ => panic!("Expected Workbase variant"),
+            _ => return None,
         };
         Some(workbase)
     }
@@ -78,11 +78,17 @@ impl Store {
             return None;
         }
         debug!("Getting share from store: {:?}", blockhash);
-        let share = self.db.get::<&[u8]>(blockhash).unwrap().unwrap();
-        let share = Message::cbor_deserialize(&share).unwrap();
+        let share = match self.db.get::<&[u8]>(blockhash) {
+            Ok(Some(share)) => share,
+            Ok(None) | Err(_) => return None,
+        };
+        let share = match Message::cbor_deserialize(&share) {
+            Ok(share) => share,
+            Err(_) => return None,
+        };
         let share = match share {
             Message::ShareBlock(share) => share,
-            _ => panic!("Expected ShareBlock variant"),
+            _ => return None,
         };
         Some(share)
     }
