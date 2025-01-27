@@ -15,9 +15,11 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::shares::miner_message::MinerWorkbase;
-use crate::shares::{BlockHash, ShareBlock, TxHash};
+use crate::shares::ShareBlock;
+use bitcoin::{BlockHash, Txid};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
+use std::str::FromStr;
 
 /// Message trait for network messages that can be serialized/deserialized
 /// The trait provides a default implementation for serialization/deserialization
@@ -59,7 +61,7 @@ pub struct InventoryMessage {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum GetData {
     BlockHash(BlockHash),
-    TxHash(TxHash),
+    Txid(Txid),
 }
 
 #[cfg(test)]
@@ -70,9 +72,18 @@ mod tests {
     fn test_inventory_message_serde() {
         let msg = Message::Inventory(InventoryMessage {
             have_shares: vec![
-                vec![1, 2, 3].into(),
-                vec![4, 5, 6].into(),
-                vec![7, 8, 9].into(),
+                BlockHash::from_str(
+                    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5",
+                )
+                .unwrap(),
+                BlockHash::from_str(
+                    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6",
+                )
+                .unwrap(),
+                BlockHash::from_str(
+                    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7",
+                )
+                .unwrap(),
             ],
         });
 
@@ -91,29 +102,63 @@ mod tests {
             deserialized.have_shares.len(),
             deserialized.have_shares.len()
         );
-        assert_eq!(deserialized.have_shares[0], vec![1, 2, 3].into());
-        assert_eq!(deserialized.have_shares[1], vec![4, 5, 6].into());
-        assert_eq!(deserialized.have_shares[2], vec![7, 8, 9].into());
+        assert_eq!(
+            deserialized.have_shares[0],
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap()
+        );
+        assert_eq!(
+            deserialized.have_shares[1],
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
+                .unwrap()
+        );
+        assert_eq!(
+            deserialized.have_shares[2],
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
+                .unwrap()
+        );
     }
 
     #[test]
     fn test_get_data_message_serde() {
         // Test BlockHash variant
-        let block_msg = Message::GetData(GetData::BlockHash(vec![1, 2, 3].into()));
+        let block_msg = Message::GetData(GetData::BlockHash(
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap(),
+        ));
         let serialized = block_msg.cbor_serialize().unwrap();
         let deserialized = Message::cbor_deserialize(&serialized).unwrap();
         match deserialized {
-            Message::GetData(GetData::BlockHash(hash)) => assert_eq!(hash, vec![1, 2, 3].into()),
+            Message::GetData(GetData::BlockHash(hash)) => {
+                assert_eq!(
+                    hash,
+                    BlockHash::from_str(
+                        "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+                    )
+                    .unwrap()
+                )
+            }
             _ => panic!("Expected BlockHash variant"),
         }
 
-        // Test TxHash variant
-        let tx_msg = Message::GetData(GetData::TxHash(vec![4, 5, 6].into()));
+        // Test Txid variant
+        let tx_msg = Message::GetData(GetData::Txid(
+            Txid::from_str("d2528fc2d7a4f95ace97860f157c895b6098667df0e43912b027cfe58edf304e")
+                .unwrap(),
+        ));
         let serialized = tx_msg.cbor_serialize().unwrap();
         let deserialized = Message::cbor_deserialize(&serialized).unwrap();
         match deserialized {
-            Message::GetData(GetData::TxHash(hash)) => assert_eq!(hash, vec![4, 5, 6]),
-            _ => panic!("Expected TxHash variant"),
+            Message::GetData(GetData::Txid(hash)) => {
+                assert_eq!(
+                    hash,
+                    Txid::from_str(
+                        "d2528fc2d7a4f95ace97860f157c895b6098667df0e43912b027cfe58edf304e"
+                    )
+                    .unwrap()
+                )
+            }
+            _ => panic!("Expected Txid variant"),
         }
     }
 }

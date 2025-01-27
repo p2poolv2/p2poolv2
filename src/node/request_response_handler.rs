@@ -151,9 +151,11 @@ mod tests {
 
         // Create test share block
         let share_block = ShareBlock {
-            nonce: vec![1],
-            blockhash: vec![1].into(),
-            prev_share_blockhash: vec![].into(),
+            nonce: 1,
+            blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+                .parse()
+                .unwrap(),
+            prev_share_blockhash: None,
             uncles: vec![],
             miner_pubkey: vec![1].into(),
             timestamp: 1,
@@ -208,9 +210,11 @@ mod tests {
         let mut chain_handle = ChainHandle::default();
 
         let share_block = ShareBlock {
-            nonce: vec![1],
-            blockhash: vec![1].into(),
-            prev_share_blockhash: vec![].into(),
+            nonce: 1,
+            blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+                .parse()
+                .unwrap(),
+            prev_share_blockhash: None,
             uncles: vec![],
             miner_pubkey: vec![1].into(),
             timestamp: 1,

@@ -282,7 +282,7 @@ use mockall::mock;
 mock! {
     pub ChainHandle {
         pub fn new(store_path: String) -> Self;
-        pub async fn get_tip(&self) -> Option<Vec<u8>>;
+        pub async fn get_tip(&self) -> Option<BlockHash>;
         pub async fn reorg(&self, share_block: ShareBlock, total_difficulty_upto_prev_share_blockhash: Decimal) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn is_confirmed(&self, share_block: ShareBlock) -> Result<bool, Box<dyn Error + Send + Sync>>;
         pub async fn add_share(&self, share_block: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>>;
@@ -301,6 +301,7 @@ mock! {
 mod tests {
     use super::*;
     use crate::shares::miner_message::Gbt;
+    use crate::test_utils::fixtures::random_hex_string;
     use crate::test_utils::fixtures::simple_miner_share;
     use rust_decimal_macros::dec;
     use tempfile::tempdir;
@@ -315,9 +316,11 @@ mod tests {
 
         // Add a share block
         let share_block = ShareBlock {
-            nonce: vec![1],
-            blockhash: vec![1].into(),
-            prev_share_blockhash: vec![].into(),
+            nonce: 1,
+            blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+                .parse()
+                .unwrap(),
+            prev_share_blockhash: None,
             uncles: vec![],
             miner_pubkey: vec![1],
             timestamp: 1,
@@ -326,13 +329,13 @@ mod tests {
         };
 
         // Add the share block
-        let result = chain_handle.add_share(share_block).await;
+        let result = chain_handle.add_share(share_block.clone()).await;
         tracing::info!("result: {:?}", result);
         assert!(result.is_ok());
 
         // Get tip should now return the blockhash
         let tip = chain_handle.get_tip().await;
-        assert_eq!(tip, Some(vec![1].into()));
+        assert_eq!(tip, Some(share_block.blockhash));
     }
 
     #[tokio::test]
@@ -341,9 +344,11 @@ mod tests {
         let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
 
         let share_block = ShareBlock {
-            nonce: vec![1],
-            blockhash: vec![1].into(),
-            prev_share_blockhash: vec![].into(),
+            nonce: 1,
+            blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+                .parse()
+                .unwrap(),
+            prev_share_blockhash: None,
             uncles: vec![],
             miner_pubkey: vec![1],
             timestamp: 1,
@@ -357,9 +362,11 @@ mod tests {
 
         // Create another share block with higher difficulty
         let higher_diff_share = ShareBlock {
-            nonce: vec![2],
-            blockhash: vec![2].into(),
-            prev_share_blockhash: vec![1].into(), // Points to previous block
+            nonce: 2,
+            blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
+                .parse()
+                .unwrap(),
+            prev_share_blockhash: Some(share_block.blockhash), // Points to previous block
             uncles: vec![],
             miner_pubkey: vec![1],
             timestamp: 2,
@@ -367,12 +374,14 @@ mod tests {
             miner_share: simple_miner_share(None, None, Some(dec!(2.0)), Some(dec!(2.0))), // Higher difficulty
         };
 
-        let result = chain_handle.reorg(higher_diff_share, dec!(1.0)).await;
+        let result = chain_handle
+            .reorg(higher_diff_share.clone(), dec!(1.0))
+            .await;
         assert!(result.is_ok());
 
         // Check if the chain tip is updated
         let tip = chain_handle.get_tip().await;
-        assert_eq!(tip, Some(vec![2].into()));
+        assert_eq!(tip, Some(higher_diff_share.blockhash));
     }
 
     #[tokio::test]
@@ -381,9 +390,9 @@ mod tests {
         let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
 
         let share_block = ShareBlock {
-            nonce: vec![1],
-            blockhash: vec![1].into(),
-            prev_share_blockhash: vec![].into(),
+            nonce: 1,
+            blockhash: random_hex_string(64, 8).parse().unwrap(),
+            prev_share_blockhash: Some(random_hex_string(64, 8).parse().unwrap()),
             uncles: vec![],
             miner_pubkey: vec![1],
             timestamp: 1,

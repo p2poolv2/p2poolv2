@@ -143,11 +143,19 @@ mod zmq_tests {
 
         // Verify the node received and processed the data
         assert!(chain_handle
-            .get_share("00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172".into())
+            .get_share(
+                "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
+                    .parse()
+                    .unwrap()
+            )
             .await
             .is_some());
         assert!(chain_handle
-            .get_share("00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173".into())
+            .get_share(
+                "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
+                    .parse()
+                    .unwrap()
+            )
             .await
             .is_some());
 
@@ -213,7 +221,11 @@ mod zmq_tests {
 
         // Verify the node received and processed the data
         assert!(chain_handle
-            .get_share("00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172".into())
+            .get_share(
+                "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
+                    .parse()
+                    .unwrap()
+            )
             .await
             .is_some());
 

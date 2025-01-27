@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::shares::miner_message::MinerShare;
+use rand::{thread_rng, Rng};
 #[cfg(test)]
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -47,5 +48,62 @@ pub fn simple_miner_share(
         username: "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string(),
         address: "172.19.0.4".to_string(),
         agent: "cpuminer/2.5.1".to_string(),
+    }
+}
+
+pub const TEST_BLOCKHASHES: [&str; 16] = [
+    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb0",
+    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb1",
+    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2",
+    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3",
+    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
+    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5",
+    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6",
+    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7",
+    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8",
+    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb9",
+    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bba",
+    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bbb",
+    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bbc",
+    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bbd",
+    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bbe",
+    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bbf",
+];
+
+/// Generate a random hex string of specified length (defaults to 64 characters)
+pub fn random_hex_string(length: usize, leading_zeroes: usize) -> String {
+    let mut rng = thread_rng();
+    let mut bytes = [0u8; 32];
+    rng.fill(&mut bytes[..length / 2]);
+    // Set the specified number of leading bytes to zero
+    for i in 0..leading_zeroes {
+        bytes[i] = 0;
+    }
+    bytes[..length / 2]
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_random_hex_string() {
+        // Generate two random strings
+        let str1 = random_hex_string(64, 8);
+        let str2 = random_hex_string(64, 8);
+
+        // Verify length is 64 characters
+        assert_eq!(str1.len(), 64);
+        assert_eq!(str2.len(), 64);
+
+        // Verify strings are different (extremely unlikely to be equal)
+        assert_ne!(str1, str2);
+
+        // Verify strings only contain valid hex characters
+        let is_hex = |s: &str| s.chars().all(|c| c.is_ascii_hexdigit());
+        assert!(is_hex(&str1));
+        assert!(is_hex(&str2));
     }
 }

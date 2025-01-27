@@ -307,7 +307,7 @@ impl Node {
         if let Some(tip) = self.chain_handle.get_tip().await {
             info!("Sending inventory message to peer: {peer_id}, tip: {tip:?}");
             let inventory_msg = Message::Inventory(InventoryMessage {
-                have_shares: vec![tip.into()],
+                have_shares: vec![tip],
             });
             self.send_to_peer(peer_id, inventory_msg);
         }

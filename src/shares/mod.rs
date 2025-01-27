@@ -23,65 +23,18 @@ pub mod store;
 use crate::node::messages::Message;
 use crate::shares::miner_message::MinerShare;
 use crate::shares::store::Store;
+use bitcoin::{BlockHash, Txid};
 use hex;
 use serde::{Deserialize, Serialize};
-use std::{error::Error, fmt::Display};
+use std::error::Error;
 
-#[derive(Clone, PartialEq, Serialize, Deserialize, Default, Debug)]
-pub struct BlockHash(pub Vec<u8>);
-
-impl From<String> for BlockHash {
-    fn from(s: String) -> Self {
-        BlockHash(hex::decode(s).unwrap_or_default())
-    }
-}
-
-impl From<&str> for BlockHash {
-    fn from(s: &str) -> Self {
-        BlockHash(hex::decode(s).unwrap_or_default())
-    }
-}
-
-impl std::ops::Deref for BlockHash {
-    type Target = Vec<u8>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl std::ops::DerefMut for BlockHash {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl From<Vec<u8>> for BlockHash {
-    fn from(v: Vec<u8>) -> Self {
-        BlockHash(v)
-    }
-}
-
-impl From<&[u8]> for BlockHash {
-    fn from(v: &[u8]) -> Self {
-        BlockHash(v.to_vec())
-    }
-}
-
-impl Display for BlockHash {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", hex::encode(&self.0))
-    }
-}
-
-pub type Nonce = Vec<u8>;
-pub type Timestamp = u64;
-pub type TxHash = Vec<u8>;
+type Nonce = u32;
+type Timestamp = u64;
 
 const MAX_UNCLES: usize = 3;
 
 /// Captures a block on the share chain
-#[derive(Clone, PartialEq, Serialize, Deserialize, Default, Debug)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct ShareBlock {
     /// The nonce from the miner
     pub nonce: Nonce,
@@ -89,8 +42,8 @@ pub struct ShareBlock {
     /// The block hash of the block the share is generated for
     pub blockhash: BlockHash,
 
-    /// The hash of the prev share block
-    pub prev_share_blockhash: BlockHash,
+    /// The hash of the prev share block, will be None for genesis block
+    pub prev_share_blockhash: Option<BlockHash>,
 
     /// The uncles of the share
     pub uncles: Vec<BlockHash>,
@@ -102,7 +55,7 @@ pub struct ShareBlock {
     pub timestamp: Timestamp,
 
     /// Any transactions to be included in the share block
-    pub tx_hashes: Vec<TxHash>,
+    pub tx_hashes: Vec<Txid>,
 
     /// The miner work for the share
     pub miner_share: MinerShare,
@@ -112,9 +65,9 @@ impl ShareBlock {
     pub fn new(miner_share: MinerShare) -> Self {
         let share = miner_share.clone();
         Self {
-            nonce: hex::decode(miner_share.nonce).unwrap(),
-            blockhash: miner_share.hash.into(),
-            prev_share_blockhash: vec![].into(),
+            nonce: u32::from_str_radix(&miner_share.nonce, 16).unwrap(),
+            blockhash: miner_share.hash.parse().unwrap(),
+            prev_share_blockhash: None,
             uncles: vec![],
             miner_pubkey: vec![],
             timestamp: u64::from_str_radix(&miner_share.ntime, 16).unwrap(),
@@ -158,13 +111,23 @@ mod tests {
     #[test]
     fn test_share_serialization() {
         let share = ShareBlock {
-            blockhash: vec![1, 2, 3].into(),
-            nonce: vec![1, 2, 3],
-            prev_share_blockhash: vec![4, 5, 6].into(),
-            uncles: vec![vec![7, 8, 9].into()],
+            blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+                .parse()
+                .unwrap(),
+            nonce: 1,
+            prev_share_blockhash: Some(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4"
+                    .parse()
+                    .unwrap(),
+            ),
+            uncles: vec![],
             miner_pubkey: vec![10, 11, 12],
             timestamp: 1234567890,
-            tx_hashes: vec![vec![13, 14, 15]],
+            tx_hashes: vec![
+                "d2528fc2d7a4f95ace97860f157c895b6098667df0e43912b027cfe58edf304e"
+                    .parse()
+                    .unwrap(),
+            ],
             miner_share: simple_miner_share(
                 Some(7452731920372203525),
                 Some(1),
