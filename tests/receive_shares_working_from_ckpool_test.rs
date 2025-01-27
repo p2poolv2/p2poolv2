@@ -54,7 +54,7 @@ mod zmq_tests {
             .expect("Failed to bind ZMQ socket");
 
         // Give the node time to start up
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Deserialize into MinerMessage array
         let ckpool_messages: Vec<CkPoolMessage> =
@@ -69,7 +69,7 @@ mod zmq_tests {
                 .expect("Failed to publish message");
 
             // Small delay between messages to avoid overwhelming the system
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
         let workbase = chain_handle
@@ -123,7 +123,7 @@ mod zmq_tests {
             .expect("Failed to bind ZMQ socket");
 
         // Give the node time to start up
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Deserialize into MinerMessage array
         let ckpool_messages: Vec<CkPoolMessage> =
@@ -201,7 +201,7 @@ mod zmq_tests {
             .expect("Failed to bind ZMQ socket");
 
         // Give the node time to start up
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Deserialize into MinerMessage array
         let ckpool_messages: Vec<CkPoolMessage> =
