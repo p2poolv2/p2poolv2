@@ -93,10 +93,7 @@ async fn handle_request(
     match request {
         Message::ShareBlock(share_block) => {
             info!("Received share block: {:?}", share_block);
-            if let Err(e) = share_block
-                .miner_share
-                .validate(share_block.miner_share.diff, share_block.miner_share.sdiff)
-            {
+            if let Err(e) = share_block.miner_share.validate() {
                 error!("Share block validation failed: {}", e);
                 return Err("Share block validation failed".into());
             }
@@ -157,7 +154,9 @@ mod tests {
                 .unwrap(),
             prev_share_blockhash: None,
             uncles: vec![],
-            miner_pubkey: vec![1].into(),
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
             timestamp: 1,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -216,7 +215,9 @@ mod tests {
                 .unwrap(),
             prev_share_blockhash: None,
             uncles: vec![],
-            miner_pubkey: vec![1].into(),
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
             timestamp: 1,
             tx_hashes: vec![],
             miner_share: simple_miner_share(

@@ -15,9 +15,10 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 mod zmq_tests {
+    use p2poolv2::config::Config;
     use p2poolv2::shares::miner_message::CkPoolMessage;
-    use p2poolv2::{config::Config, node::actor::NodeHandle, shares::chain::ChainHandle};
-    use serde_json::json;
+    use p2poolv2::test_utils::fixtures::default_test_config;
+    use p2poolv2::{node::actor::NodeHandle, shares::chain::ChainHandle};
     use std::fs;
     use std::time::Duration;
     use tempfile::tempdir;
@@ -28,9 +29,12 @@ mod zmq_tests {
         tracing::info!("Starting test_single_node_with_zmq_feed");
 
         // Create configuration for a single node
-        let config = Config::default()
+        let config = default_test_config()
             .with_listen_address("/ip4/0.0.0.0/tcp/6887".to_string())
-            .with_store_path("test_chain_zmq.db".to_string());
+            .with_store_path("test_chain_zmq.db".to_string())
+            .with_miner_pubkey(
+                "020202020202020202020202020202020202020202020202020202020202020202".to_string(),
+            );
 
         let temp_dir = tempdir().unwrap();
         let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
@@ -95,11 +99,13 @@ mod zmq_tests {
     async fn test_single_node_with_zmq_feed_of_shares_only() {
         tracing::info!("Starting test_single_node_with_zmq_feed");
 
-        // Create configuration for a single node
-        let config = Config::default()
+        let config = default_test_config()
             .with_listen_address("/ip4/0.0.0.0/tcp/6888".to_string())
             .with_store_path("test_chain_zmq.db".to_string())
-            .with_ckpool_port(8882);
+            .with_ckpool_port(8882)
+            .with_miner_pubkey(
+                "020202020202020202020202020202020202020202020202020202020202020202".to_string(),
+            );
 
         let temp_dir = tempdir().unwrap();
         let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
@@ -174,10 +180,13 @@ mod zmq_tests {
         tracing::info!("Starting test_single_node_with_shares_and_workbases");
 
         // Create configuration for a single node
-        let config = Config::default()
+        let config = default_test_config()
             .with_listen_address("/ip4/0.0.0.0/tcp/6889".to_string())
             .with_store_path("test_chain_zmq.db".to_string())
-            .with_ckpool_port(8883);
+            .with_ckpool_port(8883)
+            .with_miner_pubkey(
+                "020202020202020202020202020202020202020202020202020202020202020202".to_string(),
+            );
 
         let temp_dir = tempdir().unwrap();
         let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());

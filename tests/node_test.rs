@@ -14,7 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use p2poolv2::{config::Config, node::actor::NodeHandle, shares::chain::ChainHandle};
+use p2poolv2::test_utils::fixtures::default_test_config;
+use p2poolv2::{node::actor::NodeHandle, shares::chain::ChainHandle};
 use std::time::Duration;
 use tempfile::tempdir;
 
@@ -22,15 +23,24 @@ use tempfile::tempdir;
 async fn test_three_nodes_connectivity() {
     // Create three different configurations as strings
 
-    let config1 = Config::default()
+    let config1 = default_test_config()
         .with_listen_address("/ip4/0.0.0.0/tcp/6884".to_string())
-        .with_store_path("test_chain_1.db".to_string());
-    let config2 = Config::default()
+        .with_store_path("test_chain_1.db".to_string())
+        .with_miner_pubkey(
+            "020202020202020202020202020202020202020202020202020202020202020202".to_string(),
+        );
+    let config2 = default_test_config()
         .with_listen_address("/ip4/0.0.0.0/tcp/6885".to_string())
-        .with_store_path("test_chain_2.db".to_string());
-    let config3 = Config::default()
+        .with_store_path("test_chain_2.db".to_string())
+        .with_miner_pubkey(
+            "020202020202020202020202020202020202020202020202020202020202020202".to_string(),
+        );
+    let config3 = default_test_config()
         .with_listen_address("/ip4/0.0.0.0/tcp/6886".to_string())
-        .with_store_path("test_chain_3.db".to_string());
+        .with_store_path("test_chain_3.db".to_string())
+        .with_miner_pubkey(
+            "020202020202020202020202020202020202020202020202020202020202020202".to_string(),
+        );
 
     let temp_dir1 = tempdir().unwrap();
     let temp_dir2 = tempdir().unwrap();
