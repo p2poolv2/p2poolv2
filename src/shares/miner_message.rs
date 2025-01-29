@@ -50,30 +50,7 @@ pub struct MinerShare {
 
 impl MinerShare {
     /// Validates the miner work against provided difficulty thresholds
-    ///
-    /// # Arguments
-    /// * `max_diff` - Maximum allowed difficulty value
-    /// * `max_sdiff` - Maximum allowed share difficulty value
-    ///
-    /// # Returns
-    /// * `Ok(())` if validation passes
-    /// * `Err(String)` with error message if validation fails
-    pub fn validate(&self, max_diff: Decimal, max_sdiff: Decimal) -> Result<(), String> {
-        // Check difficulty thresholds
-        if self.diff > max_diff {
-            return Err(format!(
-                "Difficulty {} exceeds max diff {}",
-                self.diff, max_diff
-            ));
-        }
-
-        if self.sdiff > max_sdiff {
-            return Err(format!(
-                "Share difficulty {} exceeds max sdiff {}",
-                self.sdiff, max_sdiff
-            ));
-        }
-
+    pub fn validate(&self) -> Result<(), String> {
         // Verify the hash meets required share difficulty
         // Convert hash to u256 for comparison
         let hash_bytes = hex::decode(&self.hash).map_err(|e| format!("Invalid hash hex: {}", e))?;
@@ -222,14 +199,13 @@ mod miner_share_tests {
         let miner_work: MinerShare = serde_json::from_str(json).unwrap();
 
         // Validate the share
-        let result = miner_work.validate(dec!(1.0), dec!(1.9041854952356509));
+        let result = miner_work.validate();
         assert!(result.is_ok());
 
         // Test invalid nonce
         let mut invalid_miner_work = miner_work.clone();
         invalid_miner_work.nonce = "invalidhex".to_string();
-        let result: Result<(), String> =
-            invalid_miner_work.validate(dec!(1.0), dec!(1.9041854952356509));
+        let result: Result<(), String> = invalid_miner_work.validate();
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -239,7 +215,7 @@ mod miner_share_tests {
         // Test invalid nonce length
         let mut invalid_miner_work = miner_work.clone();
         invalid_miner_work.nonce = "2eb7b8".to_string();
-        let result = invalid_miner_work.validate(dec!(1.0), dec!(1.9041854952356509));
+        let result = invalid_miner_work.validate();
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Invalid nonce length: 3");
     }

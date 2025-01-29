@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use bitcoin::PublicKey;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -34,10 +35,16 @@ pub struct CkPoolConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct MinerConfig {
+    pub pubkey: PublicKey,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub network: NetworkConfig,
     pub store: StoreConfig,
     pub ckpool: CkPoolConfig,
+    pub miner: MinerConfig,
 }
 
 impl Config {
@@ -72,22 +79,9 @@ impl Config {
         self.ckpool.port = ckpool_port;
         self
     }
-}
 
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            network: NetworkConfig {
-                listen_address: "/ip4/0.0.0.0/tcp/6884".to_string(),
-                dial_peers: vec![],
-            },
-            store: StoreConfig {
-                path: "./store.db".to_string(),
-            },
-            ckpool: CkPoolConfig {
-                host: "localhost".to_string(),
-                port: 8881,
-            },
-        }
+    pub fn with_miner_pubkey(mut self, miner_pubkey: String) -> Self {
+        self.miner.pubkey = miner_pubkey.parse().unwrap();
+        self
     }
 }

@@ -165,7 +165,9 @@ mod tests {
                 .unwrap(),
             prev_share_blockhash: None,
             uncles: vec![],
-            miner_pubkey: vec![1].into(),
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
             timestamp: 1,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -188,7 +190,9 @@ mod tests {
                     .unwrap(),
             ),
             uncles: vec![],
-            miner_pubkey: vec![21].into(),
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
             timestamp: 2,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -210,7 +214,9 @@ mod tests {
                     .unwrap(),
             ),
             uncles: vec![],
-            miner_pubkey: vec![22].into(),
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
             timestamp: 2,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -233,7 +239,9 @@ mod tests {
                     .unwrap(),
             ),
             uncles: vec![uncle1_share2.blockhash, uncle2_share2.blockhash],
-            miner_pubkey: vec![2].into(),
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
             timestamp: 2,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -252,7 +260,9 @@ mod tests {
                 .unwrap(),
             prev_share_blockhash: Some(share2.blockhash),
             uncles: vec![],
-            miner_pubkey: vec![31].into(),
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
             timestamp: 3,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -270,7 +280,9 @@ mod tests {
                 .unwrap(),
             prev_share_blockhash: Some(share2.blockhash),
             uncles: vec![],
-            miner_pubkey: vec![32].into(),
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
             timestamp: 3,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
@@ -289,7 +301,9 @@ mod tests {
                 .unwrap(),
             prev_share_blockhash: Some(share2.blockhash),
             uncles: vec![uncle1_share3.blockhash, uncle2_share3.blockhash],
-            miner_pubkey: vec![3].into(),
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
             timestamp: 3,
             tx_hashes: vec![],
             miner_share: simple_miner_share(

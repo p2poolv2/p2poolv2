@@ -18,6 +18,4 @@ pub mod command;
 pub mod config;
 pub mod node;
 pub mod shares;
-
-#[cfg(test)]
 pub mod test_utils;

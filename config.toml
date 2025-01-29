@@ -8,3 +8,6 @@ path = "./store.db"
 [ckpool]
 host = "localhost"
 port = 8881
+
+[miner]
+pubkey = "020202020202020202020202020202020202020202020202020202020202020202"

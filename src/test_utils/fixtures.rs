@@ -15,10 +15,34 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::shares::miner_message::MinerShare;
-use rand::{thread_rng, Rng};
-#[cfg(test)]
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
+
+use crate::config::{CkPoolConfig, Config, MinerConfig, NetworkConfig, StoreConfig};
+
+/// Build a default test configuration with test values that can be replaced later by each test
+/// We avoid providing a Default implementation for Config as it exposes us to the risk of
+/// accidentally using the default values in production
+pub fn default_test_config() -> Config {
+    Config {
+        network: NetworkConfig {
+            listen_address: "/ip4/0.0.0.0/tcp/6887".to_string(),
+            dial_peers: vec![],
+        },
+        store: StoreConfig {
+            path: "test_chain.db".to_string(),
+        },
+        ckpool: CkPoolConfig {
+            host: "127.0.0.1".to_string(),
+            port: 8881,
+        },
+        miner: MinerConfig {
+            pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
+        },
+    }
+}
 
 /// Build a simple miner share with consant values
 #[cfg(test)]
@@ -70,9 +94,12 @@ pub const TEST_BLOCKHASHES: [&str; 16] = [
     "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bbf",
 ];
 
+#[cfg(test)]
 /// Generate a random hex string of specified length (defaults to 64 characters)
 pub fn random_hex_string(length: usize, leading_zeroes: usize) -> String {
-    let mut rng = thread_rng();
+    use rand::{thread_rng, Rng};
+
+    let mut rng = rand::thread_rng();
     let mut bytes = [0u8; 32];
     rng.fill(&mut bytes[..length / 2]);
     // Set the specified number of leading bytes to zero

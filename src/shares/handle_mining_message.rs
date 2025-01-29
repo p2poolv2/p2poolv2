@@ -20,6 +20,7 @@ use crate::node::SwarmSend;
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::miner_message::CkPoolMessage;
 use crate::shares::ShareBlock;
+use bitcoin::PublicKey;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::error;
@@ -32,12 +33,13 @@ pub async fn handle_mining_message(
     mining_message: CkPoolMessage,
     chain_handle: ChainHandle,
     swarm_tx: mpsc::Sender<SwarmSend>,
+    miner_pubkey: PublicKey,
 ) -> Result<(), Box<dyn Error>> {
     let message: Message;
     tracing::info!("Received mining message: {:?}", mining_message);
     match mining_message {
         CkPoolMessage::Share(share) => {
-            let share_block = ShareBlock::new(share);
+            let share_block = ShareBlock::new(share, miner_pubkey);
             message = Message::ShareBlock(share_block.clone());
             if let Err(e) = chain_handle.add_share(share_block).await {
                 error!("Failed to add share: {}", e);
@@ -69,6 +71,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_mining_message_share() {
+        let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+            .parse()
+            .unwrap();
         let mut mock_chain = ChainHandle::default();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(1);
 
@@ -82,7 +87,8 @@ mod tests {
             Some(dec!(1.9041854952356509)),
         ));
 
-        let result = handle_mining_message(mining_message, mock_chain, swarm_tx).await;
+        let result =
+            handle_mining_message(mining_message, mock_chain, swarm_tx, miner_pubkey).await;
 
         assert!(result.is_ok());
 
@@ -96,6 +102,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_mining_message_share_send_gossip_error() {
+        let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+            .parse()
+            .unwrap();
         let mut mock_chain = ChainHandle::default();
         // Create a channel that will be dropped immediately to simulate send error
         let (swarm_tx, _swarm_rx) = mpsc::channel(1);
@@ -111,7 +120,8 @@ mod tests {
             Some(dec!(1.9041854952356509)),
         ));
 
-        let result = handle_mining_message(mining_message, mock_chain, swarm_tx).await;
+        let result =
+            handle_mining_message(mining_message, mock_chain, swarm_tx, miner_pubkey).await;
 
         assert!(result.is_err());
         assert_eq!(
@@ -122,6 +132,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_mining_message_share_add_share_error() {
+        let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+            .parse()
+            .unwrap();
         let mut mock_chain = ChainHandle::default();
         let (swarm_tx, _swarm_rx) = mpsc::channel(1);
         drop(_swarm_rx); // Drop receiver so if send is called the test will fail
@@ -139,7 +152,8 @@ mod tests {
             Some(dec!(1.9041854952356509)),
         ));
 
-        let result = handle_mining_message(mining_message, mock_chain, swarm_tx).await;
+        let result =
+            handle_mining_message(mining_message, mock_chain, swarm_tx, miner_pubkey).await;
 
         assert!(result.is_err());
         assert_eq!(

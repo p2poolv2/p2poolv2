@@ -322,7 +322,9 @@ mod tests {
                 .unwrap(),
             prev_share_blockhash: None,
             uncles: vec![],
-            miner_pubkey: vec![1],
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
             timestamp: 1,
             tx_hashes: vec![],
             miner_share: simple_miner_share(None, None, None, None),
@@ -350,7 +352,9 @@ mod tests {
                 .unwrap(),
             prev_share_blockhash: None,
             uncles: vec![],
-            miner_pubkey: vec![1],
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
             timestamp: 1,
             tx_hashes: vec![],
             miner_share: simple_miner_share(None, None, Some(dec!(1.0)), Some(dec!(1.0))),
@@ -368,7 +372,9 @@ mod tests {
                 .unwrap(),
             prev_share_blockhash: Some(share_block.blockhash), // Points to previous block
             uncles: vec![],
-            miner_pubkey: vec![1],
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
             timestamp: 2,
             tx_hashes: vec![],
             miner_share: simple_miner_share(None, None, Some(dec!(2.0)), Some(dec!(2.0))), // Higher difficulty
@@ -394,7 +400,9 @@ mod tests {
             blockhash: random_hex_string(64, 8).parse().unwrap(),
             prev_share_blockhash: Some(random_hex_string(64, 8).parse().unwrap()),
             uncles: vec![],
-            miner_pubkey: vec![1],
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
             timestamp: 1,
             tx_hashes: vec![],
             miner_share: simple_miner_share(None, None, Some(dec!(1.0)), Some(dec!(1.0))),

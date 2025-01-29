@@ -41,6 +41,7 @@ pub fn start_receiving_mining_messages(
             error!("Share receiver failed: {}", e);
         }
     });
+    let miner_pubkey = config.miner.pubkey.clone();
     tokio::spawn(async move {
         while let Some(mining_message_data) = mining_message_rx.recv().await {
             info!(
@@ -51,8 +52,13 @@ pub fn start_receiving_mining_messages(
                 serde_json::from_value(mining_message_data).unwrap();
             info!("Received mining message deserialized: {:?}", mining_message);
 
-            if let Err(e) =
-                handle_mining_message(mining_message, chain_handle.clone(), swarm_tx.clone()).await
+            if let Err(e) = handle_mining_message(
+                mining_message,
+                chain_handle.clone(),
+                swarm_tx.clone(),
+                miner_pubkey,
+            )
+            .await
             {
                 error!("Failed to handle mining message: {}", e);
             }
