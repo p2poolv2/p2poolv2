@@ -14,13 +14,16 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+mod common;
+
 mod zmq_tests {
-    use p2poolv2::config::Config;
+    use super::common::default_test_config;
+    use p2poolv2::node::actor::NodeHandle;
+    use p2poolv2::shares::chain::ChainHandle;
     use p2poolv2::shares::miner_message::CkPoolMessage;
-    use p2poolv2::test_utils::fixtures::default_test_config;
-    use p2poolv2::{node::actor::NodeHandle, shares::chain::ChainHandle};
     use std::fs;
     use std::time::Duration;
+    use tempfile;
     use tempfile::tempdir;
     use zmq;
 

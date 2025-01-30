@@ -23,7 +23,7 @@ pub enum CkPoolMessage {
     Workbase(MinerWorkbase),
 }
 
-/// Represents the work done by a miner.
+/// Represents the work done by a miner as sent by ckpool.
 /// We use Decimal for the diff and sdiff fields to avoid floating point precision issues.
 #[derive(Clone, PartialEq, Serialize, Deserialize, Default, Debug)]
 pub struct MinerShare {

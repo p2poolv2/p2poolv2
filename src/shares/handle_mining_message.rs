@@ -66,7 +66,7 @@ pub async fn handle_mining_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::fixtures::simple_miner_share;
+    use crate::test_utils::simple_miner_share;
     use rust_decimal_macros::dec;
 
     #[tokio::test]

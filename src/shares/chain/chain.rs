@@ -149,8 +149,8 @@ impl Chain {
 #[cfg(test)]
 mod chain_tests {
     use super::*;
-    use crate::test_utils::fixtures::random_hex_string;
-    use crate::test_utils::fixtures::simple_miner_share;
+    use crate::test_utils::random_hex_string;
+    use crate::test_utils::simple_miner_share;
     use tempfile::tempdir;
 
     #[test]
