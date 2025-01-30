@@ -24,15 +24,15 @@ mod config;
 mod node;
 mod shares;
 
-#[cfg(test)]
-mod test_utils;
-
 #[mockall_double::double]
 use crate::node::actor::NodeHandle;
 use crate::node::messages::Message;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use tracing::error;
+
+#[cfg(test)]
+mod test_utils;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

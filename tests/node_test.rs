@@ -14,7 +14,9 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use p2poolv2::test_utils::fixtures::default_test_config;
+mod common;
+
+use common::default_test_config;
 use p2poolv2::{node::actor::NodeHandle, shares::chain::ChainHandle};
 use std::time::Duration;
 use tempfile::tempdir;

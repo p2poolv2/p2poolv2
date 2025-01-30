@@ -39,12 +39,29 @@ pub struct MinerConfig {
     pub pubkey: PublicKey,
 }
 
+/// helper function to deserialize the network from the config file, which is provided as a string like Core
+/// Possible values are: main, test, testnet4, signet, regtest
+fn deserialize_network<'de, D>(deserializer: D) -> Result<bitcoin::Network, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = serde::Deserialize::deserialize(deserializer)?;
+    bitcoin::Network::from_core_arg(&s).map_err(serde::de::Error::custom)
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct BitcoinConfig {
+    #[serde(deserialize_with = "deserialize_network")]
+    pub network: bitcoin::Network,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub network: NetworkConfig,
     pub store: StoreConfig,
     pub ckpool: CkPoolConfig,
     pub miner: MinerConfig,
+    pub bitcoin: BitcoinConfig,
 }
 
 impl Config {

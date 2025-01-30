@@ -149,9 +149,10 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::fixtures::simple_miner_share;
+    use crate::test_utils::simple_miner_share;
     use rust_decimal_macros::dec;
     use tempfile::tempdir;
+
     #[test]
     fn test_chain_with_uncles() {
         let temp_dir = tempdir().unwrap();

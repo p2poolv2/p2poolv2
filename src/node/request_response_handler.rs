@@ -136,7 +136,7 @@ mod tests {
     use crate::shares::miner_message::Gbt;
     use crate::shares::miner_message::MinerWorkbase;
     use crate::shares::ShareBlock;
-    use crate::test_utils::fixtures::simple_miner_share;
+    use crate::test_utils::simple_miner_share;
     use mockall::predicate::*;
     use rust_decimal_macros::dec;
 
