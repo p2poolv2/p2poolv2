@@ -316,7 +316,6 @@ mod tests {
 
         // Add a share block
         let share_block = ShareBlock {
-            nonce: 1,
             blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
                 .parse()
                 .unwrap(),
@@ -325,7 +324,6 @@ mod tests {
             miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap(),
-            timestamp: 1,
             tx_hashes: vec![],
             miner_share: simple_miner_share(None, None, None, None),
         };
@@ -346,7 +344,6 @@ mod tests {
         let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
 
         let share_block = ShareBlock {
-            nonce: 1,
             blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
                 .parse()
                 .unwrap(),
@@ -355,7 +352,6 @@ mod tests {
             miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap(),
-            timestamp: 1,
             tx_hashes: vec![],
             miner_share: simple_miner_share(None, None, Some(dec!(1.0)), Some(dec!(1.0))),
         };
@@ -366,7 +362,6 @@ mod tests {
 
         // Create another share block with higher difficulty
         let higher_diff_share = ShareBlock {
-            nonce: 2,
             blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
                 .parse()
                 .unwrap(),
@@ -375,7 +370,6 @@ mod tests {
             miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap(),
-            timestamp: 2,
             tx_hashes: vec![],
             miner_share: simple_miner_share(None, None, Some(dec!(2.0)), Some(dec!(2.0))), // Higher difficulty
         };
@@ -396,14 +390,12 @@ mod tests {
         let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
 
         let share_block = ShareBlock {
-            nonce: 1,
             blockhash: random_hex_string(64, 8).parse().unwrap(),
             prev_share_blockhash: Some(random_hex_string(64, 8).parse().unwrap()),
             uncles: vec![],
             miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap(),
-            timestamp: 1,
             tx_hashes: vec![],
             miner_share: simple_miner_share(None, None, Some(dec!(1.0)), Some(dec!(1.0))),
         };
@@ -417,6 +409,7 @@ mod tests {
     async fn test_add_workbase() {
         let temp_dir = tempdir().unwrap();
         let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let time = bitcoin::absolute::Time::from_hex("676d6caa").unwrap();
 
         let workbase = MinerWorkbase {
             workinfoid: 1,
@@ -438,13 +431,13 @@ mod tests {
                 sigoplimit: 80000,
                 sizelimit: 4000000,
                 weightlimit: 4000000,
-                curtime: 1,
+                curtime: time,
                 bits: "bits".to_string(),
                 height: 1,
                 signet_challenge: "51".to_string(),
                 default_witness_commitment: "commitment".to_string(),
                 diff: 1.0,
-                ntime: "ntime".to_string(),
+                ntime: time,
                 bbversion: "20000000".to_string(),
                 nbit: "1e0377ae".to_string(),
             },

@@ -160,7 +160,6 @@ mod tests {
 
         // Create initial share
         let share1 = ShareBlock {
-            nonce: 1,
             blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
                 .parse()
                 .unwrap(),
@@ -169,7 +168,6 @@ mod tests {
             miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap(),
-            timestamp: 1,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
                 Some(7452731920372203525),
@@ -181,7 +179,6 @@ mod tests {
 
         // Create uncles for share2
         let uncle1_share2 = ShareBlock {
-            nonce: 21,
             blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
                 .parse()
                 .unwrap(),
@@ -194,7 +191,6 @@ mod tests {
             miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap(),
-            timestamp: 2,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
                 Some(7452731920372203525 + 1),
@@ -205,7 +201,6 @@ mod tests {
         };
 
         let uncle2_share2 = ShareBlock {
-            nonce: 22,
             blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
                 .parse()
                 .unwrap(),
@@ -218,7 +213,6 @@ mod tests {
             miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap(),
-            timestamp: 2,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
                 Some(7452731920372203525 + 2),
@@ -230,7 +224,6 @@ mod tests {
 
         // Create share2 with uncles
         let share2 = ShareBlock {
-            nonce: 2,
             blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8"
                 .parse()
                 .unwrap(),
@@ -243,7 +236,6 @@ mod tests {
             miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap(),
-            timestamp: 2,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
                 Some(7452731920372203525 + 3),
@@ -255,7 +247,6 @@ mod tests {
 
         // Create uncles for share3
         let uncle1_share3 = ShareBlock {
-            nonce: 31,
             blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb9"
                 .parse()
                 .unwrap(),
@@ -264,7 +255,6 @@ mod tests {
             miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap(),
-            timestamp: 3,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
                 Some(7452731920372203525 + 4),
@@ -275,7 +265,6 @@ mod tests {
         };
 
         let uncle2_share3 = ShareBlock {
-            nonce: 32,
             blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bba"
                 .parse()
                 .unwrap(),
@@ -284,7 +273,6 @@ mod tests {
             miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap(),
-            timestamp: 3,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
                 Some(7452731920372203525 + 5),
@@ -296,7 +284,6 @@ mod tests {
 
         // Create share3 with uncles
         let share3 = ShareBlock {
-            nonce: 3,
             blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bbb"
                 .parse()
                 .unwrap(),
@@ -305,7 +292,6 @@ mod tests {
             miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap(),
-            timestamp: 3,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
                 Some(7452731920372203525 + 6),
