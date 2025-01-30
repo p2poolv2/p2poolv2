@@ -24,13 +24,8 @@ pub mod validation;
 
 use crate::node::messages::Message;
 use crate::shares::miner_message::MinerShare;
-use crate::shares::store::Store;
-use crate::shares::validation::validate;
 use bitcoin::{BlockHash, PublicKey, Txid};
-use chain::ChainHandle;
 use serde::{Deserialize, Serialize};
-use std::error::Error;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 type Nonce = u32;
 type Timestamp = u64;
@@ -38,9 +33,6 @@ type Timestamp = u64;
 /// Captures a block on the share chain
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct ShareBlock {
-    /// The nonce from the miner
-    pub nonce: Nonce,
-
     /// The block hash of the block the share is generated for
     pub blockhash: BlockHash,
 
@@ -53,9 +45,6 @@ pub struct ShareBlock {
     /// Compressed pubkey identifying the miner
     pub miner_pubkey: PublicKey,
 
-    /// Timestamp as unix timestamp for the share generation time
-    pub timestamp: Timestamp,
-
     /// Any transactions to be included in the share block
     pub tx_hashes: Vec<Txid>,
 
@@ -67,12 +56,10 @@ impl ShareBlock {
     pub fn new(miner_share: MinerShare, miner_pubkey: PublicKey) -> Self {
         let share = miner_share.clone();
         Self {
-            nonce: u32::from_str_radix(&miner_share.nonce, 16).unwrap(),
             blockhash: miner_share.hash.parse().unwrap(),
             prev_share_blockhash: None,
             uncles: vec![],
-            miner_pubkey: miner_pubkey,
-            timestamp: u64::from_str_radix(&miner_share.ntime, 16).unwrap(),
+            miner_pubkey,
             tx_hashes: vec![],
             miner_share: share,
         }
@@ -91,7 +78,6 @@ mod tests {
             blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
                 .parse()
                 .unwrap(),
-            nonce: 1,
             prev_share_blockhash: Some(
                 "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4"
                     .parse()
@@ -101,7 +87,6 @@ mod tests {
             miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap(),
-            timestamp: 1234567890,
             tx_hashes: vec![
                 "d2528fc2d7a4f95ace97860f157c895b6098667df0e43912b027cfe58edf304e"
                     .parse()
@@ -124,14 +109,12 @@ mod tests {
         };
 
         assert_eq!(share.blockhash, deserialized.blockhash);
-        assert_eq!(share.nonce, deserialized.nonce);
         assert_eq!(
             share.prev_share_blockhash,
             deserialized.prev_share_blockhash
         );
         assert_eq!(share.uncles, deserialized.uncles);
         assert_eq!(share.miner_pubkey, deserialized.miner_pubkey);
-        assert_eq!(share.timestamp, deserialized.timestamp);
         assert_eq!(share.tx_hashes, deserialized.tx_hashes);
         assert_eq!(share.miner_share, deserialized.miner_share);
     }

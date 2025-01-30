@@ -23,7 +23,7 @@ mod command;
 mod config;
 mod node;
 mod shares;
-
+mod utils;
 #[mockall_double::double]
 use crate::node::actor::NodeHandle;
 use crate::node::messages::Message;

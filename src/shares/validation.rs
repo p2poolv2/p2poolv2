@@ -16,7 +16,6 @@
 
 use crate::shares::chain::ChainHandle;
 use crate::shares::ShareBlock;
-use std::char::MAX;
 use std::error::Error;
 
 pub const MAX_UNCLES: usize = 3;
@@ -90,10 +89,11 @@ pub async fn validate_timestamp(share: &ShareBlock) -> Result<(), Box<dyn Error>
         .unwrap()
         .as_secs();
 
-    let time_diff = if current_time > share.timestamp {
-        current_time - share.timestamp
+    let miner_share_time = share.miner_share.ntime.to_consensus_u32() as u64;
+    let time_diff = if current_time > miner_share_time {
+        current_time - miner_share_time
     } else {
-        share.timestamp - current_time
+        miner_share_time - current_time
     };
 
     tracing::info!("Time diff: {}", time_diff);
@@ -101,7 +101,9 @@ pub async fn validate_timestamp(share: &ShareBlock) -> Result<(), Box<dyn Error>
     if time_diff > MAX_TIME_DIFF {
         return Err(format!(
             "Share timestamp {} is more than {} seconds from current time {}",
-            share.timestamp, MAX_TIME_DIFF, current_time
+            share.miner_share.ntime.to_consensus_u32(),
+            MAX_TIME_DIFF,
+            current_time
         )
         .into());
     }
@@ -111,11 +113,17 @@ pub async fn validate_timestamp(share: &ShareBlock) -> Result<(), Box<dyn Error>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shares::PublicKey;
     use crate::test_utils::simple_miner_share;
 
     #[tokio::test]
-    async fn test_validate_timestamp() {
-        let share = simple_miner_share(None, None, None, None);
-        // assert!(validate_timestamp(&share).await.is_ok());
+    async fn test_validate_timestamp_should_fail_for_old_timestamp() {
+        let miner_share = simple_miner_share(None, None, None, None);
+        let miner_pubkey: PublicKey =
+            "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap();
+        let share = ShareBlock::new(miner_share, miner_pubkey);
+        assert!(validate_timestamp(&share).await.is_err());
     }
 }

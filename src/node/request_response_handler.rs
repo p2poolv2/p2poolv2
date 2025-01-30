@@ -137,6 +137,7 @@ mod tests {
     use crate::shares::miner_message::MinerWorkbase;
     use crate::shares::ShareBlock;
     use crate::test_utils::simple_miner_share;
+    use crate::test_utils::simple_miner_workbase;
     use mockall::predicate::*;
     use rust_decimal_macros::dec;
 
@@ -148,7 +149,6 @@ mod tests {
 
         // Create test share block
         let share_block = ShareBlock {
-            nonce: 1,
             blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
                 .parse()
                 .unwrap(),
@@ -157,7 +157,6 @@ mod tests {
             miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap(),
-            timestamp: 1,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
                 Some(7452731920372203525),
@@ -209,7 +208,6 @@ mod tests {
         let mut chain_handle = ChainHandle::default();
 
         let share_block = ShareBlock {
-            nonce: 1,
             blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
                 .parse()
                 .unwrap(),
@@ -218,7 +216,6 @@ mod tests {
             miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap(),
-            timestamp: 1,
             tx_hashes: vec![],
             miner_share: simple_miner_share(
                 Some(7452731920372203525),
@@ -254,10 +251,7 @@ mod tests {
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
         let mut chain_handle = ChainHandle::default();
 
-        let workbase = MinerWorkbase {
-            workinfoid: 1,
-            gbt: Gbt::default(),
-        };
+        let workbase = simple_miner_workbase();
 
         // Set up mock to return success
         chain_handle
@@ -284,10 +278,7 @@ mod tests {
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
         let mut chain_handle = ChainHandle::default();
 
-        let workbase = MinerWorkbase {
-            workinfoid: 1,
-            gbt: Gbt::default(),
-        };
+        let workbase = simple_miner_workbase();
 
         // Set up mock to return error
         chain_handle

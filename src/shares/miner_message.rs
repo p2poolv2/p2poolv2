@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::utils::serde_support::time::{deserialize_time, serialize_time};
+use bitcoin::absolute::Time;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -25,14 +27,18 @@ pub enum CkPoolMessage {
 
 /// Represents the work done by a miner as sent by ckpool.
 /// We use Decimal for the diff and sdiff fields to avoid floating point precision issues.
-#[derive(Clone, PartialEq, Serialize, Deserialize, Default, Debug)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct MinerShare {
     pub workinfoid: u64,
     pub clientid: u64,
     pub enonce1: String,
     pub nonce2: String,
     pub nonce: String,
-    pub ntime: String,
+    #[serde(
+        serialize_with = "serialize_time",
+        deserialize_with = "deserialize_time"
+    )]
+    pub ntime: Time,
     pub diff: Decimal,
     pub sdiff: Decimal,
     pub hash: String,
@@ -79,14 +85,14 @@ impl MinerShare {
 }
 
 /// Represents the Workbase used by ckpool
-#[derive(Clone, PartialEq, Serialize, Deserialize, Default, Debug)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct MinerWorkbase {
     pub workinfoid: u64,
     pub gbt: Gbt,
 }
 
 /// Represents the getblocktemplate used in ckpool as workbase
-#[derive(Clone, PartialEq, Serialize, Deserialize, Default, Debug)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct Gbt {
     pub capabilities: Vec<String>,
     pub version: u32,
@@ -105,13 +111,17 @@ pub struct Gbt {
     pub sigoplimit: u32,
     pub sizelimit: u32,
     pub weightlimit: u32,
-    pub curtime: u64,
+    pub curtime: Time,
     pub bits: String,
     pub height: u32,
     pub signet_challenge: String,
     pub default_witness_commitment: String,
     pub diff: f64,
-    pub ntime: String,
+    #[serde(
+        serialize_with = "serialize_time",
+        deserialize_with = "deserialize_time"
+    )]
+    pub ntime: Time,
     pub bbversion: String,
     pub nbit: String,
 }
