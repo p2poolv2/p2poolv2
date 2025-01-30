@@ -126,4 +126,47 @@ mod tests {
         let share = ShareBlock::new(miner_share, miner_pubkey);
         assert!(validate_timestamp(&share).await.is_err());
     }
+
+    #[tokio::test]
+    async fn test_validate_timestamp_should_fail_for_future_timestamp() {
+        let mut miner_share = simple_miner_share(None, None, None, None);
+
+        // Set timestamp to 2 minutes in the future
+        let future_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 120;
+        miner_share.ntime = bitcoin::absolute::Time::from_consensus(future_time as u32)
+            .expect("Failed to create future timestamp");
+
+        let miner_pubkey: PublicKey =
+            "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap();
+        let share = ShareBlock::new(miner_share, miner_pubkey);
+
+        assert!(validate_timestamp(&share).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_validate_timestamp_should_succeed_for_valid_timestamp() {
+        let mut miner_share = simple_miner_share(None, None, None, None);
+
+        // Set timestamp to current time
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        miner_share.ntime = bitcoin::absolute::Time::from_consensus(current_time as u32)
+            .expect("Failed to create current timestamp");
+
+        let miner_pubkey: PublicKey =
+            "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap();
+        let share = ShareBlock::new(miner_share, miner_pubkey);
+
+        assert!(validate_timestamp(&share).await.is_ok());
+    }
 }
