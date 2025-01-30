@@ -113,8 +113,11 @@ pub async fn validate_timestamp(share: &ShareBlock) -> Result<(), Box<dyn Error>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shares::chain::ChainHandle;
+    use crate::shares::store::Store;
     use crate::shares::PublicKey;
     use crate::test_utils::simple_miner_share;
+    use tempfile::tempdir;
 
     #[tokio::test]
     async fn test_validate_timestamp_should_fail_for_old_timestamp() {
@@ -168,5 +171,63 @@ mod tests {
         let share = ShareBlock::new(miner_share, miner_pubkey);
 
         assert!(validate_timestamp(&share).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_prev_blockhash_exists() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // Create and add initial share to chain
+        let initial_share = ShareBlock {
+            blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+                .parse()
+                .unwrap(),
+            prev_share_blockhash: None,
+            uncles: vec![],
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
+            tx_hashes: vec![],
+            miner_share: simple_miner_share(None, None, None, None),
+        };
+        chain_handle.add_share(initial_share.clone()).await.unwrap();
+
+        // Create new share pointing to existing share - should validate
+        let valid_share = ShareBlock {
+            blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
+                .parse()
+                .unwrap(),
+            prev_share_blockhash: Some(initial_share.blockhash),
+            uncles: vec![],
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
+            tx_hashes: vec![],
+            miner_share: simple_miner_share(None, None, None, None),
+        };
+        assert!(validate_prev_share_blockhash(&valid_share, &chain_handle)
+            .await
+            .is_ok());
+
+        // Create share pointing to non-existent previous hash - should fail validation
+        let non_existent_hash = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
+            .parse()
+            .unwrap();
+        let invalid_share = ShareBlock {
+            blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8"
+                .parse()
+                .unwrap(),
+            prev_share_blockhash: Some(non_existent_hash),
+            uncles: vec![],
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
+            tx_hashes: vec![],
+            miner_share: simple_miner_share(None, None, None, None),
+        };
+        assert!(validate_prev_share_blockhash(&invalid_share, &chain_handle)
+            .await
+            .is_err());
     }
 }
