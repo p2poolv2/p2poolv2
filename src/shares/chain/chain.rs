@@ -31,6 +31,7 @@ pub struct Chain {
     pub tips: HashSet<BlockHash>,
     pub total_difficulty: Decimal,
     pub store: Store,
+    pub chain_tip: Option<BlockHash>,
 }
 
 impl Chain {
@@ -39,6 +40,7 @@ impl Chain {
             tips: HashSet::new(),
             total_difficulty: dec!(0.0),
             store,
+            chain_tip: None,
         }
     }
 
@@ -57,6 +59,7 @@ impl Chain {
             info!("New chain: {:?}", blockhash);
             self.tips.insert(blockhash);
             self.total_difficulty = share_difficulty;
+            self.chain_tip = Some(blockhash);
             return Ok(());
         }
 
@@ -76,6 +79,7 @@ impl Chain {
         // handle potential reorgs
         // get total difficulty up to prev_share_blockhash
         if let Some(prev_share_blockhash) = prev_share_blockhash {
+            tracing::info!("Checking for reorgs at share: {:?}", prev_share_blockhash);
             let chain_upto_prev_share_blockhash = self.store.get_chain_upto(&prev_share_blockhash);
             let total_difficulty_upto_prev_share_blockhash = chain_upto_prev_share_blockhash
                 .iter()
@@ -90,7 +94,6 @@ impl Chain {
                 }
             }
         }
-
         Ok(())
     }
 
@@ -117,6 +120,7 @@ impl Chain {
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         info!("Reorging chain to share: {:?}", share.blockhash);
         self.total_difficulty = total_difficulty_upto_prev_share_blockhash + share.miner_share.diff;
+        self.chain_tip = Some(share.blockhash);
         Ok(())
     }
 
@@ -198,6 +202,7 @@ mod chain_tests {
         expected_tips.insert(share1.blockhash);
         assert_eq!(chain.tips, expected_tips);
         assert_eq!(chain.total_difficulty, dec!(1.0));
+        assert_eq!(chain.chain_tip, Some(share1.blockhash));
 
         // Create uncles for share2
         let uncle1_share2 = ShareBlock {
@@ -240,6 +245,7 @@ mod chain_tests {
         expected_tips.insert(uncle1_share2.blockhash);
         assert_eq!(chain.tips, expected_tips);
         assert_eq!(chain.total_difficulty, dec!(2.0));
+        assert_eq!(chain.chain_tip, Some(uncle1_share2.blockhash));
 
         // second orphan is also a tip
         chain.add_share(uncle2_share2.clone()).unwrap();
@@ -248,6 +254,8 @@ mod chain_tests {
         expected_tips.insert(uncle2_share2.blockhash);
         assert_eq!(chain.tips, expected_tips);
         assert_eq!(chain.total_difficulty, dec!(2.0));
+        /// chain tip doesn't change as uncle2_share2 has same difficulty as uncle1_share2
+        assert_eq!(chain.chain_tip, Some(uncle1_share2.blockhash));
 
         // Create share2 with its uncles
         let share2 = ShareBlock {
@@ -274,7 +282,7 @@ mod chain_tests {
         expected_tips.insert(share2.blockhash);
         assert_eq!(chain.tips, expected_tips);
         assert_eq!(chain.total_difficulty, dec!(3.0));
-
+        assert_eq!(chain.chain_tip, Some(share2.blockhash));
         // Create uncles for share3
         let uncle1_share3 = ShareBlock {
             blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb9"
@@ -318,7 +326,7 @@ mod chain_tests {
         assert_eq!(chain.tips, expected_tips);
         // we only look at total difficulty for the highest work chain, which now is 1, 2, 3.1
         assert_eq!(chain.total_difficulty, dec!(4.0));
-
+        assert_eq!(chain.chain_tip, Some(uncle1_share3.blockhash));
         chain.add_share(uncle2_share3.clone()).unwrap();
         expected_tips.clear();
         expected_tips.insert(uncle1_share3.blockhash);
@@ -327,7 +335,7 @@ mod chain_tests {
         assert_eq!(chain.tips, expected_tips);
         // we only look at total difficulty for the highest work chain, which now is 1, 2, 3.1 (not 3.2)
         assert_eq!(chain.total_difficulty, dec!(4.0));
-
+        assert_eq!(chain.chain_tip, Some(uncle1_share3.blockhash));
         // Create share3 with its uncles
         let share3 = ShareBlock {
             blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bbb"
@@ -354,6 +362,7 @@ mod chain_tests {
         assert_eq!(chain.tips, expected_tips);
         // we only look at total difficulty for the highest work chain, which now is 1, 2, 3
         assert_eq!(chain.total_difficulty, dec!(6.0));
+        assert_eq!(chain.chain_tip, Some(share3.blockhash));
     }
 
     #[test]

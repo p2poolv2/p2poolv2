@@ -34,6 +34,7 @@ pub enum ChainMessage {
     GetWorkbase(u64),
     GetShare(BlockHash),
     GetTotalDifficulty,
+    GetChainTip,
 }
 
 #[derive(Debug)]
@@ -46,6 +47,7 @@ pub enum ChainResponse {
     StoreWorkbaseResult(Result<(), Box<dyn Error + Send + Sync>>),
     GetWorkbaseResult(Option<MinerWorkbase>),
     GetShareResult(Option<ShareBlock>),
+    ChainTip(Option<BlockHash>),
 }
 
 pub struct ChainActor {
@@ -134,6 +136,12 @@ impl ChainActor {
                         .await
                     {
                         error!("Failed to send get_total_difficulty response: {}", e);
+                    }
+                }
+                ChainMessage::GetChainTip => {
+                    let result = self.chain.chain_tip.clone();
+                    if let Err(e) = response_sender.send(ChainResponse::ChainTip(result)).await {
+                        error!("Failed to send get_chain_tip response: {}", e);
                     }
                 }
             }
@@ -297,6 +305,18 @@ impl ChainHandle {
             _ => dec!(0.0),
         }
     }
+
+    pub async fn get_chain_tip(&self) -> Option<BlockHash> {
+        let (response_sender, mut response_receiver) = mpsc::channel(1);
+        self.sender
+            .send((ChainMessage::GetChainTip, response_sender))
+            .await
+            .unwrap();
+        match response_receiver.recv().await {
+            Some(ChainResponse::ChainTip(result)) => result,
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -312,6 +332,7 @@ mock! {
         pub async fn add_share(&self, share_block: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn add_workbase(&self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase>;
+        pub async fn get_chain_tip(&self) -> Option<BlockHash>;
     }
 
     impl Clone for ChainHandle {
