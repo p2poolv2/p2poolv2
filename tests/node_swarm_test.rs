@@ -52,13 +52,13 @@ async fn test_three_nodes_connectivity() {
     let chain_handle2 = ChainHandle::new(temp_dir2.path().to_str().unwrap().to_string());
     let chain_handle3 = ChainHandle::new(temp_dir3.path().to_str().unwrap().to_string());
     // Start three nodes
-    let (node1_handle, stop_rx1) = NodeHandle::new(config1, chain_handle1)
+    let (node1_handle, _stop_rx1) = NodeHandle::new(config1, chain_handle1)
         .await
         .expect("Failed to create node 1");
-    let (node2_handle, stop_rx2) = NodeHandle::new(config2, chain_handle2)
+    let (node2_handle, _stop_rx2) = NodeHandle::new(config2, chain_handle2)
         .await
         .expect("Failed to create node 2");
-    let (node3_handle, stop_rx3) = NodeHandle::new(config3, chain_handle3)
+    let (node3_handle, _stop_rx3) = NodeHandle::new(config3, chain_handle3)
         .await
         .expect("Failed to create node 3");
 
