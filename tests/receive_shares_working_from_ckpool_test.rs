@@ -141,7 +141,6 @@ mod zmq_tests {
         // Publish each message from test data
         for message in ckpool_messages {
             let serialized = serde_json::to_string(&message).unwrap();
-            tracing::debug!("Publishing message: {:?}", &message);
             publisher
                 .send(&serialized, 0)
                 .expect("Failed to publish message");
@@ -176,7 +175,22 @@ mod zmq_tests {
                     .unwrap()
             )
         );
-
+        let share_at_tip = chain_handle
+            .get_share(
+                "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
+                    .parse()
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            share_at_tip.prev_share_blockhash,
+            Some(
+                "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
+                    .parse()
+                    .unwrap()
+            )
+        );
         let workbase = chain_handle.get_workbase(7460801854683742211).await;
         assert!(workbase.is_none());
 

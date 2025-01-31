@@ -75,7 +75,6 @@ impl Chain {
         }
         // add the new share as a tip
         self.tips.insert(blockhash);
-
         // handle potential reorgs
         // get total difficulty up to prev_share_blockhash
         if let Some(prev_share_blockhash) = prev_share_blockhash {
@@ -160,6 +159,15 @@ impl Chain {
     /// Get the total difficulty of the chain
     pub fn get_total_difficulty(&self) -> Decimal {
         self.total_difficulty
+    }
+
+    /// Get the chain tip and uncles
+    pub fn get_chain_tip_and_uncles(&self) -> (Option<BlockHash>, HashSet<BlockHash>) {
+        let mut uncles = self.tips.clone();
+        if let Some(tip) = self.chain_tip {
+            uncles.remove(&tip);
+        }
+        (self.chain_tip, uncles)
     }
 }
 
