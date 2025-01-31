@@ -19,24 +19,27 @@ use crate::shares::store::Store;
 use crate::shares::ShareBlock;
 use crate::shares::{miner_message::MinerWorkbase, BlockHash};
 use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
+use std::collections::HashSet;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error};
-
 #[derive(Debug)]
 pub enum ChainMessage {
-    GetTip,
+    GetTips,
     Reorg(ShareBlock, Decimal),
     IsConfirmed(ShareBlock),
     AddShare(ShareBlock),
     StoreWorkbase(MinerWorkbase),
     GetWorkbase(u64),
     GetShare(BlockHash),
+    GetTotalDifficulty,
 }
 
 #[derive(Debug)]
 pub enum ChainResponse {
-    Tip(Option<BlockHash>),
+    Tips(HashSet<BlockHash>),
+    TotalDifficulty(Decimal),
     ReorgResult(Result<(), Box<dyn Error + Send + Sync>>),
     IsConfirmedResult(bool),
     AddShareResult(Result<(), Box<dyn Error + Send + Sync>>),
@@ -62,9 +65,9 @@ impl ChainActor {
         while let Some((msg, response_sender)) = self.receiver.recv().await {
             debug!("Chain actor received message: {:?}", msg);
             match msg {
-                ChainMessage::GetTip => {
-                    let tip = self.chain.tip.clone();
-                    if let Err(e) = response_sender.send(ChainResponse::Tip(tip)).await {
+                ChainMessage::GetTips => {
+                    let tips = self.chain.tips.clone();
+                    if let Err(e) = response_sender.send(ChainResponse::Tips(tips)).await {
                         error!("Failed to send chain response: {}", e);
                     }
                 }
@@ -124,6 +127,15 @@ impl ChainActor {
                         error!("Failed to send get_share response: {}", e);
                     }
                 }
+                ChainMessage::GetTotalDifficulty => {
+                    let result = self.chain.get_total_difficulty();
+                    if let Err(e) = response_sender
+                        .send(ChainResponse::TotalDifficulty(result))
+                        .await
+                    {
+                        error!("Failed to send get_total_difficulty response: {}", e);
+                    }
+                }
             }
         }
     }
@@ -144,20 +156,20 @@ impl ChainHandle {
         Self { sender }
     }
 
-    pub async fn get_tip(&self) -> Option<BlockHash> {
+    pub async fn get_tips(&self) -> HashSet<BlockHash> {
         let (response_sender, mut response_receiver) = mpsc::channel(1);
         if let Err(e) = self
             .sender
-            .send((ChainMessage::GetTip, response_sender))
+            .send((ChainMessage::GetTips, response_sender))
             .await
         {
-            error!("Failed to send GetTip message: {}", e);
-            return None;
+            error!("Failed to send GetTips message: {}", e);
+            return HashSet::new();
         }
 
         match response_receiver.recv().await {
-            Some(ChainResponse::Tip(tip)) => tip,
-            _ => None,
+            Some(ChainResponse::Tips(tips)) => tips,
+            _ => HashSet::new(),
         }
     }
 
@@ -273,6 +285,18 @@ impl ChainHandle {
             _ => None,
         }
     }
+
+    pub async fn get_total_difficulty(&self) -> Decimal {
+        let (response_sender, mut response_receiver) = mpsc::channel(1);
+        self.sender
+            .send((ChainMessage::GetTotalDifficulty, response_sender))
+            .await
+            .unwrap();
+        match response_receiver.recv().await {
+            Some(ChainResponse::TotalDifficulty(result)) => result,
+            _ => dec!(0.0),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -282,7 +306,7 @@ use mockall::mock;
 mock! {
     pub ChainHandle {
         pub fn new(store_path: String) -> Self;
-        pub async fn get_tip(&self) -> Option<BlockHash>;
+        pub async fn get_tips(&self) -> HashSet<BlockHash>;
         pub async fn reorg(&self, share_block: ShareBlock, total_difficulty_upto_prev_share_blockhash: Decimal) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn is_confirmed(&self, share_block: ShareBlock) -> Result<bool, Box<dyn Error + Send + Sync>>;
         pub async fn add_share(&self, share_block: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>>;
@@ -307,12 +331,12 @@ mod tests {
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn test_get_tip() {
+    async fn test_get_tips() {
         let temp_dir = tempdir().unwrap();
         let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
 
-        let tip = chain_handle.get_tip().await;
-        assert_eq!(tip, None); // New chain should have no tip
+        let tips = chain_handle.get_tips().await;
+        assert!(tips.is_empty()); // New chain should have no tips
 
         // Add a share block
         let share_block = ShareBlock {
@@ -328,14 +352,17 @@ mod tests {
             miner_share: simple_miner_share(None, None, None, None),
         };
 
-        // Add the share block
         let result = chain_handle.add_share(share_block.clone()).await;
-        tracing::info!("result: {:?}", result);
         assert!(result.is_ok());
 
-        // Get tip should now return the blockhash
-        let tip = chain_handle.get_tip().await;
-        assert_eq!(tip, Some(share_block.blockhash));
+        // Get tips should now return the blockhash
+        let tips = chain_handle.get_tips().await;
+        let mut expected_tips = HashSet::new();
+        expected_tips.insert(share_block.blockhash);
+        assert_eq!(tips, expected_tips);
+
+        let total_difficulty = chain_handle.get_total_difficulty().await;
+        assert_eq!(total_difficulty, dec!(1.0));
     }
 
     #[tokio::test]
@@ -374,14 +401,17 @@ mod tests {
             miner_share: simple_miner_share(None, None, Some(dec!(2.0)), Some(dec!(2.0))), // Higher difficulty
         };
 
-        let result = chain_handle
-            .reorg(higher_diff_share.clone(), dec!(1.0))
-            .await;
+        let result = chain_handle.add_share(higher_diff_share.clone()).await;
         assert!(result.is_ok());
 
-        // Check if the chain tip is updated
-        let tip = chain_handle.get_tip().await;
-        assert_eq!(tip, Some(higher_diff_share.blockhash));
+        // Check if the chain tips are updated
+        let tips = chain_handle.get_tips().await;
+        let mut expected_tips = HashSet::new();
+        expected_tips.insert(higher_diff_share.blockhash);
+        assert_eq!(tips, expected_tips);
+
+        let total_difficulty = chain_handle.get_total_difficulty().await;
+        assert_eq!(total_difficulty, dec!(3.0));
     }
 
     #[tokio::test]

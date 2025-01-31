@@ -18,6 +18,7 @@ use crate::shares::miner_message::MinerWorkbase;
 use crate::shares::{store::Store, BlockHash, ShareBlock};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
+use std::collections::HashSet;
 use std::error::Error;
 use tracing::{error, info};
 
@@ -27,7 +28,7 @@ const MIN_CONFIRMATION_DEPTH: usize = 100;
 /// A datastructure representing the main share chain
 /// The share chain reorgs when a share is found that has a higher total PoW than the current tip
 pub struct Chain {
-    pub tip: Option<BlockHash>,
+    pub tips: HashSet<BlockHash>,
     pub total_difficulty: Decimal,
     pub store: Store,
 }
@@ -35,13 +36,13 @@ pub struct Chain {
 impl Chain {
     pub fn new(store: Store) -> Self {
         Self {
-            tip: None,
+            tips: HashSet::new(),
             total_difficulty: dec!(0.0),
             store,
         }
     }
 
-    /// Add a share to the chain and update the tip and total difficulty
+    /// Add a share to the chain and update the tips and total difficulty
     pub fn add_share(&mut self, share: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>> {
         info!("Adding share to chain: {:?}", share);
         let blockhash = share.blockhash.clone();
@@ -52,31 +53,30 @@ impl Chain {
         self.store.add_share(share.clone());
 
         // handle new chain by setting tip and total difficulty
-        if self.tip.is_none() {
+        if self.tips.is_empty() {
             info!("New chain: {:?}", blockhash);
-            self.tip = Some(blockhash);
+            self.tips.insert(blockhash);
             self.total_difficulty = share_difficulty;
             return Ok(());
         }
 
-        let current_tip = self.tip.as_ref().unwrap();
-        // handle chain extension on current tip
-        if prev_share_blockhash == Some(*current_tip) {
-            info!("Chain extension on current tip: {:?}", blockhash);
-            self.tip = Some(blockhash);
-            self.total_difficulty += share_difficulty;
-            return Ok(());
+        // remove the previous blockhash from tips if it exists
+        if let Some(prev) = prev_share_blockhash {
+            self.tips.remove(&prev);
         }
+        // remove uncles from tips
+        if !share.uncles.is_empty() {
+            for uncle in &share.uncles {
+                self.tips.remove(uncle);
+            }
+        }
+        // add the new share as a tip
+        self.tips.insert(blockhash);
 
         // handle potential reorgs
-        if prev_share_blockhash.is_some() && prev_share_blockhash.unwrap() != *current_tip {
-            info!(
-                "Potential reorg: {:?} -> {:?}",
-                prev_share_blockhash, blockhash
-            );
-            // get total difficulty up to prev_share_blockhash
-            let chain_upto_prev_share_blockhash =
-                self.store.get_chain_upto(&prev_share_blockhash.unwrap());
+        // get total difficulty up to prev_share_blockhash
+        if let Some(prev_share_blockhash) = prev_share_blockhash {
+            let chain_upto_prev_share_blockhash = self.store.get_chain_upto(&prev_share_blockhash);
             let total_difficulty_upto_prev_share_blockhash = chain_upto_prev_share_blockhash
                 .iter()
                 .map(|share| share.miner_share.diff)
@@ -94,20 +94,28 @@ impl Chain {
         Ok(())
     }
 
+    /// Remove a blockhash from the tips set
+    /// If the blockhash is not in the tips set, this is a no-op
+    pub fn remove_from_tips(&mut self, blockhash: &BlockHash) {
+        self.tips.remove(blockhash);
+    }
+
+    /// Add a blockhash to the tips set
+    /// If the blockhash is already in the tips set, this is a no-op
+    pub fn add_to_tips(&mut self, blockhash: BlockHash) {
+        self.tips.insert(blockhash);
+    }
+
     /// Reorg the chain to the new share
     /// We do not explicitly mark any blocks as unconfirmed or transactions as unconfirmed. This is because we don't cache the status of the blocks or transactions.
-    /// By changing the tip we are effectively marking all the blocks and transactions that were on the old tip as unconfirmed.
+    /// By changing the tips we are effectively marking all the blocks and transactions that were on the old tips as unconfirmed.
     /// When a share is being traded, if it is not on the main chain, it will not be accepted for the trade.
-    ///
-    /// The solution above will work as long as all the blocks and transactions are in memory. Once we need to query the chain from disk, we will need to implement a more sophisticated solution.
-    /// In favour of avoiding premature optimization, we will implement the solution above first and then optimize it later, if needed.
     pub fn reorg(
         &mut self,
         share: ShareBlock,
         total_difficulty_upto_prev_share_blockhash: Decimal,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         info!("Reorging chain to share: {:?}", share.blockhash);
-        self.tip = Some(share.blockhash);
         self.total_difficulty = total_difficulty_upto_prev_share_blockhash + share.miner_share.diff;
         Ok(())
     }
@@ -144,6 +152,11 @@ impl Chain {
     pub fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase> {
         self.store.get_workbase(workinfoid)
     }
+
+    /// Get the total difficulty of the chain
+    pub fn get_total_difficulty(&self) -> Decimal {
+        self.total_difficulty
+    }
 }
 
 #[cfg(test)]
@@ -151,6 +164,7 @@ mod chain_tests {
     use super::*;
     use crate::test_utils::random_hex_string;
     use crate::test_utils::simple_miner_share;
+    use std::collections::HashSet;
     use tempfile::tempdir;
 
     #[test]
@@ -180,7 +194,9 @@ mod chain_tests {
         };
         chain.add_share(share1.clone()).unwrap();
 
-        assert_eq!(chain.tip, Some(share1.blockhash));
+        let mut expected_tips = HashSet::new();
+        expected_tips.insert(share1.blockhash);
+        assert_eq!(chain.tips, expected_tips);
         assert_eq!(chain.total_difficulty, dec!(1.0));
 
         // Create uncles for share2
@@ -218,11 +234,19 @@ mod chain_tests {
                 Some(dec!(1.9041854952356509)),
             ),
         };
+        // first orphan is a tip
         chain.add_share(uncle1_share2.clone()).unwrap();
-        chain.add_share(uncle2_share2.clone()).unwrap();
+        expected_tips.clear();
+        expected_tips.insert(uncle1_share2.blockhash);
+        assert_eq!(chain.tips, expected_tips);
+        assert_eq!(chain.total_difficulty, dec!(2.0));
 
-        // difficulty remains the same as the previous tip, so there is no reorg
-        assert_eq!(chain.tip, Some(uncle1_share2.blockhash));
+        // second orphan is also a tip
+        chain.add_share(uncle2_share2.clone()).unwrap();
+        expected_tips.clear();
+        expected_tips.insert(uncle1_share2.blockhash);
+        expected_tips.insert(uncle2_share2.blockhash);
+        assert_eq!(chain.tips, expected_tips);
         assert_eq!(chain.total_difficulty, dec!(2.0));
 
         // Create share2 with its uncles
@@ -245,7 +269,10 @@ mod chain_tests {
         };
         chain.add_share(share2.clone()).unwrap();
 
-        assert_eq!(chain.tip, Some(share2.blockhash));
+        /// two tips that will be future uncles and the chain tip
+        expected_tips.clear();
+        expected_tips.insert(share2.blockhash);
+        assert_eq!(chain.tips, expected_tips);
         assert_eq!(chain.total_difficulty, dec!(3.0));
 
         // Create uncles for share3
@@ -283,11 +310,22 @@ mod chain_tests {
                 Some(dec!(1.9041854952356509)),
             ),
         };
-        chain.add_share(uncle1_share3.clone()).unwrap();
-        chain.add_share(uncle2_share3.clone()).unwrap();
 
-        // if same diff share is added, it doesn't change the tip or total difficulty
-        assert_eq!(chain.tip, Some(uncle1_share3.blockhash));
+        chain.add_share(uncle1_share3.clone()).unwrap();
+        expected_tips.clear();
+        expected_tips.insert(uncle1_share3.blockhash);
+
+        assert_eq!(chain.tips, expected_tips);
+        // we only look at total difficulty for the highest work chain, which now is 1, 2, 3.1
+        assert_eq!(chain.total_difficulty, dec!(4.0));
+
+        chain.add_share(uncle2_share3.clone()).unwrap();
+        expected_tips.clear();
+        expected_tips.insert(uncle1_share3.blockhash);
+        expected_tips.insert(uncle2_share3.blockhash);
+
+        assert_eq!(chain.tips, expected_tips);
+        // we only look at total difficulty for the highest work chain, which now is 1, 2, 3.1 (not 3.2)
         assert_eq!(chain.total_difficulty, dec!(4.0));
 
         // Create share3 with its uncles
@@ -310,7 +348,11 @@ mod chain_tests {
         };
         chain.add_share(share3.clone()).unwrap();
 
-        assert_eq!(chain.tip, Some(share3.blockhash));
+        expected_tips.clear();
+        expected_tips.insert(share3.blockhash);
+
+        assert_eq!(chain.tips, expected_tips);
+        // we only look at total difficulty for the highest work chain, which now is 1, 2, 3
         assert_eq!(chain.total_difficulty, dec!(6.0));
     }
 

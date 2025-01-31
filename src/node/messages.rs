@@ -18,6 +18,7 @@ use crate::shares::miner_message::MinerWorkbase;
 use crate::shares::ShareBlock;
 use bitcoin::{BlockHash, Txid};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::error::Error;
 use std::str::FromStr;
 
@@ -54,7 +55,7 @@ impl Message {
 /// Message for sending a list of shares to the network
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct InventoryMessage {
-    pub have_shares: Vec<BlockHash>,
+    pub have_shares: HashSet<BlockHash>,
 }
 
 /// Message for requesting data from peers
@@ -70,22 +71,21 @@ mod tests {
 
     #[test]
     fn test_inventory_message_serde() {
-        let msg = Message::Inventory(InventoryMessage {
-            have_shares: vec![
-                BlockHash::from_str(
-                    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5",
-                )
+        let mut have_shares = HashSet::new();
+        have_shares.insert(
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
                 .unwrap(),
-                BlockHash::from_str(
-                    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6",
-                )
+        );
+        have_shares.insert(
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
                 .unwrap(),
-                BlockHash::from_str(
-                    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7",
-                )
+        );
+        have_shares.insert(
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
                 .unwrap(),
-            ],
-        });
+        );
+
+        let msg = Message::Inventory(InventoryMessage { have_shares });
 
         // Test serialization
         let serialized = msg.cbor_serialize().unwrap();
@@ -97,26 +97,27 @@ mod tests {
             Message::Inventory(inventory) => inventory,
             _ => panic!("Expected Inventory variant"),
         };
+
         // Verify the deserialized message matches original
-        assert_eq!(
-            deserialized.have_shares.len(),
-            deserialized.have_shares.len()
-        );
-        assert_eq!(
-            deserialized.have_shares[0],
-            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
-                .unwrap()
-        );
-        assert_eq!(
-            deserialized.have_shares[1],
-            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-                .unwrap()
-        );
-        assert_eq!(
-            deserialized.have_shares[2],
-            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
-                .unwrap()
-        );
+        assert_eq!(deserialized.have_shares.len(), 3);
+        assert!(deserialized.have_shares.contains(
+            &BlockHash::from_str(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+            )
+            .unwrap()
+        ));
+        assert!(deserialized.have_shares.contains(
+            &BlockHash::from_str(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
+            )
+            .unwrap()
+        ));
+        assert!(deserialized.have_shares.contains(
+            &BlockHash::from_str(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
+            )
+            .unwrap()
+        ));
     }
 
     #[test]
