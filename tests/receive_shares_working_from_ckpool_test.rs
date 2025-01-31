@@ -168,6 +168,15 @@ mod zmq_tests {
             .await
             .is_some());
 
+        assert_eq!(
+            chain_handle.get_chain_tip().await,
+            Some(
+                "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
+                    .parse()
+                    .unwrap()
+            )
+        );
+
         let workbase = chain_handle.get_workbase(7460801854683742211).await;
         assert!(workbase.is_none());
 
