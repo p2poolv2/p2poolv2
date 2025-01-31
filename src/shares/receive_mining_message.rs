@@ -44,10 +44,6 @@ pub fn start_receiving_mining_messages(
     let miner_pubkey = config.miner.pubkey.clone();
     tokio::spawn(async move {
         while let Some(mining_message_data) = mining_message_rx.recv().await {
-            info!(
-                "Received mining message serialized: {:?}",
-                mining_message_data
-            );
             let mining_message: CkPoolMessage =
                 serde_json::from_value(mining_message_data).unwrap();
             info!("Received mining message deserialized: {:?}", mining_message);

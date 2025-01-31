@@ -24,6 +24,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error};
+
 #[derive(Debug)]
 pub enum ChainMessage {
     GetTips,
@@ -35,6 +36,7 @@ pub enum ChainMessage {
     GetShare(BlockHash),
     GetTotalDifficulty,
     GetChainTip,
+    GetChainTipAndUncles,
 }
 
 #[derive(Debug)]
@@ -48,6 +50,7 @@ pub enum ChainResponse {
     GetWorkbaseResult(Option<MinerWorkbase>),
     GetShareResult(Option<ShareBlock>),
     ChainTip(Option<BlockHash>),
+    ChainTipAndUncles(Option<BlockHash>, HashSet<BlockHash>),
 }
 
 pub struct ChainActor {
@@ -142,6 +145,15 @@ impl ChainActor {
                     let result = self.chain.chain_tip.clone();
                     if let Err(e) = response_sender.send(ChainResponse::ChainTip(result)).await {
                         error!("Failed to send get_chain_tip response: {}", e);
+                    }
+                }
+                ChainMessage::GetChainTipAndUncles => {
+                    let (chain_tip, uncles) = self.chain.get_chain_tip_and_uncles();
+                    if let Err(e) = response_sender
+                        .send(ChainResponse::ChainTipAndUncles(chain_tip, uncles))
+                        .await
+                    {
+                        error!("Failed to send get_chain_tip_and_uncles response: {}", e);
                     }
                 }
             }
@@ -317,6 +329,18 @@ impl ChainHandle {
             _ => None,
         }
     }
+
+    pub async fn get_chain_tip_and_uncles(&self) -> (Option<BlockHash>, HashSet<BlockHash>) {
+        let (response_sender, mut response_receiver) = mpsc::channel(1);
+        self.sender
+            .send((ChainMessage::GetChainTipAndUncles, response_sender))
+            .await
+            .unwrap();
+        match response_receiver.recv().await {
+            Some(ChainResponse::ChainTipAndUncles(chain_tip, uncles)) => (chain_tip, uncles),
+            _ => (None, HashSet::new()),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -333,6 +357,7 @@ mock! {
         pub async fn add_workbase(&self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase>;
         pub async fn get_chain_tip(&self) -> Option<BlockHash>;
+        pub async fn get_chain_tip_and_uncles(&self) -> (Option<BlockHash>, HashSet<BlockHash>);
     }
 
     impl Clone for ChainHandle {
