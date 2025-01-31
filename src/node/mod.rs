@@ -304,12 +304,14 @@ impl Node {
     /// Send inventory message to a specific peer
     /// For now we just send the tip of the chain
     async fn send_inventory(&mut self, peer_id: libp2p::PeerId) {
-        if let Some(tip) = self.chain_handle.get_tip().await {
-            info!("Sending inventory message to peer: {peer_id}, tip: {tip:?}");
-            let inventory_msg = Message::Inventory(InventoryMessage {
-                have_shares: vec![tip],
-            });
-            self.send_to_peer(peer_id, inventory_msg);
+        let tips = self.chain_handle.get_tips().await;
+        info!("Sending inventory message to peer: {peer_id}, tips: {tips:?}");
+        let inventory_msg = Message::Inventory(InventoryMessage { have_shares: tips });
+        if let Err(e) = self.send_to_peer(peer_id, inventory_msg) {
+            error!(
+                "Failed to send inventory message to peer {}: {}",
+                peer_id, e
+            );
         }
     }
 }
