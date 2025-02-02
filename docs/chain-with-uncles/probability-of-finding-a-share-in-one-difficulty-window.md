@@ -1,4 +1,4 @@
-# Finding Shares With Two S19s
+# Probability of Finding Shares as a Small Miner
 
 We want to determine what is the probability that a small miner finds
 at least one share over the bitcoin difficulty period of two weeks.
@@ -7,6 +7,27 @@ The question was raised by Sjors Provoost at BOB Spaces Cohort 3, and
 we all worked together to find an answer to this. Thanks goes also to
 Gabriele Vernetti for looking at the numbers from a different
 perspective to increase our confidence in P2Pool reboot.
+
+## Motivation
+
+Adoption of P2Poolv2 will benefit by enabling the long tail of miners
+to join the pool. For such miners, we want to alleviate the fear that
+there they won't get any shares in the sharechain. Knowing the
+smallest hashrate that can find a share in a period helps miners know
+if P2Poolv2 will work for them.
+
+Long tail miners generally can be more tolerant of variance in finding
+shares as long as the payout is fair and auditable. As long as miners
+find a share once in a retarget period, they know the pool is
+operating and is not scamming them.
+
+With this motivation we present a model to find the minimal hashrate
+required to find a share in a retarget period with over 99%
+probability, and then compute the minimal hashrate required. We
+conclude that with two S19 pros, a miner can find a share in a
+retarget period in each retarget window. The model doesn't assume
+uncles and this hashrate will reduce once we incorporate uncles into
+to extend the model.
 
 ## Model
 
