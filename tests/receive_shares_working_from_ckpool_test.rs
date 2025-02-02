@@ -148,49 +148,22 @@ mod zmq_tests {
             // Small delay between messages to avoid overwhelming the system
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
+        // Create share block hashes for testing
+        let share1_hash = "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
+            .parse()
+            .unwrap();
+        let share2_hash = "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
+            .parse()
+            .unwrap();
 
         // Verify the node received and processed the data
-        assert!(chain_handle
-            .get_share(
-                "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
-                    .parse()
-                    .unwrap()
-            )
-            .await
-            .is_some());
-        assert!(chain_handle
-            .get_share(
-                "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
-                    .parse()
-                    .unwrap()
-            )
-            .await
-            .is_some());
+        assert!(chain_handle.get_share(share1_hash).await.is_some());
+        assert!(chain_handle.get_share(share2_hash).await.is_some());
 
-        assert_eq!(
-            chain_handle.get_chain_tip().await,
-            Some(
-                "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
-                    .parse()
-                    .unwrap()
-            )
-        );
-        let share_at_tip = chain_handle
-            .get_share(
-                "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
-                    .parse()
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            share_at_tip.prev_share_blockhash,
-            Some(
-                "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
-                    .parse()
-                    .unwrap()
-            )
-        );
+        assert_eq!(chain_handle.get_chain_tip().await, Some(share2_hash));
+        let share_at_tip = chain_handle.get_share(share2_hash).await.unwrap();
+        assert_eq!(share_at_tip.prev_share_blockhash, Some(share1_hash));
+
         let workbase = chain_handle.get_workbase(7460801854683742211).await;
         assert!(workbase.is_none());
 
