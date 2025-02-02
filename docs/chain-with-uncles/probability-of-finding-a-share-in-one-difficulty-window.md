@@ -64,7 +64,7 @@ probability that no shares are found by the miner in the two week
 period as: $\frac{4.834^0 e^{-4.834}}{0!} = 0.792%$
 
 Converting that to at least one share, we get the probability as
-$100 -0.782 = 99.2%$
+$100 -0.792 = 99.2%$
 
 ## Conclusion
 
