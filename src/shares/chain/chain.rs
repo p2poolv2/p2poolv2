@@ -169,6 +169,32 @@ impl Chain {
         }
         (self.chain_tip, uncles)
     }
+
+    /// Get the depth of a blockhash from chain tip
+    /// Returns None if blockhash is not found in chain
+    /// Returns 0 if blockhash is the chain tip
+    pub fn get_depth(&self, blockhash: &BlockHash) -> Option<usize> {
+        // If chain tip is None, return None
+        let tip = match self.chain_tip {
+            Some(tip) => tip,
+            None => return None,
+        };
+
+        // If blockhash is chain tip, return 0
+        if tip == *blockhash {
+            return Some(0);
+        }
+
+        // Get chain from tip to given blockhash
+        let chain = self.store.get_chain_upto(blockhash);
+        // If chain is empty, blockhash not found
+        if chain.is_empty() {
+            return None;
+        }
+
+        // Return length of chain minus 1 (since chain includes the blockhash)
+        Some(chain.len())
+    }
 }
 
 #[cfg(test)]
@@ -444,5 +470,71 @@ mod chain_tests {
 
         // Verify workbase was stored by checking it matches what we stored
         assert_eq!(chain.get_workbase(workbase.workinfoid), Some(workbase));
+    }
+
+    #[test]
+    fn test_get_depth() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string());
+        let mut chain = Chain::new(store);
+
+        // Test when chain is empty (no chain tip)
+        let random_hash = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+            .parse()
+            .unwrap();
+        assert_eq!(chain.get_depth(&random_hash), None);
+
+        // Create initial share
+        let share1 = ShareBlock {
+            blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+                .parse()
+                .unwrap(),
+            prev_share_blockhash: None,
+            uncles: vec![],
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
+            tx_hashes: vec![],
+            miner_share: simple_miner_share(
+                Some(7452731920372203525),
+                Some(1),
+                Some(dec!(1.0)),
+                Some(dec!(1.9041854952356509)),
+            ),
+        };
+        chain.add_share(share1.clone()).unwrap();
+
+        // Test when blockhash is chain tip
+        assert_eq!(chain.get_depth(&share1.blockhash), Some(0));
+
+        // Create second share
+        let share2 = ShareBlock {
+            blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
+                .parse()
+                .unwrap(),
+            prev_share_blockhash: Some(share1.blockhash),
+            uncles: vec![],
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
+            tx_hashes: vec![],
+            miner_share: simple_miner_share(
+                Some(7452731920372203526),
+                Some(1),
+                Some(dec!(1.0)),
+                Some(dec!(1.9041854952356509)),
+            ),
+        };
+        chain.add_share(share2.clone()).unwrap();
+
+        // Test depth of first share when it's not the tip
+        assert_eq!(chain.get_depth(&share2.blockhash), Some(0));
+        assert_eq!(chain.get_depth(&share1.blockhash), Some(1));
+
+        // Test when blockhash is not found in chain
+        let non_existent_hash = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
+            .parse()
+            .unwrap();
+        assert_eq!(chain.get_depth(&non_existent_hash), None);
     }
 }
