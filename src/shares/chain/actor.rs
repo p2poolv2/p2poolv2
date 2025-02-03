@@ -37,6 +37,7 @@ pub enum ChainMessage {
     GetTotalDifficulty,
     GetChainTip,
     GetChainTipAndUncles,
+    GetDepth(BlockHash),
 }
 
 #[derive(Debug)]
@@ -51,6 +52,7 @@ pub enum ChainResponse {
     GetShareResult(Option<ShareBlock>),
     ChainTip(Option<BlockHash>),
     ChainTipAndUncles(Option<BlockHash>, HashSet<BlockHash>),
+    Depth(Option<usize>),
 }
 
 pub struct ChainActor {
@@ -154,6 +156,12 @@ impl ChainActor {
                         .await
                     {
                         error!("Failed to send get_chain_tip_and_uncles response: {}", e);
+                    }
+                }
+                ChainMessage::GetDepth(blockhash) => {
+                    let result = self.chain.get_depth(&blockhash);
+                    if let Err(e) = response_sender.send(ChainResponse::Depth(result)).await {
+                        error!("Failed to send get_depth response: {}", e);
                     }
                 }
             }
@@ -341,6 +349,18 @@ impl ChainHandle {
             _ => (None, HashSet::new()),
         }
     }
+
+    pub async fn get_depth(&self, blockhash: BlockHash) -> Option<usize> {
+        let (response_sender, mut response_receiver) = mpsc::channel(1);
+        self.sender
+            .send((ChainMessage::GetDepth(blockhash), response_sender))
+            .await
+            .unwrap();
+        match response_receiver.recv().await {
+            Some(ChainResponse::Depth(result)) => result,
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -358,6 +378,7 @@ mock! {
         pub async fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase>;
         pub async fn get_chain_tip(&self) -> Option<BlockHash>;
         pub async fn get_chain_tip_and_uncles(&self) -> (Option<BlockHash>, HashSet<BlockHash>);
+        pub async fn get_depth(&self, blockhash: BlockHash) -> Option<usize>;
     }
 
     impl Clone for ChainHandle {
@@ -521,5 +542,55 @@ mod tests {
 
         let result = chain_handle.add_workbase(workbase).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_depth() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // Create initial share
+        let share1 = ShareBlock {
+            blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+                .parse()
+                .unwrap(),
+            prev_share_blockhash: None,
+            uncles: vec![],
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
+            tx_hashes: vec![],
+            miner_share: simple_miner_share(None, None, Some(dec!(1.0)), Some(dec!(1.0))),
+        };
+
+        // Add first share and verify depth is 0
+        chain_handle.add_share(share1.clone()).await.unwrap();
+        let depth = chain_handle.get_depth(share1.blockhash).await;
+        assert_eq!(depth, Some(0));
+
+        // Create and add second share
+        let share2 = ShareBlock {
+            blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
+                .parse()
+                .unwrap(),
+            prev_share_blockhash: Some(share1.blockhash),
+            uncles: vec![],
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
+            tx_hashes: vec![],
+            miner_share: simple_miner_share(None, None, Some(dec!(1.0)), Some(dec!(1.0))),
+        };
+
+        // Add second share and verify depths
+        chain_handle.add_share(share2.clone()).await.unwrap();
+        assert_eq!(chain_handle.get_depth(share2.blockhash).await, Some(0));
+        assert_eq!(chain_handle.get_depth(share1.blockhash).await, Some(1));
+
+        // Test non-existent hash returns None
+        let non_existent = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
+            .parse()
+            .unwrap();
+        assert_eq!(chain_handle.get_depth(non_existent).await, None);
     }
 }
