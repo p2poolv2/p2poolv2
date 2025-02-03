@@ -83,7 +83,7 @@ pub async fn handle_request_response_event(
     Ok(())
 }
 
-async fn handle_request(
+pub async fn handle_request(
     peer: libp2p::PeerId,
     request: Message,
     chain_handle: ChainHandle,
@@ -91,12 +91,15 @@ async fn handle_request(
 ) -> Result<(), Box<dyn Error>> {
     info!("Handling request from peer: {}", peer);
     match request {
-        Message::ShareBlock(share_block) => {
+        Message::ShareBlock(mut share_block) => {
             info!("Received share block: {:?}", share_block);
             if let Err(e) = share_block.miner_share.validate() {
                 error!("Share block validation failed: {}", e);
                 return Err("Share block validation failed".into());
             }
+            let (chain_tip, tips) = chain_handle.get_chain_tip_and_uncles().await;
+            share_block.prev_share_blockhash = chain_tip;
+            share_block.uncles = tips.into_iter().collect();
             if let Err(e) = chain_handle.add_share(share_block.clone()).await {
                 error!("Failed to add share: {}", e);
                 return Err("Error adding share to chain".into());
@@ -140,7 +143,7 @@ mod tests {
     use crate::test_utils::simple_miner_workbase;
     use mockall::predicate::*;
     use rust_decimal_macros::dec;
-
+    use std::collections::HashSet;
     #[tokio::test]
     async fn test_handle_share_block_request() {
         let mut chain_handle = ChainHandle::default();
@@ -171,6 +174,10 @@ mod tests {
             .expect_add_share()
             .with(eq(share_block.clone()))
             .returning(|_| Ok(()));
+
+        chain_handle
+            .expect_get_chain_tip_and_uncles()
+            .returning(|| (None, HashSet::new()));
 
         // Test handle_request directly without request_id
         let result = handle_request(
@@ -231,6 +238,10 @@ mod tests {
             .with(eq(share_block.clone()))
             .returning(|_| Err("Failed to add share".into()));
 
+        chain_handle
+            .expect_get_chain_tip_and_uncles()
+            .returning(|| (None, HashSet::new()));
+
         let result = handle_request(
             peer_id,
             Message::ShareBlock(share_block),
@@ -258,6 +269,10 @@ mod tests {
             .expect_add_workbase()
             .with(eq(workbase.clone()))
             .returning(|_| Ok(()));
+
+        chain_handle
+            .expect_get_chain_tip_and_uncles()
+            .returning(|| (None, HashSet::new()));
 
         let result =
             handle_request(peer_id, Message::Workbase(workbase), chain_handle, swarm_tx).await;
