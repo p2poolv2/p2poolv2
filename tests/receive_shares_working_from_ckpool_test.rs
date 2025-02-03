@@ -29,8 +29,6 @@ mod zmq_tests {
 
     #[tokio::test]
     async fn test_single_node_with_zmq_feed_of_workbases_only() {
-        tracing::info!("Starting test_single_node_with_zmq_feed");
-
         // Create configuration for a single node
         let config = default_test_config()
             .with_listen_address("/ip4/0.0.0.0/tcp/6887".to_string())
@@ -100,8 +98,6 @@ mod zmq_tests {
 
     #[tokio::test]
     async fn test_single_node_with_zmq_feed_of_shares_only() {
-        tracing::info!("Starting test_single_node_with_zmq_feed");
-
         let config = default_test_config()
             .with_listen_address("/ip4/0.0.0.0/tcp/6888".to_string())
             .with_store_path("test_chain_zmq.db".to_string())
@@ -176,8 +172,6 @@ mod zmq_tests {
 
     #[tokio::test]
     async fn test_single_node_with_shares_and_workbases() {
-        tracing::info!("Starting test_single_node_with_shares_and_workbases");
-
         // Create configuration for a single node
         let config = default_test_config()
             .with_listen_address("/ip4/0.0.0.0/tcp/6889".to_string())
