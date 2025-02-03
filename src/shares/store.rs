@@ -58,6 +58,20 @@ impl Store {
         Ok(())
     }
 
+    /// Add a transaction to the store
+    /// The txid is computed and Transaction is serialized using cbor
+    pub fn add_transaction(&mut self, tx: bitcoin::Transaction) -> Result<(), Box<dyn Error>> {
+        let txid = tx.compute_txid();
+        debug!("Adding transaction to store: {:?}", txid);
+        self.db
+            .put::<&[u8], Vec<u8>>(
+                txid.as_ref(),
+                Message::Transaction(tx).cbor_serialize().unwrap(),
+            )
+            .unwrap();
+        Ok(())
+    }
+
     /// Get a workbase from the store
     pub fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase> {
         let workbase = self.db.get(workinfoid.to_string().as_bytes()).unwrap();
@@ -88,6 +102,30 @@ impl Store {
             _ => return None,
         };
         Some(share)
+    }
+
+    /// Get a transaction from the store using a provided txid
+    /// The transaction is deserialized using cbor
+    pub fn get_transaction(&self, txid: &bitcoin::Txid) -> Option<bitcoin::Transaction> {
+        let tx = match self.db.get::<&[u8]>(txid.as_ref()) {
+            Ok(Some(tx)) => tx,
+            Ok(None) | Err(_) => return None,
+        };
+        let tx = match Message::cbor_deserialize(&tx) {
+            Ok(tx) => tx,
+            Err(e) => {
+                tracing::error!("Error deserializing transaction: {:?}", e);
+                return None;
+            }
+        };
+        let tx = match tx {
+            Message::Transaction(tx) => tx,
+            _ => {
+                tracing::error!("Badly serialized transaction in database");
+                return None;
+            }
+        };
+        Some(tx)
     }
 
     /// Get the parent of a share as a ShareBlock
@@ -350,5 +388,34 @@ mod tests {
         assert!(uncles_share3
             .iter()
             .any(|u| u.blockhash == uncle2_share3.blockhash));
+    }
+
+    #[test]
+    fn test_transaction_store() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // Create a simple test transaction
+        let tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+
+        // Store the transaction
+        let txid = tx.compute_txid();
+        store.add_transaction(tx.clone()).unwrap();
+
+        // Retrieve the transaction
+        let retrieved_tx = store.get_transaction(&txid);
+        assert!(retrieved_tx.is_some());
+        assert_eq!(retrieved_tx.unwrap(), tx);
+
+        // Try getting non-existent transaction
+        let fake_txid = "d2528fc2d7a4f95ace97860f157c895b6098667df0e43912b027cfe58edf304e"
+            .parse()
+            .unwrap();
+        assert!(store.get_transaction(&fake_txid).is_none());
     }
 }
