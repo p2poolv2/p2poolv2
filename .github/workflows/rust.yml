@@ -32,7 +32,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Build
-        run: cargo build --verbose
+        run: cargo build --verbose --target-dir target
         
       - name: Run tests
         run: cargo test --verbose
