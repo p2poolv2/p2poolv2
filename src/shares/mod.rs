@@ -27,9 +27,6 @@ use crate::shares::miner_message::MinerShare;
 use bitcoin::{BlockHash, PublicKey, Txid};
 use serde::{Deserialize, Serialize};
 
-type Nonce = u32;
-type Timestamp = u64;
-
 /// Captures a block on the share chain
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct ShareBlock {
