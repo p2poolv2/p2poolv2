@@ -31,6 +31,7 @@ pub enum Message {
     GetData(GetData),
     ShareBlock(ShareBlock),
     Workbase(MinerWorkbase),
+    Transaction(bitcoin::Transaction),
 }
 
 impl Message {

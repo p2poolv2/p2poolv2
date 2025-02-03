@@ -20,6 +20,7 @@ pub mod handle_mining_message;
 pub mod miner_message;
 pub mod receive_mining_message;
 pub mod store;
+pub mod transactions;
 pub mod validation;
 
 use crate::node::messages::Message;
