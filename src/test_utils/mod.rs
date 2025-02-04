@@ -103,7 +103,7 @@ pub fn test_coinbase_transaction() -> bitcoin::Transaction {
         .parse::<bitcoin::PublicKey>()
         .unwrap();
 
-    crate::shares::transactions::create_share_block_coinbase_transaction(
+    crate::shares::transactions::coinbase::create_coinbase_transaction(
         &pubkey,
         bitcoin::Network::Regtest,
     )
