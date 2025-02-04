@@ -361,6 +361,14 @@ impl ChainHandle {
             _ => None,
         }
     }
+
+    /// Set up the share to use chain_tip as the previous blockhash and other tips as uncles
+    pub async fn setup_share_for_chain(&self, mut share_block: ShareBlock) -> ShareBlock {
+        let (chain_tip, tips) = self.get_chain_tip_and_uncles().await;
+        share_block.prev_share_blockhash = chain_tip;
+        share_block.uncles = tips.into_iter().collect();
+        share_block
+    }
 }
 
 #[cfg(test)]
@@ -379,6 +387,7 @@ mock! {
         pub async fn get_chain_tip(&self) -> Option<BlockHash>;
         pub async fn get_chain_tip_and_uncles(&self) -> (Option<BlockHash>, HashSet<BlockHash>);
         pub async fn get_depth(&self, blockhash: BlockHash) -> Option<usize>;
+        pub async fn setup_share_for_chain(&self, share_block: ShareBlock) -> ShareBlock;
     }
 
     impl Clone for ChainHandle {
