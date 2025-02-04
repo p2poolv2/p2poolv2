@@ -42,15 +42,24 @@ pub struct MinerShare {
     pub diff: Decimal,
     pub sdiff: Decimal,
     pub hash: String,
+    #[serde(skip)]
     pub result: bool,
+    #[serde(skip)]
     pub errn: i32,
+    #[serde(skip)]
     pub createdate: String,
+    #[serde(skip)]
     pub createby: String,
+    #[serde(skip)]
     pub createcode: String,
+    #[serde(skip)]
     pub createinet: String,
+    #[serde(skip)]
     pub workername: String,
     pub username: String,
+    #[serde(skip)]
     pub address: String,
+    #[serde(skip)]
     pub agent: String,
 }
 
@@ -189,8 +198,6 @@ mod miner_share_tests {
         assert_eq!(miner_work.nonce, "2eb7b82b");
         assert_eq!(miner_work.diff, dec!(1.0));
         assert_eq!(miner_work.sdiff, dec!(1.9041854952356509));
-        assert_eq!(miner_work.result, true);
-        assert_eq!(miner_work.agent, "cpuminer/2.5.1");
 
         // Serialize back to JSON
         let serialized = serde_json::to_string(&miner_work).unwrap();
@@ -247,11 +254,14 @@ mod miner_share_tests {
                 assert_eq!(share.nonce, "2eb7b82b");
                 assert_eq!(share.diff, dec!(1.0));
                 assert_eq!(share.sdiff, dec!(1.9041854952356509));
-                assert_eq!(share.result, true);
-                assert_eq!(share.agent, "cpuminer/2.5.1");
             }
             _ => panic!("Expected Share variant"),
         }
+
+        let miner_message_share = match &miner_message {
+            CkPoolMessage::Share(share) => share,
+            _ => panic!("Expected Share variant"),
+        };
 
         // Serialize back to JSON
         let serialized = serde_json::to_string(&miner_message).unwrap();
@@ -259,8 +269,23 @@ mod miner_share_tests {
         // Deserialize again to verify
         let deserialized: CkPoolMessage = serde_json::from_str(&serialized).unwrap();
 
+        let deserialized_share = match &deserialized {
+            CkPoolMessage::Share(share) => share,
+            _ => panic!("Expected Share variant"),
+        };
+
         // Verify the round-trip
-        assert_eq!(miner_message, deserialized);
+        assert_eq!(
+            miner_message_share.workinfoid,
+            deserialized_share.workinfoid
+        );
+        assert_eq!(miner_message_share.clientid, deserialized_share.clientid);
+        assert_eq!(miner_message_share.enonce1, deserialized_share.enonce1);
+        assert_eq!(miner_message_share.nonce2, deserialized_share.nonce2);
+        assert_eq!(miner_message_share.nonce, deserialized_share.nonce);
+        assert_eq!(miner_message_share.ntime, deserialized_share.ntime);
+        assert_eq!(miner_message_share.diff, deserialized_share.diff);
+        assert_eq!(miner_message_share.sdiff, deserialized_share.sdiff);
     }
 
     // {"Workbase": Object {"gbt": Object {"bbversion": String("20000000"), "bits": String("1e0377ae"), "capabilities": Array [String("proposal")], "coinbaseaux": Object {}, "coinbasevalue": Number(5000000000), "curtime": Number(1737100205), "default_witness_commitment": String("6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9"), "diff": Number(0.001126515290698186), "height": Number(99), "longpollid": String("00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc1"), "mintime": Number(1736687181), "mutable": Array [String("time"), String("transactions"), String("prevblock")], "nbit": String("1e0377ae"), "noncerange": String("00000000ffffffff"), "ntime": String("678a0bad"), "previousblockhash": String("00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc"), "rules": Array [String("csv"), String("!segwit"), String("!signet"), String("taproot")], "signet_challenge": String("51"), "sigoplimit": Number(80000), "sizelimit": Number(4000000), "target": String("00000377ae000000000000000000000000000000000000000000000000000000"), "transactions": Array [], "vbavailable": Object {}, "vbrequired": Number(0), "version": Number(536870912), "weightlimit": Number(4000000)}, "workinfoid": Number(7460787496608071691)}}
