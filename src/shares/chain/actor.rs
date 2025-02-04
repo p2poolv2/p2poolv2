@@ -363,6 +363,8 @@ impl ChainHandle {
     }
 
     /// Set up the share to use chain_tip as the previous blockhash and other tips as uncles
+    /// This should be used only when the share is being for the local miner.
+    /// Shares received from peers should not be modified``.
     pub async fn setup_share_for_chain(&self, mut share_block: ShareBlock) -> ShareBlock {
         let (chain_tip, tips) = self.get_chain_tip_and_uncles().await;
         share_block.prev_share_blockhash = chain_tip;
