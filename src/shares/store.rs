@@ -189,6 +189,7 @@ impl Store {
 mod tests {
     use super::*;
     use crate::test_utils::simple_miner_share;
+    use crate::test_utils::test_coinbase_transaction;
     use rust_decimal_macros::dec;
     use tempfile::tempdir;
 
@@ -214,6 +215,7 @@ mod tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
 
         // Create uncles for share2
@@ -237,6 +239,7 @@ mod tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
 
         let uncle2_share2 = ShareBlock {
@@ -259,6 +262,7 @@ mod tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
 
         // Create share2 with uncles
@@ -282,6 +286,7 @@ mod tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
 
         // Create uncles for share3
@@ -301,6 +306,7 @@ mod tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
 
         let uncle2_share3 = ShareBlock {
@@ -319,6 +325,7 @@ mod tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
 
         // Create share3 with uncles
@@ -338,6 +345,7 @@ mod tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
 
         // Add all shares to store

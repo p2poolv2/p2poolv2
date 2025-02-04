@@ -405,6 +405,7 @@ mod tests {
     use crate::shares::miner_message::Gbt;
     use crate::test_utils::random_hex_string;
     use crate::test_utils::simple_miner_share;
+    use crate::test_utils::test_coinbase_transaction;
     use rust_decimal_macros::dec;
     use tempfile::tempdir;
 
@@ -428,6 +429,7 @@ mod tests {
                 .unwrap(),
             tx_hashes: vec![],
             miner_share: simple_miner_share(None, None, None, None),
+            coinbase_tx: test_coinbase_transaction(),
         };
 
         let result = chain_handle.add_share(share_block.clone()).await;
@@ -459,6 +461,7 @@ mod tests {
                 .unwrap(),
             tx_hashes: vec![],
             miner_share: simple_miner_share(None, None, Some(dec!(1.0)), Some(dec!(1.0))),
+            coinbase_tx: test_coinbase_transaction(),
         };
 
         // Add initial share block
@@ -477,6 +480,7 @@ mod tests {
                 .unwrap(),
             tx_hashes: vec![],
             miner_share: simple_miner_share(None, None, Some(dec!(2.0)), Some(dec!(2.0))), // Higher difficulty
+            coinbase_tx: test_coinbase_transaction(),
         };
 
         let result = chain_handle.add_share(higher_diff_share.clone()).await;
@@ -506,6 +510,7 @@ mod tests {
                 .unwrap(),
             tx_hashes: vec![],
             miner_share: simple_miner_share(None, None, Some(dec!(1.0)), Some(dec!(1.0))),
+            coinbase_tx: test_coinbase_transaction(),
         };
 
         let result = chain_handle.is_confirmed(share_block).await;
@@ -572,6 +577,7 @@ mod tests {
                 .unwrap(),
             tx_hashes: vec![],
             miner_share: simple_miner_share(None, None, Some(dec!(1.0)), Some(dec!(1.0))),
+            coinbase_tx: test_coinbase_transaction(),
         };
 
         // Add first share and verify depth is 0
@@ -591,6 +597,7 @@ mod tests {
                 .unwrap(),
             tx_hashes: vec![],
             miner_share: simple_miner_share(None, None, Some(dec!(1.0)), Some(dec!(1.0))),
+            coinbase_tx: test_coinbase_transaction(),
         };
 
         // Add second share and verify depths

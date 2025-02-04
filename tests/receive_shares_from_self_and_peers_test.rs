@@ -68,7 +68,7 @@ mod self_and_peer_messages_tests {
                         "020202020202020202020202020202020202020202020202020202020202020203"
                             .parse()
                             .unwrap();
-                    let mut peer_share = ShareBlock::new(share, pubkey);
+                    let mut peer_share = ShareBlock::new(share, pubkey, bitcoin::Network::Regtest);
                     // set all peer shares to have the same prev_share_blockhash
                     peer_share.prev_share_blockhash = Some(
                         "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
