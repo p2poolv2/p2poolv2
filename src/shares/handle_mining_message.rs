@@ -40,10 +40,7 @@ pub async fn handle_mining_message(
     match mining_message {
         CkPoolMessage::Share(share) => {
             let mut share_block = ShareBlock::new(share, miner_pubkey);
-            let (chain_tip, tips) = chain_handle.get_chain_tip_and_uncles().await;
-            share_block.prev_share_blockhash = chain_tip;
-            share_block.uncles = tips.into_iter().collect();
-
+            share_block = chain_handle.setup_share_for_chain(share_block).await;
             message = Message::ShareBlock(share_block.clone());
             if let Err(e) = chain_handle.add_share(share_block).await {
                 error!("Failed to add share: {}", e);
@@ -85,21 +82,21 @@ mod tests {
         mock_chain.expect_add_share().times(1).returning(|_| Ok(()));
 
         mock_chain
-            .expect_get_chain_tip_and_uncles()
+            .expect_setup_share_for_chain()
             .times(1)
-            .returning(|| {
-                (
-                    Some(
-                        "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
-                            .parse()
-                            .unwrap(),
-                    ),
-                    HashSet::from([
-                        "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
-                            .parse()
-                            .unwrap(),
-                    ]),
-                )
+            .returning(|share_block| {
+                let mut share_block = share_block;
+                share_block.prev_share_blockhash = Some(
+                    "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
+                        .parse()
+                        .unwrap(),
+                );
+                share_block.uncles = vec![
+                    "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
+                        .parse()
+                        .unwrap(),
+                ];
+                share_block
             });
 
         let mining_message = CkPoolMessage::Share(simple_miner_share(
@@ -136,21 +133,21 @@ mod tests {
         mock_chain.expect_add_share().times(1).returning(|_| Ok(()));
 
         mock_chain
-            .expect_get_chain_tip_and_uncles()
+            .expect_setup_share_for_chain()
             .times(1)
-            .returning(|| {
-                (
-                    Some(
-                        "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
-                            .parse()
-                            .unwrap(),
-                    ),
-                    HashSet::from([
-                        "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
-                            .parse()
-                            .unwrap(),
-                    ]),
-                )
+            .returning(|share_block| {
+                let mut share_block = share_block;
+                share_block.prev_share_blockhash = Some(
+                    "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
+                        .parse()
+                        .unwrap(),
+                );
+                share_block.uncles = vec![
+                    "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
+                        .parse()
+                        .unwrap(),
+                ];
+                share_block
             });
 
         let mining_message = CkPoolMessage::Share(simple_miner_share(
@@ -186,21 +183,21 @@ mod tests {
             .returning(|_| Err("Failed to add share".into()));
 
         mock_chain
-            .expect_get_chain_tip_and_uncles()
+            .expect_setup_share_for_chain()
             .times(1)
-            .returning(|| {
-                (
-                    Some(
-                        "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
-                            .parse()
-                            .unwrap(),
-                    ),
-                    HashSet::from([
-                        "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
-                            .parse()
-                            .unwrap(),
-                    ]),
-                )
+            .returning(|share_block| {
+                let mut share_block = share_block;
+                share_block.prev_share_blockhash = Some(
+                    "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
+                        .parse()
+                        .unwrap(),
+                );
+                share_block.uncles = vec![
+                    "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
+                        .parse()
+                        .unwrap(),
+                ];
+                share_block
             });
 
         let mining_message = CkPoolMessage::Share(simple_miner_share(

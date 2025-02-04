@@ -26,6 +26,7 @@ pub mod validation;
 use crate::node::messages::Message;
 use crate::shares::miner_message::MinerShare;
 use bitcoin::{BlockHash, PublicKey, Txid};
+use chain::ChainHandle;
 use serde::{Deserialize, Serialize};
 
 /// Captures a block on the share chain

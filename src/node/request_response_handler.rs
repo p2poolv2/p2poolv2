@@ -97,9 +97,7 @@ pub async fn handle_request(
                 error!("Share block validation failed: {}", e);
                 return Err("Share block validation failed".into());
             }
-            let (chain_tip, tips) = chain_handle.get_chain_tip_and_uncles().await;
-            share_block.prev_share_blockhash = chain_tip;
-            share_block.uncles = tips.into_iter().collect();
+            share_block = chain_handle.setup_share_for_chain(share_block).await;
             if let Err(e) = chain_handle.add_share(share_block.clone()).await {
                 error!("Failed to add share: {}", e);
                 return Err("Error adding share to chain".into());
@@ -176,8 +174,8 @@ mod tests {
             .returning(|_| Ok(()));
 
         chain_handle
-            .expect_get_chain_tip_and_uncles()
-            .returning(|| (None, HashSet::new()));
+            .expect_setup_share_for_chain()
+            .returning(|share_block| share_block);
 
         // Test handle_request directly without request_id
         let result = handle_request(
@@ -239,8 +237,8 @@ mod tests {
             .returning(|_| Err("Failed to add share".into()));
 
         chain_handle
-            .expect_get_chain_tip_and_uncles()
-            .returning(|| (None, HashSet::new()));
+            .expect_setup_share_for_chain()
+            .returning(|share_block| share_block);
 
         let result = handle_request(
             peer_id,
@@ -271,8 +269,8 @@ mod tests {
             .returning(|_| Ok(()));
 
         chain_handle
-            .expect_get_chain_tip_and_uncles()
-            .returning(|| (None, HashSet::new()));
+            .expect_setup_share_for_chain()
+            .returning(|share_block| share_block);
 
         let result =
             handle_request(peer_id, Message::Workbase(workbase), chain_handle, swarm_tx).await;
