@@ -113,10 +113,9 @@ pub async fn validate_timestamp(share: &ShareBlock) -> Result<(), Box<dyn Error>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shares::chain::ChainHandle;
-    use crate::shares::store::Store;
     use crate::shares::PublicKey;
     use crate::test_utils::simple_miner_share;
+    use crate::test_utils::test_coinbase_transaction;
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -126,7 +125,7 @@ mod tests {
             "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap();
-        let share = ShareBlock::new(miner_share, miner_pubkey);
+        let share = ShareBlock::new(miner_share, miner_pubkey, bitcoin::Network::Regtest);
         assert!(validate_timestamp(&share).await.is_err());
     }
 
@@ -147,7 +146,7 @@ mod tests {
             "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap();
-        let share = ShareBlock::new(miner_share, miner_pubkey);
+        let share = ShareBlock::new(miner_share, miner_pubkey, bitcoin::Network::Regtest);
 
         assert!(validate_timestamp(&share).await.is_err());
     }
@@ -168,7 +167,7 @@ mod tests {
             "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap();
-        let share = ShareBlock::new(miner_share, miner_pubkey);
+        let share = ShareBlock::new(miner_share, miner_pubkey, bitcoin::Network::Regtest);
 
         assert!(validate_timestamp(&share).await.is_ok());
     }
@@ -189,6 +188,7 @@ mod tests {
                 .parse()
                 .unwrap(),
             tx_hashes: vec![],
+            coinbase_tx: test_coinbase_transaction(),
             miner_share: simple_miner_share(None, None, None, None),
         };
         chain_handle.add_share(initial_share.clone()).await.unwrap();
@@ -204,6 +204,7 @@ mod tests {
                 .parse()
                 .unwrap(),
             tx_hashes: vec![],
+            coinbase_tx: test_coinbase_transaction(),
             miner_share: simple_miner_share(None, None, None, None),
         };
         assert!(validate_prev_share_blockhash(&valid_share, &chain_handle)
@@ -224,6 +225,7 @@ mod tests {
                 .parse()
                 .unwrap(),
             tx_hashes: vec![],
+            coinbase_tx: test_coinbase_transaction(),
             miner_share: simple_miner_share(None, None, None, None),
         };
         assert!(validate_prev_share_blockhash(&invalid_share, &chain_handle)
@@ -247,6 +249,7 @@ mod tests {
                 .parse()
                 .unwrap(),
             tx_hashes: vec![],
+            coinbase_tx: test_coinbase_transaction(),
             miner_share: simple_miner_share(None, None, None, None),
         };
         chain_handle.add_share(uncle1.clone()).await.unwrap();
@@ -261,6 +264,7 @@ mod tests {
                 .parse()
                 .unwrap(),
             tx_hashes: vec![],
+            coinbase_tx: test_coinbase_transaction(),
             miner_share: simple_miner_share(None, None, None, None),
         };
         chain_handle.add_share(uncle2.clone()).await.unwrap();
@@ -275,6 +279,7 @@ mod tests {
                 .parse()
                 .unwrap(),
             tx_hashes: vec![],
+            coinbase_tx: test_coinbase_transaction(),
             miner_share: simple_miner_share(None, None, None, None),
         };
         chain_handle.add_share(uncle3.clone()).await.unwrap();
@@ -289,6 +294,7 @@ mod tests {
                 .parse()
                 .unwrap(),
             tx_hashes: vec![],
+            coinbase_tx: test_coinbase_transaction(),
             miner_share: simple_miner_share(None, None, None, None),
         };
         chain_handle.add_share(uncle4.clone()).await.unwrap();
@@ -304,6 +310,7 @@ mod tests {
                 .parse()
                 .unwrap(),
             tx_hashes: vec![],
+            coinbase_tx: test_coinbase_transaction(),
             miner_share: simple_miner_share(None, None, None, None),
         };
         assert!(validate_uncles(&valid_share, &chain_handle).await.is_ok());
@@ -324,6 +331,7 @@ mod tests {
                 .parse()
                 .unwrap(),
             tx_hashes: vec![],
+            coinbase_tx: test_coinbase_transaction(),
             miner_share: simple_miner_share(None, None, None, None),
         };
         assert!(validate_uncles(&invalid_share, &chain_handle)
@@ -344,6 +352,7 @@ mod tests {
                 .parse()
                 .unwrap(),
             tx_hashes: vec![],
+            coinbase_tx: test_coinbase_transaction(),
             miner_share: simple_miner_share(None, None, None, None),
         };
         assert!(validate_uncles(&invalid_share, &chain_handle)

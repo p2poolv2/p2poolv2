@@ -202,6 +202,7 @@ mod chain_tests {
     use super::*;
     use crate::test_utils::random_hex_string;
     use crate::test_utils::simple_miner_share;
+    use crate::test_utils::test_coinbase_transaction;
     use std::collections::HashSet;
     use tempfile::tempdir;
 
@@ -229,6 +230,7 @@ mod chain_tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
         chain.add_share(share1.clone()).unwrap();
 
@@ -255,6 +257,7 @@ mod chain_tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
         let uncle2_share2 = ShareBlock {
             blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
@@ -272,6 +275,7 @@ mod chain_tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
         // first orphan is a tip
         chain.add_share(uncle1_share2.clone()).unwrap();
@@ -308,6 +312,7 @@ mod chain_tests {
                 Some(dec!(2.0)),
                 Some(dec!(2.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
         chain.add_share(share2.clone()).unwrap();
 
@@ -334,6 +339,7 @@ mod chain_tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
         let uncle2_share3 = ShareBlock {
             blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bba"
@@ -351,6 +357,7 @@ mod chain_tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
 
         chain.add_share(uncle1_share3.clone()).unwrap();
@@ -387,6 +394,7 @@ mod chain_tests {
                 Some(dec!(3.0)),
                 Some(dec!(3.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
         chain.add_share(share3.clone()).unwrap();
 
@@ -425,6 +433,7 @@ mod chain_tests {
                     Some(dec!(1.0)),
                     Some(dec!(1.9041854952356509)),
                 ),
+                coinbase_tx: test_coinbase_transaction(),
             };
             blocks.push(share.clone());
             chain.add_share(share.clone()).unwrap();
@@ -501,6 +510,7 @@ mod chain_tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
         chain.add_share(share1.clone()).unwrap();
 
@@ -524,6 +534,7 @@ mod chain_tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
         chain.add_share(share2.clone()).unwrap();
 

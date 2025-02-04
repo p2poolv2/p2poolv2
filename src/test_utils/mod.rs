@@ -97,6 +97,19 @@ pub fn random_hex_string(length: usize, leading_zeroes: usize) -> String {
         .collect()
 }
 
+#[cfg(test)]
+pub fn test_coinbase_transaction() -> bitcoin::Transaction {
+    let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+        .parse::<bitcoin::PublicKey>()
+        .unwrap();
+
+    crate::shares::transactions::create_share_block_coinbase_transaction(
+        &pubkey,
+        bitcoin::Network::Regtest,
+    )
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]

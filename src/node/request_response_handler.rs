@@ -138,9 +138,11 @@ mod tests {
     use crate::shares::ShareBlock;
     use crate::test_utils::simple_miner_share;
     use crate::test_utils::simple_miner_workbase;
+    use crate::test_utils::test_coinbase_transaction;
     use mockall::predicate::*;
     use rust_decimal_macros::dec;
     use std::collections::HashSet;
+
     #[tokio::test]
     async fn test_handle_share_block_request() {
         let mut chain_handle = ChainHandle::default();
@@ -164,6 +166,7 @@ mod tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
 
         // Set up mock expectations
@@ -227,6 +230,7 @@ mod tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
 
         // Set up mock to return error

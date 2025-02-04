@@ -49,11 +49,20 @@ pub struct ShareBlock {
 
     /// The miner work for the share
     pub miner_share: MinerShare,
+
+    /// Coinbase transaction for the share block
+    pub coinbase_tx: bitcoin::Transaction,
 }
 
 impl ShareBlock {
-    pub fn new(miner_share: MinerShare, miner_pubkey: PublicKey) -> Self {
+    pub fn new(
+        miner_share: MinerShare,
+        miner_pubkey: PublicKey,
+        network: bitcoin::Network,
+    ) -> Self {
         let share = miner_share.clone();
+        let coinbase_tx =
+            transactions::create_share_block_coinbase_transaction(&miner_pubkey, network);
         Self {
             blockhash: miner_share.hash.parse().unwrap(),
             prev_share_blockhash: None,
@@ -61,6 +70,7 @@ impl ShareBlock {
             miner_pubkey,
             tx_hashes: vec![],
             miner_share: share,
+            coinbase_tx,
         }
     }
 }
@@ -69,6 +79,7 @@ impl ShareBlock {
 mod tests {
     use super::*;
     use crate::test_utils::simple_miner_share;
+    use crate::test_utils::test_coinbase_transaction;
     use rust_decimal_macros::dec;
 
     #[test]
@@ -97,6 +108,7 @@ mod tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
+            coinbase_tx: test_coinbase_transaction(),
         };
 
         let serialized = Message::ShareBlock(share.clone()).cbor_serialize().unwrap();
