@@ -26,7 +26,6 @@ pub mod validation;
 use crate::node::messages::Message;
 use crate::shares::miner_message::MinerShare;
 use bitcoin::{BlockHash, PublicKey, Txid};
-use chain::ChainHandle;
 use serde::{Deserialize, Serialize};
 
 /// Captures a block on the share chain
@@ -127,6 +126,25 @@ mod tests {
         assert_eq!(share.uncles, deserialized.uncles);
         assert_eq!(share.miner_pubkey, deserialized.miner_pubkey);
         assert_eq!(share.tx_hashes, deserialized.tx_hashes);
-        assert_eq!(share.miner_share, deserialized.miner_share);
+
+        // Only compare non-skipped fields from MinerShare
+        assert_eq!(
+            share.miner_share.workinfoid,
+            deserialized.miner_share.workinfoid
+        );
+        assert_eq!(
+            share.miner_share.clientid,
+            deserialized.miner_share.clientid
+        );
+        assert_eq!(share.miner_share.enonce1, deserialized.miner_share.enonce1);
+        assert_eq!(share.miner_share.nonce2, deserialized.miner_share.nonce2);
+        assert_eq!(share.miner_share.nonce, deserialized.miner_share.nonce);
+        assert_eq!(share.miner_share.ntime, deserialized.miner_share.ntime);
+        assert_eq!(share.miner_share.diff, deserialized.miner_share.diff);
+        assert_eq!(share.miner_share.sdiff, deserialized.miner_share.sdiff);
+        assert_eq!(
+            share.miner_share.username,
+            deserialized.miner_share.username
+        );
     }
 }
