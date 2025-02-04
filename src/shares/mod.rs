@@ -61,7 +61,7 @@ impl ShareBlock {
     ) -> Self {
         let share = miner_share.clone();
         let coinbase_tx =
-            transactions::create_share_block_coinbase_transaction(&miner_pubkey, network);
+            transactions::coinbase::create_coinbase_transaction(&miner_pubkey, network);
         Self {
             blockhash: miner_share.hash.parse().unwrap(),
             prev_share_blockhash: None,
