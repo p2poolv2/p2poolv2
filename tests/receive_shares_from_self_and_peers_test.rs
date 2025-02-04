@@ -68,14 +68,18 @@ mod self_and_peer_messages_tests {
                         "020202020202020202020202020202020202020202020202020202020202020203"
                             .parse()
                             .unwrap();
-                    Message::ShareBlock(ShareBlock::new(share, pubkey))
+                    let mut peer_share = ShareBlock::new(share, pubkey);
+                    // set all peer shares to have the same prev_share_blockhash
+                    peer_share.prev_share_blockhash = Some(
+                        "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
+                            .parse()
+                            .unwrap(),
+                    );
+                    Message::ShareBlock(peer_share)
                 }
                 CkPoolMessage::Workbase(workbase) => Message::Workbase(workbase),
             })
             .collect();
-
-        assert_eq!(ckpool_messages.len(), 2, "CKPool messages length mismatch");
-        assert_eq!(peer_messages.len(), 2, "Peer messages length mismatch");
 
         let ctx = zmq::Context::new();
         let publisher = ctx

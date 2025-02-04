@@ -97,7 +97,6 @@ pub async fn handle_request(
                 error!("Share block validation failed: {}", e);
                 return Err("Share block validation failed".into());
             }
-            share_block = chain_handle.setup_share_for_chain(share_block).await;
             if let Err(e) = chain_handle.add_share(share_block.clone()).await {
                 error!("Failed to add share: {}", e);
                 return Err("Error adding share to chain".into());
