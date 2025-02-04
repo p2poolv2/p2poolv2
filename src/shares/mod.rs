@@ -147,4 +147,42 @@ mod tests {
             deserialized.miner_share.username
         );
     }
+
+    #[test]
+    fn test_serialized_share_size() {
+        let share = ShareBlock {
+            blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb0"
+                .parse()
+                .unwrap(),
+            prev_share_blockhash: Some(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb1"
+                    .parse()
+                    .unwrap(),
+            ),
+            uncles: vec![
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2"
+                    .parse()
+                    .unwrap(),
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3"
+                    .parse()
+                    .unwrap(),
+            ],
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
+            tx_hashes: vec![],
+            miner_share: simple_miner_share(
+                Some(7452731920372203525),
+                Some(1),
+                Some(dec!(1.0)),
+                Some(dec!(1.9041854952356509)),
+            ),
+            coinbase_tx: test_coinbase_transaction(),
+        };
+
+        let serialized = Message::ShareBlock(share).cbor_serialize().unwrap();
+
+        // The serialized size should be less than 1KB since we skip many fields
+        assert_eq!(serialized.len(), 616);
+    }
 }
