@@ -16,6 +16,7 @@
 
 use crate::node::messages::Message;
 use crate::shares::miner_message::MinerWorkbase;
+use crate::shares::transactions::pool_transaction::PoolTransaction;
 use crate::shares::{BlockHash, ShareBlock};
 use rocksdb::DB;
 use std::error::Error;
@@ -60,14 +61,13 @@ impl Store {
 
     /// Add a transaction to the store
     /// The txid is computed and Transaction is serialized using cbor
-    pub fn add_transaction(&mut self, tx: bitcoin::Transaction) -> Result<(), Box<dyn Error>> {
-        let txid = tx.compute_txid();
+    pub fn add_transaction(&mut self, pool_tx: PoolTransaction) -> Result<(), Box<dyn Error>> {
+        let txid = pool_tx.tx.compute_txid();
         debug!("Adding transaction to store: {:?}", txid);
+        let mut serialized = Vec::new();
+        ciborium::ser::into_writer(&pool_tx, &mut serialized).unwrap();
         self.db
-            .put::<&[u8], Vec<u8>>(
-                txid.as_ref(),
-                Message::Transaction(tx).cbor_serialize().unwrap(),
-            )
+            .put::<&[u8], Vec<u8>>(txid.as_ref(), serialized)
             .unwrap();
         Ok(())
     }
@@ -106,22 +106,15 @@ impl Store {
 
     /// Get a transaction from the store using a provided txid
     /// The transaction is deserialized using cbor
-    pub fn get_transaction(&self, txid: &bitcoin::Txid) -> Option<bitcoin::Transaction> {
+    pub fn get_transaction(&self, txid: &bitcoin::Txid) -> Option<PoolTransaction> {
         let tx = match self.db.get::<&[u8]>(txid.as_ref()) {
             Ok(Some(tx)) => tx,
             Ok(None) | Err(_) => return None,
         };
-        let tx = match Message::cbor_deserialize(&tx) {
+        let tx: PoolTransaction = match ciborium::de::from_reader(tx.as_slice()) {
             Ok(tx) => tx,
             Err(e) => {
                 tracing::error!("Error deserializing transaction: {:?}", e);
-                return None;
-            }
-        };
-        let tx = match tx {
-            Message::Transaction(tx) => tx,
-            _ => {
-                tracing::error!("Badly serialized transaction in database");
                 return None;
             }
         };
@@ -411,14 +404,16 @@ mod tests {
             output: vec![],
         };
 
+        let pool_tx = PoolTransaction::new(tx.clone());
+
         // Store the transaction
         let txid = tx.compute_txid();
-        store.add_transaction(tx.clone()).unwrap();
+        store.add_transaction(pool_tx.clone()).unwrap();
 
         // Retrieve the transaction
         let retrieved_tx = store.get_transaction(&txid);
         assert!(retrieved_tx.is_some());
-        assert_eq!(retrieved_tx.unwrap(), tx);
+        assert_eq!(retrieved_tx.unwrap().tx, tx);
 
         // Try getting non-existent transaction
         let fake_txid = "d2528fc2d7a4f95ace97860f157c895b6098667df0e43912b027cfe58edf304e"
