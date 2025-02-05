@@ -183,6 +183,38 @@ mod tests {
         let serialized = Message::ShareBlock(share).cbor_serialize().unwrap();
 
         // The serialized size should be less than 1KB since we skip many fields
-        assert_eq!(serialized.len(), 616);
+        assert_eq!(serialized.len(), 718);
+    }
+
+    #[test]
+    fn test_share_block_new_includes_coinbase_transaction() {
+        // Create a test public key
+        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+            .parse()
+            .unwrap();
+
+        // Create a miner share with test values
+        let miner_share = simple_miner_share(
+            Some(7452731920372203525),
+            Some(1),
+            Some(dec!(1.0)),
+            Some(dec!(1.9041854952356509)),
+        );
+
+        // Create a new share block using ShareBlock::new
+        let share = ShareBlock::new(miner_share, pubkey, bitcoin::Network::Regtest);
+
+        // Verify the coinbase transaction exists and has expected properties
+        assert!(share.coinbase_tx.is_coinbase());
+        assert_eq!(share.coinbase_tx.output.len(), 1);
+        assert_eq!(share.coinbase_tx.input.len(), 1);
+
+        // Verify the output is a P2PKH to the miner's public key
+        let output = &share.coinbase_tx.output[0];
+        assert_eq!(output.value.to_sat(), 1);
+
+        // Verify the output script is P2PKH for the miner's pubkey
+        let expected_address = bitcoin::Address::p2pkh(&pubkey, bitcoin::Network::Regtest);
+        assert_eq!(output.script_pubkey, expected_address.script_pubkey());
     }
 }

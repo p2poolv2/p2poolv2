@@ -33,11 +33,19 @@ pub fn create_coinbase_transaction(pubkey: &PublicKey, network: Network) -> Tran
         script_pubkey,
     };
 
+    // Create input with null outpoint and empty script sig
+    let tx_in = bitcoin::TxIn {
+        previous_output: bitcoin::OutPoint::null(),
+        script_sig: bitcoin::ScriptBuf::new(),
+        sequence: bitcoin::Sequence::MAX,
+        witness: bitcoin::Witness::new(),
+    };
+
     // Create transaction
     let transaction = Transaction {
         version: bitcoin::transaction::Version::TWO,
         lock_time: bitcoin::absolute::LockTime::ZERO,
-        input: vec![],
+        input: vec![tx_in],
         output: vec![tx_out],
     };
 
@@ -61,8 +69,10 @@ mod tests {
         // Verify transaction properties
         assert_eq!(transaction.version, bitcoin::transaction::Version::TWO);
         assert_eq!(transaction.lock_time, bitcoin::absolute::LockTime::ZERO);
-        assert!(transaction.input.is_empty());
+        assert_eq!(transaction.input.len(), 1);
         assert_eq!(transaction.output.len(), 1);
+
+        assert!(transaction.is_coinbase());
 
         // Verify output properties
         let output = &transaction.output[0];
