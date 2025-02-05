@@ -28,9 +28,11 @@ use crate::shares::miner_message::MinerShare;
 use bitcoin::{BlockHash, PublicKey, Txid};
 use serde::{Deserialize, Serialize};
 
-/// Captures a block on the share chain
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
-pub struct ShareBlock {
+
+/// Header for the ShareBlock
+/// Helps validate PoW and transaction merkle root.
+pub struct ShareHeader {
     /// The block hash of the bitcoin weak block received from the ckpool miner
     pub blockhash: BlockHash,
 
@@ -45,6 +47,13 @@ pub struct ShareBlock {
 
     /// Any transactions to be included in the share block
     pub tx_hashes: Vec<Txid>,
+}
+
+/// Captures a block on the share chain
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct ShareBlock {
+    /// The header of the share block
+    pub header: ShareHeader,
 
     /// The miner work for the share
     pub miner_share: MinerShare,
@@ -63,11 +72,13 @@ impl ShareBlock {
         let coinbase_tx =
             transactions::coinbase::create_coinbase_transaction(&miner_pubkey, network);
         Self {
-            blockhash: miner_share.hash.parse().unwrap(),
-            prev_share_blockhash: None,
-            uncles: vec![],
-            miner_pubkey,
-            tx_hashes: vec![],
+            header: ShareHeader {
+                blockhash: miner_share.hash.parse().unwrap(),
+                prev_share_blockhash: None,
+                uncles: vec![],
+                miner_pubkey,
+                tx_hashes: vec![],
+            },
             miner_share: share,
             coinbase_tx,
         }
@@ -84,23 +95,25 @@ mod tests {
     #[test]
     fn test_share_serialization() {
         let share = ShareBlock {
-            blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
-                .parse()
-                .unwrap(),
-            prev_share_blockhash: Some(
-                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4"
+            header: ShareHeader {
+                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
                     .parse()
                     .unwrap(),
-            ),
-            uncles: vec![],
-            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                .parse()
-                .unwrap(),
-            tx_hashes: vec![
-                "d2528fc2d7a4f95ace97860f157c895b6098667df0e43912b027cfe58edf304e"
+                prev_share_blockhash: Some(
+                    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4"
+                        .parse()
+                        .unwrap(),
+                ),
+                uncles: vec![],
+                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                     .parse()
                     .unwrap(),
-            ],
+                tx_hashes: vec![
+                    "d2528fc2d7a4f95ace97860f157c895b6098667df0e43912b027cfe58edf304e"
+                        .parse()
+                        .unwrap(),
+                ],
+            },
             miner_share: simple_miner_share(
                 Some(7452731920372203525),
                 Some(1),
@@ -118,14 +131,14 @@ mod tests {
             _ => panic!("Expected ShareBlock variant"),
         };
 
-        assert_eq!(share.blockhash, deserialized.blockhash);
+        assert_eq!(share.header.blockhash, deserialized.header.blockhash);
         assert_eq!(
-            share.prev_share_blockhash,
-            deserialized.prev_share_blockhash
+            share.header.prev_share_blockhash,
+            deserialized.header.prev_share_blockhash
         );
-        assert_eq!(share.uncles, deserialized.uncles);
-        assert_eq!(share.miner_pubkey, deserialized.miner_pubkey);
-        assert_eq!(share.tx_hashes, deserialized.tx_hashes);
+        assert_eq!(share.header.uncles, deserialized.header.uncles);
+        assert_eq!(share.header.miner_pubkey, deserialized.header.miner_pubkey);
+        assert_eq!(share.header.tx_hashes, deserialized.header.tx_hashes);
 
         // Only compare non-skipped fields from MinerShare
         assert_eq!(

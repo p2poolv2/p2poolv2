@@ -86,12 +86,12 @@ mod tests {
             .times(1)
             .returning(|share_block| {
                 let mut share_block = share_block;
-                share_block.prev_share_blockhash = Some(
+                share_block.header.prev_share_blockhash = Some(
                     "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
                         .parse()
                         .unwrap(),
                 );
-                share_block.uncles = vec![
+                share_block.header.uncles = vec![
                     "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
                         .parse()
                         .unwrap(),
@@ -137,12 +137,12 @@ mod tests {
             .times(1)
             .returning(|share_block| {
                 let mut share_block = share_block;
-                share_block.prev_share_blockhash = Some(
+                share_block.header.prev_share_blockhash = Some(
                     "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
                         .parse()
                         .unwrap(),
                 );
-                share_block.uncles = vec![
+                share_block.header.uncles = vec![
                     "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
                         .parse()
                         .unwrap(),
@@ -187,12 +187,12 @@ mod tests {
             .times(1)
             .returning(|share_block| {
                 let mut share_block = share_block;
-                share_block.prev_share_blockhash = Some(
+                share_block.header.prev_share_blockhash = Some(
                     "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
                         .parse()
                         .unwrap(),
                 );
-                share_block.uncles = vec![
+                share_block.header.uncles = vec![
                     "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
                         .parse()
                         .unwrap(),
