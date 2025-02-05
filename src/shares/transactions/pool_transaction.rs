@@ -37,7 +37,7 @@ impl PoolTransaction {
     }
 
     // validate the transaction
-    pub fn validate(&mut self) {
+    pub fn mark_validated(&mut self) {
         self.validated = true;
     }
 
@@ -84,7 +84,7 @@ mod tests {
         let mut pool_tx = PoolTransaction::new(tx);
         assert!(!pool_tx.validated);
 
-        pool_tx.validate();
+        pool_tx.mark_validated();
         assert!(pool_tx.validated);
     }
 
@@ -126,7 +126,7 @@ mod tests {
         store.add_transaction(pool_tx.clone()).unwrap();
 
         // Modify and update transaction
-        pool_tx.validate();
+        pool_tx.mark_validated();
         pool_tx.update(&mut store);
 
         // Verify updated transaction
