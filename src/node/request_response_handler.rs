@@ -136,6 +136,7 @@ mod tests {
     use crate::shares::miner_message::Gbt;
     use crate::shares::miner_message::MinerWorkbase;
     use crate::shares::ShareBlock;
+    use crate::shares::ShareHeader;
     use crate::test_utils::simple_miner_share;
     use crate::test_utils::simple_miner_workbase;
     use crate::test_utils::test_coinbase_transaction;
@@ -151,15 +152,17 @@ mod tests {
 
         // Create test share block
         let share_block = ShareBlock {
-            blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
-                .parse()
-                .unwrap(),
-            prev_share_blockhash: None,
-            uncles: vec![],
-            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                .parse()
-                .unwrap(),
-            tx_hashes: vec![],
+            header: ShareHeader {
+                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+                    .parse()
+                    .unwrap(),
+                prev_share_blockhash: None,
+                uncles: vec![],
+                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                    .parse()
+                    .unwrap(),
+                tx_hashes: vec![],
+            },
             miner_share: simple_miner_share(
                 Some(7452731920372203525),
                 Some(1),
@@ -195,7 +198,10 @@ mod tests {
             let message = Message::cbor_deserialize(&buf).unwrap();
             match message {
                 Message::ShareBlock(received_share) => {
-                    assert_eq!(received_share.blockhash, share_block.blockhash);
+                    assert_eq!(
+                        received_share.header.blockhash,
+                        share_block.header.blockhash
+                    );
                     assert_eq!(
                         received_share.miner_share.diff,
                         share_block.miner_share.diff
@@ -215,15 +221,17 @@ mod tests {
         let mut chain_handle = ChainHandle::default();
 
         let share_block = ShareBlock {
-            blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
-                .parse()
-                .unwrap(),
-            prev_share_blockhash: None,
-            uncles: vec![],
-            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                .parse()
-                .unwrap(),
-            tx_hashes: vec![],
+            header: ShareHeader {
+                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+                    .parse()
+                    .unwrap(),
+                prev_share_blockhash: None,
+                uncles: vec![],
+                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                    .parse()
+                    .unwrap(),
+                tx_hashes: vec![],
+            },
             miner_share: simple_miner_share(
                 Some(7452731920372203525),
                 Some(1),

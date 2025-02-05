@@ -158,7 +158,7 @@ mod zmq_tests {
 
         assert_eq!(chain_handle.get_chain_tip().await, Some(share2_hash));
         let share_at_tip = chain_handle.get_share(share2_hash).await.unwrap();
-        assert_eq!(share_at_tip.prev_share_blockhash, Some(share1_hash));
+        assert_eq!(share_at_tip.header.prev_share_blockhash, Some(share1_hash));
 
         let workbase = chain_handle.get_workbase(7460801854683742211).await;
         assert!(workbase.is_none());
