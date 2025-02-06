@@ -91,7 +91,7 @@ pub async fn handle_request(
 ) -> Result<(), Box<dyn Error>> {
     info!("Handling request from peer: {}", peer);
     match request {
-        Message::ShareBlock(mut share_block) => {
+        Message::ShareBlock(share_block) => {
             info!("Received share block: {:?}", share_block);
             if let Err(e) = share_block.miner_share.validate() {
                 error!("Share block validation failed: {}", e);
