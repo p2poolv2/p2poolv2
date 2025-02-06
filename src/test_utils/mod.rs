@@ -16,7 +16,8 @@
 
 use crate::shares::miner_message::MinerShare;
 use crate::shares::miner_message::MinerWorkbase;
-
+use crate::shares::{ShareBlock, ShareHeader};
+use bitcoin::BlockHash;
 #[cfg(test)]
 use rand;
 use rust_decimal::Decimal;
@@ -107,6 +108,42 @@ pub fn test_coinbase_transaction() -> bitcoin::Transaction {
         &pubkey,
         bitcoin::Network::Regtest,
     )
+}
+
+#[cfg(test)]
+pub fn test_share_block(
+    blockhash: Option<&str>,
+    prev_share_blockhash: Option<&str>,
+    uncles: Vec<BlockHash>,
+    miner_pubkey: Option<&str>,
+    workinfoid: Option<u64>,
+    clientid: Option<u64>,
+    diff: Option<Decimal>,
+    sdiff: Option<Decimal>,
+) -> ShareBlock {
+    let prev_share_blockhash = match prev_share_blockhash {
+        Some(prev_share_blockhash) => Some(prev_share_blockhash.parse().unwrap()),
+        None => None,
+    };
+    let miner_pubkey = match miner_pubkey {
+        Some(miner_pubkey) => miner_pubkey.parse().unwrap(),
+        None => "020202020202020202020202020202020202020202020202020202020202020202"
+            .parse()
+            .unwrap(),
+    };
+    ShareBlock {
+        header: ShareHeader {
+            blockhash: blockhash
+                .unwrap_or("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .parse()
+                .unwrap(),
+            prev_share_blockhash,
+            uncles,
+            miner_pubkey,
+        },
+        miner_share: simple_miner_share(workinfoid, clientid, diff, sdiff),
+        transactions: vec![test_coinbase_transaction()],
+    }
 }
 
 #[cfg(test)]

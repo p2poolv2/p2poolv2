@@ -204,6 +204,7 @@ mod chain_tests {
     use crate::test_utils::random_hex_string;
     use crate::test_utils::simple_miner_share;
     use crate::test_utils::test_coinbase_transaction;
+    use crate::test_utils::test_share_block;
     use std::collections::HashSet;
     use tempfile::tempdir;
 
@@ -215,26 +216,17 @@ mod chain_tests {
         let mut chain = Chain::new(store);
 
         // Create initial share (1)
-        let share1 = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: None,
-                uncles: vec![],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
+        let share1 = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
+            None,
+            vec![],
+            Some("020202020202020202020202020202020202020202020202020202020202020202"),
+            None,
+            None,
+            None,
+            None,
+        );
+
         chain.add_share(share1.clone()).unwrap();
 
         let mut expected_tips = HashSet::new();
@@ -244,46 +236,28 @@ mod chain_tests {
         assert_eq!(chain.chain_tip, Some(share1.header.blockhash));
 
         // Create uncles for share2
-        let uncle1_share2 = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: Some(share1.header.blockhash),
-                uncles: vec![],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525 + 1),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
-        let uncle2_share2 = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: Some(share1.header.blockhash),
-                uncles: vec![],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525 + 2),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
+        let uncle1_share2 = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"),
+            Some(share1.header.blockhash.to_string().as_str()),
+            vec![],
+            Some("020202020202020202020202020202020202020202020202020202020202020202"),
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let uncle2_share2 = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"),
+            Some(share1.header.blockhash.to_string().as_str()),
+            vec![],
+            Some("020202020202020202020202020202020202020202020202020202020202020202"),
+            None,
+            None,
+            None,
+            None,
+        );
+
         // first orphan is a tip
         chain.add_share(uncle1_share2.clone()).unwrap();
         expected_tips.clear();
@@ -303,29 +277,19 @@ mod chain_tests {
         assert_eq!(chain.chain_tip, Some(uncle1_share2.header.blockhash));
 
         // Create share2 with its uncles
-        let share2 = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: Some(share1.header.blockhash),
-                uncles: vec![
-                    uncle1_share2.header.blockhash,
-                    uncle2_share2.header.blockhash,
-                ],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525 + 3),
-                Some(1),
-                Some(dec!(2.0)),
-                Some(dec!(2.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
+        let share2 = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8"),
+            Some(share1.header.blockhash.to_string().as_str()),
+            vec![
+                uncle1_share2.header.blockhash,
+                uncle2_share2.header.blockhash,
+            ],
+            Some("020202020202020202020202020202020202020202020202020202020202020202"),
+            Some(7452731920372203525 + 3),
+            Some(1),
+            Some(dec!(2.0)),
+            Some(dec!(2.9041854952356509)),
+        );
         chain.add_share(share2.clone()).unwrap();
 
         // two tips that will be future uncles and the chain tip
@@ -335,46 +299,27 @@ mod chain_tests {
         assert_eq!(chain.total_difficulty, dec!(3.0));
         assert_eq!(chain.chain_tip, Some(share2.header.blockhash));
         // Create uncles for share3
-        let uncle1_share3 = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb9"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: Some(share2.header.blockhash),
-                uncles: vec![],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525 + 4),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
-        let uncle2_share3 = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bba"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: Some(share2.header.blockhash),
-                uncles: vec![],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525 + 5),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
+        let uncle1_share3 = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb9"),
+            Some(share2.header.blockhash.to_string().as_str()),
+            vec![],
+            Some("020202020202020202020202020202020202020202020202020202020202020202"),
+            Some(7452731920372203525 + 4),
+            Some(1),
+            Some(dec!(1.0)),
+            Some(dec!(1.9041854952356509)),
+        );
+
+        let uncle2_share3 = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bba"),
+            Some(share2.header.blockhash.to_string().as_str()),
+            vec![],
+            Some("020202020202020202020202020202020202020202020202020202020202020202"),
+            Some(7452731920372203525 + 5),
+            Some(1),
+            Some(dec!(1.0)),
+            Some(dec!(1.9041854952356509)),
+        );
 
         chain.add_share(uncle1_share3.clone()).unwrap();
         expected_tips.clear();
@@ -394,29 +339,19 @@ mod chain_tests {
         assert_eq!(chain.total_difficulty, dec!(4.0));
         assert_eq!(chain.chain_tip, Some(uncle1_share3.header.blockhash));
         // Create share3 with its uncles
-        let share3 = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bbb"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: Some(share2.header.blockhash),
-                uncles: vec![
-                    uncle1_share3.header.blockhash,
-                    uncle2_share3.header.blockhash,
-                ],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525 + 6),
-                Some(1),
-                Some(dec!(3.0)),
-                Some(dec!(3.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
+        let share3 = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bbb"),
+            Some(share2.header.blockhash.to_string().as_str()),
+            vec![
+                uncle1_share3.header.blockhash,
+                uncle2_share3.header.blockhash,
+            ],
+            Some("020202020202020202020202020202020202020202020202020202020202020202"),
+            Some(7452731920372203525 + 6),
+            Some(1),
+            Some(dec!(3.0)),
+            Some(dec!(3.9041854952356509)),
+        );
         chain.add_share(share3.clone()).unwrap();
 
         expected_tips.clear();
@@ -437,31 +372,24 @@ mod chain_tests {
         // Create initial chain of MIN_CONFIRMATION_DEPTH + 1 blocks
         let mut prev_hash = None;
         let mut blocks = vec![];
+        let mut blockhash_strings = Vec::new(); // Add this to store strings
 
         // Generate blocks
         for i in 0..=MIN_CONFIRMATION_DEPTH + 1 {
-            let share = ShareBlock {
-                header: ShareHeader {
-                    blockhash: random_hex_string(64, 8).parse().unwrap(),
-                    prev_share_blockhash: prev_hash,
-                    uncles: vec![],
-                    miner_pubkey:
-                        "020202020202020202020202020202020202020202020202020202020202020202"
-                            .parse()
-                            .unwrap(),
-                    tx_hashes: vec![],
-                },
-                miner_share: simple_miner_share(
-                    Some(7452731920372203525 + i as u64),
-                    Some(1),
-                    Some(dec!(1.0)),
-                    Some(dec!(1.9041854952356509)),
-                ),
-                coinbase_tx: test_coinbase_transaction(),
-            };
+            let share = test_share_block(
+                Some(random_hex_string(64, 8).as_str()),
+                prev_hash,
+                vec![],
+                Some("020202020202020202020202020202020202020202020202020202020202020202"),
+                Some(7452731920372203525 + i as u64),
+                Some(1),
+                Some(dec!(1.0)),
+                Some(dec!(1.9041854952356509)),
+            );
             blocks.push(share.clone());
             chain.add_share(share.clone()).unwrap();
-            prev_hash = Some(share.header.blockhash);
+            blockhash_strings.push(share.header.blockhash.to_string()); // Store string
+            prev_hash = Some(blockhash_strings.last().unwrap().as_str()); // Use reference to stored string
 
             if i > MIN_CONFIRMATION_DEPTH || i == 0 {
                 assert!(chain.is_confirmed(share));
@@ -518,52 +446,33 @@ mod chain_tests {
         assert_eq!(chain.get_depth(&random_hash), None);
 
         // Create initial share
-        let share1 = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: None,
-                uncles: vec![],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
+        let share1 = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
+            None,
+            vec![],
+            Some("020202020202020202020202020202020202020202020202020202020202020202"),
+            Some(7452731920372203525),
+            Some(1),
+            Some(dec!(1.0)),
+            Some(dec!(1.9041854952356509)),
+        );
         chain.add_share(share1.clone()).unwrap();
 
         // Test when blockhash is chain tip
         assert_eq!(chain.get_depth(&share1.header.blockhash), Some(0));
 
         // Create second share
-        let share2 = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: Some(share1.header.blockhash),
-                uncles: vec![],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203526),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
+        let share2 = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"),
+            Some(share1.header.blockhash.to_string().as_str()),
+            vec![],
+            Some("020202020202020202020202020202020202020202020202020202020202020202"),
+            Some(7452731920372203526),
+            Some(1),
+            Some(dec!(1.0)),
+            Some(dec!(1.9041854952356509)),
+        );
+
         chain.add_share(share2.clone()).unwrap();
 
         // Test depth of first share when it's not the tip
