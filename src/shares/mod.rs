@@ -25,7 +25,7 @@ pub mod validation;
 
 use crate::node::messages::Message;
 use crate::shares::miner_message::MinerShare;
-use bitcoin::{BlockHash, PublicKey, Txid};
+use bitcoin::{BlockHash, PublicKey, Transaction};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
@@ -44,9 +44,6 @@ pub struct ShareHeader {
 
     /// Compressed pubkey identifying the miner
     pub miner_pubkey: PublicKey,
-
-    /// Any transactions to be included in the share block
-    pub tx_hashes: Vec<Txid>,
 }
 
 /// Captures a block on the share chain
@@ -54,12 +51,10 @@ pub struct ShareHeader {
 pub struct ShareBlock {
     /// The header of the share block
     pub header: ShareHeader,
-
     /// The miner work for the share
     pub miner_share: MinerShare,
-
-    /// Coinbase transaction for the share block
-    pub coinbase_tx: bitcoin::Transaction,
+    /// Any transactions to be included in the share block
+    pub transactions: Vec<Transaction>,
 }
 
 impl ShareBlock {
@@ -77,10 +72,9 @@ impl ShareBlock {
                 prev_share_blockhash: None,
                 uncles: vec![],
                 miner_pubkey,
-                tx_hashes: vec![],
             },
             miner_share: share,
-            coinbase_tx,
+            transactions: vec![coinbase_tx],
         }
     }
 }
@@ -108,11 +102,6 @@ mod tests {
                 miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                     .parse()
                     .unwrap(),
-                tx_hashes: vec![
-                    "d2528fc2d7a4f95ace97860f157c895b6098667df0e43912b027cfe58edf304e"
-                        .parse()
-                        .unwrap(),
-                ],
             },
             miner_share: simple_miner_share(
                 Some(7452731920372203525),
@@ -120,7 +109,7 @@ mod tests {
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
             ),
-            coinbase_tx: test_coinbase_transaction(),
+            transactions: vec![test_coinbase_transaction()],
         };
 
         let serialized = Message::ShareBlock(share.clone()).cbor_serialize().unwrap();
@@ -138,7 +127,7 @@ mod tests {
         );
         assert_eq!(share.header.uncles, deserialized.header.uncles);
         assert_eq!(share.header.miner_pubkey, deserialized.header.miner_pubkey);
-        assert_eq!(share.header.tx_hashes, deserialized.header.tx_hashes);
+        assert_eq!(share.transactions, deserialized.transactions);
 
         // Only compare non-skipped fields from MinerShare
         assert_eq!(
@@ -180,12 +169,12 @@ mod tests {
         let share = ShareBlock::new(miner_share, pubkey, bitcoin::Network::Regtest);
 
         // Verify the coinbase transaction exists and has expected properties
-        assert!(share.coinbase_tx.is_coinbase());
-        assert_eq!(share.coinbase_tx.output.len(), 1);
-        assert_eq!(share.coinbase_tx.input.len(), 1);
+        assert!(share.transactions[0].is_coinbase());
+        assert_eq!(share.transactions[0].output.len(), 1);
+        assert_eq!(share.transactions[0].input.len(), 1);
 
         // Verify the output is a P2PKH to the miner's public key
-        let output = &share.coinbase_tx.output[0];
+        let output = &share.transactions[0].output[0];
         assert_eq!(output.value.to_sat(), 1);
 
         // Verify the output script is P2PKH for the miner's pubkey

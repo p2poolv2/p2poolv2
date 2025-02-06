@@ -185,6 +185,7 @@ mod tests {
     use crate::shares::{ShareBlock, ShareHeader};
     use crate::test_utils::simple_miner_share;
     use crate::test_utils::test_coinbase_transaction;
+    use crate::test_utils::test_share_block;
     use rust_decimal_macros::dec;
     use tempfile::tempdir;
 
@@ -194,174 +195,92 @@ mod tests {
         let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string());
 
         // Create initial share
-        let share1 = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: None,
-                uncles: vec![],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
+        let share1 = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
+            None,
+            vec![],
+            None,
+            Some(7452731920372203525),
+            Some(1),
+            Some(dec!(1.0)),
+            Some(dec!(1.9041854952356509)),
+        );
 
         // Create uncles for share2
-        let uncle1_share2 = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: Some(
-                    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
-                        .parse()
-                        .unwrap(),
-                ),
-                uncles: vec![],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525 + 1),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
+        let uncle1_share2 = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"),
+            Some(share1.header.blockhash.to_string().as_str()),
+            vec![],
+            None,
+            Some(7452731920372203525 + 1),
+            Some(1),
+            Some(dec!(1.0)),
+            Some(dec!(1.9041854952356509)),
+        );
 
-        let uncle2_share2 = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: Some(
-                    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
-                        .parse()
-                        .unwrap(),
-                ),
-                uncles: vec![],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525 + 2),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
+        let uncle2_share2 = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"),
+            Some(share1.header.blockhash.to_string().as_str()),
+            vec![],
+            None,
+            Some(7452731920372203525 + 2),
+            Some(1),
+            Some(dec!(1.0)),
+            Some(dec!(1.9041854952356509)),
+        );
 
         // Create share2 with uncles
-        let share2 = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: Some(
-                    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
-                        .parse()
-                        .unwrap(),
-                ),
-                uncles: vec![
-                    uncle1_share2.header.blockhash,
-                    uncle2_share2.header.blockhash,
-                ],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525 + 3),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
+        let share2 = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8"),
+            Some(share1.header.blockhash.to_string().as_str()),
+            vec![
+                uncle1_share2.header.blockhash,
+                uncle2_share2.header.blockhash,
+            ],
+            None,
+            Some(7452731920372203525 + 3),
+            Some(1),
+            Some(dec!(1.0)),
+            Some(dec!(1.9041854952356509)),
+        );
 
         // Create uncles for share3
-        let uncle1_share3 = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb9"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: Some(share2.header.blockhash),
-                uncles: vec![],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525 + 4),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
+        let uncle1_share3 = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb9"),
+            Some(share2.header.blockhash.to_string().as_str()),
+            vec![],
+            None,
+            Some(7452731920372203525 + 4),
+            Some(1),
+            Some(dec!(1.0)),
+            Some(dec!(1.9041854952356509)),
+        );
 
-        let uncle2_share3 = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bba"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: Some(share2.header.blockhash),
-                uncles: vec![],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525 + 5),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
+        let uncle2_share3 = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bba"),
+            Some(share2.header.blockhash.to_string().as_str()),
+            vec![],
+            None,
+            Some(7452731920372203525 + 5),
+            Some(1),
+            Some(dec!(1.0)),
+            Some(dec!(1.9041854952356509)),
+        );
 
         // Create share3 with uncles
-        let share3 = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bbb"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: Some(share2.header.blockhash),
-                uncles: vec![
-                    uncle1_share3.header.blockhash,
-                    uncle2_share3.header.blockhash,
-                ],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525 + 6),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
+        let share3 = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bbb"),
+            Some(share2.header.blockhash.to_string().as_str()),
+            vec![
+                uncle1_share3.header.blockhash,
+                uncle2_share3.header.blockhash,
+            ],
+            None,
+            Some(7452731920372203525 + 6),
+            Some(1),
+            Some(dec!(1.0)),
+            Some(dec!(1.9041854952356509)),
+        );
 
         // Add all shares to store
         store.add_share(share1.clone());

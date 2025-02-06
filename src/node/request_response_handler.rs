@@ -133,16 +133,9 @@ mod tests {
     use super::*;
     #[mockall_double::double]
     use crate::shares::chain::actor::ChainHandle;
-    use crate::shares::miner_message::Gbt;
-    use crate::shares::miner_message::MinerWorkbase;
-    use crate::shares::ShareBlock;
-    use crate::shares::ShareHeader;
-    use crate::test_utils::simple_miner_share;
     use crate::test_utils::simple_miner_workbase;
-    use crate::test_utils::test_coinbase_transaction;
+    use crate::test_utils::test_share_block;
     use mockall::predicate::*;
-    use rust_decimal_macros::dec;
-    use std::collections::HashSet;
 
     #[tokio::test]
     async fn test_handle_share_block_request() {
@@ -151,26 +144,16 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
 
         // Create test share block
-        let share_block = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: None,
-                uncles: vec![],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
+        let share_block = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
+            None,
+            vec![],
+            Some("020202020202020202020202020202020202020202020202020202020202020202"),
+            None,
+            None,
+            None,
+            None,
+        );
 
         // Set up mock expectations
         chain_handle
@@ -220,26 +203,16 @@ mod tests {
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
         let mut chain_handle = ChainHandle::default();
 
-        let share_block = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: None,
-                uncles: vec![],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-                tx_hashes: vec![],
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            coinbase_tx: test_coinbase_transaction(),
-        };
+        let share_block = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
+            None,
+            vec![],
+            Some("020202020202020202020202020202020202020202020202020202020202020202"),
+            None,
+            None,
+            None,
+            None,
+        );
 
         // Set up mock to return error
         chain_handle
