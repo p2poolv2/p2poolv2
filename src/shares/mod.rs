@@ -54,6 +54,7 @@ pub struct ShareBlock {
     /// The miner work for the share
     pub miner_share: MinerShare,
     /// Any transactions to be included in the share block
+    #[serde(skip)]
     pub transactions: Vec<Transaction>,
 }
 
@@ -127,7 +128,7 @@ mod tests {
         );
         assert_eq!(share.header.uncles, deserialized.header.uncles);
         assert_eq!(share.header.miner_pubkey, deserialized.header.miner_pubkey);
-        assert_eq!(share.transactions, deserialized.transactions);
+        assert!(deserialized.transactions.is_empty(),);
 
         // Only compare non-skipped fields from MinerShare
         assert_eq!(

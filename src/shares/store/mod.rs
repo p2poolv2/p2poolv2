@@ -16,8 +16,9 @@
 
 use crate::node::messages::Message;
 use crate::shares::miner_message::MinerWorkbase;
-use crate::shares::transactions::pool_transaction::PoolTransaction;
 use crate::shares::{BlockHash, ShareBlock};
+use bitcoin::hex::DisplayHex;
+use bitcoin::Transaction;
 use rocksdb::DB;
 use std::error::Error;
 use tracing::debug;
@@ -39,12 +40,23 @@ impl Store {
     /// Add a share to the store
     pub fn add_share(&mut self, share: ShareBlock) {
         debug!("Adding share to store: {:?}", share.header.blockhash);
+        self.add_transactions(&share.transactions.clone());
         self.db
             .put::<&[u8], Vec<u8>>(
                 share.header.blockhash.clone().as_ref(),
                 Message::ShareBlock(share).cbor_serialize().unwrap(),
             )
             .unwrap();
+    }
+
+    /// Add a vector of transactions to the store
+    /// The transaction is neither marked validated nor spent, that is done later
+    pub fn add_transactions(&mut self, transactions: &Vec<Transaction>) {
+        for tx in transactions {
+            if let Err(e) = self.add_transaction(tx.clone()) {
+                debug!("Failed to add transaction to store: {}", e);
+            }
+        }
     }
 
     /// Add a workbase to the store
@@ -61,15 +73,60 @@ impl Store {
 
     /// Add a transaction to the store
     /// The txid is computed and Transaction is serialized using cbor
-    pub fn add_transaction(&mut self, pool_tx: PoolTransaction) -> Result<(), Box<dyn Error>> {
-        let txid = pool_tx.tx.compute_txid();
+    pub fn add_transaction(&mut self, tx: Transaction) -> Result<(), Box<dyn Error>> {
+        let txid = tx.compute_txid();
         debug!("Adding transaction to store: {:?}", txid);
         let mut serialized = Vec::new();
-        ciborium::ser::into_writer(&pool_tx, &mut serialized).unwrap();
+        ciborium::ser::into_writer(&tx, &mut serialized).unwrap();
         self.db
             .put::<&[u8], Vec<u8>>(txid.as_ref(), serialized)
             .unwrap();
         Ok(())
+    }
+
+    /// Update a transaction's validation and spent status in the store
+    /// The status is stored separately from the transaction using txid + "_status" as key
+    pub fn update_transaction(
+        &mut self,
+        txid: &bitcoin::Txid,
+        validated: bool,
+        spent_by: Option<bitcoin::Txid>,
+    ) -> Result<(), Box<dyn Error>> {
+        // Create status key by concatenating txid bytes and status suffix
+        let mut status_key_bytes = <bitcoin::Txid as AsRef<[u8]>>::as_ref(&txid).to_vec();
+        status_key_bytes.extend_from_slice(b"_status");
+
+        let status = (validated, spent_by);
+        let mut serialized = Vec::new();
+        ciborium::ser::into_writer(&status, &mut serialized).unwrap();
+        self.db.put(&status_key_bytes, serialized).unwrap();
+        Ok(())
+    }
+
+    /// Get the validation status of a transaction from the store
+    pub fn get_transaction_status(
+        &self,
+        txid: &bitcoin::Txid,
+    ) -> Option<(bool, Option<bitcoin::Txid>)> {
+        // Create status key by concatenating txid bytes and status suffix
+        let mut status_key_bytes = <bitcoin::Txid as AsRef<[u8]>>::as_ref(&txid).to_vec();
+        status_key_bytes.extend_from_slice(b"_status");
+
+        let status = match self.db.get::<&[u8]>(&status_key_bytes) {
+            Ok(Some(status)) => status,
+            Ok(None) | Err(_) => return None,
+        };
+
+        let (validated, spent_by): (bool, Option<bitcoin::Txid>) =
+            match ciborium::de::from_reader(status.as_slice()) {
+                Ok(status) => status,
+                Err(e) => {
+                    tracing::error!("Error deserializing transaction status: {:?}", e);
+                    return None;
+                }
+            };
+
+        Some((validated, spent_by))
     }
 
     /// Get a workbase from the store
@@ -106,12 +163,12 @@ impl Store {
 
     /// Get a transaction from the store using a provided txid
     /// The transaction is deserialized using cbor
-    pub fn get_transaction(&self, txid: &bitcoin::Txid) -> Option<PoolTransaction> {
+    pub fn get_transaction(&self, txid: &bitcoin::Txid) -> Option<Transaction> {
         let tx = match self.db.get::<&[u8]>(txid.as_ref()) {
             Ok(Some(tx)) => tx,
             Ok(None) | Err(_) => return None,
         };
-        let tx: PoolTransaction = match ciborium::de::from_reader(tx.as_slice()) {
+        let tx: Transaction = match ciborium::de::from_reader(tx.as_slice()) {
             Ok(tx) => tx,
             Err(e) => {
                 tracing::error!("Error deserializing transaction: {:?}", e);
@@ -349,21 +406,72 @@ mod tests {
             output: vec![],
         };
 
-        let pool_tx = PoolTransaction::new(tx.clone());
-
         // Store the transaction
         let txid = tx.compute_txid();
-        store.add_transaction(pool_tx.clone()).unwrap();
+        store.add_transaction(tx.clone()).unwrap();
 
         // Retrieve the transaction
         let retrieved_tx = store.get_transaction(&txid);
         assert!(retrieved_tx.is_some());
-        assert_eq!(retrieved_tx.unwrap().tx, tx);
+        assert_eq!(retrieved_tx.unwrap(), tx);
 
         // Try getting non-existent transaction
         let fake_txid = "d2528fc2d7a4f95ace97860f157c895b6098667df0e43912b027cfe58edf304e"
             .parse()
             .unwrap();
         assert!(store.get_transaction(&fake_txid).is_none());
+    }
+
+    #[test]
+    fn test_transaction_status() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // Create a test transaction
+        let tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+
+        // Store the transaction
+        let txid = tx.compute_txid();
+        store.add_transaction(tx.clone()).unwrap();
+
+        // Initially status should be None
+        let initial_status = store.get_transaction_status(&txid);
+        assert!(initial_status.is_none());
+
+        // Update status to validated but not spent
+        store.update_transaction(&txid, true, None).unwrap();
+        let status = store.get_transaction_status(&txid).unwrap();
+        assert_eq!(status, (true, None));
+
+        // Create another transaction that spends this one
+        let spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+        let spending_txid = spending_tx.compute_txid();
+
+        // Update status to spent
+        store
+            .update_transaction(&txid, true, Some(spending_txid))
+            .unwrap();
+        let status = store.get_transaction_status(&txid).unwrap();
+        assert_eq!(status, (true, Some(spending_txid)));
+
+        // Update status back to unspent
+        store.update_transaction(&txid, true, None).unwrap();
+        let status = store.get_transaction_status(&txid).unwrap();
+        assert_eq!(status, (true, None));
+
+        // Update status to invalidated
+        store.update_transaction(&txid, false, None).unwrap();
+        let status = store.get_transaction_status(&txid).unwrap();
+        assert_eq!(status, (false, None));
     }
 }
