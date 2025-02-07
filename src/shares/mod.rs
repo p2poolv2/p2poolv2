@@ -27,7 +27,7 @@ use crate::node::messages::Message;
 use crate::shares::miner_message::MinerShare;
 use bitcoin::{BlockHash, PublicKey, Transaction};
 use serde::{Deserialize, Serialize};
-
+use std::error::Error;
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 
 /// Header for the ShareBlock
@@ -54,7 +54,6 @@ pub struct ShareBlock {
     /// The miner work for the share
     pub miner_share: MinerShare,
     /// Any transactions to be included in the share block
-    #[serde(skip)]
     pub transactions: Vec<Transaction>,
 }
 
@@ -80,11 +79,67 @@ impl ShareBlock {
     }
 }
 
+/// A variant of ShareBlock used for storage that excludes transactions
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct StorageShareBlock {
+    /// The header of the share block
+    pub header: ShareHeader,
+    /// The miner work for the share
+    pub miner_share: MinerShare,
+}
+
+impl From<ShareBlock> for StorageShareBlock {
+    fn from(block: ShareBlock) -> Self {
+        Self {
+            header: block.header,
+            miner_share: block.miner_share,
+        }
+    }
+}
+
+impl StorageShareBlock {
+    /// Convert back to ShareBlock with empty transactions
+    pub fn into_share_block(self) -> ShareBlock {
+        ShareBlock {
+            header: self.header,
+            miner_share: self.miner_share,
+            transactions: Vec::new(),
+        }
+    }
+
+    /// Convert back to ShareBlock with provided transactions
+    pub fn into_share_block_with_transactions(self, transactions: Vec<Transaction>) -> ShareBlock {
+        ShareBlock {
+            header: self.header,
+            miner_share: self.miner_share,
+            transactions,
+        }
+    }
+
+    /// Serialize the message to CBOR bytes
+    pub fn cbor_serialize(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        let mut buf = Vec::new();
+        if let Err(e) = ciborium::ser::into_writer(&self, &mut buf) {
+            return Err(e.into());
+        }
+        Ok(buf)
+    }
+
+    /// Deserialize a message from CBOR bytes
+    pub fn cbor_deserialize(bytes: &[u8]) -> Result<Self, Box<dyn Error>> {
+        match ciborium::de::from_reader(bytes) {
+            Ok(msg) => Ok(msg),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_utils::simple_miner_share;
     use crate::test_utils::test_coinbase_transaction;
+    use crate::test_utils::test_share_block;
     use rust_decimal_macros::dec;
 
     #[test]
@@ -128,7 +183,7 @@ mod tests {
         );
         assert_eq!(share.header.uncles, deserialized.header.uncles);
         assert_eq!(share.header.miner_pubkey, deserialized.header.miner_pubkey);
-        assert!(deserialized.transactions.is_empty(),);
+        assert_eq!(share.transactions, deserialized.transactions);
 
         // Only compare non-skipped fields from MinerShare
         assert_eq!(
@@ -181,5 +236,37 @@ mod tests {
         // Verify the output script is P2PKH for the miner's pubkey
         let expected_address = bitcoin::Address::p2pkh(&pubkey, bitcoin::Network::Regtest);
         assert_eq!(output.script_pubkey, expected_address.script_pubkey());
+    }
+
+    #[test]
+    fn test_storage_share_block_conversion() {
+        let share = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4"),
+            vec![],
+            Some("020202020202020202020202020202020202020202020202020202020202020202"),
+            Some(7452731920372203525),
+            Some(1),
+            Some(dec!(1.0)),
+            Some(dec!(1.9041854952356509)),
+        );
+
+        // Test conversion to StorageShareBlock
+        let storage_share: StorageShareBlock = share.clone().into();
+
+        // Verify header and miner_share are preserved
+        assert_eq!(storage_share.header, share.header);
+        assert_eq!(storage_share.miner_share, share.miner_share);
+
+        // Test conversion back to ShareBlock with empty transactions
+        let recovered_share = storage_share.clone().into_share_block();
+        assert_eq!(recovered_share.header, share.header);
+        assert_eq!(recovered_share.miner_share, share.miner_share);
+        assert!(recovered_share.transactions.is_empty());
+
+        // Test conversion back with original transactions
+        let recovered_share =
+            storage_share.into_share_block_with_transactions(share.transactions.clone());
+        assert_eq!(recovered_share, share);
     }
 }
