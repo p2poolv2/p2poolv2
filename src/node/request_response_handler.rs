@@ -153,6 +153,7 @@ mod tests {
             None,
             None,
             None,
+            &mut vec![],
         );
 
         // Set up mock expectations
@@ -212,6 +213,7 @@ mod tests {
             None,
             None,
             None,
+            &mut vec![],
         );
 
         // Set up mock to return error

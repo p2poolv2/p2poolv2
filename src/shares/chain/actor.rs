@@ -429,6 +429,7 @@ mod tests {
             None,
             None,
             None,
+            &mut vec![],
         );
 
         let result = chain_handle.add_share(share_block.clone()).await;
@@ -458,6 +459,7 @@ mod tests {
             None,
             None,
             None,
+            &mut vec![],
         );
 
         // Add initial share block
@@ -474,6 +476,7 @@ mod tests {
             None,
             Some(dec!(2.0)),
             Some(dec!(2.0)),
+            &mut vec![],
         );
 
         let result = chain_handle.add_share(higher_diff_share.clone()).await;
@@ -503,6 +506,7 @@ mod tests {
             None,
             None,
             None,
+            &mut vec![],
         );
 
         let result = chain_handle.is_confirmed(share_block).await;
@@ -567,6 +571,7 @@ mod tests {
             None,
             None,
             None,
+            &mut vec![],
         );
 
         // Add first share and verify depth is 0
@@ -584,6 +589,7 @@ mod tests {
             None,
             None,
             None,
+            &mut vec![],
         );
 
         // Add second share and verify depths

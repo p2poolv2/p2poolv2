@@ -18,6 +18,7 @@ use crate::shares::miner_message::MinerShare;
 use crate::shares::miner_message::MinerWorkbase;
 use crate::shares::{ShareBlock, ShareHeader};
 use bitcoin::BlockHash;
+use bitcoin::Transaction;
 #[cfg(test)]
 use rand;
 use rust_decimal::Decimal;
@@ -120,6 +121,7 @@ pub fn test_share_block(
     clientid: Option<u64>,
     diff: Option<Decimal>,
     sdiff: Option<Decimal>,
+    include_transactions: &mut Vec<Transaction>,
 ) -> ShareBlock {
     let prev_share_blockhash = match prev_share_blockhash {
         Some(prev_share_blockhash) => Some(prev_share_blockhash.parse().unwrap()),
@@ -131,6 +133,8 @@ pub fn test_share_block(
             .parse()
             .unwrap(),
     };
+    let mut transactions = vec![test_coinbase_transaction()];
+    transactions.append(include_transactions);
     ShareBlock {
         header: ShareHeader {
             blockhash: blockhash
@@ -140,9 +144,14 @@ pub fn test_share_block(
             prev_share_blockhash,
             uncles,
             miner_pubkey,
+            merkle_root: bitcoin::merkle_tree::calculate_root(
+                transactions.iter().map(Transaction::compute_txid),
+            )
+            .unwrap()
+            .into(),
         },
         miner_share: simple_miner_share(workinfoid, clientid, diff, sdiff),
-        transactions: vec![test_coinbase_transaction()],
+        transactions,
     }
 }
 

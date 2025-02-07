@@ -26,6 +26,8 @@ pub const MAX_TIME_DIFF: u64 = 60;
 /// DONE: validate prev_share_blockhash is in store
 /// DONE: validate uncles are in store and no more than MAX_UNCLES
 /// DONE: validate timestamp is within the last 10 minutes
+/// TODO: validate merkle root
+/// TODO: validate coinbase transaction
 pub async fn validate(
     share: &ShareBlock,
     chain_handle: &ChainHandle,
@@ -125,7 +127,12 @@ mod tests {
             "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap();
-        let share = ShareBlock::new(miner_share, miner_pubkey, bitcoin::Network::Regtest);
+        let share = ShareBlock::new(
+            miner_share,
+            miner_pubkey,
+            bitcoin::Network::Regtest,
+            &mut vec![],
+        );
         assert!(validate_timestamp(&share).await.is_err());
     }
 
@@ -146,7 +153,12 @@ mod tests {
             "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap();
-        let share = ShareBlock::new(miner_share, miner_pubkey, bitcoin::Network::Regtest);
+        let share = ShareBlock::new(
+            miner_share,
+            miner_pubkey,
+            bitcoin::Network::Regtest,
+            &mut vec![],
+        );
 
         assert!(validate_timestamp(&share).await.is_err());
     }
@@ -167,7 +179,12 @@ mod tests {
             "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap();
-        let share = ShareBlock::new(miner_share, miner_pubkey, bitcoin::Network::Regtest);
+        let share = ShareBlock::new(
+            miner_share,
+            miner_pubkey,
+            bitcoin::Network::Regtest,
+            &mut vec![],
+        );
 
         assert!(validate_timestamp(&share).await.is_ok());
     }
@@ -187,6 +204,7 @@ mod tests {
             None,
             None,
             None,
+            &mut vec![],
         );
         chain_handle.add_share(initial_share.clone()).await.unwrap();
 
@@ -200,6 +218,7 @@ mod tests {
             None,
             None,
             None,
+            &mut vec![],
         );
         assert!(validate_prev_share_blockhash(&valid_share, &chain_handle)
             .await
@@ -216,6 +235,7 @@ mod tests {
             None,
             None,
             None,
+            &mut vec![],
         );
         assert!(validate_prev_share_blockhash(&invalid_share, &chain_handle)
             .await
@@ -237,6 +257,7 @@ mod tests {
             None,
             None,
             None,
+            &mut vec![],
         );
         chain_handle.add_share(uncle1.clone()).await.unwrap();
 
@@ -249,6 +270,7 @@ mod tests {
             None,
             None,
             None,
+            &mut vec![],
         );
         chain_handle.add_share(uncle2.clone()).await.unwrap();
 
@@ -261,6 +283,7 @@ mod tests {
             None,
             None,
             None,
+            &mut vec![],
         );
         chain_handle.add_share(uncle3.clone()).await.unwrap();
 
@@ -273,6 +296,7 @@ mod tests {
             None,
             None,
             None,
+            &mut vec![],
         );
         chain_handle.add_share(uncle4.clone()).await.unwrap();
 
@@ -290,6 +314,7 @@ mod tests {
             None,
             None,
             None,
+            &mut vec![],
         );
         assert!(validate_uncles(&valid_share, &chain_handle).await.is_ok());
 
@@ -308,6 +333,7 @@ mod tests {
             None,
             None,
             None,
+            &mut vec![],
         );
         assert!(validate_uncles(&invalid_share, &chain_handle)
             .await
@@ -326,6 +352,7 @@ mod tests {
             None,
             None,
             None,
+            &mut vec![],
         );
         assert!(validate_uncles(&invalid_share, &chain_handle)
             .await

@@ -337,6 +337,7 @@ mod tests {
             Some(1),
             Some(dec!(1.0)),
             Some(dec!(1.9041854952356509)),
+            &mut vec![],
         );
 
         // Create uncles for share2
@@ -349,6 +350,7 @@ mod tests {
             Some(1),
             Some(dec!(1.0)),
             Some(dec!(1.9041854952356509)),
+            &mut vec![],
         );
 
         let uncle2_share2 = test_share_block(
@@ -360,6 +362,7 @@ mod tests {
             Some(1),
             Some(dec!(1.0)),
             Some(dec!(1.9041854952356509)),
+            &mut vec![],
         );
 
         // Create share2 with uncles
@@ -375,6 +378,7 @@ mod tests {
             Some(1),
             Some(dec!(1.0)),
             Some(dec!(1.9041854952356509)),
+            &mut vec![],
         );
 
         // Create uncles for share3
@@ -387,6 +391,7 @@ mod tests {
             Some(1),
             Some(dec!(1.0)),
             Some(dec!(1.9041854952356509)),
+            &mut vec![],
         );
 
         let uncle2_share3 = test_share_block(
@@ -398,6 +403,7 @@ mod tests {
             Some(1),
             Some(dec!(1.0)),
             Some(dec!(1.9041854952356509)),
+            &mut vec![],
         );
 
         // Create share3 with uncles
@@ -413,6 +419,7 @@ mod tests {
             Some(1),
             Some(dec!(1.0)),
             Some(dec!(1.9041854952356509)),
+            &mut vec![],
         );
 
         // Add all shares to store
@@ -555,7 +562,7 @@ mod tests {
     fn test_store_retrieve_txids_by_blockhash_index() {
         use tempfile::TempDir;
         let temp_dir = TempDir::new().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string());
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string());
 
         // Create test transactions
         let tx1 = bitcoin::Transaction {
@@ -575,29 +582,17 @@ mod tests {
         let txid2 = tx2.compute_txid();
 
         // Create a test share block with transactions
-        let share = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: Some(
-                    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4"
-                        .parse()
-                        .unwrap(),
-                ),
-                uncles: vec![],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            transactions: vec![tx1, tx2],
-        };
+        let share = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4"),
+            vec![],
+            Some("020202020202020202020202020202020202020202020202020202020202020202"),
+            Some(7452731920372203525),
+            Some(1),
+            Some(dec!(1.0)),
+            Some(dec!(1.9041854952356509)),
+            &mut vec![tx1.clone(), tx2.clone()],
+        );
 
         let blockhash = share.header.blockhash;
 
@@ -645,29 +640,17 @@ mod tests {
         };
 
         // Create a test share block with transactions
-        let share = ShareBlock {
-            header: ShareHeader {
-                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
-                    .parse()
-                    .unwrap(),
-                prev_share_blockhash: Some(
-                    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4"
-                        .parse()
-                        .unwrap(),
-                ),
-                uncles: vec![],
-                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                    .parse()
-                    .unwrap(),
-            },
-            miner_share: simple_miner_share(
-                Some(7452731920372203525),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-            ),
-            transactions: vec![tx1.clone(), tx2.clone()],
-        };
+        let share = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4"),
+            vec![],
+            Some("020202020202020202020202020202020202020202020202020202020202020202"),
+            Some(7452731920372203525),
+            Some(1),
+            Some(dec!(1.0)),
+            Some(dec!(1.9041854952356509)),
+            &mut vec![tx1.clone(), tx2.clone()],
+        );
 
         // Store the share block
         store.add_share(share.clone());
@@ -676,10 +659,11 @@ mod tests {
         let retrieved_txs = store.get_transactions(&share.header.blockhash);
 
         // Verify transactions were stored and can be retrieved
-        assert_eq!(retrieved_txs.len(), 2);
-        assert_eq!(retrieved_txs[0], tx1);
-        assert_eq!(retrieved_txs[1], tx2);
-
+        assert_eq!(retrieved_txs.len(), 3);
+        assert!(retrieved_txs[0].is_coinbase());
+        assert_eq!(retrieved_txs[1], tx1);
+        assert_eq!(retrieved_txs[2], tx2);
+        
         // Verify individual transactions can be retrieved by txid
         let tx1_id = tx1.compute_txid();
         let tx2_id = tx2.compute_txid();
@@ -692,7 +676,7 @@ mod tests {
     fn test_add_transactions_with_batch() {
         // Create a new store with a temporary path
         let temp_dir = tempfile::tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string());
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string());
 
         // Create test transactions
         let tx1 = Transaction {
