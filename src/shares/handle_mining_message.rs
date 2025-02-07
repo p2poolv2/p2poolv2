@@ -39,7 +39,8 @@ pub async fn handle_mining_message(
     tracing::info!("Received mining message: {:?}", mining_message);
     match mining_message {
         CkPoolMessage::Share(share) => {
-            let mut share_block = ShareBlock::new(share, miner_pubkey, bitcoin::Network::Regtest);
+            let mut share_block =
+                ShareBlock::new(share, miner_pubkey, bitcoin::Network::Regtest, &mut vec![]);
             share_block = chain_handle.setup_share_for_chain(share_block).await;
             message = Message::ShareBlock(share_block.clone());
             if let Err(e) = chain_handle.add_share(share_block).await {

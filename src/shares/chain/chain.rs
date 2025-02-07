@@ -225,6 +225,7 @@ mod chain_tests {
             None,
             None,
             None,
+            &mut vec![],
         );
 
         chain.add_share(share1.clone()).unwrap();
@@ -245,6 +246,7 @@ mod chain_tests {
             None,
             None,
             None,
+            &mut vec![],
         );
 
         let uncle2_share2 = test_share_block(
@@ -256,6 +258,7 @@ mod chain_tests {
             None,
             None,
             None,
+            &mut vec![],
         );
 
         // first orphan is a tip
@@ -289,6 +292,7 @@ mod chain_tests {
             Some(1),
             Some(dec!(2.0)),
             Some(dec!(2.9041854952356509)),
+            &mut vec![],
         );
         chain.add_share(share2.clone()).unwrap();
 
@@ -308,6 +312,7 @@ mod chain_tests {
             Some(1),
             Some(dec!(1.0)),
             Some(dec!(1.9041854952356509)),
+            &mut vec![],
         );
 
         let uncle2_share3 = test_share_block(
@@ -319,6 +324,7 @@ mod chain_tests {
             Some(1),
             Some(dec!(1.0)),
             Some(dec!(1.9041854952356509)),
+            &mut vec![],
         );
 
         chain.add_share(uncle1_share3.clone()).unwrap();
@@ -351,6 +357,7 @@ mod chain_tests {
             Some(1),
             Some(dec!(3.0)),
             Some(dec!(3.9041854952356509)),
+            &mut vec![],
         );
         chain.add_share(share3.clone()).unwrap();
 
@@ -385,6 +392,7 @@ mod chain_tests {
                 Some(1),
                 Some(dec!(1.0)),
                 Some(dec!(1.9041854952356509)),
+                &mut vec![],
             );
             blocks.push(share.clone());
             chain.add_share(share.clone()).unwrap();
@@ -455,6 +463,7 @@ mod chain_tests {
             Some(1),
             Some(dec!(1.0)),
             Some(dec!(1.9041854952356509)),
+            &mut vec![],
         );
         chain.add_share(share1.clone()).unwrap();
 
@@ -471,6 +480,7 @@ mod chain_tests {
             Some(1),
             Some(dec!(1.0)),
             Some(dec!(1.9041854952356509)),
+            &mut vec![],
         );
 
         chain.add_share(share2.clone()).unwrap();
