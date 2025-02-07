@@ -16,8 +16,8 @@
 
 use crate::node::messages::Message;
 use crate::shares::miner_message::MinerWorkbase;
-use crate::shares::{BlockHash, ShareBlock};
-use bitcoin::hex::DisplayHex;
+use crate::shares::{BlockHash, ShareBlock, StorageShareBlock};
+use bitcoin::hashes::Hash;
 use bitcoin::Transaction;
 use rocksdb::DB;
 use std::error::Error;
@@ -38,25 +38,89 @@ impl Store {
     }
 
     /// Add a share to the store
+    /// We use StorageShareBlock to serialize the share so that we do not store transactions serialized with the block.
+    /// Transactions are stored separately. All writes are done in a single atomic batch.
     pub fn add_share(&mut self, share: ShareBlock) {
         debug!("Adding share to store: {:?}", share.header.blockhash);
-        self.add_transactions(&share.transactions.clone());
-        self.db
-            .put::<&[u8], Vec<u8>>(
-                share.header.blockhash.clone().as_ref(),
-                Message::ShareBlock(share).cbor_serialize().unwrap(),
-            )
-            .unwrap();
+        let blockhash = share.header.blockhash.clone();
+
+        // Create a new write batch
+        let mut batch = rocksdb::WriteBatch::default();
+
+        // Add transactions and get their txids
+        let txids = self.store_transactions_batch(&share.transactions, &mut batch);
+
+        // Store txids list for this block
+        self.store_txids_to_block_index(&blockhash, &txids, &mut batch);
+
+        // Add the share block itself
+        let storage_share_block: StorageShareBlock = share.into();
+        batch.put::<&[u8], Vec<u8>>(
+            bitcoin::BlockHash::as_ref(&blockhash),
+            storage_share_block.cbor_serialize().unwrap(),
+        );
+
+        // Write the entire batch atomically
+        self.db.write(batch).unwrap();
     }
 
-    /// Add a vector of transactions to the store
-    /// The transaction is neither marked validated nor spent, that is done later
-    pub fn add_transactions(&mut self, transactions: &Vec<Transaction>) {
-        for tx in transactions {
-            if let Err(e) = self.add_transaction(tx.clone()) {
-                debug!("Failed to add transaction to store: {}", e);
+    /// Add the list of transaction IDs to the batch
+    fn store_txids_to_block_index(
+        &self,
+        blockhash: &BlockHash,
+        txids: &[bitcoin::Txid],
+        batch: &mut rocksdb::WriteBatch,
+    ) {
+        let mut blockhash_bytes = <BlockHash as AsRef<[u8]>>::as_ref(blockhash).to_vec();
+        blockhash_bytes.extend_from_slice(b"_txids");
+
+        let mut serialized_txids = Vec::new();
+        ciborium::ser::into_writer(&txids, &mut serialized_txids).unwrap();
+        batch.put::<&[u8], Vec<u8>>(blockhash_bytes.as_ref(), serialized_txids);
+    }
+
+    /// Get all transaction IDs for a given block hash
+    /// Returns a vector of transaction IDs that were included in the block
+    fn get_txids_for_blockhash(&self, blockhash: &BlockHash) -> Vec<bitcoin::Txid> {
+        let mut blockhash_bytes = <BlockHash as AsRef<[u8]>>::as_ref(blockhash).to_vec();
+        blockhash_bytes.extend_from_slice(b"_txids");
+
+        match self.db.get::<&[u8]>(blockhash_bytes.as_ref()) {
+            Ok(Some(serialized_txids)) => {
+                let txids: Vec<bitcoin::Txid> =
+                    ciborium::de::from_reader(&serialized_txids[..]).unwrap_or_default();
+                txids
             }
+            _ => Vec::new(),
         }
+    }
+
+    /// Store transactions in a batch and return their txids
+    /// This is a helper function used by add_share and add_transactions
+    fn store_transactions_batch(
+        &self,
+        transactions: &[Transaction],
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Vec<bitcoin::Txid> {
+        transactions
+            .iter()
+            .map(|tx| {
+                let txid = tx.compute_txid();
+                let mut serialized = Vec::new();
+                ciborium::ser::into_writer(&tx, &mut serialized).unwrap();
+                batch.put::<&[u8], Vec<u8>>(bitcoin::Txid::as_ref(&txid), serialized);
+                txid
+            })
+            .collect()
+    }
+
+    /// Add a vector of transactions to the store outside of a block context
+    /// The transactions are neither marked validated nor spent, that is done later
+    /// Use rocksdb batch to add transactions atomically
+    pub fn add_transactions(&mut self, transactions: Vec<Transaction>) {
+        let mut batch = rocksdb::WriteBatch::default();
+        self.store_transactions_batch(&transactions, &mut batch);
+        self.db.write(batch).unwrap();
     }
 
     /// Add a workbase to the store
@@ -73,11 +137,15 @@ impl Store {
 
     /// Add a transaction to the store
     /// The txid is computed and Transaction is serialized using cbor
+    /// If blockhash is provided, it is used as a key to store txid, this will let us query are transactions in a block
+    /// Note: A txid can be present in multiple blocks, we do not check for this. For example, different peers can include the same txid in different blocks,
+    /// we store all that information.
     pub fn add_transaction(&mut self, tx: Transaction) -> Result<(), Box<dyn Error>> {
         let txid = tx.compute_txid();
         debug!("Adding transaction to store: {:?}", txid);
         let mut serialized = Vec::new();
         ciborium::ser::into_writer(&tx, &mut serialized).unwrap();
+        // store txid -> transaction
         self.db
             .put::<&[u8], Vec<u8>>(txid.as_ref(), serialized)
             .unwrap();
@@ -150,15 +218,23 @@ impl Store {
             Ok(Some(share)) => share,
             Ok(None) | Err(_) => return None,
         };
-        let share = match Message::cbor_deserialize(&share) {
+        let share = match StorageShareBlock::cbor_deserialize(&share) {
             Ok(share) => share,
             Err(_) => return None,
         };
-        let share = match share {
-            Message::ShareBlock(share) => share,
-            _ => return None,
-        };
+        let transactions = self.get_transactions(&share.header.blockhash);
+        let share = share.into_share_block_with_transactions(transactions);
         Some(share)
+    }
+
+    /// Get transactions for a blockhash
+    /// First look up the txids from the blockhash_txids index, then get the transactions from the txids
+    pub fn get_transactions(&self, blockhash: &BlockHash) -> Vec<Transaction> {
+        let txids = self.get_txids_for_blockhash(blockhash);
+        txids
+            .iter()
+            .map(|txid| self.get_transaction(txid).unwrap())
+            .collect()
     }
 
     /// Get a transaction from the store using a provided txid
@@ -473,5 +549,178 @@ mod tests {
         store.update_transaction(&txid, false, None).unwrap();
         let status = store.get_transaction_status(&txid).unwrap();
         assert_eq!(status, (false, None));
+    }
+
+    #[test]
+    fn test_store_retrieve_txids_by_blockhash_index() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // Create test transactions
+        let tx1 = bitcoin::Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+        let tx2 = bitcoin::Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+
+        let txid1 = tx1.compute_txid();
+        let txid2 = tx2.compute_txid();
+
+        // Create a test share block with transactions
+        let share = ShareBlock {
+            header: ShareHeader {
+                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+                    .parse()
+                    .unwrap(),
+                prev_share_blockhash: Some(
+                    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4"
+                        .parse()
+                        .unwrap(),
+                ),
+                uncles: vec![],
+                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                    .parse()
+                    .unwrap(),
+            },
+            miner_share: simple_miner_share(
+                Some(7452731920372203525),
+                Some(1),
+                Some(dec!(1.0)),
+                Some(dec!(1.9041854952356509)),
+            ),
+            transactions: vec![tx1, tx2],
+        };
+
+        let blockhash = share.header.blockhash;
+
+        // Store the txids for the blockhash
+        let txids = vec![txid1, txid2];
+        let mut batch = rocksdb::WriteBatch::default();
+        store.store_txids_to_block_index(&blockhash, &txids, &mut batch);
+        store.db.write(batch).unwrap();
+
+        // Get txids for the blockhash
+        let retrieved_txids = store.get_txids_for_blockhash(&blockhash);
+
+        // Verify we got back the same txids in the same order
+        assert_eq!(retrieved_txids.len(), 2);
+        assert_eq!(retrieved_txids[0], txid1);
+        assert_eq!(retrieved_txids[1], txid2);
+
+        // Test getting txids for non-existent blockhash
+        let non_existent_blockhash =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
+                .parse()
+                .unwrap();
+        let empty_txids = store.get_txids_for_blockhash(&non_existent_blockhash);
+        assert!(empty_txids.is_empty());
+    }
+
+    #[test]
+    fn test_share_block_with_transactions_storage() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // Create test transactions
+        let tx1 = bitcoin::Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+        let tx2 = bitcoin::Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+
+        // Create a test share block with transactions
+        let share = ShareBlock {
+            header: ShareHeader {
+                blockhash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+                    .parse()
+                    .unwrap(),
+                prev_share_blockhash: Some(
+                    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4"
+                        .parse()
+                        .unwrap(),
+                ),
+                uncles: vec![],
+                miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                    .parse()
+                    .unwrap(),
+            },
+            miner_share: simple_miner_share(
+                Some(7452731920372203525),
+                Some(1),
+                Some(dec!(1.0)),
+                Some(dec!(1.9041854952356509)),
+            ),
+            transactions: vec![tx1.clone(), tx2.clone()],
+        };
+
+        // Store the share block
+        store.add_share(share.clone());
+
+        // Retrieve transactions for the block hash
+        let retrieved_txs = store.get_transactions(&share.header.blockhash);
+
+        // Verify transactions were stored and can be retrieved
+        assert_eq!(retrieved_txs.len(), 2);
+        assert_eq!(retrieved_txs[0], tx1);
+        assert_eq!(retrieved_txs[1], tx2);
+
+        // Verify individual transactions can be retrieved by txid
+        let tx1_id = tx1.compute_txid();
+        let tx2_id = tx2.compute_txid();
+
+        assert_eq!(store.get_transaction(&tx1_id).unwrap(), tx1);
+        assert_eq!(store.get_transaction(&tx2_id).unwrap(), tx2);
+    }
+
+    #[test]
+    fn test_add_transactions_with_batch() {
+        // Create a new store with a temporary path
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // Create test transactions
+        let tx1 = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+
+        let tx2 = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+
+        let transactions = vec![tx1.clone(), tx2.clone()];
+
+        // Create a write batch and store transactions
+        let mut batch = rocksdb::WriteBatch::default();
+        let txids = store.store_transactions_batch(&transactions, &mut batch);
+
+        // Write the batch
+        store.db.write(batch).unwrap();
+
+        // Verify transactions were stored correctly
+        assert_eq!(txids.len(), 2);
+        assert_eq!(store.get_transaction(&txids[0]).unwrap(), tx1);
+        assert_eq!(store.get_transaction(&txids[1]).unwrap(), tx2);
     }
 }
