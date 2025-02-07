@@ -723,4 +723,38 @@ mod tests {
         assert_eq!(store.get_transaction(&txids[0]).unwrap(), tx1);
         assert_eq!(store.get_transaction(&txids[1]).unwrap(), tx2);
     }
+
+    #[test]
+    fn test_add_transactions() {
+        // Create a new store with a temporary path
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // Create test transactions
+        let tx1 = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+
+        let tx2 = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+
+        let transactions = vec![tx1.clone(), tx2.clone()];
+
+        // Add transactions to store
+        store.add_transactions(transactions);
+
+        // Verify transactions were stored correctly by retrieving them by txid
+        let tx1_id = tx1.compute_txid();
+        let tx2_id = tx2.compute_txid();
+
+        assert_eq!(store.get_transaction(&tx1_id).unwrap(), tx1);
+        assert_eq!(store.get_transaction(&tx2_id).unwrap(), tx2);
+    }
 }
