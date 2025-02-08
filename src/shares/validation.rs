@@ -16,6 +16,7 @@
 
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
+use crate::shares::transactions::compute_merkle_root;
 use crate::shares::ShareBlock;
 use crate::utils::time_provider::TimeProviderTrait;
 use mockall::predicate::eq;
@@ -48,7 +49,26 @@ pub async fn validate(
     if let Err(e) = share.miner_share.validate() {
         return Err(format!("Share validation failed: {}", e).into());
     }
+    if let Err(e) = validate_merkle_root(share).await {
+        return Err(format!("Share merkle root validation failed: {}", e).into());
+    }
 
+    Ok(())
+}
+
+/// Validate the merkle root of transactions in the share block matches the one in the header
+pub async fn validate_merkle_root(share: &ShareBlock) -> Result<(), Box<dyn Error>> {
+    let calculated_merkle_root = compute_merkle_root(&share.transactions);
+    let calculated_merkle_root = calculated_merkle_root.ok_or_else(|| {
+        Box::<dyn Error>::from("Cannot compute merkle root for empty transaction list")
+    })?;
+    if calculated_merkle_root != share.header.merkle_root {
+        return Err(format!(
+            "Invalid merkle root. Expected {}, got {}",
+            share.header.merkle_root, calculated_merkle_root
+        )
+        .into());
+    }
     Ok(())
 }
 
@@ -392,5 +412,22 @@ mod tests {
         assert!(validate_uncles(&invalid_share, &chain_handle)
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_validate_merkle_root_for_only_coinbase_transaction_in_share() {
+        let share = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
+            None,
+            vec![],
+            Some("020202020202020202020202020202020202020202020202020202020202020202"),
+            None,
+            None,
+            None,
+            None,
+            &mut vec![],
+        );
+
+        assert!(validate_merkle_root(&share).await.is_ok());
     }
 }
