@@ -24,6 +24,7 @@ mod self_and_peer_messages_tests {
     use p2poolv2::shares::chain::ChainHandle;
     use p2poolv2::shares::miner_message::CkPoolMessage;
     use p2poolv2::shares::ShareBlock;
+    use p2poolv2::utils::time_provider::TestTimeProvider;
     use std::fs;
     use std::time::Duration;
     use tempfile;
@@ -33,6 +34,11 @@ mod self_and_peer_messages_tests {
 
     #[tokio::test]
     async fn receive_shares_and_workbases_from_self_and_peers() {
+        // "678a17fe"
+        let timestamp = u64::from_str_radix("678a17fe", 16).unwrap();
+        let mut time_provider = TestTimeProvider::new();
+        time_provider.set_time(timestamp);
+
         // Create configuration for a single node
         let config = default_test_config()
             .with_listen_address("/ip4/0.0.0.0/tcp/6887".to_string())
@@ -117,6 +123,7 @@ mod self_and_peer_messages_tests {
                 peer_msg.clone(),
                 chain_handle.clone(),
                 swarm_tx.clone(),
+                &mut time_provider,
             )
             .await;
             tracing::debug!("Peer message response: {:?}", &response);
@@ -134,8 +141,14 @@ mod self_and_peer_messages_tests {
         }
 
         for msg in peer_iter {
-            let response =
-                handle_request(peer_id, msg.clone(), chain_handle.clone(), swarm_tx.clone()).await;
+            let response = handle_request(
+                peer_id,
+                msg.clone(),
+                chain_handle.clone(),
+                swarm_tx.clone(),
+                &mut time_provider,
+            )
+            .await;
             assert!(response.is_ok(), "Peer message handling failed");
             tokio::time::sleep(Duration::from_millis(100)).await;
         }

@@ -24,6 +24,7 @@ use crate::node::messages::{InventoryMessage, Message};
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::receive_mining_message::start_receiving_mining_messages;
+use crate::utils::time_provider::SystemTimeProvider;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::identify;
 use libp2p::mdns::Event as MdnsEvent;
@@ -204,12 +205,14 @@ impl Node {
                 P2PoolBehaviourEvent::RequestResponse(request_response_event) => {
                     let chain_handle = self.chain_handle.clone();
                     let swarm_tx = self.swarm_tx.clone();
+                    let mut time_provider = SystemTimeProvider::new();
                     // TODO: Limit the number of concurrent requests
                     tokio::spawn(async move {
                         handle_request_response_event(
                             request_response_event,
                             chain_handle,
                             swarm_tx,
+                            &mut time_provider,
                         )
                         .await
                         .unwrap();

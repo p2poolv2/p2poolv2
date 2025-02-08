@@ -15,3 +15,4 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod serde_support;
+pub mod time_provider;

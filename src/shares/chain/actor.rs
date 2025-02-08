@@ -390,6 +390,7 @@ mock! {
         pub async fn get_chain_tip_and_uncles(&self) -> (Option<BlockHash>, HashSet<BlockHash>);
         pub async fn get_depth(&self, blockhash: BlockHash) -> Option<usize>;
         pub async fn setup_share_for_chain(&self, share_block: ShareBlock) -> ShareBlock;
+        pub async fn get_share(&self, share_hash: BlockHash) -> Option<ShareBlock>;
     }
 
     impl Clone for ChainHandle {

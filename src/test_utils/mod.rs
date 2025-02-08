@@ -38,7 +38,10 @@ pub fn simple_miner_share(
         enonce1: "336c6d67".to_string(),
         nonce2: "0000000000000000".to_string(),
         nonce: "2eb7b82b".to_string(),
-        ntime: bitcoin::absolute::Time::from_hex("676d6caa").unwrap(),
+        ntime: bitcoin::absolute::Time::from_consensus(
+            u32::from_str_radix("678a17fe", 16).unwrap(),
+        )
+        .unwrap(),
         diff: diff.unwrap_or(dec!(1.0)),
         sdiff: sdiff.unwrap_or(dec!(1.9041854952356509)),
         hash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".to_string(),
