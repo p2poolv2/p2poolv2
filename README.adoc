@@ -5,9 +5,9 @@ image:https://codecov.io/gh/pool2win/p2pool-v2/graph/badge.svg?token=Xeu4GFdASS[
 
 Rebooting P2Pool
 
-1. Share chain with uncles - all your work is accountied for.
+1. Share chain with uncles - all your work is accounted for.
 2. Pay large miners in coinbase - non custodial solution for top N miners.
-3. Support transactions - pay all miners with atomic swaps with market makers.
+3. Support transactions - pay all miners with atomic swaps by market makers.
 4. Market makers buy shares from smaller miners - earning virgin coins.
 
 == Run with Docker
