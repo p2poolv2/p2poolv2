@@ -93,11 +93,26 @@ impl MinerShare {
     }
 }
 
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct WorkbaseTxn {
+    pub txid: String,
+    pub data: String,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct WorkbaseMerkleItem {
+    pub merkle: String,
+}
+
 /// Represents the Workbase used by ckpool
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct MinerWorkbase {
     pub workinfoid: u64,
     pub gbt: Gbt,
+    pub txns: Vec<WorkbaseTxn>,
+    pub merkles: Vec<WorkbaseMerkleItem>,
+    pub coinb1: String,
+    pub coinb2: String,
 }
 
 /// Represents the getblocktemplate used in ckpool as workbase
@@ -141,7 +156,7 @@ mod tests {
 
     #[test]
     fn test_gbt_response_deserialization() {
-        let json_str = r#"{"gbt":{"capabilities":["proposal"],"version":536870912,"rules":["csv","!segwit","!signet","taproot"],"vbavailable":{},"vbrequired":0,"previousblockhash":"00000000790ba17d9c06acf8749166014eb1499c8ea6dd598060dbec7eeae808","transactions":[],"coinbaseaux":{},"coinbasevalue":5000000000,"longpollid":"00000000790ba17d9c06acf8749166014eb1499c8ea6dd598060dbec7eeae8084","target":"00000377ae000000000000000000000000000000000000000000000000000000","mintime":1736686858,"mutable":["time","transactions","prevblock"],"noncerange":"00000000ffffffff","sigoplimit":80000,"sizelimit":4000000,"weightlimit":4000000,"curtime":1736694495,"bits":"1e0377ae","height":98,"signet_challenge":"51","default_witness_commitment":"6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9","diff":0.001126515290698186,"ntime":"6783dadf","bbversion":"20000000","nbit":"1e0377ae"},"workinfoid":7459044800742817807}"#;
+        let json_str = r#"{"txns": [], "merkles": [], "coinb1": "aa", "coinb2": "bb", "gbt":{"capabilities":["proposal"],"version":536870912,"rules":["csv","!segwit","!signet","taproot"],"vbavailable":{},"vbrequired":0,"previousblockhash":"00000000790ba17d9c06acf8749166014eb1499c8ea6dd598060dbec7eeae808","transactions":[],"coinbaseaux":{},"coinbasevalue":5000000000,"longpollid":"00000000790ba17d9c06acf8749166014eb1499c8ea6dd598060dbec7eeae8084","target":"00000377ae000000000000000000000000000000000000000000000000000000","mintime":1736686858,"mutable":["time","transactions","prevblock"],"noncerange":"00000000ffffffff","sigoplimit":80000,"sizelimit":4000000,"weightlimit":4000000,"curtime":1736694495,"bits":"1e0377ae","height":98,"signet_challenge":"51","default_witness_commitment":"6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9","diff":0.001126515290698186,"ntime":"6783dadf","bbversion":"20000000","nbit":"1e0377ae"},"workinfoid":7459044800742817807}"#;
 
         // Test deserialization
         let gbt_response: MinerWorkbase = serde_json::from_str(json_str).unwrap();
@@ -291,7 +306,7 @@ mod miner_share_tests {
     // {"Workbase": Object {"gbt": Object {"bbversion": String("20000000"), "bits": String("1e0377ae"), "capabilities": Array [String("proposal")], "coinbaseaux": Object {}, "coinbasevalue": Number(5000000000), "curtime": Number(1737100205), "default_witness_commitment": String("6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9"), "diff": Number(0.001126515290698186), "height": Number(99), "longpollid": String("00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc1"), "mintime": Number(1736687181), "mutable": Array [String("time"), String("transactions"), String("prevblock")], "nbit": String("1e0377ae"), "noncerange": String("00000000ffffffff"), "ntime": String("678a0bad"), "previousblockhash": String("00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc"), "rules": Array [String("csv"), String("!segwit"), String("!signet"), String("taproot")], "signet_challenge": String("51"), "sigoplimit": Number(80000), "sizelimit": Number(4000000), "target": String("00000377ae000000000000000000000000000000000000000000000000000000"), "transactions": Array [], "vbavailable": Object {}, "vbrequired": Number(0), "version": Number(536870912), "weightlimit": Number(4000000)}, "workinfoid": Number(7460787496608071691)}}
     #[test]
     fn test_miner_message_workbase_deserialization() {
-        let json = r#"{"Workbase": {"gbt": {"bbversion": "20000000", "bits": "1e0377ae", "capabilities": ["proposal"], "coinbaseaux": {}, "coinbasevalue": 5000000000, "curtime": 1737100205, "default_witness_commitment": "6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9", "diff": 0.001126515290698186, "height": 99, "longpollid": "00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc1", "mintime": 1736687181, "mutable": ["time", "transactions", "prevblock"], "nbit": "1e0377ae", "noncerange": "00000000ffffffff", "ntime": "678a0bad", "previousblockhash": "00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc", "rules": ["csv", "!segwit", "!signet", "taproot"], "signet_challenge": "51", "sigoplimit": 80000, "sizelimit": 4000000, "target": "00000377ae000000000000000000000000000000000000000000000000000000", "transactions": [], "vbavailable": {}, "vbrequired": 0, "version": 536870912, "weightlimit": 4000000}, "workinfoid": 7460787496608071691}}"#;
+        let json = r#"{"Workbase": {"txns": [], "merkles": [], "coinb1": "aa", "coinb2": "bb", "gbt": {"bbversion": "20000000", "bits": "1e0377ae", "capabilities": ["proposal"], "coinbaseaux": {}, "coinbasevalue": 5000000000, "curtime": 1737100205, "default_witness_commitment": "6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9", "diff": 0.001126515290698186, "height": 99, "longpollid": "00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc1", "mintime": 1736687181, "mutable": ["time", "transactions", "prevblock"], "nbit": "1e0377ae", "noncerange": "00000000ffffffff", "ntime": "678a0bad", "previousblockhash": "00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc", "rules": ["csv", "!segwit", "!signet", "taproot"], "signet_challenge": "51", "sigoplimit": 80000, "sizelimit": 4000000, "target": "00000377ae000000000000000000000000000000000000000000000000000000", "transactions": [], "vbavailable": {}, "vbrequired": 0, "version": 536870912, "weightlimit": 4000000}, "workinfoid": 7460787496608071691}}"#;
 
         // Deserialize JSON to MinerMessage
         let miner_message: CkPoolMessage = serde_json::from_str(json).unwrap();
