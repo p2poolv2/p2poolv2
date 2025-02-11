@@ -57,7 +57,7 @@ pub fn simple_miner_share(
 
 #[cfg(test)]
 pub fn simple_miner_workbase() -> MinerWorkbase {
-    let json_str = r#"{"gbt":{"capabilities":["proposal"],"version":536870912,"rules":["csv","!segwit","!signet","taproot"],"vbavailable":{},"vbrequired":0,"previousblockhash":"00000000790ba17d9c06acf8749166014eb1499c8ea6dd598060dbec7eeae808","transactions":[],"coinbaseaux":{},"coinbasevalue":5000000000,"longpollid":"00000000790ba17d9c06acf8749166014eb1499c8ea6dd598060dbec7eeae8084","target":"00000377ae000000000000000000000000000000000000000000000000000000","mintime":1736686858,"mutable":["time","transactions","prevblock"],"noncerange":"00000000ffffffff","sigoplimit":80000,"sizelimit":4000000,"weightlimit":4000000,"curtime":1736694495,"bits":"1e0377ae","height":98,"signet_challenge":"51","default_witness_commitment":"6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9","diff":0.001126515290698186,"ntime":"6783dadf","bbversion":"20000000","nbit":"1e0377ae"},"workinfoid":7459044800742817807}"#;
+    let json_str = include_str!("../../tests/test_data/simple_miner_workbase.json");
     serde_json::from_str(&json_str).unwrap()
 }
 

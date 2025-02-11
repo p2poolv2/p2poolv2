@@ -550,6 +550,10 @@ mod tests {
                 bbversion: "20000000".to_string(),
                 nbit: "1e0377ae".to_string(),
             },
+            txns: vec![],
+            merkles: vec![],
+            coinb1: "01".to_string(),
+            coinb2: "02".to_string(),
         };
 
         let result = chain_handle.add_workbase(workbase).await;
