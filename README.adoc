@@ -28,15 +28,19 @@ During development, you may want to run individual containers.
 
 Remember, all docker commands are run from the docker directory.
 
-Start bitcoind signet
+=== Start bitcoind signet
 
 `docker compose up bitcoind`
 
-Start ckpool-solo   
+=== Start ckpool-solo
 
-`docker compose up ckpool-solo`
+`docker compose up ckpool`
 
-Start cpuminer to start producing shares
+=== Start p2pool-v2
+
+`docker compose up p2pool`
+
+=== Start cpuminer to start producing shares
 
 `docker compose up cpuminer`
 
