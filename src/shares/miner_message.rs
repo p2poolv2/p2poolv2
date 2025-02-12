@@ -195,6 +195,7 @@ mod tests {
 #[cfg(test)]
 mod miner_share_tests {
     use super::*;
+    use crate::test_utils::simple_miner_share;
     use rust_decimal_macros::dec;
     use serde_json;
 
@@ -333,5 +334,21 @@ mod miner_share_tests {
 
         // Verify the round-trip
         assert_eq!(miner_message, deserialized);
+    }
+
+    #[test]
+    fn test_miner_share_serialized_size() {
+        let share = simple_miner_share(None, None, None, None);
+        let message = CkPoolMessage::Share(share);
+
+        // Serialize to JSON
+        let serialized = serde_json::to_string(&message).unwrap();
+
+        // Print and verify the size
+        println!("Serialized share size: {} bytes", serialized.len());
+        println!("Serialized share: {}", serialized);
+
+        // The size should be reasonable for network transmission
+        assert_eq!(serialized.len(), 316);
     }
 }
