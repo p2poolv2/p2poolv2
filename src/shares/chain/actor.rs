@@ -554,6 +554,8 @@ mod tests {
             merkles: vec![],
             coinb1: "01".to_string(),
             coinb2: "02".to_string(),
+            coinb3: "03".to_string(),
+            header: "01".to_string(),
         };
 
         let result = chain_handle.add_workbase(workbase).await;

@@ -32,6 +32,7 @@ mod zmq_tests {
         // Create configuration for a single node
         let config = default_test_config()
             .with_listen_address("/ip4/0.0.0.0/tcp/6887".to_string())
+            .with_ckpool_port(8882)
             .with_store_path("test_chain_zmq.db".to_string())
             .with_miner_pubkey(
                 "020202020202020202020202020202020202020202020202020202020202020202".to_string(),
@@ -101,7 +102,7 @@ mod zmq_tests {
         let config = default_test_config()
             .with_listen_address("/ip4/0.0.0.0/tcp/6888".to_string())
             .with_store_path("test_chain_zmq.db".to_string())
-            .with_ckpool_port(8882)
+            .with_ckpool_port(8883)
             .with_miner_pubkey(
                 "020202020202020202020202020202020202020202020202020202020202020202".to_string(),
             );
@@ -176,7 +177,7 @@ mod zmq_tests {
         let config = default_test_config()
             .with_listen_address("/ip4/0.0.0.0/tcp/6889".to_string())
             .with_store_path("test_chain_zmq.db".to_string())
-            .with_ckpool_port(8883)
+            .with_ckpool_port(8884)
             .with_miner_pubkey(
                 "020202020202020202020202020202020202020202020202020202020202020202".to_string(),
             );
