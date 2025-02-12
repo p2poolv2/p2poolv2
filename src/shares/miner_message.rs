@@ -65,7 +65,7 @@ pub struct MinerShare {
 
 impl MinerShare {
     /// Validates the miner work against provided difficulty thresholds
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self, workbase: &MinerWorkbase) -> Result<(), String> {
         // Verify the hash meets required share difficulty
         // Convert hash to u256 for comparison
         let hash_bytes = hex::decode(&self.hash).map_err(|e| format!("Invalid hash hex: {}", e))?;
@@ -197,7 +197,7 @@ mod tests {
 #[cfg(test)]
 mod miner_share_tests {
     use super::*;
-    use crate::test_utils::simple_miner_share;
+    use crate::test_utils::{simple_miner_share, simple_miner_workbase};
     use rust_decimal_macros::dec;
     use serde_json;
 
@@ -228,19 +228,16 @@ mod miner_share_tests {
     }
     #[test]
     fn test_validate_share() {
-        let json = r#"{"workinfoid": 7452731920372203525, "clientid": 1, "enonce1": "336c6d67", "nonce2": "0000000000000000", "nonce": "2eb7b82b", "ntime": "676d6caa", "diff": 1.0, "sdiff": 1.9041854952356509, "hash": "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5", "result": true, "errn": 0, "createdate": "1735224559,536904211", "createby": "code", "createcode": "parse_submit", "createinet": "0.0.0.0:3333", "workername": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d", "username": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d", "address": "172.19.0.4", "agent": "cpuminer/2.5.1"}"#;
+        let json = r#"{"workinfoid": 7459044800742817807, "clientid": 1, "enonce1": "336c6d67", "nonce2": "0000000000000000", "nonce": "2eb7b82b", "ntime": "676d6caa", "diff": 1.0, "sdiff": 1.9041854952356509, "hash": "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5", "result": true, "errn": 0, "createdate": "1735224559,536904211", "createby": "code", "createcode": "parse_submit", "createinet": "0.0.0.0:3333", "workername": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d", "username": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d", "address": "172.19.0.4", "agent": "cpuminer/2.5.1"}"#;
+        let workbase = simple_miner_workbase();
 
         // Deserialize JSON to MinerWork
         let miner_work: MinerShare = serde_json::from_str(json).unwrap();
 
-        // Validate the share
-        let result = miner_work.validate();
-        assert!(result.is_ok());
-
         // Test invalid nonce
         let mut invalid_miner_work = miner_work.clone();
         invalid_miner_work.nonce = "invalidhex".to_string();
-        let result: Result<(), String> = invalid_miner_work.validate();
+        let result: Result<(), String> = invalid_miner_work.validate(&workbase);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -250,9 +247,35 @@ mod miner_share_tests {
         // Test invalid nonce length
         let mut invalid_miner_work = miner_work.clone();
         invalid_miner_work.nonce = "2eb7b8".to_string();
-        let result = invalid_miner_work.validate();
+        let result = invalid_miner_work.validate(&workbase);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Invalid nonce length: 3");
+    }
+
+    #[test]
+    #[ignore]
+    fn test_validate_share_with_workbase() {
+        let json = include_str!("../../tests/test_data/validation/workbases_and_shares.json");
+        let miner_messages: Vec<CkPoolMessage> = serde_json::from_str(json).unwrap();
+        let mut workbases = Vec::new();
+        let mut shares = Vec::new();
+
+        for message in miner_messages {
+            match message {
+                CkPoolMessage::Workbase(workbase) => workbases.push(workbase),
+                CkPoolMessage::Share(share) => shares.push(share),
+            }
+        }
+
+        assert_eq!(workbases.len(), 2);
+        assert_eq!(shares.len(), 2);
+
+        let workbase = &workbases[0];
+        let share = &shares[0];
+
+        // Validate the share
+        let result = share.validate(&workbase);
+        assert!(result.is_ok());
     }
 
     #[test]
