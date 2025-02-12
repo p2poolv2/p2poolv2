@@ -36,6 +36,7 @@ mod self_and_peer_messages_tests {
         // Create configuration for a single node
         let config = default_test_config()
             .with_listen_address("/ip4/0.0.0.0/tcp/6887".to_string())
+            .with_ckpool_port(8882)
             .with_store_path("test_chain_zmq.db".to_string())
             .with_miner_pubkey(
                 "020202020202020202020202020202020202020202020202020202020202020202".to_string(),
