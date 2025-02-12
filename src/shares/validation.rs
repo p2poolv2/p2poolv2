@@ -41,7 +41,17 @@ pub async fn validate(
     if let Err(e) = validate_uncles(share, chain_handle).await {
         return Err(format!("Share uncles validation failed: {}", e).into());
     }
-    if let Err(e) = share.miner_share.validate() {
+    let workbase = chain_handle
+        .get_workbase(share.miner_share.workinfoid)
+        .await;
+    if workbase.is_none() {
+        return Err(format!(
+            "Missing workbase for share - workinfoid: {}",
+            share.miner_share.workinfoid
+        )
+        .into());
+    }
+    if let Err(e) = share.miner_share.validate(&workbase.unwrap()) {
         return Err(format!("Share validation failed: {}", e).into());
     }
 

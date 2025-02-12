@@ -93,9 +93,20 @@ pub async fn handle_request(
     match request {
         Message::ShareBlock(share_block) => {
             info!("Received share block: {:?}", share_block);
-            if let Err(e) = share_block.miner_share.validate() {
-                error!("Share block validation failed: {}", e);
-                return Err("Share block validation failed".into());
+            if let Some(workbase) = chain_handle
+                .get_workbase(share_block.miner_share.workinfoid)
+                .await
+            {
+                if let Err(e) = share_block.miner_share.validate(&workbase) {
+                    error!("Share block validation failed: {}", e);
+                    return Err("Share block validation failed".into());
+                }
+            } else {
+                error!(
+                    "No workbase found for share block: {}",
+                    share_block.miner_share.workinfoid
+                );
+                return Err("Workbase not found".into());
             }
             if let Err(e) = chain_handle.add_share(share_block.clone()).await {
                 error!("Failed to add share: {}", e);
@@ -149,7 +160,7 @@ mod tests {
             None,
             vec![],
             Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            None,
+            Some(7459044800742817807),
             None,
             None,
             None,
@@ -165,6 +176,10 @@ mod tests {
         chain_handle
             .expect_setup_share_for_chain()
             .returning(|share_block| share_block);
+        chain_handle
+            .expect_get_workbase()
+            .with(eq(7459044800742817807))
+            .returning(|_| Some(simple_miner_workbase()));
 
         // Test handle_request directly without request_id
         let result = handle_request(
@@ -209,7 +224,7 @@ mod tests {
             None,
             vec![],
             Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            None,
+            Some(7459044800742817807),
             None,
             None,
             None,
@@ -225,6 +240,11 @@ mod tests {
         chain_handle
             .expect_setup_share_for_chain()
             .returning(|share_block| share_block);
+
+        chain_handle
+            .expect_get_workbase()
+            .with(eq(7459044800742817807))
+            .returning(|_| Some(simple_miner_workbase()));
 
         let result = handle_request(
             peer_id,
