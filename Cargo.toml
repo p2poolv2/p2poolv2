@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.83"
 
+[profile.dev]
+debug = false
+lto = "off"
+codegen-units = 1
+
 [dependencies]
 libp2p = { version = "0.53", features = [
     "tcp",
