@@ -16,6 +16,7 @@
 
 use crate::utils::serde_support::time::{deserialize_time, serialize_time};
 use bitcoin::absolute::Time;
+use bitcoin::consensus::Decodable;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -115,6 +116,8 @@ pub struct MinerWorkbase {
     pub coinb2: String,
     pub coinb3: String,
     pub header: String,
+    pub txnbinlen: String,
+    pub txnbin: String,
 }
 
 /// Represents the getblocktemplate used in ckpool as workbase
@@ -158,39 +161,41 @@ mod tests {
 
     #[test]
     fn test_gbt_response_deserialization() {
-        let json_str = r#"{"txns": [], "merkles": [], "coinb1": "aa", "coinb2": "bb", "coinb3": "cc", "header": "01", "gbt":{"capabilities":["proposal"],"version":536870912,"rules":["csv","!segwit","!signet","taproot"],"vbavailable":{},"vbrequired":0,"previousblockhash":"00000000790ba17d9c06acf8749166014eb1499c8ea6dd598060dbec7eeae808","transactions":[],"coinbaseaux":{},"coinbasevalue":5000000000,"longpollid":"00000000790ba17d9c06acf8749166014eb1499c8ea6dd598060dbec7eeae8084","target":"00000377ae000000000000000000000000000000000000000000000000000000","mintime":1736686858,"mutable":["time","transactions","prevblock"],"noncerange":"00000000ffffffff","sigoplimit":80000,"sizelimit":4000000,"weightlimit":4000000,"curtime":1736694495,"bits":"1e0377ae","height":98,"signet_challenge":"51","default_witness_commitment":"6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9","diff":0.001126515290698186,"ntime":"6783dadf","bbversion":"20000000","nbit":"1e0377ae"},"workinfoid":7459044800742817807}"#;
+        let json = std::fs::read_to_string("tests/test_data/workbases_only.json")
+            .expect("Failed to read test data file");
 
         // Test deserialization
-        let gbt_response: MinerWorkbase = serde_json::from_str(json_str).unwrap();
+        let miner_messages: Vec<CkPoolMessage> = serde_json::from_str(&json).unwrap();
+        let workbase = match &miner_messages[0] {
+            CkPoolMessage::Workbase(workbase) => workbase,
+            _ => panic!("Expected Workbase variant"),
+        };
 
         // Verify some fields
-        assert_eq!(gbt_response.workinfoid, 7459044800742817807);
-        assert_eq!(gbt_response.gbt.version, 536870912);
-        assert_eq!(gbt_response.gbt.height, 98);
+        assert_eq!(workbase.workinfoid, 7460801854683742211);
+        assert_eq!(workbase.gbt.version, 536870912);
+        assert_eq!(workbase.gbt.height, 109);
         assert_eq!(
-            gbt_response.gbt.previousblockhash,
-            "00000000790ba17d9c06acf8749166014eb1499c8ea6dd598060dbec7eeae808"
+            workbase.gbt.previousblockhash,
+            "00000000e98ac35502140d69c08ea35993b3ac761308b640e045aa648df0e601"
         );
-        assert_eq!(gbt_response.gbt.coinbasevalue, 5000000000);
-        assert_eq!(gbt_response.gbt.diff, 0.001126515290698186);
+        assert_eq!(workbase.gbt.coinbasevalue, 5000000000);
+        assert_eq!(workbase.gbt.diff, 0.001126515290698186);
 
         // Test serialization back to JSON
-        let serialized: String = serde_json::to_string(&gbt_response).unwrap();
+        let serialized: String = serde_json::to_string(&workbase).unwrap();
 
         // Deserialize again to verify round-trip
         let deserialized: MinerWorkbase = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(deserialized.workinfoid, gbt_response.workinfoid);
-        assert_eq!(deserialized.gbt.version, gbt_response.gbt.version);
-        assert_eq!(deserialized.gbt.height, gbt_response.gbt.height);
+        assert_eq!(deserialized.workinfoid, workbase.workinfoid);
+        assert_eq!(deserialized.gbt.version, workbase.gbt.version);
+        assert_eq!(deserialized.gbt.height, workbase.gbt.height);
         assert_eq!(
             deserialized.gbt.previousblockhash,
-            gbt_response.gbt.previousblockhash
+            workbase.gbt.previousblockhash
         );
-        assert_eq!(
-            deserialized.gbt.coinbasevalue,
-            gbt_response.gbt.coinbasevalue
-        );
-        assert_eq!(deserialized.gbt.diff, gbt_response.gbt.diff);
+        assert_eq!(deserialized.gbt.coinbasevalue, workbase.gbt.coinbasevalue);
+        assert_eq!(deserialized.gbt.diff, workbase.gbt.diff);
     }
 }
 
@@ -332,33 +337,26 @@ mod miner_share_tests {
     // {"Workbase": Object {"gbt": Object {"bbversion": String("20000000"), "bits": String("1e0377ae"), "capabilities": Array [String("proposal")], "coinbaseaux": Object {}, "coinbasevalue": Number(5000000000), "curtime": Number(1737100205), "default_witness_commitment": String("6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9"), "diff": Number(0.001126515290698186), "height": Number(99), "longpollid": String("00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc1"), "mintime": Number(1736687181), "mutable": Array [String("time"), String("transactions"), String("prevblock")], "nbit": String("1e0377ae"), "noncerange": String("00000000ffffffff"), "ntime": String("678a0bad"), "previousblockhash": String("00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc"), "rules": Array [String("csv"), String("!segwit"), String("!signet"), String("taproot")], "signet_challenge": String("51"), "sigoplimit": Number(80000), "sizelimit": Number(4000000), "target": String("00000377ae000000000000000000000000000000000000000000000000000000"), "transactions": Array [], "vbavailable": Object {}, "vbrequired": Number(0), "version": Number(536870912), "weightlimit": Number(4000000)}, "workinfoid": Number(7460787496608071691)}}
     #[test]
     fn test_miner_message_workbase_deserialization() {
-        let json = r#"{"Workbase": {"txns": [], "merkles": [], "coinb1": "aa", "coinb2": "bb", "coinb3": "cc", "header": "01", "gbt": {"bbversion": "20000000", "bits": "1e0377ae", "capabilities": ["proposal"], "coinbaseaux": {}, "coinbasevalue": 5000000000, "curtime": 1737100205, "default_witness_commitment": "6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9", "diff": 0.001126515290698186, "height": 99, "longpollid": "00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc1", "mintime": 1736687181, "mutable": ["time", "transactions", "prevblock"], "nbit": "1e0377ae", "noncerange": "00000000ffffffff", "ntime": "678a0bad", "previousblockhash": "00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc", "rules": ["csv", "!segwit", "!signet", "taproot"], "signet_challenge": "51", "sigoplimit": 80000, "sizelimit": 4000000, "target": "00000377ae000000000000000000000000000000000000000000000000000000", "transactions": [], "vbavailable": {}, "vbrequired": 0, "version": 536870912, "weightlimit": 4000000}, "workinfoid": 7460787496608071691}}"#;
-
-        // Deserialize JSON to MinerMessage
-        let miner_message: CkPoolMessage = serde_json::from_str(json).unwrap();
+        let json_str = include_str!("../../tests/test_data/simple_miner_workbase.json");
+        let workbase: MinerWorkbase = serde_json::from_str(&json_str).unwrap();
 
         // Verify it's a Workbase variant and check fields
-        match &miner_message {
-            CkPoolMessage::Workbase(workbase) => {
-                assert_eq!(workbase.workinfoid, 7460787496608071691);
-                assert_eq!(workbase.gbt.height, 99);
-                assert_eq!(workbase.gbt.bits, "1e0377ae");
-                assert_eq!(
-                    workbase.gbt.previousblockhash,
-                    "00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc"
-                );
-            }
-            _ => panic!("Expected Workbase variant"),
-        }
+        assert_eq!(workbase.workinfoid, 7459044800742817807);
+        assert_eq!(workbase.gbt.height, 98);
+        assert_eq!(workbase.gbt.bits, "1e0377ae");
+        assert_eq!(
+            workbase.gbt.previousblockhash,
+            "00000000790ba17d9c06acf8749166014eb1499c8ea6dd598060dbec7eeae808"
+        );
 
         // Serialize back to JSON
-        let serialized = serde_json::to_string(&miner_message).unwrap();
+        let serialized = serde_json::to_string(&workbase).unwrap();
 
         // Deserialize again to verify
-        let deserialized: CkPoolMessage = serde_json::from_str(&serialized).unwrap();
+        let deserialized: MinerWorkbase = serde_json::from_str(&serialized).unwrap();
 
         // Verify the round-trip
-        assert_eq!(miner_message, deserialized);
+        assert_eq!(workbase, deserialized);
     }
 
     #[test]
@@ -376,4 +374,61 @@ mod miner_share_tests {
         // The size should be reasonable for network transmission
         assert_eq!(serialized.len(), 316);
     }
+
+    #[test_log::test(test)]
+    fn test_workbase_coinbase_deserialization() {
+        // Read test data file
+        let test_data =
+            std::fs::read_to_string("tests/test_data/validation/workbases_and_shares.json")
+                .unwrap();
+        let messages: Vec<CkPoolMessage> = serde_json::from_str(&test_data).unwrap();
+
+        // Group workbases and shares
+        let mut workbase_share_pairs = Vec::new();
+        let mut current_workbase: Option<MinerWorkbase> = None;
+
+        for message in messages {
+            match message {
+                CkPoolMessage::Workbase(workbase) => {
+                    current_workbase = Some(workbase);
+                }
+                CkPoolMessage::Share(share) => {
+                    if let Some(workbase) = current_workbase.clone() {
+                        workbase_share_pairs.push((workbase, share));
+                    }
+                }
+            }
+        }
+
+        // Validate each workbase-share pair
+        for (workbase, share) in workbase_share_pairs {
+            let coinbase = validate_coinbase(&workbase, &share).unwrap();
+            assert!(coinbase.is_coinbase());
+        }
+    }
+}
+
+fn validate_coinbase(
+    workbase: &MinerWorkbase,
+    share: &MinerShare,
+) -> Result<bitcoin::Transaction, Box<dyn std::error::Error>> {
+    use hex::FromHex;
+
+    let coinb1 = &workbase.coinb1;
+    let coinb2 = &workbase.coinb2;
+    let enonce1 = &share.enonce1;
+    let nonce2 = &share.nonce2;
+    let txnbinlen = &workbase.txnbinlen;
+    let txnbin = &workbase.txnbin;
+    let coinb3 = &workbase.coinb3;
+
+    let complete_tx = format!(
+        "{}{}{}{}{}{}{}",
+        coinb1, enonce1, nonce2, coinb2, txnbinlen, txnbin, coinb3
+    );
+
+    // Try to deserialize
+    let tx_bytes = Vec::from_hex(&complete_tx).unwrap();
+    bitcoin::Transaction::consensus_decode(&mut std::io::Cursor::new(tx_bytes))
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
 }
