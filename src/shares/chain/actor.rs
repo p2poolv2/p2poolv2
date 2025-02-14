@@ -556,6 +556,8 @@ mod tests {
             coinb2: "02".to_string(),
             coinb3: "03".to_string(),
             header: "01".to_string(),
+            txnbinlen: "16".to_string(),
+            txnbin: "001496142b6e2f10deaa471f460ad34aeb085f25698f".to_string(),
         };
 
         let result = chain_handle.add_workbase(workbase).await;
