@@ -14,9 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+mod builders;
+
 use crate::utils::serde_support::time::{deserialize_time, serialize_time};
 use bitcoin::absolute::Time;
-use bitcoin::consensus::Decodable;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -115,6 +116,7 @@ pub struct MinerWorkbase {
     pub coinb1: String,
     pub coinb2: String,
     pub coinb3: String,
+    // The bitcoin block header as a hex string without merkle root and nonce
     pub header: String,
     pub txnbinlen: String,
     pub txnbin: String,
@@ -124,7 +126,7 @@ pub struct MinerWorkbase {
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct Gbt {
     pub capabilities: Vec<String>,
-    pub version: u32,
+    pub version: i32,
     pub rules: Vec<String>,
     pub vbavailable: serde_json::Value,
     pub vbrequired: u32,
@@ -260,7 +262,7 @@ mod miner_share_tests {
     #[test]
     #[ignore]
     fn test_validate_share_with_workbase() {
-        let json = include_str!("../../tests/test_data/validation/workbases_and_shares.json");
+        let json = include_str!("../../../tests/test_data/validation/workbases_and_shares.json");
         let miner_messages: Vec<CkPoolMessage> = serde_json::from_str(json).unwrap();
         let mut workbases = Vec::new();
         let mut shares = Vec::new();
@@ -337,7 +339,7 @@ mod miner_share_tests {
     // {"Workbase": Object {"gbt": Object {"bbversion": String("20000000"), "bits": String("1e0377ae"), "capabilities": Array [String("proposal")], "coinbaseaux": Object {}, "coinbasevalue": Number(5000000000), "curtime": Number(1737100205), "default_witness_commitment": String("6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9"), "diff": Number(0.001126515290698186), "height": Number(99), "longpollid": String("00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc1"), "mintime": Number(1736687181), "mutable": Array [String("time"), String("transactions"), String("prevblock")], "nbit": String("1e0377ae"), "noncerange": String("00000000ffffffff"), "ntime": String("678a0bad"), "previousblockhash": String("00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc"), "rules": Array [String("csv"), String("!segwit"), String("!signet"), String("taproot")], "signet_challenge": String("51"), "sigoplimit": Number(80000), "sizelimit": Number(4000000), "target": String("00000377ae000000000000000000000000000000000000000000000000000000"), "transactions": Array [], "vbavailable": Object {}, "vbrequired": Number(0), "version": Number(536870912), "weightlimit": Number(4000000)}, "workinfoid": Number(7460787496608071691)}}
     #[test]
     fn test_miner_message_workbase_deserialization() {
-        let json_str = include_str!("../../tests/test_data/simple_miner_workbase.json");
+        let json_str = include_str!("../../../tests/test_data/simple_miner_workbase.json");
         let workbase: MinerWorkbase = serde_json::from_str(&json_str).unwrap();
 
         // Verify it's a Workbase variant and check fields
@@ -402,33 +404,8 @@ mod miner_share_tests {
 
         // Validate each workbase-share pair
         for (workbase, share) in workbase_share_pairs {
-            let coinbase = validate_coinbase(&workbase, &share).unwrap();
+            let coinbase = builders::build_coinbase_from_share(&workbase, &share).unwrap();
             assert!(coinbase.is_coinbase());
         }
     }
-}
-
-fn validate_coinbase(
-    workbase: &MinerWorkbase,
-    share: &MinerShare,
-) -> Result<bitcoin::Transaction, Box<dyn std::error::Error>> {
-    use hex::FromHex;
-
-    let coinb1 = &workbase.coinb1;
-    let coinb2 = &workbase.coinb2;
-    let enonce1 = &share.enonce1;
-    let nonce2 = &share.nonce2;
-    let txnbinlen = &workbase.txnbinlen;
-    let txnbin = &workbase.txnbin;
-    let coinb3 = &workbase.coinb3;
-
-    let complete_tx = format!(
-        "{}{}{}{}{}{}{}",
-        coinb1, enonce1, nonce2, coinb2, txnbinlen, txnbin, coinb3
-    );
-
-    // Try to deserialize
-    let tx_bytes = Vec::from_hex(&complete_tx).unwrap();
-    bitcoin::Transaction::consensus_decode(&mut std::io::Cursor::new(tx_bytes))
-        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
 }
