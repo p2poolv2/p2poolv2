@@ -71,11 +71,22 @@ fn decode_transactions(
         .collect()
 }
 
+/// Compute the transaction merkle root from vector of transactions
+///
+/// The header in Gbt does not have the coinbase transaction, so we need to compute the merkle root
+/// with the vector of transactions built by using coinbase from share and rest of the transactions
+/// from workbase
+pub fn compute_merkle_root(txns: &Vec<bitcoin::Transaction>) -> Option<bitcoin::TxMerkleNode> {
+    let hashes = txns.iter().map(|obj| obj.compute_txid().to_raw_hash());
+    bitcoin::merkle_tree::calculate_root(hashes).map(|h| h.into())
+}
+
 /// Builds a bitcoin block header from a workbase and a share
 /// TOOD: Update nonce and ntime from MinerShare
 fn build_header(
     workbase: &MinerWorkbase,
     share: &MinerShare,
+    txns: &Vec<bitcoin::Transaction>,
 ) -> Result<bitcoin::block::Header, Box<dyn Error>> {
     let header_bytes = hex::decode(&workbase.header)?;
     let mut header =
@@ -83,6 +94,7 @@ fn build_header(
     header.version = bitcoin::block::Version::from_consensus(workbase.gbt.version);
     header.time = share.ntime.to_consensus_u32();
     header.nonce = u32::from_str_radix(&share.nonce, 16)?;
+    header.merkle_root = compute_merkle_root(txns).ok_or("Failed to compute merkle root")?;
     Ok(header)
 }
 
@@ -94,10 +106,10 @@ pub fn build_bitcoin_block(
     workbase: &MinerWorkbase,
     share: &MinerShare,
 ) -> Result<bitcoin::Block, Box<dyn Error>> {
-    let header = build_header(workbase, share)?;
     let coinbase = build_coinbase_from_share(&workbase, &share)?;
     let mut txns = vec![coinbase];
     txns.extend(decode_transactions(&workbase.txns)?);
+    let header = build_header(workbase, share, &txns)?;
     let block = bitcoin::Block {
         header,
         txdata: txns,
@@ -158,6 +170,9 @@ mod tests {
                     .unwrap()
             );
             assert_eq!(block.header.time, share_ntime);
+
+            assert!(block.check_merkle_root());
+            assert!(block.check_witness_commitment());
         }
     }
 }
