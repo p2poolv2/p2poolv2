@@ -14,11 +14,12 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::Message;
 use crate::node::SwarmSend;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
+use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
+use crate::{node::behaviour::request_response::RequestResponseEvent, shares::validation};
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
@@ -42,7 +43,10 @@ pub async fn handle_request_response_event(
                 },
         } => {
             debug!("Received request from peer: {}", peer);
-            if let Err(e) = handle_request(peer, request, chain_handle, swarm_tx).await {
+            let time_provider = SystemTimeProvider {};
+            if let Err(e) =
+                handle_request(peer, request, chain_handle, swarm_tx, &time_provider).await
+            {
                 error!("Failed to handle request: {}", e);
                 return Err("Error handling request".into());
             }
@@ -88,25 +92,15 @@ pub async fn handle_request(
     request: Message,
     chain_handle: ChainHandle,
     swarm_tx: mpsc::Sender<SwarmSend>,
+    time_provider: &impl TimeProvider,
 ) -> Result<(), Box<dyn Error>> {
     info!("Handling request from peer: {}", peer);
     match request {
         Message::ShareBlock(share_block) => {
             info!("Received share block: {:?}", share_block);
-            if let Some(workbase) = chain_handle
-                .get_workbase(share_block.miner_share.workinfoid)
-                .await
-            {
-                if let Err(e) = share_block.miner_share.validate(&workbase) {
-                    error!("Share block validation failed: {}", e);
-                    return Err("Share block validation failed".into());
-                }
-            } else {
-                error!(
-                    "No workbase found for share block: {}",
-                    share_block.miner_share.workinfoid
-                );
-                return Err("Workbase not found".into());
+            if let Err(e) = validation::validate(&share_block, &chain_handle, time_provider).await {
+                error!("Share block validation failed: {}", e);
+                return Err("Share block validation failed".into());
             }
             if let Err(e) = chain_handle.add_share(share_block.clone()).await {
                 error!("Failed to add share: {}", e);
@@ -132,6 +126,14 @@ pub async fn handle_request(
             }
             Ok(())
         }
+        Message::UserWorkbase(userworkbase) => {
+            info!("Received user workbase: {:?}", userworkbase);
+            if let Err(e) = chain_handle.store_user_workbase(userworkbase.clone()).await {
+                error!("Failed to store user workbase: {}", e);
+                return Err("Error storing user workbase".into());
+            }
+            Ok(())
+        }
         _ => {
             info!("Received unknown request: {:?}", request);
             Ok(())
@@ -145,27 +147,36 @@ mod tests {
     #[mockall_double::double]
     use crate::shares::chain::actor::ChainHandle;
     use crate::test_utils::simple_miner_workbase;
-    use crate::test_utils::test_share_block;
+    use crate::test_utils::{load_valid_workbases_userworkbases_and_shares, test_share_block};
+    use crate::utils::time_provider::TestTimeProvider;
     use mockall::predicate::*;
+    use std::time::SystemTime;
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_handle_share_block_request() {
         let mut chain_handle = ChainHandle::default();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
         let peer_id = libp2p::PeerId::random();
 
-        // Create test share block
-        let share_block = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
-            None,
-            vec![],
-            Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            Some(7459044800742817807),
-            None,
-            None,
-            None,
-            &mut vec![],
-        );
+        let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
+        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+            .parse::<bitcoin::PublicKey>()
+            .unwrap();
+        let share_header = crate::shares::miner_message::builders::build_share_header(
+            &workbases[0],
+            &shares[0],
+            &userworkbases[0],
+            pubkey,
+        )
+        .unwrap();
+
+        let share_block = crate::shares::miner_message::builders::build_share_block(
+            &workbases[0],
+            &userworkbases[0],
+            &shares[0],
+            share_header,
+        )
+        .unwrap();
 
         // Set up mock expectations
         chain_handle
@@ -178,8 +189,15 @@ mod tests {
             .returning(|share_block| share_block);
         chain_handle
             .expect_get_workbase()
-            .with(eq(7459044800742817807))
-            .returning(|_| Some(simple_miner_workbase()));
+            .with(eq(7473434392883363843))
+            .returning(move |_| Some(workbases[0].clone()));
+        chain_handle
+            .expect_get_user_workbase()
+            .with(eq(7473434392883363843))
+            .returning(move |_| Some(userworkbases[0].clone()));
+
+        let mut time_provider = TestTimeProvider(SystemTime::now());
+        time_provider.set_time(shares[0].ntime);
 
         // Test handle_request directly without request_id
         let result = handle_request(
@@ -187,6 +205,7 @@ mod tests {
             Message::ShareBlock(share_block.clone()),
             chain_handle,
             swarm_tx,
+            &time_provider,
         )
         .await;
 
@@ -246,11 +265,14 @@ mod tests {
             .with(eq(7459044800742817807))
             .returning(|_| Some(simple_miner_workbase()));
 
+        let time_provider = TestTimeProvider(SystemTime::now());
+
         let result = handle_request(
             peer_id,
             Message::ShareBlock(share_block),
             chain_handle,
             swarm_tx,
+            &time_provider,
         )
         .await;
 
@@ -278,8 +300,16 @@ mod tests {
             .expect_setup_share_for_chain()
             .returning(|share_block| share_block);
 
-        let result =
-            handle_request(peer_id, Message::Workbase(workbase), chain_handle, swarm_tx).await;
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        let result = handle_request(
+            peer_id,
+            Message::Workbase(workbase),
+            chain_handle,
+            swarm_tx,
+            &time_provider,
+        )
+        .await;
 
         assert!(result.is_ok());
 
@@ -305,8 +335,16 @@ mod tests {
             .with(eq(workbase.clone()))
             .returning(|_| Err("Failed to add workbase".into()));
 
-        let result =
-            handle_request(peer_id, Message::Workbase(workbase), chain_handle, swarm_tx).await;
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        let result = handle_request(
+            peer_id,
+            Message::Workbase(workbase),
+            chain_handle,
+            swarm_tx,
+            &time_provider,
+        )
+        .await;
 
         assert!(result.is_err());
 

@@ -1,0 +1,25 @@
+[
+    {
+        "Share": {
+            "workinfoid": 7473434392883363843,
+            "clientid": 1,
+            "enonce1": "fdf8b667",
+            "nonce2": "0000000000000000",
+            "nonce": "f15f1590",
+            "ntime": "67b6f938",
+            "diff": 1.0,
+            "sdiff": 31.465847594928551,
+            "hash": "000000000822bbfaf34d53fc43d0c1382054d3aafe31893020c315db8b0a19f9",
+            "result": true,
+            "errn": 0,
+            "createdate": "1740044611,331134621",
+            "createby": "code",
+            "createcode": "parse_submit",
+            "createinet": "0.0.0.0:3333",
+            "workername": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d",
+            "username": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d",
+            "address": "127.0.0.1",
+            "agent": "cpuminer/2.5.1"
+        }
+    }
+]

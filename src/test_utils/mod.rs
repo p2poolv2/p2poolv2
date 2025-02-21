@@ -14,8 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::shares::miner_message::MinerShare;
-use crate::shares::miner_message::MinerWorkbase;
+use crate::shares::miner_message::{CkPoolMessage, MinerShare, MinerWorkbase, UserWorkbase};
 use crate::shares::{ShareBlock, ShareHeader};
 use bitcoin::BlockHash;
 use bitcoin::Transaction;
@@ -109,6 +108,42 @@ pub fn test_coinbase_transaction() -> bitcoin::Transaction {
         &pubkey,
         bitcoin::Network::Regtest,
     )
+}
+
+#[cfg(test)]
+pub fn load_valid_workbases_userworkbases_and_shares(
+) -> (Vec<MinerWorkbase>, Vec<UserWorkbase>, Vec<MinerShare>) {
+    let workbases_str = include_str!("../../tests/test_data/validation/workbases.json");
+    let shares_str = include_str!("../../tests/test_data/validation/shares.json");
+    let userworkbases_str = include_str!("../../tests/test_data/validation/userworkbases.json");
+    let workbases: Vec<CkPoolMessage> = serde_json::from_str(&workbases_str).unwrap();
+    let shares: Vec<CkPoolMessage> = serde_json::from_str(&shares_str).unwrap();
+    let userworkbases: Vec<CkPoolMessage> = serde_json::from_str(&userworkbases_str).unwrap();
+    let workbases = workbases
+        .into_iter()
+        .filter_map(|msg| match msg {
+            CkPoolMessage::Workbase(w) => Some(w),
+            _ => None,
+        })
+        .collect::<Vec<MinerWorkbase>>();
+
+    let userworkbases = userworkbases
+        .into_iter()
+        .filter_map(|msg| match msg {
+            CkPoolMessage::UserWorkbase(w) => Some(w),
+            _ => None,
+        })
+        .collect::<Vec<UserWorkbase>>();
+
+    let shares = shares
+        .into_iter()
+        .filter_map(|msg| match msg {
+            CkPoolMessage::Share(s) => Some(s),
+            _ => None,
+        })
+        .collect::<Vec<MinerShare>>();
+
+    (workbases, userworkbases, shares)
 }
 
 #[cfg(test)]

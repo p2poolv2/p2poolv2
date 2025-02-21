@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::shares::miner_message::MinerWorkbase;
+use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::ShareBlock;
 use bitcoin::{BlockHash, Txid};
 use serde::{Deserialize, Serialize};
@@ -31,6 +31,7 @@ pub enum Message {
     GetData(GetData),
     ShareBlock(ShareBlock),
     Workbase(MinerWorkbase),
+    UserWorkbase(UserWorkbase),
     Transaction(bitcoin::Transaction),
 }
 

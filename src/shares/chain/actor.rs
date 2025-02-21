@@ -17,7 +17,10 @@
 use super::chain::Chain;
 use crate::shares::store::Store;
 use crate::shares::ShareBlock;
-use crate::shares::{miner_message::MinerWorkbase, BlockHash};
+use crate::shares::{
+    miner_message::{MinerWorkbase, UserWorkbase},
+    BlockHash,
+};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashSet;
@@ -32,7 +35,9 @@ pub enum ChainMessage {
     IsConfirmed(ShareBlock),
     AddShare(ShareBlock),
     StoreWorkbase(MinerWorkbase),
+    StoreUserWorkbase(UserWorkbase),
     GetWorkbase(u64),
+    GetUserWorkbase(u64),
     GetShare(BlockHash),
     GetTotalDifficulty,
     GetChainTip,
@@ -48,7 +53,9 @@ pub enum ChainResponse {
     IsConfirmedResult(bool),
     AddShareResult(Result<(), Box<dyn Error + Send + Sync>>),
     StoreWorkbaseResult(Result<(), Box<dyn Error + Send + Sync>>),
+    StoreUserWorkbaseResult(Result<(), Box<dyn Error + Send + Sync>>),
     GetWorkbaseResult(Option<MinerWorkbase>),
+    GetUserWorkbaseResult(Option<UserWorkbase>),
     GetShareResult(Option<ShareBlock>),
     ChainTip(Option<BlockHash>),
     ChainTipAndUncles(Option<BlockHash>, HashSet<BlockHash>),
@@ -162,6 +169,24 @@ impl ChainActor {
                     let result = self.chain.get_depth(&blockhash);
                     if let Err(e) = response_sender.send(ChainResponse::Depth(result)).await {
                         error!("Failed to send get_depth response: {}", e);
+                    }
+                }
+                ChainMessage::StoreUserWorkbase(user_workbase) => {
+                    let result = self.chain.add_user_workbase(user_workbase);
+                    if let Err(e) = response_sender
+                        .send(ChainResponse::StoreUserWorkbaseResult(result))
+                        .await
+                    {
+                        error!("Failed to send store_user_workbase response: {}", e);
+                    }
+                }
+                ChainMessage::GetUserWorkbase(workinfoid) => {
+                    let result = self.chain.get_user_workbase(workinfoid);
+                    if let Err(e) = response_sender
+                        .send(ChainResponse::GetUserWorkbaseResult(result))
+                        .await
+                    {
+                        error!("Failed to send get_user_workbase response: {}", e);
                     }
                 }
             }
@@ -302,6 +327,29 @@ impl ChainHandle {
         }
     }
 
+    pub async fn store_user_workbase(
+        &self,
+        user_workbase: UserWorkbase,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let (response_sender, mut response_receiver) = mpsc::channel(1);
+        if let Err(e) = self
+            .sender
+            .send((
+                ChainMessage::StoreUserWorkbase(user_workbase),
+                response_sender,
+            ))
+            .await
+        {
+            error!("Failed to send StoreUserWorkbase message: {}", e);
+            return Err(e.into());
+        }
+
+        match response_receiver.recv().await {
+            Some(ChainResponse::StoreUserWorkbaseResult(result)) => result,
+            _ => Err("Failed to receive store user workbase result".into()),
+        }
+    }
+
     pub async fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase> {
         let (response_sender, mut response_receiver) = mpsc::channel(1);
         self.sender
@@ -310,6 +358,18 @@ impl ChainHandle {
             .unwrap();
         match response_receiver.recv().await {
             Some(ChainResponse::GetWorkbaseResult(result)) => result,
+            _ => None,
+        }
+    }
+
+    pub async fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase> {
+        let (response_sender, mut response_receiver) = mpsc::channel(1);
+        self.sender
+            .send((ChainMessage::GetUserWorkbase(workinfoid), response_sender))
+            .await
+            .unwrap();
+        match response_receiver.recv().await {
+            Some(ChainResponse::GetUserWorkbaseResult(result)) => result,
             _ => None,
         }
     }
@@ -390,6 +450,9 @@ mock! {
         pub async fn get_chain_tip_and_uncles(&self) -> (Option<BlockHash>, HashSet<BlockHash>);
         pub async fn get_depth(&self, blockhash: BlockHash) -> Option<usize>;
         pub async fn setup_share_for_chain(&self, share_block: ShareBlock) -> ShareBlock;
+        pub async fn store_user_workbase(&self, user_workbase: UserWorkbase) -> Result<(), Box<dyn Error + Send + Sync>>;
+        pub async fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase>;
+        pub async fn get_share(&self, share_hash: BlockHash) -> Option<ShareBlock>;
     }
 
     impl Clone for ChainHandle {
@@ -556,8 +619,6 @@ mod tests {
             coinb2: "02".to_string(),
             coinb3: "03".to_string(),
             header: "01".to_string(),
-            txnbinlen: "16".to_string(),
-            txnbin: "001496142b6e2f10deaa471f460ad34aeb085f25698f".to_string(),
         };
 
         let result = chain_handle.add_workbase(workbase).await;
