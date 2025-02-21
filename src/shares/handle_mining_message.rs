@@ -55,6 +55,13 @@ pub async fn handle_mining_message(
                 return Err("Error adding workbase".into());
             }
         }
+        CkPoolMessage::UserWorkbase(userworkbase) => {
+            message = Message::UserWorkbase(userworkbase.clone());
+            if let Err(e) = chain_handle.store_user_workbase(userworkbase).await {
+                error!("Failed to add user workbase: {}", e);
+                return Err("Error adding user workbase".into());
+            }
+        }
     };
 
     let serialized_message = message.cbor_serialize().unwrap();

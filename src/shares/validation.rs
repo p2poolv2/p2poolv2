@@ -14,8 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::shares::chain::ChainHandle;
+#[mockall_double::double]
+use crate::shares::chain::actor::ChainHandle;
 use crate::shares::ShareBlock;
+use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
 
 pub const MAX_UNCLES: usize = 3;
@@ -31,8 +33,9 @@ pub const MAX_TIME_DIFF: u64 = 60;
 pub async fn validate(
     share: &ShareBlock,
     chain_handle: &ChainHandle,
+    time_provider: &impl TimeProvider,
 ) -> Result<(), Box<dyn Error>> {
-    if let Err(e) = validate_timestamp(share).await {
+    if let Err(e) = validate_timestamp(share, time_provider).await {
         return Err(format!("Share timestamp validation failed: {}", e).into());
     }
     if let Err(e) = validate_prev_share_blockhash(share, chain_handle).await {
@@ -51,7 +54,20 @@ pub async fn validate(
         )
         .into());
     }
-    if let Err(e) = share.miner_share.validate(&workbase.unwrap()) {
+    let userworkbase = chain_handle
+        .get_user_workbase(share.miner_share.workinfoid)
+        .await;
+    if userworkbase.is_none() {
+        return Err(format!(
+            "Missing user workbase for share - workinfoid: {}",
+            share.miner_share.workinfoid
+        )
+        .into());
+    }
+    if let Err(e) = share
+        .miner_share
+        .validate(&workbase.unwrap(), &userworkbase.unwrap())
+    {
         return Err(format!("Share validation failed: {}", e).into());
     }
 
@@ -95,11 +111,11 @@ pub async fn validate_uncles(
 }
 
 /// Validate the share timestamp is within the last 60 seconds
-pub async fn validate_timestamp(share: &ShareBlock) -> Result<(), Box<dyn Error>> {
-    let current_time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+pub async fn validate_timestamp(
+    share: &ShareBlock,
+    time_provider: &impl TimeProvider,
+) -> Result<(), Box<dyn Error>> {
+    let current_time = time_provider.seconds_since_epoch();
 
     let miner_share_time = share.miner_share.ntime.to_consensus_u32() as u64;
     let time_diff = if current_time > miner_share_time {
@@ -107,8 +123,6 @@ pub async fn validate_timestamp(share: &ShareBlock) -> Result<(), Box<dyn Error>
     } else {
         miner_share_time - current_time
     };
-
-    tracing::info!("Time diff: {}", time_diff);
 
     if time_diff > MAX_TIME_DIFF {
         return Err(format!(
@@ -126,10 +140,11 @@ pub async fn validate_timestamp(share: &ShareBlock) -> Result<(), Box<dyn Error>
 mod tests {
     use super::*;
     use crate::shares::{BlockHash, PublicKey};
+    use crate::test_utils::load_valid_workbases_userworkbases_and_shares;
     use crate::test_utils::simple_miner_share;
     use crate::test_utils::test_share_block;
-    use tempfile::tempdir;
-
+    use crate::utils::time_provider::TestTimeProvider;
+    use std::time::SystemTime;
     #[tokio::test]
     async fn test_validate_timestamp_should_fail_for_old_timestamp() {
         let miner_share = simple_miner_share(None, None, None, None);
@@ -143,21 +158,26 @@ mod tests {
             bitcoin::Network::Regtest,
             &mut vec![],
         );
-        assert!(validate_timestamp(&share).await.is_err());
+        let mut time_provider = TestTimeProvider(SystemTime::now());
+        let share_timestamp = share.miner_share.ntime.to_consensus_u32() as u64 - 120;
+
+        time_provider
+            .set_time(bitcoin::absolute::Time::from_consensus(share_timestamp as u32).unwrap());
+
+        let result = validate_timestamp(&share, &time_provider).await;
+        assert_eq!(
+            result.err().unwrap().to_string(),
+            "Share timestamp 1735224490 is more than 60 seconds from current time 1735224370"
+        );
     }
 
     #[tokio::test]
     async fn test_validate_timestamp_should_fail_for_future_timestamp() {
-        let mut miner_share = simple_miner_share(None, None, None, None);
-
-        // Set timestamp to 2 minutes in the future
-        let future_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            + 120;
-        miner_share.ntime = bitcoin::absolute::Time::from_consensus(future_time as u32)
-            .expect("Failed to create future timestamp");
+        let miner_share = simple_miner_share(None, None, None, None);
+        let mut time_provider = TestTimeProvider(SystemTime::now());
+        let future_time = miner_share.ntime.to_consensus_u32() as u64 + 120;
+        time_provider
+            .set_time(bitcoin::absolute::Time::from_consensus(future_time as u32).unwrap());
 
         let miner_pubkey: PublicKey =
             "020202020202020202020202020202020202020202020202020202020202020202"
@@ -170,20 +190,14 @@ mod tests {
             &mut vec![],
         );
 
-        assert!(validate_timestamp(&share).await.is_err());
+        assert!(validate_timestamp(&share, &time_provider).await.is_err());
     }
 
     #[tokio::test]
     async fn test_validate_timestamp_should_succeed_for_valid_timestamp() {
         let mut miner_share = simple_miner_share(None, None, None, None);
-
-        // Set timestamp to current time
-        let current_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        miner_share.ntime = bitcoin::absolute::Time::from_consensus(current_time as u32)
-            .expect("Failed to create current timestamp");
+        let mut time_provider = TestTimeProvider(SystemTime::now());
+        time_provider.set_time(miner_share.ntime);
 
         let miner_pubkey: PublicKey =
             "020202020202020202020202020202020202020202020202020202020202020202"
@@ -196,14 +210,11 @@ mod tests {
             &mut vec![],
         );
 
-        assert!(validate_timestamp(&share).await.is_ok());
+        assert!(validate_timestamp(&share, &time_provider).await.is_ok());
     }
 
     #[tokio::test]
     async fn test_validate_prev_blockhash_exists() {
-        let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
-
         // Create and add initial share to chain
         let initial_share = test_share_block(
             Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
@@ -216,7 +227,6 @@ mod tests {
             None,
             &mut vec![],
         );
-        chain_handle.add_share(initial_share.clone()).await.unwrap();
 
         // Create new share pointing to existing share - should validate
         let valid_share = test_share_block(
@@ -230,6 +240,17 @@ mod tests {
             None,
             &mut vec![],
         );
+
+        let mut chain_handle = ChainHandle::default();
+        chain_handle
+            .expect_get_share()
+            .with(mockall::predicate::eq(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+                    .parse::<BlockHash>()
+                    .unwrap(),
+            ))
+            .returning(move |_| Some(initial_share.clone()));
+
         assert!(validate_prev_share_blockhash(&valid_share, &chain_handle)
             .await
             .is_ok());
@@ -247,6 +268,16 @@ mod tests {
             None,
             &mut vec![],
         );
+
+        chain_handle
+            .expect_get_share()
+            .with(mockall::predicate::eq(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
+                    .parse::<BlockHash>()
+                    .unwrap(),
+            ))
+            .returning(move |_| None);
+
         assert!(validate_prev_share_blockhash(&invalid_share, &chain_handle)
             .await
             .is_err());
@@ -254,8 +285,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_uncles() {
-        let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let mut chain_handle = ChainHandle::default();
 
         // Create initial shares to use as uncles
         let uncle1 = test_share_block(
@@ -269,7 +299,15 @@ mod tests {
             None,
             &mut vec![],
         );
-        chain_handle.add_share(uncle1.clone()).await.unwrap();
+        let uncle1_clone = uncle1.clone();
+        chain_handle
+            .expect_get_share()
+            .with(mockall::predicate::eq(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb1"
+                    .parse::<BlockHash>()
+                    .unwrap(),
+            ))
+            .returning(move |_| Some(uncle1_clone.clone()));
 
         let uncle2 = test_share_block(
             Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2"),
@@ -282,7 +320,16 @@ mod tests {
             None,
             &mut vec![],
         );
-        chain_handle.add_share(uncle2.clone()).await.unwrap();
+        let uncle2_clone = uncle2.clone();
+
+        chain_handle
+            .expect_get_share()
+            .with(mockall::predicate::eq(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2"
+                    .parse::<BlockHash>()
+                    .unwrap(),
+            ))
+            .returning(move |_| Some(uncle2_clone.clone()));
 
         let uncle3 = test_share_block(
             Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3"),
@@ -295,7 +342,16 @@ mod tests {
             None,
             &mut vec![],
         );
-        chain_handle.add_share(uncle3.clone()).await.unwrap();
+        let uncle3_clone = uncle3.clone();
+
+        chain_handle
+            .expect_get_share()
+            .with(mockall::predicate::eq(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3"
+                    .parse::<BlockHash>()
+                    .unwrap(),
+            ))
+            .returning(move |_| Some(uncle3_clone.clone()));
 
         let uncle4 = test_share_block(
             Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4"),
@@ -308,7 +364,16 @@ mod tests {
             None,
             &mut vec![],
         );
-        chain_handle.add_share(uncle4.clone()).await.unwrap();
+        let uncle4_clone = uncle4.clone();
+
+        chain_handle
+            .expect_get_share()
+            .with(mockall::predicate::eq(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4"
+                    .parse::<BlockHash>()
+                    .unwrap(),
+            ))
+            .returning(move |_| Some(uncle4_clone.clone()));
 
         // Test share with valid number of uncles (MAX_UNCLES = 3)
         let valid_share = test_share_block(
@@ -353,6 +418,12 @@ mod tests {
         let non_existent_hash = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
             .parse()
             .unwrap();
+
+        chain_handle
+            .expect_get_share()
+            .with(mockall::predicate::eq(non_existent_hash))
+            .returning(|_| None);
+
         let invalid_share = test_share_block(
             Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8"),
             None,
@@ -367,5 +438,56 @@ mod tests {
         assert!(validate_uncles(&invalid_share, &chain_handle)
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_validate_share() {
+        let mut chain_handle = ChainHandle::default();
+
+        let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
+        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+            .parse::<bitcoin::PublicKey>()
+            .unwrap();
+        let share_header = crate::shares::miner_message::builders::build_share_header(
+            &workbases[0],
+            &shares[0],
+            &userworkbases[0],
+            pubkey,
+        )
+        .unwrap();
+
+        let share_block = crate::shares::miner_message::builders::build_share_block(
+            &workbases[0],
+            &userworkbases[0],
+            &shares[0],
+            share_header,
+        )
+        .unwrap();
+
+        // Set up mock expectations
+        chain_handle
+            .expect_add_share()
+            .with(mockall::predicate::eq(share_block.clone()))
+            .returning(|_| Ok(()));
+
+        chain_handle
+            .expect_setup_share_for_chain()
+            .returning(|share_block| share_block);
+        chain_handle
+            .expect_get_workbase()
+            .with(mockall::predicate::eq(7473434392883363843))
+            .returning(move |_| Some(workbases[0].clone()));
+        chain_handle
+            .expect_get_user_workbase()
+            .with(mockall::predicate::eq(7473434392883363843))
+            .returning(move |_| Some(userworkbases[0].clone()));
+
+        let mut time_provider = TestTimeProvider(SystemTime::now());
+        time_provider.set_time(shares[0].ntime);
+
+        // Test handle_request directly without request_id
+        let result = validate(&share_block, &chain_handle, &time_provider).await;
+
+        assert!(result.is_ok());
     }
 }

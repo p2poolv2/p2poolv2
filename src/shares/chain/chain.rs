@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::shares::miner_message::MinerWorkbase;
+use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{store::Store, BlockHash, ShareBlock};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -146,6 +146,18 @@ impl Chain {
         Ok(())
     }
 
+    /// Add a user workbase to the chain
+    pub fn add_user_workbase(
+        &mut self,
+        user_workbase: UserWorkbase,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        if let Err(e) = self.store.add_user_workbase(user_workbase) {
+            error!("Failed to add user workbase to store: {}", e);
+            return Err("Error adding user workbase to store".into());
+        }
+        Ok(())
+    }
+
     /// Get a share from the chain given a share hash
     pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock> {
         self.store.get_share(share_hash)
@@ -154,6 +166,11 @@ impl Chain {
     /// Get a workbase from the chain given a workinfoid
     pub fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase> {
         self.store.get_workbase(workinfoid)
+    }
+
+    /// Get a user workbase from the chain given a workinfoid
+    pub fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase> {
+        self.store.get_user_workbase(workinfoid)
     }
 
     /// Get the total difficulty of the chain

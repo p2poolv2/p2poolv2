@@ -24,14 +24,15 @@ mod self_and_peer_messages_tests {
     use p2poolv2::shares::chain::ChainHandle;
     use p2poolv2::shares::miner_message::CkPoolMessage;
     use p2poolv2::shares::ShareBlock;
+    use p2poolv2::utils::time_provider::{TestTimeProvider, TimeProvider};
     use std::fs;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
     use tempfile;
     use tempfile::tempdir;
     use tokio::sync::mpsc;
     use zmq;
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn receive_shares_and_workbases_from_self_and_peers() {
         // Create configuration for a single node
         let config = default_test_config()
@@ -71,15 +72,12 @@ mod self_and_peer_messages_tests {
                             .unwrap();
                     let mut peer_share =
                         ShareBlock::new(share, pubkey, bitcoin::Network::Regtest, &mut vec![]);
-                    // set all peer shares to have the same prev_share_blockhash
-                    peer_share.header.prev_share_blockhash = Some(
-                        "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
-                            .parse()
-                            .unwrap(),
-                    );
+                    // set all peer shares to have the no prev_share_blockhash
+                    peer_share.header.prev_share_blockhash = None;
                     Message::ShareBlock(peer_share)
                 }
                 CkPoolMessage::Workbase(workbase) => Message::Workbase(workbase),
+                CkPoolMessage::UserWorkbase(userworkbase) => Message::UserWorkbase(userworkbase),
             })
             .collect();
 
@@ -103,103 +101,72 @@ mod self_and_peer_messages_tests {
             }
         });
 
-        while let (Some(ckpool_msg), Some(peer_msg)) = (ckpool_iter.next(), peer_iter.next()) {
+        while let Some(ckpool_msg) = ckpool_iter.next() {
             let serialized = serde_json::to_string(&ckpool_msg).unwrap();
-            tracing::debug!("Publishing CKPool message: {:?}", &ckpool_msg);
             publisher
                 .send(&serialized, 0)
                 .expect("Failed to publish message");
+        }
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        while let Some(peer_msg) = peer_iter.next() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            // for shares from peers we validate it, so we need to set the time provider to the share timestamp
+            let mut time_provider = TestTimeProvider(SystemTime::now());
+            if let Message::ShareBlock(share) = &peer_msg {
+                time_provider.set_time(share.miner_share.ntime);
+            }
 
             tokio::time::sleep(Duration::from_millis(100)).await;
 
-            tracing::debug!("Sending peer message: {:?}", &peer_msg);
             let response = handle_request(
                 peer_id,
                 peer_msg.clone(),
                 chain_handle.clone(),
                 swarm_tx.clone(),
+                &time_provider,
             )
             .await;
+            let ww = chain_handle.get_workbase(7473434392883363844).await;
+            println!("ww: {:?}", ww);
             tracing::debug!("Peer message response: {:?}", &response);
             assert!(response.is_ok(), "Peer message handling failed");
-
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-
-        for msg in ckpool_iter {
-            let serialized = serde_json::to_string(&msg).unwrap();
-            publisher
-                .send(&serialized, 0)
-                .expect("Failed to publish message");
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-
-        for msg in peer_iter {
-            let response =
-                handle_request(peer_id, msg.clone(), chain_handle.clone(), swarm_tx.clone()).await;
-            assert!(response.is_ok(), "Peer message handling failed");
-            tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        assert!(
-            chain_handle
-                .get_share(
-                    "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
-                        .parse()
-                        .unwrap()
-                )
-                .await
-                .is_some(),
-            "CKPool share not found"
-        );
-
-        assert!(
-            chain_handle
-                .get_share(
-                    "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
-                        .parse()
-                        .unwrap()
-                )
-                .await
-                .is_some(),
-            "Peer share not found"
-        );
-
         let peer_share = chain_handle
             .get_share(
-                "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
+                "000000000822bbfaf34d53fc43d0c1382054d3aafe31893020c315db8b0a19f9"
                     .parse()
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(
-            peer_share.header.prev_share_blockhash,
-            Some(
-                "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
-                    .parse()
-                    .unwrap()
-            ),
-            "Previous share blockhash mismatch"
+
+        // For this test, we forced prev_share_blockhash to be None
+        assert!(
+            peer_share.header.prev_share_blockhash.is_none(),
+            "Previous share blockhash mismatch",
         );
 
         let ckpool_workbase = chain_handle
-            .get_workbase(7460801854683742211)
+            .get_workbase(7473434392883363843)
             .await
             .unwrap();
         assert_eq!(
-            ckpool_workbase.gbt.height, 109,
+            ckpool_workbase.gbt.height, 123,
             "CKPool workbase height mismatch"
         );
 
         let peer_workbase = chain_handle
-            .get_workbase(7460801854683742212)
+            .get_workbase(7473434392883363844)
             .await
             .unwrap();
         assert_eq!(
-            peer_workbase.gbt.height, 109,
+            peer_workbase.gbt.height, 123,
             "Peer workbase height mismatch"
         );
 

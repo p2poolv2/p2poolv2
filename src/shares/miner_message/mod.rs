@@ -14,17 +14,20 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-mod builders;
+pub mod builders;
 
 use crate::utils::serde_support::time::{deserialize_time, serialize_time};
 use bitcoin::absolute::Time;
+use hex;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub enum CkPoolMessage {
     Share(MinerShare),
     Workbase(MinerWorkbase),
+    UserWorkbase(UserWorkbase),
 }
 
 /// Represents the work done by a miner as sent by ckpool.
@@ -67,31 +70,59 @@ pub struct MinerShare {
 
 impl MinerShare {
     /// Validates the miner work against provided difficulty thresholds
-    pub fn validate(&self, workbase: &MinerWorkbase) -> Result<(), String> {
-        // Verify the hash meets required share difficulty
-        // Convert hash to u256 for comparison
-        let hash_bytes = hex::decode(&self.hash).map_err(|e| format!("Invalid hash hex: {}", e))?;
+    pub fn validate(
+        &self,
+        workbase: &MinerWorkbase,
+        user_workbase: &UserWorkbase,
+    ) -> Result<bool, String> {
+        let coinbase = builders::build_coinbase_from_share(workbase, user_workbase, &self)
+            .map_err(|e| format!("Failed to build coinbase: {}", e))?;
+        let coinbase_txid = coinbase.compute_txid();
+        let txids = workbase
+            .txns
+            .iter()
+            .map(|tx| bitcoin::Txid::from_str(&tx.txid))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to parse txid: {}", e))?;
+        let mut all_txids = vec![coinbase_txid];
+        all_txids.extend(&txids);
 
-        if hash_bytes.len() != 32 {
-            return Err(format!("Invalid hash length: {}", hash_bytes.len()));
+        let merkle_root = builders::compute_merkle_root_from_txids(&all_txids)
+            .ok_or_else(|| "Failed to compute merkle root".to_string())?;
+        let header = builders::build_bitcoin_header(workbase, self, merkle_root)
+            .map_err(|e| format!("Failed to build header: {}", e))?;
+        let block = builders::build_bitcoin_block(workbase, user_workbase, self)
+            .map_err(|e| format!("Failed to build block: {}", e))?;
+
+        let compact_target =
+            bitcoin::pow::CompactTarget::from_unprefixed_hex(&user_workbase.params.nbit).unwrap();
+        let required_target = bitcoin::Target::from_compact(compact_target);
+        // Validate proof of work
+        if header.validate_pow(required_target).is_err() {
+            return Err("Invalid proof of work".to_string());
         }
 
-        // Convert nonce to bytes for verification
-        let nonce_bytes =
-            hex::decode(&self.nonce).map_err(|e| format!("Invalid nonce hex: {}", e))?;
-
-        if nonce_bytes.len() != 4 {
-            return Err(format!("Invalid nonce length: {}", nonce_bytes.len()));
+        // Check merkle root
+        if !block.check_merkle_root() {
+            return Err("Invalid merkle root".to_string());
         }
 
-        // TODO: Implement actual hash verification against sdiff
-        // This would involve:
-        // 1. Reconstructing the block header with the nonce
-        // 2. Hashing it to verify it matches self.hash
-        // 3. Verifying the hash meets the required sdiff threshold
-        // For now we just validate the formats
+        // Check witness commitment
+        if !block.check_witness_commitment() {
+            return Err("Invalid witness commitment".to_string());
+        }
 
-        Ok(())
+        Ok(true)
+    }
+}
+
+#[cfg(test)]
+use mockall::mock;
+
+#[cfg(test)]
+mock! {
+    pub MinerShare {
+        pub fn validate(&self, workbase: &MinerWorkbase) -> Result<bool, String>;
     }
 }
 
@@ -118,8 +149,97 @@ pub struct MinerWorkbase {
     pub coinb3: String,
     // The bitcoin block header as a hex string without merkle root and nonce
     pub header: String,
-    pub txnbinlen: String,
-    pub txnbin: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(into = "(String, String, String, String, Vec<String>, String, String, String, bool)")]
+#[serde(from = "(String, String, String, String, Vec<String>, String, String, String, bool)")]
+pub struct UserWorkbaseParams {
+    pub id: String,
+    pub prevhash: String,
+    pub coinb1: String,
+    pub coinb2: String,
+    pub merkles: Vec<String>,
+    pub version: String,
+    pub nbit: String,
+    pub ntime: String,
+    pub clean_jobs: bool,
+}
+
+impl From<UserWorkbaseParams>
+    for (
+        String,
+        String,
+        String,
+        String,
+        Vec<String>,
+        String,
+        String,
+        String,
+        bool,
+    )
+{
+    fn from(params: UserWorkbaseParams) -> Self {
+        (
+            params.id,
+            params.prevhash,
+            params.coinb1,
+            params.coinb2,
+            params.merkles,
+            params.version,
+            params.nbit,
+            params.ntime,
+            params.clean_jobs,
+        )
+    }
+}
+
+impl
+    From<(
+        String,
+        String,
+        String,
+        String,
+        Vec<String>,
+        String,
+        String,
+        String,
+        bool,
+    )> for UserWorkbaseParams
+{
+    fn from(
+        (id, prevhash, coinb1, coinb2, merkles, version, nbit, ntime, clean_jobs): (
+            String,
+            String,
+            String,
+            String,
+            Vec<String>,
+            String,
+            String,
+            String,
+            bool,
+        ),
+    ) -> Self {
+        Self {
+            id,
+            prevhash,
+            coinb1,
+            coinb2,
+            merkles,
+            version,
+            nbit,
+            ntime,
+            clean_jobs,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct UserWorkbase {
+    pub params: UserWorkbaseParams,
+    pub id: Option<String>,
+    pub method: String,
+    pub workinfoid: u64,
 }
 
 /// Represents the getblocktemplate used in ckpool as workbase
@@ -162,7 +282,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_gbt_response_deserialization() {
+    fn test_userworkbase_deserialization() {
+        let json = std::fs::read_to_string("tests/test_data/validation/userworkbases.json")
+            .expect("Failed to read test data file");
+
+        // Test deserialization
+        let messages: Vec<CkPoolMessage> = serde_json::from_str(&json).unwrap();
+        let userworkbase = match &messages[0] {
+            CkPoolMessage::UserWorkbase(userworkbase) => userworkbase,
+            _ => panic!("Expected UserWorkbase variant"),
+        };
+
+        // Verify fields
+        assert_eq!(userworkbase.workinfoid, 7473434392883363843);
+        assert_eq!(userworkbase.method, "mining.notify");
+        assert_eq!(userworkbase.id, None);
+
+        // Verify params
+        let params = &userworkbase.params;
+        assert_eq!(params.id, "67b6f8fc00000003");
+        assert_eq!(
+            params.prevhash,
+            "6d600f568f665af26301fcafa53326454b9db355ff5d87f9863a956300000000"
+        );
+        assert_eq!(params.coinb1, "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff2c017b000438f9b667049c0fc52d0c");
+        assert_eq!(params.coinb2, "0a636b706f6f6c0a2f7032706f6f6c76322fffffffff0300111024010000001600148f1b6f0d5a0422afad259ec03977bdf2c74a037600e1f50500000000160014a248cf2f99f449511b22bab1a3d001719f84cd090000000000000000266a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf900000000");
+        assert!(params.merkles.is_empty());
+        assert_eq!(params.version, "20000000");
+        assert_eq!(params.nbit, "1e0377ae");
+        assert_eq!(params.ntime, "67b6f938");
+        assert_eq!(params.clean_jobs, false);
+
+        // Test serialization back to JSON
+        let serialized = serde_json::to_string(&userworkbase).unwrap();
+
+        // Deserialize again to verify round-trip
+        let deserialized: UserWorkbase = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.workinfoid, userworkbase.workinfoid);
+        assert_eq!(deserialized.method, userworkbase.method);
+        assert_eq!(deserialized.params, userworkbase.params);
+    }
+
+    #[test]
+    fn test_add_workbase() {
         let json = std::fs::read_to_string("tests/test_data/workbases_only.json")
             .expect("Failed to read test data file");
 
@@ -204,7 +366,9 @@ mod tests {
 #[cfg(test)]
 mod miner_share_tests {
     use super::*;
-    use crate::test_utils::{simple_miner_share, simple_miner_workbase};
+    use crate::test_utils::{
+        load_valid_workbases_userworkbases_and_shares, simple_miner_share, simple_miner_workbase,
+    };
     use rust_decimal_macros::dec;
     use serde_json;
 
@@ -235,53 +399,37 @@ mod miner_share_tests {
     }
     #[test]
     fn test_validate_share() {
-        let json = r#"{"workinfoid": 7459044800742817807, "clientid": 1, "enonce1": "336c6d67", "nonce2": "0000000000000000", "nonce": "2eb7b82b", "ntime": "676d6caa", "diff": 1.0, "sdiff": 1.9041854952356509, "hash": "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5", "result": true, "errn": 0, "createdate": "1735224559,536904211", "createby": "code", "createcode": "parse_submit", "createinet": "0.0.0.0:3333", "workername": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d", "username": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d", "address": "172.19.0.4", "agent": "cpuminer/2.5.1"}"#;
-        let workbase = simple_miner_workbase();
-
-        // Deserialize JSON to MinerWork
-        let miner_work: MinerShare = serde_json::from_str(json).unwrap();
+        let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
 
         // Test invalid nonce
-        let mut invalid_miner_work = miner_work.clone();
+        let mut invalid_miner_work = shares[0].clone();
         invalid_miner_work.nonce = "invalidhex".to_string();
-        let result: Result<(), String> = invalid_miner_work.validate(&workbase);
+        let result = invalid_miner_work.validate(&workbases[0], &userworkbases[0]);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
-            "Invalid nonce hex: Invalid character \'i\' at position 0"
+            "Failed to build header: invalid digit found in string"
         );
 
-        // Test invalid nonce length
-        let mut invalid_miner_work = miner_work.clone();
+        // Test invalid nonce
+        let mut invalid_miner_work = shares[0].clone();
         invalid_miner_work.nonce = "2eb7b8".to_string();
-        let result = invalid_miner_work.validate(&workbase);
+        let result = invalid_miner_work.validate(&workbases[0], &userworkbases[0]);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Invalid nonce length: 3");
+        assert_eq!(result.unwrap_err(), "Invalid proof of work");
     }
 
     #[test]
     #[ignore]
     fn test_validate_share_with_workbase() {
-        let json = include_str!("../../../tests/test_data/validation/workbases_and_shares.json");
-        let miner_messages: Vec<CkPoolMessage> = serde_json::from_str(json).unwrap();
-        let mut workbases = Vec::new();
-        let mut shares = Vec::new();
-
-        for message in miner_messages {
-            match message {
-                CkPoolMessage::Workbase(workbase) => workbases.push(workbase),
-                CkPoolMessage::Share(share) => shares.push(share),
-            }
-        }
-
-        assert_eq!(workbases.len(), 2);
-        assert_eq!(shares.len(), 2);
+        let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
 
         let workbase = &workbases[0];
+        let userworkbase = &userworkbases[0];
         let share = &shares[0];
 
         // Validate the share
-        let result = share.validate(&workbase);
+        let result = share.validate(&workbase, &userworkbase);
         assert!(result.is_ok());
     }
 
@@ -369,42 +517,22 @@ mod miner_share_tests {
         // Serialize to JSON
         let serialized = serde_json::to_string(&message).unwrap();
 
-        // Print and verify the size
-        println!("Serialized share size: {} bytes", serialized.len());
-        println!("Serialized share: {}", serialized);
-
         // The size should be reasonable for network transmission
         assert_eq!(serialized.len(), 316);
     }
 
     #[test_log::test(test)]
     fn test_workbase_coinbase_deserialization() {
-        // Read test data file
-        let test_data =
-            std::fs::read_to_string("tests/test_data/validation/workbases_and_shares.json")
-                .unwrap();
-        let messages: Vec<CkPoolMessage> = serde_json::from_str(&test_data).unwrap();
-
-        // Group workbases and shares
-        let mut workbase_share_pairs = Vec::new();
-        let mut current_workbase: Option<MinerWorkbase> = None;
-
-        for message in messages {
-            match message {
-                CkPoolMessage::Workbase(workbase) => {
-                    current_workbase = Some(workbase);
-                }
-                CkPoolMessage::Share(share) => {
-                    if let Some(workbase) = current_workbase.clone() {
-                        workbase_share_pairs.push((workbase, share));
-                    }
-                }
-            }
-        }
+        let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
 
         // Validate each workbase-share pair
-        for (workbase, share) in workbase_share_pairs {
-            let coinbase = builders::build_coinbase_from_share(&workbase, &share).unwrap();
+        for ((workbase, userworkbase), share) in workbases
+            .iter()
+            .zip(userworkbases.iter())
+            .zip(shares.iter())
+        {
+            let coinbase =
+                builders::build_coinbase_from_share(&workbase, &userworkbase, &share).unwrap();
             assert!(coinbase.is_coinbase());
         }
     }

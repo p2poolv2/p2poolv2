@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::node::messages::Message;
-use crate::shares::miner_message::MinerWorkbase;
+use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{BlockHash, ShareBlock, StorageShareBlock};
 use bitcoin::hashes::Hash;
 use bitcoin::Transaction;
@@ -125,11 +125,27 @@ impl Store {
 
     /// Add a workbase to the store
     pub fn add_workbase(&mut self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error>> {
-        debug!("Adding workbase to store: {:?}", workbase.workinfoid);
+        let workbase_key = format!("workbase:{}", workbase.workinfoid);
+        debug!("Adding workbase to store: {:?}", workbase_key);
         self.db
             .put(
-                workbase.workinfoid.to_string().as_bytes(),
+                workbase_key.as_bytes(),
                 Message::Workbase(workbase).cbor_serialize().unwrap(),
+            )
+            .unwrap();
+        Ok(())
+    }
+
+    /// Add a user workbase to the store
+    pub fn add_user_workbase(&mut self, user_workbase: UserWorkbase) -> Result<(), Box<dyn Error>> {
+        let user_workbase_key = format!("user_workbase:{}", user_workbase.workinfoid);
+        debug!("Adding user workbase to store: {:?}", user_workbase_key);
+        self.db
+            .put(
+                user_workbase_key.as_bytes(),
+                Message::UserWorkbase(user_workbase)
+                    .cbor_serialize()
+                    .unwrap(),
             )
             .unwrap();
         Ok(())
@@ -199,16 +215,40 @@ impl Store {
 
     /// Get a workbase from the store
     pub fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase> {
-        let workbase = self.db.get(workinfoid.to_string().as_bytes()).unwrap();
+        let workbase_key = format!("workbase:{}", workinfoid);
+        debug!("Getting workbase from store: {:?}", workbase_key);
+        let workbase = self.db.get(workbase_key.as_bytes()).unwrap();
         if workbase.is_none() {
             return None;
         }
         let workbase = Message::cbor_deserialize(&workbase.unwrap()).unwrap();
         let workbase = match workbase {
             Message::Workbase(workbase) => workbase,
-            _ => return None,
+            _ => {
+                tracing::error!("Invalid workbase key: {:?}", workbase_key);
+                return None;
+            }
         };
         Some(workbase)
+    }
+
+    /// Get a user workbase from the store
+    pub fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase> {
+        let user_workbase_key = format!("user_workbase:{}", workinfoid);
+        debug!("Getting user workbase from store: {:?}", user_workbase_key);
+        let user_workbase = self.db.get(user_workbase_key.as_bytes()).unwrap();
+        if user_workbase.is_none() {
+            return None;
+        }
+        let user_workbase = Message::cbor_deserialize(&user_workbase.unwrap()).unwrap();
+        let user_workbase = match user_workbase {
+            Message::UserWorkbase(user_workbase) => user_workbase,
+            _ => {
+                tracing::error!("Invalid user workbase key: {:?}", user_workbase_key);
+                return None;
+            }
+        };
+        Some(user_workbase)
     }
 
     /// Get a share from the store
@@ -663,7 +703,7 @@ mod tests {
         assert!(retrieved_txs[0].is_coinbase());
         assert_eq!(retrieved_txs[1], tx1);
         assert_eq!(retrieved_txs[2], tx2);
-        
+
         // Verify individual transactions can be retrieved by txid
         let tx1_id = tx1.compute_txid();
         let tx2_id = tx2.compute_txid();

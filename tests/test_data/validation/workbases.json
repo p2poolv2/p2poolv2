@@ -40,54 +40,13 @@
                 "bbversion": "20000000",
                 "nbit": "1e0377ae"
             },
-            "workinfoid": 7473434392883363844,
+            "workinfoid": 7473434392883363843,
             "txns": [],
             "merkles": [],
             "coinb1": "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff2c017b000438f9b667049c0fc52d0c",
             "coinb2": "0a636b706f6f6c0a2f7032706f6f6c76322fffffffff030011102401000000",
             "coinb3": "00e1f50500000000160014a248cf2f99f449511b22bab1a3d001719f84cd090000000000000000266a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf900000000",
             "header": "200000006d600f568f665af26301fcafa53326454b9db355ff5d87f9863a956300000000000000000000000000000000000000000000000000000000000000000000000067b6f9381e0377ae000000000000008000000000000000000000000000000000000000000000000000000000"
-        }
-    },
-    {
-        "UserWorkbase": {
-            "params": [
-                "67b6f8fc00000003",
-                "6d600f568f665af26301fcafa53326454b9db355ff5d87f9863a956300000000",
-                "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff2c017b000438f9b667049c0fc52d0c",
-                "0a636b706f6f6c0a2f7032706f6f6c76322fffffffff0300111024010000001600148f1b6f0d5a0422afad259ec03977bdf2c74a037600e1f50500000000160014a248cf2f99f449511b22bab1a3d001719f84cd090000000000000000266a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf900000000",
-                [],
-                "20000000",
-                "1e0377ae",
-                "67b6f938",
-                false
-            ],
-            "id": null,
-            "method": "mining.notify",
-            "workinfoid": 7473434392883363844
-        }
-    },
-    {
-        "Share": {
-            "workinfoid": 7473434392883363844,
-            "clientid": 1,
-            "enonce1": "fdf8b667",
-            "nonce2": "0000000000000000",
-            "nonce": "f15f1590",
-            "ntime": "67b6f938",
-            "diff": 1.0,
-            "sdiff": 31.465847594928551,
-            "hash": "000000000822bbfaf34d53fc43d0c1382054d3aafe31893020c315db8b0a19f9",
-            "result": true,
-            "errn": 0,
-            "createdate": "1740044611,331134621",
-            "createby": "code",
-            "createcode": "parse_submit",
-            "createinet": "0.0.0.0:3333",
-            "workername": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d",
-            "username": "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d",
-            "address": "127.0.0.1",
-            "agent": "cpuminer/2.5.1"
         }
     }
 ]
