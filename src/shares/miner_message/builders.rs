@@ -25,18 +25,6 @@ use std::error::Error;
 use std::io::Read;
 use std::str::FromStr;
 
-/// Decodes a hex string into a value of type T using the bitcoin consensus encoding
-/// We use the hex crate to decode the hex string into a byte vector
-/// Then we use the bitcoin consensus encoding to decode the byte vector into a value of type T
-/// Returns an error if the hex string is invalid
-pub fn decode_little_endian_hex<T: Decodable>(
-    hex_string: &str,
-) -> Result<T, Box<dyn std::error::Error>> {
-    let hex_bytes = hex::decode(hex_string).unwrap();
-    let value = bitcoin::consensus::encode::deserialize(&hex_bytes).unwrap();
-    Ok(value)
-}
-
 pub fn build_coinbase_from_share(
     _workbase: &MinerWorkbase,
     userworkbase: &UserWorkbase,
@@ -219,7 +207,6 @@ mod tests {
             coinbase.lock_time,
             bitcoin::locktime::absolute::LockTime::ZERO
         );
-
 
         // Mining reward output
         assert_eq!(
