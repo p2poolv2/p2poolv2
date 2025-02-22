@@ -67,16 +67,6 @@ fn decode_txids(txns: &Vec<WorkbaseTxn>) -> Result<Vec<bitcoin::Txid>, Box<dyn E
         .collect()
 }
 
-/// Compute the transaction merkle root from vector of transactions
-///
-/// The header in Gbt does not have the coinbase transaction, so we need to compute the merkle root
-/// with the vector of transactions built by using coinbase from share and rest of the transactions
-/// from workbase
-pub fn compute_merkle_root(txns: &Vec<bitcoin::Transaction>) -> Option<bitcoin::TxMerkleNode> {
-    let hashes = txns.iter().map(|obj| obj.compute_txid().to_raw_hash());
-    bitcoin::merkle_tree::calculate_root(hashes).map(|h| h.into())
-}
-
 /// Compute merkle root from the txids
 pub fn compute_merkle_root_from_txids(txids: &Vec<bitcoin::Txid>) -> Option<bitcoin::TxMerkleNode> {
     let hashes = txids.iter().map(|obj| obj.to_raw_hash());
