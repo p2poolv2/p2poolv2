@@ -19,12 +19,12 @@ use crate::shares::miner_message::MinerWorkbase;
 use crate::shares::miner_message::UserWorkbase;
 use crate::shares::miner_message::WorkbaseTxn;
 use bitcoin::consensus::Decodable;
-use bitcoin::consensus::Encodable;
-use bitcoin::hashes::Hash;
 use std::error::Error;
-use std::io::Read;
 use std::str::FromStr;
 
+/// Build coinbase from the share received from ckpool
+/// We do not validate the coinbase transaction, as ckpool does it for us.
+/// For shares received from peers, we will validate the entire block later.
 pub fn build_coinbase_from_share(
     _workbase: &MinerWorkbase,
     userworkbase: &UserWorkbase,
@@ -334,5 +334,44 @@ mod tests {
             let pow_result = block.header.validate_pow(required_target);
             assert!(pow_result.is_ok());
         }
+    }
+
+    #[test]
+    fn test_decode_transactions() {
+        let hex_tx = "010000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff2c017b000438f9b667049c0fc52d0cfdf8b66700000000000000000a636b706f6f6c0a2f7032706f6f6c76322fffffffff0300111024010000001600148f1b6f0d5a0422afad259ec03977bdf2c74a037600e1f50500000000160014a248cf2f99f449511b22bab1a3d001719f84cd090000000000000000266a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf90120000000000000000000000000000000000000000000000000000000000000000000000000";
+        let txs = vec![WorkbaseTxn {
+            data: hex_tx.to_string(),
+            txid: "d5ada3c7b0fb6e9e8a8c5c2f36f3e3134d0cf5d6eb6b14c0c70a53e13b4c5d9f".to_string(),
+        }];
+
+        let decoded = decode_transactions(&txs).unwrap();
+
+        assert_eq!(decoded.len(), 1);
+        let tx = &decoded[0];
+
+        // Verify transaction details
+        assert_eq!(tx.version, bitcoin::transaction::Version::ONE);
+        assert_eq!(tx.lock_time, bitcoin::absolute::LockTime::ZERO);
+
+        // Check inputs
+        assert_eq!(tx.input.len(), 1);
+        let input = &tx.input[0];
+        assert_eq!(
+            input.previous_output.txid,
+            bitcoin::Txid::from_str(
+                "0000000000000000000000000000000000000000000000000000000000000000"
+            )
+            .unwrap()
+        );
+        assert_eq!(input.previous_output.vout, 4294967295);
+        assert_eq!(input.sequence, bitcoin::Sequence::MAX);
+
+        // Check outputs
+        assert_eq!(tx.output.len(), 3);
+
+        // Verify the transaction can be serialized back
+        let serialized = bitcoin::consensus::encode::serialize(&tx);
+        let hex_serialized = hex::encode(serialized);
+        assert_eq!(hex_serialized, hex_tx.to_lowercase());
     }
 }
