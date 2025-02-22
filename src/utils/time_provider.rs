@@ -72,4 +72,31 @@ mod test {
         let time_provider = TestTimeProvider(fixed_time);
         assert_eq!(time_provider.now(), fixed_time);
     }
+
+    #[test]
+    fn test_system_time_provider() {
+        let provider = SystemTimeProvider;
+
+        // Get current time from provider
+        let provider_time = provider.now();
+        // Get actual system time
+        let system_time = SystemTime::now();
+
+        // Times should be very close (within 1 second)
+        let diff = system_time.duration_since(provider_time).unwrap();
+        assert!(diff < Duration::from_secs(1));
+
+        // Test seconds_since_epoch returns a reasonable value
+        let seconds = provider.seconds_since_epoch();
+        // Should be greater than Jan 1, 2024 (timestamp 1704067200)
+        assert!(seconds > 1704067200);
+
+        // Test set_time is no-op
+        let mut provider = SystemTimeProvider;
+        let before = provider.now();
+        provider.set_time(Time::from_consensus(1653195600).unwrap()); // Value picked from rust-bitcoin docs
+        let after = provider.now();
+        // Time should still progress normally
+        assert!(after >= before);
+    }
 }
