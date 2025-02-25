@@ -24,12 +24,12 @@ pub const MAX_UNCLES: usize = 3;
 pub const MAX_TIME_DIFF: u64 = 60;
 
 /// Validate the share block, returning Error in case of failure to validate
-/// TODO: validate nonce and blockhash meets difficulty
-/// DONE: validate prev_share_blockhash is in store
-/// DONE: validate uncles are in store and no more than MAX_UNCLES
-/// DONE: validate timestamp is within the last 10 minutes
-/// TODO: validate merkle root
-/// TODO: validate coinbase transaction
+/// validate nonce and blockhash meets difficulty
+/// validate prev_share_blockhash is in store
+/// validate uncles are in store and no more than MAX_UNCLES
+/// validate timestamp is within the last 10 minutes
+/// validate merkle root
+/// validate coinbase transaction
 pub async fn validate(
     share: &ShareBlock,
     chain_handle: &ChainHandle,
