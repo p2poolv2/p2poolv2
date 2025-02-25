@@ -42,7 +42,8 @@ zmq = "0.10"
 mockall = "0.13.1"
 mockall_double = "0.3.1"
 bitcoin = { version = "0.32.5", features = ["serde"] }
-bitcoincore-rpc = "0.19.0"
+jsonrpsee = { version = "0.24", features = ["http-client", "client"] }
+base64 = "0.22.1"
 
 [lib]
 name = "p2poolv2"
@@ -57,3 +58,4 @@ tempfile = "3.15.0"
 test-log = { version = "0.2.17", features = ["trace"] }
 tokio = { version = "1.0", features = ["full", "test-util"] }
 rand = "0.8"
+wiremock = "0.6.2"
