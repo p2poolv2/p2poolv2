@@ -41,6 +41,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 /// Capture send type for swarm p2p messages that can be sent to the swarm
+#[allow(dead_code)]
 pub enum SwarmSend {
     Gossip(Vec<u8>),
     Message(PeerId, Message),
@@ -61,7 +62,6 @@ impl Node {
         chain_handle: ChainHandle,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
-        let peer_id = id_keys.public().to_peer_id();
 
         let behavior = match P2PoolBehaviour::new(&id_keys) {
             Ok(behavior) => behavior,
@@ -123,10 +123,12 @@ impl Node {
     }
 
     /// Returns a Vec of peer IDs that are currently connected to this node
+    #[allow(dead_code)]
     pub fn connected_peers(&self) -> Vec<libp2p::PeerId> {
         self.swarm.connected_peers().cloned().collect()
     }
 
+    #[allow(dead_code)]
     pub fn shutdown(&mut self) -> Result<(), Box<dyn Error>> {
         for peer_id in self.swarm.connected_peers().cloned().collect::<Vec<_>>() {
             self.swarm.disconnect_peer_id(peer_id).unwrap_or_default();
@@ -176,7 +178,7 @@ impl Node {
                 peer_id, endpoint, ..
             } => {
                 info!("Connected to peer: {peer_id} {endpoint:?}");
-                self.handle_connection_established(peer_id);
+                self.handle_connection_established(peer_id).await;
                 Ok(())
             }
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
@@ -296,9 +298,9 @@ impl Node {
     }
 
     /// Handle connection established events, these are events that are generated when a connection is established
-    fn handle_connection_established(&mut self, peer_id: libp2p::PeerId) {
+    async fn handle_connection_established(&mut self, peer_id: libp2p::PeerId) {
         info!("Connection established with peer: {peer_id}");
-        self.send_inventory(peer_id);
+        let _ = self.send_inventory(peer_id).await;
     }
 
     /// Send inventory message to a specific peer

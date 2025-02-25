@@ -20,7 +20,6 @@ use bitcoin::{BlockHash, Txid};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
-use std::str::FromStr;
 
 /// Message trait for network messages that can be serialized/deserialized
 /// The trait provides a default implementation for serialization/deserialization
@@ -70,6 +69,7 @@ pub enum GetData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn test_inventory_message_serde() {

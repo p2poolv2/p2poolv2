@@ -30,10 +30,13 @@ use tracing::{debug, error, info};
 
 /// NodeHandle provides an interface to interact with a Node running in a separate task
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct NodeHandle {
     // The channel to send commands to the Node Actor
     command_tx: mpsc::Sender<Command>,
 }
+
+#[allow(dead_code)]
 
 impl NodeHandle {
     /// Create a new Node and return a handle to interact with it

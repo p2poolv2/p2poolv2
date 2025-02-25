@@ -21,6 +21,8 @@ use std::error::Error;
 use tokio::sync::oneshot;
 
 /// Commands for communication between node handle and actor
+#[derive(Debug)]
+#[allow(dead_code)]
 pub enum Command {
     /// Command telling node's event loop to send share to network
     SendGossip(

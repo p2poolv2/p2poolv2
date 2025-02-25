@@ -77,7 +77,7 @@ mod tests {
     use super::*;
     use crate::test_utils::simple_miner_share;
     use rust_decimal_macros::dec;
-    use std::collections::HashSet;
+
     #[tokio::test]
     async fn test_handle_mining_message_share() {
         let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"

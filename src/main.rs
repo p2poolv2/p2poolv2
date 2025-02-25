@@ -26,7 +26,6 @@ mod shares;
 mod utils;
 #[mockall_double::double]
 use crate::node::actor::NodeHandle;
-use crate::node::messages::Message;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use tracing::error;
@@ -54,7 +53,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Load configuration
     let config = config::Config::load(&args.config)?;
     let chain_handle = ChainHandle::new(config.store.path.clone());
-    if let Ok((node_handle, stopping_rx)) = NodeHandle::new(config, chain_handle).await {
+    if let Ok((_node_handle, stopping_rx)) = NodeHandle::new(config, chain_handle).await {
         info!("Node started");
         stopping_rx.await?;
         info!("Node stopped");
