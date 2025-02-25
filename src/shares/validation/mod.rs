@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+mod bitcoin_block_validation;
+
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::ShareBlock;

@@ -19,11 +19,13 @@ use std::error::Error;
 use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
 
+mod bitcoind_rpc;
 mod command;
 mod config;
 mod node;
 mod shares;
 mod utils;
+
 #[mockall_double::double]
 use crate::node::actor::NodeHandle;
 #[mockall_double::double]
