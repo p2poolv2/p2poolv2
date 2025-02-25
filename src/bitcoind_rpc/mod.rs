@@ -19,11 +19,11 @@ use jsonrpsee::core::client::ClientT;
 use jsonrpsee::http_client::{HeaderMap, HttpClient, HttpClientBuilder};
 
 #[derive(Debug, Clone)]
-pub struct BitcoinClient {
+pub struct BitcoindRpcClient {
     client: HttpClient,
 }
 
-impl BitcoinClient {
+impl BitcoindRpcClient {
     pub fn new(
         url: &str,
         username: &str,
@@ -91,11 +91,36 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = BitcoinClient::new(&mock_server.uri(), "testuser", "testpass").unwrap();
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "testuser", "testpass").unwrap();
 
         let params: Vec<serde_json::Value> = vec![];
         let result: String = client.request("test", params).await.unwrap();
 
         assert_eq!(result, "test response");
+    }
+
+    #[tokio::test]
+    async fn test_bitcoin_client_with_invalid_credentials() {
+        let mock_server = MockServer::start().await;
+
+        let client =
+            BitcoindRpcClient::new(&mock_server.uri(), "invaliduser", "invalidpass").unwrap();
+        let params: Vec<serde_json::Value> = vec![];
+        let result: Result<String, Box<dyn std::error::Error>> =
+            client.request("test", params).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    #[ignore] // Ignore by default since we only use it to test the connection to a locally running bitcoind
+    async fn test_bitcoin_client_real_connection() {
+        let client = BitcoindRpcClient::new("http://localhost:38332", "p2pool", "p2pool").unwrap();
+
+        let params: Vec<serde_json::Value> = vec![];
+        let result: serde_json::Value = client.request("getblockchaininfo", params).await.unwrap();
+
+        println!("Blockchain info: {}", result);
+        assert!(result.is_object());
+        assert!(result.get("chain").is_some());
     }
 }
