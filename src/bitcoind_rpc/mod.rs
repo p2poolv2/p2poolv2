@@ -19,10 +19,12 @@ use jsonrpsee::core::client::ClientT;
 use jsonrpsee::http_client::{HeaderMap, HttpClient, HttpClientBuilder};
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct BitcoindRpcClient {
     client: HttpClient,
 }
 
+#[allow(dead_code)]
 impl BitcoindRpcClient {
     pub fn new(
         url: &str,
