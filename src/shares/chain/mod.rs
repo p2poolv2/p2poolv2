@@ -16,5 +16,3 @@
 
 pub mod actor;
 mod chain;
-
-pub use actor::ChainHandle;

@@ -50,6 +50,7 @@ where
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct BitcoinConfig {
     #[serde(deserialize_with = "deserialize_network")]
     pub network: bitcoin::Network,
@@ -59,6 +60,7 @@ pub struct BitcoinConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct Config {
     pub network: NetworkConfig,
     pub store: StoreConfig,
@@ -67,6 +69,7 @@ pub struct Config {
     pub bitcoin: BitcoinConfig,
 }
 
+#[allow(dead_code)]
 impl Config {
     pub fn load(path: &str) -> Result<Self, config::ConfigError> {
         config::Config::builder()

@@ -23,7 +23,6 @@ pub mod store;
 pub mod transactions;
 pub mod validation;
 
-use crate::node::messages::Message;
 use crate::shares::miner_message::MinerShare;
 use bitcoin::TxMerkleNode;
 use bitcoin::{BlockHash, PublicKey, Transaction};
@@ -107,6 +106,7 @@ impl From<ShareBlock> for StorageShareBlock {
     }
 }
 
+#[allow(dead_code)]
 impl StorageShareBlock {
     /// Convert back to ShareBlock with empty transactions
     pub fn into_share_block(self) -> ShareBlock {
@@ -147,6 +147,7 @@ impl StorageShareBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node::messages::Message;
     use crate::test_utils::simple_miner_share;
     use crate::test_utils::test_share_block;
     use rust_decimal_macros::dec;

@@ -17,7 +17,6 @@
 use crate::node::messages::Message;
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{BlockHash, ShareBlock, StorageShareBlock};
-use bitcoin::hashes::Hash;
 use bitcoin::Transaction;
 use rocksdb::DB;
 use std::error::Error;
@@ -25,11 +24,13 @@ use tracing::debug;
 
 /// A store for share blocks.
 /// RocksDB as is used as the underlying database.
+#[allow(dead_code)]
 pub struct Store {
     path: String,
     db: DB,
 }
 
+#[allow(dead_code)]
 impl Store {
     /// Create a new share store
     pub fn new(path: String) -> Self {
@@ -355,9 +356,6 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shares::{ShareBlock, ShareHeader};
-    use crate::test_utils::simple_miner_share;
-    use crate::test_utils::test_coinbase_transaction;
     use crate::test_utils::test_share_block;
     use rust_decimal_macros::dec;
     use tempfile::tempdir;

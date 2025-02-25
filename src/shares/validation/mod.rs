@@ -195,7 +195,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_timestamp_should_succeed_for_valid_timestamp() {
-        let mut miner_share = simple_miner_share(None, None, None, None);
+        let miner_share = simple_miner_share(None, None, None, None);
         let mut time_provider = TestTimeProvider(SystemTime::now());
         time_provider.set_time(miner_share.ntime);
 

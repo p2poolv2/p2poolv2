@@ -18,6 +18,7 @@ use bitcoin::absolute::Time;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Trait to get current system time, allowing for mocking in tests
+#[allow(dead_code)]
 pub trait TimeProvider {
     fn now(&self) -> SystemTime;
     fn set_time(&mut self, time: Time);

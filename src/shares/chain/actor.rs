@@ -29,6 +29,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error};
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum ChainMessage {
     GetTips,
     Reorg(ShareBlock, Decimal),
@@ -46,6 +47,7 @@ pub enum ChainMessage {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum ChainResponse {
     Tips(HashSet<BlockHash>),
     TotalDifficulty(Decimal),
@@ -199,6 +201,7 @@ pub struct ChainHandle {
     sender: mpsc::Sender<(ChainMessage, mpsc::Sender<ChainResponse>)>,
 }
 
+#[allow(dead_code)]
 impl ChainHandle {
     pub fn new(store_path: String) -> Self {
         tracing::info!("Creating ChainHandle with store_path: {}", store_path);
@@ -466,10 +469,7 @@ mock! {
 mod tests {
     use super::*;
     use crate::shares::miner_message::Gbt;
-    use crate::shares::ShareHeader;
     use crate::test_utils::random_hex_string;
-    use crate::test_utils::simple_miner_share;
-    use crate::test_utils::test_coinbase_transaction;
     use crate::test_utils::test_share_block;
     use rust_decimal_macros::dec;
     use tempfile::tempdir;

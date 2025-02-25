@@ -120,6 +120,7 @@ pub fn build_bitcoin_block(
 /// Builds a ShareHeader from a workbase and a share
 /// The prev_share_blockhash and uncles fields are set to None and empty vec respectively
 /// since they need to be set by the chain actor
+#[allow(dead_code)]
 pub fn build_share_header(
     workbase: &MinerWorkbase,
     share: &MinerShare,
@@ -148,6 +149,7 @@ pub fn build_share_header(
 /// Builds a ShareBlock from a workbase, share and header
 /// Returns an error if any transaction fails to decode
 /// Returns an error if the coinbase transaction fails to decode
+#[allow(dead_code)]
 pub fn build_share_block(
     workbase: &MinerWorkbase,
     userworkbase: &UserWorkbase,
@@ -167,14 +169,9 @@ pub fn build_share_block(
 
 #[cfg(test)]
 mod tests {
-    use bitcoin::{amount::serde::as_btc::deserialize, hex::DisplayHex, Script};
-    use serde::Serialize;
-
     use super::*;
-    use crate::shares::miner_message::CkPoolMessage;
     use crate::test_utils::load_valid_workbases_userworkbases_and_shares;
     // btcaddress from ckpool-solo.json
-    const PAYOUT_ADDRESS: &str = "tb1qjc2zkm30zr0253clgc9dxjhtpp0j26v0wufeq3";
     const USER_PAYOUT_ADDRESS: &str = "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d";
     const DONATION_ADDRESS: &str = "tb1q5fyv7tue73y4zxezh2c685qpwx0cfngfxlrgxh";
 

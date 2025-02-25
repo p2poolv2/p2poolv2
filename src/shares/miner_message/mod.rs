@@ -18,7 +18,6 @@ pub mod builders;
 
 use crate::utils::serde_support::time::{deserialize_time, serialize_time};
 use bitcoin::absolute::Time;
-use hex;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -366,9 +365,7 @@ mod tests {
 #[cfg(test)]
 mod miner_share_tests {
     use super::*;
-    use crate::test_utils::{
-        load_valid_workbases_userworkbases_and_shares, simple_miner_share, simple_miner_workbase,
-    };
+    use crate::test_utils::{load_valid_workbases_userworkbases_and_shares, simple_miner_share};
     use rust_decimal_macros::dec;
     use serde_json;
 

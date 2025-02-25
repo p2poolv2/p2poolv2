@@ -34,6 +34,7 @@ pub struct Chain {
     pub chain_tip: Option<BlockHash>,
 }
 
+#[allow(dead_code)]
 impl Chain {
     pub fn new(store: Store) -> Self {
         Self {
@@ -217,10 +218,7 @@ impl Chain {
 #[cfg(test)]
 mod chain_tests {
     use super::*;
-    use crate::shares::{ShareBlock, ShareHeader};
     use crate::test_utils::random_hex_string;
-    use crate::test_utils::simple_miner_share;
-    use crate::test_utils::test_coinbase_transaction;
     use crate::test_utils::test_share_block;
     use std::collections::HashSet;
     use tempfile::tempdir;

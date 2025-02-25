@@ -41,10 +41,13 @@ pub struct P2PoolBehaviour {
 }
 
 /// The interval at which the node will send heartbeat messages to peers
+#[allow(dead_code)]
 const HEARTBEAT_INTERVAL: u64 = 15;
 
 // Define the events that can be emitted by our behavior
 #[derive(Debug)]
+#[allow(dead_code)]
+
 pub enum P2PoolBehaviourEvent {
     Gossipsub(gossipsub::Event),
     Kademlia(kad::Event),
@@ -52,6 +55,8 @@ pub enum P2PoolBehaviourEvent {
     Mdns(MdnsEvent),
     RequestResponse(RequestResponseEvent<Message, Message>),
 }
+
+#[allow(dead_code)]
 
 impl P2PoolBehaviour {
     pub fn new(local_key: &Keypair) -> Result<Self, Box<dyn Error>> {
