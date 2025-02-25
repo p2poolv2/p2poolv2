@@ -53,6 +53,9 @@ where
 pub struct BitcoinConfig {
     #[serde(deserialize_with = "deserialize_network")]
     pub network: bitcoin::Network,
+    pub url: String,
+    pub username: String,
+    pub password: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -99,6 +102,21 @@ impl Config {
 
     pub fn with_miner_pubkey(mut self, miner_pubkey: String) -> Self {
         self.miner.pubkey = miner_pubkey.parse().unwrap();
+        self
+    }
+
+    pub fn with_bitcoin_url(mut self, bitcoin_url: String) -> Self {
+        self.bitcoin.url = bitcoin_url;
+        self
+    }
+
+    pub fn with_bitcoin_username(mut self, bitcoin_username: String) -> Self {
+        self.bitcoin.username = bitcoin_username;
+        self
+    }
+
+    pub fn with_bitcoin_password(mut self, bitcoin_password: String) -> Self {
+        self.bitcoin.password = bitcoin_password;
         self
     }
 }
