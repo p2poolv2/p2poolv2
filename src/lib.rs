@@ -14,11 +14,11 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+pub mod bitcoind_rpc;
 pub mod command;
 pub mod config;
 pub mod node;
 pub mod shares;
-pub mod utils;
-
 #[cfg(test)]
 pub mod test_utils;
+pub mod utils;
