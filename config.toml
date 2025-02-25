@@ -14,3 +14,4 @@ pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
 
 [bitcoin]
 network = "signet"
+# RPC credentials are loaded from env vars

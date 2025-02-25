@@ -31,6 +31,9 @@ pub fn default_test_config() -> Config {
         },
         bitcoin: BitcoinConfig {
             network: bitcoin::Network::Regtest,
+            url: "http://localhost:8332".to_string(),
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
         },
         store: StoreConfig {
             path: "test_chain.db".to_string(),
