@@ -55,6 +55,13 @@ impl BitcoindRpcClient {
         let response = self.client.request(method, params).await?;
         Ok(response)
     }
+
+    /// Get current bitcoin difficulty from bitcoind rpc
+    pub async fn get_difficulty(&self) -> Result<f64, Box<dyn std::error::Error>> {
+        let params: Vec<serde_json::Value> = vec![];
+        let result: serde_json::Value = self.request("getdifficulty", params).await?;
+        Ok(result.as_f64().unwrap())
+    }
 }
 
 #[cfg(test)]
@@ -124,5 +131,32 @@ mod tests {
         println!("Blockchain info: {}", result);
         assert!(result.is_object());
         assert!(result.get("chain").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_get_difficulty() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "getdifficulty",
+                "params": [],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "result": 1234.56,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let difficulty = client.get_difficulty().await.unwrap();
+
+        assert_eq!(difficulty, 1234.56);
     }
 }
