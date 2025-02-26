@@ -123,3 +123,44 @@ impl Config {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_builder() {
+        let config = Config::load("./config.toml").unwrap();
+        let config = config
+            .with_listen_address("127.0.0.1:8080".to_string())
+            .with_dial_peers(vec![
+                "peer1.example.com".to_string(),
+                "peer2.example.com".to_string(),
+            ])
+            .with_store_path("/tmp/store".to_string())
+            .with_ckpool_host("ckpool.example.com".to_string())
+            .with_ckpool_port(3333)
+            .with_miner_pubkey(
+                "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".to_string(),
+            )
+            .with_bitcoin_url("http://localhost:8332".to_string())
+            .with_bitcoin_username("testuser".to_string())
+            .with_bitcoin_password("testpass".to_string());
+
+        assert_eq!(config.network.listen_address, "127.0.0.1:8080");
+        assert_eq!(
+            config.network.dial_peers,
+            vec!["peer1.example.com", "peer2.example.com"]
+        );
+        assert_eq!(config.store.path, "/tmp/store");
+        assert_eq!(config.ckpool.host, "ckpool.example.com");
+        assert_eq!(config.ckpool.port, 3333);
+        assert_eq!(
+            config.miner.pubkey.to_string(),
+            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+        );
+        assert_eq!(config.bitcoin.url, "http://localhost:8332");
+        assert_eq!(config.bitcoin.username, "testuser");
+        assert_eq!(config.bitcoin.password, "testpass");
+    }
+}
