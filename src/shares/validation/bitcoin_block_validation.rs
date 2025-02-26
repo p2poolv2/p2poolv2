@@ -46,7 +46,6 @@ pub async fn validate_bitcoin_block(
     let result: Result<serde_json::Value, _> = bitcoind.request("getblocktemplate", params).await;
 
     if let Err(e) = result {
-        println!("Bitcoin block validation failed: {}", e);
         return Err(format!("Bitcoin block validation failed: {}", e).into());
     }
 
@@ -115,5 +114,98 @@ mod tests {
         // Test validation
         let result = validate_bitcoin_block(&block, &config).await;
         assert!(result.is_ok());
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_validate_bitcoin_block_reject() {
+        // Start mock server
+        let mock_server = MockServer::start().await;
+        let block_hex_string = include_str!("../../../tests/test_data/seralized/block_1.txt");
+        let block_hex = hex::decode(block_hex_string).unwrap();
+        let block = bitcoin::Block::consensus_decode(&mut block_hex.as_slice()).unwrap();
+
+        // Set up mock auth
+        let auth_header = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD
+                .encode(format!("{}:{}", "testuser", "testpass"))
+        );
+
+        // Set up expected request/response
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", auth_header))
+            .and(body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 0,
+                "method": "getblocktemplate",
+                "params": [{
+                    "mode": "proposal",
+                    "data": block_hex_string
+                }],
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": "rejected",
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        // Create test config
+        let config = BitcoinConfig {
+            network: bitcoin::Network::Regtest,
+            url: mock_server.uri(),
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        };
+
+        // Test validation
+        let result = validate_bitcoin_block(&block, &config).await;
+        assert!(result.is_err());
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_validate_bitcoin_block_http_error() {
+        // Start mock server
+        let mock_server = MockServer::start().await;
+        let block_hex_string = include_str!("../../../tests/test_data/seralized/block_1.txt");
+        let block_hex = hex::decode(block_hex_string).unwrap();
+        let block = bitcoin::Block::consensus_decode(&mut block_hex.as_slice()).unwrap();
+
+        // Set up mock auth
+        let auth_header = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD
+                .encode(format!("{}:{}", "testuser", "testpass"))
+        );
+
+        // Set up expected request/response with HTTP 500 error
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", auth_header))
+            .and(body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 0,
+                "method": "getblocktemplate",
+                "params": [{
+                    "mode": "proposal",
+                    "data": block_hex_string
+                }],
+            })))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&mock_server)
+            .await;
+
+        // Create test config
+        let config = BitcoinConfig {
+            network: bitcoin::Network::Regtest,
+            url: mock_server.uri(),
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+        };
+
+        // Test validation
+        let result = validate_bitcoin_block(&block, &config).await;
+        assert!(result.is_err());
     }
 }
