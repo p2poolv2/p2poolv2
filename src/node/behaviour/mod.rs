@@ -15,8 +15,11 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod request_response;
+use crate::config::Config;
 use crate::node::messages::Message;
+use libp2p::connection_limits;
 use libp2p::request_response::ProtocolSupport;
+use libp2p::swarm::behaviour::toggle::Toggle;
 use libp2p::{
     gossipsub, identify,
     identity::Keypair,
@@ -28,6 +31,7 @@ use libp2p::{
 use request_response::P2PoolRequestResponseProtocol;
 use request_response::{RequestResponseBehaviour, RequestResponseEvent};
 use std::error::Error;
+use void;
 
 // Combine the behaviors we want to use
 #[derive(NetworkBehaviour)]
@@ -36,8 +40,9 @@ pub struct P2PoolBehaviour {
     pub gossipsub: gossipsub::Behaviour,
     pub kademlia: kad::Behaviour<MemoryStore>,
     pub identify: identify::Behaviour,
-    pub mdns: MdnsTokio,
+    pub mdns: Toggle<MdnsTokio>,
     pub request_response: RequestResponseBehaviour<Message, Message>,
+    pub limits: connection_limits::Behaviour,
 }
 
 /// The interval at which the node will send heartbeat messages to peers
@@ -59,7 +64,7 @@ pub enum P2PoolBehaviourEvent {
 #[allow(dead_code)]
 
 impl P2PoolBehaviour {
-    pub fn new(local_key: &Keypair) -> Result<Self, Box<dyn Error>> {
+    pub fn new(local_key: &Keypair, config: &Config) -> Result<Self, Box<dyn Error>> {
         // Initialize gossipsub
         let gossipsub_config = gossipsub::ConfigBuilder::default()
             .heartbeat_interval(std::time::Duration::from_secs(HEARTBEAT_INTERVAL))
@@ -85,10 +90,25 @@ impl P2PoolBehaviour {
             local_key.public(),
         ));
 
-        let mdns_behaviour =
-            MdnsTokio::new(MdnsConfig::default(), local_key.public().to_peer_id())?;
+        // Initialize MDNS only if enabled in config
+        let mdns_behaviour = if config.network.enable_mdns {
+            Toggle::from(Some(MdnsTokio::new(
+                MdnsConfig::default(),
+                local_key.public().to_peer_id(),
+            )?))
+        } else {
+            Toggle::from(None)
+        };
 
-        Ok(P2PoolBehaviour {
+        let limits_config = connection_limits::ConnectionLimits::default()
+            .with_max_pending_incoming(Some(config.network.max_pending_incoming))
+            .with_max_pending_outgoing(Some(config.network.max_pending_outgoing))
+            .with_max_established_incoming(Some(config.network.max_established_incoming))
+            .with_max_established_outgoing(Some(config.network.max_established_outgoing))
+            .with_max_established_per_peer(Some(config.network.max_established_per_peer));
+        let limits = connection_limits::Behaviour::new(limits_config);
+
+        let behaviour = P2PoolBehaviour {
             gossipsub: gossipsub_behaviour,
             kademlia: kademlia_behaviour,
             identify: identify_behaviour,
@@ -97,7 +117,10 @@ impl P2PoolBehaviour {
                 [(P2PoolRequestResponseProtocol::new(), ProtocolSupport::Full)],
                 libp2p::request_response::Config::default(),
             ),
-        })
+            limits,
+        };
+
+        Ok(behaviour)
     }
 
     /// Add a peer's address to Kademlia's routing table and get the closest peers so the peer availablility propagates across the network
@@ -142,5 +165,14 @@ impl From<MdnsEvent> for P2PoolBehaviourEvent {
 impl From<RequestResponseEvent<Message, Message>> for P2PoolBehaviourEvent {
     fn from(event: RequestResponseEvent<Message, Message>) -> Self {
         P2PoolBehaviourEvent::RequestResponse(event)
+    }
+}
+
+// Provide From for the void (unreachable) type for connection_limits behaviour
+impl From<void::Void> for P2PoolBehaviourEvent {
+    fn from(void: void::Void) -> Self {
+        // Since void::Void is uninhabited (can never be constructed),
+        // we can safely make this unreachable
+        match void {}
     }
 }

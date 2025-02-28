@@ -21,6 +21,12 @@ use serde::Deserialize;
 pub struct NetworkConfig {
     pub listen_address: String,
     pub dial_peers: Vec<String>,
+    pub enable_mdns: bool,
+    pub max_pending_incoming: u32,
+    pub max_pending_outgoing: u32,
+    pub max_established_incoming: u32,
+    pub max_established_outgoing: u32,
+    pub max_established_per_peer: u32,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -88,6 +94,36 @@ impl Config {
         self
     }
 
+    pub fn with_enable_mdns(mut self, enable_mdns: bool) -> Self {
+        self.network.enable_mdns = enable_mdns;
+        self
+    }
+
+    pub fn with_max_pending_incoming(mut self, max_pending_incoming: u32) -> Self {
+        self.network.max_pending_incoming = max_pending_incoming;
+        self
+    }
+
+    pub fn with_max_pending_outgoing(mut self, max_pending_outgoing: u32) -> Self {
+        self.network.max_pending_outgoing = max_pending_outgoing;
+        self
+    }
+
+    pub fn with_max_established_incoming(mut self, max_established_incoming: u32) -> Self {
+        self.network.max_established_incoming = max_established_incoming;
+        self
+    }
+
+    pub fn with_max_established_outgoing(mut self, max_established_outgoing: u32) -> Self {
+        self.network.max_established_outgoing = max_established_outgoing;
+        self
+    }
+
+    pub fn with_max_established_per_peer(mut self, max_established_per_peer: u32) -> Self {
+        self.network.max_established_per_peer = max_established_per_peer;
+        self
+    }
+
     pub fn with_store_path(mut self, store_path: String) -> Self {
         self.store.path = store_path;
         self
@@ -137,6 +173,12 @@ mod tests {
                 "peer1.example.com".to_string(),
                 "peer2.example.com".to_string(),
             ])
+            .with_enable_mdns(true)
+            .with_max_pending_incoming(10)
+            .with_max_pending_outgoing(10)
+            .with_max_established_incoming(50)
+            .with_max_established_outgoing(50)
+            .with_max_established_per_peer(1)
             .with_store_path("/tmp/store".to_string())
             .with_ckpool_host("ckpool.example.com".to_string())
             .with_ckpool_port(3333)
@@ -162,5 +204,11 @@ mod tests {
         assert_eq!(config.bitcoin.url, "http://localhost:8332");
         assert_eq!(config.bitcoin.username, "testuser");
         assert_eq!(config.bitcoin.password, "testpass");
+
+        assert_eq!(config.network.max_pending_incoming, 10);
+        assert_eq!(config.network.max_pending_outgoing, 10);
+        assert_eq!(config.network.max_established_incoming, 50);
+        assert_eq!(config.network.max_established_outgoing, 50);
+        assert_eq!(config.network.max_established_per_peer, 1);
     }
 }

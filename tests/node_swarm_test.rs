@@ -21,28 +21,33 @@ use p2poolv2::{node::actor::NodeHandle, shares::chain::actor::ChainHandle};
 use std::time::Duration;
 use tempfile::tempdir;
 
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn test_three_nodes_connectivity() {
     // Create three different configurations as strings
 
     let config1 = default_test_config()
-        .with_listen_address("/ip4/0.0.0.0/tcp/6884".to_string())
+        .with_listen_address("/ip4/127.0.0.1/tcp/6884".to_string())
         .with_store_path("test_chain_1.db".to_string())
         .with_miner_pubkey(
             "020202020202020202020202020202020202020202020202020202020202020202".to_string(),
         );
     let config2 = default_test_config()
-        .with_listen_address("/ip4/0.0.0.0/tcp/6885".to_string())
+        .with_listen_address("/ip4/127.0.0.1/tcp/6885".to_string())
         .with_store_path("test_chain_2.db".to_string())
         .with_miner_pubkey(
             "020202020202020202020202020202020202020202020202020202020202020202".to_string(),
-        );
+        )
+        .with_dial_peers(vec!["/ip4/127.0.0.1/tcp/6884".to_string()]);
     let config3 = default_test_config()
-        .with_listen_address("/ip4/0.0.0.0/tcp/6886".to_string())
+        .with_listen_address("/ip4/127.0.0.1/tcp/6886".to_string())
         .with_store_path("test_chain_3.db".to_string())
         .with_miner_pubkey(
             "020202020202020202020202020202020202020202020202020202020202020202".to_string(),
-        );
+        )
+        .with_dial_peers(vec![
+            "/ip4/127.0.0.1/tcp/6884".to_string(),
+            "/ip4/127.0.0.1/tcp/6885".to_string(),
+        ]);
 
     let temp_dir1 = tempdir().unwrap();
     let temp_dir2 = tempdir().unwrap();
@@ -55,15 +60,15 @@ async fn test_three_nodes_connectivity() {
     let (node1_handle, _stop_rx1) = NodeHandle::new(config1, chain_handle1)
         .await
         .expect("Failed to create node 1");
+    tokio::time::sleep(Duration::from_millis(100)).await;
     let (node2_handle, _stop_rx2) = NodeHandle::new(config2, chain_handle2)
         .await
         .expect("Failed to create node 2");
+    tokio::time::sleep(Duration::from_millis(100)).await;
     let (node3_handle, _stop_rx3) = NodeHandle::new(config3, chain_handle3)
         .await
         .expect("Failed to create node 3");
-
-    // Wait for peer discovery and mesh formation
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Get peer lists from each node
     let peers1 = node1_handle
