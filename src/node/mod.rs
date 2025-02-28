@@ -308,12 +308,12 @@ impl Node {
     /// Handle connection established events, these are events that are generated when a connection is established
     async fn handle_connection_established(&mut self, peer_id: libp2p::PeerId) {
         info!("Connection established with peer: {peer_id}");
-        let _ = self.send_inventory(peer_id).await;
+        let _ = self.send_header_inventory(peer_id).await;
     }
 
     /// Send inventory message to a specific peer
     /// For now we just send the tip of the chain
-    async fn send_inventory(&mut self, peer_id: libp2p::PeerId) {
+    async fn send_header_inventory(&mut self, peer_id: libp2p::PeerId) {
         let tips = self.chain_handle.get_tips().await;
         info!("Sending inventory message to peer: {peer_id}, tips: {tips:?}");
         let inventory_msg = Message::Inventory(InventoryMessage::ShareHeader(tips));
