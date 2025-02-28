@@ -316,7 +316,7 @@ impl Node {
     async fn send_inventory(&mut self, peer_id: libp2p::PeerId) {
         let tips = self.chain_handle.get_tips().await;
         info!("Sending inventory message to peer: {peer_id}, tips: {tips:?}");
-        let inventory_msg = Message::Inventory(InventoryMessage { have_shares: tips });
+        let inventory_msg = Message::Inventory(InventoryMessage::ShareHeader(tips));
         if let Err(e) = self.send_to_peer(peer_id, inventory_msg) {
             error!(
                 "Failed to send inventory message to peer {}: {}",

@@ -53,10 +53,13 @@ impl Message {
     }
 }
 
-/// Message for sending a list of shares to the network
+/// The inventory message used to tell a peer what we have in our inventory.
+/// The message can be used to tell the peer about share headers, blocks, or transactions that this peer has.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct InventoryMessage {
-    pub have_shares: HashSet<BlockHash>,
+pub enum InventoryMessage {
+    ShareHeader(HashSet<BlockHash>),
+    ShareBlock(HashSet<BlockHash>),
+    ShareTransaction(HashSet<Txid>),
 }
 
 /// Message for requesting data from peers
@@ -87,7 +90,7 @@ mod tests {
                 .unwrap(),
         );
 
-        let msg = Message::Inventory(InventoryMessage { have_shares });
+        let msg = Message::Inventory(InventoryMessage::ShareHeader(have_shares));
 
         // Test serialization
         let serialized = msg.cbor_serialize().unwrap();
@@ -96,25 +99,25 @@ mod tests {
         let deserialized = Message::cbor_deserialize(&serialized).unwrap();
 
         let deserialized = match deserialized {
-            Message::Inventory(inventory) => inventory,
+            Message::Inventory(InventoryMessage::ShareHeader(have_shares)) => have_shares,
             _ => panic!("Expected Inventory variant"),
         };
 
         // Verify the deserialized message matches original
-        assert_eq!(deserialized.have_shares.len(), 3);
-        assert!(deserialized.have_shares.contains(
+        assert_eq!(deserialized.len(), 3);
+        assert!(deserialized.contains(
             &BlockHash::from_str(
                 "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
             )
             .unwrap()
         ));
-        assert!(deserialized.have_shares.contains(
+        assert!(deserialized.contains(
             &BlockHash::from_str(
                 "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
             )
             .unwrap()
         ));
-        assert!(deserialized.have_shares.contains(
+        assert!(deserialized.contains(
             &BlockHash::from_str(
                 "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
             )
