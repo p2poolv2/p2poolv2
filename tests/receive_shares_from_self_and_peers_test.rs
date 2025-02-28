@@ -20,7 +20,7 @@ mod self_and_peer_messages_tests {
     use super::common::default_test_config;
     use p2poolv2::node::actor::NodeHandle;
     use p2poolv2::node::messages::Message;
-    use p2poolv2::node::request_response_handler::handle_request;
+    use p2poolv2::node::p2p_message_handlers::handle_request;
     use p2poolv2::shares::chain::actor::ChainHandle;
     use p2poolv2::shares::miner_message::CkPoolMessage;
     use p2poolv2::shares::ShareBlock;

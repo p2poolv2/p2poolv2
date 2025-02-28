@@ -32,6 +32,7 @@ pub enum Message {
     Workbase(MinerWorkbase),
     UserWorkbase(UserWorkbase),
     Transaction(bitcoin::Transaction),
+    ShareHeader(BlockHash),
 }
 
 impl Message {
@@ -65,7 +66,8 @@ pub enum InventoryMessage {
 /// Message for requesting data from peers
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum GetData {
-    BlockHash(BlockHash),
+    Header(BlockHash),
+    Block(BlockHash),
     Txid(Txid),
 }
 
@@ -128,14 +130,14 @@ mod tests {
     #[test]
     fn test_get_data_message_serde() {
         // Test BlockHash variant
-        let block_msg = Message::GetData(GetData::BlockHash(
+        let block_msg = Message::GetData(GetData::Block(
             BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
                 .unwrap(),
         ));
         let serialized = block_msg.cbor_serialize().unwrap();
         let deserialized = Message::cbor_deserialize(&serialized).unwrap();
         match deserialized {
-            Message::GetData(GetData::BlockHash(hash)) => {
+            Message::GetData(GetData::Block(hash)) => {
                 assert_eq!(
                     hash,
                     BlockHash::from_str(
