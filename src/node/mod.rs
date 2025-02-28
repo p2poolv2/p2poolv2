@@ -19,6 +19,7 @@ pub mod request_response_handler;
 pub use crate::config::Config;
 pub mod actor;
 pub mod messages;
+pub mod p2p_message_handlers;
 
 use crate::node::messages::{InventoryMessage, Message};
 #[mockall_double::double]
