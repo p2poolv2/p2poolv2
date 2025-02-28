@@ -15,8 +15,8 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::node::messages::Message;
-use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
-use crate::shares::{BlockHash, ShareBlock, StorageShareBlock};
+use crate::shares::miner_message::{MinerShare, MinerWorkbase, UserWorkbase};
+use crate::shares::{BlockHash, ShareBlock, ShareHeader, StorageShareBlock};
 use bitcoin::Transaction;
 use rocksdb::DB;
 use std::error::Error;
@@ -266,6 +266,20 @@ impl Store {
         let transactions = self.get_transactions(&share.header.blockhash);
         let share = share.into_share_block_with_transactions(transactions);
         Some(share)
+    }
+
+    /// Get a share header and miner share from the store without loading transactions
+    pub fn get_share_header(&self, blockhash: &BlockHash) -> Option<(ShareHeader, MinerShare)> {
+        debug!("Getting share header from store: {:?}", blockhash);
+        let share = match self.db.get::<&[u8]>(blockhash.as_ref()) {
+            Ok(Some(share)) => share,
+            Ok(None) | Err(_) => return None,
+        };
+        let storage_share = match StorageShareBlock::cbor_deserialize(&share) {
+            Ok(share) => share,
+            Err(_) => return None,
+        };
+        Some((storage_share.header, storage_share.miner_share))
     }
 
     /// Get transactions for a blockhash
@@ -778,5 +792,62 @@ mod tests {
 
         assert_eq!(store.get_transaction(&tx1_id).unwrap(), tx1);
         assert_eq!(store.get_transaction(&tx2_id).unwrap(), tx2);
+    }
+
+    #[test]
+    fn test_get_share_header() {
+        // Create a new store with a temporary path
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // Create test share block
+        let share = test_share_block(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
+            None,
+            vec![],
+            Some("020202020202020202020202020202020202020202020202020202020202020202"),
+            Some(7452731920372203525),
+            Some(1),
+            Some(dec!(1.0)),
+            Some(dec!(1.9041854952356509)),
+            &mut vec![],
+        );
+
+        // Add share to store
+        store.add_share(share.clone());
+
+        // Get share header from store
+        let (header, miner_share) = store.get_share_header(&share.header.blockhash).unwrap();
+
+        // Verify header matches original
+        assert_eq!(header.blockhash, share.header.blockhash);
+        assert_eq!(
+            header.prev_share_blockhash,
+            share.header.prev_share_blockhash
+        );
+        assert_eq!(header.uncles, share.header.uncles);
+        assert_eq!(header.miner_pubkey, share.header.miner_pubkey);
+        assert_eq!(header.merkle_root, share.header.merkle_root);
+
+        // Verify miner share matches original
+        assert_eq!(miner_share.workinfoid, share.miner_share.workinfoid);
+        assert_eq!(miner_share.nonce, share.miner_share.nonce);
+        assert_eq!(miner_share.diff, share.miner_share.diff);
+        assert_eq!(miner_share.ntime, share.miner_share.ntime);
+    }
+
+    #[test]
+    fn test_get_share_header_nonexistent() {
+        // Create a new store with a temporary path
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // Try to get share header for non-existent blockhash
+        let non_existent_blockhash =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
+                .parse()
+                .unwrap();
+        let result = store.get_share_header(&non_existent_blockhash);
+        assert!(result.is_none());
     }
 }
