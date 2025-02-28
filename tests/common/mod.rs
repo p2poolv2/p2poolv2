@@ -26,8 +26,14 @@ use p2poolv2::config::{
 pub fn default_test_config() -> Config {
     Config {
         network: NetworkConfig {
-            listen_address: "/ip4/0.0.0.0/tcp/6887".to_string(),
+            listen_address: "/ip4/127.0.0.1/tcp/6887".to_string(),
             dial_peers: vec![],
+            enable_mdns: false,
+            max_pending_incoming: 10,
+            max_pending_outgoing: 10,
+            max_established_incoming: 50,
+            max_established_outgoing: 50,
+            max_established_per_peer: 3,
         },
         bitcoin: BitcoinConfig {
             network: bitcoin::Network::Regtest,

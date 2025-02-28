@@ -3,6 +3,12 @@ listen_address = "/ip4/0.0.0.0/tcp/6886"
 dial_peers = [
     # "/ip4/127.0.0.1/tcp/6885",
 ]
+enable_mdns = true
+max_pending_incoming = 10
+max_pending_outgoing = 10
+max_established_incoming = 50
+max_established_outgoing = 50
+max_established_per_peer = 1
 
 [store]
 path = "./store.2.db"

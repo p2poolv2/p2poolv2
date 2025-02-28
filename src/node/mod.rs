@@ -63,7 +63,7 @@ impl Node {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
 
-        let behavior = match P2PoolBehaviour::new(&id_keys) {
+        let behavior = match P2PoolBehaviour::new(&id_keys, config) {
             Ok(behavior) => behavior,
             Err(err) => {
                 error!("Failed to create P2PoolBehaviour: {}", err);
@@ -184,6 +184,14 @@ impl Node {
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
                 info!("Disconnected from peer: {peer_id}");
                 self.swarm.behaviour_mut().remove_peer(&peer_id);
+                Ok(())
+            }
+            SwarmEvent::OutgoingConnectionError {
+                peer_id,
+                error,
+                connection_id,
+            } => {
+                error!("Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}");
                 Ok(())
             }
             SwarmEvent::Behaviour(event) => match event {
