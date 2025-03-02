@@ -45,7 +45,13 @@ pub async fn handle_request(
             handle_responses::handle_share_headers(share_headers, chain_handle, time_provider).await
         }
         Message::ShareBlocks(share_blocks) => {
-            handle_responses::handle_share_blocks(share_blocks, chain_handle, time_provider).await
+            handle_responses::handle_share_blocks(
+                share_blocks,
+                chain_handle,
+                swarm_tx,
+                time_provider,
+            )
+            .await
         }
         Message::Workbase(workbase) => {
             info!("Received workbase: {:?}", workbase);
@@ -123,7 +129,7 @@ mod tests {
     use mockall::predicate::*;
     use std::time::SystemTime;
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_handle_share_block_request() {
         let mut chain_handle = ChainHandle::default();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
@@ -186,17 +192,16 @@ mod tests {
         if let Some(SwarmSend::Gossip(buf)) = swarm_rx.try_recv().ok() {
             let message = Message::cbor_deserialize(&buf).unwrap();
             match message {
-                Message::ShareBlocks(received_shares) => {
-                    assert_eq!(
-                        received_shares[0].header.blockhash,
-                        share_block.header.blockhash
-                    );
-                    assert_eq!(
-                        received_shares[0].miner_share.diff,
-                        share_block.miner_share.diff
-                    );
-                }
-                _ => panic!("Expected ShareBlock message"),
+                Message::Inventory(inventory) => match inventory {
+                    InventoryMessage::ShareBlock(received_shares) => {
+                        assert_eq!(
+                            received_shares.contains(&share_block.header.blockhash),
+                            true
+                        );
+                    }
+                    _ => panic!("Expected Inventory message with ShareBlock"),
+                },
+                _ => panic!("Expected Inventory message"),
             }
         } else {
             panic!("Expected gossip message");
