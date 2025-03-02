@@ -14,8 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod requests;
-pub mod responses;
+pub mod handle_requests;
+pub mod handle_responses;
 
 use crate::node::messages::{GetData, InventoryMessage, Message};
 use crate::node::SwarmSend;
@@ -36,16 +36,16 @@ pub async fn handle_request(
     info!("Handling request from peer: {}", peer);
     match request {
         Message::GetShareHeaders(block_hashes) => {
-            requests::handle_get_headers(block_hashes, chain_handle, swarm_tx).await
+            handle_requests::handle_get_headers(block_hashes, chain_handle, swarm_tx).await
         }
         Message::GetShareBlocks(block_hashes) => {
-            requests::handle_get_blocks(block_hashes, chain_handle, swarm_tx).await
+            handle_requests::handle_get_blocks(block_hashes, chain_handle, swarm_tx).await
         }
         Message::ShareHeaders(share_headers) => {
-            responses::handle_share_headers(share_headers, chain_handle, time_provider).await
+            handle_responses::handle_share_headers(share_headers, chain_handle, time_provider).await
         }
         Message::ShareBlocks(share_blocks) => {
-            responses::handle_share_blocks(share_blocks, chain_handle, time_provider).await
+            handle_responses::handle_share_blocks(share_blocks, chain_handle, time_provider).await
         }
         Message::Workbase(workbase) => {
             info!("Received workbase: {:?}", workbase);
