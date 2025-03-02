@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
-use crate::shares::ShareBlock;
+use crate::shares::{ShareBlock, ShareHeader};
 use bitcoin::{BlockHash, Txid};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -27,12 +27,15 @@ use std::error::Error;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Message {
     Inventory(InventoryMessage),
+    GetShareHeaders(Vec<BlockHash>),
+    GetShareBlocks(Vec<BlockHash>),
+    ShareHeaders(Vec<ShareHeader>),
+    ShareBlocks(Vec<ShareBlock>),
     GetData(GetData),
-    ShareBlock(ShareBlock),
     Workbase(MinerWorkbase),
     UserWorkbase(UserWorkbase),
     Transaction(bitcoin::Transaction),
-    ShareHeader(BlockHash),
+    MiningShare(ShareBlock),
 }
 
 impl Message {
