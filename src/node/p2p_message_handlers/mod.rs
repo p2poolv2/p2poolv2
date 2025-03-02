@@ -14,11 +14,13 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+pub mod requests;
+pub mod responses;
+
 use crate::node::messages::{GetData, InventoryMessage, Message};
 use crate::node::SwarmSend;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
-use crate::shares::validation;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -33,26 +35,17 @@ pub async fn handle_request(
 ) -> Result<(), Box<dyn Error>> {
     info!("Handling request from peer: {}", peer);
     match request {
-        Message::ShareHeader(block_hash) => {
-            info!("Received share header: {:?}", block_hash);
-            Ok(())
+        Message::GetShareHeaders(block_hashes) => {
+            requests::handle_get_headers(block_hashes, chain_handle, swarm_tx).await
         }
-        Message::ShareBlock(share_block) => {
-            info!("Received share block: {:?}", share_block);
-            if let Err(e) = validation::validate(&share_block, &chain_handle, time_provider).await {
-                error!("Share block validation failed: {}", e);
-                return Err("Share block validation failed".into());
-            }
-            if let Err(e) = chain_handle.add_share(share_block.clone()).await {
-                error!("Failed to add share: {}", e);
-                return Err("Error adding share to chain".into());
-            }
-            let buf = Message::ShareBlock(share_block).cbor_serialize().unwrap();
-            if let Err(e) = swarm_tx.send(SwarmSend::Gossip(buf)).await {
-                error!("Failed to send share: {}", e);
-                return Err("Error sending share to network".into());
-            }
-            Ok(())
+        Message::GetShareBlocks(block_hashes) => {
+            requests::handle_get_blocks(block_hashes, chain_handle, swarm_tx).await
+        }
+        Message::ShareHeaders(share_headers) => {
+            responses::handle_share_headers(share_headers, chain_handle, time_provider).await
+        }
+        Message::ShareBlocks(share_blocks) => {
+            responses::handle_share_blocks(share_blocks, chain_handle, time_provider).await
         }
         Message::Workbase(workbase) => {
             info!("Received workbase: {:?}", workbase);
@@ -110,6 +103,10 @@ pub async fn handle_request(
         }
         Message::Transaction(transaction) => {
             info!("Received transaction: {:?}", transaction);
+            Ok(())
+        }
+        Message::MiningShare(share_block) => {
+            info!("Received mining share from ckpool: {:?}", share_block);
             Ok(())
         }
     }
@@ -176,7 +173,7 @@ mod tests {
         // Test handle_request directly without request_id
         let result = handle_request(
             peer_id,
-            Message::ShareBlock(share_block.clone()),
+            Message::ShareBlocks(vec![share_block.clone()]),
             chain_handle,
             swarm_tx,
             &time_provider,
@@ -189,13 +186,13 @@ mod tests {
         if let Some(SwarmSend::Gossip(buf)) = swarm_rx.try_recv().ok() {
             let message = Message::cbor_deserialize(&buf).unwrap();
             match message {
-                Message::ShareBlock(received_share) => {
+                Message::ShareBlocks(received_shares) => {
                     assert_eq!(
-                        received_share.header.blockhash,
+                        received_shares[0].header.blockhash,
                         share_block.header.blockhash
                     );
                     assert_eq!(
-                        received_share.miner_share.diff,
+                        received_shares[0].miner_share.diff,
                         share_block.miner_share.diff
                     );
                 }
@@ -243,7 +240,7 @@ mod tests {
 
         let result = handle_request(
             peer_id,
-            Message::ShareBlock(share_block),
+            Message::ShareBlocks(vec![share_block]),
             chain_handle,
             swarm_tx,
             &time_provider,

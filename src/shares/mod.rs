@@ -166,12 +166,14 @@ mod tests {
             &mut vec![],
         );
 
-        let serialized = Message::ShareBlock(share.clone()).cbor_serialize().unwrap();
+        let serialized = Message::MiningShare(share.clone())
+            .cbor_serialize()
+            .unwrap();
         let deserialized = Message::cbor_deserialize(&serialized).unwrap();
 
         let deserialized = match deserialized {
-            Message::ShareBlock(share) => share,
-            _ => panic!("Expected ShareBlock variant"),
+            Message::MiningShare(share) => share,
+            _ => panic!("Expected MiningShare variant"),
         };
 
         assert_eq!(share.header.blockhash, deserialized.header.blockhash);
