@@ -19,6 +19,7 @@ use crate::shares::miner_message::{MinerShare, MinerWorkbase, UserWorkbase};
 use crate::shares::{BlockHash, ShareBlock, ShareHeader, StorageShareBlock};
 use bitcoin::Transaction;
 use rocksdb::DB;
+use std::collections::HashMap;
 use std::error::Error;
 use tracing::debug;
 
@@ -268,6 +269,39 @@ impl Store {
         Some(share)
     }
 
+    /// Get multiple shares from the store
+    pub fn get_shares(&self, blockhashes: Vec<BlockHash>) -> HashMap<BlockHash, ShareBlock> {
+        debug!("Getting shares from store: {:?}", blockhashes);
+        let keys = blockhashes
+            .iter()
+            .map(|h| <bitcoin::BlockHash as AsRef<[u8]>>::as_ref(h))
+            .collect::<Vec<_>>();
+        let shares = self.db.multi_get::<&[u8], Vec<&[u8]>>(keys);
+        let shares = shares
+            .into_iter()
+            .map(|v| {
+                if let Ok(Some(v)) = v {
+                    if let Ok(storage_share) = StorageShareBlock::cbor_deserialize(&v) {
+                        let txids = self.get_txids_for_blockhash(&storage_share.header.blockhash);
+                        let transactions = txids
+                            .iter()
+                            .map(|txid| self.get_transaction(txid).unwrap())
+                            .collect::<Vec<_>>();
+                        Some(storage_share.into_share_block_with_transactions(transactions))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        shares
+            .into_iter()
+            .filter_map(|share| share.map(|s| (s.header.blockhash, s)))
+            .collect::<HashMap<BlockHash, ShareBlock>>()
+    }
+
     /// Get a share header and miner share from the store without loading transactions
     pub fn get_share_header(&self, blockhash: &BlockHash) -> Option<(ShareHeader, MinerShare)> {
         debug!("Getting share header from store: {:?}", blockhash);
@@ -324,16 +358,13 @@ impl Store {
             return vec![];
         }
         let share = share.unwrap();
-        share
-            .header
-            .uncles
-            .iter()
-            .map(|uncle| self.get_share(uncle).unwrap())
-            .collect()
+        let uncle_blocks = self.get_shares(share.header.uncles);
+        uncle_blocks.into_iter().map(|(_, share)| share).collect()
     }
 
     /// Get entire chain from earliest known block to given blockhash, excluding the given blockhash
     /// When we prune the chain, the oldest share in the chain will be marked as root, by removing it's prev_share_blockhash
+    /// We can't use get_shares as we need to get a share, then find it's prev_share_blockhash, then get the share again, etc.
     pub fn get_chain_upto(&self, blockhash: &BlockHash) -> Vec<ShareBlock> {
         debug!("Getting chain upto: {:?}", blockhash);
         std::iter::successors(self.get_share(blockhash), |share| {

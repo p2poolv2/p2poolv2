@@ -28,6 +28,8 @@ pub async fn handle_get_blocks(
     chain_handle: ChainHandle,
     swarm_tx: mpsc::Sender<SwarmSend>,
 ) -> Result<(), Box<dyn Error>> {
-    info!("Received get blocks: {:?}", block_hashes);
+    info!("Received getblocks: {:?}", block_hashes);
+    // let share_blocks = chain_handle.get_blocks(block_hashes).await;
+    // swarm_tx.send(SwarmSend::ShareBlocks(share_blocks)).await?;
     Ok(())
 }
