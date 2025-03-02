@@ -14,4 +14,4 @@ run config="config.toml":
 	RUST_LOG={{LOG_LEVEL}} cargo run -- --config={{config}}
 
 check:
-	cargo check
+	cargo check --jobs 2
