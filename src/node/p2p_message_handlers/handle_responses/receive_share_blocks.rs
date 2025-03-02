@@ -14,12 +14,15 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::node::messages::{InventoryMessage, Message};
+use crate::node::SwarmSend;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::validation;
 use crate::shares::ShareBlock;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
+use tokio::sync::mpsc;
 use tracing::{error, info};
 
 /// Handle a ShareBlock received from a peer
@@ -27,11 +30,12 @@ use tracing::{error, info};
 pub async fn handle_share_blocks(
     share_blocks: Vec<ShareBlock>,
     chain_handle: ChainHandle,
+    swarm_tx: mpsc::Sender<SwarmSend>,
     time_provider: &impl TimeProvider,
 ) -> Result<(), Box<dyn Error>> {
     info!("Received share blocks: {:?}", share_blocks);
-    for share_block in share_blocks {
-        if let Err(e) = validation::validate(&share_block, &chain_handle, time_provider).await {
+    for share_block in &share_blocks {
+        if let Err(e) = validation::validate(share_block, &chain_handle, time_provider).await {
             error!("Share block validation failed: {}", e);
             return Err("Share block validation failed".into());
         }
@@ -41,6 +45,16 @@ pub async fn handle_share_blocks(
         }
     }
     info!("Successfully added share blocks to chain");
-    // TODO: Trigger gossip of share block inventory message
+
+    // Trigger gossip of share block inventory message
+    let inventory = Message::Inventory(InventoryMessage::ShareBlock(
+        share_blocks
+            .iter()
+            .map(|block| block.header.blockhash)
+            .collect(),
+    ));
+    let buf = inventory.cbor_serialize().unwrap();
+    let swarm_send = SwarmSend::Gossip(buf);
+    swarm_tx.send(swarm_send).await.unwrap();
     Ok(())
 }
