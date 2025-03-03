@@ -470,7 +470,7 @@ mod tests {
     use super::*;
     use crate::shares::miner_message::Gbt;
     use crate::test_utils::random_hex_string;
-    use crate::test_utils::test_share_block;
+    use crate::test_utils::TestBlockBuilder;
     use rust_decimal_macros::dec;
     use tempfile::tempdir;
 
@@ -483,17 +483,9 @@ mod tests {
         assert!(tips.is_empty()); // New chain should have no tips
 
         // Add a share block
-        let share_block = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
-            None,
-            vec![],
-            None,
-            None,
-            None,
-            None,
-            None,
-            &mut vec![],
-        );
+        let share_block = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .build();
 
         let result = chain_handle.add_share(share_block.clone()).await;
         assert!(result.is_ok());
@@ -513,34 +505,21 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
 
-        let share_block = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
-            None,
-            vec![],
-            None,
-            None,
-            None,
-            None,
-            None,
-            &mut vec![],
-        );
+        let share_block = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .build();
 
         // Add initial share block
         let result = chain_handle.add_share(share_block.clone()).await;
         assert!(result.is_ok());
 
         // Create another share block with higher difficulty
-        let higher_diff_share = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"),
-            Some(share_block.header.blockhash.to_string().as_str()),
-            vec![],
-            None,
-            None,
-            None,
-            Some(dec!(2.0)),
-            Some(dec!(2.0)),
-            &mut vec![],
-        );
+        let higher_diff_share = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
+            .prev_share_blockhash(share_block.header.blockhash.to_string().as_str())
+            .diff(dec!(2.0))
+            .sdiff(dec!(2.0))
+            .build();
 
         let result = chain_handle.add_share(higher_diff_share.clone()).await;
         assert!(result.is_ok());
@@ -560,17 +539,11 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
 
-        let share_block = test_share_block(
-            Some(random_hex_string(64, 8).as_str()),
-            Some(random_hex_string(64, 8).as_str()),
-            vec![],
-            Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            None,
-            None,
-            None,
-            None,
-            &mut vec![],
-        );
+        let share_block = TestBlockBuilder::new()
+            .blockhash(random_hex_string(64, 8).as_str())
+            .prev_share_blockhash(random_hex_string(64, 8).as_str())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
 
         let result = chain_handle.is_confirmed(share_block).await;
         assert!(result.is_ok());
@@ -631,17 +604,10 @@ mod tests {
         let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
 
         // Create initial share
-        let share1 = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
-            None,
-            vec![],
-            Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            None,
-            None,
-            None,
-            None,
-            &mut vec![],
-        );
+        let share1 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
 
         // Add first share and verify depth is 0
         chain_handle.add_share(share1.clone()).await.unwrap();
@@ -649,17 +615,11 @@ mod tests {
         assert_eq!(depth, Some(0));
 
         // Create and add second share
-        let share2 = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"),
-            Some(share1.header.blockhash.to_string().as_str()),
-            vec![],
-            Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            None,
-            None,
-            None,
-            None,
-            &mut vec![],
-        );
+        let share2 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
+            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
 
         // Add second share and verify depths
         chain_handle.add_share(share2.clone()).await.unwrap();

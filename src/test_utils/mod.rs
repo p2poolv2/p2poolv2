@@ -127,7 +127,96 @@ pub fn load_valid_workbases_userworkbases_and_shares(
 }
 
 #[cfg(test)]
-pub fn test_share_block(
+pub struct TestBlockBuilder {
+    blockhash: Option<String>,
+    prev_share_blockhash: Option<String>,
+    uncles: Vec<BlockHash>,
+    miner_pubkey: Option<String>,
+    workinfoid: Option<u64>,
+    clientid: Option<u64>,
+    diff: Option<Decimal>,
+    sdiff: Option<Decimal>,
+    transactions: Vec<Transaction>,
+}
+
+#[cfg(test)]
+impl TestBlockBuilder {
+    pub fn new() -> Self {
+        Self {
+            blockhash: None,
+            prev_share_blockhash: None,
+            uncles: Vec::new(),
+            miner_pubkey: None,
+            workinfoid: None,
+            clientid: None,
+            diff: None,
+            sdiff: None,
+            transactions: Vec::new(),
+        }
+    }
+
+    pub fn blockhash(mut self, blockhash: &str) -> Self {
+        self.blockhash = Some(blockhash.to_string());
+        self
+    }
+
+    pub fn prev_share_blockhash(mut self, prev_share_blockhash: &str) -> Self {
+        self.prev_share_blockhash = Some(prev_share_blockhash.to_string());
+        self
+    }
+
+    pub fn uncles(mut self, uncles: Vec<BlockHash>) -> Self {
+        self.uncles = uncles;
+        self
+    }
+
+    pub fn miner_pubkey(mut self, miner_pubkey: &str) -> Self {
+        self.miner_pubkey = Some(miner_pubkey.to_string());
+        self
+    }
+
+    pub fn workinfoid(mut self, workinfoid: u64) -> Self {
+        self.workinfoid = Some(workinfoid);
+        self
+    }
+
+    pub fn clientid(mut self, clientid: u64) -> Self {
+        self.clientid = Some(clientid);
+        self
+    }
+
+    pub fn diff(mut self, diff: Decimal) -> Self {
+        self.diff = Some(diff);
+        self
+    }
+
+    pub fn sdiff(mut self, sdiff: Decimal) -> Self {
+        self.sdiff = Some(sdiff);
+        self
+    }
+
+    pub fn add_transaction(mut self, transaction: Transaction) -> Self {
+        self.transactions.push(transaction);
+        self
+    }
+
+    pub fn build(self) -> ShareBlock {
+        test_share_block(
+            self.blockhash.as_deref(),
+            self.prev_share_blockhash.as_deref(),
+            self.uncles,
+            self.miner_pubkey.as_deref(),
+            self.workinfoid,
+            self.clientid,
+            self.diff,
+            self.sdiff,
+            &mut self.transactions.clone(),
+        )
+    }
+}
+
+#[cfg(test)]
+fn test_share_block(
     blockhash: Option<&str>,
     prev_share_blockhash: Option<&str>,
     uncles: Vec<BlockHash>,

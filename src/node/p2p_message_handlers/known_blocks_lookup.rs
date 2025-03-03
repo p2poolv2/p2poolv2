@@ -34,7 +34,7 @@ async fn find_first_known_block(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::test_share_block;
+    use crate::test_utils::TestBlockBuilder;
     use mockall::predicate::*;
 
     #[tokio::test]
@@ -62,17 +62,11 @@ mod tests {
             .expect_get_share()
             .with(eq(hash2))
             .times(1)
-            .return_const(test_share_block(
-                Some("0000000000000000000000000000000000000000000000000000000000000002"),
-                None,
-                vec![],
-                None,
-                None,
-                None,
-                None,
-                None,
-                &mut vec![],
-            ));
+            .return_const(
+                TestBlockBuilder::new()
+                    .blockhash("0000000000000000000000000000000000000000000000000000000000000002")
+                    .build(),
+            );
 
         // hash3 should not be called since we found hash2
 

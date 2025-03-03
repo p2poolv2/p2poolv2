@@ -78,7 +78,7 @@ mod tests {
     use super::*;
     use base64::Engine;
     use bitcoin::consensus::Decodable;
-
+    use rust_decimal_macros::dec;
     use wiremock::{
         matchers::{body_json, header, method, path},
         Mock, MockServer, ResponseTemplate,
@@ -290,17 +290,10 @@ mod tests {
         };
 
         // Create share with matching difficulty
-        let mut share = crate::test_utils::test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
-            None,
-            vec![],
-            None,
-            None,
-            None,
-            None,
-            Some(rust_decimal::Decimal::from_f64_retain(1.0).unwrap()),
-            &mut vec![],
-        );
+        let share = crate::test_utils::TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .diff(dec!(1.0))
+            .build();
 
         // Test validation
         let result = meets_bitcoin_difficulty(&share, &block, &config).await;
@@ -349,17 +342,10 @@ mod tests {
         };
 
         // Create share with difficulty lower than network
-        let mut share = crate::test_utils::test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
-            None,
-            vec![],
-            None,
-            None,
-            None,
-            None,
-            Some(rust_decimal::Decimal::from_f64_retain(1.0).unwrap()), // Share difficulty is 1.0
-            &mut vec![],
-        );
+        let share = crate::test_utils::TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .sdiff(dec!(1.0))
+            .build();
 
         // Test validation - should return Ok(false) since share difficulty is too low
         let result = meets_bitcoin_difficulty(&share, &block, &config).await;

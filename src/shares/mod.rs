@@ -149,22 +149,22 @@ mod tests {
     use super::*;
     use crate::node::messages::Message;
     use crate::test_utils::simple_miner_share;
-    use crate::test_utils::test_share_block;
+    use crate::test_utils::TestBlockBuilder;
     use rust_decimal_macros::dec;
 
     #[test]
     fn test_share_serialization() {
-        let share = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4"),
-            vec![],
-            Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            Some(7452731920372203525),
-            Some(1),
-            Some(dec!(1.0)),
-            Some(dec!(1.9041854952356509)),
-            &mut vec![],
-        );
+        let share = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .prev_share_blockhash(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
+            )
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .workinfoid(7452731920372203525)
+            .clientid(1)
+            .diff(dec!(1.0))
+            .sdiff(dec!(1.9041854952356509))
+            .build();
 
         let serialized = Message::MiningShare(share.clone())
             .cbor_serialize()
@@ -240,17 +240,17 @@ mod tests {
 
     #[test]
     fn test_storage_share_block_conversion() {
-        let share = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4"),
-            vec![],
-            Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            Some(7452731920372203525),
-            Some(1),
-            Some(dec!(1.0)),
-            Some(dec!(1.9041854952356509)),
-            &mut vec![],
-        );
+        let share = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .prev_share_blockhash(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
+            )
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .workinfoid(7452731920372203525)
+            .clientid(1)
+            .diff(dec!(1.0))
+            .sdiff(dec!(1.9041854952356509))
+            .build();
 
         // Test conversion to StorageShareBlock
         let storage_share: StorageShareBlock = share.clone().into();
