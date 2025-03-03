@@ -60,15 +60,15 @@ async fn test_three_nodes_connectivity() {
     let (node1_handle, _stop_rx1) = NodeHandle::new(config1, chain_handle1)
         .await
         .expect("Failed to create node 1");
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
     let (node2_handle, _stop_rx2) = NodeHandle::new(config2, chain_handle2)
         .await
         .expect("Failed to create node 2");
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
     let (node3_handle, _stop_rx3) = NodeHandle::new(config3, chain_handle3)
         .await
         .expect("Failed to create node 3");
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Get peer lists from each node
     let peers1 = node1_handle
