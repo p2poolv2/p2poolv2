@@ -2,9 +2,9 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "rust: cargo test -j 2",
+            "label": "rust: cargo test",
             "type": "shell",
-            "command": "cargo test -j 2",
+            "command": "cargo test",
             "group": {
                 "kind": "build",
                 // "isDefault": true
