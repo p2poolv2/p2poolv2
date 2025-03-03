@@ -20,5 +20,5 @@ pub mod receive_share_headers;
 
 pub use receive_send_inventory::handle_blocks_inventory;
 pub use receive_send_inventory::handle_transactions_inventory;
-pub use receive_share_blocks::handle_share_blocks;
+pub use receive_share_blocks::handle_share_block;
 pub use receive_share_headers::handle_share_headers;

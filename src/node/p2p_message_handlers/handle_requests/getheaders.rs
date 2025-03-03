@@ -22,8 +22,14 @@ use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::info;
 
-pub async fn handle_get_headers(
+/// Find the headers matching request and return headers (not inventory)
+/// TODO
+/// - find the last known block hash from the list of block_hashes
+/// - from that last know block hash, find the headers matching
+///   of blocks from the last known block up to the stop block hash
+pub async fn handle_getheaders(
     block_hashes: Vec<BlockHash>,
+    stop_block_hash: BlockHash,
     chain_handle: ChainHandle,
     swarm_tx: mpsc::Sender<SwarmSend>,
 ) -> Result<(), Box<dyn Error>> {

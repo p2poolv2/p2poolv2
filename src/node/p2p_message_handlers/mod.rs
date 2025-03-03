@@ -35,23 +35,25 @@ pub async fn handle_request(
 ) -> Result<(), Box<dyn Error>> {
     info!("Handling request from peer: {}", peer);
     match request {
-        Message::GetShareHeaders(block_hashes) => {
-            handle_requests::handle_get_headers(block_hashes, chain_handle, swarm_tx).await
+        Message::GetShareHeaders(block_hashes, stop_block_hash) => {
+            handle_requests::handle_getheaders(
+                block_hashes,
+                stop_block_hash,
+                chain_handle,
+                swarm_tx,
+            )
+            .await
         }
-        Message::GetShareBlocks(block_hashes) => {
-            handle_requests::handle_get_blocks(block_hashes, chain_handle, swarm_tx).await
+        Message::GetShareBlocks(block_hashes, stop_block_hash) => {
+            handle_requests::handle_getblocks(block_hashes, stop_block_hash, chain_handle, swarm_tx)
+                .await
         }
         Message::ShareHeaders(share_headers) => {
             handle_responses::handle_share_headers(share_headers, chain_handle, time_provider).await
         }
-        Message::ShareBlocks(share_blocks) => {
-            handle_responses::handle_share_blocks(
-                share_blocks,
-                chain_handle,
-                swarm_tx,
-                time_provider,
-            )
-            .await
+        Message::ShareBlock(share_block) => {
+            handle_responses::handle_share_block(share_block, chain_handle, swarm_tx, time_provider)
+                .await
         }
         Message::Workbase(workbase) => {
             info!("Received workbase: {:?}", workbase);
@@ -94,12 +96,13 @@ pub async fn handle_request(
             }
             Ok(())
         }
+        Message::NotFound(_) => {
+            info!("Received not found message");
+            Ok(())
+        }
         Message::GetData(get_data) => {
             info!("Received get data: {:?}", get_data);
             match get_data {
-                GetData::Header(block_hash) => {
-                    info!("Received header: {:?}", block_hash);
-                }
                 GetData::Block(block_hash) => {
                     info!("Received block hash: {:?}", block_hash);
                 }
@@ -181,7 +184,7 @@ mod tests {
         // Test handle_request directly without request_id
         let result = handle_request(
             peer_id,
-            Message::ShareBlocks(vec![share_block.clone()]),
+            Message::ShareBlock(share_block.clone()),
             chain_handle,
             swarm_tx,
             &time_provider,
@@ -246,7 +249,7 @@ mod tests {
 
         let result = handle_request(
             peer_id,
-            Message::ShareBlocks(vec![share_block]),
+            Message::ShareBlock(share_block),
             chain_handle,
             swarm_tx,
             &time_provider,
