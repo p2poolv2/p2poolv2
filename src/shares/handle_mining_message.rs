@@ -64,8 +64,7 @@ pub async fn handle_mining_message(
         }
     };
 
-    let serialized_message = message.cbor_serialize().unwrap();
-    if let Err(e) = swarm_tx.send(SwarmSend::Gossip(serialized_message)).await {
+    if let Err(e) = swarm_tx.send(SwarmSend::Gossip(message)).await {
         error!("Failed to send share: {}", e);
         return Err("Error sending share to network".into());
     }
