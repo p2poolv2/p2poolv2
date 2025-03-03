@@ -53,8 +53,7 @@ pub async fn handle_share_blocks(
             .map(|block| block.header.blockhash)
             .collect(),
     ));
-    let buf = inventory.cbor_serialize().unwrap();
-    let swarm_send = SwarmSend::Gossip(buf);
+    let swarm_send = SwarmSend::Gossip(inventory);
     swarm_tx.send(swarm_send).await.unwrap();
     Ok(())
 }

@@ -154,7 +154,8 @@ impl NodeActor {
             tokio::select! {
                 buf = self.node.swarm_rx.recv() => {
                     match buf {
-                        Some(SwarmSend::Gossip(buf)) => {
+                        Some(SwarmSend::Gossip(message)) => {
+                            let buf = message.cbor_serialize().unwrap();
                             match self.node.swarm.behaviour_mut().gossipsub.publish(self.node.share_topic.clone(), buf) {
                                 Err(e) => error!("Error publishing share: {}", e),
                                 Ok(_) => {}

@@ -59,8 +59,10 @@ pub async fn handle_request(
                 error!("Failed to store workbase: {}", e);
                 return Err("Error storing workbase".into());
             }
-            let buf = Message::Workbase(workbase).cbor_serialize().unwrap();
-            if let Err(e) = swarm_tx.send(SwarmSend::Gossip(buf)).await {
+            if let Err(e) = swarm_tx
+                .send(SwarmSend::Gossip(Message::Workbase(workbase)))
+                .await
+            {
                 error!("Failed to send share: {}", e);
                 return Err("Error sending share to network".into());
             }
@@ -189,8 +191,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Verify gossip message was sent
-        if let Some(SwarmSend::Gossip(buf)) = swarm_rx.try_recv().ok() {
-            let message = Message::cbor_deserialize(&buf).unwrap();
+        if let Some(SwarmSend::Gossip(message)) = swarm_rx.try_recv().ok() {
             match message {
                 Message::Inventory(inventory) => match inventory {
                     InventoryMessage::ShareBlock(received_shares) => {

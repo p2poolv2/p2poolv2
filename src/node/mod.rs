@@ -44,7 +44,7 @@ use tracing::{debug, error, info};
 /// Capture send type for swarm p2p messages that can be sent to the swarm
 #[allow(dead_code)]
 pub enum SwarmSend {
-    Gossip(Vec<u8>),
+    Gossip(Message),
     Message(PeerId, Message),
 }
 
