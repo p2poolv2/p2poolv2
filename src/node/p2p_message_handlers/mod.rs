@@ -16,6 +16,7 @@
 
 pub mod handle_requests;
 pub mod handle_responses;
+pub mod known_blocks_lookup;
 
 use crate::node::messages::{GetData, InventoryMessage, Message};
 use crate::node::SwarmSend;
