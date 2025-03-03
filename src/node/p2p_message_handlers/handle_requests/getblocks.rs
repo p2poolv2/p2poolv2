@@ -22,9 +22,13 @@ use tokio::sync::mpsc;
 use tracing::info;
 
 /// Handle a GetBlocks request from a peer
-/// TODO: Implement the logic to handle the GetBlocks request
-pub async fn handle_get_blocks(
+/// TODO
+/// - find the last known block hash from the list of block_hashes
+/// - from that last know block hash, generate an inventory message to send blockhashes
+///   of blocks from the last known block up to the stop block hash.
+pub async fn handle_getblocks(
     block_hashes: Vec<bitcoin::BlockHash>,
+    stop_block_hash: bitcoin::BlockHash,
     chain_handle: ChainHandle,
     swarm_tx: mpsc::Sender<SwarmSend>,
 ) -> Result<(), Box<dyn Error>> {

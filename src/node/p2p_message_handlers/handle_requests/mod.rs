@@ -14,10 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod get_share_blocks;
-pub mod get_share_headers;
+pub mod getblocks;
+pub mod getheaders;
 pub mod inventory;
 
-pub use get_share_blocks::handle_get_blocks;
-pub use get_share_headers::handle_get_headers;
+pub use getblocks::handle_getblocks;
+pub use getheaders::handle_getheaders;
 pub use inventory::handle_inventory;

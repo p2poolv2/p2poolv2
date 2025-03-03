@@ -27,10 +27,11 @@ use std::error::Error;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Message {
     Inventory(InventoryMessage),
-    GetShareHeaders(Vec<BlockHash>),
-    GetShareBlocks(Vec<BlockHash>),
+    NotFound(()),
+    GetShareHeaders(Vec<BlockHash>, BlockHash),
+    GetShareBlocks(Vec<BlockHash>, BlockHash),
     ShareHeaders(Vec<ShareHeader>),
-    ShareBlocks(Vec<ShareBlock>),
+    ShareBlock(ShareBlock),
     GetData(GetData),
     Workbase(MinerWorkbase),
     UserWorkbase(UserWorkbase),
@@ -69,7 +70,6 @@ pub enum InventoryMessage {
 /// Message for requesting data from peers
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum GetData {
-    Header(BlockHash),
     Block(BlockHash),
     Txid(Txid),
 }
