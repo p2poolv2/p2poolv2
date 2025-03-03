@@ -137,20 +137,6 @@ impl Node {
         Ok(())
     }
 
-    /// Send a share to the network
-    pub fn send_gossip(&mut self, buf: Vec<u8>) -> Result<(), Box<dyn Error>> {
-        if let Err(e) = self
-            .swarm
-            .behaviour_mut()
-            .gossipsub
-            .publish(self.share_topic.clone(), buf)
-        {
-            error!("Failed to send share: {}", e);
-            return Err("Error sending share to network".into());
-        }
-        Ok(())
-    }
-
     /// Send a message to a specific peer
     pub fn send_to_peer(
         &mut self,

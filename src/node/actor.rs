@@ -16,7 +16,6 @@
 
 use crate::command::Command;
 use crate::config::Config;
-use crate::node::messages::Message;
 use crate::node::Node;
 use crate::node::SwarmSend;
 #[mockall_double::double]
@@ -73,33 +72,6 @@ impl NodeHandle {
         }
     }
 
-    /// Send a share to the network
-    pub async fn send_gossip(&self, message: Message) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let (tx, rx) = oneshot::channel();
-        let buf = message.cbor_serialize().unwrap();
-        self.command_tx.send(Command::SendGossip(buf, tx)).await?;
-        match rx.await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    /// Send a message to a specific peer
-    pub async fn send_to_peer(
-        &self,
-        peer_id: libp2p::PeerId,
-        message: Message,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::SendToPeer(peer_id, message, tx))
-            .await?;
-        match rx.await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e.into()),
-        }
-    }
-
     /// Add share to the chain
     pub async fn add_share(&self, share: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (tx, rx) = oneshot::channel();
@@ -128,6 +100,9 @@ impl NodeHandle {
 
 #[cfg(test)]
 use mockall::mock;
+
+#[cfg(test)]
+use crate::node::messages::Message;
 
 #[cfg(test)]
 mock! {
@@ -208,13 +183,10 @@ impl NodeActor {
                             tx.send(peers).unwrap();
                         },
                         Some(Command::SendGossip(buf, tx)) => {
-                            match self.node.send_gossip(buf) {
+                            match self.node.swarm.behaviour_mut().gossipsub.publish(self.node.share_topic.clone(), buf) {
+                                Err(e) => error!("Error publishing share: {}", e),
                                 Ok(_) => tx.send(Ok(())).unwrap(),
-                                Err(e) => {
-                                    error!("Error sending gossip: {}", e);
-                                    tx.send(Err("Error sending gossip".into())).unwrap()
-                                },
-                            };
+                            }
                         },
                         Some(Command::SendToPeer(peer_id, message, tx)) => {
                             match self.node.send_to_peer(peer_id, message) {
