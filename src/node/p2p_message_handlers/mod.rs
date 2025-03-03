@@ -130,7 +130,7 @@ mod tests {
     #[mockall_double::double]
     use crate::shares::chain::actor::ChainHandle;
     use crate::test_utils::simple_miner_workbase;
-    use crate::test_utils::{load_valid_workbases_userworkbases_and_shares, test_share_block};
+    use crate::test_utils::{load_valid_workbases_userworkbases_and_shares, TestBlockBuilder};
     use crate::utils::time_provider::TestTimeProvider;
     use mockall::predicate::*;
     use std::time::SystemTime;
@@ -219,17 +219,11 @@ mod tests {
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
         let mut chain_handle = ChainHandle::default();
 
-        let share_block = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
-            None,
-            vec![],
-            Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            Some(7459044800742817807),
-            None,
-            None,
-            None,
-            &mut vec![],
-        );
+        let share_block = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .workinfoid(7459044800742817807)
+            .build();
 
         // Set up mock to return error
         chain_handle

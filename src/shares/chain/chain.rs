@@ -219,7 +219,9 @@ impl Chain {
 mod chain_tests {
     use super::*;
     use crate::test_utils::random_hex_string;
-    use crate::test_utils::test_share_block;
+    use crate::test_utils::TestBlockBuilder;
+    use bitcoin::sighash::Prevouts;
+    use std::collections::btree_set::SymmetricDifference;
     use std::collections::HashSet;
     use tempfile::tempdir;
 
@@ -231,17 +233,10 @@ mod chain_tests {
         let mut chain = Chain::new(store);
 
         // Create initial share (1)
-        let share1 = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
-            None,
-            vec![],
-            Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            None,
-            None,
-            None,
-            None,
-            &mut vec![],
-        );
+        let share1 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
 
         chain.add_share(share1.clone()).unwrap();
 
@@ -252,29 +247,17 @@ mod chain_tests {
         assert_eq!(chain.chain_tip, Some(share1.header.blockhash));
 
         // Create uncles for share2
-        let uncle1_share2 = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"),
-            Some(share1.header.blockhash.to_string().as_str()),
-            vec![],
-            Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            None,
-            None,
-            None,
-            None,
-            &mut vec![],
-        );
+        let uncle1_share2 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
+            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
 
-        let uncle2_share2 = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"),
-            Some(share1.header.blockhash.to_string().as_str()),
-            vec![],
-            Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            None,
-            None,
-            None,
-            None,
-            &mut vec![],
-        );
+        let uncle2_share2 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
+            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
 
         // first orphan is a tip
         chain.add_share(uncle1_share2.clone()).unwrap();
@@ -295,20 +278,20 @@ mod chain_tests {
         assert_eq!(chain.chain_tip, Some(uncle1_share2.header.blockhash));
 
         // Create share2 with its uncles
-        let share2 = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8"),
-            Some(share1.header.blockhash.to_string().as_str()),
-            vec![
+        let share2 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8")
+            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .uncles(vec![
                 uncle1_share2.header.blockhash,
                 uncle2_share2.header.blockhash,
-            ],
-            Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            Some(7452731920372203525 + 3),
-            Some(1),
-            Some(dec!(2.0)),
-            Some(dec!(2.9041854952356509)),
-            &mut vec![],
-        );
+            ])
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .workinfoid(7452731920372203525 + 3)
+            .clientid(1)
+            .diff(dec!(2.0))
+            .sdiff(dec!(2.9041854952356509))
+            .build();
+
         chain.add_share(share2.clone()).unwrap();
 
         // two tips that will be future uncles and the chain tip
@@ -318,29 +301,25 @@ mod chain_tests {
         assert_eq!(chain.total_difficulty, dec!(3.0));
         assert_eq!(chain.chain_tip, Some(share2.header.blockhash));
         // Create uncles for share3
-        let uncle1_share3 = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb9"),
-            Some(share2.header.blockhash.to_string().as_str()),
-            vec![],
-            Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            Some(7452731920372203525 + 4),
-            Some(1),
-            Some(dec!(1.0)),
-            Some(dec!(1.9041854952356509)),
-            &mut vec![],
-        );
+        let uncle1_share3 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb9")
+            .prev_share_blockhash(share2.header.blockhash.to_string().as_str())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .workinfoid(7452731920372203525 + 4)
+            .clientid(1)
+            .diff(dec!(1.0))
+            .sdiff(dec!(1.9041854952356509))
+            .build();
 
-        let uncle2_share3 = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bba"),
-            Some(share2.header.blockhash.to_string().as_str()),
-            vec![],
-            Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            Some(7452731920372203525 + 5),
-            Some(1),
-            Some(dec!(1.0)),
-            Some(dec!(1.9041854952356509)),
-            &mut vec![],
-        );
+        let uncle2_share3 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bba")
+            .prev_share_blockhash(share2.header.blockhash.to_string().as_str())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .workinfoid(7452731920372203525 + 5)
+            .clientid(1)
+            .diff(dec!(1.0))
+            .sdiff(dec!(1.9041854952356509))
+            .build();
 
         chain.add_share(uncle1_share3.clone()).unwrap();
         expected_tips.clear();
@@ -360,20 +339,20 @@ mod chain_tests {
         assert_eq!(chain.total_difficulty, dec!(4.0));
         assert_eq!(chain.chain_tip, Some(uncle1_share3.header.blockhash));
         // Create share3 with its uncles
-        let share3 = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bbb"),
-            Some(share2.header.blockhash.to_string().as_str()),
-            vec![
+        let share3 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bbb")
+            .prev_share_blockhash(share2.header.blockhash.to_string().as_str())
+            .uncles(vec![
                 uncle1_share3.header.blockhash,
                 uncle2_share3.header.blockhash,
-            ],
-            Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            Some(7452731920372203525 + 6),
-            Some(1),
-            Some(dec!(3.0)),
-            Some(dec!(3.9041854952356509)),
-            &mut vec![],
-        );
+            ])
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .workinfoid(7452731920372203525 + 6)
+            .clientid(1)
+            .diff(dec!(3.0))
+            .sdiff(dec!(3.9041854952356509))
+            .build();
+
         chain.add_share(share3.clone()).unwrap();
 
         expected_tips.clear();
@@ -398,17 +377,20 @@ mod chain_tests {
 
         // Generate blocks
         for i in 0..=MIN_CONFIRMATION_DEPTH + 1 {
-            let share = test_share_block(
-                Some(random_hex_string(64, 8).as_str()),
-                prev_hash,
-                vec![],
-                Some("020202020202020202020202020202020202020202020202020202020202020202"),
-                Some(7452731920372203525 + i as u64),
-                Some(1),
-                Some(dec!(1.0)),
-                Some(dec!(1.9041854952356509)),
-                &mut vec![],
-            );
+            let mut share_builder =
+                TestBlockBuilder::new().blockhash(random_hex_string(64, 8).as_str());
+            if prev_hash.is_some() {
+                share_builder = share_builder.prev_share_blockhash(prev_hash.unwrap());
+            }
+
+            let share = share_builder
+                .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+                .workinfoid(7452731920372203525 + i as u64)
+                .clientid(1)
+                .diff(dec!(1.0))
+                .sdiff(dec!(1.9041854952356509))
+                .build();
+
             blocks.push(share.clone());
             chain.add_share(share.clone()).unwrap();
             blockhash_strings.push(share.header.blockhash.to_string()); // Store string
@@ -469,34 +451,30 @@ mod chain_tests {
         assert_eq!(chain.get_depth(&random_hash), None);
 
         // Create initial share
-        let share1 = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
-            None,
-            vec![],
-            Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            Some(7452731920372203525),
-            Some(1),
-            Some(dec!(1.0)),
-            Some(dec!(1.9041854952356509)),
-            &mut vec![],
-        );
+        let share1 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .workinfoid(7452731920372203525)
+            .clientid(1)
+            .diff(dec!(1.0))
+            .sdiff(dec!(1.9041854952356509))
+            .build();
+
         chain.add_share(share1.clone()).unwrap();
 
         // Test when blockhash is chain tip
         assert_eq!(chain.get_depth(&share1.header.blockhash), Some(0));
 
         // Create second share
-        let share2 = test_share_block(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"),
-            Some(share1.header.blockhash.to_string().as_str()),
-            vec![],
-            Some("020202020202020202020202020202020202020202020202020202020202020202"),
-            Some(7452731920372203526),
-            Some(1),
-            Some(dec!(1.0)),
-            Some(dec!(1.9041854952356509)),
-            &mut vec![],
-        );
+        let share2 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
+            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .workinfoid(7452731920372203526)
+            .clientid(1)
+            .diff(dec!(1.0))
+            .sdiff(dec!(1.9041854952356509))
+            .build();
 
         chain.add_share(share2.clone()).unwrap();
 
