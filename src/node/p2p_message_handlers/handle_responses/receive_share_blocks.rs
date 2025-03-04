@@ -46,9 +46,9 @@ pub async fn handle_share_block(
     info!("Successfully added share blocks to chain");
 
     // Trigger gossip of share block inventory message
-    let inventory = Message::Inventory(InventoryMessage::ShareBlock(HashSet::from([share_block
-        .header
-        .blockhash])));
+    let inventory = Message::Inventory(InventoryMessage::BlockHashes(vec![
+        share_block.header.blockhash,
+    ]));
     let swarm_send = SwarmSend::Gossip(inventory);
     swarm_tx.send(swarm_send).await.unwrap();
     Ok(())

@@ -82,13 +82,10 @@ pub async fn handle_request(
         Message::Inventory(inventory) => {
             info!("Received inventory: {:?}", inventory);
             match inventory {
-                InventoryMessage::ShareHeader(have_shares) => {
-                    info!("Received share header inventory: {:?}", have_shares);
-                }
-                InventoryMessage::ShareBlock(have_blocks) => {
+                InventoryMessage::BlockHashes(have_blocks) => {
                     info!("Received share block inventory: {:?}", have_blocks);
                 }
-                InventoryMessage::ShareTransaction(have_transactions) => {
+                InventoryMessage::TransactionHashes(have_transactions) => {
                     info!(
                         "Received share transaction inventory: {:?}",
                         have_transactions
@@ -198,7 +195,7 @@ mod tests {
         if let Some(SwarmSend::Gossip(message)) = swarm_rx.try_recv().ok() {
             match message {
                 Message::Inventory(inventory) => match inventory {
-                    InventoryMessage::ShareBlock(received_shares) => {
+                    InventoryMessage::BlockHashes(received_shares) => {
                         assert_eq!(
                             received_shares.contains(&share_block.header.blockhash),
                             true
