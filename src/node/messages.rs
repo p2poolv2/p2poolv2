@@ -62,9 +62,8 @@ impl Message {
 /// The message can be used to tell the peer about share headers, blocks, or transactions that this peer has.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum InventoryMessage {
-    ShareHeader(HashSet<BlockHash>),
-    ShareBlock(HashSet<BlockHash>),
-    ShareTransaction(HashSet<Txid>),
+    BlockHashes(Vec<BlockHash>),
+    TransactionHashes(Vec<Txid>),
 }
 
 /// Message for requesting data from peers
@@ -81,21 +80,21 @@ mod tests {
 
     #[test]
     fn test_inventory_message_serde() {
-        let mut have_shares = HashSet::new();
-        have_shares.insert(
+        let mut have_shares = Vec::new();
+        have_shares.push(
             BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
                 .unwrap(),
         );
-        have_shares.insert(
+        have_shares.push(
             BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
                 .unwrap(),
         );
-        have_shares.insert(
+        have_shares.push(
             BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
                 .unwrap(),
         );
 
-        let msg = Message::Inventory(InventoryMessage::ShareHeader(have_shares));
+        let msg = Message::Inventory(InventoryMessage::BlockHashes(have_shares));
 
         // Test serialization
         let serialized = msg.cbor_serialize().unwrap();
@@ -104,7 +103,7 @@ mod tests {
         let deserialized = Message::cbor_deserialize(&serialized).unwrap();
 
         let deserialized = match deserialized {
-            Message::Inventory(InventoryMessage::ShareHeader(have_shares)) => have_shares,
+            Message::Inventory(InventoryMessage::BlockHashes(have_shares)) => have_shares,
             _ => panic!("Expected Inventory variant"),
         };
 
