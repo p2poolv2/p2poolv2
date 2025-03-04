@@ -200,7 +200,7 @@ impl TestBlockBuilder {
         self
     }
 
-    pub fn build(self) -> ShareBlock {
+    pub fn build(mut self) -> ShareBlock {
         test_share_block(
             self.blockhash.as_deref(),
             self.prev_share_blockhash.as_deref(),
@@ -210,7 +210,7 @@ impl TestBlockBuilder {
             self.clientid,
             self.diff,
             self.sdiff,
-            &mut self.transactions.clone(),
+            &mut self.transactions,
         )
     }
 }
