@@ -220,8 +220,6 @@ mod chain_tests {
     use super::*;
     use crate::test_utils::random_hex_string;
     use crate::test_utils::TestBlockBuilder;
-    use bitcoin::sighash::Prevouts;
-    use std::collections::btree_set::SymmetricDifference;
     use std::collections::HashSet;
     use tempfile::tempdir;
 

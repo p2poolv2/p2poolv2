@@ -25,7 +25,7 @@ use std::error::Error;
 use tracing::debug;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-struct TxMetadata {
+pub struct TxMetadata {
     txid: bitcoin::Txid,
     version: bitcoin::transaction::Version,
     lock_time: bitcoin::absolute::LockTime,
