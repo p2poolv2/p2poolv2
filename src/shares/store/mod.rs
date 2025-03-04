@@ -15,16 +15,33 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::node::messages::Message;
-use crate::shares::miner_message::{MinerShare, MinerWorkbase, UserWorkbase};
-use crate::shares::{BlockHash, ShareBlock, ShareHeader, StorageShareBlock};
+use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
+use crate::shares::{BlockHash, ShareBlock, StorageShareBlock};
 use bitcoin::Transaction;
 use rocksdb::{ColumnFamilyDescriptor, Options as RocksDbOptions, DB};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 use tracing::debug;
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+struct TxMetadata {
+    txid: bitcoin::Txid,
+    version: bitcoin::transaction::Version,
+    lock_time: bitcoin::absolute::LockTime,
+    input_count: u32,
+    output_count: u32,
+    spent_by: Option<bitcoin::Txid>,
+}
+
 /// A store for share blocks.
 /// RocksDB as is used as the underlying database.
+/// We use column families to store different types of data, so that compactions are independent for each type.
+/// Key Value stores in column families:
+/// - block: share blocks
+/// - block_txids: txids for a block, to get transactions for a block. A tx can appear in multiple blocks.
+/// - inputs: inputs for a transaction, to get inputs for a tx.
+/// - outputs: outputs for a transaction, to get outputs for a tx. These can be marked as spent. So these are updated.
 #[allow(dead_code)]
 pub struct Store {
     path: String,
@@ -38,11 +55,14 @@ impl Store {
     /// Create a new share store
     pub fn new(path: String) -> Result<Self, Box<dyn Error>> {
         // for now we use default options for all column families, we can tweak this later based on performance testing
-        let header_cf = ColumnFamilyDescriptor::new("header", RocksDbOptions::default());
         let block_cf = ColumnFamilyDescriptor::new("block", RocksDbOptions::default());
-        let tx_cf = ColumnFamilyDescriptor::new("tx", RocksDbOptions::default());
+        let block_txids_cf = ColumnFamilyDescriptor::new("block_txids", RocksDbOptions::default());
         let inputs_cf = ColumnFamilyDescriptor::new("inputs", RocksDbOptions::default());
         let outputs_cf = ColumnFamilyDescriptor::new("outputs", RocksDbOptions::default());
+        let tx_cf = ColumnFamilyDescriptor::new("tx", RocksDbOptions::default());
+        let workbase_cf = ColumnFamilyDescriptor::new("workbase", RocksDbOptions::default());
+        let user_workbase_cf =
+            ColumnFamilyDescriptor::new("user_workbase", RocksDbOptions::default());
 
         // for the db too, we use default options for now
         let mut db_options = RocksDbOptions::default();
@@ -51,7 +71,15 @@ impl Store {
         let db = DB::open_cf_descriptors(
             &db_options,
             path.clone(),
-            vec![header_cf, block_cf, tx_cf, inputs_cf, outputs_cf],
+            vec![
+                block_cf,
+                block_txids_cf,
+                inputs_cf,
+                outputs_cf,
+                tx_cf,
+                workbase_cf,
+                user_workbase_cf,
+            ],
         )
         .unwrap();
         Ok(Self { path, db })
@@ -61,21 +89,28 @@ impl Store {
     /// We use StorageShareBlock to serialize the share so that we do not store transactions serialized with the block.
     /// Transactions are stored separately. All writes are done in a single atomic batch.
     pub fn add_share(&mut self, share: ShareBlock) {
-        debug!("Adding share to store: {:?}", share.header.blockhash);
+        debug!(
+            "Adding share to store with {} txs: {:?}",
+            share.transactions.len(),
+            share.header.blockhash
+        );
         let blockhash = share.header.blockhash.clone();
 
         // Create a new write batch
         let mut batch = rocksdb::WriteBatch::default();
 
-        // Add transactions and get their txids
-        let txids = self.store_transactions_batch(&share.transactions, &mut batch);
+        // Store transactions and get their metadata
+        let txs_metadata = self.store_txs(&share.transactions, &mut batch);
 
-        // Store txids list for this block
+        let txids = txs_metadata.iter().map(|t| t.txid).collect();
+        // Store block -> txids index
         self.store_txids_to_block_index(&blockhash, &txids, &mut batch);
 
         // Add the share block itself
         let storage_share_block: StorageShareBlock = share.into();
-        batch.put::<&[u8], Vec<u8>>(
+        let block_cf = self.db.cf_handle("block").unwrap();
+        batch.put_cf::<&[u8], Vec<u8>>(
+            block_cf,
             bitcoin::BlockHash::as_ref(&blockhash),
             storage_share_block.cbor_serialize().unwrap(),
         );
@@ -84,11 +119,71 @@ impl Store {
         self.db.write(batch).unwrap();
     }
 
+    /// Store transactions in the store
+    /// Store inputs and outputs for each transaction in separate column families
+    /// Store txid -> transaction metadata in the tx column family
+    /// The block -> txids store is done in store_txids_to_block_index. This function lets us store transactions outside of a block context
+    fn store_txs(
+        &self,
+        transactions: &[Transaction],
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Vec<TxMetadata> {
+        let inputs_cf = self.db.cf_handle("inputs").unwrap();
+        let outputs_cf = self.db.cf_handle("outputs").unwrap();
+        let mut txs_metadata = Vec::new();
+        for tx in transactions {
+            let txid = tx.compute_txid();
+            let metadata = self.store_tx_metadata(txid, tx, batch);
+            txs_metadata.push(metadata);
+
+            // Store each input for the transaction
+            for (i, input) in tx.input.iter().enumerate() {
+                let input_key = format!("{}:{}", txid, i);
+                let mut serialized = Vec::new();
+                ciborium::ser::into_writer(&input, &mut serialized).unwrap();
+                batch.put_cf::<&[u8], Vec<u8>>(inputs_cf, input_key.as_ref(), serialized);
+            }
+
+            // Store each output for the transaction
+            for (i, output) in tx.output.iter().enumerate() {
+                let output_key = format!("{}:{}", txid, i);
+                let mut serialized = Vec::new();
+                ciborium::ser::into_writer(&output, &mut serialized).unwrap();
+                batch.put_cf::<&[u8], Vec<u8>>(outputs_cf, output_key.as_ref(), serialized);
+            }
+        }
+        txs_metadata
+    }
+
+    /// Store transaction metadata
+    fn store_tx_metadata(
+        &self,
+        txid: bitcoin::Txid,
+        tx: &Transaction,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> TxMetadata {
+        let tx_metadata = TxMetadata {
+            txid,
+            version: tx.version,
+            lock_time: tx.lock_time,
+            input_count: tx.input.len() as u32,
+            output_count: tx.output.len() as u32,
+            spent_by: None,
+        };
+
+        let tx_cf = self.db.cf_handle("tx").unwrap();
+        let mut tx_metadata_serialized = Vec::new();
+        ciborium::ser::into_writer(&tx_metadata, &mut tx_metadata_serialized).unwrap();
+        batch.put_cf::<&[u8], Vec<u8>>(tx_cf, txid.as_ref(), tx_metadata_serialized);
+        tx_metadata
+    }
+
     /// Add the list of transaction IDs to the batch
+    /// Transactions themselves are stored in store_txs, here we just store the association between block and txids
     fn store_txids_to_block_index(
         &self,
         blockhash: &BlockHash,
-        txids: &[bitcoin::Txid],
+        txids: &Vec<bitcoin::Txid>,
         batch: &mut rocksdb::WriteBatch,
     ) {
         let mut blockhash_bytes = <BlockHash as AsRef<[u8]>>::as_ref(blockhash).to_vec();
@@ -96,7 +191,8 @@ impl Store {
 
         let mut serialized_txids = Vec::new();
         ciborium::ser::into_writer(&txids, &mut serialized_txids).unwrap();
-        batch.put::<&[u8], Vec<u8>>(blockhash_bytes.as_ref(), serialized_txids);
+        let block_txids_cf = self.db.cf_handle("block_txids").unwrap();
+        batch.put_cf::<&[u8], Vec<u8>>(block_txids_cf, blockhash_bytes.as_ref(), serialized_txids);
     }
 
     /// Get all transaction IDs for a given block hash
@@ -105,7 +201,11 @@ impl Store {
         let mut blockhash_bytes = <BlockHash as AsRef<[u8]>>::as_ref(blockhash).to_vec();
         blockhash_bytes.extend_from_slice(b"_txids");
 
-        match self.db.get::<&[u8]>(blockhash_bytes.as_ref()) {
+        let block_txids_cf = self.db.cf_handle("block_txids").unwrap();
+        match self
+            .db
+            .get_cf::<&[u8]>(block_txids_cf, blockhash_bytes.as_ref())
+        {
             Ok(Some(serialized_txids)) => {
                 let txids: Vec<bitcoin::Txid> =
                     ciborium::de::from_reader(&serialized_txids[..]).unwrap_or_default();
@@ -115,40 +215,14 @@ impl Store {
         }
     }
 
-    /// Store transactions in a batch and return their txids
-    /// This is a helper function used by add_share and add_transactions
-    fn store_transactions_batch(
-        &self,
-        transactions: &[Transaction],
-        batch: &mut rocksdb::WriteBatch,
-    ) -> Vec<bitcoin::Txid> {
-        transactions
-            .iter()
-            .map(|tx| {
-                let txid = tx.compute_txid();
-                let mut serialized = Vec::new();
-                ciborium::ser::into_writer(&tx, &mut serialized).unwrap();
-                batch.put::<&[u8], Vec<u8>>(bitcoin::Txid::as_ref(&txid), serialized);
-                txid
-            })
-            .collect()
-    }
-
-    /// Add a vector of transactions to the store outside of a block context
-    /// The transactions are neither marked validated nor spent, that is done later
-    /// Use rocksdb batch to add transactions atomically
-    pub fn add_transactions(&mut self, transactions: Vec<Transaction>) {
-        let mut batch = rocksdb::WriteBatch::default();
-        self.store_transactions_batch(&transactions, &mut batch);
-        self.db.write(batch).unwrap();
-    }
-
     /// Add a workbase to the store
     pub fn add_workbase(&mut self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error>> {
         let workbase_key = format!("workbase:{}", workbase.workinfoid);
         debug!("Adding workbase to store: {:?}", workbase_key);
+        let workbase_cf = self.db.cf_handle("workbase").unwrap();
         self.db
-            .put(
+            .put_cf(
+                workbase_cf,
                 workbase_key.as_bytes(),
                 Message::Workbase(workbase).cbor_serialize().unwrap(),
             )
@@ -160,8 +234,10 @@ impl Store {
     pub fn add_user_workbase(&mut self, user_workbase: UserWorkbase) -> Result<(), Box<dyn Error>> {
         let user_workbase_key = format!("user_workbase:{}", user_workbase.workinfoid);
         debug!("Adding user workbase to store: {:?}", user_workbase_key);
+        let user_workbase_cf = self.db.cf_handle("user_workbase").unwrap();
         self.db
-            .put(
+            .put_cf(
+                user_workbase_cf,
                 user_workbase_key.as_bytes(),
                 Message::UserWorkbase(user_workbase)
                     .cbor_serialize()
@@ -171,73 +247,52 @@ impl Store {
         Ok(())
     }
 
-    /// Add a transaction to the store
-    /// The txid is computed and Transaction is serialized using cbor
-    /// If blockhash is provided, it is used as a key to store txid, this will let us query are transactions in a block
-    /// Note: A txid can be present in multiple blocks, we do not check for this. For example, different peers can include the same txid in different blocks,
-    /// we store all that information.
-    pub fn add_transaction(&mut self, tx: Transaction) -> Result<(), Box<dyn Error>> {
-        let txid = tx.compute_txid();
-        debug!("Adding transaction to store: {:?}", txid);
+    /// Update a transaction's validation and spent status in the tx metadata store
+    /// The status is stored separately from the transaction using txid + "_status" as key
+    /// We read the transaction from the store, update spent_by and write back to the store.
+    pub fn update_transaction_spent_status(
+        &mut self,
+        txid: &bitcoin::Txid,
+        spent_by: Option<bitcoin::Txid>,
+    ) -> Result<(), Box<dyn Error>> {
+        let tx_cf = self.db.cf_handle("tx").unwrap();
+        let tx_metadata = self.db.get_cf::<&[u8]>(tx_cf, txid.as_ref()).unwrap();
+        if tx_metadata.is_none() {
+            return Err("Transaction not found".into());
+        }
+        let tx_metadata = tx_metadata.unwrap();
+        let mut tx_metadata: TxMetadata =
+            ciborium::de::from_reader(tx_metadata.as_slice()).unwrap();
+        tx_metadata.spent_by = spent_by;
         let mut serialized = Vec::new();
-        ciborium::ser::into_writer(&tx, &mut serialized).unwrap();
-        // store txid -> transaction
+        ciborium::ser::into_writer(&tx_metadata, &mut serialized).unwrap();
         self.db
-            .put::<&[u8], Vec<u8>>(txid.as_ref(), serialized)
+            .put_cf::<&[u8], Vec<u8>>(tx_cf, txid.as_ref(), serialized)
             .unwrap();
         Ok(())
     }
 
-    /// Update a transaction's validation and spent status in the store
-    /// The status is stored separately from the transaction using txid + "_status" as key
-    pub fn update_transaction(
-        &mut self,
-        txid: &bitcoin::Txid,
-        validated: bool,
-        spent_by: Option<bitcoin::Txid>,
-    ) -> Result<(), Box<dyn Error>> {
-        // Create status key by concatenating txid bytes and status suffix
-        let mut status_key_bytes = <bitcoin::Txid as AsRef<[u8]>>::as_ref(&txid).to_vec();
-        status_key_bytes.extend_from_slice(b"_status");
-
-        let status = (validated, spent_by);
-        let mut serialized = Vec::new();
-        ciborium::ser::into_writer(&status, &mut serialized).unwrap();
-        self.db.put(&status_key_bytes, serialized).unwrap();
-        Ok(())
-    }
-
     /// Get the validation status of a transaction from the store
-    pub fn get_transaction_status(
-        &self,
-        txid: &bitcoin::Txid,
-    ) -> Option<(bool, Option<bitcoin::Txid>)> {
-        // Create status key by concatenating txid bytes and status suffix
-        let mut status_key_bytes = <bitcoin::Txid as AsRef<[u8]>>::as_ref(&txid).to_vec();
-        status_key_bytes.extend_from_slice(b"_status");
-
-        let status = match self.db.get::<&[u8]>(&status_key_bytes) {
-            Ok(Some(status)) => status,
-            Ok(None) | Err(_) => return None,
-        };
-
-        let (validated, spent_by): (bool, Option<bitcoin::Txid>) =
-            match ciborium::de::from_reader(status.as_slice()) {
-                Ok(status) => status,
-                Err(e) => {
-                    tracing::error!("Error deserializing transaction status: {:?}", e);
-                    return None;
-                }
-            };
-
-        Some((validated, spent_by))
+    pub fn get_tx_metadata(&self, txid: &bitcoin::Txid) -> Option<TxMetadata> {
+        let tx_cf = self.db.cf_handle("tx").unwrap();
+        let tx_metadata = self.db.get_cf::<&[u8]>(tx_cf, txid.as_ref()).unwrap();
+        if tx_metadata.is_none() {
+            return None;
+        }
+        let tx_metadata = tx_metadata.unwrap();
+        let tx_metadata: TxMetadata = ciborium::de::from_reader(tx_metadata.as_slice()).unwrap();
+        Some(tx_metadata)
     }
 
     /// Get a workbase from the store
     pub fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase> {
         let workbase_key = format!("workbase:{}", workinfoid);
         debug!("Getting workbase from store: {:?}", workbase_key);
-        let workbase = self.db.get(workbase_key.as_bytes()).unwrap();
+        let workbase_cf = self.db.cf_handle("workbase").unwrap();
+        let workbase = self
+            .db
+            .get_cf::<&[u8]>(workbase_cf, workbase_key.as_bytes())
+            .unwrap();
         if workbase.is_none() {
             return None;
         }
@@ -256,7 +311,11 @@ impl Store {
     pub fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase> {
         let user_workbase_key = format!("user_workbase:{}", workinfoid);
         debug!("Getting user workbase from store: {:?}", user_workbase_key);
-        let user_workbase = self.db.get(user_workbase_key.as_bytes()).unwrap();
+        let user_workbase_cf = self.db.cf_handle("user_workbase").unwrap();
+        let user_workbase = self
+            .db
+            .get_cf::<&[u8]>(user_workbase_cf, user_workbase_key.as_bytes())
+            .unwrap();
         if user_workbase.is_none() {
             return None;
         }
@@ -274,7 +333,8 @@ impl Store {
     /// Get a share from the store
     pub fn get_share(&self, blockhash: &BlockHash) -> Option<ShareBlock> {
         debug!("Getting share from store: {:?}", blockhash);
-        let share = match self.db.get::<&[u8]>(blockhash.as_ref()) {
+        let share_cf = self.db.cf_handle("block").unwrap();
+        let share = match self.db.get_cf::<&[u8]>(share_cf, blockhash.as_ref()) {
             Ok(Some(share)) => share,
             Ok(None) | Err(_) => return None,
         };
@@ -282,7 +342,7 @@ impl Store {
             Ok(share) => share,
             Err(_) => return None,
         };
-        let transactions = self.get_transactions(&share.header.blockhash);
+        let transactions = self.get_txs_for_block(&share.header.blockhash);
         let share = share.into_share_block_with_transactions(transactions);
         Some(share)
     }
@@ -290,11 +350,12 @@ impl Store {
     /// Get multiple shares from the store
     pub fn get_shares(&self, blockhashes: Vec<BlockHash>) -> HashMap<BlockHash, ShareBlock> {
         debug!("Getting shares from store: {:?}", blockhashes);
+        let share_cf = self.db.cf_handle("block").unwrap();
         let keys = blockhashes
             .iter()
-            .map(|h| <bitcoin::BlockHash as AsRef<[u8]>>::as_ref(h))
+            .map(|h| (share_cf, <bitcoin::BlockHash as AsRef<[u8]>>::as_ref(h)))
             .collect::<Vec<_>>();
-        let shares = self.db.multi_get::<&[u8], Vec<&[u8]>>(keys);
+        let shares = self.db.multi_get_cf(keys);
         let shares = shares
             .into_iter()
             .map(|v| {
@@ -303,7 +364,7 @@ impl Store {
                         let txids = self.get_txids_for_blockhash(&storage_share.header.blockhash);
                         let transactions = txids
                             .iter()
-                            .map(|txid| self.get_transaction(txid).unwrap())
+                            .map(|txid| self.get_tx(txid).unwrap())
                             .collect::<Vec<_>>();
                         Some(storage_share.into_share_block_with_transactions(transactions))
                     } else {
@@ -320,10 +381,12 @@ impl Store {
             .collect::<HashMap<BlockHash, ShareBlock>>()
     }
 
-    /// Get a share header and miner share from the store without loading transactions
-    pub fn get_share_header(&self, blockhash: &BlockHash) -> Option<(ShareHeader, MinerShare)> {
+    /// Get a storage share, which is share header and miner share, from the store without loading transactions
+    /// This is used when we want to get a share header and miner share without loading transactions
+    pub fn get_storage_share(&self, blockhash: &BlockHash) -> Option<StorageShareBlock> {
         debug!("Getting share header from store: {:?}", blockhash);
-        let share = match self.db.get::<&[u8]>(blockhash.as_ref()) {
+        let share_cf = self.db.cf_handle("block").unwrap();
+        let share = match self.db.get_cf::<&[u8]>(share_cf, blockhash.as_ref()) {
             Ok(Some(share)) => share,
             Ok(None) | Err(_) => return None,
         };
@@ -331,34 +394,76 @@ impl Store {
             Ok(share) => share,
             Err(_) => return None,
         };
-        Some((storage_share.header, storage_share.miner_share))
+        Some(storage_share)
     }
 
     /// Get transactions for a blockhash
     /// First look up the txids from the blockhash_txids index, then get the transactions from the txids
-    pub fn get_transactions(&self, blockhash: &BlockHash) -> Vec<Transaction> {
+    pub fn get_txs_for_block(&self, blockhash: &BlockHash) -> Vec<Transaction> {
         let txids = self.get_txids_for_blockhash(blockhash);
         txids
             .iter()
-            .map(|txid| self.get_transaction(txid).unwrap())
+            .map(|txid| self.get_tx(txid).unwrap())
             .collect()
     }
 
     /// Get a transaction from the store using a provided txid
-    /// The transaction is deserialized using cbor
-    pub fn get_transaction(&self, txid: &bitcoin::Txid) -> Option<Transaction> {
-        let tx = match self.db.get::<&[u8]>(txid.as_ref()) {
-            Ok(Some(tx)) => tx,
-            Ok(None) | Err(_) => return None,
+    /// - Load tx metadata
+    /// - Load inputs
+    /// - Load outputs
+    /// - Deserialize inputs and outputs
+    /// - Return transaction
+    pub fn get_tx(&self, txid: &bitcoin::Txid) -> Result<Transaction, Box<dyn Error>> {
+        let tx_metadata = self
+            .get_tx_metadata(txid)
+            .ok_or_else(|| format!("Transaction metadata not found for txid: {}", txid))?;
+
+        debug!("Transaction metadata: {:?}", tx_metadata);
+
+        let inputs_cf = self.db.cf_handle("inputs").unwrap();
+        let outputs_cf = self.db.cf_handle("outputs").unwrap();
+        let mut inputs = Vec::new();
+        let mut outputs = Vec::new();
+
+        for i in 0..tx_metadata.input_count {
+            let input_key = format!("{}:{}", txid, i);
+            let input = self
+                .db
+                .get_cf::<&[u8]>(inputs_cf, input_key.as_ref())
+                .unwrap()
+                .unwrap();
+            let input: bitcoin::TxIn = match ciborium::de::from_reader(input.as_slice()) {
+                Ok(input) => input,
+                Err(e) => {
+                    tracing::error!("Error deserializing input: {:?}", e);
+                    return Err(e.into());
+                }
+            };
+            inputs.push(input);
+        }
+        for i in 0..tx_metadata.output_count {
+            let output_key = format!("{}:{}", txid, i);
+            let output = self
+                .db
+                .get_cf::<&[u8]>(outputs_cf, output_key.as_ref())
+                .unwrap()
+                .unwrap();
+            let output: bitcoin::TxOut = match ciborium::de::from_reader(output.as_slice()) {
+                Ok(output) => output,
+                Err(e) => {
+                    tracing::error!("Error deserializing output: {:?}", e);
+                    return Err(e.into());
+                }
+            };
+            outputs.push(output);
+        }
+        let transaction = Transaction {
+            version: tx_metadata.version,
+            lock_time: tx_metadata.lock_time,
+            input: inputs,
+            output: outputs,
         };
-        let tx: Transaction = match ciborium::de::from_reader(tx.as_slice()) {
-            Ok(tx) => tx,
-            Err(e) => {
-                tracing::error!("Error deserializing transaction: {:?}", e);
-                return None;
-            }
-        };
-        Some(tx)
+        Ok(transaction)
     }
 
     /// Get the parent of a share as a ShareBlock
@@ -557,9 +662,9 @@ mod tests {
     }
 
     #[test]
-    fn test_transaction_store() {
+    fn test_transaction_store_should_succeed() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
 
         // Create a simple test transaction
         let tx = bitcoin::Transaction {
@@ -571,22 +676,35 @@ mod tests {
 
         // Store the transaction
         let txid = tx.compute_txid();
-        store.add_transaction(tx.clone()).unwrap();
+        let mut batch = rocksdb::WriteBatch::default();
+        let txs_metadata = store.store_txs(&[tx.clone()], &mut batch);
+        store.db.write(batch).unwrap();
+
+        assert_eq!(txs_metadata.len(), 1);
+        assert_eq!(txs_metadata[0].txid, txid);
 
         // Retrieve the transaction
-        let retrieved_tx = store.get_transaction(&txid);
-        assert!(retrieved_tx.is_some());
-        assert_eq!(retrieved_tx.unwrap(), tx);
+        let retrieved_tx = store.get_tx(&txid).unwrap();
+        assert_eq!(retrieved_tx.input.len(), 0);
+        assert_eq!(retrieved_tx.output.len(), 0);
+        assert_eq!(retrieved_tx.version, tx.version);
+        assert_eq!(retrieved_tx.lock_time, tx.lock_time);
+    }
+
+    #[test]
+    fn test_transaction_store_for_nonexistent_transaction_should_fail() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
 
         // Try getting non-existent transaction
         let fake_txid = "d2528fc2d7a4f95ace97860f157c895b6098667df0e43912b027cfe58edf304e"
             .parse()
             .unwrap();
-        assert!(store.get_transaction(&fake_txid).is_none());
+        assert!(store.get_tx(&fake_txid).is_err());
     }
 
     #[test]
-    fn test_transaction_status() {
+    fn test_transaction_spent_by_should_succeed() {
         let temp_dir = tempdir().unwrap();
         let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
 
@@ -600,16 +718,20 @@ mod tests {
 
         // Store the transaction
         let txid = tx.compute_txid();
-        store.add_transaction(tx.clone()).unwrap();
+        let mut batch = rocksdb::WriteBatch::default();
+        store.store_txs(&[tx.clone()], &mut batch);
+        store.db.write(batch).unwrap();
 
         // Initially status should be None
-        let initial_status = store.get_transaction_status(&txid);
-        assert!(initial_status.is_none());
+        let initial_spent_by = store.get_tx_metadata(&txid).unwrap().spent_by;
+        assert!(initial_spent_by.is_none());
 
         // Update status to validated but not spent
-        store.update_transaction(&txid, true, None).unwrap();
-        let status = store.get_transaction_status(&txid).unwrap();
-        assert_eq!(status, (true, None));
+        let batch = rocksdb::WriteBatch::default();
+        store.update_transaction_spent_status(&txid, None).unwrap();
+        store.db.write(batch).unwrap();
+        let status = store.get_tx_metadata(&txid).unwrap().spent_by;
+        assert_eq!(status, None);
 
         // Create another transaction that spends this one
         let spending_tx = bitcoin::Transaction {
@@ -621,21 +743,20 @@ mod tests {
         let spending_txid = spending_tx.compute_txid();
 
         // Update status to spent
+        let batch = rocksdb::WriteBatch::default();
         store
-            .update_transaction(&txid, true, Some(spending_txid))
+            .update_transaction_spent_status(&txid, Some(spending_txid))
             .unwrap();
-        let status = store.get_transaction_status(&txid).unwrap();
-        assert_eq!(status, (true, Some(spending_txid)));
+        store.db.write(batch).unwrap();
+        let status = store.get_tx_metadata(&txid).unwrap().spent_by;
+        assert_eq!(status, Some(spending_txid));
 
         // Update status back to unspent
-        store.update_transaction(&txid, true, None).unwrap();
-        let status = store.get_transaction_status(&txid).unwrap();
-        assert_eq!(status, (true, None));
-
-        // Update status to invalidated
-        store.update_transaction(&txid, false, None).unwrap();
-        let status = store.get_transaction_status(&txid).unwrap();
-        assert_eq!(status, (false, None));
+        let batch = rocksdb::WriteBatch::default();
+        store.update_transaction_spent_status(&txid, None).unwrap();
+        store.db.write(batch).unwrap();
+        let status = store.get_tx_metadata(&txid).unwrap().spent_by;
+        assert_eq!(status, None);
     }
 
     #[test]
@@ -702,7 +823,7 @@ mod tests {
     }
 
     #[test]
-    fn test_share_block_with_transactions_storage() {
+    fn test_store_share_block_with_transactions_should_retreive_txs() {
         use tempfile::TempDir;
         let temp_dir = TempDir::new().unwrap();
         let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
@@ -738,9 +859,10 @@ mod tests {
 
         // Store the share block
         store.add_share(share.clone());
+        assert_eq!(share.transactions.len(), 3);
 
         // Retrieve transactions for the block hash
-        let retrieved_txs = store.get_transactions(&share.header.blockhash);
+        let retrieved_txs = store.get_txs_for_block(&share.header.blockhash);
 
         // Verify transactions were stored and can be retrieved
         assert_eq!(retrieved_txs.len(), 3);
@@ -752,12 +874,92 @@ mod tests {
         let tx1_id = tx1.compute_txid();
         let tx2_id = tx2.compute_txid();
 
-        assert_eq!(store.get_transaction(&tx1_id).unwrap(), tx1);
-        assert_eq!(store.get_transaction(&tx2_id).unwrap(), tx2);
+        assert_eq!(store.get_tx(&tx1_id).unwrap(), tx1);
+        assert_eq!(store.get_tx(&tx2_id).unwrap(), tx2);
     }
 
     #[test]
-    fn test_add_transactions_with_batch() {
+    fn test_store_tx_metadata_with_no_inputs_or_outputs_should_succeed() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+
+        let tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+
+        let txid = tx.compute_txid();
+        let mut batch = rocksdb::WriteBatch::default();
+        let res = store.store_tx_metadata(txid, &tx, &mut batch);
+        store.db.write(batch).unwrap();
+
+        assert_eq!(res.txid, txid);
+        let tx_metadata = store.get_tx_metadata(&txid).unwrap();
+        assert_eq!(tx_metadata.txid, txid);
+        assert_eq!(tx_metadata.version, tx.version);
+        assert_eq!(tx_metadata.lock_time, tx.lock_time);
+        assert_eq!(tx_metadata.input_count, 0);
+        assert_eq!(tx_metadata.output_count, 0);
+    }
+
+    #[test]
+    fn test_store_txs_with_inputs_or_outputs_should_succeed() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+
+        let script_true = bitcoin::Script::builder()
+            .push_opcode(bitcoin::opcodes::all::OP_PUSHNUM_1)
+            .into_script();
+        let tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(
+                    "0101010101010101010101010101010101010101010101010101010101010101"
+                        .parse()
+                        .unwrap(),
+                    0,
+                ),
+                sequence: bitcoin::Sequence::default(),
+                witness: bitcoin::Witness::default(),
+                script_sig: script_true.clone(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1000000),
+                script_pubkey: script_true.clone(),
+            }],
+        };
+
+        let txid = tx.compute_txid();
+        let mut batch = rocksdb::WriteBatch::default();
+        let res = store.store_txs(&[tx.clone()], &mut batch);
+        store.db.write(batch).unwrap();
+
+        assert_eq!(res[0].txid, txid);
+
+        let tx = store.get_tx(&txid).unwrap();
+        assert_eq!(tx.version, tx.version);
+        assert_eq!(tx.lock_time, tx.lock_time);
+        assert_eq!(tx.input.len(), 1);
+        assert_eq!(
+            tx.input[0].previous_output,
+            bitcoin::OutPoint::new(
+                "0101010101010101010101010101010101010101010101010101010101010101"
+                    .parse()
+                    .unwrap(),
+                0,
+            )
+        );
+        assert_eq!(tx.input[0].script_sig, script_true);
+        assert_eq!(tx.output.len(), 1);
+        assert_eq!(tx.output[0].value, bitcoin::Amount::from_sat(1000000));
+        assert_eq!(tx.output[0].script_pubkey, script_true);
+    }
+
+    #[test]
+    fn test_store_txs_should_succeed() {
         // Create a new store with a temporary path
         let temp_dir = tempfile::tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
@@ -779,51 +981,17 @@ mod tests {
 
         let transactions = vec![tx1.clone(), tx2.clone()];
 
-        // Create a write batch and store transactions
-        let mut batch = rocksdb::WriteBatch::default();
-        let txids = store.store_transactions_batch(&transactions, &mut batch);
-
-        // Write the batch
-        store.db.write(batch).unwrap();
-
-        // Verify transactions were stored correctly
-        assert_eq!(txids.len(), 2);
-        assert_eq!(store.get_transaction(&txids[0]).unwrap(), tx1);
-        assert_eq!(store.get_transaction(&txids[1]).unwrap(), tx2);
-    }
-
-    #[test]
-    fn test_add_transactions() {
-        // Create a new store with a temporary path
-        let temp_dir = tempfile::tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
-
-        // Create test transactions
-        let tx1 = Transaction {
-            version: bitcoin::transaction::Version(1),
-            lock_time: bitcoin::absolute::LockTime::ZERO,
-            input: vec![],
-            output: vec![],
-        };
-
-        let tx2 = Transaction {
-            version: bitcoin::transaction::Version(1),
-            lock_time: bitcoin::absolute::LockTime::ZERO,
-            input: vec![],
-            output: vec![],
-        };
-
-        let transactions = vec![tx1.clone(), tx2.clone()];
-
         // Add transactions to store
-        store.add_transactions(transactions);
+        let mut batch = rocksdb::WriteBatch::default();
+        store.store_txs(&transactions, &mut batch);
+        store.db.write(batch).unwrap();
 
         // Verify transactions were stored correctly by retrieving them by txid
         let tx1_id = tx1.compute_txid();
         let tx2_id = tx2.compute_txid();
 
-        assert_eq!(store.get_transaction(&tx1_id).unwrap(), tx1);
-        assert_eq!(store.get_transaction(&tx2_id).unwrap(), tx2);
+        assert_eq!(store.get_tx(&tx1_id).unwrap(), tx1);
+        assert_eq!(store.get_tx(&tx2_id).unwrap(), tx2);
     }
 
     #[test]
@@ -846,23 +1014,26 @@ mod tests {
         store.add_share(share.clone());
 
         // Get share header from store
-        let (header, miner_share) = store.get_share_header(&share.header.blockhash).unwrap();
+        let read_share = store.get_share(&share.header.blockhash).unwrap();
 
         // Verify header matches original
-        assert_eq!(header.blockhash, share.header.blockhash);
+        assert_eq!(read_share.header.blockhash, share.header.blockhash);
         assert_eq!(
-            header.prev_share_blockhash,
+            read_share.header.prev_share_blockhash,
             share.header.prev_share_blockhash
         );
-        assert_eq!(header.uncles, share.header.uncles);
-        assert_eq!(header.miner_pubkey, share.header.miner_pubkey);
-        assert_eq!(header.merkle_root, share.header.merkle_root);
+        assert_eq!(read_share.header.uncles, share.header.uncles);
+        assert_eq!(read_share.header.miner_pubkey, share.header.miner_pubkey);
+        assert_eq!(read_share.header.merkle_root, share.header.merkle_root);
 
         // Verify miner share matches original
-        assert_eq!(miner_share.workinfoid, share.miner_share.workinfoid);
-        assert_eq!(miner_share.nonce, share.miner_share.nonce);
-        assert_eq!(miner_share.diff, share.miner_share.diff);
-        assert_eq!(miner_share.ntime, share.miner_share.ntime);
+        assert_eq!(
+            read_share.miner_share.workinfoid,
+            share.miner_share.workinfoid
+        );
+        assert_eq!(read_share.miner_share.nonce, share.miner_share.nonce);
+        assert_eq!(read_share.miner_share.diff, share.miner_share.diff);
+        assert_eq!(read_share.miner_share.ntime, share.miner_share.ntime);
     }
 
     #[test]
@@ -876,7 +1047,7 @@ mod tests {
             "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
                 .parse()
                 .unwrap();
-        let result = store.get_share_header(&non_existent_blockhash);
+        let result = store.get_share(&non_existent_blockhash);
         assert!(result.is_none());
     }
 }
