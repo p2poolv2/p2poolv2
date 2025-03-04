@@ -229,7 +229,7 @@ mod chain_tests {
     /// Setup a test chain with 3 shares on the main chain, where shares 2 and 3 have two uncles each
     fn test_chain_add_shares() {
         let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string());
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
         let mut chain = Chain::new(store);
 
         // Create initial share (1)
@@ -367,7 +367,7 @@ mod chain_tests {
     #[test]
     fn test_confirmations() {
         let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string());
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
         let mut chain = Chain::new(store);
 
         // Create initial chain of MIN_CONFIRMATION_DEPTH + 1 blocks
@@ -410,7 +410,7 @@ mod chain_tests {
         use std::fs;
 
         let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string());
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
         let mut chain = Chain::new(store);
 
         // Load test data from JSON file
@@ -441,7 +441,7 @@ mod chain_tests {
     #[test]
     fn test_get_depth() {
         let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string());
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
         let mut chain = Chain::new(store);
 
         // Test when chain is empty (no chain tip)
