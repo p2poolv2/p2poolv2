@@ -24,6 +24,23 @@ use tracing::info;
 
 const MAX_BLOCKS: usize = 500;
 
+/// Get block hashes from the chain tip up to the stop block hash
+/// Limit the number of blocks to MAX_BLOCKS
+/// Used by handle_getblocks and handle_getheaders to get block hashes from the chain tip up to the stop block hash
+pub async fn get_block_hashes_from_chain_tip(
+    chain_handle: ChainHandle,
+    stop_block_hash: bitcoin::BlockHash,
+) -> Result<Vec<bitcoin::BlockHash>, Box<dyn Error>> {
+    let mut block_hashes = Vec::with_capacity(MAX_BLOCKS);
+    let mut current_hash = chain_handle.get_chain_tip().await.unwrap();
+    while block_hashes.len() < MAX_BLOCKS && current_hash != stop_block_hash {
+        block_hashes.push(current_hash);
+        let previous_block = chain_handle.get_share(current_hash).await.unwrap();
+        current_hash = previous_block.header.prev_share_blockhash.unwrap();
+    }
+    Ok(block_hashes)
+}
+
 /// Handle a GetBlocks request from a peer
 /// - start from chain tip, find blockhashes up to the stop block hash
 /// - limit the number of blocks to MAX_BLOCKS
@@ -35,17 +52,10 @@ pub async fn handle_getblocks(
     swarm_tx: mpsc::Sender<SwarmSend>,
 ) -> Result<(), Box<dyn Error>> {
     info!("Received getblocks: {:?}", block_hashes);
-    // start from the chain tip, skip uncles tips
-    let mut block_hashes = Vec::with_capacity(MAX_BLOCKS);
-
-    let mut current_hash = chain_handle.get_chain_tip().await.unwrap();
-    while block_hashes.len() < MAX_BLOCKS && current_hash != stop_block_hash {
-        block_hashes.push(current_hash);
-        let previous_block = chain_handle.get_share(current_hash).await.unwrap();
-        current_hash = previous_block.header.prev_share_blockhash.unwrap();
-    }
+    let response_block_hashes =
+        get_block_hashes_from_chain_tip(chain_handle, stop_block_hash).await?;
     let inventory_message = Message::Inventory(InventoryMessage::BlockHashes(
-        block_hashes.into_iter().collect(),
+        response_block_hashes.into_iter().collect(),
     ));
     swarm_tx.send(SwarmSend::Gossip(inventory_message)).await?;
     Ok(())
@@ -58,11 +68,12 @@ mod tests {
     use super::*;
     use bitcoin::BlockHash;
     use std::str::FromStr;
+    use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn test_handle_getblocks() {
         let mut chain_handle = ChainHandle::default();
-        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend>(32);
 
         // Create 5 block hashes
         let block_hashes: Vec<BlockHash> = vec![

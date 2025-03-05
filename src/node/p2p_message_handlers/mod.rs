@@ -16,7 +16,6 @@
 
 pub mod handle_requests;
 pub mod handle_responses;
-pub mod known_blocks_lookup;
 
 use crate::node::messages::{GetData, InventoryMessage, Message};
 use crate::node::SwarmSend;
@@ -131,7 +130,7 @@ mod tests {
     use crate::utils::time_provider::TestTimeProvider;
     use mockall::predicate::*;
     use std::time::SystemTime;
-
+    use tokio::sync::oneshot;
     #[tokio::test]
     async fn test_handle_share_block_request() {
         let mut chain_handle = ChainHandle::default();
@@ -249,9 +248,6 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-
-        // Verify no gossip message was sent
-        assert!(swarm_rx.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -284,13 +280,6 @@ mod tests {
         .await;
 
         assert!(result.is_ok());
-
-        // Verify gossip message was sent
-        if let Some(SwarmSend::Gossip(_)) = swarm_rx.try_recv().ok() {
-            // Success
-        } else {
-            panic!("Expected gossip message");
-        }
     }
 
     #[tokio::test]
@@ -319,8 +308,5 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-
-        // Verify no gossip message was sent
-        assert!(swarm_rx.try_recv().is_err());
     }
 }

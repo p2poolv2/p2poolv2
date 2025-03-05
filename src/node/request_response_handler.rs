@@ -14,10 +14,9 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::node::p2p_message_handlers::handle_request;
-
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::Message;
+use crate::node::p2p_message_handlers::handle_request;
 use crate::node::SwarmSend;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
@@ -41,7 +40,7 @@ pub async fn handle_request_response_event(
                 libp2p::request_response::Message::Request {
                     request_id: _,
                     request,
-                    channel: _,
+                    channel: response_channel,
                 },
         } => {
             debug!("Received request from peer: {}", peer);
