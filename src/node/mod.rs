@@ -28,6 +28,7 @@ use crate::shares::receive_mining_message::start_receiving_mining_messages;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::identify;
 use libp2p::mdns::Event as MdnsEvent;
+use libp2p::request_response::ResponseChannel;
 use libp2p::PeerId;
 use libp2p::{
     gossipsub,
@@ -45,7 +46,8 @@ use tracing::{debug, error, info};
 #[allow(dead_code)]
 pub enum SwarmSend {
     Gossip(Message),
-    Message(PeerId, Message),
+    Request(PeerId, Message),
+    Response(ResponseChannel<Message>, Message),
 }
 
 /// Node is the main struct that represents the node

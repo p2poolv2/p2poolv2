@@ -161,9 +161,13 @@ impl NodeActor {
                                 Ok(_) => {}
                             }
                         }
-                        Some(SwarmSend::Message(peer_id, msg)) => {
+                        Some(SwarmSend::Request(peer_id, msg)) => {
                             let request_id =    self.node.swarm.behaviour_mut().request_response.send_request(&peer_id, msg);
                             debug!("Sent message to peer: {peer_id}, request_id: {request_id}");
+                        }
+                        Some(SwarmSend::Response(response_channel, msg)) => {
+                            let request_id = self.node.swarm.behaviour_mut().request_response.send_response(response_channel, msg);
+                            debug!("Sent message to response channel: {:?}", request_id);
                         }
                         None => {
                             info!("Stopping node actor on channel close");
