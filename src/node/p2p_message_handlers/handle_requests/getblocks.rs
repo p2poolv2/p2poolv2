@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::node::p2p_message_handlers::get_blocks_from_tip::get_block_hashes_from_chain_tip;
 use crate::node::SwarmSend;
 use crate::node::{InventoryMessage, Message};
 #[mockall_double::double]
@@ -21,25 +22,6 @@ use crate::shares::chain::actor::ChainHandle;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::info;
-
-const MAX_BLOCKS: usize = 500;
-
-/// Get block hashes from the chain tip up to the stop block hash
-/// Limit the number of blocks to MAX_BLOCKS
-/// Used by handle_getblocks and handle_getheaders to get block hashes from the chain tip up to the stop block hash
-pub async fn get_block_hashes_from_chain_tip(
-    chain_handle: ChainHandle,
-    stop_block_hash: bitcoin::BlockHash,
-) -> Result<Vec<bitcoin::BlockHash>, Box<dyn Error>> {
-    let mut block_hashes = Vec::with_capacity(MAX_BLOCKS);
-    let mut current_hash = chain_handle.get_chain_tip().await.unwrap();
-    while block_hashes.len() < MAX_BLOCKS && current_hash != stop_block_hash {
-        block_hashes.push(current_hash);
-        let previous_block = chain_handle.get_share(current_hash).await.unwrap();
-        current_hash = previous_block.header.prev_share_blockhash.unwrap();
-    }
-    Ok(block_hashes)
-}
 
 /// Handle a GetBlocks request from a peer
 /// - start from chain tip, find blockhashes up to the stop block hash
@@ -73,8 +55,8 @@ mod tests {
     use std::str::FromStr;
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
-    #[tokio::test]
 
+    #[tokio::test]
     async fn test_handle_getblocks() {
         let mut chain_handle = ChainHandle::default();
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
