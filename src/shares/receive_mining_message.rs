@@ -28,10 +28,10 @@ use tracing::{error, info};
 /// Receives messages from ckpool and sends them to the node asynchronously
 /// Each new message received starts a new tokio task
 /// TODO: Add limits to how many concurrent tasks are run
-pub fn start_receiving_mining_messages(
+pub fn start_receiving_mining_messages<C: Send + 'static>(
     config: &Config,
     chain_handle: ChainHandle,
-    swarm_tx: mpsc::Sender<SwarmSend>,
+    swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error>> {
     let (mining_message_tx, mut mining_message_rx) =
         tokio::sync::mpsc::channel::<serde_json::Value>(100);
@@ -48,7 +48,7 @@ pub fn start_receiving_mining_messages(
                 serde_json::from_value(mining_message_data).unwrap();
             info!("Received mining message deserialized: {:?}", mining_message);
 
-            if let Err(e) = handle_mining_message(
+            if let Err(e) = handle_mining_message::<C>(
                 mining_message,
                 chain_handle.clone(),
                 swarm_tx.clone(),

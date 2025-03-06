@@ -42,19 +42,38 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
+pub struct SwarmResponseChannel<T> {
+    channel: ResponseChannel<T>,
+}
+
+#[allow(dead_code)]
+pub trait SwarmResponseChannelTrait<T> {
+    fn new(channel: ResponseChannel<T>) -> Self;
+    fn channel(&self) -> &ResponseChannel<T>;
+}
+
+impl<T> SwarmResponseChannelTrait<T> for SwarmResponseChannel<T> {
+    fn new(channel: ResponseChannel<T>) -> Self {
+        Self { channel }
+    }
+    fn channel(&self) -> &ResponseChannel<T> {
+        &self.channel
+    }
+}
+
 /// Capture send type for swarm p2p messages that can be sent to the swarm
 #[allow(dead_code)]
-pub enum SwarmSend {
+pub enum SwarmSend<C> {
     Gossip(Message),
     Request(PeerId, Message),
-    Response(ResponseChannel<Message>, Message),
+    Response(C, Message),
 }
 
 /// Node is the main struct that represents the node
 struct Node {
     swarm: Swarm<P2PoolBehaviour>,
-    swarm_tx: mpsc::Sender<SwarmSend>,
-    swarm_rx: mpsc::Receiver<SwarmSend>,
+    swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
+    swarm_rx: mpsc::Receiver<SwarmSend<ResponseChannel<Message>>>,
     share_topic: gossipsub::IdentTopic,
     chain_handle: ChainHandle,
 }

@@ -29,10 +29,10 @@ use tracing::error;
 /// For now the message can be a share or a GBT workbase
 /// We store the received message in the node's database and send a gossip message to the network as this is our local share,
 /// we assume it is valid and add it to the chain.
-pub async fn handle_mining_message(
+pub async fn handle_mining_message<C>(
     mining_message: CkPoolMessage,
     chain_handle: ChainHandle,
-    swarm_tx: mpsc::Sender<SwarmSend>,
+    swarm_tx: mpsc::Sender<SwarmSend<C>>,
     miner_pubkey: PublicKey,
 ) -> Result<(), Box<dyn Error>> {
     let message: Message;
@@ -113,8 +113,13 @@ mod tests {
             Some(dec!(1.9041854952356509)),
         ));
 
-        let result =
-            handle_mining_message(mining_message, mock_chain, swarm_tx, miner_pubkey).await;
+        let result = handle_mining_message::<mpsc::Sender<Message>>(
+            mining_message,
+            mock_chain,
+            swarm_tx,
+            miner_pubkey,
+        )
+        .await;
 
         assert!(result.is_ok());
 
@@ -164,8 +169,13 @@ mod tests {
             Some(dec!(1.9041854952356509)),
         ));
 
-        let result =
-            handle_mining_message(mining_message, mock_chain, swarm_tx, miner_pubkey).await;
+        let result = handle_mining_message::<mpsc::Sender<Message>>(
+            mining_message,
+            mock_chain,
+            swarm_tx,
+            miner_pubkey,
+        )
+        .await;
 
         assert!(result.is_err());
         assert_eq!(
@@ -214,8 +224,13 @@ mod tests {
             Some(dec!(1.9041854952356509)),
         ));
 
-        let result =
-            handle_mining_message(mining_message, mock_chain, swarm_tx, miner_pubkey).await;
+        let result = handle_mining_message::<mpsc::Sender<Message>>(
+            mining_message,
+            mock_chain,
+            swarm_tx,
+            miner_pubkey,
+        )
+        .await;
 
         assert!(result.is_err());
         assert_eq!(

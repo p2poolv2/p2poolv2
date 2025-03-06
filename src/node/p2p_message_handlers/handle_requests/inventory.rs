@@ -31,10 +31,11 @@ use tracing::info;
 /// - Send the data to the peer via the swarm_tx channel
 /// - We send one message for each found object. See block and tx messages.
 /// Note: headers are not sent as inventory, but as headers message.
-pub async fn handle_inventory(
+pub async fn handle_inventory<C>(
     inventory: Vec<InventoryMessage>,
     chain_handle: ChainHandle,
-    swarm_tx: mpsc::Sender<SwarmSend>,
+    swarm_tx: mpsc::Sender<SwarmSend<C>>,
+    response_channel: C,
 ) -> Result<(), Box<dyn Error>> {
     info!("Received inventory update: {:?}", inventory);
     Ok(())

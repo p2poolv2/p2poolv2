@@ -27,11 +27,12 @@ use tracing::info;
 /// - find the last known block hash from the list of block_hashes
 /// - from that last know block hash, find the headers matching
 ///   of blocks from the last known block up to the stop block hash
-pub async fn handle_getheaders(
+pub async fn handle_getheaders<C>(
     block_hashes: Vec<BlockHash>,
     stop_block_hash: BlockHash,
     chain_handle: ChainHandle,
-    swarm_tx: mpsc::Sender<SwarmSend>,
+    response_channel: C,
+    swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error>> {
     info!("Received get headers: {:?}", block_hashes);
     Ok(())

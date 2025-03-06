@@ -21,6 +21,7 @@ use crate::node::SwarmSend;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use crate::utils::time_provider::SystemTimeProvider;
+use libp2p::request_response::ResponseChannel;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
@@ -30,7 +31,7 @@ use tracing::{debug, error, info};
 pub async fn handle_request_response_event(
     event: RequestResponseEvent<Message, Message>,
     chain_handle: ChainHandle,
-    swarm_tx: mpsc::Sender<SwarmSend>,
+    swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
 ) -> Result<(), Box<dyn Error>> {
     info!("Request-response event: {:?}", event);
     match event {
@@ -45,8 +46,15 @@ pub async fn handle_request_response_event(
         } => {
             debug!("Received request from peer: {}", peer);
             let time_provider = SystemTimeProvider {};
-            if let Err(e) =
-                handle_request(peer, request, chain_handle, swarm_tx, &time_provider).await
+            if let Err(e) = handle_request::<ResponseChannel<Message>>(
+                peer,
+                request,
+                chain_handle,
+                response_channel,
+                swarm_tx,
+                &time_provider,
+            )
+            .await
             {
                 error!("Failed to handle request: {}", e);
                 return Err("Error handling request".into());
