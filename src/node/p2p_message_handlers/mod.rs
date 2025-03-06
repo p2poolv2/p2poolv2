@@ -26,11 +26,12 @@ use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-pub async fn handle_request(
+pub async fn handle_request<C: 'static>(
     peer: libp2p::PeerId,
     request: Message,
     chain_handle: ChainHandle,
-    swarm_tx: mpsc::Sender<SwarmSend>,
+    response_channel: C,
+    swarm_tx: mpsc::Sender<SwarmSend<C>>,
     time_provider: &impl TimeProvider,
 ) -> Result<(), Box<dyn Error>> {
     info!("Handling request from peer: {}", peer);
@@ -40,13 +41,20 @@ pub async fn handle_request(
                 block_hashes,
                 stop_block_hash,
                 chain_handle,
+                response_channel,
                 swarm_tx,
             )
             .await
         }
         Message::GetShareBlocks(block_hashes, stop_block_hash) => {
-            handle_requests::handle_getblocks(block_hashes, stop_block_hash, chain_handle, swarm_tx)
-                .await
+            handle_requests::handle_getblocks(
+                block_hashes,
+                stop_block_hash,
+                chain_handle,
+                response_channel,
+                swarm_tx,
+            )
+            .await
         }
         Message::ShareHeaders(share_headers) => {
             handle_responses::handle_share_headers(share_headers, chain_handle, time_provider).await
@@ -131,10 +139,12 @@ mod tests {
     use mockall::predicate::*;
     use std::time::SystemTime;
     use tokio::sync::oneshot;
+
     #[tokio::test]
     async fn test_handle_share_block_request() {
         let mut chain_handle = ChainHandle::default();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let peer_id = libp2p::PeerId::random();
 
         let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
@@ -183,6 +193,7 @@ mod tests {
             peer_id,
             Message::ShareBlock(share_block.clone()),
             chain_handle,
+            response_channel_tx,
             swarm_tx,
             &time_provider,
         )
@@ -212,7 +223,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_request_share_block_error() {
         let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let mut chain_handle = ChainHandle::default();
 
         let share_block = TestBlockBuilder::new()
@@ -242,6 +254,7 @@ mod tests {
             peer_id,
             Message::ShareBlock(share_block),
             chain_handle,
+            response_channel_tx,
             swarm_tx,
             &time_provider,
         )
@@ -253,7 +266,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_request_workbase_success() {
         let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let mut chain_handle = ChainHandle::default();
 
         let workbase = simple_miner_workbase();
@@ -274,6 +288,7 @@ mod tests {
             peer_id,
             Message::Workbase(workbase),
             chain_handle,
+            response_channel_tx,
             swarm_tx,
             &time_provider,
         )
@@ -285,7 +300,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_request_workbase_error() {
         let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let mut chain_handle = ChainHandle::default();
 
         let workbase = simple_miner_workbase();
@@ -302,6 +318,7 @@ mod tests {
             peer_id,
             Message::Workbase(workbase),
             chain_handle,
+            response_channel_tx,
             swarm_tx,
             &time_provider,
         )

@@ -45,11 +45,12 @@ pub async fn get_block_hashes_from_chain_tip(
 /// - start from chain tip, find blockhashes up to the stop block hash
 /// - limit the number of blocks to MAX_BLOCKS
 /// - generate an inventory message to send blockhashes
-pub async fn handle_getblocks(
+pub async fn handle_getblocks<C: 'static>(
     block_hashes: Vec<bitcoin::BlockHash>,
     stop_block_hash: bitcoin::BlockHash,
     chain_handle: ChainHandle,
-    swarm_tx: mpsc::Sender<SwarmSend>,
+    response_channel: C,
+    swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error>> {
     info!("Received getblocks: {:?}", block_hashes);
     let response_block_hashes =
@@ -57,7 +58,9 @@ pub async fn handle_getblocks(
     let inventory_message = Message::Inventory(InventoryMessage::BlockHashes(
         response_block_hashes.into_iter().collect(),
     ));
-    swarm_tx.send(SwarmSend::Gossip(inventory_message)).await?;
+    swarm_tx
+        .send(SwarmSend::Response(response_channel, inventory_message))
+        .await?;
     Ok(())
 }
 
@@ -69,11 +72,13 @@ mod tests {
     use bitcoin::BlockHash;
     use std::str::FromStr;
     use tokio::sync::mpsc;
-
+    use tokio::sync::oneshot;
     #[tokio::test]
+
     async fn test_handle_getblocks() {
         let mut chain_handle = ChainHandle::default();
-        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend>(32);
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
         // Create 5 block hashes
         let block_hashes: Vec<BlockHash> = vec![
@@ -116,13 +121,21 @@ mod tests {
             });
 
         // Call handle_getblocks
-        let result = handle_getblocks(vec![], stop_block, chain_handle, swarm_tx).await;
+        let result = handle_getblocks(
+            vec![],
+            stop_block,
+            chain_handle,
+            response_channel_tx,
+            swarm_tx,
+        )
+        .await;
         assert!(result.is_ok());
 
         // Verify the inventory message contains expected blocks
-        if let Some(SwarmSend::Gossip(Message::Inventory(InventoryMessage::BlockHashes(
-            sent_hashes,
-        )))) = swarm_rx.try_recv().ok()
+        if let Some(SwarmSend::Response(
+            _response_channel,
+            Message::Inventory(InventoryMessage::BlockHashes(sent_hashes)),
+        )) = swarm_rx.try_recv().ok()
         {
             assert_eq!(sent_hashes.len(), 2);
             assert!(sent_hashes.contains(

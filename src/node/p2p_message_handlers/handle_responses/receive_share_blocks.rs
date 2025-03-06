@@ -28,10 +28,10 @@ use tracing::{error, info};
 
 /// Handle a ShareBlock received from a peer
 /// Validate the ShareBlock and store it in the chain
-pub async fn handle_share_block(
+pub async fn handle_share_block<C>(
     share_block: ShareBlock,
     chain_handle: ChainHandle,
-    swarm_tx: mpsc::Sender<SwarmSend>,
+    swarm_tx: mpsc::Sender<SwarmSend<C>>,
     time_provider: &impl TimeProvider,
 ) -> Result<(), Box<dyn Error>> {
     info!("Received share block: {:?}", share_block);

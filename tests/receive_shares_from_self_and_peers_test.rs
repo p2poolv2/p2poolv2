@@ -95,6 +95,7 @@ mod self_and_peer_messages_tests {
         let mut peer_iter = peer_messages.iter();
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(100);
+        let (response_channel_tx, _response_channel_rx) = mpsc::channel::<Message>(100);
         tokio::spawn(async move {
             while let Some(_) = swarm_rx.recv().await {
                 tracing::debug!("Received swarm send");
@@ -125,6 +126,7 @@ mod self_and_peer_messages_tests {
                 peer_id,
                 peer_msg.clone(),
                 chain_handle.clone(),
+                response_channel_tx.clone(),
                 swarm_tx.clone(),
                 &time_provider,
             )
