@@ -18,7 +18,6 @@ use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{ShareBlock, ShareHeader};
 use bitcoin::{BlockHash, Txid};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::error::Error;
 
 /// Message trait for network messages that can be serialized/deserialized
