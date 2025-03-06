@@ -21,7 +21,6 @@ use crate::shares::chain::actor::ChainHandle;
 use crate::shares::validation;
 use crate::shares::ShareBlock;
 use crate::utils::time_provider::TimeProvider;
-use std::collections::HashSet;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{error, info};
