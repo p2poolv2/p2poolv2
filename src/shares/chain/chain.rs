@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
-use crate::shares::{store::Store, BlockHash, ShareBlock};
+use crate::shares::{store::Store, BlockHash, ShareBlock, ShareHeader};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashSet;
@@ -162,6 +162,27 @@ impl Chain {
     /// Get a share from the chain given a share hash
     pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock> {
         self.store.get_share(share_hash)
+    }
+
+    /// Get a share header from the chain given a share hash
+    pub fn get_share_headers(&self, share_hashes: &Vec<BlockHash>) -> Vec<ShareHeader> {
+        self.store.get_share_headers(share_hashes.clone())
+    }
+
+    /// Get blockhashes for locator
+    /// Returns a list of shares starting from the earliest block from the block hashes
+    pub fn get_headers_for_locator(
+        &self,
+        block_hashes: &Vec<BlockHash>,
+        stop_block_hash: &BlockHash,
+        limit: usize,
+    ) -> Vec<ShareHeader> {
+        if self.chain_tip.is_none() {
+            return vec![];
+        }
+
+        self.store
+            .get_headers_for_locator(block_hashes, stop_block_hash, limit)
     }
 
     /// Get a workbase from the chain given a workinfoid
@@ -485,5 +506,103 @@ mod chain_tests {
             .parse()
             .unwrap();
         assert_eq!(chain.get_depth(&non_existent_hash), None);
+    }
+
+    #[test]
+    fn test_get_headers_for_locator() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let mut chain = Chain::new(store);
+
+        // Create a chain of 5 shares
+        let share1 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb1")
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .workinfoid(1)
+            .clientid(1)
+            .diff(dec!(1.0))
+            .sdiff(dec!(1.9041854952356509))
+            .build();
+
+        let share2 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2")
+            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .workinfoid(2)
+            .clientid(1)
+            .diff(dec!(1.0))
+            .sdiff(dec!(1.9041854952356509))
+            .build();
+
+        let share3 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3")
+            .prev_share_blockhash(share2.header.blockhash.to_string().as_str())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .workinfoid(3)
+            .clientid(1)
+            .diff(dec!(1.0))
+            .sdiff(dec!(1.9041854952356509))
+            .build();
+
+        let share4 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
+            .prev_share_blockhash(share3.header.blockhash.to_string().as_str())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .workinfoid(4)
+            .clientid(1)
+            .diff(dec!(1.0))
+            .sdiff(dec!(1.9041854952356509))
+            .build();
+
+        let share5 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .prev_share_blockhash(share4.header.blockhash.to_string().as_str())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .workinfoid(5)
+            .clientid(1)
+            .diff(dec!(1.0))
+            .sdiff(dec!(1.9041854952356509))
+            .build();
+
+        // Add shares to chain
+        chain.add_share(share1.clone()).unwrap();
+        chain.add_share(share2.clone()).unwrap();
+        chain.add_share(share3.clone()).unwrap();
+        chain.add_share(share4.clone()).unwrap();
+        chain.add_share(share5.clone()).unwrap();
+
+        // Test 1: Get headers starting from share1 up to share3
+        let locator = vec![share1.header.blockhash];
+        let stop_hash = share3.header.blockhash;
+        let headers = chain.get_headers_for_locator(&locator, &stop_hash, 500);
+        assert_eq!(headers.len(), 2); // Should return share2 and share3
+        assert_eq!(headers[0].blockhash, share2.header.blockhash);
+        assert_eq!(headers[1].blockhash, share3.header.blockhash);
+
+        // Test 2: Get headers with limit
+        let headers = chain.get_headers_for_locator(&locator, &share5.header.blockhash, 2);
+        assert_eq!(headers.len(), 2); // Should only return 2 headers due to limit
+        assert_eq!(headers[0].blockhash, share2.header.blockhash);
+        assert_eq!(headers[1].blockhash, share3.header.blockhash);
+
+        // Test 3: Get headers with non-existent locator
+        let non_existent = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
+            .parse()
+            .unwrap();
+        let headers =
+            chain.get_headers_for_locator(&vec![non_existent], &share5.header.blockhash, 500);
+        assert_eq!(headers.len(), 0); // Should return empty vec when locator not found
+
+        // Test 4: Multiple locator hashes, results should start from first found
+        let locator = vec![
+            non_existent,
+            share3.header.blockhash,
+            share2.header.blockhash,
+            share1.header.blockhash,
+        ];
+        let headers = chain.get_headers_for_locator(&locator, &share5.header.blockhash, 500);
+        assert_eq!(headers.len(), 2); // Should return share4 and share5
+        assert_eq!(headers[0].blockhash, share4.header.blockhash);
+        assert_eq!(headers[1].blockhash, share5.header.blockhash);
     }
 }
