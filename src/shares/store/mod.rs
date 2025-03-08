@@ -420,10 +420,7 @@ impl Store {
     }
 
     /// Get a share headers matching the vector of blockhashes
-    pub fn get_share_headers(
-        &self,
-        blockhashes: Vec<BlockHash>,
-    ) -> HashMap<BlockHash, ShareHeader> {
+    pub fn get_share_headers(&self, blockhashes: Vec<BlockHash>) -> Vec<ShareHeader> {
         debug!("Getting share headers from store: {:?}", blockhashes);
         let share_cf = self.db.cf_handle("block").unwrap();
         let keys = blockhashes
@@ -447,8 +444,8 @@ impl Store {
             .collect::<Vec<_>>();
         share_headers
             .into_iter()
-            .filter_map(|share| share.map(|s| (s.blockhash, s)))
-            .collect::<HashMap<BlockHash, ShareHeader>>()
+            .filter_map(|header| header)
+            .collect()
     }
 
     /// Get headers to satisy the locator query.
@@ -508,9 +505,6 @@ impl Store {
             };
         }
         self.get_share_headers(descendants)
-            .into_iter()
-            .map(|(_, header)| header)
-            .collect()
     }
 
     /// Get multiple shares from the store
@@ -1444,5 +1438,105 @@ mod tests {
         assert!(descendants_with_limit.contains(&share2.header));
         assert!(descendants_with_limit.contains(&uncle1_share2.header));
         assert!(descendants_with_limit.contains(&uncle2_share2.header));
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_get_headers_for_block_locator_should_find_matching_blocks() {
+        use bitcoin::BlockHash;
+        use std::str::FromStr;
+
+        let temp_dir = tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+
+        // Create 5 block hashes
+        let block_hashes: Vec<BlockHash> = vec![
+            "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", // tip
+            "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048",
+            "000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd", // stop block
+            "0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742c1cae6295464449",
+            "000000004ebadb55ee9096c9a2f8880e09da59c0d68b1c228da88e48844a1485", // locator + genesis
+        ]
+        .into_iter()
+        .map(|h| BlockHash::from_str(h).unwrap())
+        .collect();
+
+        let stop_block = block_hashes[2];
+        let mut blocks: Vec<ShareBlock> = Vec::new();
+
+        // We don't need to mock the last two block because they are past the stop block (inclusive)
+        for (i, hash) in block_hashes.iter().enumerate().rev() {
+            println!("Adding hash: {:?} with i = {}", hash, i);
+            let mut builder = TestBlockBuilder::new().blockhash(hash.to_string().as_str());
+            if i < block_hashes.len() - 1 {
+                builder = builder.prev_share_blockhash(block_hashes[i + 1].to_string().as_str());
+            }
+            let block = builder.build();
+            store.add_share(block.clone());
+            blocks.push(block);
+        }
+
+        let locator = vec![block_hashes[4]];
+
+        println!("locator: {:?}", locator);
+        println!("stop_block: {:?}", stop_block);
+
+        // Call handle_getblocks
+        let result = store.get_headers_for_locator(&locator, &stop_block, 10);
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(
+            result[0].blockhash.to_string(),
+            "0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742c1cae6295464449"
+        );
+        assert_eq!(
+            result[1].blockhash.to_string(),
+            "000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_headers_for_block_locator_stop_block_not_found() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+
+        let mut blocks = Vec::new();
+        let mut locator = vec![];
+
+        let block = TestBlockBuilder::new()
+            .blockhash("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f") // locator + genesis
+            .build();
+        blocks.push(block.clone());
+        store.add_share(block.clone());
+        locator.push(block.header.blockhash);
+
+        let block = TestBlockBuilder::new()
+            .blockhash("00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048")
+            .prev_share_blockhash(
+                "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+            )
+            .build();
+        blocks.push(block.clone());
+        store.add_share(block.clone());
+
+        let block = TestBlockBuilder::new()
+            .blockhash("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd") // tip
+            .prev_share_blockhash(
+                "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048",
+            )
+            .build();
+        blocks.push(block.clone());
+        store.add_share(block.clone());
+
+        // Use a stop block hash that doesn't exist in our chain
+        let non_existent_stop_block =
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                .parse::<BlockHash>()
+                .unwrap();
+
+        // Call get_headers_for_block_locator with non-existent stop block
+        let result = store.get_headers_for_locator(&locator, &non_existent_stop_block, 10);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], blocks[1].header);
+        assert_eq!(result[1], blocks[2].header);
     }
 }
