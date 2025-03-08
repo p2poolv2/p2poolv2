@@ -541,22 +541,6 @@ impl Store {
             .collect::<HashMap<BlockHash, ShareBlock>>()
     }
 
-    /// Get a storage share, which is share header and miner share, from the store without loading transactions
-    /// This is used when we want to get a share header and miner share without loading transactions
-    pub fn get_storage_share(&self, blockhash: &BlockHash) -> Option<StorageShareBlock> {
-        debug!("Getting share header from store: {:?}", blockhash);
-        let share_cf = self.db.cf_handle("block").unwrap();
-        let share = match self.db.get_cf::<&[u8]>(share_cf, blockhash.as_ref()) {
-            Ok(Some(share)) => share,
-            Ok(None) | Err(_) => return None,
-        };
-        let storage_share = match StorageShareBlock::cbor_deserialize(&share) {
-            Ok(share) => share,
-            Err(_) => return None,
-        };
-        Some(storage_share)
-    }
-
     /// Get transactions for a blockhash
     /// First look up the txids from the blockhash_txids index, then get the transactions from the txids
     pub fn get_txs_for_block(&self, blockhash: &BlockHash) -> Vec<Transaction> {
