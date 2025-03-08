@@ -326,4 +326,118 @@ mod tests {
 
         assert!(result.is_err());
     }
+
+    #[tokio::test]
+    async fn test_handle_request_getheaders() {
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let response_channel = 1u32;
+        let mut chain_handle = ChainHandle::default();
+
+        let block_hashes = vec![
+            "0000000000000000000000000000000000000000000000000000000000000001"
+                .parse::<bitcoin::BlockHash>()
+                .unwrap(),
+        ];
+        let stop_block_hash = "0000000000000000000000000000000000000000000000000000000000000002"
+            .parse::<bitcoin::BlockHash>()
+            .unwrap();
+
+        // Mock the response headers
+        let block1 = TestBlockBuilder::new()
+            .blockhash("0000000000000000000000000000000000000000000000000000000000000001")
+            .build();
+        let block2 = TestBlockBuilder::new()
+            .blockhash("0000000000000000000000000000000000000000000000000000000000000002")
+            .build();
+        let response_headers = vec![block1.header.clone(), block2.header.clone()];
+
+        // Set up mock expectations
+        chain_handle
+            .expect_get_headers_for_locator()
+            .returning(move |_, _| response_headers.clone());
+
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        let result = handle_request(
+            peer_id,
+            Message::GetShareHeaders(block_hashes, stop_block_hash),
+            chain_handle,
+            response_channel,
+            swarm_tx,
+            &time_provider,
+        )
+        .await;
+
+        assert!(result.is_ok());
+
+        // Verify swarm message
+        if let Some(SwarmSend::Response(channel, Message::ShareHeaders(headers))) =
+            swarm_rx.recv().await
+        {
+            assert_eq!(channel, response_channel);
+            assert_eq!(headers, vec![block1.header, block2.header]);
+        } else {
+            panic!("Expected SwarmSend::Response with ShareHeaders message");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_get_share_blocks() {
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let (response_channel, _response_channel_rx) = oneshot::channel::<Message>();
+        let mut chain_handle = ChainHandle::default();
+
+        let block_hashes = vec![
+            "0000000000000000000000000000000000000000000000000000000000000001"
+                .parse::<bitcoin::BlockHash>()
+                .unwrap(),
+            "0000000000000000000000000000000000000000000000000000000000000002"
+                .parse::<bitcoin::BlockHash>()
+                .unwrap(),
+        ];
+
+        let stop_block_hash = "0000000000000000000000000000000000000000000000000000000000000002"
+            .parse::<bitcoin::BlockHash>()
+            .unwrap();
+
+        // Create test blocks that will be returned
+        let block1 = TestBlockBuilder::new()
+            .blockhash("0000000000000000000000000000000000000000000000000000000000000001")
+            .build();
+        let block2 = TestBlockBuilder::new()
+            .blockhash("0000000000000000000000000000000000000000000000000000000000000002")
+            .build();
+
+        // Set up mock expectations
+        chain_handle
+            .expect_get_headers_for_locator()
+            .returning(move |_, _| vec![block1.header.clone(), block2.header.clone()]);
+
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        let result = handle_request(
+            peer_id,
+            Message::GetShareBlocks(block_hashes.clone(), stop_block_hash),
+            chain_handle,
+            response_channel,
+            swarm_tx,
+            &time_provider,
+        )
+        .await;
+
+        assert!(result.is_ok());
+
+        // Verify swarm message
+        if let Some(SwarmSend::Response(
+            _,
+            Message::Inventory(InventoryMessage::BlockHashes(hashes)),
+        )) = swarm_rx.recv().await
+        {
+            assert_eq!(hashes, block_hashes);
+        } else {
+            panic!("Expected SwarmSend::Response with Inventory message");
+        }
+    }
 }
