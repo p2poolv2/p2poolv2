@@ -743,4 +743,40 @@ mod tests {
         let headers = chain_handle.get_share_headers(share_hashes).await;
         assert!(headers.is_empty());
     }
+
+    #[tokio::test]
+    async fn test_get_headers_for_locator() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // Create test blocks
+        let block1 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb1")
+            .build();
+
+        let block2 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2")
+            .prev_share_blockhash(block1.header.blockhash.to_string().as_str())
+            .build();
+
+        let block3 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3")
+            .prev_share_blockhash(block2.header.blockhash.to_string().as_str())
+            .build();
+
+        let locator = vec![block1.header.blockhash];
+        let stop_hash = block3.header.blockhash;
+
+        chain_handle.add_share(block1.clone()).await.unwrap();
+        chain_handle.add_share(block2.clone()).await.unwrap();
+        chain_handle.add_share(block3.clone()).await.unwrap();
+
+        // Call the function and verify results
+        let headers = chain_handle
+            .get_headers_for_locator(locator, stop_hash)
+            .await;
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers[0], block2.header);
+        assert_eq!(headers[1], block3.header);
+    }
 }
