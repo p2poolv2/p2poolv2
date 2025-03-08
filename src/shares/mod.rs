@@ -29,7 +29,7 @@ use bitcoin::{BlockHash, PublicKey, Transaction};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 
-#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 /// Header for the ShareBlock
 /// Helps validate PoW and transaction merkle root.
 pub struct ShareHeader {
@@ -44,6 +44,14 @@ pub struct ShareHeader {
     /// Transaction merkle root
     pub merkle_root: TxMerkleNode,
 }
+
+impl PartialEq for ShareHeader {
+    fn eq(&self, other: &Self) -> bool {
+        self.blockhash == other.blockhash
+    }
+}
+
+impl Eq for ShareHeader {}
 
 /// Captures a block on the share chain
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
