@@ -47,6 +47,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       
       - name: Cache dependencies and tarpaulin
+        id: cache-dependencies
         uses: actions/cache@v3
         with:
           path: |
