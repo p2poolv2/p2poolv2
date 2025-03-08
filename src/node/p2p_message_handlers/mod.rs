@@ -14,7 +14,6 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod get_blocks_from_tip;
 pub mod handle_requests;
 pub mod handle_responses;
 
