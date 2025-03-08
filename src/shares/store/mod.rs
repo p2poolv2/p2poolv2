@@ -451,8 +451,8 @@ impl Store {
             .collect::<HashMap<BlockHash, ShareHeader>>()
     }
 
-    /// Get block hashes to satisy the locator query.
-    /// Returns a list of shares from the earliest block from the block hashes
+    /// Get headers to satisy the locator query.
+    /// Returns a list of headers from the earliest block from the block hashes
     /// We assume the list of blocks in the locator is ordered by height, so we stop when we find the first block in the locator
     /// Find headers up to the stop blockhash, or the limit provided
     pub fn get_headers_for_locator(
