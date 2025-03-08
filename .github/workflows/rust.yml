@@ -46,7 +46,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       
-      - name: Cache dependencies
+      - name: Cache dependencies and tarpaulin
         uses: actions/cache@v3
         with:
           path: |
@@ -55,14 +55,17 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-tarpaulin-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-tarpaulin-
+            ${{ runner.os }}-cargo-
 
       - name: Install cargo-tarpaulin
+        if: steps.cache-dependencies.outputs.cache-hit != 'true'
         run: cargo install cargo-tarpaulin
 
       - name: Generate coverage report
-        run: cargo tarpaulin --out xml
+        run: cargo tarpaulin --out xml --target-dir target
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
