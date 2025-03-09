@@ -23,8 +23,9 @@ use tokio::sync::mpsc;
 use tracing::info;
 
 /// Handle Inventory message request from a peer.
-/// Inventory results in a GetData message being sent to the peer,
+/// inv is sent unsolicited, or in response to getblocks message,
 /// therefore we include this message in the handle_requests module.
+///
 /// We wrap all inventory update messages in the same message type
 /// TODO
 /// - Depending on the type of the inventory, we query the database for the relevant data

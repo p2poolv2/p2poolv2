@@ -22,6 +22,8 @@ use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::info;
 
+const MAX_BLOCKS: usize = 500;
+
 /// Handle a GetBlocks request from a peer
 /// - start from chain tip, find blockhashes up to the stop block hash
 /// - limit the number of blocks to MAX_BLOCKS
@@ -35,7 +37,7 @@ pub async fn handle_getblocks<C: 'static>(
 ) -> Result<(), Box<dyn Error>> {
     info!("Received getblocks: {:?}", block_hashes);
     let response_block_hashes = chain_handle
-        .get_headers_for_locator(block_hashes, stop_block_hash)
+        .get_headers_for_locator(block_hashes, stop_block_hash, MAX_BLOCKS)
         .await;
     let inventory_message = Message::Inventory(InventoryMessage::BlockHashes(
         response_block_hashes
@@ -89,8 +91,7 @@ mod tests {
         // Set up mock expectations
         chain_handle
             .expect_get_headers_for_locator()
-            .with(eq(block_hashes.clone()), eq(stop_block_hash))
-            .returning(move |_, _| response_headers.clone());
+            .returning(move |_, _, _| response_headers.clone());
 
         // Call the handler
         handle_getblocks(

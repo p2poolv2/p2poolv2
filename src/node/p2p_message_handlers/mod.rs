@@ -355,7 +355,7 @@ mod tests {
         // Set up mock expectations
         chain_handle
             .expect_get_headers_for_locator()
-            .returning(move |_, _| response_headers.clone());
+            .returning(move |_, _, _| response_headers.clone());
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
@@ -413,7 +413,7 @@ mod tests {
         // Set up mock expectations
         chain_handle
             .expect_get_headers_for_locator()
-            .returning(move |_, _| vec![block1.header.clone(), block2.header.clone()]);
+            .returning(move |_, _, _| vec![block1.header.clone(), block2.header.clone()]);
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
