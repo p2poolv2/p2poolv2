@@ -56,7 +56,6 @@ mod tests {
 
     use super::*;
     use crate::test_utils::TestBlockBuilder;
-    use mockall::predicate::*;
     use std::str::FromStr;
 
     #[tokio::test]

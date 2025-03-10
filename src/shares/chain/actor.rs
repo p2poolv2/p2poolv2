@@ -23,7 +23,7 @@ use crate::shares::{
 use crate::shares::{ShareBlock, ShareHeader};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error};
@@ -517,7 +517,7 @@ mock! {
         pub async fn store_user_workbase(&self, user_workbase: UserWorkbase) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase>;
         pub async fn get_share(&self, share_hash: BlockHash) -> Option<ShareBlock>;
-        pub async fn get_share_headers(&self, share_hashes: Vec<BlockHash>) -> HashMap<BlockHash, ShareHeader>;
+        pub async fn get_share_headers(&self, share_hashes: Vec<BlockHash>) -> Vec<ShareHeader>;
         pub async fn get_headers_for_locator(&self, block_hashes: Vec<BlockHash>, stop_block_hash: BlockHash, max_headers: usize) -> Vec<ShareHeader>;
     }
 
