@@ -25,19 +25,19 @@ use tracing::info;
 const MAX_BLOCKS: usize = 500;
 
 /// Handle a GetBlocks request from a peer
-/// - start from chain tip, find blockhashes up to the stop block hash
+/// - use the locator to find the blockhashes to respond with
 /// - limit the number of blocks to MAX_BLOCKS
 /// - generate an inventory message to send blockhashes
 pub async fn handle_getblocks<C: 'static>(
-    block_hashes: Vec<bitcoin::BlockHash>,
+    locator: Vec<bitcoin::BlockHash>,
     stop_block_hash: bitcoin::BlockHash,
     chain_handle: ChainHandle,
     response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error>> {
-    info!("Received getblocks: {:?}", block_hashes);
+    info!("Received getblocks: {:?}", locator);
     let response_block_hashes = chain_handle
-        .get_headers_for_locator(block_hashes, stop_block_hash, MAX_BLOCKS)
+        .get_headers_for_locator(locator, stop_block_hash, MAX_BLOCKS)
         .await;
     let inventory_message = Message::Inventory(InventoryMessage::BlockHashes(
         response_block_hashes
