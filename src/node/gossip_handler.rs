@@ -28,7 +28,10 @@ use tracing::{debug, error, info};
 /// 1. Workbase(MinerWorkbase)
 /// 2. UserWorkbase(UserWorkbase)
 /// 3. MiningShare(ShareBlock)
-pub async fn handle_gossipsub_event(event: gossipsub::Event, chain_handle: ChainHandle) {
+pub async fn handle_gossipsub_event(
+    event: gossipsub::Event,
+    chain_handle: ChainHandle,
+) -> Result<(), Box<dyn Error>> {
     debug!("Gossipsub event: {:?}", event);
     match event {
         gossipsub::Event::Message {
@@ -37,14 +40,15 @@ pub async fn handle_gossipsub_event(event: gossipsub::Event, chain_handle: Chain
             message,
         } => {
             let message = Message::cbor_deserialize(&message.data).unwrap();
-            tokio::spawn(async move {
-                if let Err(e) = handle_gossip_message(message, chain_handle).await {
-                    error!("Failed to handle gossip message: {}", e);
-                }
-            });
+            if let Err(e) = handle_gossip_message(message, chain_handle).await {
+                error!("Failed to handle gossip message: {}", e);
+                return Err("Failed to handle gossip message".into());
+            }
+            Ok(())
         }
         _ => {
             // Do nothing for all other gossip events
+            Ok(())
         }
     }
 }
@@ -94,6 +98,72 @@ mod tests {
     use super::*;
     use crate::shares::miner_message::{CkPoolMessage, MinerWorkbase, UserWorkbase};
     use crate::test_utils::TestBlockBuilder;
+    use libp2p::gossipsub::{MessageId, TopicHash};
+    use libp2p::PeerId;
+
+    #[tokio::test]
+    async fn test_handle_gossip_event() {
+        let mut mock_chain = ChainHandle::default();
+
+        let json_str = include_str!("../../tests/test_data/simple_miner_workbase.json");
+        let workbase: MinerWorkbase = serde_json::from_str(&json_str).unwrap();
+
+        mock_chain
+            .expect_add_workbase()
+            .with(mockall::predicate::eq(workbase.clone()))
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let message = Message::Workbase(workbase).cbor_serialize().unwrap();
+
+        let event = gossipsub::Event::Message {
+            propagation_source: PeerId::random(),
+            message_id: MessageId::new(b"test"),
+            message: gossipsub::Message {
+                source: Some(PeerId::random()),
+                data: message,
+                sequence_number: Some(0),
+                topic: TopicHash::from_raw("share"),
+            },
+        };
+
+        let result = handle_gossipsub_event(event, mock_chain).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_gossip_event_should_handle_error_from_chain_handle() {
+        let mut mock_chain = ChainHandle::default();
+
+        let json_str = include_str!("../../tests/test_data/simple_miner_workbase.json");
+        let workbase: MinerWorkbase = serde_json::from_str(&json_str).unwrap();
+
+        mock_chain
+            .expect_add_workbase()
+            .with(mockall::predicate::eq(workbase.clone()))
+            .times(1)
+            .returning(|_| Err("Failed to add workbase".into()));
+
+        let message = Message::Workbase(workbase).cbor_serialize().unwrap();
+
+        let event = gossipsub::Event::Message {
+            propagation_source: PeerId::random(),
+            message_id: MessageId::new(b"test"),
+            message: gossipsub::Message {
+                source: Some(PeerId::random()),
+                data: message,
+                sequence_number: Some(0),
+                topic: TopicHash::from_raw("share"),
+            },
+        };
+
+        let result = handle_gossipsub_event(event, mock_chain).await;
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Failed to handle gossip message"
+        );
+    }
 
     #[tokio::test]
     async fn test_handle_gossip_message_workbase() {
