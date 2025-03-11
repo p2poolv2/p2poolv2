@@ -21,12 +21,12 @@ use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
 use tracing::info;
 
-/// Handle a ShareHeader received from a peer
+/// Handle ShareHeaders received from a peer
 /// We need to:
 /// 1. TODO: Validate the PoW on the share header
-/// 2. TODO: Push the header into a task queue to fetch the matching share block
-/// 3. TODO: We need to start a task in node to pull from the task queue and send getData message
-/// 4. DONE: We already handle responses to getData in the shape of ShareBlock messages
+/// 2. TODO: Store the headers
+/// 2. TODO: Push the header into a task queue to fetch txs to build the ShareBlock
+/// 3. TODO: We need to start a task in node to pull from the task queue and send getData message for txs
 pub async fn handle_share_headers(
     share_headers: Vec<ShareHeader>,
     chain_handle: ChainHandle,
