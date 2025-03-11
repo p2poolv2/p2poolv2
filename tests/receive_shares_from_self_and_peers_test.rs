@@ -117,7 +117,7 @@ mod self_and_peer_messages_tests {
             // for shares from peers we validate it, so we need to set the time provider to the share timestamp
             let mut time_provider = TestTimeProvider(SystemTime::now());
             if let Message::ShareBlock(share) = &peer_msg {
-                time_provider.set_time(share.miner_share.ntime);
+                time_provider.set_time(share.header.miner_share.ntime);
             }
 
             tokio::time::sleep(Duration::from_millis(100)).await;

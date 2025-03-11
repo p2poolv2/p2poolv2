@@ -34,7 +34,7 @@ pub async fn meets_bitcoin_difficulty(
 ) -> Result<bool, Box<dyn Error>> {
     let bitcoind = BitcoindRpcClient::new(&config.url, &config.username, &config.password)?;
     let difficulty = bitcoind.get_difficulty().await?;
-    let share_difficulty = share.miner_share.sdiff;
+    let share_difficulty = share.header.miner_share.sdiff;
     if share_difficulty >= Decimal::from_f64_retain(difficulty).unwrap() {
         Ok(validate_bitcoin_block(block, config).await?)
     } else {

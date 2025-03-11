@@ -94,9 +94,9 @@ impl Store {
         debug!(
             "Adding share to store with {} txs: {:?}",
             share.transactions.len(),
-            share.header.blockhash
+            share.header.miner_share.hash
         );
-        let blockhash = share.header.blockhash.clone();
+        let blockhash = share.header.miner_share.hash;
 
         // Create a new write batch
         let mut batch = rocksdb::WriteBatch::default();
@@ -414,7 +414,8 @@ impl Store {
             Ok(share) => share,
             Err(_) => return None,
         };
-        let transactions = self.get_txs_for_block(&share.header.blockhash);
+        let blockhash = share.header.miner_share.hash;
+        let transactions = self.get_txs_for_block(&blockhash);
         let share = share.into_share_block_with_transactions(transactions);
         Some(share)
     }
@@ -473,7 +474,7 @@ impl Store {
         }
 
         self.get_descendants(
-            start_share_block.unwrap().header.blockhash,
+            start_share_block.unwrap().header.miner_share.hash,
             stop_blockhash,
             limit,
         )
@@ -521,7 +522,8 @@ impl Store {
             .map(|v| {
                 if let Ok(Some(v)) = v {
                     if let Ok(storage_share) = StorageShareBlock::cbor_deserialize(&v) {
-                        let txids = self.get_txids_for_blockhash(&storage_share.header.blockhash);
+                        let blockhash = storage_share.header.miner_share.hash;
+                        let txids = self.get_txids_for_blockhash(&blockhash);
                         let transactions = txids
                             .iter()
                             .map(|txid| self.get_tx(txid).unwrap())
@@ -537,7 +539,12 @@ impl Store {
             .collect::<Vec<_>>();
         shares
             .into_iter()
-            .filter_map(|share| share.map(|s| (s.header.blockhash, s)))
+            .filter_map(|share| {
+                share.map(|s| {
+                    let blockhash = s.header.miner_share.hash;
+                    (blockhash, s)
+                })
+            })
             .collect::<HashMap<BlockHash, ShareBlock>>()
     }
 
@@ -658,7 +665,7 @@ impl Store {
         let chain1 = self.get_chain_upto(blockhash1);
         let chain2 = self.get_chain_upto(blockhash2);
         if let Some(blockhash) = chain1.iter().rev().find(|share| chain2.contains(share)) {
-            Some(blockhash.header.blockhash.clone())
+            Some(blockhash.header.miner_share.hash)
         } else {
             None
         }
@@ -688,7 +695,7 @@ mod tests {
         // Create uncles for share2
         let uncle1_share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
             .workinfoid(7452731920372203525 + 1)
             .clientid(1)
             .diff(dec!(1.0))
@@ -697,7 +704,7 @@ mod tests {
 
         let uncle2_share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
-            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
             .workinfoid(7452731920372203525 + 2)
             .clientid(1)
             .diff(dec!(1.0))
@@ -707,10 +714,10 @@ mod tests {
         // Create share2 with uncles
         let share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8")
-            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
             .uncles(vec![
-                uncle1_share2.header.blockhash,
-                uncle2_share2.header.blockhash,
+                uncle1_share2.header.miner_share.hash,
+                uncle2_share2.header.miner_share.hash,
             ])
             .workinfoid(7452731920372203525 + 3)
             .clientid(1)
@@ -721,7 +728,7 @@ mod tests {
         // Create uncles for share3
         let uncle1_share3 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb9")
-            .prev_share_blockhash(share2.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share2.header.miner_share.hash.to_string().as_str())
             .workinfoid(7452731920372203525 + 4)
             .clientid(1)
             .diff(dec!(1.0))
@@ -730,7 +737,7 @@ mod tests {
 
         let uncle2_share3 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bba")
-            .prev_share_blockhash(share2.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share2.header.miner_share.hash.to_string().as_str())
             .workinfoid(7452731920372203525 + 5)
             .clientid(1)
             .diff(dec!(1.0))
@@ -740,10 +747,10 @@ mod tests {
         // Create share3 with uncles
         let share3 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bbb")
-            .prev_share_blockhash(share2.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share2.header.miner_share.hash.to_string().as_str())
             .uncles(vec![
-                uncle1_share3.header.blockhash,
-                uncle2_share3.header.blockhash,
+                uncle1_share3.header.miner_share.hash,
+                uncle2_share3.header.miner_share.hash,
             ])
             .workinfoid(7452731920372203525 + 6)
             .clientid(1)
@@ -761,85 +768,102 @@ mod tests {
         store.add_share(share3.clone());
 
         // Get chain up to share3
-        let chain = store.get_chain_upto(&share3.header.blockhash);
+        let chain = store.get_chain_upto(&share3.header.miner_share.hash);
 
         // Get common ancestor of share3 and share2
-        let common_ancestor =
-            store.get_common_ancestor(&share3.header.blockhash, &share2.header.blockhash);
-        assert_eq!(common_ancestor, Some(share1.header.blockhash));
+        let common_ancestor = store.get_common_ancestor(
+            &share3.header.miner_share.hash,
+            &share2.header.miner_share.hash,
+        );
+        assert_eq!(common_ancestor, Some(share1.header.miner_share.hash));
 
         // Get chain up to uncle1_share3 (share31)
-        let chain_to_uncle = store.get_chain_upto(&uncle1_share3.header.blockhash);
+        let chain_to_uncle = store.get_chain_upto(&uncle1_share3.header.miner_share.hash);
         assert_eq!(chain_to_uncle.len(), 3);
         assert_eq!(
-            chain_to_uncle[0].header.blockhash,
-            uncle1_share3.header.blockhash
+            chain_to_uncle[0].header.miner_share.hash,
+            uncle1_share3.header.miner_share.hash
         );
-        assert_eq!(chain_to_uncle[1].header.blockhash, share2.header.blockhash);
-        assert_eq!(chain_to_uncle[2].header.blockhash, share1.header.blockhash);
+        assert_eq!(
+            chain_to_uncle[1].header.miner_share.hash,
+            share2.header.miner_share.hash
+        );
+        assert_eq!(
+            chain_to_uncle[2].header.miner_share.hash,
+            share1.header.miner_share.hash
+        );
 
         // Chain should contain share3, share2, share1 in reverse order
         assert_eq!(chain.len(), 3);
-        assert_eq!(chain[0].header.blockhash, share3.header.blockhash);
-        assert_eq!(chain[1].header.blockhash, share2.header.blockhash);
-        assert_eq!(chain[2].header.blockhash, share1.header.blockhash);
+        assert_eq!(
+            chain[0].header.miner_share.hash,
+            share3.header.miner_share.hash
+        );
+        assert_eq!(
+            chain[1].header.miner_share.hash,
+            share2.header.miner_share.hash
+        );
+        assert_eq!(
+            chain[2].header.miner_share.hash,
+            share1.header.miner_share.hash
+        );
 
         // Verify uncles of share2
-        let uncles_share2 = store.get_uncles(&share2.header.blockhash);
+        let uncles_share2 = store.get_uncles(&share2.header.miner_share.hash);
         assert_eq!(uncles_share2.len(), 2);
         assert!(uncles_share2
             .iter()
-            .any(|u| u.header.blockhash == uncle1_share2.header.blockhash));
+            .any(|u| u.header.miner_share.hash == uncle1_share2.header.miner_share.hash));
         assert!(uncles_share2
             .iter()
-            .any(|u| u.header.blockhash == uncle2_share2.header.blockhash));
+            .any(|u| u.header.miner_share.hash == uncle2_share2.header.miner_share.hash));
 
         // Verify uncles of share3
-        let uncles_share3 = store.get_uncles(&share3.header.blockhash);
+        let uncles_share3 = store.get_uncles(&share3.header.miner_share.hash);
         assert_eq!(uncles_share3.len(), 2);
         assert!(uncles_share3
             .iter()
-            .any(|u| u.header.blockhash == uncle1_share3.header.blockhash));
+            .any(|u| u.header.miner_share.hash == uncle1_share3.header.miner_share.hash));
         assert!(uncles_share3
             .iter()
-            .any(|u| u.header.blockhash == uncle2_share3.header.blockhash));
+            .any(|u| u.header.miner_share.hash == uncle2_share3.header.miner_share.hash));
 
         // Verify children of share1
-        let children_share1 = store.get_children_blockhashes(&share1.header.blockhash);
+        let children_share1 = store.get_children_blockhashes(&share1.header.miner_share.hash);
         assert_eq!(children_share1.len(), 3);
-        assert!(children_share1.contains(&share2.header.blockhash));
-        assert!(children_share1.contains(&uncle1_share2.header.blockhash));
-        assert!(children_share1.contains(&uncle2_share2.header.blockhash));
+        assert!(children_share1.contains(&share2.header.miner_share.hash));
+        assert!(children_share1.contains(&uncle1_share2.header.miner_share.hash));
+        assert!(children_share1.contains(&uncle2_share2.header.miner_share.hash));
 
         // Verify children of share2
-        let children_share2 = store.get_children_blockhashes(&share2.header.blockhash);
+        let children_share2 = store.get_children_blockhashes(&share2.header.miner_share.hash);
         assert_eq!(children_share2.len(), 3);
-        assert!(children_share2.contains(&share3.header.blockhash));
-        assert!(children_share2.contains(&uncle1_share3.header.blockhash));
-        assert!(children_share2.contains(&uncle2_share3.header.blockhash));
+        assert!(children_share2.contains(&share3.header.miner_share.hash));
+        assert!(children_share2.contains(&uncle1_share3.header.miner_share.hash));
+        assert!(children_share2.contains(&uncle2_share3.header.miner_share.hash));
 
         // Verify children of share3
-        let children_share3 = store.get_children_blockhashes(&share3.header.blockhash);
+        let children_share3 = store.get_children_blockhashes(&share3.header.miner_share.hash);
         assert!(children_share3.is_empty());
 
         // Verify children of uncle1_share2
         let children_uncle1_share2 =
-            store.get_children_blockhashes(&uncle1_share2.header.blockhash);
+            store.get_children_blockhashes(&uncle1_share2.header.miner_share.hash);
         assert!(children_uncle1_share2.is_empty());
 
         // Verify children of uncle2_share2
         let children_uncle2_share2 =
-            store.get_children_blockhashes(&uncle2_share2.header.blockhash);
+            store.get_children_blockhashes(&uncle2_share2.header.miner_share.hash);
         assert!(children_uncle2_share2.is_empty());
 
         // Verify children of uncle1_share3
         let children_uncle1_share3 =
-            store.get_children_blockhashes(&uncle1_share3.header.blockhash);
+            store.get_children_blockhashes(&uncle1_share3.header.miner_share.hash);
         assert!(children_uncle1_share3.is_empty());
 
         // Verify children of uncle2_share3
         let children_uncle2_share3 =
-            store.get_children_blockhashes(&uncle2_share3.header.blockhash);
+            store.get_children_blockhashes(&uncle2_share3.header.miner_share.hash);
         assert!(children_uncle2_share3.is_empty());
     }
 
@@ -979,7 +1003,7 @@ mod tests {
             .add_transaction(tx2.clone())
             .build();
 
-        let blockhash = share.header.blockhash;
+        let blockhash = share.header.miner_share.hash;
 
         // Store the txids for the blockhash
         let txids = vec![txid1, txid2];
@@ -1044,7 +1068,7 @@ mod tests {
         assert_eq!(share.transactions.len(), 3);
 
         // Retrieve transactions for the block hash
-        let retrieved_txs = store.get_txs_for_block(&share.header.blockhash);
+        let retrieved_txs = store.get_txs_for_block(&share.header.miner_share.hash);
 
         // Verify transactions were stored and can be retrieved
         assert_eq!(retrieved_txs.len(), 3);
@@ -1196,10 +1220,13 @@ mod tests {
         store.add_share(share.clone());
 
         // Get share header from store
-        let read_share = store.get_share(&share.header.blockhash).unwrap();
+        let read_share = store.get_share(&share.header.miner_share.hash).unwrap();
 
         // Verify header matches original
-        assert_eq!(read_share.header.blockhash, share.header.blockhash);
+        assert_eq!(
+            read_share.header.miner_share.hash,
+            share.header.miner_share.hash
+        );
         assert_eq!(
             read_share.header.prev_share_blockhash,
             share.header.prev_share_blockhash
@@ -1210,12 +1237,21 @@ mod tests {
 
         // Verify miner share matches original
         assert_eq!(
-            read_share.miner_share.workinfoid,
-            share.miner_share.workinfoid
+            read_share.header.miner_share.workinfoid,
+            share.header.miner_share.workinfoid
         );
-        assert_eq!(read_share.miner_share.nonce, share.miner_share.nonce);
-        assert_eq!(read_share.miner_share.diff, share.miner_share.diff);
-        assert_eq!(read_share.miner_share.ntime, share.miner_share.ntime);
+        assert_eq!(
+            read_share.header.miner_share.nonce,
+            share.header.miner_share.nonce
+        );
+        assert_eq!(
+            read_share.header.miner_share.diff,
+            share.header.miner_share.diff
+        );
+        assert_eq!(
+            read_share.header.miner_share.ntime,
+            share.header.miner_share.ntime
+        );
     }
 
     #[test]
@@ -1249,7 +1285,7 @@ mod tests {
         // Create uncles for share2
         let uncle1_share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
             .workinfoid(7452731920372203525 + 1)
             .clientid(1)
             .diff(dec!(1.0))
@@ -1258,7 +1294,7 @@ mod tests {
 
         let uncle2_share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
-            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
             .workinfoid(7452731920372203525 + 2)
             .clientid(1)
             .diff(dec!(1.0))
@@ -1268,10 +1304,10 @@ mod tests {
         // Create share2 with uncles
         let share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8")
-            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
             .uncles(vec![
-                uncle1_share2.header.blockhash,
-                uncle2_share2.header.blockhash,
+                uncle1_share2.header.miner_share.hash,
+                uncle2_share2.header.miner_share.hash,
             ])
             .workinfoid(7452731920372203525 + 3)
             .clientid(1)
@@ -1282,7 +1318,7 @@ mod tests {
         // Create share3
         let share3 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb9")
-            .prev_share_blockhash(share2.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share2.header.miner_share.hash.to_string().as_str())
             .workinfoid(7452731920372203525 + 4)
             .clientid(1)
             .diff(dec!(1.0))
@@ -1297,29 +1333,29 @@ mod tests {
         store.add_share(share3.clone());
 
         // Verify children of share1
-        let children_share1 = store.get_children_blockhashes(&share1.header.blockhash);
+        let children_share1 = store.get_children_blockhashes(&share1.header.miner_share.hash);
         assert_eq!(children_share1.len(), 3);
-        assert!(children_share1.contains(&share2.header.blockhash));
-        assert!(children_share1.contains(&uncle1_share2.header.blockhash));
-        assert!(children_share1.contains(&uncle2_share2.header.blockhash));
+        assert!(children_share1.contains(&share2.header.miner_share.hash));
+        assert!(children_share1.contains(&uncle1_share2.header.miner_share.hash));
+        assert!(children_share1.contains(&uncle2_share2.header.miner_share.hash));
 
         // Verify children of share2
-        let children_share2 = store.get_children_blockhashes(&share2.header.blockhash);
+        let children_share2 = store.get_children_blockhashes(&share2.header.miner_share.hash);
         assert_eq!(children_share2.len(), 1);
-        assert!(children_share2.contains(&share3.header.blockhash));
+        assert!(children_share2.contains(&share3.header.miner_share.hash));
 
         // Verify children of share3
-        let children_share3 = store.get_children_blockhashes(&share3.header.blockhash);
+        let children_share3 = store.get_children_blockhashes(&share3.header.miner_share.hash);
         assert!(children_share3.is_empty());
 
         // Verify children of uncle1_share2
         let children_uncle1_share2 =
-            store.get_children_blockhashes(&uncle1_share2.header.blockhash);
+            store.get_children_blockhashes(&uncle1_share2.header.miner_share.hash);
         assert!(children_uncle1_share2.is_empty());
 
         // Verify children of uncle2_share2
         let children_uncle2_share2 =
-            store.get_children_blockhashes(&uncle2_share2.header.blockhash);
+            store.get_children_blockhashes(&uncle2_share2.header.miner_share.hash);
         assert!(children_uncle2_share2.is_empty());
     }
 
@@ -1339,7 +1375,7 @@ mod tests {
         // Create uncles for share2
         let uncle1_share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
             .workinfoid(7452731920372203525 + 1)
             .clientid(1)
             .diff(dec!(1.0))
@@ -1348,7 +1384,7 @@ mod tests {
 
         let uncle2_share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
-            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
             .workinfoid(7452731920372203525 + 2)
             .clientid(1)
             .diff(dec!(1.0))
@@ -1358,10 +1394,10 @@ mod tests {
         // Create share2 with uncles
         let share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8")
-            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
             .uncles(vec![
-                uncle1_share2.header.blockhash,
-                uncle2_share2.header.blockhash,
+                uncle1_share2.header.miner_share.hash,
+                uncle2_share2.header.miner_share.hash,
             ])
             .workinfoid(7452731920372203525 + 3)
             .clientid(1)
@@ -1372,7 +1408,7 @@ mod tests {
         // Create share3
         let share3 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb9")
-            .prev_share_blockhash(share2.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share2.header.miner_share.hash.to_string().as_str())
             .workinfoid(7452731920372203525 + 4)
             .clientid(1)
             .diff(dec!(1.0))
@@ -1387,8 +1423,11 @@ mod tests {
         store.add_share(share3.clone());
 
         // Verify descendants of share1
-        let descendants_share1 =
-            store.get_descendants(share1.header.blockhash, &share3.header.blockhash, 10);
+        let descendants_share1 = store.get_descendants(
+            share1.header.miner_share.hash,
+            &share3.header.miner_share.hash,
+            10,
+        );
         assert_eq!(descendants_share1.len(), 4);
         assert!(descendants_share1.contains(&share2.header));
         assert!(descendants_share1.contains(&share3.header));
@@ -1396,28 +1435,43 @@ mod tests {
         assert!(descendants_share1.contains(&uncle2_share2.header));
 
         // Verify descendants of share2
-        let descendants_share2 =
-            store.get_descendants(share2.header.blockhash, &share3.header.blockhash, 10);
+        let descendants_share2 = store.get_descendants(
+            share2.header.miner_share.hash,
+            &share3.header.miner_share.hash,
+            10,
+        );
         assert_eq!(descendants_share2.len(), 1);
-        assert_eq!(descendants_share2[0].blockhash, share3.header.blockhash);
+        assert_eq!(
+            descendants_share2[0].miner_share.hash,
+            share3.header.miner_share.hash
+        );
 
         // Verify no descendants for share3
-        let descendants_share3 =
-            store.get_descendants(share3.header.blockhash, &share3.header.blockhash, 10);
+        let descendants_share3 = store.get_descendants(
+            share3.header.miner_share.hash,
+            &share3.header.miner_share.hash,
+            10,
+        );
         assert!(descendants_share3.is_empty());
 
         // Verify descendants with limit
-        let descendants_with_limit =
-            store.get_descendants(share1.header.blockhash, &share3.header.blockhash, 1);
+        let descendants_with_limit = store.get_descendants(
+            share1.header.miner_share.hash,
+            &share3.header.miner_share.hash,
+            1,
+        );
         assert_eq!(descendants_with_limit.len(), 1);
         assert_eq!(
-            descendants_with_limit[0].blockhash,
-            uncle1_share2.header.blockhash
+            descendants_with_limit[0].miner_share.hash,
+            uncle1_share2.header.miner_share.hash
         );
 
         // Verify descendants with stop blockhash
-        let descendants_with_limit =
-            store.get_descendants(share1.header.blockhash, &share2.header.blockhash, 10);
+        let descendants_with_limit = store.get_descendants(
+            share1.header.miner_share.hash,
+            &share2.header.miner_share.hash,
+            10,
+        );
         assert_eq!(descendants_with_limit.len(), 3);
         assert!(descendants_with_limit.contains(&share2.header));
         assert!(descendants_with_limit.contains(&uncle1_share2.header));
@@ -1469,11 +1523,11 @@ mod tests {
 
         assert_eq!(result.len(), 2);
         assert_eq!(
-            result[0].blockhash.to_string(),
+            result[0].miner_share.hash.to_string(),
             "0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742c1cae6295464449"
         );
         assert_eq!(
-            result[1].blockhash.to_string(),
+            result[1].miner_share.hash.to_string(),
             "000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd"
         );
     }
@@ -1491,7 +1545,7 @@ mod tests {
             .build();
         blocks.push(block.clone());
         store.add_share(block.clone());
-        locator.push(block.header.blockhash);
+        locator.push(block.header.miner_share.hash);
 
         let block = TestBlockBuilder::new()
             .blockhash("00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048")

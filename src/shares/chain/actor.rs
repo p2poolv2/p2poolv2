@@ -556,7 +556,7 @@ mod tests {
         // Get tips should now return the blockhash
         let tips = chain_handle.get_tips().await;
         let mut expected_tips = HashSet::new();
-        expected_tips.insert(share_block.header.blockhash);
+        expected_tips.insert(share_block.header.miner_share.hash);
         assert_eq!(tips, expected_tips);
 
         let total_difficulty = chain_handle.get_total_difficulty().await;
@@ -579,7 +579,7 @@ mod tests {
         // Create another share block with higher difficulty
         let higher_diff_share = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-            .prev_share_blockhash(share_block.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share_block.header.miner_share.hash.to_string().as_str())
             .diff(dec!(2.0))
             .sdiff(dec!(2.0))
             .build();
@@ -590,7 +590,7 @@ mod tests {
         // Check if the chain tips are updated
         let tips = chain_handle.get_tips().await;
         let mut expected_tips = HashSet::new();
-        expected_tips.insert(higher_diff_share.header.blockhash);
+        expected_tips.insert(higher_diff_share.header.miner_share.hash);
         assert_eq!(tips, expected_tips);
 
         let total_difficulty = chain_handle.get_total_difficulty().await;
@@ -674,24 +674,24 @@ mod tests {
 
         // Add first share and verify depth is 0
         chain_handle.add_share(share1.clone()).await.unwrap();
-        let depth = chain_handle.get_depth(share1.header.blockhash).await;
+        let depth = chain_handle.get_depth(share1.header.miner_share.hash).await;
         assert_eq!(depth, Some(0));
 
         // Create and add second share
         let share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
         // Add second share and verify depths
         chain_handle.add_share(share2.clone()).await.unwrap();
         assert_eq!(
-            chain_handle.get_depth(share2.header.blockhash).await,
+            chain_handle.get_depth(share2.header.miner_share.hash).await,
             Some(0)
         );
         assert_eq!(
-            chain_handle.get_depth(share1.header.blockhash).await,
+            chain_handle.get_depth(share1.header.miner_share.hash).await,
             Some(1)
         );
 
@@ -716,7 +716,7 @@ mod tests {
         // Create second share
         let share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
@@ -725,7 +725,10 @@ mod tests {
         chain_handle.add_share(share2.clone()).await.unwrap();
 
         // Get headers for both shares
-        let share_hashes = vec![share1.header.blockhash, share2.header.blockhash];
+        let share_hashes = vec![
+            share1.header.miner_share.hash,
+            share2.header.miner_share.hash,
+        ];
         let headers = chain_handle.get_share_headers(share_hashes).await;
 
         // Verify we got both headers back correctly
@@ -754,16 +757,16 @@ mod tests {
 
         let block2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2")
-            .prev_share_blockhash(block1.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(block1.header.miner_share.hash.to_string().as_str())
             .build();
 
         let block3 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3")
-            .prev_share_blockhash(block2.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(block2.header.miner_share.hash.to_string().as_str())
             .build();
 
-        let locator = vec![block1.header.blockhash];
-        let stop_hash = block3.header.blockhash;
+        let locator = vec![block1.header.miner_share.hash];
+        let stop_hash = block3.header.miner_share.hash;
 
         chain_handle.add_share(block1.clone()).await.unwrap();
         chain_handle.add_share(block2.clone()).await.unwrap();

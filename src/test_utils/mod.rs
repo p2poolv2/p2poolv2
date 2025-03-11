@@ -26,6 +26,7 @@ use rust_decimal_macros::dec;
 #[cfg(test)]
 /// Build a simple miner share with consant values
 pub fn simple_miner_share(
+    blockhash: Option<&str>,
     workinfoid: Option<u64>,
     clientid: Option<u64>,
     diff: Option<Decimal>,
@@ -40,7 +41,10 @@ pub fn simple_miner_share(
         ntime: bitcoin::absolute::Time::from_hex("676d6caa").unwrap(),
         diff: diff.unwrap_or(dec!(1.0)),
         sdiff: sdiff.unwrap_or(dec!(1.9041854952356509)),
-        hash: "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".to_string(),
+        hash: blockhash
+            .unwrap_or("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .parse::<BlockHash>()
+            .unwrap(),
         result: true,
         errn: 0,
         createdate: "1735224559,536904211".to_string(),
@@ -241,10 +245,7 @@ fn test_share_block(
     transactions.append(include_transactions);
     ShareBlock {
         header: ShareHeader {
-            blockhash: blockhash
-                .unwrap_or("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
-                .parse()
-                .unwrap(),
+            miner_share: simple_miner_share(blockhash, workinfoid, clientid, diff, sdiff),
             prev_share_blockhash,
             uncles,
             miner_pubkey,
@@ -254,7 +255,6 @@ fn test_share_block(
             .unwrap()
             .into(),
         },
-        miner_share: simple_miner_share(workinfoid, clientid, diff, sdiff),
         transactions,
     }
 }

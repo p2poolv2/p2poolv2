@@ -22,7 +22,11 @@ use std::error::Error;
 use tracing::info;
 
 /// Handle a ShareHeader received from a peer
-/// TODO: Validate and store the share header in the database
+/// We need to:
+/// 1. TODO: Validate the PoW on the share header
+/// 2. TODO: Push the header into a task queue to fetch the matching share block
+/// 3. TODO: We need to start a task in node to pull from the task queue and send getData message
+/// 4. DONE: We already handle responses to getData in the shape of ShareBlock messages
 pub async fn handle_share_headers(
     share_headers: Vec<ShareHeader>,
     chain_handle: ChainHandle,

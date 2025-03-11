@@ -48,9 +48,9 @@ impl Chain {
     /// Add a share to the chain and update the tips and total difficulty
     pub fn add_share(&mut self, share: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>> {
         info!("Adding share to chain: {:?}", share);
-        let blockhash = share.header.blockhash.clone();
+        let blockhash = share.header.miner_share.hash.clone();
         let prev_share_blockhash = share.header.prev_share_blockhash.clone();
-        let share_difficulty = share.miner_share.diff;
+        let share_difficulty = share.header.miner_share.diff;
 
         // save to share to store for all cases
         self.store.add_share(share.clone());
@@ -83,7 +83,7 @@ impl Chain {
             let chain_upto_prev_share_blockhash = self.store.get_chain_upto(&prev_share_blockhash);
             let total_difficulty_upto_prev_share_blockhash = chain_upto_prev_share_blockhash
                 .iter()
-                .map(|share| share.miner_share.diff)
+                .map(|share| share.header.miner_share.diff)
                 .sum::<Decimal>();
             if total_difficulty_upto_prev_share_blockhash + share_difficulty > self.total_difficulty
             {
@@ -118,9 +118,13 @@ impl Chain {
         share: ShareBlock,
         total_difficulty_upto_prev_share_blockhash: Decimal,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        info!("Reorging chain to share: {:?}", share.header.blockhash);
-        self.total_difficulty = total_difficulty_upto_prev_share_blockhash + share.miner_share.diff;
-        self.chain_tip = Some(share.header.blockhash);
+        info!(
+            "Reorging chain to share: {:?}",
+            share.header.miner_share.hash
+        );
+        self.total_difficulty =
+            total_difficulty_upto_prev_share_blockhash + share.header.miner_share.diff;
+        self.chain_tip = Some(share.header.miner_share.hash);
         Ok(())
     }
 
@@ -260,49 +264,49 @@ mod chain_tests {
         chain.add_share(share1.clone()).unwrap();
 
         let mut expected_tips = HashSet::new();
-        expected_tips.insert(share1.header.blockhash);
+        expected_tips.insert(share1.header.miner_share.hash);
         assert_eq!(chain.tips, expected_tips);
         assert_eq!(chain.total_difficulty, dec!(1.0));
-        assert_eq!(chain.chain_tip, Some(share1.header.blockhash));
+        assert_eq!(chain.chain_tip, Some(share1.header.miner_share.hash));
 
         // Create uncles for share2
         let uncle1_share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
         let uncle2_share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
-            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
         // first orphan is a tip
         chain.add_share(uncle1_share2.clone()).unwrap();
         expected_tips.clear();
-        expected_tips.insert(uncle1_share2.header.blockhash);
+        expected_tips.insert(uncle1_share2.header.miner_share.hash);
         assert_eq!(chain.tips, expected_tips);
         assert_eq!(chain.total_difficulty, dec!(2.0));
-        assert_eq!(chain.chain_tip, Some(uncle1_share2.header.blockhash));
+        assert_eq!(chain.chain_tip, Some(uncle1_share2.header.miner_share.hash));
 
         // second orphan is also a tip
         chain.add_share(uncle2_share2.clone()).unwrap();
         expected_tips.clear();
-        expected_tips.insert(uncle1_share2.header.blockhash);
-        expected_tips.insert(uncle2_share2.header.blockhash);
+        expected_tips.insert(uncle1_share2.header.miner_share.hash);
+        expected_tips.insert(uncle2_share2.header.miner_share.hash);
         assert_eq!(chain.tips, expected_tips);
         assert_eq!(chain.total_difficulty, dec!(2.0));
         // chain tip doesn't change as uncle2_share2 has same difficulty as uncle1_share2
-        assert_eq!(chain.chain_tip, Some(uncle1_share2.header.blockhash));
+        assert_eq!(chain.chain_tip, Some(uncle1_share2.header.miner_share.hash));
 
         // Create share2 with its uncles
         let share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8")
-            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
             .uncles(vec![
-                uncle1_share2.header.blockhash,
-                uncle2_share2.header.blockhash,
+                uncle1_share2.header.miner_share.hash,
+                uncle2_share2.header.miner_share.hash,
             ])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .workinfoid(7452731920372203525 + 3)
@@ -315,14 +319,14 @@ mod chain_tests {
 
         // two tips that will be future uncles and the chain tip
         expected_tips.clear();
-        expected_tips.insert(share2.header.blockhash);
+        expected_tips.insert(share2.header.miner_share.hash);
         assert_eq!(chain.tips, expected_tips);
         assert_eq!(chain.total_difficulty, dec!(3.0));
-        assert_eq!(chain.chain_tip, Some(share2.header.blockhash));
+        assert_eq!(chain.chain_tip, Some(share2.header.miner_share.hash));
         // Create uncles for share3
         let uncle1_share3 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb9")
-            .prev_share_blockhash(share2.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share2.header.miner_share.hash.to_string().as_str())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .workinfoid(7452731920372203525 + 4)
             .clientid(1)
@@ -332,7 +336,7 @@ mod chain_tests {
 
         let uncle2_share3 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bba")
-            .prev_share_blockhash(share2.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share2.header.miner_share.hash.to_string().as_str())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .workinfoid(7452731920372203525 + 5)
             .clientid(1)
@@ -342,28 +346,28 @@ mod chain_tests {
 
         chain.add_share(uncle1_share3.clone()).unwrap();
         expected_tips.clear();
-        expected_tips.insert(uncle1_share3.header.blockhash);
+        expected_tips.insert(uncle1_share3.header.miner_share.hash);
 
         assert_eq!(chain.tips, expected_tips);
         // we only look at total difficulty for the highest work chain, which now is 1, 2, 3.1
         assert_eq!(chain.total_difficulty, dec!(4.0));
-        assert_eq!(chain.chain_tip, Some(uncle1_share3.header.blockhash));
+        assert_eq!(chain.chain_tip, Some(uncle1_share3.header.miner_share.hash));
         chain.add_share(uncle2_share3.clone()).unwrap();
         expected_tips.clear();
-        expected_tips.insert(uncle1_share3.header.blockhash);
-        expected_tips.insert(uncle2_share3.header.blockhash);
+        expected_tips.insert(uncle1_share3.header.miner_share.hash);
+        expected_tips.insert(uncle2_share3.header.miner_share.hash);
 
         assert_eq!(chain.tips, expected_tips);
         // we only look at total difficulty for the highest work chain, which now is 1, 2, 3.1 (not 3.2)
         assert_eq!(chain.total_difficulty, dec!(4.0));
-        assert_eq!(chain.chain_tip, Some(uncle1_share3.header.blockhash));
+        assert_eq!(chain.chain_tip, Some(uncle1_share3.header.miner_share.hash));
         // Create share3 with its uncles
         let share3 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bbb")
-            .prev_share_blockhash(share2.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share2.header.miner_share.hash.to_string().as_str())
             .uncles(vec![
-                uncle1_share3.header.blockhash,
-                uncle2_share3.header.blockhash,
+                uncle1_share3.header.miner_share.hash,
+                uncle2_share3.header.miner_share.hash,
             ])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .workinfoid(7452731920372203525 + 6)
@@ -375,12 +379,12 @@ mod chain_tests {
         chain.add_share(share3.clone()).unwrap();
 
         expected_tips.clear();
-        expected_tips.insert(share3.header.blockhash);
+        expected_tips.insert(share3.header.miner_share.hash);
 
         assert_eq!(chain.tips, expected_tips);
         // we only look at total difficulty for the highest work chain, which now is 1, 2, 3
         assert_eq!(chain.total_difficulty, dec!(6.0));
-        assert_eq!(chain.chain_tip, Some(share3.header.blockhash));
+        assert_eq!(chain.chain_tip, Some(share3.header.miner_share.hash));
     }
 
     #[test]
@@ -412,7 +416,7 @@ mod chain_tests {
 
             blocks.push(share.clone());
             chain.add_share(share.clone()).unwrap();
-            blockhash_strings.push(share.header.blockhash.to_string()); // Store string
+            blockhash_strings.push(share.header.miner_share.hash.to_string()); // Store string
             prev_hash = Some(blockhash_strings.last().unwrap().as_str()); // Use reference to stored string
 
             if i > MIN_CONFIRMATION_DEPTH || i == 0 {
@@ -482,12 +486,12 @@ mod chain_tests {
         chain.add_share(share1.clone()).unwrap();
 
         // Test when blockhash is chain tip
-        assert_eq!(chain.get_depth(&share1.header.blockhash), Some(0));
+        assert_eq!(chain.get_depth(&share1.header.miner_share.hash), Some(0));
 
         // Create second share
         let share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .workinfoid(7452731920372203526)
             .clientid(1)
@@ -498,8 +502,8 @@ mod chain_tests {
         chain.add_share(share2.clone()).unwrap();
 
         // Test depth of first share when it's not the tip
-        assert_eq!(chain.get_depth(&share2.header.blockhash), Some(0));
-        assert_eq!(chain.get_depth(&share1.header.blockhash), Some(1));
+        assert_eq!(chain.get_depth(&share2.header.miner_share.hash), Some(0));
+        assert_eq!(chain.get_depth(&share1.header.miner_share.hash), Some(1));
 
         // Test when blockhash is not found in chain
         let non_existent_hash = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
@@ -526,7 +530,7 @@ mod chain_tests {
 
         let share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2")
-            .prev_share_blockhash(share1.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .workinfoid(2)
             .clientid(1)
@@ -536,7 +540,7 @@ mod chain_tests {
 
         let share3 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3")
-            .prev_share_blockhash(share2.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share2.header.miner_share.hash.to_string().as_str())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .workinfoid(3)
             .clientid(1)
@@ -546,7 +550,7 @@ mod chain_tests {
 
         let share4 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
-            .prev_share_blockhash(share3.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share3.header.miner_share.hash.to_string().as_str())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .workinfoid(4)
             .clientid(1)
@@ -556,7 +560,7 @@ mod chain_tests {
 
         let share5 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
-            .prev_share_blockhash(share4.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(share4.header.miner_share.hash.to_string().as_str())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .workinfoid(5)
             .clientid(1)
@@ -572,37 +576,40 @@ mod chain_tests {
         chain.add_share(share5.clone()).unwrap();
 
         // Test 1: Get headers starting from share1 up to share3
-        let locator = vec![share1.header.blockhash];
-        let stop_hash = share3.header.blockhash;
+        let locator = vec![share1.header.miner_share.hash];
+        let stop_hash = share3.header.miner_share.hash;
         let headers = chain.get_headers_for_locator(&locator, &stop_hash, 500);
         assert_eq!(headers.len(), 2); // Should return share2 and share3
-        assert_eq!(headers[0].blockhash, share2.header.blockhash);
-        assert_eq!(headers[1].blockhash, share3.header.blockhash);
+        assert_eq!(headers[0].miner_share.hash, share2.header.miner_share.hash);
+        assert_eq!(headers[1].miner_share.hash, share3.header.miner_share.hash);
 
         // Test 2: Get headers with limit
-        let headers = chain.get_headers_for_locator(&locator, &share5.header.blockhash, 2);
+        let headers = chain.get_headers_for_locator(&locator, &share5.header.miner_share.hash, 2);
         assert_eq!(headers.len(), 2); // Should only return 2 headers due to limit
-        assert_eq!(headers[0].blockhash, share2.header.blockhash);
-        assert_eq!(headers[1].blockhash, share3.header.blockhash);
+        assert_eq!(headers[0].miner_share.hash, share2.header.miner_share.hash);
+        assert_eq!(headers[1].miner_share.hash, share3.header.miner_share.hash);
 
         // Test 3: Get headers with non-existent locator
         let non_existent = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
             .parse()
             .unwrap();
-        let headers =
-            chain.get_headers_for_locator(&vec![non_existent], &share5.header.blockhash, 500);
+        let headers = chain.get_headers_for_locator(
+            &vec![non_existent],
+            &share5.header.miner_share.hash,
+            500,
+        );
         assert_eq!(headers.len(), 0); // Should return empty vec when locator not found
 
         // Test 4: Multiple locator hashes, results should start from first found
         let locator = vec![
             non_existent,
-            share3.header.blockhash,
-            share2.header.blockhash,
-            share1.header.blockhash,
+            share3.header.miner_share.hash,
+            share2.header.miner_share.hash,
+            share1.header.miner_share.hash,
         ];
-        let headers = chain.get_headers_for_locator(&locator, &share5.header.blockhash, 500);
+        let headers = chain.get_headers_for_locator(&locator, &share5.header.miner_share.hash, 500);
         assert_eq!(headers.len(), 2); // Should return share4 and share5
-        assert_eq!(headers[0].blockhash, share4.header.blockhash);
-        assert_eq!(headers[1].blockhash, share5.header.blockhash);
+        assert_eq!(headers[0].miner_share.hash, share4.header.miner_share.hash);
+        assert_eq!(headers[1].miner_share.hash, share5.header.miner_share.hash);
     }
 }

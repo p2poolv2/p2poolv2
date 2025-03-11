@@ -18,6 +18,7 @@ pub mod builders;
 
 use crate::utils::serde_support::time::{deserialize_time, serialize_time};
 use bitcoin::absolute::Time;
+use bitcoin::BlockHash;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -45,7 +46,7 @@ pub struct MinerShare {
     pub ntime: Time,
     pub diff: Decimal,
     pub sdiff: Decimal,
-    pub hash: String,
+    pub hash: BlockHash,
     #[serde(skip)]
     pub result: bool,
     #[serde(skip)]
@@ -508,7 +509,7 @@ mod miner_share_tests {
 
     #[test]
     fn test_miner_share_serialized_size() {
-        let share = simple_miner_share(None, None, None, None);
+        let share = simple_miner_share(None, None, None, None, None);
         let message = CkPoolMessage::Share(share);
 
         // Serialize to JSON
