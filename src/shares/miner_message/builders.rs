@@ -26,7 +26,6 @@ use std::str::FromStr;
 /// We do not validate the coinbase transaction, as ckpool does it for us.
 /// For shares received from peers, we will validate the entire block later.
 pub fn build_coinbase_from_share(
-    _workbase: &MinerWorkbase,
     userworkbase: &UserWorkbase,
     share: &MinerShare,
 ) -> Result<bitcoin::Transaction, Box<dyn std::error::Error>> {
@@ -100,7 +99,7 @@ pub fn build_bitcoin_block(
     userworkbase: &UserWorkbase,
     share: &MinerShare,
 ) -> Result<bitcoin::Block, Box<dyn Error>> {
-    let coinbase = build_coinbase_from_share(&workbase, &userworkbase, &share)?;
+    let coinbase = build_coinbase_from_share(&userworkbase, &share)?;
     let mut txns = vec![coinbase.clone()];
     txns.extend(decode_transactions(&workbase.txns)?);
 
@@ -128,7 +127,7 @@ pub fn build_share_header(
     miner_pubkey: bitcoin::PublicKey,
 ) -> Result<crate::shares::ShareHeader, Box<dyn Error>> {
     // TODO[pool2win/P0] - The coinbase for the share should be the one paying miner pubkey
-    let coinbase = build_coinbase_from_share(workbase, userworkbase, share)?;
+    let coinbase = build_coinbase_from_share(userworkbase, share)?;
     let mut txids = vec![coinbase.compute_txid()];
     txids.extend(decode_txids(&workbase.txns)?);
 
@@ -156,7 +155,7 @@ pub fn build_share_block(
     share: &MinerShare,
     header: crate::shares::ShareHeader,
 ) -> Result<crate::shares::ShareBlock, Box<dyn Error>> {
-    let coinbase = build_coinbase_from_share(workbase, userworkbase, share)?;
+    let coinbase = build_coinbase_from_share(userworkbase, share)?;
     let mut transactions = vec![coinbase];
     transactions.extend(decode_transactions(&workbase.txns)?);
 
@@ -177,11 +176,10 @@ mod tests {
 
     #[test]
     fn test_build_coinbase() {
-        let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
+        let (_workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
 
         // Build coinbase
-        let coinbase =
-            build_coinbase_from_share(&workbases[0], &userworkbases[0], &shares[0]).unwrap();
+        let coinbase = build_coinbase_from_share(&userworkbases[0], &shares[0]).unwrap();
 
         // Verify it's a coinbase transaction
         assert!(coinbase.is_coinbase());
@@ -251,8 +249,7 @@ mod tests {
         let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
 
         // Build coinbase and merkle root
-        let coinbase =
-            build_coinbase_from_share(&workbases[0], &userworkbases[0], &shares[0]).unwrap();
+        let coinbase = build_coinbase_from_share(&userworkbases[0], &shares[0]).unwrap();
         let mut txids = vec![coinbase.compute_txid()];
         txids.extend(decode_txids(&workbases[0].txns).unwrap());
         let merkle_root = compute_merkle_root_from_txids(&txids).unwrap();
