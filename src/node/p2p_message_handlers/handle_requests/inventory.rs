@@ -23,14 +23,14 @@ use tokio::sync::mpsc;
 use tracing::info;
 
 /// Handle Inventory message request from a peer.
-/// Inventory results in a GetData message being sent to the peer,
+/// inv is sent unsolicited, or in response to getblocks message,
 /// therefore we include this message in the handle_requests module.
+///
 /// We wrap all inventory update messages in the same message type
-/// TODO
 /// - Depending on the type of the inventory, we query the database for the relevant data
 /// - Send the data to the peer via the swarm_tx channel
 /// - We send one message for each found object. See block and tx messages.
-/// Note: headers are not sent as inventory, but as headers message.
+/// Note: At the moment, we only support sending blockhashes as inventory.
 pub async fn handle_inventory<C>(
     inventory: Vec<InventoryMessage>,
     chain_handle: ChainHandle,

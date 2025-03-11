@@ -60,8 +60,12 @@ pub async fn handle_request<C: 'static>(
             handle_responses::handle_share_headers(share_headers, chain_handle, time_provider).await
         }
         Message::ShareBlock(share_block) => {
-            handle_responses::handle_share_block(share_block, chain_handle, swarm_tx, time_provider)
-                .await
+            handle_responses::handle_share_block::<void::Void>(
+                share_block,
+                chain_handle,
+                time_provider,
+            )
+            .await
         }
         Message::Workbase(workbase) => {
             info!("Received workbase: {:?}", workbase);
@@ -200,24 +204,6 @@ mod tests {
         .await;
 
         assert!(result.is_ok());
-
-        // Verify gossip message was sent
-        if let Some(SwarmSend::Gossip(message)) = swarm_rx.try_recv().ok() {
-            match message {
-                Message::Inventory(inventory) => match inventory {
-                    InventoryMessage::BlockHashes(received_shares) => {
-                        assert_eq!(
-                            received_shares.contains(&share_block.header.blockhash),
-                            true
-                        );
-                    }
-                    _ => panic!("Expected Inventory message with ShareBlock"),
-                },
-                _ => panic!("Expected Inventory message"),
-            }
-        } else {
-            panic!("Expected gossip message");
-        }
     }
 
     #[tokio::test]
@@ -355,7 +341,7 @@ mod tests {
         // Set up mock expectations
         chain_handle
             .expect_get_headers_for_locator()
-            .returning(move |_, _| response_headers.clone());
+            .returning(move |_, _, _| response_headers.clone());
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
@@ -413,7 +399,7 @@ mod tests {
         // Set up mock expectations
         chain_handle
             .expect_get_headers_for_locator()
-            .returning(move |_, _| vec![block1.header.clone(), block2.header.clone()]);
+            .returning(move |_, _, _| vec![block1.header.clone(), block2.header.clone()]);
 
         let time_provider = TestTimeProvider(SystemTime::now());
 

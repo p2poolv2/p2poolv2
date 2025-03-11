@@ -23,7 +23,7 @@ use crate::shares::{
 use crate::shares::{ShareBlock, ShareHeader};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error};
@@ -45,7 +45,7 @@ pub enum ChainMessage {
     GetChainTip,
     GetChainTipAndUncles,
     GetDepth(BlockHash),
-    GetHeadersForLocator(Vec<BlockHash>, BlockHash),
+    GetHeadersForLocator(Vec<BlockHash>, BlockHash, usize),
 }
 
 #[derive(Debug)]
@@ -204,13 +204,10 @@ impl ChainActor {
                         error!("Failed to send get_user_workbase response: {}", e);
                     }
                 }
-                ChainMessage::GetHeadersForLocator(block_hashes, stop_block_hash) => {
-                    const MAX_BLOCKS: usize = 500;
-                    let result = self.chain.get_headers_for_locator(
-                        &block_hashes,
-                        &stop_block_hash,
-                        MAX_BLOCKS,
-                    );
+                ChainMessage::GetHeadersForLocator(block_hashes, stop_block_hash, limit) => {
+                    let result =
+                        self.chain
+                            .get_headers_for_locator(&block_hashes, &stop_block_hash, limit);
                     if let Err(e) = response_sender
                         .send(ChainResponse::GetHeadersForLocatorResult(result))
                         .await
@@ -483,11 +480,12 @@ impl ChainHandle {
         &self,
         block_hashes: Vec<BlockHash>,
         stop_block_hash: BlockHash,
+        limit: usize,
     ) -> Vec<ShareHeader> {
         let (response_sender, mut response_receiver) = mpsc::channel(1);
         self.sender
             .send((
-                ChainMessage::GetHeadersForLocator(block_hashes, stop_block_hash),
+                ChainMessage::GetHeadersForLocator(block_hashes, stop_block_hash, limit),
                 response_sender,
             ))
             .await
@@ -519,8 +517,8 @@ mock! {
         pub async fn store_user_workbase(&self, user_workbase: UserWorkbase) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase>;
         pub async fn get_share(&self, share_hash: BlockHash) -> Option<ShareBlock>;
-        pub async fn get_share_headers(&self, share_hashes: Vec<BlockHash>) -> HashMap<BlockHash, ShareHeader>;
-        pub async fn get_headers_for_locator(&self, block_hashes: Vec<BlockHash>, stop_block_hash: BlockHash) -> Vec<ShareHeader>;
+        pub async fn get_share_headers(&self, share_hashes: Vec<BlockHash>) -> Vec<ShareHeader>;
+        pub async fn get_headers_for_locator(&self, block_hashes: Vec<BlockHash>, stop_block_hash: BlockHash, max_headers: usize) -> Vec<ShareHeader>;
     }
 
     impl Clone for ChainHandle {
@@ -773,7 +771,7 @@ mod tests {
 
         // Call the function and verify results
         let headers = chain_handle
-            .get_headers_for_locator(locator, stop_hash)
+            .get_headers_for_locator(locator, stop_hash, 2000)
             .await;
         assert_eq!(headers.len(), 2);
         assert_eq!(headers[0], block2.header);

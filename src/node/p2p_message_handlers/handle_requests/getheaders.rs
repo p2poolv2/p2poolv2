@@ -22,9 +22,11 @@ use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::info;
 
+const MAX_HEADERS: usize = 2000;
+
 /// Handle a GetHeaders request from a peer
 /// - start from chain tip, find blockhashes up to the stop block hash
-/// - limit the number of blocks to MAX_BLOCKS
+/// - limit the number of blocks to MAX_HEADERS
 /// - respond with send all headers found
 pub async fn handle_getheaders<C: 'static>(
     block_hashes: Vec<bitcoin::BlockHash>,
@@ -35,7 +37,7 @@ pub async fn handle_getheaders<C: 'static>(
 ) -> Result<(), Box<dyn Error>> {
     info!("Received getheaders: {:?}", block_hashes);
     let response_headers = chain_handle
-        .get_headers_for_locator(block_hashes, stop_block_hash)
+        .get_headers_for_locator(block_hashes, stop_block_hash, MAX_HEADERS)
         .await;
     let headers_message = Message::ShareHeaders(response_headers);
     swarm_tx
@@ -83,7 +85,7 @@ mod tests {
         // Set up mock expectations
         chain_handle
             .expect_get_headers_for_locator()
-            .returning(move |_, _| response_headers.clone());
+            .returning(move |_, _, _| response_headers.clone());
 
         let _result = handle_getheaders(
             block_hashes,
