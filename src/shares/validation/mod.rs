@@ -47,26 +47,27 @@ pub async fn validate(
         return Err(format!("Share uncles validation failed: {}", e).into());
     }
     let workbase = chain_handle
-        .get_workbase(share.miner_share.workinfoid)
+        .get_workbase(share.header.miner_share.workinfoid)
         .await;
     if workbase.is_none() {
         return Err(format!(
             "Missing workbase for share - workinfoid: {}",
-            share.miner_share.workinfoid
+            share.header.miner_share.workinfoid
         )
         .into());
     }
     let userworkbase = chain_handle
-        .get_user_workbase(share.miner_share.workinfoid)
+        .get_user_workbase(share.header.miner_share.workinfoid)
         .await;
     if userworkbase.is_none() {
         return Err(format!(
             "Missing user workbase for share - workinfoid: {}",
-            share.miner_share.workinfoid
+            share.header.miner_share.workinfoid
         )
         .into());
     }
     if let Err(e) = share
+        .header
         .miner_share
         .validate(&workbase.unwrap(), &userworkbase.unwrap())
     {
@@ -119,7 +120,7 @@ pub async fn validate_timestamp(
 ) -> Result<(), Box<dyn Error>> {
     let current_time = time_provider.seconds_since_epoch();
 
-    let miner_share_time = share.miner_share.ntime.to_consensus_u32() as u64;
+    let miner_share_time = share.header.miner_share.ntime.to_consensus_u32() as u64;
     let time_diff = if current_time > miner_share_time {
         current_time - miner_share_time
     } else {
@@ -129,7 +130,7 @@ pub async fn validate_timestamp(
     if time_diff > MAX_TIME_DIFF {
         return Err(format!(
             "Share timestamp {} is more than {} seconds from current time {}",
-            share.miner_share.ntime.to_consensus_u32(),
+            share.header.miner_share.ntime.to_consensus_u32(),
             MAX_TIME_DIFF,
             current_time
         )
@@ -149,7 +150,7 @@ mod tests {
     use std::time::SystemTime;
     #[tokio::test]
     async fn test_validate_timestamp_should_fail_for_old_timestamp() {
-        let miner_share = simple_miner_share(None, None, None, None);
+        let miner_share = simple_miner_share(None, None, None, None, None);
         let miner_pubkey: PublicKey =
             "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
@@ -161,7 +162,7 @@ mod tests {
             &mut vec![],
         );
         let mut time_provider = TestTimeProvider(SystemTime::now());
-        let share_timestamp = share.miner_share.ntime.to_consensus_u32() as u64 - 120;
+        let share_timestamp = share.header.miner_share.ntime.to_consensus_u32() as u64 - 120;
 
         time_provider
             .set_time(bitcoin::absolute::Time::from_consensus(share_timestamp as u32).unwrap());
@@ -175,7 +176,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_timestamp_should_fail_for_future_timestamp() {
-        let miner_share = simple_miner_share(None, None, None, None);
+        let miner_share = simple_miner_share(None, None, None, None, None);
         let mut time_provider = TestTimeProvider(SystemTime::now());
         let future_time = miner_share.ntime.to_consensus_u32() as u64 + 120;
         time_provider
@@ -197,7 +198,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_timestamp_should_succeed_for_valid_timestamp() {
-        let miner_share = simple_miner_share(None, None, None, None);
+        let miner_share = simple_miner_share(None, None, None, None, None);
         let mut time_provider = TestTimeProvider(SystemTime::now());
         time_provider.set_time(miner_share.ntime);
 
@@ -226,7 +227,7 @@ mod tests {
         // Create new share pointing to existing share - should validate
         let valid_share = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-            .prev_share_blockhash(initial_share.header.blockhash.to_string().as_str())
+            .prev_share_blockhash(initial_share.header.miner_share.hash.to_string().as_str())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
@@ -337,9 +338,9 @@ mod tests {
         let valid_share = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
             .uncles(vec![
-                uncle1.header.blockhash,
-                uncle2.header.blockhash,
-                uncle3.header.blockhash,
+                uncle1.header.miner_share.hash,
+                uncle2.header.miner_share.hash,
+                uncle3.header.miner_share.hash,
             ])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
@@ -350,10 +351,10 @@ mod tests {
         let invalid_share = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
             .uncles(vec![
-                uncle1.header.blockhash,
-                uncle2.header.blockhash,
-                uncle3.header.blockhash,
-                uncle4.header.blockhash,
+                uncle1.header.miner_share.hash,
+                uncle2.header.miner_share.hash,
+                uncle3.header.miner_share.hash,
+                uncle4.header.miner_share.hash,
             ])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
@@ -374,7 +375,7 @@ mod tests {
 
         let invalid_share = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8")
-            .uncles(vec![uncle1.header.blockhash, non_existent_hash])
+            .uncles(vec![uncle1.header.miner_share.hash, non_existent_hash])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 

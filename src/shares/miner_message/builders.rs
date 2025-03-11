@@ -134,10 +134,8 @@ pub fn build_share_header(
     let merkle_root =
         compute_merkle_root_from_txids(&txids).ok_or("Failed to compute merkle root")?;
 
-    let blockhash = bitcoin::BlockHash::from_str(&share.hash)?;
-
     Ok(crate::shares::ShareHeader {
-        blockhash,
+        miner_share: share.clone(),
         prev_share_blockhash: None,
         uncles: vec![],
         miner_pubkey,
@@ -161,7 +159,6 @@ pub fn build_share_block(
 
     Ok(crate::shares::ShareBlock {
         header,
-        miner_share: share.clone(),
         transactions,
     })
 }

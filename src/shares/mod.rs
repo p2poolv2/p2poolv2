@@ -33,8 +33,8 @@ use std::error::Error;
 /// Header for the ShareBlock
 /// Helps validate PoW and transaction merkle root.
 pub struct ShareHeader {
-    /// The block hash of the bitcoin weak block received from the ckpool miner
-    pub blockhash: BlockHash,
+    /// miner share with blockhash, nonce, time, diff and workinfoid
+    pub miner_share: MinerShare,
     /// The hash of the prev share block, will be None for genesis block
     pub prev_share_blockhash: Option<BlockHash>,
     /// The uncles of the share
@@ -47,7 +47,7 @@ pub struct ShareHeader {
 
 impl PartialEq for ShareHeader {
     fn eq(&self, other: &Self) -> bool {
-        self.blockhash == other.blockhash
+        self.miner_share.hash == other.miner_share.hash
     }
 }
 
@@ -58,8 +58,6 @@ impl Eq for ShareHeader {}
 pub struct ShareBlock {
     /// The header of the share block
     pub header: ShareHeader,
-    /// The miner work for the share
-    pub miner_share: MinerShare,
     /// Any transactions to be included in the share block
     pub transactions: Vec<Transaction>,
 }
@@ -71,7 +69,6 @@ impl ShareBlock {
         network: bitcoin::Network,
         include_transactions: &mut Vec<Transaction>,
     ) -> Self {
-        let share = miner_share.clone();
         let coinbase_tx =
             transactions::coinbase::create_coinbase_transaction(&miner_pubkey, network);
         let mut transactions = vec![coinbase_tx];
@@ -84,13 +81,12 @@ impl ShareBlock {
         .into();
         Self {
             header: ShareHeader {
-                blockhash: miner_share.hash.parse().unwrap(),
                 prev_share_blockhash: None,
                 uncles: vec![],
                 miner_pubkey,
                 merkle_root,
+                miner_share,
             },
-            miner_share: share,
             transactions,
         }
     }
@@ -101,15 +97,12 @@ impl ShareBlock {
 pub struct StorageShareBlock {
     /// The header of the share block
     pub header: ShareHeader,
-    /// The miner work for the share
-    pub miner_share: MinerShare,
 }
 
 impl From<ShareBlock> for StorageShareBlock {
     fn from(block: ShareBlock) -> Self {
         Self {
             header: block.header,
-            miner_share: block.miner_share,
         }
     }
 }
@@ -120,7 +113,6 @@ impl StorageShareBlock {
     pub fn into_share_block(self) -> ShareBlock {
         ShareBlock {
             header: self.header,
-            miner_share: self.miner_share,
             transactions: Vec::new(),
         }
     }
@@ -129,7 +121,6 @@ impl StorageShareBlock {
     pub fn into_share_block_with_transactions(self, transactions: Vec<Transaction>) -> ShareBlock {
         ShareBlock {
             header: self.header,
-            miner_share: self.miner_share,
             transactions,
         }
     }
@@ -184,7 +175,10 @@ mod tests {
             _ => panic!("Expected MiningShare variant"),
         };
 
-        assert_eq!(share.header.blockhash, deserialized.header.blockhash);
+        assert_eq!(
+            share.header.miner_share.hash,
+            deserialized.header.miner_share.hash
+        );
         assert_eq!(
             share.header.prev_share_blockhash,
             deserialized.header.prev_share_blockhash
@@ -195,22 +189,40 @@ mod tests {
 
         // Only compare non-skipped fields from MinerShare
         assert_eq!(
-            share.miner_share.workinfoid,
-            deserialized.miner_share.workinfoid
+            share.header.miner_share.workinfoid,
+            deserialized.header.miner_share.workinfoid
         );
         assert_eq!(
-            share.miner_share.clientid,
-            deserialized.miner_share.clientid
+            share.header.miner_share.clientid,
+            deserialized.header.miner_share.clientid
         );
-        assert_eq!(share.miner_share.enonce1, deserialized.miner_share.enonce1);
-        assert_eq!(share.miner_share.nonce2, deserialized.miner_share.nonce2);
-        assert_eq!(share.miner_share.nonce, deserialized.miner_share.nonce);
-        assert_eq!(share.miner_share.ntime, deserialized.miner_share.ntime);
-        assert_eq!(share.miner_share.diff, deserialized.miner_share.diff);
-        assert_eq!(share.miner_share.sdiff, deserialized.miner_share.sdiff);
         assert_eq!(
-            share.miner_share.username,
-            deserialized.miner_share.username
+            share.header.miner_share.enonce1,
+            deserialized.header.miner_share.enonce1
+        );
+        assert_eq!(
+            share.header.miner_share.nonce2,
+            deserialized.header.miner_share.nonce2
+        );
+        assert_eq!(
+            share.header.miner_share.nonce,
+            deserialized.header.miner_share.nonce
+        );
+        assert_eq!(
+            share.header.miner_share.ntime,
+            deserialized.header.miner_share.ntime
+        );
+        assert_eq!(
+            share.header.miner_share.diff,
+            deserialized.header.miner_share.diff
+        );
+        assert_eq!(
+            share.header.miner_share.sdiff,
+            deserialized.header.miner_share.sdiff
+        );
+        assert_eq!(
+            share.header.miner_share.username,
+            deserialized.header.miner_share.username
         );
     }
 
@@ -223,6 +235,7 @@ mod tests {
 
         // Create a miner share with test values
         let miner_share = simple_miner_share(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
             Some(7452731920372203525),
             Some(1),
             Some(dec!(1.0)),
@@ -265,12 +278,10 @@ mod tests {
 
         // Verify header and miner_share are preserved
         assert_eq!(storage_share.header, share.header);
-        assert_eq!(storage_share.miner_share, share.miner_share);
 
         // Test conversion back to ShareBlock with empty transactions
         let recovered_share = storage_share.clone().into_share_block();
         assert_eq!(recovered_share.header, share.header);
-        assert_eq!(recovered_share.miner_share, share.miner_share);
         assert!(recovered_share.transactions.is_empty());
 
         // Test conversion back with original transactions

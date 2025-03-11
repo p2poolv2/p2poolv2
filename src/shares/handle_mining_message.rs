@@ -107,6 +107,7 @@ mod tests {
             });
 
         let mining_message = CkPoolMessage::Share(simple_miner_share(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
             Some(7452731920372203525),
             Some(1),
             Some(dec!(1.0)),
@@ -163,6 +164,7 @@ mod tests {
             });
 
         let mining_message = CkPoolMessage::Share(simple_miner_share(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
             Some(7452731920372203525),
             Some(1),
             Some(dec!(1.0)),
@@ -218,6 +220,7 @@ mod tests {
             });
 
         let mining_message = CkPoolMessage::Share(simple_miner_share(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
             Some(7452731920372203525),
             Some(1),
             Some(dec!(1.0)),

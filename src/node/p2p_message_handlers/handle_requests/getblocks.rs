@@ -42,7 +42,7 @@ pub async fn handle_getblocks<C: 'static>(
     let inventory_message = Message::Inventory(InventoryMessage::BlockHashes(
         response_block_hashes
             .into_iter()
-            .map(|h| h.blockhash)
+            .map(|h| h.miner_share.hash)
             .collect(),
     ));
     swarm_tx
@@ -111,8 +111,8 @@ mod tests {
         {
             assert_eq!(channel, response_channel);
             assert_eq!(hashes.len(), 2);
-            assert_eq!(hashes[0], block1.header.blockhash);
-            assert_eq!(hashes[1], block2.header.blockhash);
+            assert_eq!(hashes[0], block1.header.miner_share.hash);
+            assert_eq!(hashes[1], block2.header.miner_share.hash);
         } else {
             panic!("Expected SwarmSend::Response with Inventory message");
         }
