@@ -74,7 +74,7 @@ impl MinerShare {
         workbase: &MinerWorkbase,
         user_workbase: &UserWorkbase,
     ) -> Result<bool, String> {
-        let coinbase = builders::build_coinbase_from_share(workbase, user_workbase, &self)
+        let coinbase = builders::build_coinbase_from_share(user_workbase, &self)
             .map_err(|e| format!("Failed to build coinbase: {}", e))?;
         let coinbase_txid = coinbase.compute_txid();
         let txids = workbase
@@ -237,6 +237,7 @@ impl
 pub struct UserWorkbase {
     pub params: UserWorkbaseParams,
     pub id: Option<String>,
+    #[serde(skip)]
     pub method: String,
     pub workinfoid: u64,
 }
@@ -294,7 +295,6 @@ mod tests {
 
         // Verify fields
         assert_eq!(userworkbase.workinfoid, 7473434392883363843);
-        assert_eq!(userworkbase.method, "mining.notify");
         assert_eq!(userworkbase.id, None);
 
         // Verify params
@@ -523,13 +523,12 @@ mod miner_share_tests {
         let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
 
         // Validate each workbase-share pair
-        for ((workbase, userworkbase), share) in workbases
+        for ((_workbase, userworkbase), share) in workbases
             .iter()
             .zip(userworkbases.iter())
             .zip(shares.iter())
         {
-            let coinbase =
-                builders::build_coinbase_from_share(&workbase, &userworkbase, &share).unwrap();
+            let coinbase = builders::build_coinbase_from_share(&userworkbase, &share).unwrap();
             assert!(coinbase.is_coinbase());
         }
     }
