@@ -220,7 +220,10 @@ impl Node {
                 P2PoolBehaviourEvent::Gossipsub(gossip_event) => {
                     let chain_handle = self.chain_handle.clone();
                     tokio::spawn(async move {
-                        handle_gossipsub_event(gossip_event, chain_handle).await;
+                        let result = handle_gossipsub_event(gossip_event, chain_handle).await;
+                        if let Err(e) = result {
+                            error!("Failed to handle gossipsub event: {}", e);
+                        }
                     });
                     Ok(())
                 }

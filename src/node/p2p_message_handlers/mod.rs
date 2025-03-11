@@ -147,7 +147,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_share_block_request() {
         let mut chain_handle = ChainHandle::default();
-        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let peer_id = libp2p::PeerId::random();
 
