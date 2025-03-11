@@ -22,6 +22,7 @@ pub mod receive_mining_message;
 pub mod store;
 pub mod transactions;
 pub mod validation;
+use rust_decimal::Decimal;
 
 use crate::shares::miner_message::MinerShare;
 use bitcoin::TxMerkleNode;
@@ -52,6 +53,32 @@ impl PartialEq for ShareHeader {
 }
 
 impl Eq for ShareHeader {}
+
+impl ShareHeader {
+    pub fn genesis(
+        workinfoid: u64,
+        clientid: u64,
+        enonce1: String,
+        nonce2: String,
+        nonce: String,
+        ntime: u32,
+        diff: Decimal,
+        sdiff: Decimal,
+        hash: BlockHash,
+        public_key: PublicKey,
+        merkle_root: TxMerkleNode,
+    ) -> Self {
+        Self {
+            prev_share_blockhash: None,
+            uncles: vec![],
+            miner_pubkey: public_key,
+            merkle_root,
+            miner_share: MinerShare::genesis(
+                workinfoid, clientid, enonce1, nonce2, nonce, ntime, diff, sdiff, hash,
+            ),
+        }
+    }
+}
 
 /// Captures a block on the share chain
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
@@ -87,6 +114,48 @@ impl ShareBlock {
                 merkle_root,
                 miner_share,
             },
+            transactions,
+        }
+    }
+
+    pub fn build_genesis_share_block(
+        workinfoid: u64,
+        clientid: u64,
+        enonce1: String,
+        nonce2: String,
+        nonce: String,
+        ntime: u32,
+        diff: Decimal,
+        sdiff: Decimal,
+        hash: BlockHash,
+        public_key: PublicKey,
+        network: bitcoin::Network,
+    ) -> Self {
+        assert!(
+            network == bitcoin::Network::Signet,
+            "Network Bitcoin, Testnet, Testnet4 or Regtest not yet supported"
+        );
+        let coinbase_tx = transactions::coinbase::create_coinbase_transaction(&public_key, network);
+        let transactions = vec![coinbase_tx];
+        let merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
+            transactions.iter().map(Transaction::compute_txid),
+        )
+        .unwrap()
+        .into();
+        Self {
+            header: ShareHeader::genesis(
+                workinfoid,
+                clientid,
+                enonce1,
+                nonce2,
+                nonce,
+                ntime,
+                diff,
+                sdiff,
+                hash,
+                public_key,
+                merkle_root,
+            ),
             transactions,
         }
     }
@@ -150,6 +219,51 @@ mod tests {
     use crate::test_utils::simple_miner_share;
     use crate::test_utils::TestBlockBuilder;
     use rust_decimal_macros::dec;
+
+    #[test]
+    fn test_build_genesis_share_header() {
+        let blockhash = "000000000822bbfaf34d53fc43d0c1382054d3aafe31893020c315db8b0a19f9"
+            .parse()
+            .unwrap();
+        let public_key = "020202020202020202020202020202020202020202020202020202020202020202"
+            .parse()
+            .unwrap();
+        let share = ShareBlock::build_genesis_share_block(
+            7473434392883363843,
+            1,
+            "fdf8b667".to_string(),
+            "0000000000000000".to_string(),
+            "f15f1590".to_string(),
+            1740044600,
+            dec!(1.0),
+            dec!(31.465847594928551),
+            blockhash,
+            public_key,
+            bitcoin::Network::Signet,
+        );
+
+        assert_eq!(share.header.miner_share.workinfoid, 7473434392883363843);
+        assert_eq!(share.header.miner_share.clientid, 1);
+        assert_eq!(share.header.miner_share.enonce1, "fdf8b667");
+        assert_eq!(share.header.miner_share.nonce2, "0000000000000000");
+        assert_eq!(share.header.miner_share.nonce, "f15f1590");
+        assert_eq!(share.header.miner_share.diff, dec!(1.0));
+        assert_eq!(share.header.miner_share.sdiff, dec!(31.465847594928551));
+        assert_eq!(share.header.miner_share.hash, blockhash);
+        assert!(share.header.uncles.is_empty());
+        assert_eq!(share.header.miner_pubkey, public_key);
+
+        assert_eq!(share.transactions.len(), 1);
+        assert!(share.transactions[0].is_coinbase());
+        assert_eq!(share.transactions[0].output.len(), 1);
+        assert_eq!(share.transactions[0].input.len(), 1);
+
+        let output = &share.transactions[0].output[0];
+        assert_eq!(output.value.to_sat(), 1);
+
+        let expected_address = bitcoin::Address::p2pkh(&public_key, bitcoin::Network::Signet);
+        assert_eq!(output.script_pubkey, expected_address.script_pubkey());
+    }
 
     #[test]
     fn test_share_serialization() {
