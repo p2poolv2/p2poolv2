@@ -200,7 +200,10 @@ impl Chain {
     /// - Return the locator
     /// TODO[pool2win, optimisation]: We end up scanning the entire chain here,
     /// we can work with indexes once we add the indexes to the chain handle.
-    pub fn build_locator(&self) -> Vec<bitcoin::BlockHash> {
+    pub fn build_locator(&self) -> Result<Vec<bitcoin::BlockHash>, Box<dyn Error + Send>> {
+        if self.chain_tip.is_none() {
+            return Ok(vec![]);
+        }
         let tip = self.chain_tip.unwrap();
         let mut step = 1;
         let mut current_hash = tip;
@@ -238,7 +241,7 @@ impl Chain {
                 }
             }
         }
-        locator
+        Ok(locator)
     }
 
     /// Get a workbase from the chain given a workinfoid
@@ -691,7 +694,7 @@ mod chain_tests {
         // Set chain tip to latest block
         chain.chain_tip = Some(blocks[4].header.miner_share.hash);
 
-        let locator = chain.build_locator();
+        let locator = chain.build_locator().unwrap();
         assert_eq!(locator.len(), 5); // Should return all blocks
                                       // Verify blocks are in reverse order (tip to genesis)
         for i in 0..5 {
@@ -727,8 +730,7 @@ mod chain_tests {
         // Set chain tip to latest block
         chain.chain_tip = Some(blocks[24].header.miner_share.hash);
 
-        let locator = chain.build_locator();
-
+        let locator = chain.build_locator().unwrap();
         // Should return 14 blocks:
         // - First 10 blocks (indexes 24 down to 15)
         // - Then blocks at positions 12 (index 12), 16 (index 8), 24 (index 0)

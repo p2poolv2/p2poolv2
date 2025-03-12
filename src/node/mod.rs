@@ -23,6 +23,7 @@ pub mod messages;
 pub mod p2p_message_handlers;
 
 use crate::node::messages::{InventoryMessage, Message};
+use crate::node::p2p_message_handlers::handle_responses::send_inventory::send_blocks_inventory;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::receive_mining_message::start_receiving_mining_messages;
@@ -319,21 +320,11 @@ impl Node {
     /// Handle connection established events, these are events that are generated when a connection is established
     async fn handle_connection_established(&mut self, peer_id: libp2p::PeerId) {
         info!("Connection established with peer: {peer_id}");
-        let _ = self.send_header_inventory(peer_id).await;
-    }
-
-    /// Send inventory message to a specific peer
-    /// For now we just send the tip of the chain
-    async fn send_header_inventory(&mut self, peer_id: libp2p::PeerId) {
-        let tips = self.chain_handle.get_tips().await;
-        info!("Sending inventory message to peer: {peer_id}, tips: {tips:?}");
-        let inventory_msg =
-            Message::Inventory(InventoryMessage::BlockHashes(tips.into_iter().collect()));
-        if let Err(e) = self.send_to_peer(peer_id, inventory_msg) {
-            error!(
-                "Failed to send inventory message to peer {}: {}",
-                peer_id, e
-            );
-        }
+        let _ = send_blocks_inventory::<ResponseChannel<Message>>(
+            peer_id,
+            self.chain_handle.clone(),
+            self.swarm_tx.clone(),
+        )
+        .await;
     }
 }
