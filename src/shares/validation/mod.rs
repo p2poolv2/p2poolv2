@@ -77,7 +77,7 @@ pub async fn validate(
     Ok(())
 }
 
-/// Validate prev_share_blockhash is in store
+/// Validate prev_share_blockhash is in store or block is genesis
 pub async fn validate_prev_share_blockhash(
     share: &ShareBlock,
     chain_handle: &ChainHandle,
