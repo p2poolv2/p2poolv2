@@ -219,6 +219,13 @@ impl ChainActor {
                 }
                 ChainMessage::BuildLocator => {
                     let result = self.chain.build_locator();
+                    let result = match result {
+                        Ok(locator) => locator,
+                        Err(e) => {
+                            error!("Failed to build locator: {}", e);
+                            return;
+                        }
+                    };
                     if let Err(e) = response_sender
                         .send(ChainResponse::BuildLocatorResult(result))
                         .await
