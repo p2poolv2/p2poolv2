@@ -17,28 +17,17 @@
 use crate::node::messages::InventoryMessage;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
-use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
 use tracing::info;
 
 /// Send blocks inventory update to a peer. This is not a response, but is triggered
 /// by the node when it has new data to share.
-pub async fn handle_blocks_inventory(
+pub async fn send_blocks_inventory(
     inventory: Vec<InventoryMessage>,
     chain_handle: ChainHandle,
-    time_provider: &impl TimeProvider,
 ) -> Result<(), Box<dyn Error>> {
     info!("Sending inventory update: {:?}", inventory);
-    Ok(())
-}
-
-/// Send transactions inventory update to a peer. This is not a response, but is triggered
-/// by the node when it has new data to share.
-pub async fn handle_transactions_inventory(
-    inventory: Vec<InventoryMessage>,
-    chain_handle: ChainHandle,
-    time_provider: &impl TimeProvider,
-) -> Result<(), Box<dyn Error>> {
-    info!("Sending inventory update: {:?}", inventory);
+    let tip = chain_handle.get_chain_tip().await;
+    let locator = vec![tip.unwrap()];
     Ok(())
 }
