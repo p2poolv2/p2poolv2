@@ -32,6 +32,7 @@ pub struct Chain {
     pub total_difficulty: Decimal,
     pub store: Store,
     pub chain_tip: Option<BlockHash>,
+    pub genesis_block_hash: Option<BlockHash>,
 }
 
 #[allow(dead_code)]
@@ -42,12 +43,16 @@ impl Chain {
             total_difficulty: dec!(0.0),
             store,
             chain_tip: None,
+            genesis_block_hash: None,
         }
     }
 
     /// Add a share to the chain and update the tips and total difficulty
     pub fn add_share(&mut self, share: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>> {
         info!("Adding share to chain: {:?}", share);
+        if self.tips.is_empty() {
+            self.genesis_block_hash = Some(share.header.miner_share.hash.clone());
+        }
         let blockhash = share.header.miner_share.hash.clone();
         let prev_share_blockhash = share.header.prev_share_blockhash.clone();
         let share_difficulty = share.header.miner_share.diff;
@@ -187,6 +192,53 @@ impl Chain {
 
         self.store
             .get_headers_for_locator(block_hashes, stop_block_hash, limit)
+    }
+
+    /// Get a locator for the chain.
+    /// - Start from the tip, go back until we hit genesis block
+    /// - After 10 blocks, double the step size each time
+    /// - Return the locator
+    /// TODO[pool2win, optimisation]: We end up scanning the entire chain here,
+    /// we can work with indexes once we add the indexes to the chain handle.
+    pub fn build_locator(&self) -> Vec<bitcoin::BlockHash> {
+        let tip = self.chain_tip.unwrap();
+        let mut step = 1;
+        let mut current_hash = tip;
+        let mut locator = vec![current_hash];
+
+        // Keep going back until we hit genesis block
+        while let Some(block) = self.get_share(&current_hash) {
+            // After 10 blocks, double the step size each time
+            if locator.len() >= 10 {
+                step *= 2;
+            }
+
+            // Go back 'step' number of blocks
+            let mut next_hash = block.header.prev_share_blockhash;
+            for _ in 1..step {
+                if let Some(prev_block_hash) = next_hash {
+                    if let Some(prev_block) = self.get_share(&prev_block_hash) {
+                        next_hash = prev_block.header.prev_share_blockhash;
+                    }
+                }
+            }
+
+            // Break if we hit genesis (no previous hash)
+            match next_hash {
+                Some(hash) => {
+                    current_hash = hash;
+                    locator.push(current_hash);
+                }
+                None => {
+                    // push the genesis block if we reached the end
+                    if current_hash != self.genesis_block_hash.unwrap() {
+                        locator.push(self.genesis_block_hash.unwrap());
+                    }
+                    break;
+                }
+            }
+        }
+        locator
     }
 
     /// Get a workbase from the chain given a workinfoid
@@ -611,5 +663,87 @@ mod chain_tests {
         assert_eq!(headers.len(), 2); // Should return share4 and share5
         assert_eq!(headers[0].miner_share.hash, share4.header.miner_share.hash);
         assert_eq!(headers[1].miner_share.hash, share5.header.miner_share.hash);
+    }
+
+    #[test]
+    fn test_build_locator_with_less_than_10_blocks() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let mut chain = Chain::new(store);
+
+        let mut blocks: Vec<ShareBlock> = Vec::new();
+
+        let block_builder = TestBlockBuilder::new().blockhash(format!("{:064x}", 0).as_str());
+        let block = block_builder.build();
+        blocks.push(block.clone());
+        chain.add_share(block).unwrap();
+
+        for i in 1..5 {
+            let block_builder = TestBlockBuilder::new().blockhash(format!("{:064x}", i).as_str());
+            let block = block_builder
+                .prev_share_blockhash(blocks[i - 1].header.miner_share.hash.to_string().as_str())
+                .build();
+            blocks.push(block.clone());
+            chain.add_share(block).unwrap();
+        }
+
+        assert_eq!(blocks.len(), 5);
+        // Set chain tip to latest block
+        chain.chain_tip = Some(blocks[4].header.miner_share.hash);
+
+        let locator = chain.build_locator();
+        assert_eq!(locator.len(), 5); // Should return all blocks
+                                      // Verify blocks are in reverse order (tip to genesis)
+        for i in 0..5 {
+            assert_eq!(locator[i], blocks[4 - i].header.miner_share.hash);
+        }
+    }
+
+    #[test]
+    fn test_build_locator_with_more_than_10_blocks() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let mut chain = Chain::new(store);
+
+        let mut blocks: Vec<ShareBlock> = Vec::new();
+        for i in 1..=25 {
+            let prev_hash = if i == 1 {
+                None
+            } else {
+                Some(blocks[i - 2].header.miner_share.hash)
+            };
+
+            let mut block_builder =
+                TestBlockBuilder::new().blockhash(format!("{:064x}", i).as_str());
+            if prev_hash.is_some() {
+                block_builder =
+                    block_builder.prev_share_blockhash(prev_hash.unwrap().to_string().as_str());
+            }
+            let block = block_builder.build();
+            blocks.push(block.clone());
+            chain.add_share(block).unwrap();
+        }
+
+        // Set chain tip to latest block
+        chain.chain_tip = Some(blocks[24].header.miner_share.hash);
+
+        let locator = chain.build_locator();
+
+        // Should return 14 blocks:
+        // - First 10 blocks (indexes 24 down to 15)
+        // - Then blocks at positions 12 (index 12), 16 (index 8), 24 (index 0)
+        // - Plus genesis block
+        assert_eq!(locator.len(), 14);
+
+        // Verify first 10 blocks are sequential from tip
+        for i in 0..10 {
+            assert_eq!(locator[i], blocks[24 - i].header.miner_share.hash);
+        }
+
+        // Verify the step blocks
+        assert_eq!(locator[10], blocks[13].header.miner_share.hash);
+        assert_eq!(locator[11], blocks[9].header.miner_share.hash);
+        assert_eq!(locator[12], blocks[1].header.miner_share.hash);
+        assert_eq!(locator[13], blocks[0].header.miner_share.hash);
     }
 }
