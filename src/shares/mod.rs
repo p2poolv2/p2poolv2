@@ -16,6 +16,7 @@
 
 pub mod chain;
 pub mod ckpool_socket;
+pub mod genesis;
 pub mod handle_mining_message;
 pub mod miner_message;
 pub mod receive_mining_message;
@@ -56,15 +57,7 @@ impl Eq for ShareHeader {}
 
 impl ShareHeader {
     pub fn genesis(
-        workinfoid: u64,
-        clientid: u64,
-        enonce1: String,
-        nonce2: String,
-        nonce: String,
-        ntime: u32,
-        diff: Decimal,
-        sdiff: Decimal,
-        hash: BlockHash,
+        genesis_data: &genesis::GenesisData,
         public_key: PublicKey,
         merkle_root: TxMerkleNode,
     ) -> Self {
@@ -73,9 +66,7 @@ impl ShareHeader {
             uncles: vec![],
             miner_pubkey: public_key,
             merkle_root,
-            miner_share: MinerShare::genesis(
-                workinfoid, clientid, enonce1, nonce2, nonce, ntime, diff, sdiff, hash,
-            ),
+            miner_share: MinerShare::genesis(genesis_data),
         }
     }
 }
@@ -118,42 +109,20 @@ impl ShareBlock {
         }
     }
 
-    pub fn build_genesis_for_network(network: bitcoin::Network) -> Self {
+    /// Build a genesis share block for a given network
+    /// The bitcoin blockhash is hardcoded, so are the coinbase, nonce2, nonce, ntime, diff, sdiff
+    /// The workinfoid and clientid are 0 for genesis block on all networks
+    pub fn build_genesis_for_network(public_key: PublicKey, network: bitcoin::Network) -> Self {
         assert!(
             network == bitcoin::Network::Signet,
             "Network Bitcoin, Testnet, Testnet4 or Regtest not yet supported"
         );
-        // A public key for the genesis block, with unknown private key
-        let public_key = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<PublicKey>()
-            .unwrap();
-        ShareBlock::build_genesis(
-            0,
-            0,
-            "fdf8b667".to_string(),
-            "0000000000000000".to_string(),
-            "f15f1590".to_string(),
-            u32::from_str_radix("67b6f938", 16).unwrap(),
-            dec!(1.0),
-            dec!(31.465847594928551),
-            "000000000822bbfaf34d53fc43d0c1382054d3aafe31893020c315db8b0a19f9"
-                .parse()
-                .unwrap(),
-            public_key,
-            network,
-        )
+        let genesis_data = genesis::genesis_data(network).unwrap();
+        ShareBlock::build_genesis(&genesis_data, public_key, network)
     }
 
     fn build_genesis(
-        workinfoid: u64,
-        clientid: u64,
-        enonce1: String,
-        nonce2: String,
-        nonce: String,
-        ntime: u32,
-        diff: Decimal,
-        sdiff: Decimal,
-        hash: BlockHash,
+        genesis_data: &genesis::GenesisData,
         public_key: PublicKey,
         network: bitcoin::Network,
     ) -> Self {
@@ -165,19 +134,7 @@ impl ShareBlock {
         .unwrap()
         .into();
         Self {
-            header: ShareHeader::genesis(
-                workinfoid,
-                clientid,
-                enonce1,
-                nonce2,
-                nonce,
-                ntime,
-                diff,
-                sdiff,
-                hash,
-                public_key,
-                merkle_root,
-            ),
+            header: ShareHeader::genesis(genesis_data, public_key, merkle_root),
             transactions,
         }
     }
@@ -245,13 +202,13 @@ mod tests {
 
     #[test]
     fn test_build_genesis_share_header() {
-        let blockhash = "000000000822bbfaf34d53fc43d0c1382054d3aafe31893020c315db8b0a19f9"
+        let bitcoin_blockhash = "000000000822bbfaf34d53fc43d0c1382054d3aafe31893020c315db8b0a19f9"
             .parse()
             .unwrap();
-        let public_key = "020202020202020202020202020202020202020202020202020202020202020202"
+        let public_key = "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
             .parse()
             .unwrap();
-        let share = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
+        let share = ShareBlock::build_genesis_for_network(public_key, bitcoin::Network::Signet);
 
         assert_eq!(share.header.miner_share.workinfoid, 0);
         assert_eq!(share.header.miner_share.clientid, 0);
@@ -264,7 +221,7 @@ mod tests {
         );
         assert_eq!(share.header.miner_share.diff, dec!(1.0));
         assert_eq!(share.header.miner_share.sdiff, dec!(31.465847594928551));
-        assert_eq!(share.header.miner_share.hash, blockhash);
+        assert_eq!(share.header.miner_share.hash, bitcoin_blockhash);
         assert!(share.header.uncles.is_empty());
         assert_eq!(share.header.miner_pubkey, public_key);
 

@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::shares::ShareBlock;
 use clap::Parser;
 use std::error::Error;
 use tracing::{debug, info};
@@ -30,6 +31,7 @@ mod utils;
 use crate::node::actor::NodeHandle;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
+use bitcoin::PublicKey;
 use tracing::error;
 
 #[cfg(test)]
@@ -55,6 +57,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Load configuration
     let config = config::Config::load(&args.config)?;
     let chain_handle = ChainHandle::new(config.store.path.clone());
+    let public_key = "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
+        .parse::<PublicKey>()
+        .unwrap();
+    let genesis = ShareBlock::build_genesis_for_network(public_key, config.bitcoin.network);
+    if chain_handle
+        .get_share(genesis.header.miner_share.hash)
+        .await
+        .is_none()
+    {
+        if let Err(e) = chain_handle.add_share(genesis).await {
+            error!("Failed to create genesis block: {}", e);
+            std::process::exit(1);
+        }
+    }
     if let Ok((_node_handle, stopping_rx)) = NodeHandle::new(config, chain_handle).await {
         info!("Node started");
         stopping_rx.await?;

@@ -16,6 +16,7 @@
 
 pub mod builders;
 
+use crate::shares::genesis;
 use crate::utils::serde_support::time::{deserialize_time, serialize_time};
 use bitcoin::absolute::Time;
 use bitcoin::BlockHash;
@@ -69,27 +70,17 @@ pub struct MinerShare {
 }
 
 impl MinerShare {
-    pub fn genesis(
-        workinfoid: u64,
-        clientid: u64,
-        enonce1: String,
-        nonce2: String,
-        nonce: String,
-        ntime: u32,
-        diff: Decimal,
-        sdiff: Decimal,
-        hash: BlockHash,
-    ) -> Self {
+    pub fn genesis(genesis_data: &genesis::GenesisData) -> Self {
         Self {
-            workinfoid,
-            clientid,
-            enonce1,
-            nonce2,
-            nonce,
-            ntime: Time::from_consensus(ntime).unwrap(),
-            diff,
-            sdiff,
-            hash,
+            workinfoid: genesis_data.workinfoid,
+            clientid: genesis_data.clientid,
+            enonce1: genesis_data.enonce1.to_string(),
+            nonce2: genesis_data.nonce2.to_string(),
+            nonce: genesis_data.nonce.to_string(),
+            ntime: Time::from_consensus(genesis_data.ntime).unwrap(),
+            diff: genesis_data.diff,
+            sdiff: genesis_data.sdiff,
+            hash: genesis_data.bitcoin_blockhash.parse().unwrap(),
             result: true,
             errn: 0,
             createdate: "".to_string(),
@@ -314,42 +305,26 @@ pub struct Gbt {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use rust_decimal_macros::dec;
     #[test]
     fn test_build_genesis_miner_share() {
-        let workinfoid = 7473434392883363843;
-        let clientid = 1;
-        let enonce1 = "fdf8b667".to_string();
-        let nonce2 = "0000000000000000".to_string();
-        let nonce = "f15f1590".to_string();
-        let ntime = 1740044600;
-        let diff = Decimal::from_str("1.0").unwrap();
-        let sdiff = Decimal::from_str("31.465847594928551").unwrap();
-        let hash =
-            BlockHash::from_str("000000000822bbfaf34d53fc43d0c1382054d3aafe31893020c315db8b0a19f9")
-                .unwrap();
+        let genesis_data = genesis::genesis_data(bitcoin::Network::Signet).unwrap();
+        let share = MinerShare::genesis(&genesis_data);
 
-        let share = MinerShare::genesis(
-            workinfoid,
-            clientid,
-            enonce1.clone(),
-            nonce2.clone(),
-            nonce.clone(),
-            ntime,
-            diff,
-            sdiff,
-            hash,
+        assert_eq!(share.workinfoid, 0);
+        assert_eq!(share.clientid, 0);
+        assert_eq!(share.enonce1, "fdf8b667".to_string());
+        assert_eq!(share.nonce2, "0000000000000000".to_string());
+        assert_eq!(share.nonce, "f15f1590".to_string());
+        assert_eq!(share.ntime, Time::from_consensus(1740044600).unwrap());
+        assert_eq!(share.diff, dec!(1.0));
+        assert_eq!(share.sdiff, dec!(31.465847594928551));
+        assert_eq!(
+            share.hash,
+            "000000000822bbfaf34d53fc43d0c1382054d3aafe31893020c315db8b0a19f9"
+                .parse()
+                .unwrap()
         );
-
-        assert_eq!(share.workinfoid, workinfoid);
-        assert_eq!(share.clientid, clientid);
-        assert_eq!(share.enonce1, enonce1);
-        assert_eq!(share.nonce2, nonce2);
-        assert_eq!(share.nonce, nonce);
-        assert_eq!(share.ntime, Time::from_consensus(ntime).unwrap());
-        assert_eq!(share.diff, diff);
-        assert_eq!(share.sdiff, sdiff);
-        assert_eq!(share.hash, hash);
         assert_eq!(share.result, true);
         assert_eq!(share.errn, 0);
         assert_eq!(share.createdate, "");
