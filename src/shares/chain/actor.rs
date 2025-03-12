@@ -46,6 +46,7 @@ pub enum ChainMessage {
     GetChainTipAndUncles,
     GetDepth(BlockHash),
     GetHeadersForLocator(Vec<BlockHash>, BlockHash, usize),
+    BuildLocator,
 }
 
 #[derive(Debug)]
@@ -66,6 +67,7 @@ pub enum ChainResponse {
     ChainTipAndUncles(Option<BlockHash>, HashSet<BlockHash>),
     Depth(Option<usize>),
     GetHeadersForLocatorResult(Vec<ShareHeader>),
+    BuildLocatorResult(Vec<BlockHash>),
 }
 
 pub struct ChainActor {
@@ -213,6 +215,15 @@ impl ChainActor {
                         .await
                     {
                         error!("Failed to send get_blocks_for_locator response: {}", e);
+                    }
+                }
+                ChainMessage::BuildLocator => {
+                    let result = self.chain.build_locator();
+                    if let Err(e) = response_sender
+                        .send(ChainResponse::BuildLocatorResult(result))
+                        .await
+                    {
+                        error!("Failed to send build_locator response: {}", e);
                     }
                 }
             }
@@ -495,6 +506,18 @@ impl ChainHandle {
             _ => vec![],
         }
     }
+
+    pub async fn build_locator(&self) -> Vec<BlockHash> {
+        let (response_sender, mut response_receiver) = mpsc::channel(1);
+        self.sender
+            .send((ChainMessage::BuildLocator, response_sender))
+            .await
+            .unwrap();
+        match response_receiver.recv().await {
+            Some(ChainResponse::BuildLocatorResult(result)) => result,
+            _ => vec![],
+        }
+    }
 }
 
 #[cfg(test)]
@@ -519,6 +542,7 @@ mock! {
         pub async fn get_share(&self, share_hash: BlockHash) -> Option<ShareBlock>;
         pub async fn get_share_headers(&self, share_hashes: Vec<BlockHash>) -> Vec<ShareHeader>;
         pub async fn get_headers_for_locator(&self, block_hashes: Vec<BlockHash>, stop_block_hash: BlockHash, max_headers: usize) -> Vec<ShareHeader>;
+        pub async fn build_locator(&self) -> Vec<BlockHash>;
     }
 
     impl Clone for ChainHandle {
@@ -779,5 +803,40 @@ mod tests {
         assert_eq!(headers.len(), 2);
         assert_eq!(headers[0], block2.header);
         assert_eq!(headers[1], block3.header);
+    }
+
+    #[tokio::test]
+    async fn test_build_locator() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // Create test blocks in a chain
+        let block1 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb1")
+            .build();
+
+        let block2 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2")
+            .prev_share_blockhash(block1.header.miner_share.hash.to_string().as_str())
+            .build();
+
+        let block3 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3")
+            .prev_share_blockhash(block2.header.miner_share.hash.to_string().as_str())
+            .build();
+
+        // Add blocks to chain
+        chain_handle.add_share(block1.clone()).await.unwrap();
+        chain_handle.add_share(block2.clone()).await.unwrap();
+        chain_handle.add_share(block3.clone()).await.unwrap();
+
+        // Get locator and verify results
+        let locator = chain_handle.build_locator().await;
+
+        // Should return blocks in reverse order since locator starts from tip
+        assert_eq!(locator.len(), 3);
+        assert_eq!(locator[0], block3.header.miner_share.hash);
+        assert_eq!(locator[1], block2.header.miner_share.hash);
+        assert_eq!(locator[2], block1.header.miner_share.hash);
     }
 }
