@@ -32,7 +32,7 @@ mod self_and_peer_messages_tests {
     use tokio::sync::mpsc;
     use zmq;
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn receive_shares_and_workbases_from_self_and_peers() {
         // Create configuration for a single node
         let config = default_test_config()

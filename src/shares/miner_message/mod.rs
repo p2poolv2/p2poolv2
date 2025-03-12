@@ -574,7 +574,7 @@ mod miner_share_tests {
         assert_eq!(serialized.len(), 316);
     }
 
-    #[test_log::test(test)]
+    #[test]
     fn test_workbase_coinbase_deserialization() {
         let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
 
