@@ -1478,7 +1478,7 @@ mod tests {
         assert!(descendants_with_limit.contains(&uncle2_share2.header));
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_get_headers_for_block_locator_should_find_matching_blocks() {
         use bitcoin::BlockHash;
         use std::str::FromStr;

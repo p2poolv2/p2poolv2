@@ -21,7 +21,7 @@ use p2poolv2::{node::actor::NodeHandle, shares::chain::actor::ChainHandle};
 use std::time::Duration;
 use tempfile::tempdir;
 
-#[test_log::test(tokio::test)]
+#[tokio::test]
 async fn test_three_nodes_connectivity() {
     // Create three different configurations as strings
 

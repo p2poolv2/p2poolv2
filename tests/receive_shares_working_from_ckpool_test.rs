@@ -97,7 +97,7 @@ mod zmq_tests {
             .expect("Failed to shutdown node");
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_single_node_with_zmq_feed_of_shares_only() {
         let config = default_test_config()
             .with_listen_address("/ip4/127.0.0.1/tcp/6888".to_string())
@@ -171,7 +171,7 @@ mod zmq_tests {
             .expect("Failed to shutdown node");
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_single_node_with_shares_and_workbases() {
         // Create configuration for a single node
         let config = default_test_config()

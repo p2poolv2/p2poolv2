@@ -84,7 +84,7 @@ mod tests {
         Mock, MockServer, ResponseTemplate,
     };
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_validate_bitcoin_block_success() {
         // Start mock server
         let mock_server = MockServer::start().await;
@@ -133,7 +133,7 @@ mod tests {
         assert!(result.unwrap());
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_validate_bitcoin_block_reject() {
         // Start mock server
         let mock_server = MockServer::start().await;
@@ -182,7 +182,7 @@ mod tests {
         assert!(!result.unwrap());
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_validate_bitcoin_block_http_error() {
         // Start mock server
         let mock_server = MockServer::start().await;
@@ -227,7 +227,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_meets_bitcoin_difficulty_matching() {
         // Start mock server
         let mock_server = MockServer::start().await;
@@ -301,7 +301,7 @@ mod tests {
         assert!(result.unwrap());
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_validate_bitcoin_block_share_difficulty_too_low() {
         // Start mock server
         let mock_server = MockServer::start().await;
