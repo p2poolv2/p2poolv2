@@ -38,6 +38,7 @@ pub struct TxMetadata {
 /// This is stored indexed by the blockhash, we can later optimise to internal key, if needed.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BlockMetadata {
+    pub height: Option<u32>,
     pub is_valid: bool,
     pub is_confirmed: bool,
 }
@@ -756,11 +757,13 @@ impl Store {
         let metadata = self.get_block_metadata(blockhash).unwrap_or(BlockMetadata {
             is_valid: false,
             is_confirmed: false,
+            height: None,
         });
 
         let updated_metadata = BlockMetadata {
             is_valid: valid,
             is_confirmed: metadata.is_confirmed,
+            height: metadata.height,
         };
 
         self.set_block_metadata(blockhash, &updated_metadata)
@@ -775,14 +778,41 @@ impl Store {
         let metadata = self.get_block_metadata(blockhash).unwrap_or(BlockMetadata {
             is_valid: false,
             is_confirmed: false,
+            height: None,
         });
 
         let updated_metadata = BlockMetadata {
             is_valid: metadata.is_valid,
             is_confirmed: confirmed,
+            height: metadata.height,
         };
 
         self.set_block_metadata(blockhash, &updated_metadata)
+    }
+
+    pub fn set_block_height(
+        &mut self,
+        blockhash: &BlockHash,
+        height: Option<u32>,
+    ) -> Result<(), Box<dyn Error>> {
+        let metadata = self.get_block_metadata(blockhash).unwrap_or(BlockMetadata {
+            is_valid: false,
+            is_confirmed: false,
+            height,
+        });
+
+        let updated_metadata = BlockMetadata {
+            is_valid: metadata.is_valid,
+            is_confirmed: metadata.is_confirmed,
+            height,
+        };
+
+        self.set_block_metadata(blockhash, &updated_metadata)
+    }
+
+    pub fn get_block_height(&self, blockhash: &BlockHash) -> Option<u32> {
+        self.get_block_metadata(blockhash)
+            .and_then(|metadata| metadata.height)
     }
 
     /// Check if a block is valid
@@ -797,21 +827,6 @@ impl Store {
         self.get_block_metadata(blockhash)
             .map(|metadata| metadata.is_confirmed)
             .unwrap_or(false)
-    }
-
-    /// Set block as both valid and confirmed in a single operation
-    pub fn set_block_status(
-        &mut self,
-        blockhash: &BlockHash,
-        valid: bool,
-        confirmed: bool,
-    ) -> Result<(), Box<dyn Error>> {
-        let updated_metadata = BlockMetadata {
-            is_valid: valid,
-            is_confirmed: confirmed,
-        };
-
-        self.set_block_metadata(blockhash, &updated_metadata)
     }
 }
 
@@ -1757,11 +1772,6 @@ mod tests {
         store.set_block_confirmed(&blockhash, false).unwrap();
         assert_eq!(store.is_block_valid(&blockhash), false);
         assert_eq!(store.is_block_confirmed(&blockhash), false);
-
-        // Test setting both statuses at once
-        store.set_block_status(&blockhash, true, true).unwrap();
-        assert_eq!(store.is_block_valid(&blockhash), true);
-        assert_eq!(store.is_block_confirmed(&blockhash), true);
     }
 
     #[test]
@@ -1812,10 +1822,6 @@ mod tests {
 
         let blockhash1 = share1.header.miner_share.hash;
         let blockhash2 = share2.header.miner_share.hash;
-
-        // Set different statuses for each block
-        store.set_block_status(&blockhash1, true, false).unwrap();
-        store.set_block_status(&blockhash2, false, true).unwrap();
 
         // Verify each block has the correct status
         assert_eq!(store.is_block_valid(&blockhash1), true);
