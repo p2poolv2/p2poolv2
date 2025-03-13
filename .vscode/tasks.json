@@ -4,7 +4,7 @@
         {
             "label": "rust: cargo test",
             "type": "shell",
-            "command": "cargo test",
+            "command": "cargo test --jobs 4",
             "group": {
                 "kind": "build",
                 // "isDefault": true
@@ -36,7 +36,7 @@
         {
             "label": "rust: cargo check",
             "type": "shell",
-            "command": "cargo check",
+            "command": "cargo check --jobs 4",
             "group": {
                 "kind": "build",
             },
