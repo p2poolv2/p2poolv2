@@ -34,6 +34,14 @@ pub struct TxMetadata {
     spent_by: Option<bitcoin::Txid>,
 }
 
+/// ShareBlock metadata capturing if a share is valid and confirmed
+/// This is stored indexed by the blockhash, we can later optimise to internal key, if needed.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct BlockMetadata {
+    pub is_valid: bool,
+    pub is_confirmed: bool,
+}
+
 /// A store for share blocks.
 /// RocksDB as is used as the underlying database.
 /// We use column families to store different types of data, so that compactions are independent for each type.
@@ -701,6 +709,109 @@ impl Store {
                 height_bytes.copy_from_slice(&bytes);
                 usize::from_be_bytes(height_bytes)
             })
+    }
+
+    /// Get the block metadata for a blockhash
+    pub fn get_block_metadata(&self, blockhash: &BlockHash) -> Option<BlockMetadata> {
+        let block_metadata_cf = self.db.cf_handle("block").unwrap();
+        match self
+            .db
+            .get_cf::<&[u8]>(block_metadata_cf, blockhash.as_ref())
+        {
+            Ok(Some(metadata)) => {
+                let metadata: BlockMetadata = match ciborium::de::from_reader(metadata.as_slice()) {
+                    Ok(metadata) => metadata,
+                    Err(e) => {
+                        tracing::error!("Error deserializing block metadata: {:?}", e);
+                        return None;
+                    }
+                };
+                Some(metadata)
+            }
+            Ok(None) | Err(_) => None,
+        }
+    }
+
+    /// Set the block metadata for a blockhash
+    fn set_block_metadata(
+        &mut self,
+        blockhash: &BlockHash,
+        metadata: &BlockMetadata,
+    ) -> Result<(), Box<dyn Error>> {
+        let block_metadata_cf = self.db.cf_handle("block").unwrap();
+
+        let mut serialized = Vec::new();
+        ciborium::ser::into_writer(metadata, &mut serialized)?;
+
+        self.db.put_cf(block_metadata_cf, blockhash, serialized)?;
+        Ok(())
+    }
+
+    /// Mark a block as valid in the store
+    pub fn set_block_valid(
+        &mut self,
+        blockhash: &BlockHash,
+        valid: bool,
+    ) -> Result<(), Box<dyn Error>> {
+        let metadata = self.get_block_metadata(blockhash).unwrap_or(BlockMetadata {
+            is_valid: false,
+            is_confirmed: false,
+        });
+
+        let updated_metadata = BlockMetadata {
+            is_valid: valid,
+            is_confirmed: metadata.is_confirmed,
+        };
+
+        self.set_block_metadata(blockhash, &updated_metadata)
+    }
+
+    /// Mark a block as confirmed in the store
+    pub fn set_block_confirmed(
+        &mut self,
+        blockhash: &BlockHash,
+        confirmed: bool,
+    ) -> Result<(), Box<dyn Error>> {
+        let metadata = self.get_block_metadata(blockhash).unwrap_or(BlockMetadata {
+            is_valid: false,
+            is_confirmed: false,
+        });
+
+        let updated_metadata = BlockMetadata {
+            is_valid: metadata.is_valid,
+            is_confirmed: confirmed,
+        };
+
+        self.set_block_metadata(blockhash, &updated_metadata)
+    }
+
+    /// Check if a block is valid
+    pub fn is_block_valid(&self, blockhash: &BlockHash) -> bool {
+        self.get_block_metadata(blockhash)
+            .map(|metadata| metadata.is_valid)
+            .unwrap_or(false)
+    }
+
+    /// Check if a block is confirmed
+    pub fn is_block_confirmed(&self, blockhash: &BlockHash) -> bool {
+        self.get_block_metadata(blockhash)
+            .map(|metadata| metadata.is_confirmed)
+            .unwrap_or(false)
+    }
+
+    /// Set block as both valid and confirmed in a single operation
+    pub fn set_block_status(
+        &mut self,
+        blockhash: &BlockHash,
+        valid: bool,
+        confirmed: bool,
+    ) -> Result<(), Box<dyn Error>> {
+        let updated_metadata = BlockMetadata {
+            is_valid: valid,
+            is_confirmed: confirmed,
+        };
+
+        self.set_block_metadata(blockhash, &updated_metadata)
     }
 }
 
@@ -1604,5 +1715,120 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], blocks[1].header);
         assert_eq!(result[1], blocks[2].header);
+    }
+
+    #[test]
+    fn test_block_status_operations() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+
+        // Create test block
+        let share = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .clientid(1)
+            .diff(dec!(1.0))
+            .sdiff(dec!(1.9041854952356509))
+            .build();
+
+        // Add share to store
+        store.add_share(share.clone(), 0);
+        let blockhash = share.header.miner_share.hash;
+
+        // Initially, block should not be valid or confirmed
+        assert_eq!(store.is_block_valid(&blockhash), false);
+        assert_eq!(store.is_block_confirmed(&blockhash), false);
+
+        // Set block as valid
+        store.set_block_valid(&blockhash, true).unwrap();
+        assert_eq!(store.is_block_valid(&blockhash), true);
+        assert_eq!(store.is_block_confirmed(&blockhash), false);
+
+        // Set block as confirmed
+        store.set_block_confirmed(&blockhash, true).unwrap();
+        assert_eq!(store.is_block_valid(&blockhash), true);
+        assert_eq!(store.is_block_confirmed(&blockhash), true);
+
+        // Reset block's valid status
+        store.set_block_valid(&blockhash, false).unwrap();
+        assert_eq!(store.is_block_valid(&blockhash), false);
+        assert_eq!(store.is_block_confirmed(&blockhash), true);
+
+        // Reset block's confirmed status
+        store.set_block_confirmed(&blockhash, false).unwrap();
+        assert_eq!(store.is_block_valid(&blockhash), false);
+        assert_eq!(store.is_block_confirmed(&blockhash), false);
+
+        // Test setting both statuses at once
+        store.set_block_status(&blockhash, true, true).unwrap();
+        assert_eq!(store.is_block_valid(&blockhash), true);
+        assert_eq!(store.is_block_confirmed(&blockhash), true);
+    }
+
+    #[test]
+    fn test_block_status_for_nonexistent_block() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+
+        // Create a blockhash that doesn't exist in the store
+        let nonexistent_blockhash =
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                .parse::<BlockHash>()
+                .unwrap();
+
+        // Status checks should return false for non-existent blocks
+        assert_eq!(store.is_block_valid(&nonexistent_blockhash), false);
+        assert_eq!(store.is_block_confirmed(&nonexistent_blockhash), false);
+
+        // Setting status for non-existent block should succeed (creates metadata)
+        store.set_block_valid(&nonexistent_blockhash, true).unwrap();
+        assert_eq!(store.is_block_valid(&nonexistent_blockhash), true);
+        assert_eq!(store.is_block_confirmed(&nonexistent_blockhash), false);
+    }
+
+    #[test]
+    fn test_multiple_block_status_updates() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+
+        // Create multiple test blocks
+        let share1 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .clientid(1)
+            .diff(dec!(1.0))
+            .sdiff(dec!(1.9041854952356509))
+            .build();
+
+        let share2 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
+            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
+            .clientid(1)
+            .diff(dec!(1.0))
+            .sdiff(dec!(1.9041854952356509))
+            .build();
+
+        // Add shares to store
+        store.add_share(share1.clone(), 0);
+        store.add_share(share2.clone(), 1);
+
+        let blockhash1 = share1.header.miner_share.hash;
+        let blockhash2 = share2.header.miner_share.hash;
+
+        // Set different statuses for each block
+        store.set_block_status(&blockhash1, true, false).unwrap();
+        store.set_block_status(&blockhash2, false, true).unwrap();
+
+        // Verify each block has the correct status
+        assert_eq!(store.is_block_valid(&blockhash1), true);
+        assert_eq!(store.is_block_confirmed(&blockhash1), false);
+        assert_eq!(store.is_block_valid(&blockhash2), false);
+        assert_eq!(store.is_block_confirmed(&blockhash2), true);
+
+        // Update statuses
+        store.set_block_valid(&blockhash1, false).unwrap();
+        store.set_block_confirmed(&blockhash2, false).unwrap();
+
+        // Verify updated statuses
+        assert_eq!(store.is_block_valid(&blockhash1), false);
+        assert_eq!(store.is_block_confirmed(&blockhash2), false);
     }
 }
