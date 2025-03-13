@@ -26,8 +26,6 @@ pub mod validation;
 use crate::shares::miner_message::MinerShare;
 use bitcoin::TxMerkleNode;
 use bitcoin::{BlockHash, PublicKey, Transaction};
-use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 
