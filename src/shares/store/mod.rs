@@ -62,6 +62,8 @@ impl Store {
         let tx_cf = ColumnFamilyDescriptor::new("tx", RocksDbOptions::default());
         let workbase_cf = ColumnFamilyDescriptor::new("workbase", RocksDbOptions::default());
         let block_index_cf = ColumnFamilyDescriptor::new("block_index", RocksDbOptions::default());
+        let block_height_cf =
+            ColumnFamilyDescriptor::new("block_height", RocksDbOptions::default());
         let user_workbase_cf =
             ColumnFamilyDescriptor::new("user_workbase", RocksDbOptions::default());
 
@@ -81,6 +83,7 @@ impl Store {
                 workbase_cf,
                 user_workbase_cf,
                 block_index_cf,
+                block_height_cf,
             ],
         )
         .unwrap();
@@ -90,7 +93,7 @@ impl Store {
     /// Add a share to the store
     /// We use StorageShareBlock to serialize the share so that we do not store transactions serialized with the block.
     /// Transactions are stored separately. All writes are done in a single atomic batch.
-    pub fn add_share(&mut self, share: ShareBlock) {
+    pub fn add_share(&mut self, share: ShareBlock, height: usize) {
         debug!(
             "Adding share to store with {} txs: {:?}",
             share.transactions.len(),
@@ -114,6 +117,8 @@ impl Store {
             tracing::error!("Failed to update block index: {:?}", e);
             return;
         }
+
+        self.set_height_for_blockhash(share.header.miner_share.hash, height, &mut batch);
 
         // Add the share block itself
         let storage_share_block: StorageShareBlock = share.into();
@@ -670,6 +675,33 @@ impl Store {
             None
         }
     }
+
+    /// Set the height for the blockhash
+    pub fn set_height_for_blockhash(
+        &mut self,
+        blockhash: BlockHash,
+        height: usize,
+        batch: &mut rocksdb::WriteBatch,
+    ) {
+        let column_family = self.db.cf_handle("block_height").unwrap();
+        // Convert height to big-endian bytes
+        let height_bytes = height.to_be_bytes();
+        batch.put_cf(column_family, blockhash, height_bytes);
+    }
+
+    /// Get the height for the blockhash
+    pub fn get_height_for_blockhash(&self, blockhash: &BlockHash) -> Option<usize> {
+        let column_family = self.db.cf_handle("block_height").unwrap();
+        self.db
+            .get_cf::<&[u8]>(column_family, blockhash.as_ref())
+            .unwrap()
+            .map(|bytes| {
+                // Convert from big-endian bytes back to usize
+                let mut height_bytes = [0u8; std::mem::size_of::<usize>()];
+                height_bytes.copy_from_slice(&bytes);
+                usize::from_be_bytes(height_bytes)
+            })
+    }
 }
 
 #[cfg(test)]
@@ -759,13 +791,13 @@ mod tests {
             .build();
 
         // Add all shares to store
-        store.add_share(share1.clone());
-        store.add_share(uncle1_share2.clone());
-        store.add_share(uncle2_share2.clone());
-        store.add_share(share2.clone());
-        store.add_share(uncle1_share3.clone());
-        store.add_share(uncle2_share3.clone());
-        store.add_share(share3.clone());
+        store.add_share(share1.clone(), 0);
+        store.add_share(uncle1_share2.clone(), 1);
+        store.add_share(uncle2_share2.clone(), 1);
+        store.add_share(share2.clone(), 1);
+        store.add_share(uncle1_share3.clone(), 2);
+        store.add_share(uncle2_share3.clone(), 2);
+        store.add_share(share3.clone(), 2);
 
         // Get chain up to share3
         let chain = store.get_chain_upto(&share3.header.miner_share.hash);
@@ -1064,7 +1096,7 @@ mod tests {
             .build();
 
         // Store the share block
-        store.add_share(share.clone());
+        store.add_share(share.clone(), 0);
         assert_eq!(share.transactions.len(), 3);
 
         // Retrieve transactions for the block hash
@@ -1217,7 +1249,7 @@ mod tests {
             .build();
 
         // Add share to store
-        store.add_share(share.clone());
+        store.add_share(share.clone(), 0);
 
         // Get share header from store
         let read_share = store.get_share(&share.header.miner_share.hash).unwrap();
@@ -1326,11 +1358,11 @@ mod tests {
             .build();
 
         // Add all shares to store
-        store.add_share(share1.clone());
-        store.add_share(uncle1_share2.clone());
-        store.add_share(uncle2_share2.clone());
-        store.add_share(share2.clone());
-        store.add_share(share3.clone());
+        store.add_share(share1.clone(), 0);
+        store.add_share(uncle1_share2.clone(), 1);
+        store.add_share(uncle2_share2.clone(), 1);
+        store.add_share(share2.clone(), 1);
+        store.add_share(share3.clone(), 2);
 
         // Verify children of share1
         let children_share1 = store.get_children_blockhashes(&share1.header.miner_share.hash);
@@ -1416,11 +1448,11 @@ mod tests {
             .build();
 
         // Add all shares to store
-        store.add_share(share1.clone());
-        store.add_share(uncle1_share2.clone());
-        store.add_share(uncle2_share2.clone());
-        store.add_share(share2.clone());
-        store.add_share(share3.clone());
+        store.add_share(share1.clone(), 0);
+        store.add_share(uncle1_share2.clone(), 1);
+        store.add_share(uncle2_share2.clone(), 1);
+        store.add_share(share2.clone(), 1);
+        store.add_share(share3.clone(), 2);
 
         // Verify descendants of share1
         let descendants_share1 = store.get_descendants(
@@ -1503,20 +1535,16 @@ mod tests {
 
         // We don't need to mock the last two block because they are past the stop block (inclusive)
         for (i, hash) in block_hashes.iter().enumerate().rev() {
-            println!("Adding hash: {:?} with i = {}", hash, i);
             let mut builder = TestBlockBuilder::new().blockhash(hash.to_string().as_str());
             if i < block_hashes.len() - 1 {
                 builder = builder.prev_share_blockhash(block_hashes[i + 1].to_string().as_str());
             }
             let block = builder.build();
-            store.add_share(block.clone());
+            store.add_share(block.clone(), 0);
             blocks.push(block);
         }
 
         let locator = vec![block_hashes[4]];
-
-        println!("locator: {:?}", locator);
-        println!("stop_block: {:?}", stop_block);
 
         // Call handle_getblocks
         let result = store.get_headers_for_locator(&locator, &stop_block, 10);
@@ -1544,7 +1572,7 @@ mod tests {
             .blockhash("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f") // locator + genesis
             .build();
         blocks.push(block.clone());
-        store.add_share(block.clone());
+        store.add_share(block.clone(), 0);
         locator.push(block.header.miner_share.hash);
 
         let block = TestBlockBuilder::new()
@@ -1554,7 +1582,7 @@ mod tests {
             )
             .build();
         blocks.push(block.clone());
-        store.add_share(block.clone());
+        store.add_share(block.clone(), 1);
 
         let block = TestBlockBuilder::new()
             .blockhash("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd") // tip
@@ -1563,7 +1591,7 @@ mod tests {
             )
             .build();
         blocks.push(block.clone());
-        store.add_share(block.clone());
+        store.add_share(block.clone(), 2);
 
         // Use a stop block hash that doesn't exist in our chain
         let non_existent_stop_block =
