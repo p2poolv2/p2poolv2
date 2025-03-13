@@ -18,7 +18,7 @@ use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{store::Store, BlockHash, ShareBlock, ShareHeader};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::error::Error;
 use tracing::{error, info};
 
@@ -38,10 +38,6 @@ pub struct Chain {
     pub tips: HashSet<BlockHash>,
     /// Total difficulty up to the tip
     pub total_difficulty: Decimal,
-    /// Block to height index, constructed at startup time
-    pub block_height_ix: HashMap<BlockHash, u32>,
-    /// Height to block index, constructed at startup time
-    pub height_block_ix: HashMap<u32, Vec<BlockHash>>,
 }
 
 #[allow(dead_code)]
@@ -53,14 +49,13 @@ impl Chain {
             store,
             chain_tip: None,
             genesis_block_hash: None,
-            block_height_ix: HashMap::new(),
-            height_block_ix: HashMap::new(),
         }
     }
 
     /// Add a share to the chain and update the tips and total difficulty
     pub fn add_share(&mut self, share: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>> {
         info!("Adding share to chain: {:?}", share);
+
         if self.tips.is_empty() {
             self.genesis_block_hash = Some(share.header.miner_share.hash.clone());
         }
@@ -68,9 +63,9 @@ impl Chain {
         let prev_share_blockhash = share.header.prev_share_blockhash.clone();
         let share_difficulty = share.header.miner_share.diff;
 
+        let height = self.get_height_for_prevhash(prev_share_blockhash);
         // save to share to store for all cases
-        self.store.add_share(share.clone());
-        self.update_height_indices(&share);
+        self.store.add_share(share.clone(), height);
 
         // handle new chain by setting tip and total difficulty
         if self.tips.is_empty() {
@@ -114,22 +109,15 @@ impl Chain {
         Ok(())
     }
 
-    /// Update height indices for the share. We have to update two indices as we are avoiding bidirectional map dependency.
-    fn update_height_indices(&mut self, share: &ShareBlock) {
-        let blockhash = share.header.miner_share.hash.clone();
-        let prev_share_blockhash = share.header.prev_share_blockhash.clone();
-        let height = match prev_share_blockhash {
-            Some(prev) => match self.block_height_ix.get(&prev) {
+    /// Get height for the previous blockhash
+    fn get_height_for_prevhash(&mut self, hash: Option<BlockHash>) -> usize {
+        match hash {
+            Some(prev) => match self.store.get_height_for_blockhash(&prev) {
                 Some(prev_height) => prev_height + 1,
                 None => 0, // If prev not found in index, treat as genesis
             },
             None => 0,
-        };
-        self.block_height_ix.insert(blockhash.clone(), height);
-        self.height_block_ix
-            .entry(height)
-            .and_modify(|v| v.push(blockhash.clone()))
-            .or_insert_with(|| vec![blockhash]);
+        }
     }
 
     /// Remove a blockhash from the tips set
@@ -473,96 +461,56 @@ mod chain_tests {
 
         // Verify heights of all shares
         assert_eq!(
-            *chain
-                .block_height_ix
-                .get(&share1.header.miner_share.hash)
+            chain
+                .store
+                .get_height_for_blockhash(&share1.header.miner_share.hash)
                 .unwrap(),
             0
         );
 
         assert_eq!(
-            *chain
-                .block_height_ix
-                .get(&uncle1_share2.header.miner_share.hash)
+            chain
+                .store
+                .get_height_for_blockhash(&uncle1_share2.header.miner_share.hash)
                 .unwrap(),
             1
         );
         assert_eq!(
-            *chain
-                .block_height_ix
-                .get(&uncle2_share2.header.miner_share.hash)
+            chain
+                .store
+                .get_height_for_blockhash(&uncle2_share2.header.miner_share.hash)
                 .unwrap(),
             1
         );
         assert_eq!(
-            *chain
-                .block_height_ix
-                .get(&share2.header.miner_share.hash)
+            chain
+                .store
+                .get_height_for_blockhash(&share2.header.miner_share.hash)
                 .unwrap(),
             1
         );
 
         assert_eq!(
-            *chain
-                .block_height_ix
-                .get(&uncle1_share3.header.miner_share.hash)
+            chain
+                .store
+                .get_height_for_blockhash(&uncle1_share3.header.miner_share.hash)
                 .unwrap(),
             2
         );
         assert_eq!(
-            *chain
-                .block_height_ix
-                .get(&uncle2_share3.header.miner_share.hash)
+            chain
+                .store
+                .get_height_for_blockhash(&uncle2_share3.header.miner_share.hash)
                 .unwrap(),
             2
         );
         assert_eq!(
-            *chain
-                .block_height_ix
-                .get(&share3.header.miner_share.hash)
+            chain
+                .store
+                .get_height_for_blockhash(&share3.header.miner_share.hash)
                 .unwrap(),
             2
         );
-
-        // Verify height_block_ix maps back to the main chain blocks
-        assert!(chain
-            .height_block_ix
-            .get(&0)
-            .unwrap()
-            .contains(&share1.header.miner_share.hash));
-        assert!(chain
-            .height_block_ix
-            .get(&1)
-            .unwrap()
-            .contains(&share2.header.miner_share.hash));
-        assert!(chain
-            .height_block_ix
-            .get(&1)
-            .unwrap()
-            .contains(&uncle1_share2.header.miner_share.hash));
-        assert!(chain
-            .height_block_ix
-            .get(&1)
-            .unwrap()
-            .contains(&uncle2_share2.header.miner_share.hash));
-
-        assert!(chain
-            .height_block_ix
-            .get(&2)
-            .unwrap()
-            .contains(&share3.header.miner_share.hash));
-        assert!(chain
-            .height_block_ix
-            .get(&2)
-            .unwrap()
-            .contains(&uncle1_share3.header.miner_share.hash));
-        assert!(chain
-            .height_block_ix
-            .get(&2)
-            .unwrap()
-            .contains(&uncle2_share3.header.miner_share.hash));
-
-        assert!(chain.height_block_ix.get(&3).is_none());
     }
 
     #[test]
