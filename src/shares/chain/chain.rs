@@ -63,7 +63,10 @@ impl Chain {
         let prev_share_blockhash = share.header.prev_share_blockhash.clone();
         let share_difficulty = share.header.miner_share.diff;
 
-        let height = self.get_height_for_prevhash(prev_share_blockhash);
+        let height = match self.get_height_for_prevhash(prev_share_blockhash) {
+            Some(prev_height) => prev_height + 1,
+            None => 0, // If there's no previous height, this is height 0
+        };
         // save to share to store for all cases
         self.store.add_share(share.clone(), height);
 
@@ -110,13 +113,13 @@ impl Chain {
     }
 
     /// Get height for the previous blockhash
-    fn get_height_for_prevhash(&mut self, hash: Option<BlockHash>) -> usize {
+    fn get_height_for_prevhash(&mut self, hash: Option<BlockHash>) -> Option<u32> {
         match hash {
-            Some(prev) => match self.store.get_height_for_blockhash(&prev) {
-                Some(prev_height) => prev_height + 1,
-                None => 0, // If prev not found in index, treat as genesis
+            Some(prev) => match self.store.get_block_metadata(&prev) {
+                Some(metadata) => metadata.height,
+                None => None, // If prev not found in index, treat as genesis
             },
-            None => 0,
+            None => None,
         }
     }
 
@@ -212,53 +215,68 @@ impl Chain {
             .get_headers_for_locator(block_hashes, stop_block_hash, limit)
     }
 
+    /// Get the height of the chain tip
+    pub fn get_tip_height(&self) -> Option<u32> {
+        match self.chain_tip {
+            Some(tip) => {
+                let metadata = self
+                    .store
+                    .get_block_metadata(&tip)
+                    .expect("Failed to get metadata for chain tip");
+                metadata.height
+            }
+            None => None,
+        }
+    }
+
     /// Get a locator for the chain.
     /// - Start from the tip, go back until we hit genesis block
     /// - After 10 blocks, double the step size each time
     /// - Return the locator
-    /// TODO[pool2win, optimisation]: We end up scanning the entire chain here,
-    /// we can work with indexes once we add the indexes to the chain handle.
     pub fn build_locator(&self) -> Result<Vec<bitcoin::BlockHash>, Box<dyn Error + Send>> {
         if self.chain_tip.is_none() {
             return Ok(vec![]);
         }
-        let tip = self.chain_tip.unwrap();
-        let mut step = 1;
-        let mut current_hash = tip;
-        let mut locator = vec![current_hash];
 
-        // Keep going back until we hit genesis block
-        while let Some(block) = self.get_share(&current_hash) {
-            // After 10 blocks, double the step size each time
-            if locator.len() >= 10 {
+        let tip_height = self.get_tip_height();
+        match tip_height {
+            Some(tip_height) => {
+                if (tip_height) == 0 {
+                    return Ok(vec![]);
+                }
+            }
+            None => {
+                return Ok(vec![]);
+            }
+        }
+
+        // Calculate the height indexes using the algorithm from libbitcoin
+        let mut indexes = Vec::new();
+        let mut step = 1;
+
+        // Start at the top of the chain and work backwards
+        let mut height = tip_height.unwrap();
+        while height > 0 {
+            // Push top 10 indexes first, then back off exponentially
+            if indexes.len() >= 10 {
                 step *= 2;
             }
 
-            // Go back 'step' number of blocks
-            let mut next_hash = block.header.prev_share_blockhash;
-            for _ in 1..step {
-                if let Some(prev_block_hash) = next_hash {
-                    if let Some(prev_block) = self.get_share(&prev_block_hash) {
-                        next_hash = prev_block.header.prev_share_blockhash;
-                    }
-                }
-            }
-
-            // Break if we hit genesis (no previous hash)
-            match next_hash {
-                Some(hash) => {
-                    current_hash = hash;
-                    locator.push(current_hash);
-                }
-                None => {
-                    // push the genesis block if we reached the end
-                    if current_hash != self.genesis_block_hash.unwrap() {
-                        locator.push(self.genesis_block_hash.unwrap());
-                    }
-                    break;
-                }
-            }
+            indexes.push(height);
+            height = height.saturating_sub(step);
         }
+
+        // Push the genesis block index (height 0)
+        indexes.push(0);
+
+        // Convert height indexes to block hashes
+        let mut locator = Vec::new();
+
+        for height in indexes {
+            let hashes = self.store.get_blockhashes_for_height(height);
+            locator.extend(hashes);
+        }
+
         Ok(locator)
     }
 
@@ -321,7 +339,7 @@ mod chain_tests {
     use std::collections::HashSet;
     use tempfile::tempdir;
 
-    #[test]
+    #[test_log::test(test)]
     /// Setup a test chain with 3 shares on the main chain, where shares 2 and 3 have two uncles each
     fn test_chain_add_shares() {
         let temp_dir = tempdir().unwrap();
@@ -461,55 +479,26 @@ mod chain_tests {
 
         // Verify heights of all shares
         assert_eq!(
-            chain
-                .store
-                .get_height_for_blockhash(&share1.header.miner_share.hash)
-                .unwrap(),
-            0
+            chain.store.get_blockhashes_for_height(0),
+            vec![share1.header.miner_share.hash]
         );
 
         assert_eq!(
-            chain
-                .store
-                .get_height_for_blockhash(&uncle1_share2.header.miner_share.hash)
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            chain
-                .store
-                .get_height_for_blockhash(&uncle2_share2.header.miner_share.hash)
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            chain
-                .store
-                .get_height_for_blockhash(&share2.header.miner_share.hash)
-                .unwrap(),
-            1
+            chain.store.get_blockhashes_for_height(1),
+            vec![
+                uncle1_share2.header.miner_share.hash,
+                uncle2_share2.header.miner_share.hash,
+                share2.header.miner_share.hash,
+            ]
         );
 
         assert_eq!(
-            chain
-                .store
-                .get_height_for_blockhash(&uncle1_share3.header.miner_share.hash)
-                .unwrap(),
-            2
-        );
-        assert_eq!(
-            chain
-                .store
-                .get_height_for_blockhash(&uncle2_share3.header.miner_share.hash)
-                .unwrap(),
-            2
-        );
-        assert_eq!(
-            chain
-                .store
-                .get_height_for_blockhash(&share3.header.miner_share.hash)
-                .unwrap(),
-            2
+            chain.store.get_blockhashes_for_height(2),
+            vec![
+                uncle1_share3.header.miner_share.hash,
+                uncle2_share3.header.miner_share.hash,
+                share3.header.miner_share.hash
+            ]
         );
     }
 
@@ -750,7 +739,9 @@ mod chain_tests {
         let block_builder = TestBlockBuilder::new().blockhash(format!("{:064x}", 0).as_str());
         let block = block_builder.build();
         blocks.push(block.clone());
-        chain.add_share(block).unwrap();
+        chain.add_share(block.clone()).unwrap();
+
+        assert_eq!(chain.chain_tip, Some(block.header.miner_share.hash));
 
         for i in 1..5 {
             let block_builder = TestBlockBuilder::new().blockhash(format!("{:064x}", i).as_str());
@@ -758,12 +749,12 @@ mod chain_tests {
                 .prev_share_blockhash(blocks[i - 1].header.miner_share.hash.to_string().as_str())
                 .build();
             blocks.push(block.clone());
-            chain.add_share(block).unwrap();
+            chain.add_share(block.clone()).unwrap();
+            assert_eq!(chain.chain_tip, Some(block.header.miner_share.hash));
         }
 
         assert_eq!(blocks.len(), 5);
-        // Set chain tip to latest block
-        chain.chain_tip = Some(blocks[4].header.miner_share.hash);
+        assert_eq!(chain.chain_tip, Some(blocks[4].header.miner_share.hash));
 
         let locator = chain.build_locator().unwrap();
         assert_eq!(locator.len(), 5); // Should return all blocks
@@ -798,9 +789,6 @@ mod chain_tests {
             chain.add_share(block).unwrap();
         }
 
-        // Set chain tip to latest block
-        chain.chain_tip = Some(blocks[24].header.miner_share.hash);
-
         let locator = chain.build_locator().unwrap();
         // Should return 14 blocks:
         // - First 10 blocks (indexes 24 down to 15)
@@ -814,9 +802,9 @@ mod chain_tests {
         }
 
         // Verify the step blocks
-        assert_eq!(locator[10], blocks[13].header.miner_share.hash);
-        assert_eq!(locator[11], blocks[9].header.miner_share.hash);
-        assert_eq!(locator[12], blocks[1].header.miner_share.hash);
+        assert_eq!(locator[10], blocks[14].header.miner_share.hash);
+        assert_eq!(locator[11], blocks[12].header.miner_share.hash);
+        assert_eq!(locator[12], blocks[8].header.miner_share.hash);
         assert_eq!(locator[13], blocks[0].header.miner_share.hash);
     }
 }

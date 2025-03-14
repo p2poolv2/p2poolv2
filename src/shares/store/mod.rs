@@ -102,7 +102,7 @@ impl Store {
     /// Add a share to the store
     /// We use StorageShareBlock to serialize the share so that we do not store transactions serialized with the block.
     /// Transactions are stored separately. All writes are done in a single atomic batch.
-    pub fn add_share(&mut self, share: ShareBlock, height: usize) {
+    pub fn add_share(&mut self, share: ShareBlock, height: u32) {
         debug!(
             "Adding share to store with {} txs: {:?}",
             share.transactions.len(),
@@ -127,7 +127,9 @@ impl Store {
             return;
         }
 
-        self.set_height_for_blockhash(share.header.miner_share.hash, height, &mut batch);
+        self.set_height_to_blockhash(share.header.miner_share.hash, height, &mut batch);
+        self.set_block_height_in_metadata(&blockhash, Some(height), Some(&mut batch))
+            .unwrap();
 
         // Add the share block itself
         let storage_share_block: StorageShareBlock = share.into();
@@ -685,40 +687,63 @@ impl Store {
         }
     }
 
-    /// Set the height for the blockhash
-    pub fn set_height_for_blockhash(
+    /// Set the height for the blockhash, storing it in a vector of blockhashes for that height
+    /// We are fine with Vector instead of HashSet as we are not going to have a lot of blockhashes at the same height
+    pub fn set_height_to_blockhash(
         &mut self,
         blockhash: BlockHash,
-        height: usize,
+        height: u32,
         batch: &mut rocksdb::WriteBatch,
     ) {
         let column_family = self.db.cf_handle("block_height").unwrap();
-        // Convert height to big-endian bytes
+        // Convert height to big-endian bytes - this is our key
         let height_bytes = height.to_be_bytes();
-        batch.put_cf(column_family, blockhash, height_bytes);
+
+        // Get any existing blockhashes for this height
+        let mut blockhashes = match self
+            .db
+            .get_cf::<&[u8]>(column_family, height_bytes.as_ref())
+        {
+            Ok(Some(existing)) => ciborium::de::from_reader(&existing[..]).unwrap_or_default(),
+            Ok(None) | Err(_) => Vec::new() as Vec<BlockHash>,
+        };
+
+        // Add the new blockhash if not already present
+        if !blockhashes.contains(&blockhash) {
+            blockhashes.push(blockhash);
+
+            // Serialize the updated vector of blockhashes
+            let mut serialized = Vec::new();
+            ciborium::ser::into_writer(&blockhashes, &mut serialized).unwrap();
+
+            // Store the updated vector
+            batch.put_cf(column_family, height_bytes, serialized);
+        }
     }
 
-    /// Get the height for the blockhash
-    pub fn get_height_for_blockhash(&self, blockhash: &BlockHash) -> Option<usize> {
+    /// Get the blockhashes for a specific height
+    pub fn get_blockhashes_for_height(&self, height: u32) -> Vec<BlockHash> {
         let column_family = self.db.cf_handle("block_height").unwrap();
-        self.db
-            .get_cf::<&[u8]>(column_family, blockhash.as_ref())
-            .unwrap()
-            .map(|bytes| {
-                // Convert from big-endian bytes back to usize
-                let mut height_bytes = [0u8; std::mem::size_of::<usize>()];
-                height_bytes.copy_from_slice(&bytes);
-                usize::from_be_bytes(height_bytes)
-            })
+        let height_bytes = height.to_be_bytes();
+        match self
+            .db
+            .get_cf::<&[u8]>(column_family, height_bytes.as_ref())
+        {
+            Ok(Some(blockhashes)) => {
+                ciborium::de::from_reader(&blockhashes[..]).unwrap_or_default()
+            }
+            Ok(None) | Err(_) => vec![],
+        }
     }
 
     /// Get the block metadata for a blockhash
     pub fn get_block_metadata(&self, blockhash: &BlockHash) -> Option<BlockMetadata> {
         let block_metadata_cf = self.db.cf_handle("block").unwrap();
-        match self
-            .db
-            .get_cf::<&[u8]>(block_metadata_cf, blockhash.as_ref())
-        {
+
+        let mut metadata_key = <BlockHash as AsRef<[u8]>>::as_ref(blockhash).to_vec();
+        metadata_key.extend_from_slice(b"_md");
+
+        match self.db.get_cf::<&[u8]>(block_metadata_cf, &metadata_key) {
             Ok(Some(metadata)) => {
                 let metadata: BlockMetadata = match ciborium::de::from_reader(metadata.as_slice()) {
                     Ok(metadata) => metadata,
@@ -729,7 +754,10 @@ impl Store {
                 };
                 Some(metadata)
             }
-            Ok(None) | Err(_) => None,
+            Ok(None) | Err(_) => {
+                debug!("No metadata found for blockhash: {:?}", blockhash);
+                None
+            }
         }
     }
 
@@ -738,13 +766,22 @@ impl Store {
         &mut self,
         blockhash: &BlockHash,
         metadata: &BlockMetadata,
+        batch: Option<&mut rocksdb::WriteBatch>,
     ) -> Result<(), Box<dyn Error>> {
         let block_metadata_cf = self.db.cf_handle("block").unwrap();
+
+        let mut metadata_key = <BlockHash as AsRef<[u8]>>::as_ref(blockhash).to_vec();
+        metadata_key.extend_from_slice(b"_md");
 
         let mut serialized = Vec::new();
         ciborium::ser::into_writer(metadata, &mut serialized)?;
 
-        self.db.put_cf(block_metadata_cf, blockhash, serialized)?;
+        if let Some(batch) = batch {
+            batch.put_cf(block_metadata_cf, &metadata_key, serialized);
+        } else {
+            self.db
+                .put_cf(block_metadata_cf, &metadata_key, serialized)?;
+        }
         Ok(())
     }
 
@@ -753,6 +790,7 @@ impl Store {
         &mut self,
         blockhash: &BlockHash,
         valid: bool,
+        batch: Option<&mut rocksdb::WriteBatch>,
     ) -> Result<(), Box<dyn Error>> {
         let metadata = self.get_block_metadata(blockhash).unwrap_or(BlockMetadata {
             is_valid: false,
@@ -766,7 +804,7 @@ impl Store {
             height: metadata.height,
         };
 
-        self.set_block_metadata(blockhash, &updated_metadata)
+        self.set_block_metadata(blockhash, &updated_metadata, batch)
     }
 
     /// Mark a block as confirmed in the store
@@ -774,6 +812,7 @@ impl Store {
         &mut self,
         blockhash: &BlockHash,
         confirmed: bool,
+        batch: Option<&mut rocksdb::WriteBatch>,
     ) -> Result<(), Box<dyn Error>> {
         let metadata = self.get_block_metadata(blockhash).unwrap_or(BlockMetadata {
             is_valid: false,
@@ -787,13 +826,14 @@ impl Store {
             height: metadata.height,
         };
 
-        self.set_block_metadata(blockhash, &updated_metadata)
+        self.set_block_metadata(blockhash, &updated_metadata, batch)
     }
 
-    pub fn set_block_height(
+    pub fn set_block_height_in_metadata(
         &mut self,
         blockhash: &BlockHash,
         height: Option<u32>,
+        batch: Option<&mut rocksdb::WriteBatch>,
     ) -> Result<(), Box<dyn Error>> {
         let metadata = self.get_block_metadata(blockhash).unwrap_or(BlockMetadata {
             is_valid: false,
@@ -807,26 +847,7 @@ impl Store {
             height,
         };
 
-        self.set_block_metadata(blockhash, &updated_metadata)
-    }
-
-    pub fn get_block_height(&self, blockhash: &BlockHash) -> Option<u32> {
-        self.get_block_metadata(blockhash)
-            .and_then(|metadata| metadata.height)
-    }
-
-    /// Check if a block is valid
-    pub fn is_block_valid(&self, blockhash: &BlockHash) -> bool {
-        self.get_block_metadata(blockhash)
-            .map(|metadata| metadata.is_valid)
-            .unwrap_or(false)
-    }
-
-    /// Check if a block is confirmed
-    pub fn is_block_confirmed(&self, blockhash: &BlockHash) -> bool {
-        self.get_block_metadata(blockhash)
-            .map(|metadata| metadata.is_confirmed)
-            .unwrap_or(false)
+        self.set_block_metadata(blockhash, &updated_metadata, batch)
     }
 }
 
@@ -837,7 +858,7 @@ mod tests {
     use rust_decimal_macros::dec;
     use tempfile::tempdir;
 
-    #[test]
+    #[test_log::test(test)]
     fn test_chain_with_uncles() {
         let temp_dir = tempdir().unwrap();
         let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
@@ -1023,6 +1044,27 @@ mod tests {
         let children_uncle2_share3 =
             store.get_children_blockhashes(&uncle2_share3.header.miner_share.hash);
         assert!(children_uncle2_share3.is_empty());
+
+        let blocks_at_height_0 = store.get_blockhashes_for_height(0);
+        assert_eq!(blocks_at_height_0, vec![share1.header.miner_share.hash]);
+        let blocks_at_height_1 = store.get_blockhashes_for_height(1);
+        assert_eq!(
+            blocks_at_height_1,
+            vec![
+                uncle1_share2.header.miner_share.hash,
+                uncle2_share2.header.miner_share.hash,
+                share2.header.miner_share.hash
+            ]
+        );
+        let blocks_at_height_2 = store.get_blockhashes_for_height(2);
+        assert_eq!(
+            blocks_at_height_2,
+            vec![
+                uncle1_share3.header.miner_share.hash,
+                uncle2_share3.header.miner_share.hash,
+                share3.header.miner_share.hash
+            ]
+        );
     }
 
     #[test]
@@ -1732,7 +1774,7 @@ mod tests {
         assert_eq!(result[1], blocks[2].header);
     }
 
-    #[test]
+    #[test_log::test(test)]
     fn test_block_status_operations() {
         let temp_dir = tempdir().unwrap();
         let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
@@ -1750,34 +1792,40 @@ mod tests {
         let blockhash = share.header.miner_share.hash;
 
         // Initially, block should not be valid or confirmed
-        assert_eq!(store.is_block_valid(&blockhash), false);
-        assert_eq!(store.is_block_confirmed(&blockhash), false);
+        let metadata = store.get_block_metadata(&blockhash).unwrap();
+        assert!(!metadata.is_valid);
+        assert!(!metadata.is_confirmed);
+        assert_eq!(metadata.height, Some(0));
 
         // Set block as valid
-        store.set_block_valid(&blockhash, true).unwrap();
-        assert_eq!(store.is_block_valid(&blockhash), true);
-        assert_eq!(store.is_block_confirmed(&blockhash), false);
+        store.set_block_valid(&blockhash, true, None).unwrap();
+        let metadata = store.get_block_metadata(&blockhash).unwrap();
+        assert!(metadata.is_valid);
+        assert!(!metadata.is_confirmed);
 
         // Set block as confirmed
-        store.set_block_confirmed(&blockhash, true).unwrap();
-        assert_eq!(store.is_block_valid(&blockhash), true);
-        assert_eq!(store.is_block_confirmed(&blockhash), true);
+        store.set_block_confirmed(&blockhash, true, None).unwrap();
+        let metadata = store.get_block_metadata(&blockhash).unwrap();
+        assert!(metadata.is_valid);
+        assert!(metadata.is_confirmed);
 
         // Reset block's valid status
-        store.set_block_valid(&blockhash, false).unwrap();
-        assert_eq!(store.is_block_valid(&blockhash), false);
-        assert_eq!(store.is_block_confirmed(&blockhash), true);
+        store.set_block_valid(&blockhash, false, None).unwrap();
+        let metadata = store.get_block_metadata(&blockhash).unwrap();
+        assert!(!metadata.is_valid);
+        assert!(metadata.is_confirmed);
 
         // Reset block's confirmed status
-        store.set_block_confirmed(&blockhash, false).unwrap();
-        assert_eq!(store.is_block_valid(&blockhash), false);
-        assert_eq!(store.is_block_confirmed(&blockhash), false);
+        store.set_block_confirmed(&blockhash, false, None).unwrap();
+        let metadata = store.get_block_metadata(&blockhash).unwrap();
+        assert!(!metadata.is_valid);
+        assert!(!metadata.is_confirmed);
     }
 
     #[test]
     fn test_block_status_for_nonexistent_block() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
 
         // Create a blockhash that doesn't exist in the store
         let nonexistent_blockhash =
@@ -1786,13 +1834,8 @@ mod tests {
                 .unwrap();
 
         // Status checks should return false for non-existent blocks
-        assert_eq!(store.is_block_valid(&nonexistent_blockhash), false);
-        assert_eq!(store.is_block_confirmed(&nonexistent_blockhash), false);
-
-        // Setting status for non-existent block should succeed (creates metadata)
-        store.set_block_valid(&nonexistent_blockhash, true).unwrap();
-        assert_eq!(store.is_block_valid(&nonexistent_blockhash), true);
-        assert_eq!(store.is_block_confirmed(&nonexistent_blockhash), false);
+        let metadata = store.get_block_metadata(&nonexistent_blockhash);
+        assert!(metadata.is_none());
     }
 
     #[test]
@@ -1823,18 +1866,79 @@ mod tests {
         let blockhash1 = share1.header.miner_share.hash;
         let blockhash2 = share2.header.miner_share.hash;
 
+        // Set status
+        assert!(store.set_block_valid(&blockhash1, true, None).is_ok());
+        assert!(store.set_block_confirmed(&blockhash2, true, None).is_ok());
+
         // Verify each block has the correct status
-        assert_eq!(store.is_block_valid(&blockhash1), true);
-        assert_eq!(store.is_block_confirmed(&blockhash1), false);
-        assert_eq!(store.is_block_valid(&blockhash2), false);
-        assert_eq!(store.is_block_confirmed(&blockhash2), true);
+        let metadata1 = store.get_block_metadata(&blockhash1).unwrap();
+        let metadata2 = store.get_block_metadata(&blockhash2).unwrap();
+        assert_eq!(metadata1.is_valid, true);
+        assert_eq!(metadata1.is_confirmed, false);
+        assert_eq!(metadata2.is_valid, false);
+        assert_eq!(metadata2.is_confirmed, true);
 
         // Update statuses
-        store.set_block_valid(&blockhash1, false).unwrap();
-        store.set_block_confirmed(&blockhash2, false).unwrap();
+        store.set_block_valid(&blockhash1, false, None).unwrap();
+        store.set_block_confirmed(&blockhash2, false, None).unwrap();
+
+        let updated_metadata1 = store.get_block_metadata(&blockhash1).unwrap();
+        let updated_metadata2 = store.get_block_metadata(&blockhash2).unwrap();
 
         // Verify updated statuses
-        assert_eq!(store.is_block_valid(&blockhash1), false);
-        assert_eq!(store.is_block_confirmed(&blockhash2), false);
+        assert_eq!(updated_metadata1.is_valid, false);
+        assert_eq!(updated_metadata2.is_confirmed, false);
+    }
+
+    #[test]
+    fn test_set_and_get_block_height_in_metadata() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+
+        // Create a test block
+        let share = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .clientid(1)
+            .diff(dec!(1.0))
+            .sdiff(dec!(1.9041854952356509))
+            .build();
+
+        let blockhash = share.header.miner_share.hash;
+
+        // Add share to store without setting height in metadata
+        store.add_share(share.clone(), 0);
+
+        // Height should be set during add_share
+        let metadata = store.get_block_metadata(&blockhash).unwrap();
+        assert_eq!(metadata.height, Some(0));
+
+        // Update the height to a different value
+        store
+            .set_block_height_in_metadata(&blockhash, Some(42), None)
+            .unwrap();
+
+        // Verify height is updated correctly
+        let updated_metadata = store.get_block_metadata(&blockhash).unwrap();
+        assert_eq!(updated_metadata.height, Some(42));
+
+        // Remove height by setting to None
+        store
+            .set_block_height_in_metadata(&blockhash, None, None)
+            .unwrap();
+
+        // Verify height is removed
+        let metadata_without_height = store.get_block_metadata(&blockhash).unwrap();
+        assert_eq!(metadata_without_height.height, None);
+
+        // Test with batch operation
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .set_block_height_in_metadata(&blockhash, Some(100), Some(&mut batch))
+            .unwrap();
+        store.db.write(batch).unwrap();
+
+        // Verify batch operation worked
+        let batch_updated_metadata = store.get_block_metadata(&blockhash).unwrap();
+        assert_eq!(batch_updated_metadata.height, Some(100));
     }
 }
