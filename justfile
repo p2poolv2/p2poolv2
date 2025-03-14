@@ -4,7 +4,7 @@ export LOG_LEVEL := env_var_or_default("RUST_LOG", "info")
 default: test
 
 test:
-	RUST_LOG={{LOG_LEVEL}} cargo test --jobs 4
+	RUST_LOG={{LOG_LEVEL}} cargo nextest run
 
 build:
 	cargo build
@@ -14,4 +14,4 @@ run config="config.toml":
 	RUST_LOG={{LOG_LEVEL}} cargo run -- --config={{config}}
 
 check:
-	cargo check --jobs 4
+	cargo check
