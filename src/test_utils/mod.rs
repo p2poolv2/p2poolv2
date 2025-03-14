@@ -231,6 +231,8 @@ fn test_share_block(
     sdiff: Option<Decimal>,
     include_transactions: &mut Vec<Transaction>,
 ) -> ShareBlock {
+    use crate::shares::ShareBlockBuilder;
+
     let prev_share_blockhash = match prev_share_blockhash {
         Some(prev_share_blockhash) => Some(prev_share_blockhash.parse().unwrap()),
         None => None,
@@ -243,20 +245,20 @@ fn test_share_block(
     };
     let mut transactions = vec![test_coinbase_transaction()];
     transactions.append(include_transactions);
-    ShareBlock {
-        header: ShareHeader {
-            miner_share: simple_miner_share(blockhash, workinfoid, clientid, diff, sdiff),
-            prev_share_blockhash,
-            uncles,
-            miner_pubkey,
-            merkle_root: bitcoin::merkle_tree::calculate_root(
-                transactions.iter().map(Transaction::compute_txid),
-            )
-            .unwrap()
-            .into(),
-        },
-        transactions,
-    }
+    let header = ShareHeader {
+        miner_share: simple_miner_share(blockhash, workinfoid, clientid, diff, sdiff),
+        prev_share_blockhash,
+        uncles,
+        miner_pubkey,
+        merkle_root: bitcoin::merkle_tree::calculate_root(
+            transactions.iter().map(Transaction::compute_txid),
+        )
+        .unwrap()
+        .into(),
+    };
+    ShareBlockBuilder::new(header)
+        .with_transactions(transactions)
+        .build()
 }
 
 #[cfg(test)]

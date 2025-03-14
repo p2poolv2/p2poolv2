@@ -157,10 +157,9 @@ pub fn build_share_block(
     let mut transactions = vec![coinbase];
     transactions.extend(decode_transactions(&workbase.txns)?);
 
-    Ok(crate::shares::ShareBlock {
-        header,
-        transactions,
-    })
+    Ok(crate::shares::ShareBlockBuilder::new(header)
+        .with_transactions(transactions)
+        .build())
 }
 
 #[cfg(test)]
