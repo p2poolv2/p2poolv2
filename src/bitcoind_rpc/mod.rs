@@ -128,7 +128,6 @@ mod tests {
         let params: Vec<serde_json::Value> = vec![];
         let result: serde_json::Value = client.request("getblockchaininfo", params).await.unwrap();
 
-        println!("Blockchain info: {}", result);
         assert!(result.is_object());
         assert!(result.get("chain").is_some());
     }
