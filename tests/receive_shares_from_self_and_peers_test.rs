@@ -36,8 +36,8 @@ mod self_and_peer_messages_tests {
     async fn receive_shares_and_workbases_from_self_and_peers() {
         // Create configuration for a single node
         let config = default_test_config()
-            .with_listen_address("/ip4/127.0.0.1/tcp/6887".to_string())
-            .with_ckpool_port(8882)
+            .with_listen_address("/ip4/127.0.0.1/tcp/6890".to_string())
+            .with_ckpool_port(8885)
             .with_store_path("test_chain_zmq.db".to_string())
             .with_miner_pubkey(
                 "020202020202020202020202020202020202020202020202020202020202020202".to_string(),
@@ -131,8 +131,7 @@ mod self_and_peer_messages_tests {
                 &time_provider,
             )
             .await;
-            let ww = chain_handle.get_workbase(7473434392883363844).await;
-            println!("ww: {:?}", ww);
+            let _ww = chain_handle.get_workbase(7473434392883363844).await;
             tracing::debug!("Peer message response: {:?}", &response);
             assert!(response.is_ok(), "Peer message handling failed");
         }

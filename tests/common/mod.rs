@@ -26,7 +26,7 @@ use p2poolv2::config::{
 pub fn default_test_config() -> Config {
     Config {
         network: NetworkConfig {
-            listen_address: "/ip4/127.0.0.1/tcp/6887".to_string(),
+            listen_address: "/ip4/127.0.0.1/tcp/6891".to_string(),
             dial_peers: vec![],
             enable_mdns: false,
             max_pending_incoming: 10,
