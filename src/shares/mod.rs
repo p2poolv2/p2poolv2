@@ -69,6 +69,38 @@ impl ShareHeader {
     }
 }
 
+/// ShareBlockBuilder is a builder pattern to build from Header and Transactions
+/// We always required a Header, therefore the builder starts with a new, not a default.
+pub struct ShareBlockBuilder {
+    header: ShareHeader,
+    transactions: Vec<Transaction>,
+}
+
+impl ShareBlockBuilder {
+    /// Initialise the builder with a ShareHeader which is required
+    pub fn new(header: ShareHeader) -> Self {
+        Self {
+            header,
+            transactions: Vec::new(),
+        }
+    }
+
+    pub fn with_transactions(mut self, transactions: Vec<Transaction>) -> Self {
+        self.transactions = transactions;
+        self
+    }
+
+    pub fn build(self) -> ShareBlock {
+        let mut block = ShareBlock {
+            header: self.header,
+            transactions: self.transactions,
+            cached_blockhash: None,
+        };
+        block.compute_blockhash();
+        block
+    }
+}
+
 /// Captures a block on the share chain
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct ShareBlock {
@@ -76,6 +108,8 @@ pub struct ShareBlock {
     pub header: ShareHeader,
     /// Any transactions to be included in the share block
     pub transactions: Vec<Transaction>,
+    /// Cached BlockHash
+    pub cached_blockhash: Option<BlockHash>,
 }
 
 impl ShareBlock {
@@ -95,7 +129,7 @@ impl ShareBlock {
         )
         .unwrap()
         .into();
-        Self {
+        let mut block = Self {
             header: ShareHeader {
                 prev_share_blockhash: None,
                 uncles: vec![],
@@ -104,7 +138,16 @@ impl ShareBlock {
                 miner_share,
             },
             transactions,
-        }
+            cached_blockhash: None,
+        };
+        block.compute_blockhash();
+        block
+    }
+
+    pub fn compute_blockhash(&mut self) {
+        let mut serialized = Vec::new();
+        ciborium::ser::into_writer(&self, &mut serialized).unwrap();
+        self.cached_blockhash = Some(bitcoin::hashes::Hash::hash(&serialized));
     }
 
     /// Build a genesis share block for a given network
@@ -131,10 +174,13 @@ impl ShareBlock {
         )
         .unwrap()
         .into();
-        Self {
+        let mut genesis = Self {
             header: ShareHeader::genesis(genesis_data, public_key, merkle_root),
             transactions,
-        }
+            cached_blockhash: None,
+        };
+        genesis.compute_blockhash();
+        genesis
     }
 }
 
@@ -157,18 +203,14 @@ impl From<ShareBlock> for StorageShareBlock {
 impl StorageShareBlock {
     /// Convert back to ShareBlock with empty transactions
     pub fn into_share_block(self) -> ShareBlock {
-        ShareBlock {
-            header: self.header,
-            transactions: Vec::new(),
-        }
+        ShareBlockBuilder::new(self.header).build()
     }
 
     /// Convert back to ShareBlock with provided transactions
     pub fn into_share_block_with_transactions(self, transactions: Vec<Transaction>) -> ShareBlock {
-        ShareBlock {
-            header: self.header,
-            transactions,
-        }
+        ShareBlockBuilder::new(self.header)
+            .with_transactions(transactions)
+            .build()
     }
 
     /// Serialize the message to CBOR bytes
@@ -233,6 +275,14 @@ mod tests {
 
         let expected_address = bitcoin::Address::p2pkh(&public_key, bitcoin::Network::Signet);
         assert_eq!(output.script_pubkey, expected_address.script_pubkey());
+        assert_eq!(
+            share.cached_blockhash,
+            Some(
+                "c70cdc1b179c8d92960a3f4c520ee3f0915c449623fbdaef1d711eb10659acc2"
+                    .parse()
+                    .unwrap()
+            )
+        );
     }
 
     #[test]
