@@ -31,7 +31,7 @@ mod zmq_tests {
     async fn test_single_node_with_zmq_feed_of_workbases_only() {
         // Create configuration for a single node
         let config = default_test_config()
-            .with_listen_address("/ip4/127.0.0.1/tcp/6887".to_string())
+            .with_listen_address("/ip4/127.0.0.1/tcp/6891".to_string())
             .with_ckpool_port(8882)
             .with_store_path("test_chain_zmq.db".to_string())
             .with_miner_pubkey(
@@ -97,10 +97,10 @@ mod zmq_tests {
             .expect("Failed to shutdown node");
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_single_node_with_zmq_feed_of_shares_only() {
         let config = default_test_config()
-            .with_listen_address("/ip4/127.0.0.1/tcp/6888".to_string())
+            .with_listen_address("/ip4/127.0.0.1/tcp/6892".to_string())
             .with_store_path("test_chain_zmq.db".to_string())
             .with_ckpool_port(8883)
             .with_miner_pubkey(
@@ -175,7 +175,7 @@ mod zmq_tests {
     async fn test_single_node_with_shares_and_workbases() {
         // Create configuration for a single node
         let config = default_test_config()
-            .with_listen_address("/ip4/127.0.0.1/tcp/6889".to_string())
+            .with_listen_address("/ip4/127.0.0.1/tcp/6893".to_string())
             .with_store_path("test_chain_zmq.db".to_string())
             .with_ckpool_port(8884)
             .with_miner_pubkey(
