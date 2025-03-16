@@ -23,7 +23,7 @@ use crate::shares::ShareBlock;
 use bitcoin::PublicKey;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::error;
+use tracing::{debug, error};
 
 /// Handle a mining message received from ckpool
 /// For now the message can be a share or a GBT workbase
@@ -41,6 +41,7 @@ pub async fn handle_mining_message<C>(
         CkPoolMessage::Share(share) => {
             let mut share_block =
                 ShareBlock::new(share, miner_pubkey, bitcoin::Network::Regtest, &mut vec![]);
+            debug!("Mining message share block: {:?}", share_block);
             share_block = chain_handle.setup_share_for_chain(share_block).await;
             message = Message::MiningShare(share_block.clone());
             if let Err(e) = chain_handle.add_share(share_block).await {
@@ -93,16 +94,10 @@ mod tests {
             .times(1)
             .returning(|share_block| {
                 let mut share_block = share_block;
-                share_block.header.prev_share_blockhash = Some(
-                    "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
-                        .parse()
-                        .unwrap(),
-                );
-                share_block.header.uncles = vec![
-                    "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
-                        .parse()
-                        .unwrap(),
-                ];
+                share_block.header.prev_share_blockhash =
+                    Some("00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173".into());
+                share_block.header.uncles =
+                    vec!["00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172".into()];
                 share_block
             });
 
@@ -150,16 +145,10 @@ mod tests {
             .times(1)
             .returning(|share_block| {
                 let mut share_block = share_block;
-                share_block.header.prev_share_blockhash = Some(
-                    "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
-                        .parse()
-                        .unwrap(),
-                );
-                share_block.header.uncles = vec![
-                    "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
-                        .parse()
-                        .unwrap(),
-                ];
+                share_block.header.prev_share_blockhash =
+                    Some("00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173".into());
+                share_block.header.uncles =
+                    vec!["00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172".into()];
                 share_block
             });
 
@@ -206,16 +195,10 @@ mod tests {
             .times(1)
             .returning(|share_block| {
                 let mut share_block = share_block;
-                share_block.header.prev_share_blockhash = Some(
-                    "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
-                        .parse()
-                        .unwrap(),
-                );
-                share_block.header.uncles = vec![
-                    "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
-                        .parse()
-                        .unwrap(),
-                ];
+                share_block.header.prev_share_blockhash =
+                    Some("00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173".into());
+                share_block.header.uncles =
+                    vec!["00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172".into()];
                 share_block
             });
 

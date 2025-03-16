@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::shares::miner_message::{CkPoolMessage, MinerShare, MinerWorkbase, UserWorkbase};
-use crate::shares::{ShareBlock, ShareHeader};
+use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader};
 use bitcoin::BlockHash;
 use bitcoin::Transaction;
 #[cfg(test)]
@@ -131,10 +131,11 @@ pub fn load_valid_workbases_userworkbases_and_shares(
 }
 
 #[cfg(test)]
+#[derive(Debug, Clone)]
 pub struct TestBlockBuilder {
     blockhash: Option<String>,
     prev_share_blockhash: Option<String>,
-    uncles: Vec<BlockHash>,
+    uncles: Vec<ShareBlockHash>,
     miner_pubkey: Option<String>,
     workinfoid: Option<u64>,
     clientid: Option<u64>,
@@ -164,12 +165,12 @@ impl TestBlockBuilder {
         self
     }
 
-    pub fn prev_share_blockhash(mut self, prev_share_blockhash: &str) -> Self {
+    pub fn prev_share_blockhash(mut self, prev_share_blockhash: ShareBlockHash) -> Self {
         self.prev_share_blockhash = Some(prev_share_blockhash.to_string());
         self
     }
 
-    pub fn uncles(mut self, uncles: Vec<BlockHash>) -> Self {
+    pub fn uncles(mut self, uncles: Vec<ShareBlockHash>) -> Self {
         self.uncles = uncles;
         self
     }
@@ -223,7 +224,7 @@ impl TestBlockBuilder {
 fn test_share_block(
     blockhash: Option<&str>,
     prev_share_blockhash: Option<&str>,
-    uncles: Vec<BlockHash>,
+    uncles: Vec<ShareBlockHash>,
     miner_pubkey: Option<&str>,
     workinfoid: Option<u64>,
     clientid: Option<u64>,
@@ -234,7 +235,7 @@ fn test_share_block(
     use crate::shares::ShareBlockBuilder;
 
     let prev_share_blockhash = match prev_share_blockhash {
-        Some(prev_share_blockhash) => Some(prev_share_blockhash.parse().unwrap()),
+        Some(prev_share_blockhash) => Some(prev_share_blockhash.into()),
         None => None,
     };
     let miner_pubkey = match miner_pubkey {

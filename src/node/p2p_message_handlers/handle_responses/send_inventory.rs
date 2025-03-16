@@ -42,8 +42,6 @@ pub async fn send_blocks_inventory<C: 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::BlockHash;
-    use std::str::FromStr;
 
     #[tokio::test]
     async fn test_send_blocks_inventory() {
@@ -53,10 +51,8 @@ mod tests {
 
         // Mock block hashes that will be returned by build_locator
         let expected_hashes = vec![
-            BlockHash::from_str("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap(),
-            BlockHash::from_str("0000000000000000000000000000000000000000000000000000000000000002")
-                .unwrap(),
+            "0000000000000000000000000000000000000000000000000000000000000001".into(),
+            "0000000000000000000000000000000000000000000000000000000000000002".into(),
         ];
 
         let cloned_expected_hashes = expected_hashes.clone();

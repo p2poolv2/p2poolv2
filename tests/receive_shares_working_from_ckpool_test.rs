@@ -145,21 +145,34 @@ mod zmq_tests {
             // Small delay between messages to avoid overwhelming the system
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
-        // Create share block hashes for testing
-        let share1_hash = "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
-            .parse()
-            .unwrap();
-        let share2_hash = "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173"
-            .parse()
-            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // load shares from the chain to verify the node received and processed the data
+        let shares = chain_handle.get_shares_at_height(0).await;
+        let share_0 = shares.values().next().unwrap();
+        let shares = chain_handle.get_shares_at_height(1).await;
+        let share_1 = shares.values().next().unwrap();
 
         // Verify the node received and processed the data
-        assert!(chain_handle.get_share(share1_hash).await.is_some());
-        assert!(chain_handle.get_share(share2_hash).await.is_some());
+        assert!(chain_handle
+            .get_share(share_0.cached_blockhash.unwrap())
+            .await
+            .is_some());
+        assert!(chain_handle
+            .get_share(share_1.cached_blockhash.unwrap())
+            .await
+            .is_some());
 
-        assert_eq!(chain_handle.get_chain_tip().await, Some(share2_hash));
-        let share_at_tip = chain_handle.get_share(share2_hash).await.unwrap();
-        assert_eq!(share_at_tip.header.prev_share_blockhash, Some(share1_hash));
+        assert_eq!(chain_handle.get_chain_tip().await, share_1.cached_blockhash);
+        let share_at_tip = chain_handle
+            .get_share(share_1.cached_blockhash.unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            share_at_tip.header.prev_share_blockhash,
+            Some(share_0.cached_blockhash.unwrap())
+        );
 
         let workbase = chain_handle.get_workbase(7460801854683742211).await;
         assert!(workbase.is_none());
@@ -222,13 +235,12 @@ mod zmq_tests {
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
 
+        let mined_shares = chain_handle.get_shares_at_height(0).await;
+        let mined_share = mined_shares.values().next().unwrap();
+
         // Verify the node received and processed the data
         assert!(chain_handle
-            .get_share(
-                "00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172"
-                    .parse()
-                    .unwrap()
-            )
+            .get_share(mined_share.cached_blockhash.unwrap())
             .await
             .is_some());
 

@@ -137,6 +137,7 @@ mod tests {
     use super::*;
     #[mockall_double::double]
     use crate::shares::chain::actor::ChainHandle;
+    use crate::shares::ShareBlockHash;
     use crate::test_utils::simple_miner_workbase;
     use crate::test_utils::{load_valid_workbases_userworkbases_and_shares, TestBlockBuilder};
     use crate::utils::time_provider::TestTimeProvider;
@@ -320,14 +321,10 @@ mod tests {
         let response_channel = 1u32;
         let mut chain_handle = ChainHandle::default();
 
-        let block_hashes = vec![
-            "0000000000000000000000000000000000000000000000000000000000000001"
-                .parse::<bitcoin::BlockHash>()
-                .unwrap(),
-        ];
-        let stop_block_hash = "0000000000000000000000000000000000000000000000000000000000000002"
-            .parse::<bitcoin::BlockHash>()
-            .unwrap();
+        let block_hashes =
+            vec!["0000000000000000000000000000000000000000000000000000000000000001".into()];
+        let stop_block_hash =
+            "0000000000000000000000000000000000000000000000000000000000000002".into();
 
         // Mock the response headers
         let block1 = TestBlockBuilder::new()
@@ -375,18 +372,8 @@ mod tests {
         let (response_channel, _response_channel_rx) = oneshot::channel::<Message>();
         let mut chain_handle = ChainHandle::default();
 
-        let block_hashes = vec![
-            "0000000000000000000000000000000000000000000000000000000000000001"
-                .parse::<bitcoin::BlockHash>()
-                .unwrap(),
-            "0000000000000000000000000000000000000000000000000000000000000002"
-                .parse::<bitcoin::BlockHash>()
-                .unwrap(),
-        ];
-
-        let stop_block_hash = "0000000000000000000000000000000000000000000000000000000000000002"
-            .parse::<bitcoin::BlockHash>()
-            .unwrap();
+        let stop_block_hash =
+            "0000000000000000000000000000000000000000000000000000000000000002".into();
 
         // Create test blocks that will be returned
         let block1 = TestBlockBuilder::new()
@@ -396,10 +383,20 @@ mod tests {
             .blockhash("0000000000000000000000000000000000000000000000000000000000000002")
             .build();
 
+        let block_hashes: Vec<ShareBlockHash> = vec![
+            block1.cached_blockhash.unwrap(),
+            block2.cached_blockhash.unwrap(),
+        ];
+
         // Set up mock expectations
         chain_handle
-            .expect_get_headers_for_locator()
-            .returning(move |_, _, _| vec![block1.header.clone(), block2.header.clone()]);
+            .expect_get_blockhashes_for_locator()
+            .returning(move |_, _, _| {
+                vec![
+                    block1.cached_blockhash.unwrap(),
+                    block2.cached_blockhash.unwrap(),
+                ]
+            });
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
