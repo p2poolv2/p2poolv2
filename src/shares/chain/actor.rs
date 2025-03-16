@@ -15,15 +15,12 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::chain::Chain;
+use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::store::Store;
-use crate::shares::{
-    miner_message::{MinerWorkbase, UserWorkbase},
-    BlockHash,
-};
-use crate::shares::{ShareBlock, ShareHeader};
+use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error};
@@ -39,20 +36,22 @@ pub enum ChainMessage {
     StoreUserWorkbase(UserWorkbase),
     GetWorkbase(u64),
     GetUserWorkbase(u64),
-    GetShare(BlockHash),
-    GetShareHeaders(Vec<BlockHash>),
+    GetShare(ShareBlockHash),
+    GetSharesAtHeight(u32),
+    GetShareHeaders(Vec<ShareBlockHash>),
     GetTotalDifficulty,
     GetChainTip,
     GetChainTipAndUncles,
-    GetDepth(BlockHash),
-    GetHeadersForLocator(Vec<BlockHash>, BlockHash, usize),
+    GetDepth(ShareBlockHash),
+    GetHeadersForLocator(Vec<ShareBlockHash>, ShareBlockHash, usize),
+    GetBlockhashesForLocator(Vec<ShareBlockHash>, ShareBlockHash, usize),
     BuildLocator,
 }
 
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum ChainResponse {
-    Tips(HashSet<BlockHash>),
+    Tips(HashSet<ShareBlockHash>),
     TotalDifficulty(Decimal),
     ReorgResult(Result<(), Box<dyn Error + Send + Sync>>),
     IsConfirmedResult(bool),
@@ -62,12 +61,14 @@ pub enum ChainResponse {
     GetWorkbaseResult(Option<MinerWorkbase>),
     GetUserWorkbaseResult(Option<UserWorkbase>),
     GetShareResult(Option<ShareBlock>),
+    GetSharesAtHeightResult(HashMap<ShareBlockHash, ShareBlock>),
     GetShareHeadersResult(Vec<ShareHeader>),
-    ChainTip(Option<BlockHash>),
-    ChainTipAndUncles(Option<BlockHash>, HashSet<BlockHash>),
+    ChainTip(Option<ShareBlockHash>),
+    ChainTipAndUncles(Option<ShareBlockHash>, HashSet<ShareBlockHash>),
     Depth(Option<usize>),
     GetHeadersForLocatorResult(Vec<ShareHeader>),
-    BuildLocatorResult(Vec<BlockHash>),
+    BuildLocatorResult(Vec<ShareBlockHash>),
+    GetBlockhashesForLocatorResult(Vec<ShareBlockHash>),
 }
 
 pub struct ChainActor {
@@ -149,6 +150,15 @@ impl ChainActor {
                         error!("Failed to send get_share response: {}", e);
                     }
                 }
+                ChainMessage::GetSharesAtHeight(height) => {
+                    let result = self.chain.get_shares_at_height(height);
+                    if let Err(e) = response_sender
+                        .send(ChainResponse::GetSharesAtHeightResult(result))
+                        .await
+                    {
+                        error!("Failed to send get_share_at_height response: {}", e);
+                    }
+                }
                 ChainMessage::GetShareHeaders(share_hashes) => {
                     let result = self.chain.get_share_headers(&share_hashes);
                     if let Err(e) = response_sender
@@ -217,6 +227,23 @@ impl ChainActor {
                         error!("Failed to send get_blocks_for_locator response: {}", e);
                     }
                 }
+                ChainMessage::GetBlockhashesForLocator(
+                    locator,
+                    stop_block_hash,
+                    max_blockhashes,
+                ) => {
+                    let result = self.chain.get_blockhashes_for_locator(
+                        &locator,
+                        &stop_block_hash,
+                        max_blockhashes,
+                    );
+                    if let Err(e) = response_sender
+                        .send(ChainResponse::GetBlockhashesForLocatorResult(result))
+                        .await
+                    {
+                        error!("Failed to send get_blockhashes_for_locator response: {}", e);
+                    }
+                }
                 ChainMessage::BuildLocator => {
                     let result = self.chain.build_locator();
                     let result = match result {
@@ -254,7 +281,7 @@ impl ChainHandle {
         Self { sender }
     }
 
-    pub async fn get_tips(&self) -> HashSet<BlockHash> {
+    pub async fn get_tips(&self) -> HashSet<ShareBlockHash> {
         let (response_sender, mut response_receiver) = mpsc::channel(1);
         if let Err(e) = self
             .sender
@@ -335,7 +362,7 @@ impl ChainHandle {
         }
     }
 
-    pub async fn get_share(&self, share_hash: BlockHash) -> Option<ShareBlock> {
+    pub async fn get_share(&self, share_hash: ShareBlockHash) -> Option<ShareBlock> {
         let (response_sender, mut response_receiver) = mpsc::channel(1);
         if let Err(e) = self
             .sender
@@ -351,7 +378,24 @@ impl ChainHandle {
         }
     }
 
-    pub async fn get_share_headers(&self, share_hashes: Vec<BlockHash>) -> Vec<ShareHeader> {
+    pub async fn get_shares_at_height(&self, height: u32) -> HashMap<ShareBlockHash, ShareBlock> {
+        let (response_sender, mut response_receiver) = mpsc::channel(1);
+        if let Err(e) = self
+            .sender
+            .send((ChainMessage::GetSharesAtHeight(height), response_sender))
+            .await
+        {
+            error!("Failed to send GetSharesAtHeight message: {}", e);
+            return HashMap::new();
+        }
+
+        match response_receiver.recv().await {
+            Some(ChainResponse::GetSharesAtHeightResult(result)) => result,
+            _ => HashMap::new(),
+        }
+    }
+
+    pub async fn get_share_headers(&self, share_hashes: Vec<ShareBlockHash>) -> Vec<ShareHeader> {
         let (response_sender, mut response_receiver) = mpsc::channel(1);
         if let Err(e) = self
             .sender
@@ -448,7 +492,7 @@ impl ChainHandle {
         }
     }
 
-    pub async fn get_chain_tip(&self) -> Option<BlockHash> {
+    pub async fn get_chain_tip(&self) -> Option<ShareBlockHash> {
         let (response_sender, mut response_receiver) = mpsc::channel(1);
         self.sender
             .send((ChainMessage::GetChainTip, response_sender))
@@ -460,7 +504,9 @@ impl ChainHandle {
         }
     }
 
-    pub async fn get_chain_tip_and_uncles(&self) -> (Option<BlockHash>, HashSet<BlockHash>) {
+    pub async fn get_chain_tip_and_uncles(
+        &self,
+    ) -> (Option<ShareBlockHash>, HashSet<ShareBlockHash>) {
         let (response_sender, mut response_receiver) = mpsc::channel(1);
         self.sender
             .send((ChainMessage::GetChainTipAndUncles, response_sender))
@@ -472,7 +518,7 @@ impl ChainHandle {
         }
     }
 
-    pub async fn get_depth(&self, blockhash: BlockHash) -> Option<usize> {
+    pub async fn get_depth(&self, blockhash: ShareBlockHash) -> Option<usize> {
         let (response_sender, mut response_receiver) = mpsc::channel(1);
         self.sender
             .send((ChainMessage::GetDepth(blockhash), response_sender))
@@ -489,15 +535,22 @@ impl ChainHandle {
     /// Shares received from peers should not be modified``.
     pub async fn setup_share_for_chain(&self, mut share_block: ShareBlock) -> ShareBlock {
         let (chain_tip, tips) = self.get_chain_tip_and_uncles().await;
+        tracing::debug!(
+            "Setting up share for share blockhash: {:?} with chain_tip: {:?} and tips: {:?}",
+            share_block.cached_blockhash,
+            chain_tip,
+            tips
+        );
         share_block.header.prev_share_blockhash = chain_tip;
         share_block.header.uncles = tips.into_iter().collect();
+        share_block.compute_blockhash();
         share_block
     }
 
     pub async fn get_headers_for_locator(
         &self,
-        block_hashes: Vec<BlockHash>,
-        stop_block_hash: BlockHash,
+        block_hashes: Vec<ShareBlockHash>,
+        stop_block_hash: ShareBlockHash,
         limit: usize,
     ) -> Vec<ShareHeader> {
         let (response_sender, mut response_receiver) = mpsc::channel(1);
@@ -514,7 +567,27 @@ impl ChainHandle {
         }
     }
 
-    pub async fn build_locator(&self) -> Vec<BlockHash> {
+    pub async fn get_blockhashes_for_locator(
+        &self,
+        locator: Vec<ShareBlockHash>,
+        stop_block_hash: ShareBlockHash,
+        max_blockhashes: usize,
+    ) -> Vec<ShareBlockHash> {
+        let (response_sender, mut response_receiver) = mpsc::channel(1);
+        self.sender
+            .send((
+                ChainMessage::GetBlockhashesForLocator(locator, stop_block_hash, max_blockhashes),
+                response_sender,
+            ))
+            .await
+            .unwrap();
+        match response_receiver.recv().await {
+            Some(ChainResponse::GetBlockhashesForLocatorResult(result)) => result,
+            _ => vec![],
+        }
+    }
+
+    pub async fn build_locator(&self) -> Vec<ShareBlockHash> {
         let (response_sender, mut response_receiver) = mpsc::channel(1);
         self.sender
             .send((ChainMessage::BuildLocator, response_sender))
@@ -534,22 +607,24 @@ use mockall::mock;
 mock! {
     pub ChainHandle {
         pub fn new(store_path: String) -> Self;
-        pub async fn get_tips(&self) -> HashSet<BlockHash>;
+        pub async fn get_tips(&self) -> HashSet<ShareBlockHash>;
         pub async fn reorg(&self, share_block: ShareBlock, total_difficulty_upto_prev_share_blockhash: Decimal) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn is_confirmed(&self, share_block: ShareBlock) -> Result<bool, Box<dyn Error + Send + Sync>>;
         pub async fn add_share(&self, share_block: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn add_workbase(&self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase>;
-        pub async fn get_chain_tip(&self) -> Option<BlockHash>;
-        pub async fn get_chain_tip_and_uncles(&self) -> (Option<BlockHash>, HashSet<BlockHash>);
-        pub async fn get_depth(&self, blockhash: BlockHash) -> Option<usize>;
+        pub async fn get_chain_tip(&self) -> Option<ShareBlockHash>;
+        pub async fn get_chain_tip_and_uncles(&self) -> (Option<ShareBlockHash>, HashSet<ShareBlockHash>);
+        pub async fn get_depth(&self, blockhash: ShareBlockHash) -> Option<usize>;
         pub async fn setup_share_for_chain(&self, share_block: ShareBlock) -> ShareBlock;
         pub async fn store_user_workbase(&self, user_workbase: UserWorkbase) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase>;
-        pub async fn get_share(&self, share_hash: BlockHash) -> Option<ShareBlock>;
-        pub async fn get_share_headers(&self, share_hashes: Vec<BlockHash>) -> Vec<ShareHeader>;
-        pub async fn get_headers_for_locator(&self, block_hashes: Vec<BlockHash>, stop_block_hash: BlockHash, max_headers: usize) -> Vec<ShareHeader>;
-        pub async fn build_locator(&self) -> Vec<BlockHash>;
+        pub async fn get_share(&self, share_hash: ShareBlockHash) -> Option<ShareBlock>;
+        pub async fn get_shares_at_height(&self, height: u32) -> HashMap<ShareBlockHash, ShareBlock>;
+        pub async fn get_share_headers(&self, share_hashes: Vec<ShareBlockHash>) -> Vec<ShareHeader>;
+        pub async fn get_headers_for_locator(&self, block_hashes: Vec<ShareBlockHash>, stop_block_hash: ShareBlockHash, max_headers: usize) -> Vec<ShareHeader>;
+        pub async fn get_blockhashes_for_locator(&self, locator: Vec<ShareBlockHash>, stop_block_hash: ShareBlockHash, max_blockhashes: usize) -> Vec<ShareBlockHash>;
+        pub async fn build_locator(&self) -> Vec<ShareBlockHash>;
     }
 
     impl Clone for ChainHandle {
@@ -587,7 +662,7 @@ mod tests {
         // Get tips should now return the blockhash
         let tips = chain_handle.get_tips().await;
         let mut expected_tips = HashSet::new();
-        expected_tips.insert(share_block.header.miner_share.hash);
+        expected_tips.insert(share_block.cached_blockhash.unwrap());
         assert_eq!(tips, expected_tips);
 
         let total_difficulty = chain_handle.get_total_difficulty().await;
@@ -610,7 +685,7 @@ mod tests {
         // Create another share block with higher difficulty
         let higher_diff_share = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-            .prev_share_blockhash(share_block.header.miner_share.hash.to_string().as_str())
+            .prev_share_blockhash(share_block.cached_blockhash.unwrap())
             .diff(dec!(2.0))
             .sdiff(dec!(2.0))
             .build();
@@ -621,7 +696,7 @@ mod tests {
         // Check if the chain tips are updated
         let tips = chain_handle.get_tips().await;
         let mut expected_tips = HashSet::new();
-        expected_tips.insert(higher_diff_share.header.miner_share.hash);
+        expected_tips.insert(higher_diff_share.cached_blockhash.unwrap());
         assert_eq!(tips, expected_tips);
 
         let total_difficulty = chain_handle.get_total_difficulty().await;
@@ -635,7 +710,7 @@ mod tests {
 
         let share_block = TestBlockBuilder::new()
             .blockhash(random_hex_string(64, 8).as_str())
-            .prev_share_blockhash(random_hex_string(64, 8).as_str())
+            .prev_share_blockhash(random_hex_string(64, 8).as_str().into())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
@@ -705,31 +780,36 @@ mod tests {
 
         // Add first share and verify depth is 0
         chain_handle.add_share(share1.clone()).await.unwrap();
-        let depth = chain_handle.get_depth(share1.header.miner_share.hash).await;
+        let depth = chain_handle
+            .get_depth(share1.cached_blockhash.unwrap())
+            .await;
         assert_eq!(depth, Some(0));
 
         // Create and add second share
         let share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
+            .prev_share_blockhash(share1.cached_blockhash.unwrap())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
         // Add second share and verify depths
         chain_handle.add_share(share2.clone()).await.unwrap();
         assert_eq!(
-            chain_handle.get_depth(share2.header.miner_share.hash).await,
+            chain_handle
+                .get_depth(share2.cached_blockhash.unwrap())
+                .await,
             Some(0)
         );
         assert_eq!(
-            chain_handle.get_depth(share1.header.miner_share.hash).await,
+            chain_handle
+                .get_depth(share1.cached_blockhash.unwrap())
+                .await,
             Some(1)
         );
 
         // Test non-existent hash returns None
-        let non_existent = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
-            .parse()
-            .unwrap();
+        let non_existent =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7".into();
         assert_eq!(chain_handle.get_depth(non_existent).await, None);
     }
 
@@ -747,7 +827,7 @@ mod tests {
         // Create second share
         let share2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-            .prev_share_blockhash(share1.header.miner_share.hash.to_string().as_str())
+            .prev_share_blockhash(share1.cached_blockhash.unwrap())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
@@ -757,8 +837,8 @@ mod tests {
 
         // Get headers for both shares
         let share_hashes = vec![
-            share1.header.miner_share.hash,
-            share2.header.miner_share.hash,
+            share1.cached_blockhash.unwrap(),
+            share2.cached_blockhash.unwrap(),
         ];
         let headers = chain_handle.get_share_headers(share_hashes).await;
 
@@ -768,9 +848,8 @@ mod tests {
         assert_eq!(headers[1], share2.header);
 
         // Test getting headers with non-existent hash
-        let non_existent = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
-            .parse()
-            .unwrap();
+        let non_existent =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7".into();
         let share_hashes = vec![non_existent];
         let headers = chain_handle.get_share_headers(share_hashes).await;
         assert!(headers.is_empty());
@@ -788,16 +867,16 @@ mod tests {
 
         let block2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2")
-            .prev_share_blockhash(block1.header.miner_share.hash.to_string().as_str())
+            .prev_share_blockhash(block1.cached_blockhash.unwrap())
             .build();
 
         let block3 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3")
-            .prev_share_blockhash(block2.header.miner_share.hash.to_string().as_str())
+            .prev_share_blockhash(block2.cached_blockhash.unwrap())
             .build();
 
-        let locator = vec![block1.header.miner_share.hash];
-        let stop_hash = block3.header.miner_share.hash;
+        let locator = vec![block1.cached_blockhash.unwrap()];
+        let stop_hash = block3.cached_blockhash.unwrap();
 
         chain_handle.add_share(block1.clone()).await.unwrap();
         chain_handle.add_share(block2.clone()).await.unwrap();
@@ -824,12 +903,12 @@ mod tests {
 
         let block2 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2")
-            .prev_share_blockhash(block1.header.miner_share.hash.to_string().as_str())
+            .prev_share_blockhash(block1.cached_blockhash.unwrap())
             .build();
 
         let block3 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3")
-            .prev_share_blockhash(block2.header.miner_share.hash.to_string().as_str())
+            .prev_share_blockhash(block2.cached_blockhash.unwrap())
             .build();
 
         // Add blocks to chain
@@ -842,8 +921,8 @@ mod tests {
 
         // Should return blocks in reverse order since locator starts from tip
         assert_eq!(locator.len(), 3);
-        assert_eq!(locator[0], block3.header.miner_share.hash);
-        assert_eq!(locator[1], block2.header.miner_share.hash);
-        assert_eq!(locator[2], block1.header.miner_share.hash);
+        assert_eq!(locator[0], block3.cached_blockhash.unwrap());
+        assert_eq!(locator[1], block2.cached_blockhash.unwrap());
+        assert_eq!(locator[2], block1.cached_blockhash.unwrap());
     }
 }

@@ -138,14 +138,8 @@ mod self_and_peer_messages_tests {
 
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        let peer_share = chain_handle
-            .get_share(
-                "000000000822bbfaf34d53fc43d0c1382054d3aafe31893020c315db8b0a19f9"
-                    .parse()
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let peer_shares = chain_handle.get_shares_at_height(0).await;
+        let peer_share = peer_shares.values().next().unwrap();
 
         // For this test, we forced prev_share_blockhash to be None
         assert!(

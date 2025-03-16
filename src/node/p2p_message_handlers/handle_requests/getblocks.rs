@@ -18,6 +18,7 @@ use crate::node::SwarmSend;
 use crate::node::{InventoryMessage, Message};
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
+use crate::shares::ShareBlockHash;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::info;
@@ -29,21 +30,18 @@ const MAX_BLOCKS: usize = 500;
 /// - limit the number of blocks to MAX_BLOCKS
 /// - generate an inventory message to send blockhashes
 pub async fn handle_getblocks<C: 'static>(
-    locator: Vec<bitcoin::BlockHash>,
-    stop_block_hash: bitcoin::BlockHash,
+    locator: Vec<ShareBlockHash>,
+    stop_block_hash: ShareBlockHash,
     chain_handle: ChainHandle,
     response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error>> {
     info!("Received getblocks: {:?}", locator);
     let response_block_hashes = chain_handle
-        .get_headers_for_locator(locator, stop_block_hash, MAX_BLOCKS)
+        .get_blockhashes_for_locator(locator, stop_block_hash, MAX_BLOCKS)
         .await;
     let inventory_message = Message::Inventory(InventoryMessage::BlockHashes(
-        response_block_hashes
-            .into_iter()
-            .map(|h| h.miner_share.hash)
-            .collect(),
+        response_block_hashes.into_iter().map(|h| h).collect(),
     ));
     swarm_tx
         .send(SwarmSend::Response(response_channel, inventory_message))
@@ -56,7 +54,6 @@ mod tests {
 
     use super::*;
     use crate::test_utils::TestBlockBuilder;
-    use std::str::FromStr;
 
     #[tokio::test]
     async fn test_handle_getblocks() {
@@ -64,14 +61,10 @@ mod tests {
         let (swarm_tx, mut swarm_rx) = mpsc::channel(1);
         let response_channel = 1u32;
 
-        let block_hashes = vec![bitcoin::BlockHash::from_str(
-            "0000000000000000000000000000000000000000000000000000000000000001",
-        )
-        .unwrap()];
-        let stop_block_hash = bitcoin::BlockHash::from_str(
-            "0000000000000000000000000000000000000000000000000000000000000002",
-        )
-        .unwrap();
+        let block_hashes =
+            vec!["0000000000000000000000000000000000000000000000000000000000000001".into()];
+        let stop_block_hash =
+            "0000000000000000000000000000000000000000000000000000000000000002".into();
 
         // Mock response headers
         let block1 = TestBlockBuilder::new()
@@ -81,16 +74,19 @@ mod tests {
         let block2 = TestBlockBuilder::new()
             .blockhash("0000000000000000000000000000000000000000000000000000000000000002")
             .prev_share_blockhash(
-                "0000000000000000000000000000000000000000000000000000000000000001",
+                "0000000000000000000000000000000000000000000000000000000000000001".into(),
             )
             .build();
 
-        let response_headers = vec![block1.header.clone(), block2.header.clone()];
+        let response_block_hashes = vec![
+            block1.cached_blockhash.unwrap(),
+            block2.cached_blockhash.unwrap(),
+        ];
 
         // Set up mock expectations
         chain_handle
-            .expect_get_headers_for_locator()
-            .returning(move |_, _, _| response_headers.clone());
+            .expect_get_blockhashes_for_locator()
+            .returning(move |_, _, _| response_block_hashes.clone());
 
         // Call the handler
         handle_getblocks(
@@ -111,8 +107,8 @@ mod tests {
         {
             assert_eq!(channel, response_channel);
             assert_eq!(hashes.len(), 2);
-            assert_eq!(hashes[0], block1.header.miner_share.hash);
-            assert_eq!(hashes[1], block2.header.miner_share.hash);
+            assert_eq!(hashes[0], block1.cached_blockhash.unwrap());
+            assert_eq!(hashes[1], block2.cached_blockhash.unwrap());
         } else {
             panic!("Expected SwarmSend::Response with Inventory message");
         }

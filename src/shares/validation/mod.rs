@@ -142,7 +142,7 @@ pub async fn validate_timestamp(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shares::{BlockHash, PublicKey};
+    use crate::shares::{PublicKey, ShareBlockHash};
     use crate::test_utils::load_valid_workbases_userworkbases_and_shares;
     use crate::test_utils::simple_miner_share;
     use crate::test_utils::TestBlockBuilder;
@@ -227,7 +227,7 @@ mod tests {
         // Create new share pointing to existing share - should validate
         let valid_share = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-            .prev_share_blockhash(initial_share.header.miner_share.hash.to_string().as_str())
+            .prev_share_blockhash(initial_share.cached_blockhash.unwrap())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
@@ -235,9 +235,7 @@ mod tests {
         chain_handle
             .expect_get_share()
             .with(mockall::predicate::eq(
-                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
-                    .parse::<BlockHash>()
-                    .unwrap(),
+                initial_share.cached_blockhash.unwrap(),
             ))
             .returning(move |_| Some(initial_share.clone()));
 
@@ -246,7 +244,8 @@ mod tests {
             .is_ok());
 
         // Create share pointing to non-existent previous hash - should fail validation
-        let non_existent_hash = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7";
+        let non_existent_hash: ShareBlockHash =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7".into();
         let invalid_share = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8")
             .prev_share_blockhash(non_existent_hash)
@@ -254,11 +253,7 @@ mod tests {
             .build();
         chain_handle
             .expect_get_share()
-            .with(mockall::predicate::eq(
-                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
-                    .parse::<BlockHash>()
-                    .unwrap(),
-            ))
+            .with(mockall::predicate::eq(non_existent_hash))
             .returning(move |_| None);
 
         assert!(validate_prev_share_blockhash(&invalid_share, &chain_handle)
@@ -279,11 +274,7 @@ mod tests {
         let uncle1_clone = uncle1.clone();
         chain_handle
             .expect_get_share()
-            .with(mockall::predicate::eq(
-                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb1"
-                    .parse::<BlockHash>()
-                    .unwrap(),
-            ))
+            .with(mockall::predicate::eq(uncle1.cached_blockhash.unwrap()))
             .returning(move |_| Some(uncle1_clone.clone()));
 
         let uncle2 = TestBlockBuilder::new()
@@ -295,11 +286,7 @@ mod tests {
 
         chain_handle
             .expect_get_share()
-            .with(mockall::predicate::eq(
-                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2"
-                    .parse::<BlockHash>()
-                    .unwrap(),
-            ))
+            .with(mockall::predicate::eq(uncle2.cached_blockhash.unwrap()))
             .returning(move |_| Some(uncle2_clone.clone()));
 
         let uncle3 = TestBlockBuilder::new()
@@ -311,11 +298,7 @@ mod tests {
 
         chain_handle
             .expect_get_share()
-            .with(mockall::predicate::eq(
-                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3"
-                    .parse::<BlockHash>()
-                    .unwrap(),
-            ))
+            .with(mockall::predicate::eq(uncle3.cached_blockhash.unwrap()))
             .returning(move |_| Some(uncle3_clone.clone()));
 
         let uncle4 = TestBlockBuilder::new()
@@ -327,20 +310,16 @@ mod tests {
 
         chain_handle
             .expect_get_share()
-            .with(mockall::predicate::eq(
-                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4"
-                    .parse::<BlockHash>()
-                    .unwrap(),
-            ))
+            .with(mockall::predicate::eq(uncle4.cached_blockhash.unwrap()))
             .returning(move |_| Some(uncle4_clone.clone()));
 
         // Test share with valid number of uncles (MAX_UNCLES = 3)
         let valid_share = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
             .uncles(vec![
-                uncle1.header.miner_share.hash,
-                uncle2.header.miner_share.hash,
-                uncle3.header.miner_share.hash,
+                uncle1.cached_blockhash.unwrap(),
+                uncle2.cached_blockhash.unwrap(),
+                uncle3.cached_blockhash.unwrap(),
             ])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
@@ -351,10 +330,10 @@ mod tests {
         let invalid_share = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
             .uncles(vec![
-                uncle1.header.miner_share.hash,
-                uncle2.header.miner_share.hash,
-                uncle3.header.miner_share.hash,
-                uncle4.header.miner_share.hash,
+                uncle1.cached_blockhash.unwrap(),
+                uncle2.cached_blockhash.unwrap(),
+                uncle3.cached_blockhash.unwrap(),
+                uncle4.cached_blockhash.unwrap(),
             ])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
@@ -364,9 +343,8 @@ mod tests {
             .is_err());
 
         // Test share with non-existent uncle
-        let non_existent_hash = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
-            .parse()
-            .unwrap();
+        let non_existent_hash: ShareBlockHash =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7".into();
 
         chain_handle
             .expect_get_share()
@@ -375,7 +353,7 @@ mod tests {
 
         let invalid_share = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8")
-            .uncles(vec![uncle1.header.miner_share.hash, non_existent_hash])
+            .uncles(vec![uncle1.cached_blockhash.unwrap(), non_existent_hash])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 

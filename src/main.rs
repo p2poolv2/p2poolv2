@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap();
     let genesis = ShareBlock::build_genesis_for_network(public_key, config.bitcoin.network);
     if chain_handle
-        .get_share(genesis.header.miner_share.hash)
+        .get_share(genesis.cached_blockhash.unwrap())
         .await
         .is_none()
     {

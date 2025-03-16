@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
-use crate::shares::{ShareBlock, ShareHeader};
+use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader};
 use bitcoin::{BlockHash, Txid};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -27,8 +27,8 @@ use std::error::Error;
 pub enum Message {
     Inventory(InventoryMessage),
     NotFound(()),
-    GetShareHeaders(Vec<BlockHash>, BlockHash),
-    GetShareBlocks(Vec<BlockHash>, BlockHash),
+    GetShareHeaders(Vec<ShareBlockHash>, ShareBlockHash),
+    GetShareBlocks(Vec<ShareBlockHash>, ShareBlockHash),
     ShareHeaders(Vec<ShareHeader>),
     ShareBlock(ShareBlock),
     GetData(GetData),
@@ -61,7 +61,7 @@ impl Message {
 /// The message can be used to tell the peer about share headers, blocks, or transactions that this peer has.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum InventoryMessage {
-    BlockHashes(Vec<BlockHash>),
+    BlockHashes(Vec<ShareBlockHash>),
     TransactionHashes(Vec<Txid>),
 }
 
@@ -80,20 +80,11 @@ mod tests {
     #[test]
     fn test_inventory_message_serde() {
         let mut have_shares = Vec::new();
-        have_shares.push(
-            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
-                .unwrap(),
-        );
-        have_shares.push(
-            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-                .unwrap(),
-        );
-        have_shares.push(
-            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
-                .unwrap(),
-        );
+        have_shares.push("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".into());
+        have_shares.push("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6".into());
+        have_shares.push("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7".into());
 
-        let msg = Message::Inventory(InventoryMessage::BlockHashes(have_shares));
+        let msg = Message::Inventory(InventoryMessage::BlockHashes(have_shares.clone()));
 
         // Test serialization
         let serialized = msg.cbor_serialize().unwrap();
@@ -101,31 +92,16 @@ mod tests {
         // Test deserialization
         let deserialized = Message::cbor_deserialize(&serialized).unwrap();
 
-        let deserialized = match deserialized {
+        let deserialized: Vec<ShareBlockHash> = match deserialized {
             Message::Inventory(InventoryMessage::BlockHashes(have_shares)) => have_shares,
             _ => panic!("Expected Inventory variant"),
         };
 
         // Verify the deserialized message matches original
         assert_eq!(deserialized.len(), 3);
-        assert!(deserialized.contains(
-            &BlockHash::from_str(
-                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
-            )
-            .unwrap()
-        ));
-        assert!(deserialized.contains(
-            &BlockHash::from_str(
-                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
-            )
-            .unwrap()
-        ));
-        assert!(deserialized.contains(
-            &BlockHash::from_str(
-                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
-            )
-            .unwrap()
-        ));
+        assert!(deserialized.contains(&have_shares[0]));
+        assert!(deserialized.contains(&have_shares[1]));
+        assert!(deserialized.contains(&have_shares[2]));
     }
 
     #[test]

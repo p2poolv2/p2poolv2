@@ -18,6 +18,7 @@ use crate::node::Message;
 use crate::node::SwarmSend;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
+use crate::shares::ShareBlockHash;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::info;
@@ -29,8 +30,8 @@ const MAX_HEADERS: usize = 2000;
 /// - limit the number of blocks to MAX_HEADERS
 /// - respond with send all headers found
 pub async fn handle_getheaders<C: 'static>(
-    block_hashes: Vec<bitcoin::BlockHash>,
-    stop_block_hash: bitcoin::BlockHash,
+    block_hashes: Vec<ShareBlockHash>,
+    stop_block_hash: ShareBlockHash,
     chain_handle: ChainHandle,
     response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
@@ -51,8 +52,6 @@ mod tests {
     use crate::test_utils::TestBlockBuilder;
 
     use super::*;
-    use bitcoin::BlockHash;
-    use std::str::FromStr;
     use tokio::sync::mpsc;
 
     #[tokio::test]
@@ -62,10 +61,8 @@ mod tests {
         let response_channel = 1u32;
 
         let block_hashes = vec![
-            BlockHash::from_str("0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap(),
-            BlockHash::from_str("0000000000000000000000000000000000000000000000000000000000000002")
-                .unwrap(),
+            "0000000000000000000000000000000000000000000000000000000000000001".into(),
+            "0000000000000000000000000000000000000000000000000000000000000002".into(),
         ];
 
         let block1 = TestBlockBuilder::new()
@@ -79,8 +76,7 @@ mod tests {
         let response_headers = vec![block1.header.clone(), block2.header.clone()];
 
         let stop_block_hash =
-            BlockHash::from_str("0000000000000000000000000000000000000000000000000000000000000002")
-                .unwrap();
+            "0000000000000000000000000000000000000000000000000000000000000002".into();
 
         // Set up mock expectations
         chain_handle

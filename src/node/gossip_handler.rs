@@ -261,7 +261,7 @@ mod tests {
 
         let share_block = TestBlockBuilder::new()
             .blockhash("00".repeat(32).as_str())
-            .prev_share_blockhash("00".repeat(32).as_str())
+            .prev_share_blockhash("00".repeat(32).as_str().into())
             .build();
 
         let result = handle_gossip_message(Message::MiningShare(share_block), mock_chain).await;
