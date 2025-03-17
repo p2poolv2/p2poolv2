@@ -188,8 +188,15 @@ impl Node {
             SwarmEvent::ConnectionEstablished {
                 peer_id, endpoint, ..
             } => {
-                info!("Connected to peer: {peer_id} {endpoint:?}");
-                self.handle_connection_established(peer_id).await;
+                match endpoint {
+                    libp2p::core::ConnectedPoint::Dialer { .. } => {
+                        info!("Outbound connection established to peer: {peer_id}");
+                    }
+                    libp2p::core::ConnectedPoint::Listener { .. } => {
+                        self.handle_inbound_connection_established(peer_id).await;
+                        info!("Inbound connection established from peer: {peer_id}");
+                    }
+                }
                 Ok(())
             }
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
@@ -317,9 +324,9 @@ impl Node {
         }
     }
 
-    /// Handle connection established events, these are events that are generated when a connection is established
-    async fn handle_connection_established(&mut self, peer_id: libp2p::PeerId) {
-        info!("Connection established with peer: {peer_id}");
+    /// Handle inbound connection established events, these are events that are generated when a connection is established
+    async fn handle_inbound_connection_established(&mut self, peer_id: libp2p::PeerId) {
+        info!("Inbound Connection established with peer: {peer_id}");
         let _ = send_blocks_inventory::<ResponseChannel<Message>>(
             peer_id,
             self.chain_handle.clone(),
