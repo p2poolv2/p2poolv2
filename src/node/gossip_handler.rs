@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::node::p2p_message_handlers::handle_responses::receive_share_blocks::handle_share_block;
+use crate::node::p2p_message_handlers::receivers::share_blocks::handle_share_block;
 use crate::node::Message;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;

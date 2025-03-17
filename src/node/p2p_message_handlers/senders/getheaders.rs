@@ -14,29 +14,28 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::node::messages::InventoryMessage;
+use crate::node::Message;
 use crate::node::SwarmSend;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
+use crate::shares::ShareBlockHash;
+use libp2p::request_response::ResponseChannel;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::info;
 
-/// Handle Inventory message request from a peer.
-/// inv is sent unsolicited, or in response to getblocks message,
-/// therefore we include this message in the handle_requests module.
-///
-/// We wrap all inventory update messages in the same message type
-/// - Depending on the type of the inventory, we query the database for the relevant data
-/// - Send the data to the peer via the swarm_tx channel
-/// - We send one message for each found object. See block and tx messages.
-/// Note: At the moment, we only support sending blockhashes as inventory.
-pub async fn handle_inventory<C>(
-    inventory: Vec<InventoryMessage>,
+/// Handle outbound connection established events
+/// Send a getheaders request to the peer
+pub async fn send_getheaders(
+    peer_id: libp2p::PeerId,
     chain_handle: ChainHandle,
-    swarm_tx: mpsc::Sender<SwarmSend<C>>,
-    response_channel: C,
+    swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
 ) -> Result<(), Box<dyn Error>> {
-    info!("Received inventory update: {:?}", inventory);
+    let locator = chain_handle.build_locator().await;
+    let stop_block_hash: ShareBlockHash =
+        "0000000000000000000000000000000000000000000000000000000000000000".into();
+    let getheaders_request = Message::GetShareHeaders(locator.clone(), stop_block_hash);
+    swarm_tx
+        .send(SwarmSend::Request(peer_id, getheaders_request))
+        .await?;
     Ok(())
 }
