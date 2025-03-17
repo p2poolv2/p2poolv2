@@ -283,6 +283,7 @@ mod tests {
     use crate::test_utils::TestBlockBuilder;
     use bitcoin::absolute::Time;
     use rust_decimal_macros::dec;
+    use std::collections::HashSet;
 
     #[test]
     fn test_build_genesis_share_header() {
@@ -462,5 +463,80 @@ mod tests {
         let recovered_share =
             storage_share.into_share_block_with_transactions(share.transactions.clone());
         assert_eq!(recovered_share, share);
+    }
+
+    #[test]
+    fn test_share_block_hash_partial_eq() {
+        // Create two identical ShareBlockHash instances
+        let hash1: ShareBlockHash =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".into();
+        let hash2: ShareBlockHash =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".into();
+        let hash3: ShareBlockHash =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4".into();
+
+        // Test ShareBlockHash == ShareBlockHash
+        assert_eq!(hash1, hash2);
+        assert_ne!(hash1, hash3);
+
+        // Test &ShareBlockHash == ShareBlockHash
+        assert_eq!(&hash1, hash2);
+        assert_ne!(&hash1, hash3);
+
+        // Test ShareBlockHash == &str
+        assert_eq!(
+            hash1,
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+        );
+        assert_ne!(
+            hash1,
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4"
+        );
+
+        // Test &str == ShareBlockHash
+        assert_eq!(
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5",
+            hash1
+        );
+        assert_ne!(
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
+            hash1
+        );
+    }
+
+    #[test]
+    fn test_share_block_hash_in_collections() {
+        // Create ShareBlockHash instances
+        let hash1: ShareBlockHash =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".into();
+        let hash2: ShareBlockHash =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4".into();
+        let hash3: ShareBlockHash =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".into();
+
+        // Test using ShareBlockHash in a HashSet
+        let mut hash_set = HashSet::new();
+        hash_set.insert(hash1);
+        hash_set.insert(hash2);
+
+        // Should not increase size since hash1 and hash3 are equal
+        hash_set.insert(hash3);
+
+        assert_eq!(hash_set.len(), 2);
+        assert!(hash_set.contains(&hash1));
+        assert!(hash_set.contains(&hash3)); // hash3 is equal to hash1
+        assert!(hash_set.contains(&hash2));
+    }
+
+    #[test]
+    fn test_share_block_hash_display() {
+        let hash: ShareBlockHash =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".into();
+
+        // Test Display implementation
+        assert_eq!(
+            format!("{}", hash),
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+        );
     }
 }
