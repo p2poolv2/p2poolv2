@@ -14,8 +14,9 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::node::messages::InventoryMessage;
+use crate::node::Message;
 use crate::node::SwarmSend;
-use crate::node::{InventoryMessage, Message};
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::ShareBlockHash;

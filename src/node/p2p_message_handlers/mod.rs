@@ -14,14 +14,18 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod handle_requests;
-pub mod handle_responses;
+pub mod receivers;
+pub mod senders;
 
 use crate::node::messages::{GetData, InventoryMessage, Message};
 use crate::node::SwarmSend;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use crate::utils::time_provider::TimeProvider;
+use receivers::getblocks::handle_getblocks;
+use receivers::getheaders::handle_getheaders;
+use receivers::share_blocks::handle_share_block;
+use receivers::share_headers::handle_share_headers;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{error, info};
@@ -37,7 +41,7 @@ pub async fn handle_request<C: 'static>(
     info!("Handling request from peer: {}", peer);
     match request {
         Message::GetShareHeaders(block_hashes, stop_block_hash) => {
-            handle_requests::handle_getheaders(
+            handle_getheaders(
                 block_hashes,
                 stop_block_hash,
                 chain_handle,
@@ -47,7 +51,7 @@ pub async fn handle_request<C: 'static>(
             .await
         }
         Message::GetShareBlocks(block_hashes, stop_block_hash) => {
-            handle_requests::handle_getblocks(
+            handle_getblocks(
                 block_hashes,
                 stop_block_hash,
                 chain_handle,
@@ -57,15 +61,10 @@ pub async fn handle_request<C: 'static>(
             .await
         }
         Message::ShareHeaders(share_headers) => {
-            handle_responses::handle_share_headers(share_headers, chain_handle, time_provider).await
+            handle_share_headers(share_headers, chain_handle, time_provider).await
         }
         Message::ShareBlock(share_block) => {
-            handle_responses::handle_share_block::<void::Void>(
-                share_block,
-                chain_handle,
-                time_provider,
-            )
-            .await
+            handle_share_block::<void::Void>(share_block, chain_handle, time_provider).await
         }
         Message::Workbase(workbase) => {
             info!("Received workbase: {:?}", workbase);

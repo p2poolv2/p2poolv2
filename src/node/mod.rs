@@ -22,8 +22,8 @@ pub mod gossip_handler;
 pub mod messages;
 pub mod p2p_message_handlers;
 
-use crate::node::messages::{InventoryMessage, Message};
-use crate::node::p2p_message_handlers::handle_responses::send_inventory::send_blocks_inventory;
+use crate::node::messages::Message;
+use crate::node::p2p_message_handlers::senders::send_getheaders;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::receive_mining_message::start_receiving_mining_messages;
@@ -190,10 +190,22 @@ impl Node {
             } => {
                 match endpoint {
                     libp2p::core::ConnectedPoint::Dialer { .. } => {
-                        info!("Outbound connection established to peer: {peer_id}");
+                        if let Err(e) = send_getheaders(
+                            peer_id,
+                            self.chain_handle.clone(),
+                            self.swarm_tx.clone(),
+                        )
+                        .await
+                        {
+                            error!(
+                                "Failed to handle outbound connection to peer {}: {}",
+                                peer_id, e
+                            );
+                        } else {
+                            info!("Outbound connection established to peer: {}", peer_id);
+                        }
                     }
                     libp2p::core::ConnectedPoint::Listener { .. } => {
-                        self.handle_inbound_connection_established(peer_id).await;
                         info!("Inbound connection established from peer: {peer_id}");
                     }
                 }
@@ -322,16 +334,5 @@ impl Node {
             },
             _ => debug!("Other Kademlia event: {:?}", event),
         }
-    }
-
-    /// Handle inbound connection established events, these are events that are generated when a connection is established
-    async fn handle_inbound_connection_established(&mut self, peer_id: libp2p::PeerId) {
-        info!("Inbound Connection established with peer: {peer_id}");
-        let _ = send_blocks_inventory::<ResponseChannel<Message>>(
-            peer_id,
-            self.chain_handle.clone(),
-            self.swarm_tx.clone(),
-        )
-        .await;
     }
 }
