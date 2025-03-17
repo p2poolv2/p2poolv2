@@ -925,4 +925,41 @@ mod tests {
         assert_eq!(locator[1], block2.cached_blockhash.unwrap());
         assert_eq!(locator[2], block1.cached_blockhash.unwrap());
     }
+
+    // add test for get_blockhashes_for_locator
+    #[tokio::test]
+    async fn test_get_blockhashes_for_locator() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // Create test blocks
+        let block1 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb1")
+            .build();
+
+        let block2 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2")
+            .prev_share_blockhash(block1.cached_blockhash.unwrap())
+            .build();
+
+        let block3 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3")
+            .prev_share_blockhash(block2.cached_blockhash.unwrap())
+            .build();
+
+        let locator = vec![block1.cached_blockhash.unwrap()];
+        let stop_hash = block3.cached_blockhash.unwrap();
+
+        chain_handle.add_share(block1.clone()).await.unwrap();
+        chain_handle.add_share(block2.clone()).await.unwrap();
+        chain_handle.add_share(block3.clone()).await.unwrap();
+
+        // Call the function and verify results
+        let blockhashes = chain_handle
+            .get_blockhashes_for_locator(locator, stop_hash, 2000)
+            .await;
+        assert_eq!(blockhashes.len(), 2);
+        assert_eq!(blockhashes[0], block2.cached_blockhash.unwrap());
+        assert_eq!(blockhashes[1], block3.cached_blockhash.unwrap());
+    }
 }
