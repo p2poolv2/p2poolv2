@@ -205,57 +205,39 @@ impl TestBlockBuilder {
     }
 
     pub fn build(mut self) -> ShareBlock {
-        test_share_block(
-            self.blockhash.as_deref(),
-            self.prev_share_blockhash.as_deref(),
-            self.uncles,
-            self.miner_pubkey.as_deref(),
-            self.workinfoid,
-            self.clientid,
-            self.diff,
-            self.sdiff,
-            &mut self.transactions,
-        )
-    }
-}
+        let prev_share_blockhash = match self.prev_share_blockhash {
+            Some(prev_share_blockhash) => Some(prev_share_blockhash.parse().unwrap()),
+            None => None,
+        };
+        let miner_pubkey = match self.miner_pubkey {
+            Some(miner_pubkey) => miner_pubkey.parse().unwrap(),
+            None => "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
+        };
+        let mut transactions = vec![test_coinbase_transaction()];
+        transactions.append(&mut self.transactions);
 
-#[cfg(test)]
-fn test_share_block(
-    blockhash: Option<&str>,
-    prev_share_blockhash: Option<&str>,
-    uncles: Vec<BlockHash>,
-    miner_pubkey: Option<&str>,
-    workinfoid: Option<u64>,
-    clientid: Option<u64>,
-    diff: Option<Decimal>,
-    sdiff: Option<Decimal>,
-    include_transactions: &mut Vec<Transaction>,
-) -> ShareBlock {
-    let prev_share_blockhash = match prev_share_blockhash {
-        Some(prev_share_blockhash) => Some(prev_share_blockhash.parse().unwrap()),
-        None => None,
-    };
-    let miner_pubkey = match miner_pubkey {
-        Some(miner_pubkey) => miner_pubkey.parse().unwrap(),
-        None => "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse()
-            .unwrap(),
-    };
-    let mut transactions = vec![test_coinbase_transaction()];
-    transactions.append(include_transactions);
-    ShareBlock {
-        header: ShareHeader {
-            miner_share: simple_miner_share(blockhash, workinfoid, clientid, diff, sdiff),
-            prev_share_blockhash,
-            uncles,
-            miner_pubkey,
-            merkle_root: bitcoin::merkle_tree::calculate_root(
-                transactions.iter().map(Transaction::compute_txid),
-            )
-            .unwrap()
-            .into(),
-        },
-        transactions,
+        ShareBlock {
+            header: ShareHeader {
+                miner_share: simple_miner_share(
+                    self.blockhash.as_deref(),
+                    self.workinfoid,
+                    self.clientid,
+                    self.diff,
+                    self.sdiff,
+                ),
+                prev_share_blockhash,
+                uncles: self.uncles,
+                miner_pubkey,
+                merkle_root: bitcoin::merkle_tree::calculate_root(
+                    transactions.iter().map(Transaction::compute_txid),
+                )
+                .unwrap()
+                .into(),
+            },
+            transactions,
+        }
     }
 }
 
