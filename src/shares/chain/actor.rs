@@ -35,7 +35,9 @@ pub enum ChainMessage {
     StoreWorkbase(MinerWorkbase),
     StoreUserWorkbase(UserWorkbase),
     GetWorkbase(u64),
+    GetWorkbases(Vec<u64>),
     GetUserWorkbase(u64),
+    GetUserWorkbases(Vec<u64>),
     GetShare(ShareBlockHash),
     GetSharesAtHeight(u32),
     GetShareHeaders(Vec<ShareBlockHash>),
@@ -59,7 +61,9 @@ pub enum ChainResponse {
     StoreWorkbaseResult(Result<(), Box<dyn Error + Send + Sync>>),
     StoreUserWorkbaseResult(Result<(), Box<dyn Error + Send + Sync>>),
     GetWorkbaseResult(Option<MinerWorkbase>),
+    GetWorkbasesResult(Vec<MinerWorkbase>),
     GetUserWorkbaseResult(Option<UserWorkbase>),
+    GetUserWorkbasesResult(Vec<UserWorkbase>),
     GetShareResult(Option<ShareBlock>),
     GetSharesAtHeightResult(HashMap<ShareBlockHash, ShareBlock>),
     GetShareHeadersResult(Vec<ShareHeader>),
@@ -141,6 +145,15 @@ impl ChainActor {
                         error!("Failed to send get_workbase response: {}", e);
                     }
                 }
+                ChainMessage::GetWorkbases(workinfoids) => {
+                    let result = self.chain.get_workbases(&workinfoids);
+                    if let Err(e) = response_sender
+                        .send(ChainResponse::GetWorkbasesResult(result))
+                        .await
+                    {
+                        error!("Failed to send get_workbases response: {}", e);
+                    }
+                }
                 ChainMessage::GetShare(share_hash) => {
                     let result: Option<ShareBlock> = self.chain.get_share(&share_hash);
                     if let Err(e) = response_sender
@@ -204,7 +217,7 @@ impl ChainActor {
                         .send(ChainResponse::StoreUserWorkbaseResult(result))
                         .await
                     {
-                        error!("Failed to send store_user_workbase response: {}", e);
+                        error!("Failed to send add_user_workbase response: {}", e);
                     }
                 }
                 ChainMessage::GetUserWorkbase(workinfoid) => {
@@ -214,6 +227,15 @@ impl ChainActor {
                         .await
                     {
                         error!("Failed to send get_user_workbase response: {}", e);
+                    }
+                }
+                ChainMessage::GetUserWorkbases(workinfoids) => {
+                    let result = self.chain.get_user_workbases(&workinfoids);
+                    if let Err(e) = response_sender
+                        .send(ChainResponse::GetUserWorkbasesResult(result))
+                        .await
+                    {
+                        error!("Failed to send get_user_workbases response: {}", e);
                     }
                 }
                 ChainMessage::GetHeadersForLocator(block_hashes, stop_block_hash, limit) => {
@@ -433,7 +455,7 @@ impl ChainHandle {
         }
     }
 
-    pub async fn store_user_workbase(
+    pub async fn add_user_workbase(
         &self,
         user_workbase: UserWorkbase,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -468,6 +490,21 @@ impl ChainHandle {
         }
     }
 
+    pub async fn get_workbases(&self, workinfoids: &[u64]) -> Vec<MinerWorkbase> {
+        let (response_sender, mut response_receiver) = mpsc::channel(1);
+        self.sender
+            .send((
+                ChainMessage::GetWorkbases(workinfoids.to_vec()),
+                response_sender,
+            ))
+            .await
+            .unwrap();
+        match response_receiver.recv().await {
+            Some(ChainResponse::GetWorkbasesResult(result)) => result,
+            _ => vec![],
+        }
+    }
+
     pub async fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase> {
         let (response_sender, mut response_receiver) = mpsc::channel(1);
         self.sender
@@ -477,6 +514,21 @@ impl ChainHandle {
         match response_receiver.recv().await {
             Some(ChainResponse::GetUserWorkbaseResult(result)) => result,
             _ => None,
+        }
+    }
+
+    pub async fn get_user_workbases(&self, workinfoids: &[u64]) -> Vec<UserWorkbase> {
+        let (response_sender, mut response_receiver) = mpsc::channel(1);
+        self.sender
+            .send((
+                ChainMessage::GetUserWorkbases(workinfoids.to_vec()),
+                response_sender,
+            ))
+            .await
+            .unwrap();
+        match response_receiver.recv().await {
+            Some(ChainResponse::GetUserWorkbasesResult(result)) => result,
+            _ => vec![],
         }
     }
 
@@ -617,7 +669,7 @@ mock! {
         pub async fn get_chain_tip_and_uncles(&self) -> (Option<ShareBlockHash>, HashSet<ShareBlockHash>);
         pub async fn get_depth(&self, blockhash: ShareBlockHash) -> Option<usize>;
         pub async fn setup_share_for_chain(&self, share_block: ShareBlock) -> ShareBlock;
-        pub async fn store_user_workbase(&self, user_workbase: UserWorkbase) -> Result<(), Box<dyn Error + Send + Sync>>;
+        pub async fn add_user_workbase(&self, user_workbase: UserWorkbase) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase>;
         pub async fn get_share(&self, share_hash: ShareBlockHash) -> Option<ShareBlock>;
         pub async fn get_shares_at_height(&self, height: u32) -> HashMap<ShareBlockHash, ShareBlock>;
@@ -638,8 +690,10 @@ mock! {
 mod tests {
     use super::*;
     use crate::shares::miner_message::Gbt;
+    use crate::test_utils::load_valid_workbases_userworkbases_and_shares;
     use crate::test_utils::random_hex_string;
     use crate::test_utils::TestBlockBuilder;
+    use crate::test_utils::TestMinerWorkbaseBuilder;
     use rust_decimal_macros::dec;
     use tempfile::tempdir;
 
@@ -961,5 +1015,47 @@ mod tests {
         assert_eq!(blockhashes.len(), 2);
         assert_eq!(blockhashes[0], block2.cached_blockhash.unwrap());
         assert_eq!(blockhashes[1], block3.cached_blockhash.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_get_workbases() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+
+        let workbase1 = TestMinerWorkbaseBuilder::new().workinfoid(1000).build();
+        let workbase2 = TestMinerWorkbaseBuilder::new().workinfoid(2000).build();
+
+        chain_handle.add_workbase(workbase1.clone()).await.unwrap();
+        chain_handle.add_workbase(workbase2.clone()).await.unwrap();
+
+        // Test getting all workbases
+        let retrieved_workbases = chain_handle.get_workbases(&[1000, 2000]).await;
+        assert_eq!(retrieved_workbases.len(), 2);
+
+        // Verify workbases are retrieved correctly
+        let retrieved_workinfoid_set: HashSet<u64> =
+            retrieved_workbases.iter().map(|wb| wb.workinfoid).collect();
+
+        assert!(retrieved_workinfoid_set.contains(&1000));
+        assert!(retrieved_workinfoid_set.contains(&2000));
+
+        // Test getting a subset of workbases
+        let subset_ids = vec![1000];
+        let subset_workbases = chain_handle.get_workbases(&subset_ids).await;
+
+        assert_eq!(subset_workbases.len(), 1);
+        assert_eq!(subset_workbases[0].workinfoid, subset_ids[0]);
+
+        // Test getting non-existent workbases
+        let nonexistent_ids = vec![u64::MAX, u64::MAX - 1];
+        let nonexistent_workbases = chain_handle.get_workbases(&nonexistent_ids).await;
+        assert_eq!(nonexistent_workbases.len(), 0);
+
+        // Test getting a mix of existent and non-existent workbases
+        let mixed_ids = vec![1000, u64::MAX];
+        let mixed_workbases = chain_handle.get_workbases(&mixed_ids).await;
+
+        assert_eq!(mixed_workbases.len(), 1);
+        assert_eq!(mixed_workbases[0].workinfoid, 1000);
     }
 }
