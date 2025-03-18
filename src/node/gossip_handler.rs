@@ -19,7 +19,7 @@ use crate::node::Message;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use crate::utils::time_provider::SystemTimeProvider;
-use libp2p::gossipsub;
+use libp2p::{gossipsub, PeerId};
 use std::error::Error;
 use tracing::{debug, error, info};
 
@@ -35,12 +35,12 @@ pub async fn handle_gossipsub_event(
     debug!("Gossipsub event: {:?}", event);
     match event {
         gossipsub::Event::Message {
-            propagation_source: _,
+            propagation_source,
             message_id: _,
             message,
         } => {
             let message = Message::cbor_deserialize(&message.data).unwrap();
-            if let Err(e) = handle_gossip_message(message, chain_handle).await {
+            if let Err(e) = handle_gossip_message(message, chain_handle, propagation_source).await {
                 error!("Failed to handle gossip message: {}", e);
                 return Err("Failed to handle gossip message".into());
             }
@@ -56,8 +56,12 @@ pub async fn handle_gossipsub_event(
 async fn handle_gossip_message(
     message: Message,
     chain_handle: ChainHandle,
+    peer_id: PeerId,
 ) -> Result<(), Box<dyn Error>> {
-    info!("Handling gossip message: {:?}", message);
+    info!(
+        "Handling gossip message: {:?} from peer: {}",
+        message, peer_id
+    );
     match message {
         Message::Workbase(workbase) => {
             info!("Handling workbase: {:?}", workbase);
@@ -82,7 +86,7 @@ async fn handle_gossip_message(
                 handle_share_block::<void::Void>(mining_share, chain_handle, &time_provider).await
             {
                 error!("Failed to add share: {}", e);
-                return Err("Failed to add share".into());
+                return Err(format!("Failed to add share, Error: {}", e).into());
             }
             Ok(())
         }
@@ -178,7 +182,8 @@ mod tests {
             .times(1)
             .returning(|_| Ok(()));
 
-        let result = handle_gossip_message(Message::Workbase(workbase), mock_chain).await;
+        let result =
+            handle_gossip_message(Message::Workbase(workbase), mock_chain, PeerId::random()).await;
         assert!(result.is_ok());
     }
 
@@ -195,7 +200,8 @@ mod tests {
             .times(1)
             .returning(|_| Err("Failed to add workbase".into()));
 
-        let result = handle_gossip_message(Message::Workbase(workbase), mock_chain).await;
+        let result =
+            handle_gossip_message(Message::Workbase(workbase), mock_chain, PeerId::random()).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Failed to add workbase");
     }
@@ -221,7 +227,12 @@ mod tests {
             .times(1)
             .returning(|_| Ok(()));
 
-        let result = handle_gossip_message(Message::UserWorkbase(user_workbase), mock_chain).await;
+        let result = handle_gossip_message(
+            Message::UserWorkbase(user_workbase),
+            mock_chain,
+            PeerId::random(),
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -246,7 +257,12 @@ mod tests {
             .times(1)
             .returning(|_| Err("Failed to store user workbase".into()));
 
-        let result = handle_gossip_message(Message::UserWorkbase(user_workbase), mock_chain).await;
+        let result = handle_gossip_message(
+            Message::UserWorkbase(user_workbase),
+            mock_chain,
+            PeerId::random(),
+        )
+        .await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
@@ -264,8 +280,16 @@ mod tests {
             .prev_share_blockhash("00".repeat(32).as_str().into())
             .build();
 
-        let result = handle_gossip_message(Message::MiningShare(share_block), mock_chain).await;
+        let result = handle_gossip_message(
+            Message::MiningShare(share_block),
+            mock_chain,
+            PeerId::random(),
+        )
+        .await;
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "Failed to add share");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Failed to add share, Error: Share block validation failed"
+        );
     }
 }
