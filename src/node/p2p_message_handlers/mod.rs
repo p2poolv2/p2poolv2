@@ -64,13 +64,23 @@ pub async fn handle_request<C: 'static>(
             handle_share_headers(share_headers, chain_handle, time_provider).await
         }
         Message::ShareBlock(share_block) => {
-            handle_share_block::<void::Void>(share_block, chain_handle, time_provider).await
+            if let Err(e) = handle_share_block::<void::Void>(
+                share_block,
+                chain_handle,
+                time_provider,
+            )
+            .await
+            {
+                error!("Failed to add share: {}", e);
+                return Err(format!("Failed to add share: {}", e).into());
+            }
+            Ok(())
         }
         Message::Workbase(workbase) => {
             info!("Received workbase: {:?}", workbase);
             if let Err(e) = chain_handle.add_workbase(workbase.clone()).await {
                 error!("Failed to store workbase: {}", e);
-                return Err("Error storing workbase".into());
+                return Err(format!("Error storing workbase: {}", e).into());
             }
             if let Err(e) = swarm_tx
                 .send(SwarmSend::Gossip(Message::Workbase(workbase)))
@@ -247,6 +257,10 @@ mod tests {
         .await;
 
         assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Failed to add share: Share block validation failed"
+        );
     }
 
     #[tokio::test]
@@ -311,6 +325,10 @@ mod tests {
         .await;
 
         assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Error storing workbase: Failed to add workbase"
+        );
     }
 
     #[tokio::test]
