@@ -451,7 +451,7 @@ impl Store {
     }
 
     /// Get multiple user workbases from the store by their workinfoids
-    pub fn get_user_workbases(&self, workinfoids: Vec<u64>) -> Vec<UserWorkbase> {
+    pub fn get_user_workbases(&self, workinfoids: &[u64]) -> Vec<UserWorkbase> {
         debug!(
             "Getting user workbases from store for workinfoids: {:?}",
             workinfoids
@@ -2174,13 +2174,13 @@ mod tests {
         store.add_user_workbase(user_workbase3.clone()).unwrap();
 
         // Test getting individual user workbases
-        let retrieved_workbases = store.get_user_workbases(vec![1000, 2000]);
+        let retrieved_workbases = store.get_user_workbases(&vec![1000, 2000]);
         assert_eq!(retrieved_workbases.len(), 2);
         assert_eq!(retrieved_workbases[0].workinfoid, 1000);
         assert_eq!(retrieved_workbases[1].workinfoid, 2000);
 
         // Test getting a non-existent user workbase
-        let nonexistent_workbase = store.get_user_workbases(vec![4000, 5000]);
+        let nonexistent_workbase = store.get_user_workbases(&vec![4000, 5000]);
         assert_eq!(nonexistent_workbase.len(), 0);
 
         // Verify the content of retrieved workbases

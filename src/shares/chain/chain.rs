@@ -311,9 +311,19 @@ impl Chain {
         self.store.get_workbase(workinfoid)
     }
 
+    /// Get workbases from the chain given a list of workinfoids
+    pub fn get_workbases(&self, workinfoids: &[u64]) -> Vec<MinerWorkbase> {
+        self.store.get_workbases(workinfoids)
+    }
+
     /// Get a user workbase from the chain given a workinfoid
     pub fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase> {
         self.store.get_user_workbase(workinfoid)
+    }
+
+    /// Get user workbases from the chain given a list of workinfoids
+    pub fn get_user_workbases(&self, workinfoids: &[u64]) -> Vec<UserWorkbase> {
+        self.store.get_user_workbases(workinfoids)
     }
 
     /// Get the total difficulty of the chain
