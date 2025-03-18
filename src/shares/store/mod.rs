@@ -397,6 +397,36 @@ impl Store {
         Some(workbase)
     }
 
+    /// Get multiple workbases from the store given a set of workinfoids
+    pub fn get_workbases(&self, workinfoids: &[u64]) -> Vec<MinerWorkbase> {
+        debug!("Getting multiple workbases from store: {:?}", workinfoids);
+        let workbase_cf = self.db.cf_handle("workbase").unwrap();
+
+        let keys: Vec<(_, Vec<u8>)> = workinfoids
+            .iter()
+            .map(|id| {
+                let workbase_key = format!("workbase:{}", id);
+                (workbase_cf, workbase_key.into_bytes())
+            })
+            .collect();
+
+        let workbases = self.db.multi_get_cf(keys);
+
+        workbases
+            .into_iter()
+            .filter_map(|result| match result {
+                Ok(Some(data)) => match Message::cbor_deserialize(&data) {
+                    Ok(Message::Workbase(workbase)) => Some(workbase),
+                    _ => {
+                        tracing::error!("Invalid workbase data");
+                        None
+                    }
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Get a user workbase from the store
     pub fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase> {
         let user_workbase_key = format!("user_workbase:{}", workinfoid);
@@ -418,6 +448,39 @@ impl Store {
             }
         };
         Some(user_workbase)
+    }
+
+    /// Get multiple user workbases from the store by their workinfoids
+    pub fn get_user_workbases(&self, workinfoids: Vec<u64>) -> Vec<UserWorkbase> {
+        debug!(
+            "Getting user workbases from store for workinfoids: {:?}",
+            workinfoids
+        );
+        let user_workbase_cf = self.db.cf_handle("user_workbase").unwrap();
+
+        let keys: Vec<(_, Vec<u8>)> = workinfoids
+            .iter()
+            .map(|id| {
+                let user_workbase_key = format!("user_workbase:{}", id);
+                (user_workbase_cf, user_workbase_key.into_bytes())
+            })
+            .collect();
+
+        let user_workbases = self.db.multi_get_cf(keys);
+
+        user_workbases
+            .into_iter()
+            .filter_map(|result| match result {
+                Ok(Some(data)) => match Message::cbor_deserialize(&data) {
+                    Ok(Message::UserWorkbase(user_workbase)) => Some(user_workbase),
+                    _ => {
+                        tracing::error!("Invalid user workbase data");
+                        None
+                    }
+                },
+                _ => None,
+            })
+            .collect()
     }
 
     /// Get a share from the store
@@ -914,8 +977,9 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::TestBlockBuilder;
+    use crate::test_utils::{TestBlockBuilder, TestMinerWorkbaseBuilder, TestUserWorkbaseBuilder};
     use rust_decimal_macros::dec;
+    use std::collections::HashSet;
     use tempfile::tempdir;
 
     #[test_log::test(test)]
@@ -2028,5 +2092,112 @@ mod tests {
         // Verify batch operation worked
         let batch_updated_metadata = store.get_block_metadata(&blockhash).unwrap();
         assert_eq!(batch_updated_metadata.height, Some(100));
+    }
+
+    #[test]
+    fn test_get_workbases() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+
+        let workbase1 = TestMinerWorkbaseBuilder::new().workinfoid(1000).build();
+        let workbase2 = TestMinerWorkbaseBuilder::new().workinfoid(2000).build();
+        let workbase3 = TestMinerWorkbaseBuilder::new().workinfoid(3000).build();
+
+        // Add workbases to store
+        store.add_workbase(workbase1.clone()).unwrap();
+        store.add_workbase(workbase2.clone()).unwrap();
+        store.add_workbase(workbase3.clone()).unwrap();
+
+        // Test getting a single workbase
+        let retrieved_workbase = store.get_workbase(1000);
+        assert!(retrieved_workbase.is_some());
+        assert_eq!(retrieved_workbase.unwrap().workinfoid, 1000);
+
+        // Test getting multiple workbases
+        let workinfoids = vec![1000, 2000, 3000];
+        let retrieved_workbases = store.get_workbases(&workinfoids);
+
+        assert_eq!(retrieved_workbases.len(), 3);
+
+        // Verify workbases are retrieved correctly
+        let workinfoid_set: HashSet<u64> =
+            retrieved_workbases.iter().map(|wb| wb.workinfoid).collect();
+
+        assert!(workinfoid_set.contains(&1000));
+        assert!(workinfoid_set.contains(&2000));
+        assert!(workinfoid_set.contains(&3000));
+
+        // Test getting a subset of workbases
+        let subset_ids = vec![1000, 3000];
+        let subset_workbases = store.get_workbases(&subset_ids);
+
+        assert_eq!(subset_workbases.len(), 2);
+
+        let subset_workinfoid_set: HashSet<u64> =
+            subset_workbases.iter().map(|wb| wb.workinfoid).collect();
+
+        assert!(subset_workinfoid_set.contains(&1000));
+        assert!(subset_workinfoid_set.contains(&3000));
+        assert!(!subset_workinfoid_set.contains(&2000));
+
+        // Test getting non-existent workbases
+        let nonexistent_ids = vec![4000, 5000];
+        let nonexistent_workbases = store.get_workbases(&nonexistent_ids);
+        assert_eq!(nonexistent_workbases.len(), 0);
+
+        // Test getting a mix of existent and non-existent workbases
+        let mixed_ids = vec![1000, 4000, 3000];
+        let mixed_workbases = store.get_workbases(&mixed_ids);
+
+        assert_eq!(mixed_workbases.len(), 2);
+
+        let mixed_workinfoid_set: HashSet<u64> =
+            mixed_workbases.iter().map(|wb| wb.workinfoid).collect();
+
+        assert!(mixed_workinfoid_set.contains(&1000));
+        assert!(mixed_workinfoid_set.contains(&3000));
+        assert!(!mixed_workinfoid_set.contains(&4000));
+    }
+
+    #[test]
+    fn test_get_user_workbases() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+
+        let user_workbase1 = TestUserWorkbaseBuilder::new().workinfoid(1000).build();
+        let user_workbase2 = TestUserWorkbaseBuilder::new().workinfoid(2000).build();
+        let user_workbase3 = TestUserWorkbaseBuilder::new().workinfoid(3000).build();
+
+        // Add user workbases to store
+        store.add_user_workbase(user_workbase1.clone()).unwrap();
+        store.add_user_workbase(user_workbase2.clone()).unwrap();
+        store.add_user_workbase(user_workbase3.clone()).unwrap();
+
+        // Test getting individual user workbases
+        let retrieved_workbases = store.get_user_workbases(vec![1000, 2000]);
+        assert_eq!(retrieved_workbases.len(), 2);
+        assert_eq!(retrieved_workbases[0].workinfoid, 1000);
+        assert_eq!(retrieved_workbases[1].workinfoid, 2000);
+
+        // Test getting a non-existent user workbase
+        let nonexistent_workbase = store.get_user_workbases(vec![4000, 5000]);
+        assert_eq!(nonexistent_workbase.len(), 0);
+
+        // Verify the content of retrieved workbases
+        let workbase1 = &retrieved_workbases[0];
+        assert_eq!(workbase1.params.id, "67b6f8fc00000003");
+        assert_eq!(
+            workbase1.params.prevhash,
+            "6d600f568f665af26301fcafa53326454b9db355ff5d87f9863a956300000000"
+        );
+        assert_eq!(workbase1.workinfoid, 1000);
+
+        let workbase2 = &retrieved_workbases[1];
+        assert_eq!(workbase2.params.id, "67b6f8fc00000003");
+        assert_eq!(
+            workbase2.params.prevhash,
+            "6d600f568f665af26301fcafa53326454b9db355ff5d87f9863a956300000000"
+        );
+        assert_eq!(workbase2.workinfoid, 2000);
     }
 }
