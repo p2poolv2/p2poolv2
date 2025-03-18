@@ -19,16 +19,15 @@ use crate::node::SwarmSend;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::ShareBlockHash;
-use libp2p::request_response::ResponseChannel;
 use std::error::Error;
 use tokio::sync::mpsc;
 
 /// Handle outbound connection established events
 /// Send a getheaders request to the peer
-pub async fn send_getheaders(
+pub async fn send_getheaders<C: 'static>(
     peer_id: libp2p::PeerId,
     chain_handle: ChainHandle,
-    swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
+    swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error>> {
     let locator = chain_handle.build_locator().await;
     let stop_block_hash: ShareBlockHash =
@@ -38,4 +37,73 @@ pub async fn send_getheaders(
         .send(SwarmSend::Request(peer_id, getheaders_request))
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc::channel;
+
+    #[tokio::test]
+    async fn test_send_getheaders_success() {
+        let (swarm_tx, mut swarm_rx) = channel::<SwarmSend<Message>>(1);
+        let peer_id = libp2p::PeerId::random();
+        let mut chain_handle = ChainHandle::default();
+
+        let test_locator = vec![ShareBlockHash::from(
+            "1111111111111111111111111111111111111111111111111111111111111111",
+        )];
+
+        let test_locator_clone = test_locator.clone();
+
+        chain_handle
+            .expect_build_locator()
+            .times(1)
+            .return_once(move || test_locator_clone);
+
+        let send_result = send_getheaders(peer_id, chain_handle, swarm_tx).await;
+        assert!(send_result.is_ok());
+
+        if let Some(SwarmSend::Request(received_peer_id, message)) = swarm_rx.recv().await {
+            assert_eq!(received_peer_id, peer_id);
+            match message {
+                Message::GetShareHeaders(locator, stop_hash) => {
+                    assert_eq!(locator, test_locator);
+                    assert_eq!(
+                        stop_hash,
+                        ShareBlockHash::from(
+                            "0000000000000000000000000000000000000000000000000000000000000000"
+                        )
+                    );
+                }
+                _ => panic!("Unexpected message type"),
+            }
+        } else {
+            panic!("No message received");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_send_getheaders_channel_closed() {
+        let (swarm_tx, _) = channel::<SwarmSend<()>>(1);
+        let peer_id = libp2p::PeerId::random();
+        let mut chain_handle = ChainHandle::default();
+
+        let test_locator = vec![ShareBlockHash::from(
+            "1111111111111111111111111111111111111111111111111111111111111111",
+        )];
+
+        chain_handle
+            .expect_build_locator()
+            .times(1)
+            .return_once(move || test_locator.clone());
+
+        let swarm_tx_clone = swarm_tx.clone();
+
+        // Drop receiver to close channel
+        drop(swarm_tx_clone);
+
+        let send_result = send_getheaders(peer_id, chain_handle, swarm_tx).await;
+        assert!(send_result.is_err());
+    }
 }
