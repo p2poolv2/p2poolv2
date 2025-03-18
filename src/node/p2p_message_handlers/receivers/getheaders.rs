@@ -1,4 +1,4 @@
-// Copyright (C) 2024 [Kulpreet Singh]
+﻿// Copyright (C) 2024 [Kulpreet Singh]
 //
 //  This file is part of P2Poolv2
 //
@@ -105,6 +105,49 @@ mod tests {
             assert_eq!(headers, vec![block1.header, block2.header]);
         } else {
             panic!("Expected SwarmSend::Response with ShareHeaders message");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_getheaders_send_failure() {
+        let mut chain_handle = ChainHandle::default();
+        let (mut swarm_tx, swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
+        let response_channel = 1u32;
+
+        let block_hashes = vec![
+            "0000000000000000000000000000000000000000000000000000000000000001".into(),
+            "0000000000000000000000000000000000000000000000000000000000000002".into(),
+        ];
+
+        let stop_block_hash =
+            "0000000000000000000000000000000000000000000000000000000000000002".into();
+
+        // Set up mock expectations
+        chain_handle
+            .expect_get_headers_for_locator()
+            .returning(move |_, _, _| Vec::new());
+
+        // Drop the receiver to simulate send failure
+        drop(swarm_rx);
+
+        let result = handle_getheaders(
+            block_hashes,
+            stop_block_hash,
+            chain_handle,
+            response_channel,
+            swarm_tx,
+        )
+        .await;
+
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(
+                e.to_string(),
+                "channel closed".to_string(),
+                "Expected channel closed error"
+            );
+        } else {
+            panic!("Expected an error due to send failure");
         }
     }
 }
