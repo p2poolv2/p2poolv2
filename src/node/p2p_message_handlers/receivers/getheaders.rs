@@ -41,9 +41,14 @@ pub async fn handle_getheaders<C: 'static>(
         .get_headers_for_locator(block_hashes, stop_block_hash, MAX_HEADERS)
         .await;
     let headers_message = Message::ShareHeaders(response_headers);
-    swarm_tx
+    // Send response and handle errors by logging them before returning
+    if let Err(err) = swarm_tx
         .send(SwarmSend::Response(response_channel, headers_message))
-        .await?;
+        .await
+    {
+        tracing::error!("Failed to send ShareHeaders response: {}", err);
+        return Err(Box::new(err));
+    }
     Ok(())
 }
 
