@@ -21,7 +21,7 @@ use crate::shares::chain::actor::ChainHandle;
 use crate::shares::ShareBlockHash;
 use std::error::Error;
 use tokio::sync::mpsc;
-
+use tracing::error;
 /// Handle outbound connection established events
 /// Send a getheaders request to the peer
 pub async fn send_getheaders<C: 'static>(
@@ -33,9 +33,13 @@ pub async fn send_getheaders<C: 'static>(
     let stop_block_hash: ShareBlockHash =
         "0000000000000000000000000000000000000000000000000000000000000000".into();
     let getheaders_request = Message::GetShareHeaders(locator.clone(), stop_block_hash);
-    swarm_tx
+    if let Err(e) = swarm_tx
         .send(SwarmSend::Request(peer_id, getheaders_request))
-        .await?;
+        .await
+    {
+        error!("Failed to send getheaders request: {}", e);
+        return Err(format!("Failed to send getheaders request: {}", e).into());
+    }
     Ok(())
 }
 
@@ -105,5 +109,9 @@ mod tests {
 
         let send_result = send_getheaders(peer_id, chain_handle, swarm_tx).await;
         assert!(send_result.is_err());
+        assert!(send_result
+            .unwrap_err()
+            .to_string()
+            .contains("Failed to send getheaders request"));
     }
 }
