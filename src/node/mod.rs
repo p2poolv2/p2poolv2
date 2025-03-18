@@ -109,7 +109,35 @@ impl Node {
             })
             .build();
 
-        swarm.listen_on(config.network.listen_address.parse()?)?;
+        match config.network.listen_address.parse() {
+            Ok(addr) => match swarm.listen_on(addr) {
+                Ok(_) => {
+                    info!("Node listening on {}", config.network.listen_address);
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to listen on {}: {}",
+                        config.network.listen_address, e
+                    );
+                    return Err(format!(
+                        "Failed to listen on {}: {}",
+                        config.network.listen_address, e
+                    )
+                    .into());
+                }
+            },
+            Err(e) => {
+                error!(
+                    "Invalid listen address {}: {}",
+                    config.network.listen_address, e
+                );
+                return Err(format!(
+                    "Invalid listen address {}: {}",
+                    config.network.listen_address, e
+                )
+                .into());
+            }
+        }
 
         for peer_addr in &config.network.dial_peers {
             match peer_addr.parse::<Multiaddr>() {
@@ -132,10 +160,10 @@ impl Node {
         let (swarm_tx, swarm_rx) = mpsc::channel(100);
 
         if let Err(e) =
-            start_receiving_mining_messages(&config, chain_handle.clone(), swarm_tx.clone())
+            start_receiving_mining_messages(config, chain_handle.clone(), swarm_tx.clone())
         {
             error!("Failed to start receiving shares: {}", e);
-            return Err(e.into());
+            return Err(e);
         }
 
         Ok(Self {
