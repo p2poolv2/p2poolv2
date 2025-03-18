@@ -17,6 +17,7 @@
 use p2poolv2::config::{
     BitcoinConfig, CkPoolConfig, Config, MinerConfig, NetworkConfig, StoreConfig,
 };
+use p2poolv2::shares::miner_message::MinerWorkbase;
 
 #[cfg(test)]
 /// Build a default test configuration with test values that can be replaced later by each test
@@ -34,6 +35,12 @@ pub fn default_test_config() -> Config {
             max_established_incoming: 50,
             max_established_outgoing: 50,
             max_established_per_peer: 3,
+            max_workbase_per_second: 10,
+            max_userworkbase_per_second: 10,
+            max_miningshare_per_second: 100,
+            max_inventory_per_second: 100,
+            max_transaction_per_second: 100,
+            rate_limit_window_secs: 1,
         },
         bitcoin: BitcoinConfig {
             network: bitcoin::Network::Regtest,
@@ -54,4 +61,10 @@ pub fn default_test_config() -> Config {
                 .unwrap(),
         },
     }
+}
+
+#[cfg(test)]
+pub fn simple_miner_workbase() -> MinerWorkbase {
+    let json_str = include_str!("../../tests/test_data/simple_miner_workbase.json");
+    serde_json::from_str(&json_str).unwrap()
 }

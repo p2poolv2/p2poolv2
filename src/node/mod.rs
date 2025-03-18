@@ -21,7 +21,9 @@ pub mod actor;
 pub mod gossip_handler;
 pub mod messages;
 pub mod p2p_message_handlers;
+pub mod rate_limiter;
 
+use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::senders::send_getheaders;
 #[mockall_double::double]
@@ -39,6 +41,7 @@ use libp2p::{
     swarm::SwarmEvent,
     Multiaddr, Swarm,
 };
+use rate_limiter::{MessageType, RateLimiter};
 use request_response_handler::handle_request_response_event;
 use std::error::Error;
 use std::time::Duration;
@@ -79,6 +82,8 @@ struct Node {
     swarm_rx: mpsc::Receiver<SwarmSend<ResponseChannel<Message>>>,
     share_topic: gossipsub::IdentTopic,
     chain_handle: ChainHandle,
+    rate_limiter: RateLimiter,
+    config: Config,
 }
 
 impl Node {
@@ -166,12 +171,17 @@ impl Node {
             return Err(e);
         }
 
+        let rate_limiter =
+            RateLimiter::new(Duration::from_secs(config.network.rate_limit_window_secs));
+
         Ok(Self {
             swarm,
             swarm_tx,
             swarm_rx,
             share_topic,
             chain_handle,
+            rate_limiter,
+            config: config.clone(),
         })
     }
 
@@ -266,6 +276,23 @@ impl Node {
                     Ok(())
                 }
                 P2PoolBehaviourEvent::Gossipsub(gossip_event) => {
+                    if let gossipsub::Event::Message {
+                        propagation_source,
+                        message_id: _,
+                        message,
+                    } = &gossip_event
+                    {
+                        let message_type =
+                            MessageType::from(&Message::cbor_deserialize(&message.data)?);
+                        if !self.rate_limiter.check_rate_limit(
+                            &propagation_source,
+                            message_type,
+                            &self.config.network,
+                        ) {
+                            self.swarm.disconnect_peer_id(*propagation_source).unwrap();
+                            return Ok(());
+                        }
+                    }
                     let chain_handle = self.chain_handle.clone();
                     tokio::spawn(async move {
                         let result = handle_gossipsub_event(gossip_event, chain_handle).await;
@@ -276,6 +303,27 @@ impl Node {
                     Ok(())
                 }
                 P2PoolBehaviourEvent::RequestResponse(request_response_event) => {
+                    if let RequestResponseEvent::Message {
+                        peer,
+                        message:
+                            libp2p::request_response::Message::Request {
+                                request_id: _,
+                                request,
+                                channel: _,
+                            },
+                    } = &request_response_event
+                    {
+                        let message_type = MessageType::from(request);
+                        if !self.rate_limiter.check_rate_limit(
+                            &peer,
+                            message_type,
+                            &self.config.network,
+                        ) {
+                            // drop connection
+                            self.swarm.disconnect_peer_id(*peer).unwrap();
+                            return Ok(());
+                        }
+                    }
                     let chain_handle = self.chain_handle.clone();
                     let swarm_tx = self.swarm_tx.clone();
                     // TODO: Limit the number of concurrent requests

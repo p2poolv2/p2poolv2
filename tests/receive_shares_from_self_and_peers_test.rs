@@ -17,14 +17,14 @@
 mod common;
 
 mod self_and_peer_messages_tests {
-    use super::common::default_test_config;
+    use super::common::{default_test_config, simple_miner_workbase};
     use p2poolv2::node::actor::NodeHandle;
     use p2poolv2::node::messages::Message;
     use p2poolv2::node::p2p_message_handlers::handle_request;
     use p2poolv2::shares::chain::actor::ChainHandle;
     use p2poolv2::shares::miner_message::CkPoolMessage;
     use p2poolv2::shares::ShareBlock;
-    use p2poolv2::utils::time_provider::{TestTimeProvider, TimeProvider};
+    use p2poolv2::utils::time_provider::{SystemTimeProvider, TestTimeProvider, TimeProvider};
     use std::fs;
     use std::time::{Duration, SystemTime};
     use tempfile::tempdir;
@@ -161,6 +161,78 @@ mod self_and_peer_messages_tests {
         assert_eq!(
             peer_workbase.gbt.height, 123,
             "Peer workbase height mismatch"
+        );
+
+        node_handle
+            .shutdown()
+            .await
+            .expect("Failed to shutdown node");
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiting() {
+        let mut config = default_test_config()
+            .with_listen_address("/ip4/127.0.0.1/tcp/6894".to_string())
+            .with_store_path("test_rate_limit.db".to_string())
+            .with_miner_pubkey(
+                "020202020202020202020202020202020202020202020202020202020202020202".to_string(),
+            );
+
+        // setting low rate limits for testing.
+        config.network.max_workbase_per_second = 1;
+        config.network.max_userworkbase_per_second = 1;
+        config.network.rate_limit_window_secs = 1;
+
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+
+        let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone())
+            .await
+            .expect("Failed to create node");
+
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, mut _swarm_rx) = mpsc::channel(100);
+        let workbase = simple_miner_workbase();
+        let time_provider = SystemTimeProvider {};
+
+        // sending two workbase messages quickly, the second one should be rate-limited.
+        let result1 = handle_request(
+            peer_id,
+            Message::Workbase(workbase.clone()),
+            chain_handle.clone(),
+            (),
+            swarm_tx.clone(),
+            &time_provider,
+        )
+        .await;
+
+        let result2 = handle_request(
+            peer_id,
+            Message::Workbase(workbase.clone()),
+            chain_handle.clone(),
+            (),
+            swarm_tx.clone(),
+            &time_provider,
+        )
+        .await;
+
+        assert!(result1.is_ok(), "First request should succeed");
+        assert!(result2.is_ok(), "Second request should be rate limited");
+
+        // wait longer than the rate limit window, then send again to succed
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let result3 = handle_request(
+            peer_id,
+            Message::Workbase(workbase.clone()),
+            chain_handle.clone(),
+            (),
+            swarm_tx.clone(),
+            &time_provider,
+        )
+        .await;
+        assert!(
+            result3.is_ok(),
+            "Third request should succeed after waiting"
         );
 
         node_handle

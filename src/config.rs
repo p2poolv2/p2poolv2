@@ -27,6 +27,12 @@ pub struct NetworkConfig {
     pub max_established_incoming: u32,
     pub max_established_outgoing: u32,
     pub max_established_per_peer: u32,
+    pub max_workbase_per_second: u32,
+    pub max_userworkbase_per_second: u32,
+    pub max_miningshare_per_second: u32,
+    pub max_inventory_per_second: u32,
+    pub max_transaction_per_second: u32,
+    pub rate_limit_window_secs: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
