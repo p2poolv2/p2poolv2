@@ -24,7 +24,10 @@ use crate::shares::miner_message::MinerWorkbase;
 use crate::shares::ShareBlock;
 use libp2p::futures::StreamExt;
 use std::error::Error;
-use tokio::sync::{mpsc, oneshot};
+use tokio::{
+    sync::{mpsc, oneshot},
+    time::{interval, Duration},
+};
 use tracing::{debug, error, info};
 
 /// NodeHandle provides an interface to interact with a Node running in a separate task
@@ -149,6 +152,9 @@ impl NodeActor {
     }
 
     async fn run(mut self) {
+        let mut interval = interval(Duration::from_secs(
+            self.node.config.network.rate_limit_window_secs,
+        ));
         loop {
             tokio::select! {
                 buf = self.node.swarm_rx.recv() => {
@@ -229,6 +235,9 @@ impl NodeActor {
                             return;
                         }
                     }
+                }
+                _ = interval.tick() => {
+                    self.node.rate_limiter.decay();
                 }
             }
         }
