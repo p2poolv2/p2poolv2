@@ -884,6 +884,17 @@ impl Store {
         }
     }
 
+    /// Check which blockhashes from the provided list are missing from the store
+    /// Returns a vector of blockhashes that are not present in the store
+    pub fn get_missing_blockhashes(&self, blockhashes: &[ShareBlockHash]) -> Vec<ShareBlockHash> {
+        let block_cf = self.db.cf_handle("block").unwrap();
+        blockhashes
+            .iter()
+            .filter(|&hash| !self.db.key_may_exist_cf(block_cf, hash.as_ref()))
+            .cloned()
+            .collect()
+    }
+
     /// Set the block metadata for a blockhash
     fn set_block_metadata(
         &mut self,
