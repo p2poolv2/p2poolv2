@@ -16,7 +16,7 @@
 
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader};
-use bitcoin::{BlockHash, Txid};
+use bitcoin::Txid;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 
@@ -68,7 +68,7 @@ pub enum InventoryMessage {
 /// Message for requesting data from peers
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum GetData {
-    Block(BlockHash),
+    Block(ShareBlockHash),
     Txid(Txid),
 }
 
@@ -108,8 +108,7 @@ mod tests {
     fn test_get_data_message_serde() {
         // Test BlockHash variant
         let block_msg = Message::GetData(GetData::Block(
-            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
-                .unwrap(),
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".into(),
         ));
         let serialized = block_msg.cbor_serialize().unwrap();
         let deserialized = Message::cbor_deserialize(&serialized).unwrap();
@@ -117,7 +116,7 @@ mod tests {
             Message::GetData(GetData::Block(hash)) => {
                 assert_eq!(
                     hash,
-                    BlockHash::from_str(
+                    ShareBlockHash::try_from(
                         "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
                     )
                     .unwrap()
