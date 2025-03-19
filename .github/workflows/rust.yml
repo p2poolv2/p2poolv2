@@ -18,58 +18,38 @@ jobs:
       
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-      
-      - name: Cache dependencies
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Build
-        run: cargo build --verbose --target-dir target
-        
+      - name: Install latest nextest release
+        uses: taiki-e/install-action@nextest
+
+      - uses: Swatinem/rust-cache@v2
+
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo nextest run
 
-  coverage:
-    name: Code Coverage
+  Coverage:
+    name: Rust Coverage
     runs-on: ubuntu-latest
+    container:
+      image: xd009642/tarpaulin:develop-nightly
+      options: --security-opt seccomp=unconfined
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-      
-      - name: Cache dependencies and tarpaulin
-        id: cache-dependencies
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-tarpaulin-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-tarpaulin-
-            ${{ runner.os }}-cargo-
+      - name: Install dependencies
+        run: |
+          apt-get update && apt-get install -y clang libclang-dev
+        shell: bash
 
-      - name: Install cargo-tarpaulin
-        if: steps.cache-dependencies.outputs.cache-hit != 'true'
-        run: cargo install cargo-tarpaulin
+      - name: Checkout repository
+        uses: actions/checkout@v2
 
-      - name: Generate coverage report
-        run: cargo tarpaulin --out xml --target-dir target
+      - uses: Swatinem/rust-cache@v2
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
+      - name: Generate code coverage
+        run: |
+          cargo +nightly tarpaulin --verbose --all-features --workspace --timeout 120 --out xml --skip-clean --release
+
+      - name: Upload to codecov.io
+        uses: codecov/codecov-action@v2
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: cobertura.xml
