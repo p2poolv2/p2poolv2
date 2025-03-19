@@ -48,6 +48,7 @@ pub enum ChainMessage {
     GetHeadersForLocator(Vec<ShareBlockHash>, ShareBlockHash, usize),
     GetBlockhashesForLocator(Vec<ShareBlockHash>, ShareBlockHash, usize),
     BuildLocator,
+    GetMissingBlockhashes(Vec<ShareBlockHash>),
 }
 
 #[derive(Debug)]
@@ -73,6 +74,7 @@ pub enum ChainResponse {
     GetHeadersForLocatorResult(Vec<ShareHeader>),
     BuildLocatorResult(Vec<ShareBlockHash>),
     GetBlockhashesForLocatorResult(Vec<ShareBlockHash>),
+    GetMissingBlockhashesResult(Vec<ShareBlockHash>),
 }
 
 pub struct ChainActor {
@@ -280,6 +282,15 @@ impl ChainActor {
                         .await
                     {
                         error!("Failed to send build_locator response: {}", e);
+                    }
+                }
+                ChainMessage::GetMissingBlockhashes(blockhashes) => {
+                    let result = self.chain.get_missing_blockhashes(&blockhashes);
+                    if let Err(e) = response_sender
+                        .send(ChainResponse::GetMissingBlockhashesResult(result))
+                        .await
+                    {
+                        error!("Failed to send get_missing_blockhashes response: {}", e);
                     }
                 }
             }
@@ -650,6 +661,24 @@ impl ChainHandle {
             _ => vec![],
         }
     }
+
+    pub async fn get_missing_blockhashes(
+        &self,
+        blockhashes: &[ShareBlockHash],
+    ) -> Vec<ShareBlockHash> {
+        let (response_sender, mut response_receiver) = mpsc::channel(1);
+        self.sender
+            .send((
+                ChainMessage::GetMissingBlockhashes(blockhashes.to_vec()),
+                response_sender,
+            ))
+            .await
+            .unwrap();
+        match response_receiver.recv().await {
+            Some(ChainResponse::GetMissingBlockhashesResult(result)) => result,
+            _ => vec![],
+        }
+    }
 }
 
 #[cfg(test)]
@@ -677,6 +706,7 @@ mock! {
         pub async fn get_headers_for_locator(&self, block_hashes: Vec<ShareBlockHash>, stop_block_hash: ShareBlockHash, max_headers: usize) -> Vec<ShareHeader>;
         pub async fn get_blockhashes_for_locator(&self, locator: Vec<ShareBlockHash>, stop_block_hash: ShareBlockHash, max_blockhashes: usize) -> Vec<ShareBlockHash>;
         pub async fn build_locator(&self) -> Vec<ShareBlockHash>;
+        pub async fn get_missing_blockhashes(&self, blockhashes: &[ShareBlockHash]) -> Vec<ShareBlockHash>;
     }
 
     impl Clone for ChainHandle {
@@ -1057,5 +1087,59 @@ mod tests {
 
         assert_eq!(mixed_workbases.len(), 1);
         assert_eq!(mixed_workbases[0].workinfoid, 1000);
+    }
+
+    #[tokio::test]
+    async fn test_get_missing_blockhashes() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // Create and add some blocks to the chain
+        let block1 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb1")
+            .build();
+        let block2 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2")
+            .prev_share_blockhash(block1.cached_blockhash.unwrap())
+            .build();
+
+        // Add only block1 to the chain
+        chain_handle.add_share(block1.clone()).await.unwrap();
+
+        // Create some blockhashes that don't exist in the chain
+        let missing_hash1 =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3".into();
+        let missing_hash2 =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4".into();
+
+        // Test with all missing blockhashes
+        let all_missing = vec![missing_hash1, missing_hash2];
+        let result = chain_handle.get_missing_blockhashes(&all_missing).await;
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&missing_hash1));
+        assert!(result.contains(&missing_hash2));
+
+        // Test with a mix of existing and missing blockhashes
+        let mixed_hashes = vec![
+            block1.cached_blockhash.unwrap(),
+            block2.cached_blockhash.unwrap(), // Not added to chain
+            missing_hash1,
+        ];
+
+        let result = chain_handle.get_missing_blockhashes(&mixed_hashes).await;
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&block2.cached_blockhash.unwrap()));
+        assert!(result.contains(&missing_hash1));
+        assert!(!result.contains(&block1.cached_blockhash.unwrap()));
+
+        // Test with only existing blockhashes
+        let existing_hashes = vec![block1.cached_blockhash.unwrap()];
+        let result = chain_handle.get_missing_blockhashes(&existing_hashes).await;
+        assert_eq!(result.len(), 0);
+
+        // Test with empty input
+        let empty_hashes: Vec<ShareBlockHash> = vec![];
+        let result = chain_handle.get_missing_blockhashes(&empty_hashes).await;
+        assert_eq!(result.len(), 0);
     }
 }

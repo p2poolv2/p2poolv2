@@ -340,6 +340,12 @@ impl Chain {
         (self.chain_tip, uncles)
     }
 
+    /// Check which blockhashes from the provided list are missing from the chain
+    /// Returns a vector of blockhashes that are not present in the chain
+    pub fn get_missing_blockhashes(&self, blockhashes: &[ShareBlockHash]) -> Vec<ShareBlockHash> {
+        self.store.get_missing_blockhashes(blockhashes)
+    }
+
     /// Get the depth of a blockhash from chain tip
     /// Returns None if blockhash is not found in chain
     /// Returns 0 if blockhash is the chain tip
