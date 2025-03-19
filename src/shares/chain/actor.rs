@@ -1142,4 +1142,60 @@ mod tests {
         let result = chain_handle.get_missing_blockhashes(&empty_hashes).await;
         assert_eq!(result.len(), 0);
     }
+
+    #[tokio::test]
+    async fn test_get_user_workbases() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // Create test user workbases
+        let (_, user_workbases, _) = load_valid_workbases_userworkbases_and_shares();
+        let user_workbase1 = user_workbases[0].clone();
+        let mut user_workbase2 = user_workbase1.clone();
+        user_workbase2.workinfoid = 7473434392883363844;
+
+        // Store the user workbases
+        chain_handle
+            .add_user_workbase(user_workbase1.clone())
+            .await
+            .unwrap();
+        chain_handle
+            .add_user_workbase(user_workbase2.clone())
+            .await
+            .unwrap();
+
+        // Test getting all user workbases
+        let workinfoid1 = user_workbase1.workinfoid;
+        let workinfoid2 = user_workbase2.workinfoid;
+        let retrieved_workbases = chain_handle
+            .get_user_workbases(&[workinfoid1, workinfoid2])
+            .await;
+        assert_eq!(retrieved_workbases.len(), 2);
+
+        // Verify user workbases are retrieved correctly
+        let retrieved_workinfoid_set: HashSet<u64> =
+            retrieved_workbases.iter().map(|wb| wb.workinfoid).collect();
+
+        assert!(retrieved_workinfoid_set.contains(&workinfoid1));
+        assert!(retrieved_workinfoid_set.contains(&workinfoid2));
+
+        // Test getting a subset of user workbases
+        let subset_ids = vec![workinfoid1];
+        let subset_workbases = chain_handle.get_user_workbases(&subset_ids).await;
+
+        assert_eq!(subset_workbases.len(), 1);
+        assert_eq!(subset_workbases[0].workinfoid, subset_ids[0]);
+
+        // Test getting non-existent user workbases
+        let nonexistent_ids = vec![u64::MAX, u64::MAX - 1];
+        let nonexistent_workbases = chain_handle.get_user_workbases(&nonexistent_ids).await;
+        assert_eq!(nonexistent_workbases.len(), 0);
+
+        // Test getting a mix of existent and non-existent user workbases
+        let mixed_ids = vec![workinfoid1, u64::MAX];
+        let mixed_workbases = chain_handle.get_user_workbases(&mixed_ids).await;
+
+        assert_eq!(mixed_workbases.len(), 1);
+        assert_eq!(mixed_workbases[0].workinfoid, workinfoid1);
+    }
 }
