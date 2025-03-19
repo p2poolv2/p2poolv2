@@ -21,7 +21,7 @@ use crate::node::SwarmSend;
 use crate::shares::chain::actor::ChainHandle;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::info;
 
 /// Handle Inventory message request from a peer.
 /// inv is sent unsolicited, or in response to getblocks message,
@@ -31,7 +31,7 @@ use tracing::{debug, info};
 /// - Depending on the type of the inventory, we query the database for the relevant data
 /// - Send the data to the peer via the swarm_tx channel
 /// - We send one message for each found object. See block and tx messages.
-/// Note: At the moment, we only support sending blockhashes as inventory.
+///   Note: At the moment, we only support sending blockhashes as inventory.
 pub async fn handle_inventory<C: Clone + 'static>(
     inventory: Vec<InventoryMessage>,
     chain_handle: ChainHandle,
