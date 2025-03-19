@@ -21,7 +21,7 @@ use crate::node::SwarmSend;
 use crate::shares::chain::actor::ChainHandle;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{debug, info};
 
 /// Handle Inventory message request from a peer.
 /// inv is sent unsolicited, or in response to getblocks message,
@@ -44,16 +44,27 @@ pub async fn handle_inventory<C: Clone + 'static>(
         match inv_item {
             InventoryMessage::BlockHashes(locator) => {
                 info!("Received block hashes locator: {:?}", locator);
-                let stop_blockhash =
-                    "0000000000000000000000000000000000000000000000000000000000000000".into();
-                let block_hashes = chain_handle
-                    .get_blockhashes_for_locator(locator, stop_blockhash, 2000)
-                    .await;
-                if !block_hashes.is_empty() {
-                    let response = Message::Inventory(InventoryMessage::BlockHashes(block_hashes));
-                    swarm_tx
-                        .send(SwarmSend::Response(response_channel.clone(), response))
-                        .await?;
+
+                // Check which blocks we're missing and request them
+                let missing_blocks = chain_handle.get_missing_blockhashes(&locator).await;
+
+                // Request missing blocks from the peer
+                if !missing_blocks.is_empty() {
+                    info!(
+                        "Requesting {} missing blocks from peer",
+                        missing_blocks.len()
+                    );
+                    // Send individual GetBlock requests for each missing block
+                    for block_hash in missing_blocks {
+                        let get_block_request =
+                            Message::GetData(crate::node::messages::GetData::Block(block_hash));
+                        swarm_tx
+                            .send(SwarmSend::Response(
+                                response_channel.clone(),
+                                get_block_request,
+                            ))
+                            .await?;
+                    }
                 }
             }
             // Handle other inventory types as needed
@@ -64,4 +75,76 @@ pub async fn handle_inventory<C: Clone + 'static>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::node::messages::{GetData, InventoryMessage};
+    use crate::node::p2p_message_handlers::receivers::inventory::handle_inventory;
+    use crate::node::{Message, SwarmSend};
+    #[mockall_double::double]
+    use crate::shares::chain::actor::ChainHandle;
+    use crate::shares::ShareBlockHash;
+    use mockall::predicate::*;
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn test_handle_inventory_block_hashes() {
+        // Setup
+        let mut chain_handle = ChainHandle::default();
+
+        // Create some test block hashes
+        let block_hash1: ShareBlockHash =
+            "0000000000000000000000000000000000000000000000000000000000000001".into();
+        let block_hash2: ShareBlockHash =
+            "0000000000000000000000000000000000000000000000000000000000000002".into();
+        let block_hash3: ShareBlockHash =
+            "0000000000000000000000000000000000000000000000000000000000000003".into();
+
+        let locator = vec![block_hash1, block_hash2, block_hash3];
+        let missing_blocks = vec![block_hash1, block_hash3]; // Assume we're missing blocks 1 and 3
+
+        // Mock the chain_handle.get_missing_blockhashes call
+        chain_handle
+            .expect_get_missing_blockhashes()
+            .with(eq(locator.clone()))
+            .returning(move |_| missing_blocks.clone());
+
+        // Create channels for swarm communication
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(10);
+        let response_channel = "test_peer_id".to_string(); // Using String as the channel type for simplicity
+
+        // Execute
+        let inventory = vec![InventoryMessage::BlockHashes(locator)];
+        let result =
+            handle_inventory(inventory, chain_handle, swarm_tx, response_channel.clone()).await;
+
+        // Verify
+        assert!(result.is_ok(), "handle_inventory should return Ok");
+
+        // Verify that GetData messages were sent for each missing block
+        let message1 = swarm_rx.recv().await.unwrap();
+        match message1 {
+            SwarmSend::Response(channel, Message::GetData(GetData::Block(hash))) => {
+                assert_eq!(channel, response_channel);
+                assert_eq!(hash, block_hash1);
+            }
+            _ => panic!("Expected GetData::Block message for block_hash1"),
+        }
+
+        let message2 = swarm_rx.recv().await.unwrap();
+        match message2 {
+            SwarmSend::Response(channel, Message::GetData(GetData::Block(hash))) => {
+                assert_eq!(channel, response_channel);
+                assert_eq!(hash, block_hash3);
+            }
+            _ => panic!("Expected GetData::Block message for block_hash3"),
+        }
+
+        // Verify no more messages were sent
+        assert!(
+            swarm_rx.try_recv().is_err(),
+            "No more messages should have been sent"
+        );
+    }
 }
