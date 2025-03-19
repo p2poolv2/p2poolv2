@@ -34,7 +34,7 @@ mod self_and_peer_messages_tests {
 
     #[tokio::test]
     async fn receive_shares_and_workbases_from_self_and_peers() {
-        // Create configuration for a single node
+        // Create config for a single node
         let config = default_test_config()
             .with_listen_address("/ip4/127.0.0.1/tcp/6890".to_string())
             .with_ckpool_port(8885)

@@ -49,7 +49,7 @@ impl Message {
     }
 
     /// Deserialize a message from CBOR bytes
-    pub fn cbor_deserialize(bytes: &[u8]) -> Result<Self, Box<dyn Error>> {
+    pub fn cbor_deserialize(bytes: &[u8]) -> Result<Self, Box<dyn Error + Send + Sync>> {
         match ciborium::de::from_reader(bytes) {
             Ok(msg) => Ok(msg),
             Err(e) => Err(e.into()),
