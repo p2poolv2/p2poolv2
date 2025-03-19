@@ -69,7 +69,7 @@ async fn handle_gossip_message(
         }
         Message::UserWorkbase(user_workbase) => {
             info!("Handling user workbase: {:?}", user_workbase);
-            if let Err(e) = chain_handle.store_user_workbase(user_workbase).await {
+            if let Err(e) = chain_handle.add_user_workbase(user_workbase).await {
                 error!("Failed to store user workbase: {}", e);
                 return Err("Failed to store user workbase".into());
             }
@@ -216,7 +216,7 @@ mod tests {
         let user_workbase = user_workbases[0].clone();
 
         mock_chain
-            .expect_store_user_workbase()
+            .expect_add_user_workbase()
             .with(mockall::predicate::eq(user_workbase.clone()))
             .times(1)
             .returning(|_| Ok(()));
@@ -241,7 +241,7 @@ mod tests {
         let user_workbase = user_workbases[0].clone();
 
         mock_chain
-            .expect_store_user_workbase()
+            .expect_add_user_workbase()
             .with(mockall::predicate::eq(user_workbase.clone()))
             .times(1)
             .returning(|_| Err("Failed to store user workbase".into()));

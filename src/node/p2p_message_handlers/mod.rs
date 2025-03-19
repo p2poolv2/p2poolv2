@@ -83,7 +83,7 @@ pub async fn handle_request<C: 'static>(
         }
         Message::UserWorkbase(userworkbase) => {
             info!("Received user workbase: {:?}", userworkbase);
-            if let Err(e) = chain_handle.store_user_workbase(userworkbase.clone()).await {
+            if let Err(e) = chain_handle.add_user_workbase(userworkbase.clone()).await {
                 error!("Failed to store user workbase: {}", e);
                 return Err("Error storing user workbase".into());
             }
