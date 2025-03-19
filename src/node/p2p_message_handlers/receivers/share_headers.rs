@@ -29,8 +29,8 @@ use tracing::info;
 /// 3. TODO: We need to start a task in node to pull from the task queue and send getData message for txs
 pub async fn handle_share_headers(
     share_headers: Vec<ShareHeader>,
-    chain_handle: ChainHandle,
-    time_provider: &impl TimeProvider,
+    _chain_handle: ChainHandle,
+    _time_provider: &impl TimeProvider,
 ) -> Result<(), Box<dyn Error>> {
     info!("Received share headers: {:?}", share_headers);
     Ok(())

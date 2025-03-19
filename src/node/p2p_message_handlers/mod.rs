@@ -136,7 +136,7 @@ mod tests {
     use super::*;
     #[mockall_double::double]
     use crate::shares::chain::actor::ChainHandle;
-    use crate::shares::ShareBlockHash;
+    use crate::shares::{ShareBlockHash, ShareHeader};
     use crate::test_utils::simple_miner_workbase;
     use crate::test_utils::{load_valid_workbases_userworkbases_and_shares, TestBlockBuilder};
     use crate::utils::time_provider::TestTimeProvider;
@@ -421,5 +421,288 @@ mod tests {
         } else {
             panic!("Expected SwarmSend::Response with Inventory message");
         }
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_user_workbase_success() {
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
+        let mut chain_handle = ChainHandle::default();
+
+        let (_, user_workbases, _) = load_valid_workbases_userworkbases_and_shares();
+        let user_workbase = user_workbases[0].clone();
+
+        // Set up mock to return success
+        chain_handle
+            .expect_add_user_workbase()
+            .with(eq(user_workbase.clone()))
+            .returning(|_| Ok(()));
+
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        let result = handle_request(
+            peer_id,
+            Message::UserWorkbase(user_workbase),
+            chain_handle,
+            response_channel_tx,
+            swarm_tx,
+            &time_provider,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_user_workbase_error() {
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
+        let mut chain_handle = ChainHandle::default();
+
+        let (_, user_workbases, _) = load_valid_workbases_userworkbases_and_shares();
+        let user_workbase = user_workbases[0].clone();
+
+        // Set up mock to return error
+        chain_handle
+            .expect_add_user_workbase()
+            .with(eq(user_workbase.clone()))
+            .returning(|_| Err("Failed to add user workbase".into()));
+
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        let result = handle_request(
+            peer_id,
+            Message::UserWorkbase(user_workbase),
+            chain_handle,
+            response_channel_tx,
+            swarm_tx,
+            &time_provider,
+        )
+        .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_inventory_for_blocks() {
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
+        let chain_handle = ChainHandle::default();
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        // Test BlockHashes inventory
+        let block_hashes = vec![
+            "0000000000000000000000000000000000000000000000000000000000000001".into(),
+            "0000000000000000000000000000000000000000000000000000000000000002".into(),
+        ];
+        let inventory = InventoryMessage::BlockHashes(block_hashes);
+
+        let result = handle_request(
+            peer_id,
+            Message::Inventory(inventory),
+            chain_handle,
+            response_channel_tx,
+            swarm_tx.clone(),
+            &time_provider,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_inventory_for_txns() {
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (_response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
+        let chain_handle = ChainHandle::default();
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        // Test TransactionHashes inventory
+        let tx_hashes: Vec<bitcoin::Txid> = vec![
+            "0000000000000000000000000000000000000000000000000000000000000001"
+                .parse()
+                .unwrap(),
+            "0000000000000000000000000000000000000000000000000000000000000002"
+                .parse()
+                .unwrap(),
+        ];
+        let inventory = InventoryMessage::TransactionHashes(tx_hashes);
+
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
+
+        let result = handle_request(
+            peer_id,
+            Message::Inventory(inventory),
+            chain_handle,
+            response_channel_tx,
+            swarm_tx,
+            &time_provider,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_not_found() {
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
+        let chain_handle = ChainHandle::default();
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        let result = handle_request(
+            peer_id,
+            Message::NotFound(()),
+            chain_handle,
+            response_channel_tx,
+            swarm_tx,
+            &time_provider,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_get_data_for_block() {
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
+        let chain_handle = ChainHandle::default();
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        // Test GetData message with block hash
+        let block_hash = "0000000000000000000000000000000000000000000000000000000000000001".into();
+        let get_data = GetData::Block(block_hash);
+
+        let result = handle_request(
+            peer_id,
+            Message::GetData(get_data),
+            chain_handle,
+            response_channel_tx,
+            swarm_tx.clone(),
+            &time_provider,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_get_data_for_txn() {
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
+        let chain_handle = ChainHandle::default();
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        // Test GetData message with txid
+        let txid = "0000000000000000000000000000000000000000000000000000000000000001"
+            .parse()
+            .unwrap();
+        let get_data = GetData::Txid(txid);
+
+        let result = handle_request(
+            peer_id,
+            Message::GetData(get_data),
+            chain_handle,
+            response_channel_tx,
+            swarm_tx,
+            &time_provider,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_transaction() {
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
+        let chain_handle = ChainHandle::default();
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        // Create a test transaction
+        let transaction = crate::test_utils::test_coinbase_transaction();
+
+        let result = handle_request(
+            peer_id,
+            Message::Transaction(transaction),
+            chain_handle,
+            response_channel_tx,
+            swarm_tx,
+            &time_provider,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_mining_share() {
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
+        let chain_handle = ChainHandle::default();
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        // Create a test share block
+        let share_block = TestBlockBuilder::new()
+            .blockhash("0000000000000000000000000000000000000000000000000000000000000001")
+            .build();
+
+        let result = handle_request(
+            peer_id,
+            Message::MiningShare(share_block),
+            chain_handle,
+            response_channel_tx,
+            swarm_tx,
+            &time_provider,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_share_headers() {
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
+        let mut chain_handle = ChainHandle::default();
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        // Create test share headers
+        let block1 = TestBlockBuilder::new()
+            .blockhash("0000000000000000000000000000000000000000000000000000000000000001")
+            .build();
+        let block2 = TestBlockBuilder::new()
+            .blockhash("0000000000000000000000000000000000000000000000000000000000000002")
+            .build();
+
+        let share_headers = vec![block1.header.clone(), block2.header.clone()];
+
+        // Set up mock expectations for processing headers
+        chain_handle
+            .expect_get_headers_for_locator()
+            .returning(|_, _, _| vec![]);
+
+        let result = handle_request(
+            peer_id,
+            Message::ShareHeaders(share_headers),
+            chain_handle,
+            response_channel_tx,
+            swarm_tx,
+            &time_provider,
+        )
+        .await;
+
+        assert!(result.is_ok());
     }
 }
