@@ -1,10 +1,14 @@
 use crate::config::NetworkConfig;
 use crate::node::messages::Message;
 use libp2p::PeerId;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 use tracing::warn;
 
+/// Represents the type of message for rate limiting purposes.
+///
+/// We use a separate enum from `messages::Message` to have explicit control to avoid accidentally applying a rate limit to a new message type added in the future.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum MessageType {
     Workbase,
@@ -28,56 +32,71 @@ impl From<&Message> for MessageType {
     }
 }
 
-#[derive(Debug, Clone)]
+/// A counter that keeps track of recent timestamps.
+#[derive(Debug)]
 pub struct RecentCounter {
-    count: u32,
-    last_update: Instant,
+    timestamps: Mutex<VecDeque<Instant>>,
 }
 
 impl RecentCounter {
     fn new() -> Self {
         Self {
-            count: 0,
-            last_update: Instant::now(),
+            timestamps: Mutex::new(VecDeque::new()),
         }
     }
 
-    fn increment(&mut self) {
-        self.count += 1;
-        self.last_update = Instant::now();
-    }
+    async fn increment(&self, window: Duration) -> bool {
+        let now = Instant::now();
+        let mut timestamps = self.timestamps.lock().await;
 
-    fn reset(&mut self) {
-        self.count = 0;
-        self.last_update = Instant::now();
-    }
-
-    fn count(&self, window: Duration) -> u32 {
-        if self.last_update.elapsed() > window {
-            // If the last update was too long ago, treat as 0
-            0
-        } else {
-            self.count
+        // Remove timestamps outside the current window
+        while let Some(front) = timestamps.front() {
+            if now.duration_since(*front) > window {
+                timestamps.pop_front();
+            } else {
+                break;
+            }
         }
+
+        timestamps.push_back(now);
+        true
+    }
+
+    async fn count(&self, window: Duration) -> usize {
+        let now = Instant::now();
+        let mut timestamps = self.timestamps.lock().await;
+
+        // Prune old entries
+        while let Some(front) = timestamps.front() {
+            if now.duration_since(*front) > window {
+                timestamps.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        timestamps.len()
     }
 }
 
-#[derive(Debug, Clone, Default)]
+/// Rate limiter to prevent DoS attacks by limiting the number of messages
+#[derive(Debug, Default)]
 pub struct RateLimiter {
-    limits: HashMap<PeerId, HashMap<MessageType, RecentCounter>>,
+    limits: Mutex<HashMap<PeerId, HashMap<MessageType, RecentCounter>>>,
     window: Duration,
 }
 
 impl RateLimiter {
     pub fn new(window: Duration) -> Self {
         Self {
-            limits: HashMap::new(),
+            limits: Mutex::new(HashMap::new()),
             window,
         }
     }
 
-    pub fn check_rate_limit(
-        &mut self,
+    /// Checks if the rate limit for a given peer and message type is exceeded.
+    pub async fn check_rate_limit(
+        &self,
         peer_id: &PeerId,
         message_type: MessageType,
         config: &NetworkConfig,
@@ -88,34 +107,95 @@ impl RateLimiter {
             MessageType::MiningShare => config.max_miningshare_per_second,
             MessageType::Inventory => config.max_inventory_per_second,
             MessageType::Transaction => config.max_transaction_per_second,
-            MessageType::Other => return true, // Don't rate limit other messages for now.
+            MessageType::Other => return true,
         };
 
-        let peer_limits = self.limits.entry(*peer_id).or_insert_with(HashMap::new);
+        let mut limits = self.limits.lock().await;
+        let peer_limits = limits.entry(*peer_id).or_insert_with(HashMap::new);
         let counter = peer_limits
             .entry(message_type.clone())
             .or_insert_with(RecentCounter::new);
 
-        if counter.count(self.window) >= max_allowed {
+        let current_count = counter.count(self.window).await;
+        if current_count >= max_allowed as usize {
             warn!(
                 "Rate limit exceeded for peer {} and message type {:?}",
                 peer_id, message_type
             );
             false
         } else {
-            counter.increment();
+            counter.increment(self.window).await;
             true
         }
     }
+}
 
-    pub fn decay(&mut self) {
-        let now = Instant::now();
-        for peer_limits in self.limits.values_mut() {
-            for counter in peer_limits.values_mut() {
-                if now.duration_since(counter.last_update) > self.window {
-                    counter.reset();
-                }
-            }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::NetworkConfig;
+    use libp2p::PeerId;
+
+    fn test_config() -> NetworkConfig {
+        NetworkConfig {
+            listen_address: "".to_string(),
+            dial_peers: vec![],
+            enable_mdns: false,
+            max_pending_incoming: 0,
+            max_pending_outgoing: 0,
+            max_established_incoming: 0,
+            max_established_outgoing: 0,
+            max_established_per_peer: 0,
+            max_workbase_per_second: 2,
+            max_userworkbase_per_second: 1,
+            max_miningshare_per_second: 100,
+            max_inventory_per_second: 100,
+            max_transaction_per_second: 100,
+            rate_limit_window_secs: 1,
         }
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_sliding_window() {
+        let config = test_config();
+        let limiter = RateLimiter::new(Duration::from_secs(1));
+        let peer_id = PeerId::random();
+
+        // fill the window
+        assert!(
+            limiter
+                .check_rate_limit(&peer_id, MessageType::Workbase, &config)
+                .await
+        );
+        assert!(
+            limiter
+                .check_rate_limit(&peer_id, MessageType::Workbase, &config)
+                .await
+        );
+        assert!(
+            !limiter
+                .check_rate_limit(&peer_id, MessageType::Workbase, &config)
+                .await
+        );
+
+        // wait for the window to slide
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        // new messages in the next window
+        assert!(
+            limiter
+                .check_rate_limit(&peer_id, MessageType::Workbase, &config)
+                .await
+        );
+        assert!(
+            limiter
+                .check_rate_limit(&peer_id, MessageType::Workbase, &config)
+                .await
+        );
+        assert!(
+            !limiter
+                .check_rate_limit(&peer_id, MessageType::Workbase, &config)
+                .await
+        );
     }
 }
