@@ -111,7 +111,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_getheaders_send_failure() {
         let mut chain_handle = ChainHandle::default();
-        let (mut swarm_tx, swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
+        let (swarm_tx, swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
         let response_channel = 1u32;
 
         let block_hashes = vec![
