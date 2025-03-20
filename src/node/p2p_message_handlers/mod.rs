@@ -64,12 +64,8 @@ pub async fn handle_request<C: 'static>(
             handle_share_headers(share_headers, chain_handle, time_provider).await
         }
         Message::ShareBlock(share_block) => {
-            if let Err(e) = handle_share_block::<void::Void>(
-                share_block,
-                chain_handle,
-                time_provider,
-            )
-            .await
+            if let Err(e) =
+                handle_share_block::<void::Void>(share_block, chain_handle, time_provider).await
             {
                 error!("Failed to add share: {}", e);
                 return Err(format!("Failed to add share: {}", e).into());
