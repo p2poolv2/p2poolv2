@@ -18,24 +18,14 @@ jobs:
       
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-      
-      - name: Cache dependencies
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Build
-        run: cargo build --verbose --target-dir target
-        
+      - name: Install latest nextest release
+        uses: taiki-e/install-action@nextest
+
+      - uses: Swatinem/rust-cache@v2
+
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo nextest run
 
   coverage:
     name: Code Coverage
@@ -66,7 +56,7 @@ jobs:
         run: cargo install cargo-tarpaulin
 
       - name: Generate coverage report
-        run: cargo tarpaulin --out xml --target-dir target
+        run: cargo tarpaulin --out xml --target-dir target --skip-clean --release
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
