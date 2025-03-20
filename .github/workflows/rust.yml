@@ -10,6 +10,25 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  lint:
+    name: Linting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy
+
   test:
     name: Rust Tests
     runs-on: ubuntu-latest
