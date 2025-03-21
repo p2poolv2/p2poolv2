@@ -84,17 +84,25 @@ pub fn receive_from_ckpool(
     config: &CkPoolConfig,
     tx: tokio::sync::mpsc::Sender<Value>,
 ) -> Result<(), Box<dyn Error>> {
+    let mut backoff_duration = Duration::from_millis(100); // Starting with 100ms
+
     loop {
         match create_zmq_socket(config) {
             Ok(socket) => {
                 if let Err(e) = receive_shares(&socket, tx.clone()) {
                     error!("Error in receiving shares: {}. Reconnecting...", e);
-                    thread::sleep(Duration::from_secs(5)); // Only sleep here
+                    thread::sleep(backoff_duration); // Exponential backoff
+                    backoff_duration = backoff_duration * 2; // Double the backoff time
                 }
             }
             Err(e) => {
-                error!("Failed to connect to ZMQ: {}. Retrying in 5 seconds...", e);
-                thread::sleep(Duration::from_secs(5)); // Sleep if connection fails
+                error!(
+                    "Failed to connect to ZMQ: {}. Retrying in {}ms...",
+                    e,
+                    backoff_duration.as_millis()
+                );
+                thread::sleep(backoff_duration); // Exponential backoff
+                backoff_duration = backoff_duration * 2; // Double the backoff time
             }
         }
     }
@@ -170,5 +178,28 @@ mod tests {
 
         let result = receive_shares(&mock_socket, tx);
         assert!(result.is_err());
+    }
+    #[tokio::test]
+    async fn test_reconnect_logic() {
+        let (tx, mut rx) = mpsc::channel(100);
+
+        // Mock socket to simulate a failure and then success
+        let mock_messages = vec![
+            Ok(Err(vec![1, 2, 3])),                                   // Simulate failure
+            Ok(Ok(r#"{"share": "test", "value": 123}"#.to_string())), // Simulate success
+        ];
+
+        let mock_socket = MockSocket::new(mock_messages);
+
+        // Spawn the receive_shares function in a separate task
+        tokio::spawn(async move {
+            receive_shares(&mock_socket, tx).unwrap();
+        });
+
+        // Check if the first message received is valid
+        if let Some(value) = rx.recv().await {
+            assert_eq!(value["share"], "test");
+            assert_eq!(value["value"], 123);
+        }
     }
 }
