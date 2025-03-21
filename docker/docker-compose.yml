@@ -39,9 +39,10 @@ services:
       - bitcoind
       - ckpool
     environment:
-      - NETWORK=${NETWORK:-signet}
-      - BTC_RPC_PORT=${BTC_RPC_PORT:-38332}
-    command: /p2pool/target/release/p2poolv2 --network ${NETWORK:-signet} --bitcoin-url http://p2pool:p2pool@bitcoind:${BTC_RPC_PORT:-38332} --store-path /data/${NETWORK:-signet}
+      - P2POOL_BITCOIN_NETWORK=${NETWORK:-signet}
+      - P2POOL_BITCOIN_URL=bitcoind:${BTC_RPC_PORT:-38332}
+      - P2POOL_STORE_PATH=/data/${NETWORK:-signet}
+    command: /p2pool/target/release/p2poolv2 --config=/p2pool/config.toml
     volumes:
       - p2pool_data:/data
     restart: unless-stopped
