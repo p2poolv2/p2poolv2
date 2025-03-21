@@ -80,6 +80,7 @@ impl Config {
     pub fn load(path: &str) -> Result<Self, config::ConfigError> {
         config::Config::builder()
             .add_source(config::File::with_name(path))
+            .add_source(config::Environment::with_prefix("P2POOL").separator("_"))
             .build()?
             .try_deserialize()
     }
@@ -210,5 +211,20 @@ mod tests {
         assert_eq!(config.network.max_established_incoming, 50);
         assert_eq!(config.network.max_established_outgoing, 50);
         assert_eq!(config.network.max_established_per_peer, 1);
+    }
+
+    #[test]
+    fn test_config_from_env_vars() {
+        // Set environment variable for bitcoin URL
+        std::env::set_var("P2POOL_BITCOIN_URL", "http://bitcoin-from-env:8332");
+
+        // Load config from file first
+        let config = Config::load("./config.toml").unwrap();
+
+        // Check that the environment variable overrides the config file value
+        assert_eq!(config.bitcoin.url, "http://bitcoin-from-env:8332");
+
+        // Clean up environment variable after test
+        std::env::remove_var("P2POOL_BITCOIN_URL");
     }
 }
