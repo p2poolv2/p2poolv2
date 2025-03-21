@@ -35,7 +35,8 @@ RUN mkdir /data
 RUN mkdir /logs
 RUN chown ckpool:ckpool /data
 RUN chown ckpool:ckpool /logs
-COPY ckpool-solo.json /ckpool-solo.json
+COPY signet/ckpool-solo-signet.json /ckpool-solo-signet.json
+COPY testnet4/ckpool-solo-testnet4.json /ckpool-solo-testnet4.json
 
 USER ckpool
 VOLUME ["/data"]
@@ -44,5 +45,5 @@ VOLUME ["/data"]
 # 8881 is the port for ZMQ pub socket
 EXPOSE 3333 8881
 
-ENTRYPOINT ["src/ckpool"]
-CMD ["--btcsolo", "--config=/ckpool-solo.json", "--log-shares", "--loglevel=7"]
+ENTRYPOINT []
+CMD ["src/ckpool"]

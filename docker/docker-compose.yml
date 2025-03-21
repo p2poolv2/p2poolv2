@@ -4,10 +4,13 @@ services:
       context: .
       dockerfile: Dockerfile.bitcoind
     volumes:
-      - bitcoin_data:/data
+      - bitcoin_data:/data-${NETWORK:-signet}
     ports:
-      - "38333:38333" # P2P port
-      - "38332:38332" # RPC port
+      - "${BTC_P2P_PORT:-38333}:${BTC_P2P_PORT:-38333}" # P2P port
+      - "${BTC_RPC_PORT:-38332}:${BTC_RPC_PORT:-38332}" # RPC port
+    environment:
+      - NETWORK=${NETWORK:-signet}
+    command: bitcoind -conf=/etc/bitcoin/bitcoin-${NETWORK:-signet}.conf -datadir=/data-${NETWORK:-signet}
     restart: unless-stopped
   cpuminer:
     build:
@@ -27,6 +30,7 @@ services:
     depends_on:
       - bitcoind
     restart: unless-stopped
+    command: /ckpool/src/ckpool --btcsolo --config=/ckpool-solo-${NETWORK:-signet}.json --log-shares --loglevel=7
   p2pool:
     build:
       context: ..
@@ -34,7 +38,13 @@ services:
     depends_on:
       - bitcoind
       - ckpool
+    environment:
+      - NETWORK=${NETWORK:-signet}
+      - BTC_RPC_PORT=${BTC_RPC_PORT:-38332}
+    command: /p2pool/target/release/p2poolv2 --network ${NETWORK:-signet} --bitcoin-url http://p2pool:p2pool@bitcoind:${BTC_RPC_PORT:-38332} --store-path /data/${NETWORK:-signet}
+    volumes:
+      - p2pool_data:/data
     restart: unless-stopped
-    
 volumes:
   bitcoin_data:
+  p2pool_data:
