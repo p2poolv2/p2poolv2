@@ -44,6 +44,11 @@ Remember, all docker commands are run from the docker directory.
 
 `docker compose up cpuminer`
 
+== Developer Setup
+
+To ease development of p2pool's rust node, there is a devcontainer setup in place. You can use it
+for IDEs supporting devcontainers and github codespaces.
+
 == Masochistic Setup
 
 Follow the guidelines below to setup your local p2pool node. Note, these are not setup instructions,
