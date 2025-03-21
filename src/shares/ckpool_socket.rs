@@ -1,35 +1,51 @@
+// Copyright (C) 2024 [Kulpreet Singh]
+//
+//  This file is part of P2Poolv2
+//
+// P2Poolv2 is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free
+// Software Foundation, either version 3 of the License, or (at your option)
+// any later version.
+//
+// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
+// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along with
+// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::config::CkPoolConfig;
 use serde_json::Value;
 use std::error::Error;
 use std::thread;
 use std::time::Duration;
-use tracing::{error, info, debug};
+use tracing::{debug, error, info};
 use zmq;
-
-// Define a trait for socket operations (used for testing)
+// Define a trait for the socket operations we need
+// Use a trait to enable testing with a mock socket
 trait MinerSocket {
     fn recv_string(&self) -> Result<Result<String, Vec<u8>>, zmq::Error>;
 }
 
-// Implement the trait for ZMQ socket
+// Implement the trait for the real ZMQ socket
 impl MinerSocket for zmq::Socket {
     fn recv_string(&self) -> Result<Result<String, Vec<u8>>, zmq::Error> {
-        self.recv_string(0) // Receive message without blocking
+        self.recv_string(0)
     }
 }
 
-// Function to create a new ZMQ subscriber socket
+// Function to create the real ZMQ socket
 fn create_zmq_socket(config: &CkPoolConfig) -> Result<zmq::Socket, Box<dyn Error>> {
-    let ctx = zmq::Context::new(); // Create new ZMQ context
-    let socket = ctx.socket(zmq::SUB)?; // Create subscriber socket
+    let ctx = zmq::Context::new();
+    let socket = ctx.socket(zmq::SUB)?;
     socket.connect(format!("tcp://{}:{}", config.host, config.port).as_str())?;
-    socket.set_subscribe(b"")?; // Subscribe to all messages
+    socket.set_subscribe(b"")?;
     info!("Connected to ckpool at {}:{}", config.host, config.port);
     Ok(socket)
 }
 
-// Function to handle receiving shares from the ZMQ socket
+// Generic function to receive shares from any ShareSocket
+// This is generic to enable testing with a mock socket
 fn receive_shares<S: MinerSocket>(
     socket: &S,
     tx: tokio::sync::mpsc::Sender<Value>,
@@ -37,7 +53,7 @@ fn receive_shares<S: MinerSocket>(
     loop {
         match socket.recv_string() {
             Ok(Ok(json_str)) => {
-                debug!("Received JSON from ckpool: {}", json_str);
+                tracing::debug!("Received json from ckpool: {}", json_str);
                 match serde_json::from_str(&json_str) {
                     Ok(json_value) => {
                         if let Err(e) = tx.blocking_send(json_value) {
@@ -45,24 +61,25 @@ fn receive_shares<S: MinerSocket>(
                         }
                     }
                     Err(e) => {
-                        error!("Invalid JSON received: {}", e);
+                        error!("Failed to parse JSON: {}", e);
                         return Err(Box::new(e));
                     }
                 }
             }
             Ok(Err(e)) => {
-                error!("Message decode error: {:?}", e);
+                error!("Failed to decode message: {:?}", e);
                 return Err(Box::new(zmq::Error::EINVAL));
             }
             Err(e) => {
-                error!("ZMQ receive error: {:?}. Retrying in 5 seconds...", e);
-                thread::sleep(Duration::from_secs(5)); // Wait before retrying
+                error!("Failed to receive message: {:?}", e);
+                return Err(Box::new(e));
             }
         }
     }
 }
 
-// Function to initialize the subscriber and handle reconnections
+// A receive function that clients use to receive shares
+// This function creates the ZMQ socket and passes it to the receive_shares function
 pub fn receive_from_ckpool(
     config: &CkPoolConfig,
     tx: tokio::sync::mpsc::Sender<Value>,
@@ -72,11 +89,12 @@ pub fn receive_from_ckpool(
             Ok(socket) => {
                 if let Err(e) = receive_shares(&socket, tx.clone()) {
                     error!("Error in receiving shares: {}. Reconnecting...", e);
+                    thread::sleep(Duration::from_secs(5)); // Only sleep here
                 }
             }
             Err(e) => {
                 error!("Failed to connect to ZMQ: {}. Retrying in 5 seconds...", e);
-                thread::sleep(Duration::from_secs(5));
+                thread::sleep(Duration::from_secs(5)); // Sleep if connection fails
             }
         }
     }
@@ -95,7 +113,10 @@ mod tests {
 
     impl MockSocket {
         fn new(messages: Vec<Result<Result<String, Vec<u8>>, zmq::Error>>) -> Self {
-            Self { messages, current: 0 }
+            Self {
+                messages,
+                current: 0,
+            }
         }
     }
 
@@ -111,13 +132,16 @@ mod tests {
     #[tokio::test]
     async fn test_receive_valid_json() {
         let (tx, mut rx) = mpsc::channel(100);
+
         let mock_messages = vec![Ok(Ok(r#"{"share": "test", "value": 123}"#.to_string()))];
         let mock_socket = MockSocket::new(mock_messages);
-        
+
+        // Spawn the receive_shares function in a separate task
         tokio::spawn(async move {
             receive_shares(&mock_socket, tx).unwrap();
         });
 
+        // Receive the message from the channel
         if let Some(value) = rx.recv().await {
             assert_eq!(value["share"], "test");
             assert_eq!(value["value"], 123);
@@ -127,8 +151,10 @@ mod tests {
     #[tokio::test]
     async fn test_receive_invalid_json() {
         let (tx, _rx) = mpsc::channel(100);
+
         let mock_messages = vec![Ok(Ok("invalid json".to_string()))];
         let mock_socket = MockSocket::new(mock_messages);
+
         let result = receive_shares(&mock_socket, tx);
         assert!(result.is_err());
     }
@@ -136,8 +162,12 @@ mod tests {
     #[tokio::test]
     async fn test_receive_decode_error() {
         let (tx, _rx) = mpsc::channel(100);
-        let mock_messages = vec![Ok(Err(vec![1, 2, 3]))]; // Simulate decode error
+
+        let mock_messages = vec![
+            Ok(Err(vec![1, 2, 3])), // Simulating decode error
+        ];
         let mock_socket = MockSocket::new(mock_messages);
+
         let result = receive_shares(&mock_socket, tx);
         assert!(result.is_err());
     }
