@@ -1,0 +1,42 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'p2pool-v2'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=p2pool-v2",
+                    "--package=p2pool-v2"
+                ],
+                "filter": {
+                    "name": "p2pool-v2",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=p2pool-v2",
+                    "--package=p2pool-v2"
+                ],
+                "filter": {
+                    "name": "p2pool-v2",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
