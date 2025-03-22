@@ -21,8 +21,11 @@ use std::error::Error;
 use tokio::sync::oneshot;
 
 /// Commands for communication between node handle and actor
+/// We allow large enum variants because we want to avoid heap allocations for these frequently used messages
+/// We know that the size difference is large, and we are willing to accept it
 #[derive(Debug)]
 #[allow(dead_code)]
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Command telling node's event loop to send share to network
     SendGossip(
