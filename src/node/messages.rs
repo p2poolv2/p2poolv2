@@ -79,10 +79,11 @@ mod tests {
 
     #[test]
     fn test_inventory_message_serde() {
-        let mut have_shares = Vec::new();
-        have_shares.push("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".into());
-        have_shares.push("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6".into());
-        have_shares.push("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7".into());
+        let have_shares = vec![
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".into(),
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6".into(),
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7".into(),
+        ];
 
         let msg = Message::Inventory(InventoryMessage::BlockHashes(have_shares.clone()));
 
@@ -116,10 +117,7 @@ mod tests {
             Message::GetData(GetData::Block(hash)) => {
                 assert_eq!(
                     hash,
-                    ShareBlockHash::try_from(
-                        "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
-                    )
-                    .unwrap()
+                    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
                 )
             }
             _ => panic!("Expected BlockHash variant"),

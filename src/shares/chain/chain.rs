@@ -61,7 +61,7 @@ impl Chain {
             self.genesis_block_hash = share.cached_blockhash;
         }
         let blockhash = share.cached_blockhash.unwrap();
-        let prev_share_blockhash = share.header.prev_share_blockhash.clone();
+        let prev_share_blockhash = share.header.prev_share_blockhash;
         let share_difficulty = share.header.miner_share.diff;
 
         let height = match self.get_height_for_prevhash(prev_share_blockhash) {
@@ -206,8 +206,8 @@ impl Chain {
     }
 
     /// Get a share header from the chain given a share hash
-    pub fn get_share_headers(&self, share_hashes: &Vec<ShareBlockHash>) -> Vec<ShareHeader> {
-        self.store.get_share_headers(share_hashes.clone())
+    pub fn get_share_headers(&self, share_hashes: &[ShareBlockHash]) -> Vec<ShareHeader> {
+        self.store.get_share_headers(share_hashes)
     }
 
     /// Get blockhashes for locator
