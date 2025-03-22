@@ -83,7 +83,7 @@ async fn handle_gossip_message(
             info!("Handling mining share: {:?}", mining_share);
             let time_provider = SystemTimeProvider {};
             if let Err(e) =
-                handle_share_block::<void::Void>(mining_share, chain_handle, &time_provider).await
+                handle_share_block::<()>(mining_share, chain_handle, &time_provider).await
             {
                 error!("Failed to add share: {}", e);
                 return Err(format!("Failed to add share, Error: {}", e).into());
