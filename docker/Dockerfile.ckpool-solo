@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y \
 # Clone ckpool repository
 RUN git clone https://bitbucket.org/p2pool-v2/ckpool-solo.git /ckpool && \
     cd /ckpool && \
-    git checkout 99a5f9ebaf5ee8dff600fd6c3533d3284f984353
+    git checkout 6af084e97b97b1c5f5d1aaf23e371bd324d81f33
 
 # Build ckpool
 WORKDIR /ckpool
