@@ -238,11 +238,12 @@ mod tests {
         ];
 
         let mock_socket = MockSocket::new(mock_messages);
-
-        // Call receive_shares and verify that it correctly detects disconnection
-        let result = receive_shares(&mock_socket, tx);
-
-        // Ensure that the function correctly returns an error (indicating a disconnect)
-        assert!(result.is_err());
+        for _ in 0..4 {
+            let result = receive_shares(&mock_socket, tx.clone());
+            assert!(
+                result.is_err(),
+                "Expected an error, but function returned Ok"
+            );
+        }
     }
 }
