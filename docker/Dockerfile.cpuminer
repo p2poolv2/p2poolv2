@@ -1,4 +1,4 @@
-FROM alpine:latest as builder
+FROM alpine:latest
 
 # Install build dependencies
 RUN apk add --no-cache \
