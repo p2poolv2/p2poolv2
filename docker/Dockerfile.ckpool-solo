@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y \
 # Clone ckpool repository
 RUN git clone https://bitbucket.org/p2pool-v2/ckpool-solo.git /ckpool && \
     cd /ckpool && \
-    git checkout 30dc8de43dd8479b7b6edf73ab7d675f1f3d6856
+    git checkout 6af084e97b97b1c5f5d1aaf23e371bd324d81f33
 
 # Build ckpool
 WORKDIR /ckpool
@@ -35,7 +35,8 @@ RUN mkdir /data
 RUN mkdir /logs
 RUN chown ckpool:ckpool /data
 RUN chown ckpool:ckpool /logs
-COPY ckpool-solo.json /ckpool-solo.json
+COPY signet/ckpool-solo-signet.json /ckpool-solo-signet.json
+COPY testnet4/ckpool-solo-testnet4.json /ckpool-solo-testnet4.json
 
 USER ckpool
 VOLUME ["/data"]
@@ -44,5 +45,5 @@ VOLUME ["/data"]
 # 8881 is the port for ZMQ pub socket
 EXPOSE 3333 8881
 
-ENTRYPOINT ["src/ckpool"]
-CMD ["--btcsolo", "--config=/ckpool-solo.json", "--log-shares", "--loglevel=7"]
+ENTRYPOINT []
+CMD ["src/ckpool"]

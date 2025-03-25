@@ -38,5 +38,5 @@ RUN cargo build --release
 COPY config.toml /p2pool
 ENV RUST_LOG=info
 
-# Set the binary as the entrypoint
-ENTRYPOINT ["cargo", "run", "--release",  "--", "--config=config.toml"] 
+ENTRYPOINT [ ]
+CMD [] 

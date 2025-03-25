@@ -29,7 +29,7 @@ use tracing::{error, info};
 /// Validate the ShareBlock and store it in the chain
 /// We do not send any inventory message as we do not want to gossip the share block.
 /// Share blocks are gossiped using the libp2p gossipsub protocol.
-pub async fn handle_share_block<C>(
+pub async fn handle_share_block(
     share_block: ShareBlock,
     chain_handle: ChainHandle,
     time_provider: &impl TimeProvider,
@@ -98,8 +98,7 @@ mod tests {
         let mut time_provider = TestTimeProvider(SystemTime::now());
         time_provider.set_time(shares[0].ntime);
 
-        let result =
-            handle_share_block::<void::Void>(share_block, chain_handle, &time_provider).await;
+        let result = handle_share_block(share_block, chain_handle, &time_provider).await;
         assert!(result.is_ok());
     }
 
@@ -119,8 +118,7 @@ mod tests {
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        let result =
-            handle_share_block::<void::Void>(share_block, chain_handle, &time_provider).await;
+        let result = handle_share_block(share_block, chain_handle, &time_provider).await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
@@ -171,8 +169,7 @@ mod tests {
         let mut time_provider = TestTimeProvider(SystemTime::now());
         time_provider.set_time(shares[0].ntime);
 
-        let result =
-            handle_share_block::<void::Void>(share_block, chain_handle, &time_provider).await;
+        let result = handle_share_block(share_block, chain_handle, &time_provider).await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),

@@ -1,4 +1,4 @@
-FROM alpine:latest as builder
+FROM alpine:latest
 
 # Install build dependencies
 RUN apk add --no-cache \
@@ -46,8 +46,14 @@ RUN chown bitcoin:bitcoin /data
 USER bitcoin
 VOLUME ["/data"]
 
-EXPOSE 8332 8333
+# Ports for signet
+EXPOSE 38332 38333
 
-COPY bitcoin-signet.conf /bitcoin-signet.conf
-ENTRYPOINT ["bitcoind"]
-CMD ["-datadir=/data", "-conf=/bitcoin-signet.conf"]
+# Ports for testnet4
+EXPOSE 48332 48333
+
+COPY signet/bitcoin-signet.conf /etc/bitcoin/
+COPY testnet4/bitcoin-testnet4.conf /etc/bitcoin/
+
+ENTRYPOINT []
+CMD ["/bitcoin/bitcoind"]

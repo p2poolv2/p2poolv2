@@ -366,12 +366,13 @@ impl Store {
     pub fn get_tx_metadata(&self, txid: &bitcoin::Txid) -> Option<TxMetadata> {
         let tx_cf = self.db.cf_handle("tx").unwrap();
         let tx_metadata = self.db.get_cf::<&[u8]>(tx_cf, txid.as_ref()).unwrap();
-        if tx_metadata.is_none() {
-            return None;
+        if let Some(tx_metadata) = tx_metadata {
+            let tx_metadata: TxMetadata =
+                ciborium::de::from_reader(tx_metadata.as_slice()).unwrap();
+            Some(tx_metadata)
+        } else {
+            None
         }
-        let tx_metadata = tx_metadata.unwrap();
-        let tx_metadata: TxMetadata = ciborium::de::from_reader(tx_metadata.as_slice()).unwrap();
-        Some(tx_metadata)
     }
 
     /// Get a workbase from the store
@@ -383,18 +384,19 @@ impl Store {
             .db
             .get_cf::<&[u8]>(workbase_cf, workbase_key.as_bytes())
             .unwrap();
-        if workbase.is_none() {
-            return None;
+        if let Some(workbase) = workbase {
+            let workbase = Message::cbor_deserialize(&workbase).unwrap();
+            let workbase = match workbase {
+                Message::Workbase(workbase) => workbase,
+                _ => {
+                    tracing::error!("Invalid workbase key: {:?}", workbase_key);
+                    return None;
+                }
+            };
+            Some(workbase)
+        } else {
+            None
         }
-        let workbase = Message::cbor_deserialize(&workbase.unwrap()).unwrap();
-        let workbase = match workbase {
-            Message::Workbase(workbase) => workbase,
-            _ => {
-                tracing::error!("Invalid workbase key: {:?}", workbase_key);
-                return None;
-            }
-        };
-        Some(workbase)
     }
 
     /// Get multiple workbases from the store given a set of workinfoids
@@ -501,7 +503,7 @@ impl Store {
     }
 
     /// Get a share headers matching the vector of blockhashes
-    pub fn get_share_headers(&self, blockhashes: Vec<ShareBlockHash>) -> Vec<ShareHeader> {
+    pub fn get_share_headers(&self, blockhashes: &[ShareBlockHash]) -> Vec<ShareHeader> {
         debug!("Getting share headers from store: {:?}", blockhashes);
         let share_cf = self.db.cf_handle("block").unwrap();
         let keys = blockhashes
@@ -606,7 +608,7 @@ impl Store {
         limit: usize,
     ) -> Vec<ShareHeader> {
         let blockhashes = self.get_blockhashes_for_locator(locator, stop_blockhash, limit);
-        self.get_share_headers(blockhashes)
+        self.get_share_headers(&blockhashes)
     }
 
     /// Get descendants headers of a share
@@ -634,14 +636,14 @@ impl Store {
                 None => break,
             };
         }
-        self.get_share_headers(descendants)
+        self.get_share_headers(&descendants)
     }
 
     /// Get multiple shares from the store
     /// TODO: Refactor to use get_share
     pub fn get_shares(
         &self,
-        blockhashes: Vec<ShareBlockHash>,
+        blockhashes: &[ShareBlockHash],
     ) -> HashMap<ShareBlockHash, ShareBlock> {
         debug!("Getting shares from store: {:?}", blockhashes);
         let share_cf = self.db.cf_handle("block").unwrap();
@@ -765,7 +767,7 @@ impl Store {
             return vec![];
         }
         let share = share.unwrap();
-        let uncle_blocks = self.get_shares(share.header.uncles);
+        let uncle_blocks = self.get_shares(&share.header.uncles);
         uncle_blocks.into_iter().map(|(_, share)| share).collect()
     }
 
@@ -856,7 +858,7 @@ impl Store {
     /// Get the shares for a specific height
     pub fn get_shares_at_height(&self, height: u32) -> HashMap<ShareBlockHash, ShareBlock> {
         let blockhashes = self.get_blockhashes_for_height(height);
-        self.get_shares(blockhashes)
+        self.get_shares(&blockhashes)
     }
 
     /// Get the block metadata for a blockhash

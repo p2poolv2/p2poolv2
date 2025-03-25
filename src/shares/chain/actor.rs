@@ -53,6 +53,7 @@ pub enum ChainMessage {
 
 #[derive(Debug)]
 #[allow(dead_code)]
+#[allow(clippy::large_enum_variant)]
 pub enum ChainResponse {
     Tips(HashSet<ShareBlockHash>),
     TotalDifficulty(Decimal),
@@ -193,7 +194,7 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::GetChainTip => {
-                    let result = self.chain.chain_tip.clone();
+                    let result = self.chain.chain_tip;
                     if let Err(e) = response_sender.send(ChainResponse::ChainTip(result)).await {
                         error!("Failed to send get_chain_tip response: {}", e);
                     }

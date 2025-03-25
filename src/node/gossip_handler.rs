@@ -82,9 +82,7 @@ async fn handle_gossip_message(
         Message::MiningShare(mining_share) => {
             info!("Handling mining share: {:?}", mining_share);
             let time_provider = SystemTimeProvider {};
-            if let Err(e) =
-                handle_share_block::<void::Void>(mining_share, chain_handle, &time_provider).await
-            {
+            if let Err(e) = handle_share_block(mining_share, chain_handle, &time_provider).await {
                 error!("Failed to add share: {}", e);
                 return Err(format!("Failed to add share, Error: {}", e).into());
             }
@@ -110,7 +108,7 @@ mod tests {
         let mut mock_chain = ChainHandle::default();
 
         let json_str = include_str!("../../tests/test_data/simple_miner_workbase.json");
-        let workbase: MinerWorkbase = serde_json::from_str(&json_str).unwrap();
+        let workbase: MinerWorkbase = serde_json::from_str(json_str).unwrap();
 
         mock_chain
             .expect_add_workbase()
@@ -140,7 +138,7 @@ mod tests {
         let mut mock_chain = ChainHandle::default();
 
         let json_str = include_str!("../../tests/test_data/simple_miner_workbase.json");
-        let workbase: MinerWorkbase = serde_json::from_str(&json_str).unwrap();
+        let workbase: MinerWorkbase = serde_json::from_str(json_str).unwrap();
 
         mock_chain
             .expect_add_workbase()
@@ -174,7 +172,7 @@ mod tests {
         let mut mock_chain = ChainHandle::default();
 
         let json_str = include_str!("../../tests/test_data/simple_miner_workbase.json");
-        let workbase: MinerWorkbase = serde_json::from_str(&json_str).unwrap();
+        let workbase: MinerWorkbase = serde_json::from_str(json_str).unwrap();
 
         mock_chain
             .expect_add_workbase()
@@ -192,7 +190,7 @@ mod tests {
         let mut mock_chain = ChainHandle::default();
 
         let json_str = include_str!("../../tests/test_data/simple_miner_workbase.json");
-        let workbase: MinerWorkbase = serde_json::from_str(&json_str).unwrap();
+        let workbase: MinerWorkbase = serde_json::from_str(json_str).unwrap();
 
         mock_chain
             .expect_add_workbase()
@@ -211,7 +209,7 @@ mod tests {
         let mut mock_chain = ChainHandle::default();
 
         let json_str = include_str!("../../tests/test_data/validation/userworkbases.json");
-        let userworkbases: Vec<CkPoolMessage> = serde_json::from_str(&json_str).unwrap();
+        let userworkbases: Vec<CkPoolMessage> = serde_json::from_str(json_str).unwrap();
         let user_workbases = userworkbases
             .into_iter()
             .filter_map(|msg| match msg {
@@ -241,7 +239,7 @@ mod tests {
         let mut mock_chain = ChainHandle::default();
 
         let json_str = include_str!("../../tests/test_data/validation/userworkbases.json");
-        let userworkbases: Vec<CkPoolMessage> = serde_json::from_str(&json_str).unwrap();
+        let userworkbases: Vec<CkPoolMessage> = serde_json::from_str(json_str).unwrap();
         let user_workbases = userworkbases
             .into_iter()
             .filter_map(|msg| match msg {

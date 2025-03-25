@@ -36,7 +36,6 @@ pub struct NodeHandle {
 }
 
 #[allow(dead_code)]
-
 impl NodeHandle {
     /// Create a new Node and return a handle to interact with it
     pub async fn new(
@@ -156,9 +155,8 @@ impl NodeActor {
                     match buf {
                         Some(SwarmSend::Gossip(message)) => {
                             let buf = message.cbor_serialize().unwrap();
-                            match self.node.swarm.behaviour_mut().gossipsub.publish(self.node.share_topic.clone(), buf) {
-                                Err(e) => error!("Error publishing share: {}", e),
-                                Ok(_) => {}
+                            if let Err(e) = self.node.swarm.behaviour_mut().gossipsub.publish(self.node.share_topic.clone(), buf) {
+                                error!("Error publishing share: {}", e);
                             }
                         }
                         Some(SwarmSend::Request(peer_id, msg)) => {
