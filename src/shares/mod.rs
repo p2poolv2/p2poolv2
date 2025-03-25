@@ -199,8 +199,8 @@ impl ShareBlock {
     /// The workinfoid and clientid are 0 for genesis block on all networks
     pub fn build_genesis_for_network(public_key: PublicKey, network: bitcoin::Network) -> Self {
         assert!(
-            network == bitcoin::Network::Signet,
-            "Network Bitcoin, Testnet, Testnet4 or Regtest not yet supported"
+            network == bitcoin::Network::Signet || network == bitcoin::Network::Testnet4,
+            "Network Bitcoin, Testnet or Regtest not yet supported"
         );
         let genesis_data = genesis::genesis_data(network).unwrap();
         ShareBlock::build_genesis(&genesis_data, public_key, network)
@@ -318,7 +318,7 @@ mod tests {
         let output = &share.transactions[0].output[0];
         assert_eq!(output.value.to_sat(), 1);
 
-        let expected_address = bitcoin::Address::p2pkh(&public_key, bitcoin::Network::Signet);
+        let expected_address = bitcoin::Address::p2pkh(public_key, bitcoin::Network::Signet);
         assert_eq!(output.script_pubkey, expected_address.script_pubkey());
         assert_eq!(
             share.cached_blockhash,
