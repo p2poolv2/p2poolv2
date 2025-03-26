@@ -437,11 +437,8 @@ impl Store {
         let user_workbase = self
             .db
             .get_cf::<&[u8]>(user_workbase_cf, user_workbase_key.as_bytes())
-            .unwrap();
-        if user_workbase.is_none() {
-            return None;
-        }
-        let user_workbase = Message::cbor_deserialize(&user_workbase.unwrap()).unwrap();
+            .unwrap()?;
+        let user_workbase = Message::cbor_deserialize(&user_workbase).unwrap();
         let user_workbase = match user_workbase {
             Message::UserWorkbase(user_workbase) => user_workbase,
             _ => {
@@ -497,7 +494,7 @@ impl Store {
             Ok(share) => share,
             Err(_) => return None,
         };
-        let transactions = self.get_txs_for_block(&blockhash);
+        let transactions = self.get_txs_for_block(blockhash);
         let share = share.into_share_block_with_transactions(transactions);
         Some(share)
     }
@@ -525,22 +522,15 @@ impl Store {
                 }
             })
             .collect::<Vec<_>>();
-        share_headers
-            .into_iter()
-            .filter_map(|header| header)
-            .collect()
+        share_headers.into_iter().flatten().collect()
     }
 
     // Find the first blockhash that exists by checking key existence
-    fn get_first_existing_blockhash(
-        &self,
-        locator: &Vec<ShareBlockHash>,
-    ) -> Option<ShareBlockHash> {
+    fn get_first_existing_blockhash(&self, locator: &[ShareBlockHash]) -> Option<ShareBlockHash> {
         let block_cf = self.db.cf_handle("block").unwrap();
-        let mut iter = locator.iter();
-        while let Some(blockhash) = iter.next() {
+        for blockhash in locator {
             if self.db.key_may_exist_cf(block_cf, blockhash.as_ref()) {
-                return Some(blockhash.clone());
+                return Some(*blockhash);
             }
         }
         None
@@ -586,7 +576,7 @@ impl Store {
     /// Find blockhashes up to the stop blockhash, or the limit provided
     pub fn get_blockhashes_for_locator(
         &self,
-        locator: &Vec<ShareBlockHash>,
+        locator: &[ShareBlockHash],
         stop_blockhash: &ShareBlockHash,
         limit: usize,
     ) -> Vec<ShareBlockHash> {
@@ -603,7 +593,7 @@ impl Store {
     /// Get headers to satisy the locator query.
     pub fn get_headers_for_locator(
         &self,
-        locator: &Vec<ShareBlockHash>,
+        locator: &[ShareBlockHash],
         stop_blockhash: &ShareBlockHash,
         limit: usize,
     ) -> Vec<ShareHeader> {
@@ -627,8 +617,8 @@ impl Store {
             let children = self.get_children_blockhashes(&current_blockhash);
             for child in children {
                 if descendants.len() < limit {
-                    descendants.push(child.clone());
-                    next_children.push(child.clone());
+                    descendants.push(child);
+                    next_children.push(child);
                 }
             }
             current_blockhash = match next_children.pop() {
@@ -660,7 +650,7 @@ impl Store {
             .filter_map(|(blockhash, result)| {
                 if let Ok(Some(data)) = result {
                     if let Ok(storage_share) = StorageShareBlock::cbor_deserialize(&data) {
-                        let txids = self.get_txids_for_blockhash(&blockhash);
+                        let txids = self.get_txids_for_blockhash(blockhash);
                         let transactions = txids
                             .iter()
                             .map(|txid| self.get_tx(txid).unwrap())
@@ -755,7 +745,7 @@ impl Store {
     /// Get the parent of a share as a ShareBlock
     pub fn get_parent(&self, blockhash: &ShareBlockHash) -> Option<ShareBlock> {
         let share = self.get_share(blockhash)?;
-        let parent_blockhash = share.header.prev_share_blockhash.clone();
+        let parent_blockhash = share.header.prev_share_blockhash;
         self.get_share(&parent_blockhash.unwrap())
     }
 
@@ -768,7 +758,7 @@ impl Store {
         }
         let share = share.unwrap();
         let uncle_blocks = self.get_shares(&share.header.uncles);
-        uncle_blocks.into_iter().map(|(_, share)| share).collect()
+        uncle_blocks.into_values().collect()
     }
 
     /// Get entire chain from earliest known block to given blockhash, excluding the given blockhash
@@ -799,11 +789,11 @@ impl Store {
         );
         let chain1 = self.get_chain_upto(blockhash1);
         let chain2 = self.get_chain_upto(blockhash2);
-        if let Some(blockhash) = chain1.iter().rev().find(|share| chain2.contains(share)) {
-            Some(blockhash.cached_blockhash.unwrap())
-        } else {
-            None
-        }
+        chain1
+            .iter()
+            .rev()
+            .find(|share| chain2.contains(share))
+            .map(|blockhash| blockhash.cached_blockhash.unwrap())
     }
 
     /// Set the height for the blockhash, storing it in a vector of blockhashes for that height
@@ -828,8 +818,8 @@ impl Store {
         };
 
         // Add the new blockhash if not already present
-        if !blockhashes.contains(&blockhash) {
-            blockhashes.push(blockhash.clone());
+        if !blockhashes.contains(blockhash) {
+            blockhashes.push(*blockhash);
 
             // Serialize the updated vector of blockhashes
             let mut serialized = Vec::new();
@@ -2038,10 +2028,10 @@ mod tests {
         // Verify each block has the correct status
         let metadata1 = store.get_block_metadata(&blockhash1).unwrap();
         let metadata2 = store.get_block_metadata(&blockhash2).unwrap();
-        assert_eq!(metadata1.is_valid, true);
-        assert_eq!(metadata1.is_confirmed, false);
-        assert_eq!(metadata2.is_valid, false);
-        assert_eq!(metadata2.is_confirmed, true);
+        assert!(metadata1.is_valid);
+        assert!(!metadata1.is_confirmed);
+        assert!(!metadata2.is_valid);
+        assert!(metadata2.is_confirmed);
 
         // Update statuses
         store.set_block_valid(&blockhash1, false, None).unwrap();
@@ -2051,8 +2041,8 @@ mod tests {
         let updated_metadata2 = store.get_block_metadata(&blockhash2).unwrap();
 
         // Verify updated statuses
-        assert_eq!(updated_metadata1.is_valid, false);
-        assert_eq!(updated_metadata2.is_confirmed, false);
+        assert!(!updated_metadata1.is_valid);
+        assert!(!updated_metadata2.is_confirmed);
     }
 
     #[test]
@@ -2187,13 +2177,13 @@ mod tests {
         store.add_user_workbase(user_workbase3.clone()).unwrap();
 
         // Test getting individual user workbases
-        let retrieved_workbases = store.get_user_workbases(&vec![1000, 2000]);
+        let retrieved_workbases = store.get_user_workbases(&[1000, 2000]);
         assert_eq!(retrieved_workbases.len(), 2);
         assert_eq!(retrieved_workbases[0].workinfoid, 1000);
         assert_eq!(retrieved_workbases[1].workinfoid, 2000);
 
         // Test getting a non-existent user workbase
-        let nonexistent_workbase = store.get_user_workbases(&vec![4000, 5000]);
+        let nonexistent_workbase = store.get_user_workbases(&[4000, 5000]);
         assert_eq!(nonexistent_workbase.len(), 0);
 
         // Verify the content of retrieved workbases

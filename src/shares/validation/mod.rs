@@ -107,7 +107,7 @@ pub async fn validate_uncles(
     }
     for uncle in &share.header.uncles {
         if chain_handle.get_share(*uncle).await.is_none() {
-            return Err(format!("Uncle {} not found in store", uncle.to_string()).into());
+            return Err(format!("Uncle {} not found in store", uncle).into());
         }
     }
     Ok(())

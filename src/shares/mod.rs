@@ -137,10 +137,9 @@ impl PartialEq<ShareBlockHash> for &ShareBlockHash {
 
 impl Eq for ShareBlockHash {}
 
-impl ShareBlockHash {
-    /// Implement as ref for conversion to byte slice
-    pub fn as_ref(&self) -> &[u8] {
-        &self.0.as_ref()
+impl AsRef<[u8]> for ShareBlockHash {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
     }
 }
 
@@ -430,7 +429,7 @@ mod tests {
         assert_eq!(output.value.to_sat(), 1);
 
         // Verify the output script is P2PKH for the miner's pubkey
-        let expected_address = bitcoin::Address::p2pkh(&pubkey, bitcoin::Network::Regtest);
+        let expected_address = bitcoin::Address::p2pkh(pubkey, bitcoin::Network::Regtest);
         assert_eq!(output.script_pubkey, expected_address.script_pubkey());
     }
 

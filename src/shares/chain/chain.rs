@@ -214,7 +214,7 @@ impl Chain {
     /// Returns a list of shares starting from the earliest block from the block hashes
     pub fn get_headers_for_locator(
         &self,
-        block_hashes: &Vec<ShareBlockHash>,
+        block_hashes: &[ShareBlockHash],
         stop_block_hash: &ShareBlockHash,
         limit: usize,
     ) -> Vec<ShareHeader> {
@@ -230,7 +230,7 @@ impl Chain {
     /// Returns a list of shares starting from the earliest block from the block hashes
     pub fn get_blockhashes_for_locator(
         &self,
-        locator: &Vec<ShareBlockHash>,
+        locator: &[ShareBlockHash],
         stop_block_hash: &ShareBlockHash,
         max_blockhashes: usize,
     ) -> Vec<ShareBlockHash> {
@@ -351,10 +351,7 @@ impl Chain {
     /// Returns 0 if blockhash is the chain tip
     pub fn get_depth(&self, blockhash: &ShareBlockHash) -> Option<usize> {
         // If chain tip is None, return None
-        let tip = match self.chain_tip {
-            Some(tip) => tip,
-            None => return None,
-        };
+        let tip = self.chain_tip?;
 
         // If blockhash is chain tip, return 0
         if tip == *blockhash {
@@ -758,11 +755,8 @@ mod chain_tests {
         // Test 3: Get headers with non-existent locator
         let non_existent =
             "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6".into();
-        let headers = chain.get_headers_for_locator(
-            &vec![non_existent],
-            &share5.cached_blockhash.unwrap(),
-            500,
-        );
+        let headers =
+            chain.get_headers_for_locator(&[non_existent], &share5.cached_blockhash.unwrap(), 500);
         assert_eq!(headers.len(), 1); // Should return genesis when no match found
 
         // Test 4: Multiple locator hashes, results should start from first found

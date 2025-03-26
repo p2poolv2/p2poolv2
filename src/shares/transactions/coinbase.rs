@@ -41,15 +41,12 @@ pub fn create_coinbase_transaction(pubkey: &PublicKey, network: Network) -> Tran
         witness: bitcoin::Witness::new(),
     };
 
-    // Create transaction
-    let transaction = Transaction {
+    Transaction {
         version: bitcoin::transaction::Version::TWO,
         lock_time: bitcoin::absolute::LockTime::ZERO,
         input: vec![tx_in],
         output: vec![tx_out],
-    };
-
-    transaction
+    }
 }
 
 #[cfg(test)]
@@ -79,7 +76,7 @@ mod tests {
         assert_eq!(output.value, bitcoin::Amount::from_sat(SHARE_VALUE));
 
         // Verify output goes to correct address
-        let expected_address = Address::p2pkh(&pubkey, Network::Regtest);
+        let expected_address = Address::p2pkh(pubkey, Network::Regtest);
         assert_eq!(output.script_pubkey, expected_address.script_pubkey());
     }
 }

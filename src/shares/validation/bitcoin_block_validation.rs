@@ -69,7 +69,7 @@ pub async fn validate_bitcoin_block(
     if let Ok(response) = result {
         Ok(response == "duplicate")
     } else {
-        Err(format!("Bitcoin block validation failed").into())
+        Err(format!("Bitcoin block validation failed: {:?}", result).into())
     }
 }
 
@@ -312,7 +312,7 @@ mod tests {
         // Set up mock auth
         let auth_header = format!(
             "Basic {}",
-            base64::engine::general_purpose::STANDARD.encode(format!("testuser:testpass"))
+            base64::engine::general_purpose::STANDARD.encode("testuser:testpass")
         );
 
         // Mock difficulty call to return higher difficulty than share

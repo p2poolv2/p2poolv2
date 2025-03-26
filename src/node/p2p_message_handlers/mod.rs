@@ -140,7 +140,7 @@ mod tests {
     use super::*;
     #[mockall_double::double]
     use crate::shares::chain::actor::ChainHandle;
-    use crate::shares::{ShareBlockHash, ShareHeader};
+    use crate::shares::ShareBlockHash;
     use crate::test_utils::simple_miner_workbase;
     use crate::test_utils::{load_valid_workbases_userworkbases_and_shares, TestBlockBuilder};
     use crate::utils::time_provider::TestTimeProvider;
