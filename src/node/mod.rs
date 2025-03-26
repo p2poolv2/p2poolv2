@@ -41,7 +41,7 @@ use libp2p::{
     swarm::SwarmEvent,
     Multiaddr, Swarm,
 };
-use rate_limiter::{MessageType, RateLimiter};
+use rate_limiter::RateLimiter;
 use request_response_handler::handle_request_response_event;
 use std::error::Error;
 use std::time::Duration;
@@ -380,7 +380,7 @@ impl Node {
         {
             match Message::cbor_deserialize(&message.data) {
                 Ok(deserialized_msg) => {
-                    let message_type = MessageType::from(&deserialized_msg);
+                    let message_type = Message::from(deserialized_msg);
                     if !self
                         .rate_limiter
                         .check_rate_limit(
@@ -436,15 +436,15 @@ impl Node {
                 },
         } = &request_response_event
         {
-            let message_type = MessageType::from(request);
+            let message = Message::from(request.clone());
             if !self
                 .rate_limiter
-                .check_rate_limit(&peer, message_type.clone(), &self.config.network)
+                .check_rate_limit(&peer, message.clone(), &self.config.network)
                 .await
             {
                 warn!(
                     "Rate limit exceeded for peer {} with message type {:?}. Disconnecting.",
-                    peer, message_type
+                    peer, message
                 );
                 self.swarm.disconnect_peer_id(*peer).unwrap_or_else(|e| {
                     error!("Failed to disconnect rate-limited peer: {:?}", e);

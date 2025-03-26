@@ -6,32 +6,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tracing::warn;
 
-/// Represents the type of message for rate limiting purposes.
-///
-/// We use a separate enum from `messages::Message` to have explicit control to avoid accidentally applying a rate limit to a new message type added in the future.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum MessageType {
-    Workbase,
-    UserWorkbase,
-    MiningShare,
-    Inventory,
-    Transaction,
-    Other,
-}
-
-impl From<&Message> for MessageType {
-    fn from(msg: &Message) -> Self {
-        match msg {
-            Message::Workbase(_) => MessageType::Workbase,
-            Message::UserWorkbase(_) => MessageType::UserWorkbase,
-            Message::MiningShare(_) => MessageType::MiningShare,
-            Message::Inventory(_) => MessageType::Inventory,
-            Message::Transaction(_) => MessageType::Transaction,
-            _ => MessageType::Other,
-        }
-    }
-}
-
 /// A counter that keeps track of recent timestamps.
 #[derive(Debug)]
 pub struct RecentCounter {
@@ -82,7 +56,7 @@ impl RecentCounter {
 /// Rate limiter to prevent DoS attacks by limiting the number of messages
 #[derive(Debug, Default)]
 pub struct RateLimiter {
-    limits: Mutex<HashMap<PeerId, HashMap<MessageType, RecentCounter>>>,
+    limits: Mutex<HashMap<PeerId, HashMap<u8, RecentCounter>>>,
     window: Duration,
 }
 
@@ -94,33 +68,53 @@ impl RateLimiter {
         }
     }
 
+    // Get a numeric discriminant from the message variant
+    fn get_message_discriminant(message: &Message) -> u8 {
+        match message {
+            Message::Workbase(_) => 0,
+            Message::UserWorkbase(_) => 1,
+            Message::MiningShare(_) => 2,
+            Message::Inventory(_) => 3,
+            Message::Transaction(_) => 4,
+            Message::NotFound(_) => 5,
+            Message::GetShareHeaders(_, _) => 6,
+            Message::GetShareBlocks(_, _) => 7,
+            Message::ShareHeaders(_) => 8,
+            Message::ShareBlock(_) => 9,
+            Message::GetData(_) => 10,
+        }
+    }
+
     /// Checks if the rate limit for a given peer and message type is exceeded.
     pub async fn check_rate_limit(
         &self,
         peer_id: &PeerId,
-        message_type: MessageType,
+        message: Message,
         config: &NetworkConfig,
     ) -> bool {
-        let max_allowed = match message_type {
-            MessageType::Workbase => config.max_workbase_per_second,
-            MessageType::UserWorkbase => config.max_userworkbase_per_second,
-            MessageType::MiningShare => config.max_miningshare_per_second,
-            MessageType::Inventory => config.max_inventory_per_second,
-            MessageType::Transaction => config.max_transaction_per_second,
-            MessageType::Other => return true,
+        let max_allowed = match message {
+            Message::Workbase(_) => config.max_workbase_per_second,
+            Message::UserWorkbase(_) => config.max_userworkbase_per_second,
+            Message::MiningShare(_) => config.max_miningshare_per_second,
+            Message::Inventory(_) => config.max_inventory_per_second,
+            Message::Transaction(_) => config.max_transaction_per_second,
+            _ => return true,
         };
+
+        // Get the discriminant value for the HashMap key
+        let discriminant = Self::get_message_discriminant(&message);
 
         let mut limits = self.limits.lock().await;
         let peer_limits = limits.entry(*peer_id).or_insert_with(HashMap::new);
         let counter = peer_limits
-            .entry(message_type.clone())
+            .entry(discriminant)
             .or_insert_with(RecentCounter::new);
 
         let current_count = counter.count(self.window).await;
         if current_count >= max_allowed as usize {
             warn!(
                 "Rate limit exceeded for peer {} and message type {:?}",
-                peer_id, message_type
+                peer_id, message
             );
             false
         } else {
@@ -134,6 +128,7 @@ impl RateLimiter {
 mod tests {
     use super::*;
     use crate::config::NetworkConfig;
+    use crate::shares::miner_message::{Gbt, MinerWorkbase};
     use libp2p::PeerId;
 
     fn test_config() -> NetworkConfig {
@@ -155,6 +150,66 @@ mod tests {
         }
     }
 
+    fn create_test_workbase() -> Message {
+        // Create a minimal valid MinerWorkbase for testing
+        let workbase = MinerWorkbase {
+            workinfoid: 7460787496608071691,
+            gbt: Gbt {
+                capabilities: vec!["proposal".to_string()],
+                version: 536870912,
+                rules: vec![
+                    "csv".to_string(),
+                    "!segwit".to_string(),
+                    "!signet".to_string(),
+                    "taproot".to_string(),
+                ],
+                vbavailable: serde_json::Value::Object(serde_json::Map::new()),
+                vbrequired: 0,
+                previousblockhash:
+                    "00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc".to_string(),
+                transactions: vec![],
+                coinbaseaux: serde_json::Value::Object(serde_json::Map::new()),
+                coinbasevalue: 5000000000,
+                longpollid: "00000000eefbb1ae2a6ca9e826209f19d9a9f00c1ea443fa062debf89a32fcfc1"
+                    .to_string(),
+                target: "00000377ae000000000000000000000000000000000000000000000000000000"
+                    .to_string(),
+                mintime: 1736687181,
+                mutable: vec![
+                    "time".to_string(),
+                    "transactions".to_string(),
+                    "prevblock".to_string(),
+                ],
+                noncerange: "00000000ffffffff".to_string(),
+                sigoplimit: 80000,
+                sizelimit: 4000000,
+                weightlimit: 4000000,
+                curtime: bitcoin::absolute::Time::from_consensus(1737100205).unwrap(),
+                bits: "1e0377ae".to_string(),
+                height: 99,
+                signet_challenge: "51".to_string(),
+                default_witness_commitment:
+                    "6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9"
+                        .to_string(),
+                diff: 0.001126515290698186,
+                ntime: bitcoin::absolute::Time::from_consensus(1737100205).unwrap(),
+                bbversion: "20000000".to_string(),
+                nbit: "1e0377ae".to_string(),
+            },
+            txns: vec![],
+            merkles: vec![],
+            coinb1:
+                "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff"
+                    .to_string(),
+            coinb2: "ffffffff0100f2052a01000000".to_string(),
+            coinb3: "".to_string(),
+            header: "00000020fc2fa389bfde62a03f44eac1009f9a9df10962829ecaa6e21abbfeee00000000"
+                .to_string(),
+        };
+
+        Message::Workbase(workbase)
+    }
+
     #[tokio::test]
     async fn test_rate_limiter_sliding_window() {
         let config = test_config();
@@ -164,17 +219,17 @@ mod tests {
         // fill the window
         assert!(
             limiter
-                .check_rate_limit(&peer_id, MessageType::Workbase, &config)
+                .check_rate_limit(&peer_id, create_test_workbase(), &config)
                 .await
         );
         assert!(
             limiter
-                .check_rate_limit(&peer_id, MessageType::Workbase, &config)
+                .check_rate_limit(&peer_id, create_test_workbase(), &config)
                 .await
         );
         assert!(
             !limiter
-                .check_rate_limit(&peer_id, MessageType::Workbase, &config)
+                .check_rate_limit(&peer_id, create_test_workbase(), &config)
                 .await
         );
 
@@ -184,17 +239,17 @@ mod tests {
         // new messages in the next window
         assert!(
             limiter
-                .check_rate_limit(&peer_id, MessageType::Workbase, &config)
+                .check_rate_limit(&peer_id, create_test_workbase(), &config)
                 .await
         );
         assert!(
             limiter
-                .check_rate_limit(&peer_id, MessageType::Workbase, &config)
+                .check_rate_limit(&peer_id, create_test_workbase(), &config)
                 .await
         );
         assert!(
             !limiter
-                .check_rate_limit(&peer_id, MessageType::Workbase, &config)
+                .check_rate_limit(&peer_id, create_test_workbase(), &config)
                 .await
         );
     }
