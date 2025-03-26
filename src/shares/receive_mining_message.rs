@@ -41,7 +41,7 @@ pub fn start_receiving_mining_messages<C: Send + 'static>(
             error!("Share receiver failed: {}", e);
         }
     });
-    let miner_pubkey = config.miner.pubkey.clone();
+    let miner_pubkey = config.miner.pubkey;
     tokio::spawn(async move {
         while let Some(mining_message_data) = mining_message_rx.recv().await {
             let mining_message: CkPoolMessage =
