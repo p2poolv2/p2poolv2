@@ -20,6 +20,7 @@ use crate::shares::ShareBlock;
 use bitcoin::consensus::encode::serialize;
 use rust_decimal::Decimal;
 use serde_json::json;
+use std::time::Duration;
 use std::error::Error;
 
 /// Get current bitcoin difficulty from rpc
@@ -32,7 +33,7 @@ pub async fn meets_bitcoin_difficulty(
     block: &bitcoin::Block,
     config: &BitcoinConfig,
 ) -> Result<bool, Box<dyn Error>> {
-    let bitcoind = BitcoindRpcClient::new(&config.url, &config.username, &config.password)?;
+    let bitcoind = BitcoindRpcClient::new(&config.url, &config.username, &config.password,Duration::from_secs(10),3 )?;
     let difficulty = bitcoind.get_difficulty().await?;
     let share_difficulty = share.header.miner_share.sdiff;
     if share_difficulty >= Decimal::from_f64_retain(difficulty).unwrap() {
@@ -59,18 +60,30 @@ pub async fn validate_bitcoin_block(
     })];
 
     // Call getblocktemplate RPC method using config values
-    let bitcoind = BitcoindRpcClient::new(&config.url, &config.username, &config.password)?;
-    let result: Result<serde_json::Value, _> = bitcoind.request("getblocktemplate", params).await;
-
-    if let Err(e) = result {
-        return Err(format!("Bitcoin block validation failed: {}", e).into());
+    let bitcoind = BitcoindRpcClient::new(&config.url, &config.username, &config.password, Duration::from_secs(10),3)?;
+    let response: Result<serde_json::Value, _> = bitcoind.request("getblocktemplate", params).await;
+    match response {
+        Ok(res) => {
+            // Extract result, which could be directly a string or inside a JSON object
+        let result_str = if res.is_string() {
+            res.as_str().ok_or("Invalid result type")?
+        } else {
+            res.get("result")
+               .ok_or("Missing result field")?
+               .as_str()
+               .ok_or("Result is not a string")?
+        };
+        
+        if result_str == "duplicate" {
+            return Ok(true);
+        } else if result_str == "rejected" {
+            return Ok(false);
+        }
+        Err(format!("Unexpected response from bitcoind: {:?}", result_str).into())
     }
-
-    if let Ok(response) = result {
-        Ok(response == "duplicate")
-    } else {
-        Err(format!("Bitcoin block validation failed: {:?}", result).into())
-    }
+    Err(e) => Err(format!("Bitcoin block validation failed: {}", e).into()),
+}    
+          
 }
 
 #[cfg(test)]
@@ -113,6 +126,7 @@ mod tests {
                 }],
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
                 "result": "duplicate",
                 "id": 0
             })))
@@ -162,6 +176,7 @@ mod tests {
                 }],
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
                 "result": "rejected",
                 "id": 0
             })))
@@ -250,7 +265,7 @@ mod tests {
                 "jsonrpc": "2.0",
                 "id": 0,
                 "method": "getdifficulty",
-                "params": [],
+               "params": [],
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "jsonrpc": "2.0",
@@ -292,7 +307,7 @@ mod tests {
         // Create share with matching difficulty
         let share = crate::test_utils::TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
-            .diff(dec!(1.0))
+            .sdiff(dec!(1.0))
             .build();
 
         // Test validation

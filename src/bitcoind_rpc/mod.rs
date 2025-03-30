@@ -17,11 +17,16 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use jsonrpsee::core::client::ClientT;
 use jsonrpsee::http_client::{HeaderMap, HttpClient, HttpClientBuilder};
+use serde_json::Value;
+use std::time::Duration;
+use tokio::time::sleep;
+use tracing::{error, info};
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct BitcoindRpcClient {
     client: HttpClient,
+    max_retries: u8,
 }
 
 #[allow(dead_code)]
@@ -30,6 +35,8 @@ impl BitcoindRpcClient {
         url: &str,
         username: &str,
         password: &str,
+        timeout: Duration,
+        max_retries: u8,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -43,30 +50,47 @@ impl BitcoindRpcClient {
         );
         let client = HttpClientBuilder::default()
             .set_headers(headers)
+             .request_timeout(timeout)
             .build(url)?;
-        Ok(Self { client })
+        Ok(Self { client,  max_retries })
     }
 
     pub async fn request<T: serde::de::DeserializeOwned>(
         &self,
         method: &str,
-        params: Vec<serde_json::Value>,
+        params: Vec<Value>,
     ) -> Result<T, Box<dyn std::error::Error>> {
-        let response = self.client.request(method, params).await?;
-        Ok(response)
+        let mut attempts = 0;
+        let mut delay = Duration::from_millis(100);
+        while attempts < self.max_retries {
+            match self.client.request(method, params.clone()).await {
+                Ok(response) => return Ok(response),
+                Err(err) => {
+                    attempts += 1;
+                    error!("RPC call '{}' failed (attempt {}): {:?}", method, attempts, err);
+                    if attempts > self.max_retries {
+                        return Err(Box::new(err));
+                    }
+                    sleep(Duration::from_secs(2_u64.pow(attempts as u32))).await;
+                    delay *= 2; // Exponential backoff
+                }
+            }
+        }
+        Err("Max retries reached for RPC request".into())
     }
 
     /// Get current bitcoin difficulty from bitcoind rpc
     pub async fn get_difficulty(&self) -> Result<f64, Box<dyn std::error::Error>> {
-        let params: Vec<serde_json::Value> = vec![];
-        let result: serde_json::Value = self.request("getdifficulty", params).await?;
-        Ok(result.as_f64().unwrap())
+        let params: Vec<Value> = vec![];
+        let result: Value = self.request("getdifficulty", params).await?;
+        result.as_f64().ok_or_else(|| "Failed to parse difficulty".into())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::time::Duration;
     use wiremock::{
         matchers::{body_json, header, method, path},
         Mock, MockServer, ResponseTemplate,
@@ -76,6 +100,8 @@ mod tests {
     async fn test_bitcoin_client() {
         // Start mock server
         let mock_server = MockServer::start().await;
+        
+        let block_hex_string = "0000002000000000000000000000000000000000000000000000000000000000";
 
         let auth_header = format!(
             "Basic {}",
@@ -85,22 +111,25 @@ mod tests {
         // Define expected request and response
         Mock::given(method("POST"))
             .and(path("/"))
-            .and(header("Authorization", auth_header))
+            .and(header("Authorization", &auth_header))
             .and(body_json(serde_json::json!({
                 "jsonrpc": "2.0",
-                "method": "test",
-                "params": [],
+                "method": "getblocktemplate",
+                "params": [{
+                    "mode": "proposal",
+                    "data": block_hex_string
+                }],
                 "id": 0
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "jsonrpc": "2.0",
-                "result": "test response",
+                "result": "duplicate",
                 "id": 0
             })))
             .mount(&mock_server)
             .await;
 
-        let client = BitcoindRpcClient::new(&mock_server.uri(), "testuser", "testpass").unwrap();
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "testuser", "testpass",  Duration::from_secs(5), 2).unwrap();
 
         let params: Vec<serde_json::Value> = vec![];
         let result: String = client.request("test", params).await.unwrap();
@@ -113,7 +142,8 @@ mod tests {
         let mock_server = MockServer::start().await;
 
         let client =
-            BitcoindRpcClient::new(&mock_server.uri(), "invaliduser", "invalidpass").unwrap();
+            BitcoindRpcClient::new(&mock_server.uri(), "invaliduser", "invalidpass", Duration::from_secs(5),
+            2).unwrap();
         let params: Vec<serde_json::Value> = vec![];
         let result: Result<String, Box<dyn std::error::Error>> =
             client.request("test", params).await;
@@ -123,7 +153,8 @@ mod tests {
     #[tokio::test]
     #[ignore] // Ignore by default since we only use it to test the connection to a locally running bitcoind
     async fn test_bitcoin_client_real_connection() {
-        let client = BitcoindRpcClient::new("http://localhost:38332", "p2pool", "p2pool").unwrap();
+        let client = BitcoindRpcClient::new("http://localhost:38332", "p2pool", "p2pool",Duration::from_secs(30),
+        3).unwrap();
 
         let params: Vec<serde_json::Value> = vec![];
         let result: serde_json::Value = client.request("getblockchaininfo", params).await.unwrap();
@@ -153,7 +184,8 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool", Duration::from_secs(5),
+        2).unwrap();
         let difficulty = client.get_difficulty().await.unwrap();
 
         assert_eq!(difficulty, 1234.56);
