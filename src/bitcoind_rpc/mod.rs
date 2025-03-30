@@ -50,9 +50,12 @@ impl BitcoindRpcClient {
         );
         let client = HttpClientBuilder::default()
             .set_headers(headers)
-             .request_timeout(timeout)
+            .request_timeout(timeout)
             .build(url)?;
-        Ok(Self { client,  max_retries })
+        Ok(Self {
+            client,
+            max_retries,
+        })
     }
 
     pub async fn request<T: serde::de::DeserializeOwned>(
@@ -67,7 +70,10 @@ impl BitcoindRpcClient {
                 Ok(response) => return Ok(response),
                 Err(err) => {
                     attempts += 1;
-                    error!("RPC call '{}' failed (attempt {}): {:?}", method, attempts, err);
+                    error!(
+                        "RPC call '{}' failed (attempt {}): {:?}",
+                        method, attempts, err
+                    );
                     if attempts > self.max_retries {
                         return Err(Box::new(err));
                     }
@@ -83,7 +89,9 @@ impl BitcoindRpcClient {
     pub async fn get_difficulty(&self) -> Result<f64, Box<dyn std::error::Error>> {
         let params: Vec<Value> = vec![];
         let result: Value = self.request("getdifficulty", params).await?;
-        result.as_f64().ok_or_else(|| "Failed to parse difficulty".into())
+        result
+            .as_f64()
+            .ok_or_else(|| "Failed to parse difficulty".into())
     }
 }
 
@@ -100,7 +108,7 @@ mod tests {
     async fn test_bitcoin_client() {
         // Start mock server
         let mock_server = MockServer::start().await;
-        
+
         let block_hex_string = "0000002000000000000000000000000000000000000000000000000000000000";
 
         let auth_header = format!(
@@ -129,7 +137,14 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = BitcoindRpcClient::new(&mock_server.uri(), "testuser", "testpass",  Duration::from_secs(5), 2).unwrap();
+        let client = BitcoindRpcClient::new(
+            &mock_server.uri(),
+            "testuser",
+            "testpass",
+            Duration::from_secs(5),
+            2,
+        )
+        .unwrap();
 
         let params: Vec<serde_json::Value> = vec![];
         let result: String = client.request("test", params).await.unwrap();
@@ -141,9 +156,14 @@ mod tests {
     async fn test_bitcoin_client_with_invalid_credentials() {
         let mock_server = MockServer::start().await;
 
-        let client =
-            BitcoindRpcClient::new(&mock_server.uri(), "invaliduser", "invalidpass", Duration::from_secs(5),
-            2).unwrap();
+        let client = BitcoindRpcClient::new(
+            &mock_server.uri(),
+            "invaliduser",
+            "invalidpass",
+            Duration::from_secs(5),
+            2,
+        )
+        .unwrap();
         let params: Vec<serde_json::Value> = vec![];
         let result: Result<String, Box<dyn std::error::Error>> =
             client.request("test", params).await;
@@ -153,8 +173,14 @@ mod tests {
     #[tokio::test]
     #[ignore] // Ignore by default since we only use it to test the connection to a locally running bitcoind
     async fn test_bitcoin_client_real_connection() {
-        let client = BitcoindRpcClient::new("http://localhost:38332", "p2pool", "p2pool",Duration::from_secs(30),
-        3).unwrap();
+        let client = BitcoindRpcClient::new(
+            "http://localhost:38332",
+            "p2pool",
+            "p2pool",
+            Duration::from_secs(30),
+            3,
+        )
+        .unwrap();
 
         let params: Vec<serde_json::Value> = vec![];
         let result: serde_json::Value = client.request("getblockchaininfo", params).await.unwrap();
@@ -184,8 +210,14 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool", Duration::from_secs(5),
-        2).unwrap();
+        let client = BitcoindRpcClient::new(
+            &mock_server.uri(),
+            "p2pool",
+            "p2pool",
+            Duration::from_secs(5),
+            2,
+        )
+        .unwrap();
         let difficulty = client.get_difficulty().await.unwrap();
 
         assert_eq!(difficulty, 1234.56);

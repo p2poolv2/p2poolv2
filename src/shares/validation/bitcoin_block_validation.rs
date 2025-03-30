@@ -20,8 +20,8 @@ use crate::shares::ShareBlock;
 use bitcoin::consensus::encode::serialize;
 use rust_decimal::Decimal;
 use serde_json::json;
-use std::time::Duration;
 use std::error::Error;
+use std::time::Duration;
 
 /// Get current bitcoin difficulty from rpc
 /// Compare that to the share difficulty.
@@ -33,7 +33,13 @@ pub async fn meets_bitcoin_difficulty(
     block: &bitcoin::Block,
     config: &BitcoinConfig,
 ) -> Result<bool, Box<dyn Error>> {
-    let bitcoind = BitcoindRpcClient::new(&config.url, &config.username, &config.password,Duration::from_secs(10),3 )?;
+    let bitcoind = BitcoindRpcClient::new(
+        &config.url,
+        &config.username,
+        &config.password,
+        Duration::from_secs(10),
+        3,
+    )?;
     let difficulty = bitcoind.get_difficulty().await?;
     let share_difficulty = share.header.miner_share.sdiff;
     if share_difficulty >= Decimal::from_f64_retain(difficulty).unwrap() {
@@ -60,30 +66,35 @@ pub async fn validate_bitcoin_block(
     })];
 
     // Call getblocktemplate RPC method using config values
-    let bitcoind = BitcoindRpcClient::new(&config.url, &config.username, &config.password, Duration::from_secs(10),3)?;
+    let bitcoind = BitcoindRpcClient::new(
+        &config.url,
+        &config.username,
+        &config.password,
+        Duration::from_secs(10),
+        3,
+    )?;
     let response: Result<serde_json::Value, _> = bitcoind.request("getblocktemplate", params).await;
     match response {
         Ok(res) => {
             // Extract result, which could be directly a string or inside a JSON object
-        let result_str = if res.is_string() {
-            res.as_str().ok_or("Invalid result type")?
-        } else {
-            res.get("result")
-               .ok_or("Missing result field")?
-               .as_str()
-               .ok_or("Result is not a string")?
-        };
-        
-        if result_str == "duplicate" {
-            return Ok(true);
-        } else if result_str == "rejected" {
-            return Ok(false);
+            let result_str = if res.is_string() {
+                res.as_str().ok_or("Invalid result type")?
+            } else {
+                res.get("result")
+                    .ok_or("Missing result field")?
+                    .as_str()
+                    .ok_or("Result is not a string")?
+            };
+
+            if result_str == "duplicate" {
+                return Ok(true);
+            } else if result_str == "rejected" {
+                return Ok(false);
+            }
+            Err(format!("Unexpected response from bitcoind: {:?}", result_str).into())
         }
-        Err(format!("Unexpected response from bitcoind: {:?}", result_str).into())
+        Err(e) => Err(format!("Bitcoin block validation failed: {}", e).into()),
     }
-    Err(e) => Err(format!("Bitcoin block validation failed: {}", e).into()),
-}    
-          
 }
 
 #[cfg(test)]
