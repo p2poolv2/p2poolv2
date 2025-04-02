@@ -17,11 +17,17 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use jsonrpsee::core::client::ClientT;
 use jsonrpsee::http_client::{HeaderMap, HttpClient, HttpClientBuilder};
+use std::sync::Arc;
+use tokio::sync::Semaphore;
+use tokio::task;
+use tokio::time::Duration;
+use tokio::time::Instant;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct BitcoindRpcClient {
     client: HttpClient,
+    semaphore: Arc<Semaphore>,
 }
 
 #[allow(dead_code)]
@@ -30,6 +36,7 @@ impl BitcoindRpcClient {
         url: &str,
         username: &str,
         password: &str,
+        max_concurrent_requests: usize,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -44,7 +51,8 @@ impl BitcoindRpcClient {
         let client = HttpClientBuilder::default()
             .set_headers(headers)
             .build(url)?;
-        Ok(Self { client })
+        let semaphore = Arc::new(Semaphore::new(max_concurrent_requests));
+        Ok(Self { client, semaphore })
     }
 
     pub async fn request<T: serde::de::DeserializeOwned>(
@@ -52,6 +60,7 @@ impl BitcoindRpcClient {
         method: &str,
         params: Vec<serde_json::Value>,
     ) -> Result<T, Box<dyn std::error::Error>> {
+        let _permit = self.semaphore.acquire().await?; // Limit concurrent requests
         let response = self.client.request(method, params).await?;
         Ok(response)
     }
@@ -100,7 +109,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = BitcoindRpcClient::new(&mock_server.uri(), "testuser", "testpass").unwrap();
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "testuser", "testpass", 5).unwrap();
 
         let params: Vec<serde_json::Value> = vec![];
         let result: String = client.request("test", params).await.unwrap();
@@ -113,7 +122,7 @@ mod tests {
         let mock_server = MockServer::start().await;
 
         let client =
-            BitcoindRpcClient::new(&mock_server.uri(), "invaliduser", "invalidpass").unwrap();
+            BitcoindRpcClient::new(&mock_server.uri(), "invaliduser", "invalidpass", 5).unwrap();
         let params: Vec<serde_json::Value> = vec![];
         let result: Result<String, Box<dyn std::error::Error>> =
             client.request("test", params).await;
@@ -123,7 +132,8 @@ mod tests {
     #[tokio::test]
     #[ignore] // Ignore by default since we only use it to test the connection to a locally running bitcoind
     async fn test_bitcoin_client_real_connection() {
-        let client = BitcoindRpcClient::new("http://localhost:38332", "p2pool", "p2pool").unwrap();
+        let client =
+            BitcoindRpcClient::new("http://localhost:38332", "p2pool", "p2pool", 5).unwrap();
 
         let params: Vec<serde_json::Value> = vec![];
         let result: serde_json::Value = client.request("getblockchaininfo", params).await.unwrap();
@@ -153,9 +163,52 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool", 5).unwrap();
         let difficulty = client.get_difficulty().await.unwrap();
 
         assert_eq!(difficulty, 1234.56);
+
+        #[tokio::test]
+        async fn test_rate_limit_enforced() {
+            let mock_server = MockServer::start().await;
+
+            Mock::given(method("POST"))
+                .and(path("/"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "result": "ok",
+                    "id": 0
+                })))
+                .mount(&mock_server)
+                .await;
+
+            let client = BitcoindRpcClient::new(&mock_server.uri(), "user", "pass", 2).unwrap();
+
+            let start_time = Instant::now();
+
+            let handles: Vec<_> = (0..4)
+                .map(|_| {
+                    let client = client.clone();
+                    task::spawn(async move {
+                        let params: Vec<serde_json::Value> = vec![];
+                        client.request::<String>("test", params).await.unwrap()
+                    })
+                })
+                .collect();
+
+            let results: Vec<String> = futures::future::join_all(handles)
+                .await
+                .into_iter()
+                .map(|res| res.unwrap())
+                .collect();
+
+            let elapsed_time = start_time.elapsed();
+
+            assert_eq!(results.len(), 4);
+            assert!(results.iter().all(|r| r == "ok"));
+
+            // Since we allow 2 concurrent requests, the second batch should have waited
+            assert!(elapsed_time > Duration::from_millis(50));
+        }
     }
 }
