@@ -99,7 +99,7 @@ fn receive_shares<S: MinerSocket>(
 
 // A receive function that clients use to receive shares
 // This function creates the ZMQ socket and passes it to the receive_shares function
-pub fn receive_from_ckpool(
+pub fn start_receiving_from_ckpool(
     config: &CkPoolConfig,
     tx: tokio::sync::mpsc::Sender<Value>,
 ) -> Result<(), Box<dyn Error>> {
