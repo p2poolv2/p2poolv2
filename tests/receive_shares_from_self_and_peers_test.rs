@@ -27,10 +27,8 @@ mod self_and_peer_messages_tests {
     use p2poolv2::utils::time_provider::{TestTimeProvider, TimeProvider};
     use std::fs;
     use std::time::{Duration, SystemTime};
-    use tempfile;
     use tempfile::tempdir;
     use tokio::sync::mpsc;
-    use zmq;
 
     #[tokio::test]
     async fn receive_shares_and_workbases_from_self_and_peers() {
@@ -91,18 +89,18 @@ mod self_and_peer_messages_tests {
 
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        let mut ckpool_iter = ckpool_messages.iter();
-        let mut peer_iter = peer_messages.iter();
+        let ckpool_iter = ckpool_messages.iter();
+        let peer_iter = peer_messages.iter();
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(100);
         let (response_channel_tx, _response_channel_rx) = mpsc::channel::<Message>(100);
         tokio::spawn(async move {
-            while let Some(_) = swarm_rx.recv().await {
+            while (swarm_rx.recv().await).is_some() {
                 tracing::debug!("Received swarm send");
             }
         });
 
-        while let Some(ckpool_msg) = ckpool_iter.next() {
+        for ckpool_msg in ckpool_iter {
             let serialized = serde_json::to_string(&ckpool_msg).unwrap();
             publisher
                 .send(&serialized, 0)
@@ -111,7 +109,7 @@ mod self_and_peer_messages_tests {
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        while let Some(peer_msg) = peer_iter.next() {
+        for peer_msg in peer_iter {
             tokio::time::sleep(Duration::from_millis(100)).await;
 
             // for shares from peers we validate it, so we need to set the time provider to the share timestamp
