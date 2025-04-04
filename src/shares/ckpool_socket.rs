@@ -111,7 +111,7 @@ pub fn receive_from_ckpool(
                 if let Err(e) = receive_shares(&socket, tx.clone()) {
                     error!("Error in receiving shares: {}. Reconnecting...", e);
                     thread::sleep(backoff_duration); // Exponential backoff
-                    backoff_duration = backoff_duration * 2; // Double the backoff time
+                    backoff_duration *= 2; // Double the backoff time
                 } else {
                     backoff_duration = Duration::from_millis(100); // Reset backoff after success
                 }
@@ -123,7 +123,7 @@ pub fn receive_from_ckpool(
                     backoff_duration.as_millis()
                 );
                 thread::sleep(backoff_duration); // Exponential backoff
-                backoff_duration = backoff_duration * 2; // Double the backoff time
+                backoff_duration *= 2; // Double the backoff time
             }
         }
     }
