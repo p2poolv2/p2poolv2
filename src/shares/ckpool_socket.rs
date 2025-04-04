@@ -16,7 +16,6 @@
 
 use crate::config::CkPoolConfig;
 use serde_json::Value;
-use std::cell::Cell;
 use std::error::Error;
 use std::thread;
 use std::time::Duration;
@@ -82,9 +81,9 @@ fn receive_shares<S: MinerSocket>(
                 if matches!(
                     e,
                     zmq::Error::ETERM   // Context terminated
-                    | zmq::Error::ENOTSOCK  // Not a valid socket
-                    | zmq::Error::EINTR // Interrupted system call
-                    | zmq::Error::EAGAIN // Would block (e.g., non-blocking mode)
+                        | zmq::Error::ENOTSOCK  // Not a valid socket
+                        | zmq::Error::EINTR // Interrupted system call
+                        | zmq::Error::EAGAIN // Would block (e.g., non-blocking mode)
                 ) {
                     error!("Disconnected from socket: {:?}. Attempting reconnect...", e);
                     return Err(Box::new(e)); // Trigger reconnection logic
@@ -132,6 +131,7 @@ pub fn start_receiving_from_ckpool(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use tokio::sync::mpsc;
 
     // Mock socket for testing
@@ -202,6 +202,7 @@ mod tests {
         let result = receive_shares(&mock_socket, tx);
         assert!(result.is_err());
     }
+
     #[tokio::test]
     async fn test_reconnect_logic() {
         let (tx, mut rx) = mpsc::channel(100);
@@ -225,6 +226,7 @@ mod tests {
             assert_eq!(value["value"], 123);
         }
     }
+
     #[tokio::test]
     async fn test_disconnect_handling() {
         let (tx, _rx) = mpsc::channel(100);
