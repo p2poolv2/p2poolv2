@@ -23,9 +23,7 @@ mod zmq_tests {
     use p2poolv2::shares::miner_message::CkPoolMessage;
     use std::fs;
     use std::time::Duration;
-    use tempfile;
     use tempfile::tempdir;
-    use zmq;
 
     #[tokio::test]
     async fn test_single_node_with_zmq_feed_of_workbases_only() {
