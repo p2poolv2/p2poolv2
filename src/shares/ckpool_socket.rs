@@ -23,32 +23,54 @@ use std::time::Duration;
 use tracing::{debug, error, info};
 use zmq;
 
-// Define a trait for the socket operations we need
-// Use a trait to enable testing with a mock socket
+/// Trait for zmq socket operations. We implement this for the zmq::Socket type and mock it for testing
 #[automock]
-trait CkPoolSocketTrait {
-    fn recv_string(&self) -> Result<Result<String, Vec<u8>>, zmq::Error>;
+pub(crate) trait ZMQSocketTrait {
+    fn recv_string(&self, flags: i32) -> Result<Result<String, Vec<u8>>, zmq::Error>;
+    fn connect(&self, endpoint: &str) -> Result<(), zmq::Error>;
+    fn set_subscribe(&self, topic: &[u8]) -> Result<(), zmq::Error>;
+}
+
+impl ZMQSocketTrait for zmq::Socket {
+    fn recv_string(&self, flags: i32) -> Result<Result<String, Vec<u8>>, zmq::Error> {
+        self.recv_string(flags)
+    }
+    fn connect(&self, endpoint: &str) -> Result<(), zmq::Error> {
+        self.connect(endpoint)
+    }
+    fn set_subscribe(&self, topic: &[u8]) -> Result<(), zmq::Error> {
+        self.set_subscribe(topic)
+    }
+}
+
+/// Trait for ckpool socket operations.
+/// This helps us mock the CkPoolSocket for testing.
+#[automock]
+pub(crate) trait CkPoolSocketTrait {
     fn connect(&self) -> Result<(), zmq::Error>;
+    fn recv_string(&self) -> Result<Result<String, Vec<u8>>, zmq::Error>;
 }
 
 /// Concrete implementation of the CkPoolSocket trait
-pub(crate) struct CkPoolSocket {
+pub(crate) struct CkPoolSocket<S: ZMQSocketTrait> {
     config: CkPoolConfig,
-    socket: zmq::Socket,
+    socket: S,
 }
 
-impl CkPoolSocket {
-    pub(crate) fn new(config: CkPoolConfig) -> Result<Self, Box<dyn Error>> {
-        let ctx = zmq::Context::new();
-        let socket = ctx.socket(zmq::SUB)?;
+pub(crate) fn create_zmq_socket() -> Result<zmq::Socket, Box<dyn Error>> {
+    let ctx = zmq::Context::new();
+    let socket = ctx.socket(zmq::SUB)?;
+    Ok(socket)
+}
+
+impl CkPoolSocket<zmq::Socket> {
+    pub(crate) fn new(config: CkPoolConfig, socket: zmq::Socket) -> Result<Self, Box<dyn Error>> {
         Ok(CkPoolSocket { config, socket })
     }
+}
 
-    fn recv_string(&self) -> Result<Result<String, Vec<u8>>, zmq::Error> {
-        self.socket.recv_string(0)
-    }
-
-    pub(crate) fn connect(&self) -> Result<(), zmq::Error> {
+impl<S: ZMQSocketTrait> CkPoolSocketTrait for CkPoolSocket<S> {
+    fn connect(&self) -> Result<(), zmq::Error> {
         let mut retry_delay = Duration::from_secs(1);
         let max_delay = Duration::from_secs(60);
         let endpoint = format!("tcp://{}:{}", self.config.host, self.config.port);
@@ -78,15 +100,9 @@ impl CkPoolSocket {
         self.socket.set_subscribe(b"")?;
         Ok(())
     }
-}
 
-impl CkPoolSocketTrait for CkPoolSocket {
     fn recv_string(&self) -> Result<Result<String, Vec<u8>>, zmq::Error> {
         self.socket.recv_string(0)
-    }
-    fn connect(&self) -> Result<(), zmq::Error> {
-        let endpoint = format!("tcp://{}:{}", self.config.host, self.config.port);
-        self.socket.connect(&endpoint)
     }
 }
 
@@ -144,8 +160,8 @@ fn receive_shares<S: CkPoolSocketTrait>(
 
 // A receive function that clients use to receive shares
 // This function creates the ZMQ socket and passes it to the receive_shares function
-pub(crate) fn start_receiving_from_ckpool(
-    socket: CkPoolSocket,
+pub(crate) fn start_receiving_from_ckpool<S: ZMQSocketTrait>(
+    socket: CkPoolSocket<S>,
     tx: tokio::sync::mpsc::Sender<Value>,
 ) -> Result<(), Box<dyn Error>> {
     let mut backoff_duration = Duration::from_millis(100); // Starting with 100ms
@@ -166,6 +182,7 @@ pub(crate) fn start_receiving_from_ckpool(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mockall::predicate::eq;
     use tokio::sync::mpsc;
 
     #[tokio::test]
@@ -302,5 +319,89 @@ mod tests {
             }
             _ => panic!("Expected Err variant, got Ok"),
         }
+    }
+
+    #[test]
+    fn test_ckpool_socket_connect_success() {
+        // Create a mock ZMQSocketTrait
+        let mut mock_zmq_socket = MockZMQSocketTrait::new();
+
+        // Set up expectations for the mock
+        mock_zmq_socket
+            .expect_connect()
+            .times(1)
+            .with(eq("tcp://localhost:3333"))
+            .returning(|_| Ok(()));
+
+        mock_zmq_socket
+            .expect_set_subscribe()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        // Create a CkPoolConfig with test values
+        let config = CkPoolConfig {
+            host: "localhost".to_string(),
+            port: 3333,
+        };
+
+        // Create a CkPoolSocket with the mock
+        let ckpool_socket = CkPoolSocket {
+            config,
+            socket: mock_zmq_socket,
+        };
+
+        // Call connect and verify it succeeds
+        let result = ckpool_socket.connect();
+        assert!(
+            result.is_ok(),
+            "Expected successful connection, but got error: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_ckpool_socket_connect_retry_success() {
+        // Create a mock ZMQSocketTrait
+        let mut mock_zmq_socket = MockZMQSocketTrait::new();
+
+        // Set up expectations for the mock
+        // First attempt fails
+        mock_zmq_socket
+            .expect_connect()
+            .times(1)
+            .with(eq("tcp://localhost:3333"))
+            .returning(|_| Err(zmq::Error::ECONNREFUSED));
+
+        // Second attempt succeeds
+        mock_zmq_socket
+            .expect_connect()
+            .times(1)
+            .with(eq("tcp://localhost:3333"))
+            .returning(|_| Ok(()));
+
+        mock_zmq_socket
+            .expect_set_subscribe()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        // Create a CkPoolConfig with test values
+        let config = CkPoolConfig {
+            host: "localhost".to_string(),
+            port: 3333,
+        };
+
+        // Create a CkPoolSocket with the mock
+        let ckpool_socket = CkPoolSocket {
+            config,
+            socket: mock_zmq_socket,
+        };
+
+        // Call connect and verify it succeeds despite the initial failure
+        let result = ckpool_socket.connect();
+        assert!(
+            result.is_ok(),
+            "Expected successful connection after retry, but got error: {:?}",
+            result.err()
+        );
     }
 }

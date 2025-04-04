@@ -17,11 +17,12 @@
 use crate::node::Config;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
+use crate::shares::ckpool_socket::CkPoolSocketTrait;
 use crate::shares::handle_mining_message::handle_mining_message;
 use crate::shares::miner_message::CkPoolMessage;
 use crate::{
     node::SwarmSend,
-    shares::ckpool_socket::{start_receiving_from_ckpool, CkPoolSocket},
+    shares::ckpool_socket::{create_zmq_socket, start_receiving_from_ckpool, CkPoolSocket},
 };
 use std::error::Error;
 use std::thread;
@@ -38,7 +39,8 @@ pub fn start_receiving_mining_messages<C: Send + 'static>(
 ) -> Result<(), Box<dyn Error>> {
     let (mining_message_tx, mut mining_message_rx) =
         tokio::sync::mpsc::channel::<serde_json::Value>(100);
-    let ckpool_socket = CkPoolSocket::new(config.ckpool.clone())?;
+    let socket = create_zmq_socket()?;
+    let ckpool_socket = CkPoolSocket::new(config.ckpool.clone(), socket)?;
     ckpool_socket.connect()?;
     thread::spawn(move || {
         if let Err(e) = start_receiving_from_ckpool(ckpool_socket, mining_message_tx) {
