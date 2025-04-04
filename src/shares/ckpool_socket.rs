@@ -16,10 +16,12 @@
 
 use crate::config::CkPoolConfig;
 use serde_json::Value;
+use std::cell::Cell;
 use std::error::Error;
-use tracing::{error, info};
+use std::thread;
+use std::time::Duration;
+use tracing::{debug, error, info};
 use zmq;
-
 // Define a trait for the socket operations we need
 // Use a trait to enable testing with a mock socket
 trait MinerSocket {
@@ -51,27 +53,45 @@ fn receive_shares<S: MinerSocket>(
 ) -> Result<(), Box<dyn Error>> {
     loop {
         match socket.recv_string() {
+            // Successfully received a valid JSON string
             Ok(Ok(json_str)) => {
                 tracing::debug!("Received json from ckpool: {}", json_str);
                 match serde_json::from_str(&json_str) {
                     Ok(json_value) => {
+                        // Send the parsed JSON to the channel
                         if let Err(e) = tx.blocking_send(json_value) {
                             error!("Failed to send share to channel: {}", e);
                         }
                     }
                     Err(e) => {
-                        error!("Failed to parse JSON: {}", e);
+                        // Handle JSON parsing error
+                        error!("Failed to parse JSON: {}. JSON content: {:?}", e, json_str);
+                        debug!("JSON Parsing Error Stacktrace: {:?}", e);
+
                         return Err(Box::new(e));
                     }
                 }
             }
+            // Received a message that couldn't be decoded properly
             Ok(Err(e)) => {
                 error!("Failed to decode message: {:?}", e);
                 return Err(Box::new(zmq::Error::EINVAL));
             }
+            // Handle socket-level errors
             Err(e) => {
-                error!("Failed to receive message: {:?}", e);
-                return Err(Box::new(e));
+                if matches!(
+                    e,
+                    zmq::Error::ETERM   // Context terminated
+                    | zmq::Error::ENOTSOCK  // Not a valid socket
+                    | zmq::Error::EINTR // Interrupted system call
+                    | zmq::Error::EAGAIN // Would block (e.g., non-blocking mode)
+                ) {
+                    error!("Disconnected from socket: {:?}. Attempting reconnect...", e);
+                    return Err(Box::new(e)); // Trigger reconnection logic
+                } else {
+                    error!("Failed to receive message: {:?}", e);
+                    return Err(Box::new(e));
+                }
             }
         }
     }
@@ -83,8 +103,30 @@ pub fn receive_from_ckpool(
     config: &CkPoolConfig,
     tx: tokio::sync::mpsc::Sender<Value>,
 ) -> Result<(), Box<dyn Error>> {
-    let socket = create_zmq_socket(config)?;
-    receive_shares(&socket, tx)
+    let mut backoff_duration = Duration::from_millis(100); // Starting with 100ms
+
+    loop {
+        match create_zmq_socket(config) {
+            Ok(socket) => {
+                if let Err(e) = receive_shares(&socket, tx.clone()) {
+                    error!("Error in receiving shares: {}. Reconnecting...", e);
+                    thread::sleep(backoff_duration); // Exponential backoff
+                    backoff_duration = backoff_duration * 2; // Double the backoff time
+                } else {
+                    backoff_duration = Duration::from_millis(100); // Reset backoff after success
+                }
+            }
+            Err(e) => {
+                error!(
+                    "Failed to connect to ZMQ: {}. Retrying in {}ms...",
+                    e,
+                    backoff_duration.as_millis()
+                );
+                thread::sleep(backoff_duration); // Exponential backoff
+                backoff_duration = backoff_duration * 2; // Double the backoff time
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -95,24 +137,26 @@ mod tests {
     // Mock socket for testing
     struct MockSocket {
         messages: Vec<Result<Result<String, Vec<u8>>, zmq::Error>>,
-        current: usize,
+        current: Cell<usize>, // Use Cell for interior mutability
     }
 
     impl MockSocket {
         fn new(messages: Vec<Result<Result<String, Vec<u8>>, zmq::Error>>) -> Self {
             Self {
                 messages,
-                current: 0,
+                current: Cell::new(0),
             }
         }
     }
 
     impl MinerSocket for MockSocket {
         fn recv_string(&self) -> Result<Result<String, Vec<u8>>, zmq::Error> {
-            if self.current >= self.messages.len() {
-                panic!("No more mock messages");
+            let index = self.current.get();
+            if index >= self.messages.len() {
+                return Err(zmq::Error::EAGAIN); // Simulate disconnection
             }
-            self.messages[self.current].clone()
+            self.current.set(index + 1); // Update the index safely
+            self.messages[index].clone()
         }
     }
 
@@ -157,5 +201,49 @@ mod tests {
 
         let result = receive_shares(&mock_socket, tx);
         assert!(result.is_err());
+    }
+    #[tokio::test]
+    async fn test_reconnect_logic() {
+        let (tx, mut rx) = mpsc::channel(100);
+
+        // Mock socket to simulate a failure and then success
+        let mock_messages = vec![
+            Err(zmq::Error::EAGAIN), // Simulate a disconnection                                // Simulate failure
+            Ok(Ok(r#"{"share": "test", "value": 123}"#.to_string())), // Simulate success
+        ];
+
+        let mock_socket = MockSocket::new(mock_messages);
+
+        // Spawn the receive_shares function in a separate task
+        tokio::spawn(async move {
+            receive_shares(&mock_socket, tx).unwrap();
+        });
+
+        // Check if the first message received is valid
+        if let Some(value) = rx.recv().await {
+            assert_eq!(value["share"], "test");
+            assert_eq!(value["value"], 123);
+        }
+    }
+    #[tokio::test]
+    async fn test_disconnect_handling() {
+        let (tx, _rx) = mpsc::channel(100);
+
+        // Simulating various disconnection scenarios
+        let mock_messages = vec![
+            Err(zmq::Error::ETERM),    // Simulates a termination error (context shut down)
+            Err(zmq::Error::ENOTSOCK), // Simulates an invalid socket error
+            Err(zmq::Error::EINTR),    // Simulates an interrupted system call
+            Err(zmq::Error::EAGAIN),   // Simulates a would-block error
+        ];
+
+        let mock_socket = MockSocket::new(mock_messages);
+        for _ in 0..4 {
+            let result = receive_shares(&mock_socket, tx.clone());
+            assert!(
+                result.is_err(),
+                "Expected an error, but function returned Ok"
+            );
+        }
     }
 }
