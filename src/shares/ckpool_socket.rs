@@ -15,38 +15,82 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::config::CkPoolConfig;
+use mockall::automock;
 use serde_json::Value;
 use std::error::Error;
 use std::thread;
 use std::time::Duration;
 use tracing::{debug, error, info};
 use zmq;
+
 // Define a trait for the socket operations we need
 // Use a trait to enable testing with a mock socket
-trait MinerSocket {
+#[automock]
+trait MinerSocketTrait {
     fn recv_string(&self) -> Result<Result<String, Vec<u8>>, zmq::Error>;
+    fn connect(&self, endpoint: &str) -> Result<(), zmq::Error>;
 }
 
-// Implement the trait for the real ZMQ socket
-impl MinerSocket for zmq::Socket {
+/// Concrete implementation of the MinerSocket trait
+pub(crate) struct MinerSocket {
+    socket: zmq::Socket,
+}
+
+impl MinerSocket {
     fn recv_string(&self) -> Result<Result<String, Vec<u8>>, zmq::Error> {
-        self.recv_string(0)
+        self.socket.recv_string(0)
+    }
+    fn connect(&self, endpoint: &str) -> Result<(), zmq::Error> {
+        self.socket.connect(endpoint)
     }
 }
 
-// Function to create the real ZMQ socket
-fn create_zmq_socket(config: &CkPoolConfig) -> Result<zmq::Socket, Box<dyn Error>> {
+impl MinerSocketTrait for MinerSocket {
+    fn recv_string(&self) -> Result<Result<String, Vec<u8>>, zmq::Error> {
+        self.socket.recv_string(0)
+    }
+    fn connect(&self, endpoint: &str) -> Result<(), zmq::Error> {
+        self.socket.connect(endpoint)
+    }
+}
+
+// Create a ZMQ socket and connect to the ckpool. Once connected, set the topic to receive shares
+// Use exponential backoff when establishing connection
+pub(crate) fn create_zmq_socket(config: &CkPoolConfig) -> Result<MinerSocket, Box<dyn Error>> {
     let ctx = zmq::Context::new();
     let socket = ctx.socket(zmq::SUB)?;
-    socket.connect(format!("tcp://{}:{}", config.host, config.port).as_str())?;
+
+    // Implement exponential backoff for connection
+    let mut retry_delay = Duration::from_secs(1);
+    let max_delay = Duration::from_secs(60);
+    let endpoint = format!("tcp://{}:{}", config.host, config.port);
+
+    loop {
+        match socket.connect(&endpoint) {
+            Ok(_) => {
+                info!("Connected to ckpool at {}:{}", config.host, config.port);
+                break;
+            }
+            Err(e) => {
+                error!(
+                    "Failed to connect to ckpool at {}:{}: {}. Retrying in {:?}...",
+                    config.host, config.port, e, retry_delay
+                );
+                thread::sleep(retry_delay);
+
+                // Exponential backoff with a maximum delay
+                retry_delay = std::cmp::min(retry_delay * 2, max_delay);
+            }
+        }
+    }
+
     socket.set_subscribe(b"")?;
-    info!("Connected to ckpool at {}:{}", config.host, config.port);
-    Ok(socket)
+    Ok(MinerSocket { socket })
 }
 
 // Generic function to receive shares from any ShareSocket
 // This is generic to enable testing with a mock socket
-fn receive_shares<S: MinerSocket>(
+fn receive_shares<S: MinerSocketTrait>(
     socket: &S,
     tx: tokio::sync::mpsc::Sender<Value>,
 ) -> Result<(), Box<dyn Error>> {
@@ -98,32 +142,21 @@ fn receive_shares<S: MinerSocket>(
 
 // A receive function that clients use to receive shares
 // This function creates the ZMQ socket and passes it to the receive_shares function
-pub fn start_receiving_from_ckpool(
-    config: &CkPoolConfig,
+pub(crate) fn start_receiving_from_ckpool(
+    socket: MinerSocket,
     tx: tokio::sync::mpsc::Sender<Value>,
 ) -> Result<(), Box<dyn Error>> {
     let mut backoff_duration = Duration::from_millis(100); // Starting with 100ms
 
     loop {
-        match create_zmq_socket(config) {
-            Ok(socket) => {
-                if let Err(e) = receive_shares(&socket, tx.clone()) {
-                    error!("Error in receiving shares: {}. Reconnecting...", e);
-                    thread::sleep(backoff_duration); // Exponential backoff
-                    backoff_duration *= 2; // Double the backoff time
-                } else {
-                    backoff_duration = Duration::from_millis(100); // Reset backoff after success
-                }
-            }
-            Err(e) => {
-                error!(
-                    "Failed to connect to ZMQ: {}. Retrying in {}ms...",
-                    e,
-                    backoff_duration.as_millis()
-                );
-                thread::sleep(backoff_duration); // Exponential backoff
-                backoff_duration *= 2; // Double the backoff time
-            }
+        let result = receive_shares(&socket, tx.clone());
+        if result.is_err() {
+            error!(
+                "Error in receiving shares: {}. Reconnecting...",
+                result.unwrap_err()
+            );
+            thread::sleep(backoff_duration); // Exponential backoff
+            backoff_duration *= 2; // Double the backoff time
         }
     }
 }
@@ -131,41 +164,16 @@ pub fn start_receiving_from_ckpool(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
     use tokio::sync::mpsc;
-
-    // Mock socket for testing
-    struct MockSocket {
-        messages: Vec<Result<Result<String, Vec<u8>>, zmq::Error>>,
-        current: Cell<usize>, // Use Cell for interior mutability
-    }
-
-    impl MockSocket {
-        fn new(messages: Vec<Result<Result<String, Vec<u8>>, zmq::Error>>) -> Self {
-            Self {
-                messages,
-                current: Cell::new(0),
-            }
-        }
-    }
-
-    impl MinerSocket for MockSocket {
-        fn recv_string(&self) -> Result<Result<String, Vec<u8>>, zmq::Error> {
-            let index = self.current.get();
-            if index >= self.messages.len() {
-                return Err(zmq::Error::EAGAIN); // Simulate disconnection
-            }
-            self.current.set(index + 1); // Update the index safely
-            self.messages[index].clone()
-        }
-    }
 
     #[tokio::test]
     async fn test_receive_valid_json() {
         let (tx, mut rx) = mpsc::channel(100);
 
-        let mock_messages = vec![Ok(Ok(r#"{"share": "test", "value": 123}"#.to_string()))];
-        let mock_socket = MockSocket::new(mock_messages);
+        let mut mock_socket = MockMinerSocketTrait::default();
+        mock_socket
+            .expect_recv_string()
+            .returning(|| Ok(Ok(r#"{"share": "test", "value": 123}"#.to_string())));
 
         // Spawn the receive_shares function in a separate task
         tokio::spawn(async move {
@@ -183,8 +191,10 @@ mod tests {
     async fn test_receive_invalid_json() {
         let (tx, _rx) = mpsc::channel(100);
 
-        let mock_messages = vec![Ok(Ok("invalid json".to_string()))];
-        let mock_socket = MockSocket::new(mock_messages);
+        let mut mock_socket = MockMinerSocketTrait::default();
+        mock_socket
+            .expect_recv_string()
+            .returning(|| Ok(Ok("invalid json".to_string())));
 
         let result = receive_shares(&mock_socket, tx);
         assert!(result.is_err());
@@ -194,10 +204,10 @@ mod tests {
     async fn test_receive_decode_error() {
         let (tx, _rx) = mpsc::channel(100);
 
-        let mock_messages = vec![
-            Ok(Err(vec![1, 2, 3])), // Simulating decode error
-        ];
-        let mock_socket = MockSocket::new(mock_messages);
+        let mut mock_socket = MockMinerSocketTrait::default();
+        mock_socket
+            .expect_recv_string()
+            .returning(|| Ok(Ok("invalid json".to_string())));
 
         let result = receive_shares(&mock_socket, tx);
         assert!(result.is_err());
@@ -207,13 +217,10 @@ mod tests {
     async fn test_reconnect_logic() {
         let (tx, mut rx) = mpsc::channel(100);
 
-        // Mock socket to simulate a failure and then success
-        let mock_messages = vec![
-            Err(zmq::Error::EAGAIN), // Simulate a disconnection                                // Simulate failure
-            Ok(Ok(r#"{"share": "test", "value": 123}"#.to_string())), // Simulate success
-        ];
-
-        let mock_socket = MockSocket::new(mock_messages);
+        let mut mock_socket = MockMinerSocketTrait::default();
+        mock_socket
+            .expect_recv_string()
+            .returning(|| Ok(Ok("invalid json".to_string())));
 
         // Spawn the receive_shares function in a separate task
         tokio::spawn(async move {
@@ -228,18 +235,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_disconnect_handling() {
+    async fn test_handling_connection_errors_from_ckpool_should_bubble_up_error() {
         let (tx, _rx) = mpsc::channel(100);
 
+        let mut mock_socket = MockMinerSocketTrait::default();
         // Simulating various disconnection scenarios
-        let mock_messages = vec![
-            Err(zmq::Error::ETERM),    // Simulates a termination error (context shut down)
-            Err(zmq::Error::ENOTSOCK), // Simulates an invalid socket error
-            Err(zmq::Error::EINTR),    // Simulates an interrupted system call
-            Err(zmq::Error::EAGAIN),   // Simulates a would-block error
-        ];
+        mock_socket
+            .expect_recv_string()
+            .times(1)
+            .returning(|| Err(zmq::Error::ETERM)); // Simulates a termination error (context shut down)
 
-        let mock_socket = MockSocket::new(mock_messages);
+        mock_socket
+            .expect_recv_string()
+            .times(1)
+            .returning(|| Err(zmq::Error::ENOTSOCK)); // Simulates an invalid socket error
+
+        mock_socket
+            .expect_recv_string()
+            .times(1)
+            .returning(|| Err(zmq::Error::EINTR)); // Simulates an interrupted system call
+
+        mock_socket
+            .expect_recv_string()
+            .times(1)
+            .returning(|| Err(zmq::Error::EAGAIN)); // Simulates a would-block error
+
         for _ in 0..4 {
             let result = receive_shares(&mock_socket, tx.clone());
             assert!(
@@ -250,16 +270,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_unhandled_error() {
+    async fn test_invalid_json_from_ckpool_should_bubble_up_error() {
         let (tx, _rx) = mpsc::channel(100);
 
-        // Simulate an unhandled error type that doesn't match any of the specifically
-        // handled connection errors (ETERM, ENOTSOCK, EINTR, EAGAIN)
-        let mock_messages = vec![
-            Err(zmq::Error::EINVAL), // Invalid argument error
-        ];
-
-        let mock_socket = MockSocket::new(mock_messages);
+        let mut mock_socket = MockMinerSocketTrait::default();
+        mock_socket
+            .expect_recv_string()
+            .times(1)
+            .returning(|| Err(zmq::Error::EINVAL)); // Invalid argument error
 
         let result = receive_shares(&mock_socket, tx);
 

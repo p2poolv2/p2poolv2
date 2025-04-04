@@ -19,7 +19,10 @@ use crate::node::Config;
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::handle_mining_message::handle_mining_message;
 use crate::shares::miner_message::CkPoolMessage;
-use crate::{node::SwarmSend, shares::ckpool_socket::start_receiving_from_ckpool};
+use crate::{
+    node::SwarmSend,
+    shares::ckpool_socket::{create_zmq_socket, start_receiving_from_ckpool},
+};
 use std::error::Error;
 use std::thread;
 use tokio::sync::mpsc;
@@ -35,9 +38,9 @@ pub fn start_receiving_mining_messages<C: Send + 'static>(
 ) -> Result<(), Box<dyn Error>> {
     let (mining_message_tx, mut mining_message_rx) =
         tokio::sync::mpsc::channel::<serde_json::Value>(100);
-    let ckpool_config = config.ckpool.clone();
+    let ckpool_socket = create_zmq_socket(&config.ckpool)?;
     thread::spawn(move || {
-        if let Err(e) = start_receiving_from_ckpool(&ckpool_config, mining_message_tx) {
+        if let Err(e) = start_receiving_from_ckpool(ckpool_socket, mining_message_tx) {
             error!("Share receiver failed: {}", e);
         }
     });
