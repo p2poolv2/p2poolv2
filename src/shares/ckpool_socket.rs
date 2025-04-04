@@ -246,4 +246,39 @@ mod tests {
             );
         }
     }
+
+    #[tokio::test]
+    async fn test_unhandled_error() {
+        let (tx, _rx) = mpsc::channel(100);
+
+        // Simulate an unhandled error type that doesn't match any of the specifically
+        // handled connection errors (ETERM, ENOTSOCK, EINTR, EAGAIN)
+        let mock_messages = vec![
+            Err(zmq::Error::EINVAL), // Invalid argument error
+        ];
+
+        let mock_socket = MockSocket::new(mock_messages);
+
+        let result = receive_shares(&mock_socket, tx);
+
+        // Verify the error is properly propagated
+        assert!(
+            result.is_err(),
+            "Expected an error, but function returned Ok"
+        );
+
+        // We can verify that the error type is as expected
+        match result {
+            Err(e) => {
+                // Convert the error to a string and check if it contains EINVAL
+                let error_str = e.to_string();
+                assert!(
+                    error_str.contains("Invalid argument"),
+                    "Expected Invalid argument error, got: {}",
+                    error_str
+                );
+            }
+            _ => panic!("Expected Err variant, got Ok"),
+        }
+    }
 }
