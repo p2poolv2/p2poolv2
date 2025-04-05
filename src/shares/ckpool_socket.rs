@@ -112,47 +112,49 @@ fn receive_shares<S: CkPoolSocketTrait>(
     socket: &S,
     tx: tokio::sync::mpsc::Sender<Value>,
 ) -> Result<(), Box<dyn Error>> {
-    loop {
-        match socket.recv_string() {
-            // Successfully received a valid JSON string
-            Ok(Ok(json_str)) => {
-                tracing::debug!("Received json from ckpool: {}", json_str);
-                match serde_json::from_str(&json_str) {
-                    Ok(json_value) => {
-                        // Send the parsed JSON to the channel
-                        if let Err(e) = tx.blocking_send(json_value) {
-                            error!("Failed to send share to channel: {}", e);
-                        }
-                    }
-                    Err(e) => {
-                        // Handle JSON parsing error
-                        error!("Failed to parse JSON: {}. JSON content: {:?}", e, json_str);
-                        debug!("JSON Parsing Error Stacktrace: {:?}", e);
-
-                        return Err(Box::new(e));
+    match socket.recv_string() {
+        // Successfully received a valid JSON string
+        Ok(Ok(json_str)) => {
+            match serde_json::from_str(&json_str) {
+                Ok(json_value) => {
+                    // Send the parsed JSON to the channel
+                    if let Err(e) = tx.blocking_send(json_value) {
+                        debug!("Failed to send share to channel: {}", e);
+                        Err(Box::new(e))
+                    } else {
+                        debug!("Sent share to channel: {}", json_str);
+                        Ok(())
                     }
                 }
+                Err(e) => {
+                    // Handle JSON parsing error
+                    debug!("Failed to parse JSON: {}. JSON content: {:?}", e, json_str);
+                    Err(Box::new(e))
+                }
             }
-            // Received a message that couldn't be decoded properly
-            Ok(Err(e)) => {
-                error!("Failed to decode message: {:?}", e);
-                return Err(Box::new(zmq::Error::EINVAL));
-            }
-            // Handle socket-level errors
-            Err(e) => {
-                if matches!(
-                    e,
-                    zmq::Error::ETERM   // Context terminated
+        }
+        // Received a message that couldn't be decoded properly
+        Ok(Err(e)) => {
+            debug!("Failed to decode message: {:?}", e);
+            Err(Box::new(zmq::Error::EINVAL))
+        }
+        // Handle socket-level errors
+        Err(e) => {
+            if matches!(
+                e,
+                zmq::Error::ETERM   // Context terminated
                         | zmq::Error::ENOTSOCK  // Not a valid socket
                         | zmq::Error::EINTR // Interrupted system call
                         | zmq::Error::EAGAIN // Would block (e.g., non-blocking mode)
-                ) {
-                    error!("Disconnected from socket: {:?}. Attempting reconnect...", e);
-                    return Err(Box::new(e)); // Trigger reconnection logic
-                } else {
-                    error!("Failed to receive message: {:?}", e);
-                    return Err(Box::new(e));
-                }
+            ) {
+                info!(
+                    "Disconnected from ckpool socket: {:?}. Attempting reconnect...",
+                    e
+                );
+                Err(Box::new(e)) // Trigger reconnection logic
+            } else {
+                debug!("Failed to receive message: {:?}", e);
+                Err(Box::new(e))
             }
         }
     }
@@ -166,10 +168,11 @@ pub(crate) fn start_receiving_from_ckpool<S: ZMQSocketTrait>(
 ) -> Result<(), Box<dyn Error>> {
     let mut backoff_duration = Duration::from_millis(100); // Starting with 100ms
 
+    info!("Starting to receive shares from ckpool");
     loop {
         let result = receive_shares(&socket, tx.clone());
         if result.is_err() {
-            error!(
+            info!(
                 "Error in receiving shares: {}. Reconnecting...",
                 result.unwrap_err()
             );
@@ -183,6 +186,8 @@ pub(crate) fn start_receiving_from_ckpool<S: ZMQSocketTrait>(
 mod tests {
     use super::*;
     use mockall::predicate::eq;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use tokio::sync::mpsc;
 
     #[tokio::test]
@@ -403,5 +408,88 @@ mod tests {
             "Expected successful connection after retry, but got error: {:?}",
             result.err()
         );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_start_receiving_from_ckpool_success() {
+        let (tx, mut rx) = mpsc::channel(100);
+        let tx_clone = tx.clone();
+
+        // Create a flag to track if we've already returned a value
+        let has_returned = Arc::new(AtomicBool::new(false));
+        let has_errored = Arc::new(AtomicBool::new(false));
+        let has_returned_clone = has_returned.clone();
+
+        // Create a mock ZMQSocketTrait
+        let mut mock_zmq_socket = MockZMQSocketTrait::default();
+        mock_zmq_socket.expect_recv_string().returning(move |_| {
+            // First time: return an error, next time a value and then block indefinitely
+            if !has_returned.load(Ordering::SeqCst) {
+                if !has_errored.load(Ordering::SeqCst) {
+                    has_errored.store(true, Ordering::SeqCst);
+                    Err(zmq::Error::ETERM)
+                } else {
+                    has_returned.store(true, Ordering::SeqCst);
+                    Ok(Ok(r#"{"share": "test1", "value": 123}"#.to_string()))
+                }
+            } else {
+                // Subsequent calls: block indefinitely
+                std::thread::sleep(Duration::from_secs(3600)); // Sleep for an hour (effectively blocking)
+                Ok(Ok(
+                    r#"{"share": "never_returned", "value": 999}"#.to_string()
+                ))
+            }
+        });
+
+        // Create a CkPoolConfig with test values
+        let config = CkPoolConfig {
+            host: "localhost".to_string(),
+            port: 3333,
+        };
+
+        // Create a CkPoolSocket with the mock
+        let ckpool_socket = CkPoolSocket {
+            config,
+            socket: mock_zmq_socket,
+        };
+
+        // Create a mock implementation of CkPoolSocketTrait for the socket
+        let mut mock_ckpool_socket = MockCkPoolSocketTrait::default();
+        mock_ckpool_socket.expect_recv_string().returning(move || {
+            // First time: return a value
+            if !has_returned_clone.load(Ordering::SeqCst) {
+                has_returned_clone.store(true, Ordering::SeqCst);
+                Ok(Ok(r#"{"share": "test1", "value": 123}"#.to_string()))
+            } else {
+                // Subsequent calls: block indefinitely
+                std::thread::sleep(Duration::from_secs(3600)); // Sleep for an hour (effectively blocking)
+                Ok(Ok(
+                    r#"{"share": "never_returned", "value": 999}"#.to_string()
+                ))
+            }
+        });
+
+        // Spawn the start_receiving_from_ckpool function in a separate task
+        let _handle = thread::spawn(move || {
+            let result = start_receiving_from_ckpool(ckpool_socket, tx_clone);
+            assert!(result.is_ok());
+        });
+
+        // Receive the first message from the channel
+        if let Some(value) = rx.recv().await {
+            assert_eq!(value["share"], "test1");
+            assert_eq!(value["value"], 123);
+        } else {
+            panic!("Expected to receive first message");
+        }
+
+        // Use tokio's timeout to ensure the test doesn't run indefinitely
+        let _ = tokio::time::timeout(Duration::from_millis(200), async {
+            // Just wait for the timeout to expire
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        })
+        .await;
+
+        drop(tx);
     }
 }
