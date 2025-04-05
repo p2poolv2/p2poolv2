@@ -303,7 +303,7 @@ mod tests {
         mock_socket
             .expect_recv_string()
             .times(1)
-            .returning(|| Err(zmq::Error::EINVAL)); // Invalid argument error
+            .returning(|| Ok(Err(b"invalid json".to_vec()))); // Invalid argument error
 
         let result = receive_shares(&mock_socket, tx);
 
