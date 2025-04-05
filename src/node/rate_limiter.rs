@@ -9,47 +9,45 @@ use tracing::warn;
 /// A counter that keeps track of recent timestamps.
 #[derive(Debug)]
 pub struct RecentCounter {
-    timestamps: Mutex<VecDeque<Instant>>,
+    timestamps: VecDeque<Instant>,
 }
 
 impl RecentCounter {
     fn new() -> Self {
         Self {
-            timestamps: Mutex::new(VecDeque::new()),
+            timestamps: VecDeque::new(),
         }
     }
 
-    async fn increment(&self, window: Duration) -> bool {
+    fn increment(&mut self, window: Duration) -> bool {
         let now = Instant::now();
-        let mut timestamps = self.timestamps.lock().await;
 
         // Remove timestamps outside the current window
-        while let Some(front) = timestamps.front() {
+        while let Some(front) = self.timestamps.front() {
             if now.duration_since(*front) > window {
-                timestamps.pop_front();
+                self.timestamps.pop_front();
             } else {
                 break;
             }
         }
 
-        timestamps.push_back(now);
+        self.timestamps.push_back(now);
         true
     }
 
-    async fn count(&self, window: Duration) -> usize {
+    fn count(&mut self, window: Duration) -> usize {
         let now = Instant::now();
-        let mut timestamps = self.timestamps.lock().await;
 
         // Prune old entries
-        while let Some(front) = timestamps.front() {
+        while let Some(front) = self.timestamps.front() {
             if now.duration_since(*front) > window {
-                timestamps.pop_front();
+                self.timestamps.pop_front();
             } else {
                 break;
             }
         }
 
-        timestamps.len()
+        self.timestamps.len()
     }
 }
 
@@ -110,7 +108,7 @@ impl RateLimiter {
             .entry(discriminant)
             .or_insert_with(RecentCounter::new);
 
-        let current_count = counter.count(self.window).await;
+        let current_count = counter.count(self.window);
         if current_count >= max_allowed as usize {
             warn!(
                 "Rate limit exceeded for peer {} and message type {:?}",
@@ -118,7 +116,7 @@ impl RateLimiter {
             );
             false
         } else {
-            counter.increment(self.window).await;
+            counter.increment(self.window);
             true
         }
     }
