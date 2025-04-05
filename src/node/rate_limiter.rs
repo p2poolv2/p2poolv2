@@ -54,8 +54,24 @@ impl RecentCounter {
 /// Rate limiter to prevent DoS attacks by limiting the number of messages
 #[derive(Debug, Default)]
 pub struct RateLimiter {
-    limits: Mutex<HashMap<PeerId, HashMap<u8, RecentCounter>>>,
+    limits: Mutex<HashMap<PeerId, HashMap<MessageType, RecentCounter>>>,
     window: Duration,
+}
+
+/// Enum representing message types for rate limiting
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MessageType {
+    Workbase,
+    UserWorkbase,
+    MiningShare,
+    Inventory,
+    Transaction,
+    NotFound,
+    GetShareHeaders,
+    GetShareBlocks,
+    ShareHeaders,
+    ShareBlock,
+    GetData,
 }
 
 impl RateLimiter {
@@ -66,20 +82,20 @@ impl RateLimiter {
         }
     }
 
-    // Get a numeric discriminant from the message variant
-    fn get_message_discriminant(message: &Message) -> u8 {
+    // Get the message type from a Message
+    fn get_message_type(message: &Message) -> MessageType {
         match message {
-            Message::Workbase(_) => 0,
-            Message::UserWorkbase(_) => 1,
-            Message::MiningShare(_) => 2,
-            Message::Inventory(_) => 3,
-            Message::Transaction(_) => 4,
-            Message::NotFound(_) => 5,
-            Message::GetShareHeaders(_, _) => 6,
-            Message::GetShareBlocks(_, _) => 7,
-            Message::ShareHeaders(_) => 8,
-            Message::ShareBlock(_) => 9,
-            Message::GetData(_) => 10,
+            Message::Workbase(_) => MessageType::Workbase,
+            Message::UserWorkbase(_) => MessageType::UserWorkbase,
+            Message::MiningShare(_) => MessageType::MiningShare,
+            Message::Inventory(_) => MessageType::Inventory,
+            Message::Transaction(_) => MessageType::Transaction,
+            Message::NotFound(_) => MessageType::NotFound,
+            Message::GetShareHeaders(_, _) => MessageType::GetShareHeaders,
+            Message::GetShareBlocks(_, _) => MessageType::GetShareBlocks,
+            Message::ShareHeaders(_) => MessageType::ShareHeaders,
+            Message::ShareBlock(_) => MessageType::ShareBlock,
+            Message::GetData(_) => MessageType::GetData,
         }
     }
 
@@ -99,13 +115,13 @@ impl RateLimiter {
             _ => return true,
         };
 
-        // Get the discriminant value for the HashMap key
-        let discriminant = Self::get_message_discriminant(&message);
+        // Get the message type for the HashMap key
+        let message_type = Self::get_message_type(&message);
 
         let mut limits = self.limits.lock().await;
         let peer_limits = limits.entry(*peer_id).or_insert_with(HashMap::new);
         let counter = peer_limits
-            .entry(discriminant)
+            .entry(message_type)
             .or_insert_with(RecentCounter::new);
 
         let current_count = counter.count(self.window);
