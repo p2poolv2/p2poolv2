@@ -71,7 +71,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             std::process::exit(1);
         }
     }
-    if let Ok((_node_handle, stopping_rx)) = NodeHandle::new(config.clone(), chain_handle).await {
+    if let Ok((_node_handle, stopping_rx)) = NodeHandle::new(config, chain_handle).await {
         info!("Node started");
         stopping_rx.await?;
         info!("Node stopped");
