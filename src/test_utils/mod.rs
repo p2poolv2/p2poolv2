@@ -463,7 +463,7 @@ impl TestMinerWorkbaseBuilder {
     }
 
     pub fn build(self) -> crate::shares::miner_message::MinerWorkbase {
-        use crate::shares::miner_message::{Gbt, MinerWorkbase};
+        use crate::shares::miner_message::MinerWorkbase;
 
         MinerWorkbase {
             workinfoid: self.workinfoid.unwrap_or(7473434392883363843),
