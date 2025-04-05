@@ -1,4 +1,4 @@
-// Copyright (C) 2024 [Kulpreet Singh]
+// Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
 //  This file is part of P2Poolv2
 //
