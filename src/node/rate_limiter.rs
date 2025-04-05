@@ -7,8 +7,11 @@ use tokio::sync::Mutex;
 use tracing::warn;
 
 /// A counter that keeps track of recent timestamps.
+/// This is accessed from the RateLimiter struct, which uses a Mutex to ensure thread safety.
+/// We make this struct private to prevent it from being accessed directly, as it has to come
+/// from the RateLimiter struct with a lock.
 #[derive(Debug)]
-pub struct RecentCounter {
+struct RecentCounter {
     timestamps: VecDeque<Instant>,
 }
 
