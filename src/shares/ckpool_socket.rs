@@ -78,10 +78,7 @@ impl<S: ZMQSocketTrait> CkPoolSocketTrait for CkPoolSocket<S> {
         loop {
             match self.socket.connect(&endpoint) {
                 Ok(_) => {
-                    info!(
-                        "Connected to ckpool at {}:{}",
-                        self.config.host, self.config.port
-                    );
+                    info!("Connected to ckpool at {}", endpoint);
                     break;
                 }
                 Err(e) => {
@@ -284,7 +281,12 @@ mod tests {
             .times(1)
             .returning(|| Err(zmq::Error::EAGAIN)); // Simulates a would-block error
 
-        for _ in 0..4 {
+        mock_socket
+            .expect_recv_string()
+            .times(1)
+            .returning(|| Err(zmq::Error::EADDRINUSE)); // Simulates an address already in use error
+
+        for _ in 0..5 {
             let result = receive_shares(&mock_socket, tx.clone());
             assert!(
                 result.is_err(),
@@ -410,7 +412,7 @@ mod tests {
         );
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_start_receiving_from_ckpool_success() {
         let (tx, mut rx) = mpsc::channel(100);
         let tx_clone = tx.clone();
