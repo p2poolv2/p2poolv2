@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y \
 # Clone ckpool repository
 RUN git clone https://bitbucket.org/p2pool-v2/ckpool-solo.git /ckpool && \
     cd /ckpool && \
-    git checkout publish-shares
+    git checkout hydrapool-solo
 
 # Build ckpool
 WORKDIR /ckpool
