@@ -12,14 +12,26 @@ services:
       - NETWORK=${NETWORK:-signet}
     command: bitcoind -conf=/etc/bitcoin/bitcoin-${NETWORK:-signet}.conf -datadir=/data-${NETWORK:-signet}
     restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "0.0.0.0", "${BTC_P2P_PORT:-38333}" ]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks:
+      - p2pool_network
+
   cpuminer:
     build:
       context: .
       dockerfile: Dockerfile.cpuminer
     depends_on:
-      - bitcoind
-      - ckpool
+      bitcoind:
+        condition: service_healthy
     restart: unless-stopped
+    networks:
+      - p2pool_network
+
   ckpool:
     build:
       context: .
@@ -28,10 +40,20 @@ services:
       - "3333:3333"
       - "8881:8881"
     depends_on:
-      - bitcoind
+      bitcoind:
+        condition: service_healthy
     restart: unless-stopped
     command: /ckpool/src/ckpool --btcsolo --config=/ckpool-solo-${NETWORK:-signet}.json --log-shares --loglevel=7
-  p2pool:
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "localhost", "3333" ]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks:
+      - p2pool_network
+
+  p2pool: &p2pool-base
     build:
       context: ..
       dockerfile: docker/Dockerfile.p2pool
@@ -48,6 +70,14 @@ services:
     volumes:
       - p2pool_data:/data
     restart: unless-stopped
+    networks:
+      - p2pool_network
+
 volumes:
   bitcoin_data:
   p2pool_data:
+
+
+networks:
+  p2pool_network:
+    driver: bridge
