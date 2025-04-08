@@ -24,6 +24,10 @@ use bitcoin::PublicKey;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+use libp2p::PeerId;
 
 /// Handle a mining message received from ckpool
 /// For now the message can be a share or a GBT workbase
@@ -34,11 +38,17 @@ pub async fn handle_mining_message<C>(
     chain_handle: ChainHandle,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     miner_pubkey: PublicKey,
+    peer_id: PeerID,
+    last_share_times: Arc<Mutex<HashMap<PeerId, Instant>>>,
 ) -> Result<(), Box<dyn Error>> {
     let message: Message;
     tracing::info!("Received mining message: {:?}", mining_message);
     match mining_message {
         CkPoolMessage::Share(share) => {
+            {
+                let mut times = last_share_times.lock().unwrap();
+                times.insert(peer_id, Instant::now());
+            }
             let mut share_block =
                 ShareBlock::new(share, miner_pubkey, bitcoin::Network::Regtest, &mut vec![]);
             debug!("Mining message share block: {:?}", share_block);
@@ -109,11 +119,16 @@ mod tests {
             Some(dec!(1.9041854952356509)),
         ));
 
+        let peer_id = PeerId::random();
+        let last_share_times = Arc::new(Mutex::new(HashMap::new()));
+
         let result = handle_mining_message::<mpsc::Sender<Message>>(
             mining_message,
             mock_chain,
             swarm_tx,
             miner_pubkey,
+            peer_id,
+            last_share_times,
         )
         .await;
 
@@ -165,6 +180,8 @@ mod tests {
             mock_chain,
             swarm_tx,
             miner_pubkey,
+            PeerId::random(), // Add a random PeerId
+            Arc::new(Mutex::new(HashMap::new())), // Add a new Arc<Mutex<HashMap>> for last_share_times
         )
         .await;
 
@@ -215,6 +232,8 @@ mod tests {
             mock_chain,
             swarm_tx,
             miner_pubkey,
+            PeerId::random(), // Add a random PeerId
+            Arc::new(Mutex::new(HashMap::new())), // Add a new Arc<Mutex<HashMap>> for last_share_times
         )
         .await;
 

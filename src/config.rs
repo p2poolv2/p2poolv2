@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use std::time::Duration;
+
 use bitcoin::PublicKey;
 use serde::Deserialize;
 
@@ -33,6 +35,8 @@ pub struct NetworkConfig {
     pub max_inventory_per_second: u32,
     pub max_transaction_per_second: u32,
     pub rate_limit_window_secs: u64,
+    #[serde(with = "humantime_serde")]
+    pub inactive_peer_timeout: Duration,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -81,6 +85,28 @@ pub struct Config {
     pub bitcoin: BitcoinConfig,
 }
 
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            listen_address: "/ip4/0.0.0.0/tcp/38333".into(),
+            dial_peers: Vec::new(),
+            enable_mdns: true,
+            max_pending_incoming: 10,
+            max_pending_outgoing: 10,
+            max_established_incoming: 50,
+            max_established_outgoing: 50,
+            max_established_per_peer: 1,
+            max_workbase_per_second: 10,
+            max_userworkbase_per_second: 10,
+            max_miningshare_per_second: 10,
+            max_inventory_per_second: 10,
+            max_transaction_per_second: 10,
+            rate_limit_window_secs: 60,
+            inactive_peer_timeout: Duration::from_secs(604800), // 7 days
+        }
+    }
+}
+
 #[allow(dead_code)]
 impl Config {
     pub fn load(path: &str) -> Result<Self, config::ConfigError> {
@@ -89,6 +115,11 @@ impl Config {
             .add_source(config::Environment::with_prefix("P2POOL").separator("_"))
             .build()?
             .try_deserialize()
+    }
+
+    pub fn with_inactive_peer_timeout(mut self, timeout: Duration) -> Self {
+        self.network.inactive_peer_timeout = timeout;
+        self
     }
 
     pub fn with_listen_address(mut self, listen_address: String) -> Self {

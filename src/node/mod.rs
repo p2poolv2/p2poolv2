@@ -44,9 +44,10 @@ use libp2p::{
 use rate_limiter::RateLimiter;
 use request_response_handler::handle_request_response_event;
 use std::error::Error;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
+use std::sync::{Arc, Mutex};
 
 pub struct SwarmResponseChannel<T> {
     channel: ResponseChannel<T>,
@@ -73,6 +74,7 @@ pub enum SwarmSend<C> {
     Gossip(Message),
     Request(PeerId, Message),
     Response(C, Message),
+    Disconnect(PeerId),
 }
 
 /// Node is the main struct that represents the node
@@ -84,6 +86,7 @@ struct Node {
     chain_handle: ChainHandle,
     rate_limiter: RateLimiter,
     config: Config,
+    last_share_time: Arc<Mutex<HashMap<PeerId, Instant>>>,
 }
 
 impl Node {
@@ -174,6 +177,34 @@ impl Node {
         let rate_limiter =
             RateLimiter::new(Duration::from_secs(config.network.rate_limit_window_secs));
 
+        let last_share_clone = last_share_time.clone();
+        let swarm_tx_clone = swarm_tx.clone();
+        let inactivity_timeout = config.network.inactive_peer_timeout;
+        
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(86400)).await; // Daily check
+                let mut times = last_share_clone.lock().unwrap();
+                let now = Instant::now();
+                
+                let mut to_disconnect = Vec::new();
+                times.retain(|peer_id, last_seen| {
+                    if now.duration_since(*last_seen) > inactivity_timeout {
+                        to_disconnect.push(*peer_id);
+                        false
+                    } else {
+                        true
+                    }
+                });
+                
+                for peer_id in to_disconnect {
+                    if let Err(e) = swarm_tx_clone.send(SwarmSend::Disconnect(peer_id)).await {
+                        error!("Failed to queue disconnect for {}: {}", peer_id, e);
+                    }
+                }
+            }
+        });    
+
         Ok(Self {
             swarm,
             swarm_tx,
@@ -182,7 +213,44 @@ impl Node {
             chain_handle,
             rate_limiter,
             config: config.clone(),
+            last_share_time: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+
+    pub async fn run(&mut self) -> Result<(), Box<dyn Error>> {
+        loop {
+            tokio::select! {
+                event = self.swarm.select_next_some() => {
+                    self.handle_swarm_event(event).await?;
+                }
+                cmd = self.swarm_rx.recv() => {
+                    match cmd {
+                        Some(SwarmSend::Disconnect(peer_id)) => {
+                            self.swarm.disconnect_peer_id(peer_id)?;
+                            info!("Disconnected inactive peer: {}", peer_id);
+                        }
+                        Some(SwarmSend::Gossip(message)) => {
+                            let data = message.cbor_serialize()?;
+                            self.swarm.behaviour_mut().gossipsub.publish(
+                                self.share_topic.clone(),
+                                data
+                            )?;
+                        }
+                        Some(SwarmSend::Request(peer_id, message)) => {
+                            self.send_to_peer(peer_id, message)?;
+                        }
+                        Some(SwarmSend::Response(channel, message)) => {
+                            self.swarm.behaviour_mut().request_response.send_response(
+                                channel,
+                                message.cbor_serialize()?
+                            )?;
+                        }
+                        None => break,
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Returns a Vec of peer IDs that are currently connected to this node
@@ -283,6 +351,13 @@ impl Node {
                         .await
                 }
             },
+            SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                info!("Disconnected from peer: {peer_id}");
+                self.swarm.behaviour_mut().remove_peer(&peer_id);
+                let mut times = self.last_share_time.lock().unwrap();
+                times.remove(&peer_id);
+                Ok(())
+            },
             _ => Ok(()),
         }
     }
@@ -380,6 +455,10 @@ impl Node {
         {
             match Message::cbor_deserialize(&message.data) {
                 Ok(deserialized_msg) => {
+                    if let Message::MiningShare(_) = deserialized_msg {
+                        let mut times = self.last_share_times.lock().unwrap();
+                        times.insert(*propagation_source, Instant::now());
+                    }
                     let message_type = Message::from(deserialized_msg);
                     if !self
                         .rate_limiter
