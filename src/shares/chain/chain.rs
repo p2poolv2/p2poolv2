@@ -25,6 +25,10 @@ use tracing::{error, info};
 
 /// The minimum number of shares that must be on the chain for a share to be considered confirmed
 const MIN_CONFIRMATION_DEPTH: usize = 100;
+const INITIAL_PPLNS_WINDOW: usize = 1000; // Initial window size in shares
+const MIN_PPLNS_WINDOW: usize = 250;      // Minimum allowed window size
+const MAX_PPLNS_WINDOW: usize = 2000;     // Maximum allowed window size
+const WINDOW_ADJUSTMENT_FACTOR: f64 = 0.8; // Shrink window by 20% when 2 blocks found
 
 /// A datastructure representing the main share chain
 /// The share chain reorgs when a share is found that has a higher total PoW than the current tip
@@ -39,6 +43,9 @@ pub struct Chain {
     pub tips: HashSet<ShareBlockHash>,
     /// Total difficulty up to the tip
     pub total_difficulty: Decimal,
+    /// Dynamic PPLNS window tracking
+    current_window_size: usize,
+    blocks_in_current_window: usize,
 }
 
 #[allow(dead_code)]
@@ -50,12 +57,32 @@ impl Chain {
             store,
             chain_tip: None,
             genesis_block_hash: None,
+            current_window_size: INITIAL_PPLNS_WINDOW,
+            blocks_in_current_window: 0,
         }
     }
 
     /// Add a share to the chain and update the tips and total difficulty
     pub fn add_share(&mut self, share: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>> {
         info!("Adding share to chain: {:?}", share);
+
+        // Track blocks in current window
+        if share.header.miner_share.diff >= dec!(1.0) { // Assuming diff >= 1 indicates a block
+            self.blocks_in_current_window += 1;
+            
+            // Adjust window size if we found 2 blocks
+            if self.blocks_in_current_window >= 2 {
+                // Shrink the window
+                self.current_window_size = (self.current_window_size as f64 * WINDOW_ADJUSTMENT_FACTOR)
+                    .floor()
+                    .max(MIN_PPLNS_WINDOW as f64)
+                    .min(MAX_PPLNS_WINDOW as f64) as usize;
+                
+                // Reset block counter
+                self.blocks_in_current_window = 0;
+                info!("Adjusted PPLNS window to {}", self.current_window_size);
+            }
+        }
 
         if self.tips.is_empty() {
             self.genesis_block_hash = share.cached_blockhash;
@@ -116,6 +143,10 @@ impl Chain {
             }
         }
         Ok(())
+    }
+
+    pub fn get_pplns_window(&self) -> usize {
+        self.current_window_size
     }
 
     /// Get height for the previous blockhash
