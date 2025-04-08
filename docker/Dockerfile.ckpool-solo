@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
     yasm \
     libzmq3-dev \
     pkgconf \
+    netcat-openbsd\
     && rm -rf /var/lib/apt/lists/*
 
 # Clone ckpool repository
