@@ -20,7 +20,8 @@ use crate::shares::validation;
 use crate::shares::ShareBlock;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
-use tracing::{error, info};
+use tracing::{error, info, warn};
+use libp2p::PeerId;
 
 /// Handle a ShareBlock received from a peer
 /// This is called on receiving a ShareBlock from the gossipsub protocol,
@@ -29,14 +30,25 @@ use tracing::{error, info};
 /// Validate the ShareBlock and store it in the chain
 /// We do not send any inventory message as we do not want to gossip the share block.
 /// Share blocks are gossiped using the libp2p gossipsub protocol.
+/// 
+/// If validation fails, the peer will be marked for disconnection.
 pub async fn handle_share_block(
     share_block: ShareBlock,
     chain_handle: ChainHandle,
     time_provider: &impl TimeProvider,
+    peer_id: Option<PeerId>,
+    disconnect_peer: Option<Box<dyn Fn(PeerId) + Send>>,
 ) -> Result<(), Box<dyn Error>> {
     info!("Received share block: {:?}", share_block);
     if let Err(e) = validation::validate(&share_block, &chain_handle, time_provider).await {
         error!("Share block validation failed: {}", e);
+        
+        // If we have a peer_id and disconnect_peer function, disconnect the peer
+        if let (Some(peer), Some(disconnect_fn)) = (peer_id, disconnect_peer) {
+            warn!("Disconnecting peer {} for sending invalid share block", peer);
+            disconnect_fn(peer);
+        }
+        
         return Err("Share block validation failed".into());
     }
     if let Err(e) = chain_handle.add_share(share_block.clone()).await {
@@ -98,7 +110,7 @@ mod tests {
         let mut time_provider = TestTimeProvider(SystemTime::now());
         time_provider.set_time(shares[0].ntime);
 
-        let result = handle_share_block(share_block, chain_handle, &time_provider).await;
+        let result = handle_share_block(share_block, chain_handle, &time_provider, None, None).await;
         assert!(result.is_ok());
     }
 
@@ -118,7 +130,7 @@ mod tests {
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        let result = handle_share_block(share_block, chain_handle, &time_provider).await;
+        let result = handle_share_block(share_block, chain_handle, &time_provider, None, None).await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
@@ -169,7 +181,7 @@ mod tests {
         let mut time_provider = TestTimeProvider(SystemTime::now());
         time_provider.set_time(shares[0].ntime);
 
-        let result = handle_share_block(share_block, chain_handle, &time_provider).await;
+        let result = handle_share_block(share_block, chain_handle, &time_provider, None, None).await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),

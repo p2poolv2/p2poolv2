@@ -25,7 +25,7 @@ use crate::shares::ShareBlock;
 use libp2p::futures::StreamExt;
 use std::error::Error;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// NodeHandle provides an interface to interact with a Node running in a separate task
 #[derive(Clone)]
@@ -166,6 +166,12 @@ impl NodeActor {
                         Some(SwarmSend::Response(response_channel, msg)) => {
                             let request_id = self.node.swarm.behaviour_mut().request_response.send_response(response_channel, msg);
                             debug!("Sent message to response channel: {:?}", request_id);
+                        }
+                        Some(SwarmSend::DisconnectPeer(peer_id)) => {
+                            warn!("Disconnecting peer {} for sending invalid data", peer_id);
+                            if let Err(e) = self.node.swarm.disconnect_peer_id(peer_id) {
+                                error!("Failed to disconnect peer: {}", e);
+                            }
                         }
                         None => {
                             info!("Stopping node actor on channel close");

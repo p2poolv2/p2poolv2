@@ -406,6 +406,19 @@ impl Node {
                     tokio::spawn(async move {
                         if let Err(e) = handle_gossipsub_event(gossip_event, chain_handle).await {
                             error!("Failed to handle gossipsub event: {}", e);
+                            
+                            // Check if the error message indicates the peer should be disconnected
+                            if e.to_string().contains("peer should be disconnected") ||
+                               e.to_string().contains("invalid share") ||
+                               e.to_string().contains("invalid blocktemplate") ||
+                               e.to_string().contains("invalid user workbase") {
+                                warn!("Disconnecting peer {} for sending invalid data", propagation_source);
+                                self.swarm
+                                    .disconnect_peer_id(*propagation_source)
+                                    .unwrap_or_else(|e| {
+                                        error!("Failed to disconnect peer: {:?}", e);
+                                    });
+                            }
                         }
                     });
                 }
