@@ -183,25 +183,12 @@ impl Node {
         
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_secs(86400)).await; // Daily check
-                let mut times = last_share_clone.lock().unwrap();
-                let now = Instant::now();
-                
-                let mut to_disconnect = Vec::new();
-                times.retain(|peer_id, last_seen| {
-                    if now.duration_since(*last_seen) > inactivity_timeout {
-                        to_disconnect.push(*peer_id);
-                        false
-                    } else {
-                        true
-                    }
-                });
-                
-                for peer_id in to_disconnect {
-                    if let Err(e) = swarm_tx_clone.send(SwarmSend::Disconnect(peer_id)).await {
-                        error!("Failed to queue disconnect for {}: {}", peer_id, e);
-                    }
-                }
+                tokio::time::sleep(Duration::from_secs(86400)).await;
+                Self::cleanup_inactive_peers(
+                    last_share_time.clone(),
+                    swarm_tx.clone(),
+                    Duration::from_secs(config.network.inactive_peer_timeout_secs)
+                ).await;
             }
         });    
 
@@ -215,42 +202,6 @@ impl Node {
             config: config.clone(),
             last_share_time: Arc::new(Mutex::new(HashMap::new())),
         })
-    }
-
-    pub async fn run(&mut self) -> Result<(), Box<dyn Error>> {
-        loop {
-            tokio::select! {
-                event = self.swarm.select_next_some() => {
-                    self.handle_swarm_event(event).await?;
-                }
-                cmd = self.swarm_rx.recv() => {
-                    match cmd {
-                        Some(SwarmSend::Disconnect(peer_id)) => {
-                            self.swarm.disconnect_peer_id(peer_id)?;
-                            info!("Disconnected inactive peer: {}", peer_id);
-                        }
-                        Some(SwarmSend::Gossip(message)) => {
-                            let data = message.cbor_serialize()?;
-                            self.swarm.behaviour_mut().gossipsub.publish(
-                                self.share_topic.clone(),
-                                data
-                            )?;
-                        }
-                        Some(SwarmSend::Request(peer_id, message)) => {
-                            self.send_to_peer(peer_id, message)?;
-                        }
-                        Some(SwarmSend::Response(channel, message)) => {
-                            self.swarm.behaviour_mut().request_response.send_response(
-                                channel,
-                                message.cbor_serialize()?
-                            )?;
-                        }
-                        None => break,
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Returns a Vec of peer IDs that are currently connected to this node
@@ -440,6 +391,23 @@ impl Node {
             self.swarm_tx.clone(),
         )
         .await;
+    }
+
+    async fn cleanup_inactive_peers(
+        last_share_times: Arc<Mutex<HashMap<PeerId, Instant>>>,
+        swarm_tx: mpsc::Sender<SwarmSend<()>>,
+        timeout: Duration
+    ) {
+        let inactive_peers = {
+            let mut last_share_received_times = last_share_times.lock().unwrap();
+            last_share_received_times.extract_if(|_, last_seen| {
+                Instant::now().duration_since(*last_seen) > timeout
+            }).map(|(peer_id, _)| peer_id).collect::<Vec<_>>()
+        };
+
+        for peer_id in inactive_peers {
+            let _ = swarm_tx.send(SwarmSend::Disconnect(peer_id)).await;
+        }
     }
 
     /// Handle gossipsub events from the libp2p network

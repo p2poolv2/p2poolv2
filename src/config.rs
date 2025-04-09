@@ -35,7 +35,6 @@ pub struct NetworkConfig {
     pub max_inventory_per_second: u32,
     pub max_transaction_per_second: u32,
     pub rate_limit_window_secs: u64,
-    #[serde(with = "humantime_serde")]
     pub inactive_peer_timeout: Duration,
 }
 

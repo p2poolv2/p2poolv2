@@ -58,7 +58,6 @@ impl NodeHandle {
         match rx.await {
             Ok(peers) => Ok(peers),
             Err(e) => Err(e.into()),
-        }
     }
 
     /// Shutdown the node
@@ -149,23 +148,57 @@ impl NodeActor {
     }
 
     async fn run(mut self) {
+        let cleanup_handle = tokio::spawn({
+            let last_share_received_times = self.node.last_share_times.clone();
+            let swarm_tx = self.node.swarm_tx.clone();
+            let timeout_secs = self.node.config.network.inactive_peer_timeout_secs;
+            
+            async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(86400)).await;
+                    
+                    let inactive_peers = {
+                        let mut times = last_share_received_times.lock().unwrap();
+                        times.extract_if(|_, last_seen| {
+                            Instant::now().duration_since(*last_seen) > Duration::from_secs(timeout_secs)
+                        }).map(|(peer_id, _)| peer_id).collect::<Vec<_>>()
+                    };
+    
+                    for peer_id in inactive_peers {
+                        if let Err(e) = swarm_tx.send(SwarmSend::Disconnect(peer_id)).await {
+                            error!("Failed to queue disconnect for {}: {}", peer_id, e);
+                        }
+                    }
+                }
+            }
+        });
+    
         loop {
             tokio::select! {
                 buf = self.node.swarm_rx.recv() => {
                     match buf {
                         Some(SwarmSend::Gossip(message)) => {
                             let buf = message.cbor_serialize().unwrap();
-                            if let Err(e) = self.node.swarm.behaviour_mut().gossipsub.publish(self.node.share_topic.clone(), buf) {
+                            if let Err(e) = self.node.swarm.behaviour_mut().gossipsub.publish(
+                                self.node.share_topic.clone(), buf
+                            ) {
                                 error!("Error publishing share: {}", e);
                             }
                         }
                         Some(SwarmSend::Request(peer_id, msg)) => {
-                            let request_id =    self.node.swarm.behaviour_mut().request_response.send_request(&peer_id, msg);
+                            let request_id = self.node.swarm.behaviour_mut()
+                                .request_response.send_request(&peer_id, msg);
                             debug!("Sent message to peer: {peer_id}, request_id: {request_id}");
                         }
                         Some(SwarmSend::Response(response_channel, msg)) => {
-                            let request_id = self.node.swarm.behaviour_mut().request_response.send_response(response_channel, msg);
-                            debug!("Sent message to response channel: {:?}", request_id);
+                            let request_id = self.node.swarm.behaviour_mut()
+                                .request_response.send_response(response_channel, msg);
+                            debug!("Sent response: {:?}", request_id);
+                        }
+                        Some(SwarmSend::Disconnect(peer_id)) => {
+                            if let Err(e) = self.node.swarm.disconnect_peer_id(peer_id) {
+                                error!("Failed to disconnect peer {}: {}", peer_id, e);
+                            }
                         }
                         None => {
                             info!("Stopping node actor on channel close");
@@ -174,19 +207,23 @@ impl NodeActor {
                         }
                     }
                 },
+                
                 event = self.node.swarm.select_next_some() => {
                     if let Err(e) = self.node.handle_swarm_event(event).await {
                         error!("Error handling swarm event: {}", e);
                     }
                 },
+                
                 command = self.command_rx.recv() => {
                     match command {
                         Some(Command::GetPeers(tx)) => {
-                            let peers = self.node.swarm.connected_peers().cloned().collect::<Vec<_>>();
+                            let peers = self.node.swarm.connected_peers().cloned().collect();
                             tx.send(peers).unwrap();
                         },
                         Some(Command::SendGossip(buf, tx)) => {
-                            match self.node.swarm.behaviour_mut().gossipsub.publish(self.node.share_topic.clone(), buf) {
+                            match self.node.swarm.behaviour_mut().gossipsub.publish(
+                                self.node.share_topic.clone(), buf
+                            ) {
                                 Err(e) => error!("Error publishing share: {}", e),
                                 Ok(_) => tx.send(Ok(())).unwrap(),
                             }
@@ -195,8 +232,8 @@ impl NodeActor {
                             match self.node.send_to_peer(peer_id, message) {
                                 Ok(_) => tx.send(Ok(())).unwrap(),
                                 Err(e) => {
-                                    error!("Error sending message to peer: {}", e);
-                                    tx.send(Err("Error sending message to peer".into())).unwrap()
+                                    error!("Error sending to peer: {}", e);
+                                    tx.send(Err("Send failed".into())).unwrap();
                                 },
                             };
                         },
@@ -209,8 +246,8 @@ impl NodeActor {
                             match self.node.chain_handle.add_share(share).await {
                                 Ok(_) => tx.send(Ok(())).unwrap(),
                                 Err(e) => {
-                                    error!("Error adding share to chain: {}", e);
-                                    tx.send(Err("Error adding share to chain".into())).unwrap()
+                                    error!("Error adding share: {}", e);
+                                    tx.send(Err("Add share failed".into())).unwrap();
                                 },
                             };
                         },
@@ -219,18 +256,24 @@ impl NodeActor {
                                 Ok(_) => tx.send(Ok(())).unwrap(),
                                 Err(e) => {
                                     error!("Error storing workbase: {}", e);
-                                    tx.send(Err("Error storing workbase".into())).unwrap()
+                                    tx.send(Err("Store workbase failed".into())).unwrap();
                                 },
                             };
                         },
                         None => {
-                            info!("Stopping node actor on channel close");
+                            info!("Stopping node actor on command channel close");
                             self.stopping_tx.send(()).unwrap();
                             return;
                         }
                     }
-                }
+                },
+                
+                _ = cleanup_handle => {
+                    error!("Peer cleanup task exited unexpectedly");
+                    break;
+                },
             }
         }
+    }
     }
 }
