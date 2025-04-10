@@ -290,7 +290,7 @@ pub struct Gbt {
     pub curtime: Time,
     pub bits: String,
     pub height: u32,
-    pub signet_challenge: String,
+    pub signet_challenge: Option<String>,
     pub default_witness_commitment: String,
     pub diff: f64,
     #[serde(
