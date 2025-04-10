@@ -220,7 +220,7 @@ mod tests {
                 curtime: bitcoin::absolute::Time::from_consensus(1737100205).unwrap(),
                 bits: "1e0377ae".to_string(),
                 height: 99,
-                signet_challenge: "51".to_string(),
+                signet_challenge: Some("51".to_string()),
                 default_witness_commitment:
                     "6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9"
                         .to_string(),
