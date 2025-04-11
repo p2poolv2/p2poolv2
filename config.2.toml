@@ -31,3 +31,10 @@ network = "signet"
 url = "http://localhost:38332"
 username = "p2pool"
 password = "p2pool"
+
+[logging]
+# For system run services you can specify a file path
+# file = "/var/log/p2pool/p2pool.log"
+# For container or local run it is recommended to use console output
+console = false
+level = "debug"
