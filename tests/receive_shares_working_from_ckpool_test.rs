@@ -67,7 +67,6 @@ mod zmq_tests {
         // Publish each message from test data
         for message in ckpool_messages {
             let serialized = serde_json::to_string(&message).unwrap();
-            tracing::debug!("Publishing message: {:?}", &message);
             publisher
                 .send(&serialized, 0)
                 .expect("Failed to publish message");
