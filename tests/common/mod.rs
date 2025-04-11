@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use p2poolv2::config::{
-    BitcoinConfig, CkPoolConfig, Config, MinerConfig, NetworkConfig, StoreConfig,
+    BitcoinConfig, CkPoolConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig,
 };
 use p2poolv2::shares::miner_message::MinerWorkbase;
 
@@ -60,11 +60,17 @@ pub fn default_test_config() -> Config {
                 .parse()
                 .unwrap(),
         },
+        logging: LoggingConfig {
+            level: "info".to_string(),
+            console: false,
+            file: Some("./p2pool.log".to_string()),
+        },
     }
 }
 
+#[allow(dead_code)]
 #[cfg(test)]
 pub fn simple_miner_workbase() -> MinerWorkbase {
     let json_str = include_str!("../../tests/test_data/simple_miner_workbase.json");
-    serde_json::from_str(&json_str).unwrap()
+    serde_json::from_str(json_str).unwrap()
 }
