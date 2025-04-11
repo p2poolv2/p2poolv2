@@ -833,7 +833,7 @@ mod tests {
                 curtime: time,
                 bits: "bits".to_string(),
                 height: 1,
-                signet_challenge: "51".to_string(),
+                signet_challenge: Some("51".to_string()),
                 default_witness_commitment: "commitment".to_string(),
                 diff: 1.0,
                 ntime: time,

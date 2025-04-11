@@ -715,7 +715,7 @@ impl TestGbtBuilder {
             vbavailable: serde_json::Value::Array(vec![]),
             vbrequired: 0,
             longpollid: String::new(),
-            signet_challenge: String::new(),
+            signet_challenge: None,
             diff: self.diff.unwrap(),
             ntime: self.ntime.unwrap(),
             bbversion: self.bbversion.unwrap(),

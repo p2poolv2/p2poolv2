@@ -17,8 +17,10 @@
 use crate::shares::ShareBlock;
 use clap::Parser;
 use std::error::Error;
+use std::fs::File;
 use tracing::{debug, info};
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::field::debug;
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Registry};
 
 mod bitcoind_rpc;
 mod command;
@@ -46,16 +48,15 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
-
     // Parse command line arguments
     let args = Args::parse();
-    debug!("Parsed args: {:?}", args);
 
     // Load configuration
     let config = config::Config::load(&args.config)?;
+
+    // Configure logging based on config
+    setup_logging(&config.logging)?;
+
     let chain_handle = ChainHandle::new(config.store.path.clone());
     let public_key = "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
         .parse::<PublicKey>()
@@ -78,5 +79,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
     } else {
         error!("Failed to start node");
     }
+    Ok(())
+}
+
+/// Sets up logging according to the logging configuration
+fn setup_logging(logging_config: &config::LoggingConfig) -> Result<(), Box<dyn Error>> {
+    debug!("Setting up logging with config: {:?}", logging_config);
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&logging_config.level));
+
+    let registry = Registry::default().with(filter);
+
+    // Configure console logging if enabled
+    if logging_config.console {
+        let console_layer = fmt::layer().pretty();
+        // Initialize with console output
+        registry.with(console_layer).init();
+    } else if let Some(file_path) = &logging_config.file {
+        // Create directory structure if it doesn't exist
+        if let Some(parent) = std::path::Path::new(file_path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Configure file logging if specified
+        let file = File::create(file_path)?;
+        info!("Logging to file: {}", file_path);
+        let file_layer = fmt::layer().with_writer(file).with_ansi(false);
+
+        registry.with(file_layer).init();
+    } else {
+        // If neither console nor file is configured, default to console
+        let console_layer = fmt::layer();
+        registry.with(console_layer).init();
+    }
+
+    info!("Logging initialized");
     Ok(())
 }

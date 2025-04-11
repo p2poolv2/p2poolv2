@@ -74,6 +74,26 @@ pub struct BitcoinConfig {
     pub password: String,
 }
 
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct LoggingConfig {
+    /// Log to file if specified
+    pub file: Option<String>,
+    /// Log to console if true (defaults to true)
+    #[serde(default = "default_console_logging")]
+    pub console: bool,
+    /// Log level (defaults to "info")
+    #[serde(default = "default_log_level")]
+    pub level: String,
+}
+
+fn default_console_logging() -> bool {
+    true
+}
+
+fn default_log_level() -> String {
+    "info".to_string()
+}
+
 #[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
 pub struct Config {
@@ -82,6 +102,7 @@ pub struct Config {
     pub ckpool: CkPoolConfig,
     pub miner: MinerConfig,
     pub bitcoin: BitcoinConfig,
+    pub logging: LoggingConfig,
 }
 
 impl Default for NetworkConfig {

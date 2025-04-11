@@ -11,7 +11,7 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
   echo "Examples:"
   echo "  $0                  Run on signet network"
   echo "  $0 testnet4         Run on testnet4 network"
-  echo "  $0 signet bitcoind-data  Run bitcoind on signet network volume"
+  echo "  $0 signet bitcoind  Run bitcoind on signet network volume"
   exit 0
 fi
 
@@ -46,4 +46,4 @@ docker compose up --no-start
 # docker compose down "$@"
 
 # Run docker-compose with the specified configuration
-docker compose up "$@"
+docker compose up "$@" --remove-orphans

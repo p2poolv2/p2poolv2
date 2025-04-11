@@ -14,12 +14,13 @@ RUN apt-get update && apt-get install -y \
     yasm \
     libzmq3-dev \
     pkgconf \
+    netcat-openbsd\
     && rm -rf /var/lib/apt/lists/*
 
 # Clone ckpool repository
 RUN git clone https://bitbucket.org/p2pool-v2/ckpool-solo.git /ckpool && \
     cd /ckpool && \
-    git checkout 6af084e97b97b1c5f5d1aaf23e371bd324d81f33
+    git checkout publish-shares
 
 # Build ckpool
 WORKDIR /ckpool

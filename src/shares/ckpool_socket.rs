@@ -123,8 +123,6 @@ fn receive_shares<S: CkPoolSocketTrait>(
                 // Send the parsed JSON to the channel
                 if let Err(e) = tx.blocking_send(json_value) {
                     debug!("Failed to send share to channel: {}", e);
-                } else {
-                    debug!("Sent share to channel: {}", json_str);
                 }
             }
             Err(e) => {

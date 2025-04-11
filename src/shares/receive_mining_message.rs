@@ -52,7 +52,7 @@ pub fn start_receiving_mining_messages<C: Send + 'static>(
         while let Some(mining_message_data) = mining_message_rx.recv().await {
             let mining_message: CkPoolMessage =
                 serde_json::from_value(mining_message_data).unwrap();
-            info!("Received mining message deserialized: {:?}", mining_message);
+            info!("Received mining message");
 
             if let Err(e) = handle_mining_message::<C>(
                 mining_message,
