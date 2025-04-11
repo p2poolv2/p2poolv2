@@ -46,4 +46,4 @@ docker compose up --no-start
 # docker compose down "$@"
 
 # Run docker-compose with the specified configuration
-docker compose up "$@"
+docker compose up "$@" --remove-orphans
