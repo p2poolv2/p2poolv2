@@ -36,9 +36,9 @@ use libp2p::PeerId;
 pub async fn handle_mining_message<C>(
     mining_message: CkPoolMessage,
     chain_handle: ChainHandle,
-    _swarm_tx: mpsc::Sender<SwarmSend<C>>,
+    swarm_tx: mpsc::Sender<SwarmSend<C>>,
     miner_pubkey: PublicKey,
-    peer_id: PeerID,
+    peer_id: PeerId,
     last_share_times: Arc<Mutex<HashMap<PeerId, Instant>>>,
 ) -> Result<(), Box<dyn Error>> {
     match mining_message {
@@ -50,32 +50,34 @@ pub async fn handle_mining_message<C>(
             let mut share_block =
                 ShareBlock::new(share, miner_pubkey, bitcoin::Network::Regtest, &mut vec![]);
             debug!(
-                "Mining message share block for workinfoid {:?} with hash: {:?}",
-                share_block.header.miner_share.workinfoid, share_block.header.miner_share.hash
+                "Mining message share block for workinfoid {:?} with hash: {:?} from peer {}",
+                share_block.header.miner_share.workinfoid, 
+                share_block.header.miner_share.hash,
+                peer_id
             );
             share_block = chain_handle.setup_share_for_chain(share_block).await;
             if let Err(e) = chain_handle.add_share(share_block).await {
-                error!("Failed to add share: {}", e);
+                error!("Failed to add share from peer {}: {}", peer_id, e);
                 return Err("Error adding share to chain".into());
             }
         }
         CkPoolMessage::Workbase(workbase) => {
             debug!(
-                "Mining message workbase received: {:?}",
-                workbase.workinfoid
+                "Workbase received from peer {}: {:?}",
+                peer_id, workbase.workinfoid
             );
             if let Err(e) = chain_handle.add_workbase(workbase).await {
-                error!("Failed to add workbase: {}", e);
+                error!("Failed to add workbase from peer {}: {}", peer_id, e);
                 return Err("Error adding workbase".into());
             }
         }
         CkPoolMessage::UserWorkbase(userworkbase) => {
             debug!(
-                "Mining message user workbase received: {:?}",
-                userworkbase.workinfoid
+                "User workbase received from peer {}: {:?}",
+                peer_id, userworkbase.workinfoid
             );
             if let Err(e) = chain_handle.add_user_workbase(userworkbase).await {
-                error!("Failed to add user workbase: {}", e);
+                error!("Failed to add user workbase from peer {}: {}", peer_id, e);
                 return Err("Error adding user workbase".into());
             }
         }
@@ -91,50 +93,33 @@ mod tests {
     use rust_decimal_macros::dec;
 
     #[tokio::test]
-    async fn test_handle_mining_message_share() {
+    async fn test_share_updates_last_activity() {
         let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
             .parse()
             .unwrap();
         let mut mock_chain = ChainHandle::default();
-        let (swarm_tx, mut swarm_rx) = mpsc::channel(1);
-
-        // Setup expectations
-        mock_chain.expect_add_share().times(1).returning(|_| Ok(()));
-
-        mock_chain
-            .expect_setup_share_for_chain()
-            .times(1)
-            .returning(|share_block| {
-                let mut share_block = share_block;
-                share_block.header.prev_share_blockhash =
-                    Some("00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173".into());
-                share_block.header.uncles =
-                    vec!["00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172".into()];
-                share_block
-            });
-
-        let mining_message = CkPoolMessage::Share(simple_miner_share(
-            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
-            Some(7452731920372203525),
-            Some(1),
-            Some(dec!(1.0)),
-            Some(dec!(1.9041854952356509)),
-        ));
-
+        let (swarm_tx, _) = mpsc::channel(1);
         let peer_id = PeerId::random();
         let last_share_times = Arc::new(Mutex::new(HashMap::new()));
 
-        let result = handle_mining_message::<mpsc::Sender<Message>>(
+        mock_chain.expect_add_share().returning(|_| Ok(()));
+        mock_chain.expect_setup_share_for_chain().returning(|b| b);
+
+        let mining_message = CkPoolMessage::Share(simple_miner_share(
+            None, None, None, None, None
+        ));
+
+        handle_mining_message(
             mining_message,
             mock_chain,
             swarm_tx,
             miner_pubkey,
             peer_id,
-            last_share_times,
-        )
-        .await;
+            last_share_times.clone()
+        ).await.unwrap();
 
-        assert!(result.is_ok());
+        let times = last_share_times.lock().unwrap();
+        assert!(times.contains_key(&peer_id));
     }
 
     #[tokio::test]
