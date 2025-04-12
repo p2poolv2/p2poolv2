@@ -180,6 +180,7 @@ mod tests {
             max_inventory_per_second: 100,
             max_transaction_per_second: 100,
             rate_limit_window_secs: 1,
+            max_concurrent_tasks: 240,
         }
     }
 
