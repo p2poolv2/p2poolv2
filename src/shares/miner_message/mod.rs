@@ -99,7 +99,7 @@ impl MinerShare {
         workbase: &MinerWorkbase,
         user_workbase: &UserWorkbase,
     ) -> Result<bool, String> {
-        let coinbase = builders::build_coinbase_from_share(user_workbase, &self)
+        let coinbase = builders::build_coinbase_from_share(user_workbase, self)
             .map_err(|e| format!("Failed to build coinbase: {}", e))?;
         let coinbase_txid = coinbase.compute_txid();
         let txids = workbase
@@ -325,7 +325,7 @@ mod tests {
                 .parse()
                 .unwrap()
         );
-        assert_eq!(share.result, true);
+        assert!(share.result);
         assert_eq!(share.errn, 0);
         assert_eq!(share.createdate, "");
         assert_eq!(share.createby, "");
@@ -366,7 +366,7 @@ mod tests {
         assert_eq!(params.version, "20000000");
         assert_eq!(params.nbit, "1e0377ae");
         assert_eq!(params.ntime, "67b6f938");
-        assert_eq!(params.clean_jobs, false);
+        assert!(!params.clean_jobs);
 
         // Test serialization back to JSON
         let serialized = serde_json::to_string(&userworkbase).unwrap();
@@ -482,7 +482,7 @@ mod miner_share_tests {
         let share = &shares[0];
 
         // Validate the share
-        let result = share.validate(&workbase, &userworkbase);
+        let result = share.validate(workbase, userworkbase);
         assert!(result.is_ok());
     }
 
@@ -541,7 +541,7 @@ mod miner_share_tests {
     #[test]
     fn test_miner_message_workbase_deserialization() {
         let json_str = include_str!("../../../tests/test_data/simple_miner_workbase.json");
-        let workbase: MinerWorkbase = serde_json::from_str(&json_str).unwrap();
+        let workbase: MinerWorkbase = serde_json::from_str(json_str).unwrap();
 
         // Verify it's a Workbase variant and check fields
         assert_eq!(workbase.workinfoid, 7459044800742817807);
@@ -584,7 +584,7 @@ mod miner_share_tests {
             .zip(userworkbases.iter())
             .zip(shares.iter())
         {
-            let coinbase = builders::build_coinbase_from_share(&userworkbase, &share).unwrap();
+            let coinbase = builders::build_coinbase_from_share(userworkbase, share).unwrap();
             assert!(coinbase.is_coinbase());
         }
     }
