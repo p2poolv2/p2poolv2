@@ -22,7 +22,7 @@ use crate::shares::ShareBlock;
 use bitcoin::PublicKey;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::{debug, error};
+use tracing::{error, info};
 
 /// Handle a mining message received from ckpool
 /// For now the message can be a share or a GBT workbase
@@ -39,7 +39,7 @@ pub async fn handle_mining_message<C>(
         CkPoolMessage::Share(share) => {
             let mut share_block =
                 ShareBlock::new(share, miner_pubkey, bitcoin::Network::Regtest, &mut vec![]);
-            debug!(
+            info!(
                 "Mining message share block for workinfoid {:?} with hash: {:?}",
                 share_block.header.miner_share.workinfoid, share_block.header.miner_share.hash
             );
@@ -50,7 +50,7 @@ pub async fn handle_mining_message<C>(
             }
         }
         CkPoolMessage::Workbase(workbase) => {
-            debug!(
+            info!(
                 "Mining message workbase received: {:?}",
                 workbase.workinfoid
             );
@@ -60,7 +60,7 @@ pub async fn handle_mining_message<C>(
             }
         }
         CkPoolMessage::UserWorkbase(userworkbase) => {
-            debug!(
+            info!(
                 "Mining message user workbase received: {:?}",
                 userworkbase.workinfoid
             );
