@@ -630,45 +630,15 @@ impl Store {
     }
 
     /// Get multiple shares from the store
-    /// TODO: Refactor to use get_share
     pub fn get_shares(
         &self,
         blockhashes: &[ShareBlockHash],
     ) -> HashMap<ShareBlockHash, ShareBlock> {
         debug!("Getting shares from store: {:?}", blockhashes);
-        let share_cf = self.db.cf_handle("block").unwrap();
-        let keys = blockhashes
-            .iter()
-            .map(|h| (share_cf, h.as_ref()))
-            .collect::<Vec<_>>();
-        let shares = self.db.multi_get_cf(keys);
-        // iterate over the blockhashes and shares, filter out the ones that are not found or can't be deserialized
-        // then convert the storage share to share block and return as a hashmap
         blockhashes
             .iter()
-            .zip(shares)
-            .filter_map(|(blockhash, result)| {
-                if let Ok(Some(data)) = result {
-                    if let Ok(storage_share) = StorageShareBlock::cbor_deserialize(&data) {
-                        let txids = self.get_txids_for_blockhash(blockhash);
-                        let transactions = txids
-                            .iter()
-                            .map(|txid| self.get_tx(txid).unwrap())
-                            .collect::<Vec<_>>();
-                        Some((
-                            *blockhash,
-                            storage_share.into_share_block_with_transactions(transactions),
-                        ))
-                    } else {
-                        tracing::warn!(
-                            "Could not deserialize share for blockhash: {:?}",
-                            blockhash
-                        );
-                        None
-                    }
-                } else {
-                    None
-                }
+            .filter_map(|blockhash| {
+                self.get_share(blockhash).map(|share| (*blockhash, share))
             })
             .collect()
     }
