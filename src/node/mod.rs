@@ -380,11 +380,11 @@ impl Node {
         {
             match Message::cbor_deserialize(&message.data) {
                 Ok(deserialized_msg) => {
-                    let message_type = Message::from(deserialized_msg);
+                    let message_type = deserialized_msg;
                     if !self
                         .rate_limiter
                         .check_rate_limit(
-                            &propagation_source,
+                            propagation_source,
                             message_type.clone(),
                             &self.config.network,
                         )
@@ -436,10 +436,10 @@ impl Node {
                 },
         } = &request_response_event
         {
-            let message = Message::from(request.clone());
+            let message = request.clone();
             if !self
                 .rate_limiter
-                .check_rate_limit(&peer, message.clone(), &self.config.network)
+                .check_rate_limit(peer, message.clone(), &self.config.network)
                 .await
             {
                 warn!(

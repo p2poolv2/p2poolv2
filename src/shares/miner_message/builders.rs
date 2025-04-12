@@ -46,9 +46,7 @@ pub fn build_coinbase_from_share(
 
 /// Decodes a vector of WorkbaseTxn into a vector of bitcoin::Transaction
 /// Returns an error if any transaction fails to decode
-fn decode_transactions(
-    txns: &Vec<WorkbaseTxn>,
-) -> Result<Vec<bitcoin::Transaction>, Box<dyn Error>> {
+fn decode_transactions(txns: &[WorkbaseTxn]) -> Result<Vec<bitcoin::Transaction>, Box<dyn Error>> {
     txns.iter()
         .map(|tx| {
             let tx_bytes = hex::decode(&tx.data).map_err(|e| Box::new(e) as Box<dyn Error>)?;
@@ -60,14 +58,14 @@ fn decode_transactions(
 
 /// Decodes a vector of WorkbaseTxn into a vector of bitcoin::Txid
 /// Returns an error if any txid fails to decode
-fn decode_txids(txns: &Vec<WorkbaseTxn>) -> Result<Vec<bitcoin::Txid>, Box<dyn Error>> {
+fn decode_txids(txns: &[WorkbaseTxn]) -> Result<Vec<bitcoin::Txid>, Box<dyn Error>> {
     txns.iter()
         .map(|tx| bitcoin::Txid::from_str(&tx.txid).map_err(|e| Box::new(e) as Box<dyn Error>))
         .collect()
 }
 
 /// Compute merkle root from the txids
-pub fn compute_merkle_root_from_txids(txids: &Vec<bitcoin::Txid>) -> Option<bitcoin::TxMerkleNode> {
+pub fn compute_merkle_root_from_txids(txids: &[bitcoin::Txid]) -> Option<bitcoin::TxMerkleNode> {
     let hashes = txids.iter().map(|obj| obj.to_raw_hash());
     bitcoin::merkle_tree::calculate_root(hashes).map(|h| h.into())
 }
@@ -99,7 +97,7 @@ pub fn build_bitcoin_block(
     userworkbase: &UserWorkbase,
     share: &MinerShare,
 ) -> Result<bitcoin::Block, Box<dyn Error>> {
-    let coinbase = build_coinbase_from_share(&userworkbase, &share)?;
+    let coinbase = build_coinbase_from_share(userworkbase, share)?;
     let mut txns = vec![coinbase.clone()];
     txns.extend(decode_transactions(&workbase.txns)?);
 
@@ -290,7 +288,7 @@ mod tests {
             let share_ntime = share.ntime.to_consensus_u32();
             let workbase_version = workbase.gbt.version;
 
-            let block = build_bitcoin_block(&workbase, &userworkbase, &share).unwrap();
+            let block = build_bitcoin_block(workbase, userworkbase, share).unwrap();
 
             assert_eq!(block.txdata.len(), 1); // Only coinbase transaction
             assert_eq!(

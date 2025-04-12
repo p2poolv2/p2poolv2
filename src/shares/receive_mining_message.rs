@@ -27,7 +27,7 @@ use crate::{
 use std::error::Error;
 use std::thread;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::error;
 
 /// Receives messages from ckpool and sends them to the node asynchronously
 /// Each new message received starts a new tokio task

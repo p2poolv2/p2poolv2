@@ -19,7 +19,6 @@ use clap::Parser;
 use std::error::Error;
 use std::fs::File;
 use tracing::{debug, info};
-use tracing_subscriber::field::debug;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Registry};
 
 mod bitcoind_rpc;

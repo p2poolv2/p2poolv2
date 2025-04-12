@@ -86,7 +86,7 @@ mod tests {
             .parse()
             .unwrap();
         let mut mock_chain = ChainHandle::default();
-        let (swarm_tx, mut swarm_rx) = mpsc::channel(1);
+        let (swarm_tx, _swarm_rx) = mpsc::channel(1);
 
         // Setup expectations
         mock_chain.expect_add_share().times(1).returning(|_| Ok(()));
