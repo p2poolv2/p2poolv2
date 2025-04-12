@@ -23,5 +23,5 @@
 	"maxdiff": 0,
 	"maxclients": 2,
 	"zmqblock": "tcp://bitcoind:28332",
-	"btcnetwork": "signet"
+	"btcnetwork": "testnet4"
 }
