@@ -44,9 +44,14 @@ pub async fn handle_mining_message<C>(
                 share_block.header.miner_share.workinfoid, share_block.header.miner_share.hash
             );
             share_block = chain_handle.setup_share_for_chain(share_block).await;
+            let share_block_clone = share_block.clone();
             if let Err(e) = chain_handle.add_share(share_block).await {
                 error!("Failed to add share: {}", e);
                 return Err("Error adding share to chain".into());
+            }
+            //Send INV message to the network
+            if let Err(e) = _swarm_tx.send(SwarmSend::Inv(share_block_clone)).await {
+                error!("Failed to send INV message to swarm: {}", e);
             }
         }
         CkPoolMessage::Workbase(workbase) => {
@@ -120,6 +125,12 @@ mod tests {
         .await;
 
         assert!(result.is_ok());
+        // Check that INV was sent
+        if let Some(SwarmSend::Inv(_share_block)) = swarm_rx.recv().await {
+            info!("Received INV message with share block: {:?}", _share_block);
+        } else {
+            panic!("Expected INV message to be sent to swarm");
+        }
     }
 
     #[tokio::test]
