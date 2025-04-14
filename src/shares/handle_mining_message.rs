@@ -28,7 +28,6 @@ use tracing::{error, info};
 /// For now the message can be a share or a GBT workbase
 /// We store the received message in the node's database
 /// we assume it is valid and add it to the chain.
-/// TODO: Send INV message for the share _or_ push this immediately to the network
 pub async fn handle_mining_message<C>(
     mining_message: CkPoolMessage,
     chain_handle: ChainHandle,
@@ -181,5 +180,48 @@ mod tests {
             result.unwrap_err().to_string(),
             "Error adding share to chain"
         );
+    }
+    #[tokio::test]
+    async fn test_handle_mining_message_share_send_inv_error() {
+        let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+            .parse()
+            .unwrap();
+        let mut mock_chain = ChainHandle::default();
+        let (swarm_tx, swarm_rx) = mpsc::channel(1);
+
+        // Close the receiver to simulate a send failure
+        drop(swarm_rx);
+
+        // Setup expectations
+        mock_chain.expect_add_share().times(1).returning(|_| Ok(()));
+
+        mock_chain
+            .expect_setup_share_for_chain()
+            .times(1)
+            .returning(|share_block| {
+                let mut share_block = share_block;
+                share_block.header.prev_share_blockhash =
+                    Some("00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846173".into());
+                share_block.header.uncles =
+                    vec!["00000000debd331503c0e5348801a2057d2b8c8b96dcfb075d5a283954846172".into()];
+                share_block
+            });
+
+        let mining_message = CkPoolMessage::Share(simple_miner_share(
+            Some("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"),
+            Some(7452731920372203525),
+            Some(1),
+            Some(dec!(1.0)),
+            Some(dec!(1.9041854952356509)),
+        ));
+
+        let result = handle_mining_message::<mpsc::Sender<Message>>(
+            mining_message,
+            mock_chain,
+            swarm_tx,
+            miner_pubkey,
+        )
+        .await;
+        assert!(result.is_ok());
     }
 }

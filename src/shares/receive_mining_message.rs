@@ -31,7 +31,7 @@ use tracing::{error, info};
 
 /// Receives messages from ckpool and sends them to the node asynchronously
 /// Each new message received starts a new tokio task
-/// TODO: Add limits to how many concurrent tasks are run
+/// : Add limits to how many concurrent tasks are run
 pub fn start_receiving_mining_messages<C: Send + 'static>(
     config: &Config,
     chain_handle: ChainHandle,

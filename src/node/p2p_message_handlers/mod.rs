@@ -172,6 +172,7 @@ mod tests {
             &userworkbases[0],
             &shares[0],
             share_header,
+            pubkey,
         )
         .unwrap();
 

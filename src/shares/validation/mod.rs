@@ -66,11 +66,11 @@ pub async fn validate(
         )
         .into());
     }
-    if let Err(e) = share
-        .header
-        .miner_share
-        .validate(&workbase.unwrap(), &userworkbase.unwrap())
-    {
+    if let Err(e) = share.header.miner_share.validate(
+        &workbase.unwrap(),
+        &userworkbase.unwrap(),
+        share.header.miner_pubkey,
+    ) {
         return Err(format!("Share validation failed: {}", e).into());
     }
 
@@ -383,6 +383,7 @@ mod tests {
             &userworkbases[0],
             &shares[0],
             share_header,
+            pubkey,
         )
         .unwrap();
 

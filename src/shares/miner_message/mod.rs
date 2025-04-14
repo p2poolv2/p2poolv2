@@ -98,8 +98,9 @@ impl MinerShare {
         &self,
         workbase: &MinerWorkbase,
         user_workbase: &UserWorkbase,
+        miner_pubkey: bitcoin::PublicKey,
     ) -> Result<bool, String> {
-        let coinbase = builders::build_coinbase_from_share(user_workbase, self)
+        let coinbase = builders::build_coinbase_from_share(user_workbase, self, miner_pubkey)
             .map_err(|e| format!("Failed to build coinbase: {}", e))?;
         let coinbase_txid = coinbase.compute_txid();
         let txids = workbase
@@ -115,7 +116,7 @@ impl MinerShare {
             .ok_or_else(|| "Failed to compute merkle root".to_string())?;
         let header = builders::build_bitcoin_header(workbase, self, merkle_root)
             .map_err(|e| format!("Failed to build header: {}", e))?;
-        let block = builders::build_bitcoin_block(workbase, user_workbase, self)
+        let block = builders::build_bitcoin_block(workbase, user_workbase, self, miner_pubkey)
             .map_err(|e| format!("Failed to build block: {}", e))?;
 
         let compact_target =
@@ -457,7 +458,11 @@ mod miner_share_tests {
         // Test invalid nonce
         let mut invalid_miner_work = shares[0].clone();
         invalid_miner_work.nonce = "invalidhex".to_string();
-        let result = invalid_miner_work.validate(&workbases[0], &userworkbases[0]);
+        let test_pubkey = bitcoin::PublicKey::from_str(
+            "02818c2b3d33cd86ca5841e6c29b722f7243106384b5f2fa146339438971eb72e4",
+        )
+        .unwrap();
+        let result = invalid_miner_work.validate(&workbases[0], &userworkbases[0], test_pubkey);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -467,7 +472,11 @@ mod miner_share_tests {
         // Test invalid nonce
         let mut invalid_miner_work = shares[0].clone();
         invalid_miner_work.nonce = "2eb7b8".to_string();
-        let result = invalid_miner_work.validate(&workbases[0], &userworkbases[0]);
+        let test_pubkey = bitcoin::PublicKey::from_str(
+            "02818c2b3d33cd86ca5841e6c29b722f7243106384b5f2fa146339438971eb72e4",
+        )
+        .unwrap();
+        let result = invalid_miner_work.validate(&workbases[0], &userworkbases[0], test_pubkey);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Invalid proof of work");
     }
@@ -482,7 +491,11 @@ mod miner_share_tests {
         let share = &shares[0];
 
         // Validate the share
-        let result = share.validate(workbase, userworkbase);
+        let test_pubkey = bitcoin::PublicKey::from_str(
+            "02818c2b3d33cd86ca5841e6c29b722f7243106384b5f2fa146339438971eb72e4",
+        )
+        .unwrap();
+        let result = share.validate(workbase, userworkbase, test_pubkey);
         assert!(result.is_ok());
     }
 
@@ -584,7 +597,12 @@ mod miner_share_tests {
             .zip(userworkbases.iter())
             .zip(shares.iter())
         {
-            let coinbase = builders::build_coinbase_from_share(userworkbase, share).unwrap();
+            let test_pubkey = bitcoin::PublicKey::from_str(
+                "02818c2b3d33cd86ca5841e6c29b722f7243106384b5f2fa146339438971eb72e4",
+            )
+            .unwrap();
+            let coinbase =
+                builders::build_coinbase_from_share(userworkbase, share, test_pubkey).unwrap();
             assert!(coinbase.is_coinbase());
         }
     }

@@ -28,7 +28,9 @@ use std::str::FromStr;
 pub fn build_coinbase_from_share(
     userworkbase: &UserWorkbase,
     share: &MinerShare,
+    miner_pubkey: bitcoin::PublicKey,
 ) -> Result<bitcoin::Transaction, Box<dyn std::error::Error>> {
+    use bitcoin::secp256k1::Secp256k1;
     use hex::FromHex;
 
     let coinb1 = &userworkbase.params.coinb1;
@@ -39,9 +41,34 @@ pub fn build_coinbase_from_share(
     let complete_tx = format!("{}{}{}{}", coinb1, enonce1, nonce2, coinb2);
 
     // Try to deserialize
-    let tx_bytes = Vec::from_hex(&complete_tx).unwrap();
-    bitcoin::Transaction::consensus_decode(&mut std::io::Cursor::new(tx_bytes))
-        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    let tx_bytes = Vec::from_hex(&complete_tx)?;
+    let mut tx: bitcoin::Transaction =
+        bitcoin::Transaction::consensus_decode(&mut std::io::Cursor::new(tx_bytes))
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+    // Convert PublicKey to CompressedPublicKey
+    if !miner_pubkey.compressed {
+        return Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Uncompressed public keys are not supported for P2WPKH",
+        )));
+    }
+    let compressed_pk = bitcoin::CompressedPublicKey(miner_pubkey.inner);
+
+    // Create P2WPKH address from compressed public key
+    let secp = Secp256k1::new();
+    let address = bitcoin::Address::p2wpkh(&compressed_pk, bitcoin::Network::Signet);
+    let script_pubkey = address.script_pubkey();
+    // Update the first output (mining reward) to pay to miner_pubkey
+    // Preserve the original value from the deserialized transaction
+    if !tx.output.is_empty() {
+        tx.output[0].script_pubkey = script_pubkey;
+    } else {
+        return Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Coinbase transaction has no outputs",
+        )));
+    }
+    Ok(tx)
 }
 
 /// Decodes a vector of WorkbaseTxn into a vector of bitcoin::Transaction
@@ -98,8 +125,9 @@ pub fn build_bitcoin_block(
     workbase: &MinerWorkbase,
     userworkbase: &UserWorkbase,
     share: &MinerShare,
+    miner_pubkey: bitcoin::PublicKey,
 ) -> Result<bitcoin::Block, Box<dyn Error>> {
-    let coinbase = build_coinbase_from_share(&userworkbase, &share)?;
+    let coinbase = build_coinbase_from_share(userworkbase, share, miner_pubkey)?;
     let mut txns = vec![coinbase.clone()];
     txns.extend(decode_transactions(&workbase.txns)?);
 
@@ -126,8 +154,8 @@ pub fn build_share_header(
     userworkbase: &UserWorkbase,
     miner_pubkey: bitcoin::PublicKey,
 ) -> Result<crate::shares::ShareHeader, Box<dyn Error>> {
-    // TODO[pool2win/P0] - The coinbase for the share should be the one paying miner pubkey
-    let coinbase = build_coinbase_from_share(userworkbase, share)?;
+   
+    let coinbase = build_coinbase_from_share(userworkbase, share, miner_pubkey)?;
     let mut txids = vec![coinbase.compute_txid()];
     txids.extend(decode_txids(&workbase.txns)?);
 
@@ -152,8 +180,9 @@ pub fn build_share_block(
     userworkbase: &UserWorkbase,
     share: &MinerShare,
     header: crate::shares::ShareHeader,
+    miner_pubkey: bitcoin::PublicKey,
 ) -> Result<crate::shares::ShareBlock, Box<dyn Error>> {
-    let coinbase = build_coinbase_from_share(userworkbase, share)?;
+    let coinbase = build_coinbase_from_share(userworkbase, share, miner_pubkey)?;
     let mut transactions = vec![coinbase];
     transactions.extend(decode_transactions(&workbase.txns)?);
 
@@ -173,10 +202,14 @@ mod tests {
     #[test]
     fn test_build_coinbase() {
         let (_workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
+        let miner_pubkey = bitcoin::PublicKey {
+            inner: bitcoin::secp256k1::PublicKey::from_str("...compressed_key...").unwrap(),
+            compressed: true,
+        };
 
         // Build coinbase
-        let coinbase = build_coinbase_from_share(&userworkbases[0], &shares[0]).unwrap();
-
+        let coinbase =
+            build_coinbase_from_share(&userworkbases[0], &shares[0], miner_pubkey).unwrap();
         // Verify it's a coinbase transaction
         assert!(coinbase.is_coinbase());
 
@@ -243,9 +276,17 @@ mod tests {
     #[test]
     fn test_build_bitcoin_header() {
         let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
-
+        // Create a test compressed public key
+        let miner_pubkey = bitcoin::PublicKey {
+            inner: bitcoin::secp256k1::PublicKey::from_str(
+                "02b4632d08485ff1df2db55b9dafd23347d1c47a457072a1e87be26896549a8737",
+            )
+            .unwrap(),
+            compressed: true,
+        };
         // Build coinbase and merkle root
-        let coinbase = build_coinbase_from_share(&userworkbases[0], &shares[0]).unwrap();
+        let coinbase =
+            build_coinbase_from_share(&userworkbases[0], &shares[0], miner_pubkey).unwrap();
         let mut txids = vec![coinbase.compute_txid()];
         txids.extend(decode_txids(&workbases[0].txns).unwrap());
         let merkle_root = compute_merkle_root_from_txids(&txids).unwrap();
@@ -280,6 +321,14 @@ mod tests {
     #[test]
     fn test_build_bitcoin_block_and_validation() {
         let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
+        // Create a test compressed public key
+        let miner_pubkey = bitcoin::PublicKey {
+            inner: bitcoin::secp256k1::PublicKey::from_str(
+                "02b4632d08485ff1df2db55b9dafd23347d1c47a457072a1e87be26896549a8737",
+            )
+            .unwrap(),
+            compressed: true,
+        };
 
         // Build and validate blocks for each workbase-share pair
         for ((workbase, userworkbase), share) in workbases
@@ -290,7 +339,8 @@ mod tests {
             let share_ntime = share.ntime.to_consensus_u32();
             let workbase_version = workbase.gbt.version;
 
-            let block = build_bitcoin_block(&workbase, &userworkbase, &share).unwrap();
+            let block =
+                build_bitcoin_block(&workbase, &userworkbase, &share, miner_pubkey).unwrap();
 
             assert_eq!(block.txdata.len(), 1); // Only coinbase transaction
             assert_eq!(
@@ -363,5 +413,48 @@ mod tests {
         let serialized = bitcoin::consensus::encode::serialize(&tx);
         let hex_serialized = hex::encode(serialized);
         assert_eq!(hex_serialized, hex_tx.to_lowercase());
+    }
+    #[test]
+    fn test_build_share_header_with_miner_pubkey() {
+        let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
+
+        // Create a test compressed public key
+        let miner_pubkey = bitcoin::PublicKey {
+            inner: bitcoin::secp256k1::PublicKey::from_str(
+                "02b4632d08485ff1df2db55b9dafd23347d1c47a457072a1e87be26896549a8737",
+            )
+            .unwrap(),
+            compressed: true,
+        };
+
+        // Build ShareHeader
+        let share_header =
+            build_share_header(&workbases[0], &shares[0], &userworkbases[0], miner_pubkey).unwrap();
+
+        // Verify ShareHeader fields
+        assert_eq!(share_header.miner_share, shares[0]);
+        assert_eq!(share_header.prev_share_blockhash, None);
+        assert!(share_header.uncles.is_empty());
+        assert_eq!(share_header.miner_pubkey, miner_pubkey);
+
+        // Verify the coinbase transaction pays to the miner's address
+        let coinbase =
+            build_coinbase_from_share(&userworkbases[0], &shares[0], miner_pubkey).unwrap();
+        let expected_address = bitcoin::Address::p2wpkh(
+            &bitcoin::CompressedPublicKey(miner_pubkey.inner),
+            bitcoin::Network::Signet,
+        );
+        let coinbase_address = bitcoin::Address::from_script(
+            &coinbase.output[0].script_pubkey,
+            bitcoin::Network::Signet,
+        )
+        .unwrap();
+        assert_eq!(coinbase_address, expected_address);
+
+        // Verify Merkle root consistency
+        let mut txids = vec![coinbase.compute_txid()];
+        txids.extend(decode_txids(&workbases[0].txns).unwrap());
+        let expected_merkle_root = compute_merkle_root_from_txids(&txids).unwrap();
+        assert_eq!(share_header.merkle_root, expected_merkle_root);
     }
 }
