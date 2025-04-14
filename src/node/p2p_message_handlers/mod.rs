@@ -64,11 +64,17 @@ pub async fn handle_request<C: 'static>(
             handle_share_headers(share_headers, chain_handle, time_provider).await
         }
         Message::ShareBlock(share_block) => {
-            if let Err(e) = handle_share_block(share_block, chain_handle, time_provider).await {
-                error!("Failed to add share: {}", e);
-                return Err(format!("Failed to add share: {}", e).into());
+            match handle_share_block(share_block, chain_handle, time_provider).await {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    error!("Dropping peer {} due to invalid share: {}", peer, e);
+                    swarm_tx
+                        .send(SwarmSend::DisconnectPeer(peer))
+                        .await
+                        .map_err(|e| format!("Failed to disconnect peer: {}", e).into())?;
+                    Err(format!("Invalid share from peer {}: {}", peer, e).into())
+                }
             }
-            Ok(())
         }
         Message::Workbase(workbase) => {
             info!("Received workbase: {:?}", workbase);

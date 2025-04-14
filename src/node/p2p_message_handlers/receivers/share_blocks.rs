@@ -20,7 +20,7 @@ use crate::shares::validation;
 use crate::shares::ShareBlock;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Handle a ShareBlock received from a peer
 /// This is called on receiving a ShareBlock from the gossipsub protocol,
@@ -36,8 +36,8 @@ pub async fn handle_share_block(
 ) -> Result<(), Box<dyn Error>> {
     info!("Received share block: {:?}", share_block);
     if let Err(e) = validation::validate(&share_block, &chain_handle, time_provider).await {
-        error!("Share block validation failed: {}", e);
-        return Err("Share block validation failed".into());
+        warn!("Invalid share block from peer: {}", e);
+        return Err(e.into());
     }
     if let Err(e) = chain_handle.add_share(share_block.clone()).await {
         error!("Failed to add share: {}", e);

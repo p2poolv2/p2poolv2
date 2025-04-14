@@ -19,7 +19,7 @@ mod common;
 mod self_and_peer_messages_tests {
     use super::common::{default_test_config, simple_miner_workbase};
     use p2poolv2::node::actor::NodeHandle;
-    use p2poolv2::node::messages::Message;
+    use p2poolv2::node::messages::{Message, SwarnCommand};
     use p2poolv2::node::p2p_message_handlers::handle_request;
     use p2poolv2::shares::chain::actor::ChainHandle;
     use p2poolv2::shares::miner_message::CkPoolMessage;
@@ -94,11 +94,39 @@ mod self_and_peer_messages_tests {
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(100);
         let (response_channel_tx, _response_channel_rx) = mpsc::channel::<Message>(100);
+        let mut received_commands = Vec::new();
         tokio::spawn(async move {
             while (swarm_rx.recv().await).is_some() {
                 tracing::debug!("Received swarm send");
             }
         });
+
+        // Test invalid share handling
+        let invalid_share = crate::test_utils::TestBlockBuilder::new()
+            .blockhash("0000000000000000000000000000000000000000000000000000000000000000")
+            .workinfoid(7473434392883363843)
+            .build();
+        
+        let response = handle_request(
+            peer_id,
+            Message::ShareBlock(invalid_share),
+            chain_handle.clone(),
+            response_channel_tx.clone(),
+            swarm_tx.clone(),
+            &time_provider,
+        )
+        .await;
+        
+        assert!(
+            response.is_err(),
+            "Invalid share should result in error"
+        );
+
+        // Verify disconnect command was sent
+        if let Ok(cmd) = swarm_rx.try_recv() {
+            received_commands.push(cmd);
+        }
+        assert!(received_commands.iter().any(|cmd| matches!(cmd, SwarmCommand::DisconnectPeer(p) if *p == peer_id)));
 
         for ckpool_msg in ckpool_iter {
             let serialized = serde_json::to_string(&ckpool_msg).unwrap();
