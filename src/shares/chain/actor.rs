@@ -18,6 +18,7 @@ use super::chain::Chain;
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::store::Store;
 use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader};
+use crate::config::Config;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::{HashMap, HashSet};
@@ -81,14 +82,16 @@ pub enum ChainResponse {
 pub struct ChainActor {
     chain: Chain,
     receiver: mpsc::Receiver<(ChainMessage, mpsc::Sender<ChainResponse>)>,
+    config: Config,
 }
 
 impl ChainActor {
     pub fn new(
         chain: Chain,
         receiver: mpsc::Receiver<(ChainMessage, mpsc::Sender<ChainResponse>)>,
+        config: Config,
     ) -> Self {
-        Self { chain, receiver }
+        Self { chain, receiver, config }
     }
 
     pub async fn run(&mut self) {
@@ -310,7 +313,7 @@ impl ChainHandle {
         tracing::info!("Creating ChainHandle with store_path: {}", store_path);
         let (sender, receiver) = mpsc::channel(1);
         let store = Store::new(store_path).unwrap();
-        let mut chain_actor = ChainActor::new(Chain::new(store), receiver);
+        let mut chain_actor = ChainActor::new(Chain::new(store), receiver, Config::default());
         tokio::spawn(async move { chain_actor.run().await });
         Self { sender }
     }

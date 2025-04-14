@@ -49,7 +49,18 @@ pub struct CkPoolConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct MinerConfig {
     pub pubkey: PublicKey,
+    #[serde(default = "default_min_drr")]
+    pub min_drr: f64,
+    #[serde(default = "default_target_drr")]
+    pub target_drr: f64,
+    #[serde(default = "default_max_drr")]
+    pub max_drr: f64,
 }
+
+// Default values for DRR parameters
+fn default_min_drr() -> f64 { 0.15 }
+fn default_target_drr() -> f64 { 0.3 }
+fn default_max_drr() -> f64 { 0.4 }
 
 /// helper function to deserialize the network from the config file, which is provided as a string like Core
 /// Possible values are: main, test, testnet4, signet, regtest
@@ -194,7 +205,10 @@ mod tests {
 
     #[test]
     fn test_config_builder() {
-        let config = Config::load("./config.toml").unwrap();
+        let mut config = Config::load("./config.toml").unwrap();
+        config.miner.min_drr = 0.1;
+        config.miner.target_drr = 0.25;
+        config.miner.max_drr = 0.5;
         let config = config
             .with_listen_address("127.0.0.1:8080".to_string())
             .with_dial_peers(vec![
