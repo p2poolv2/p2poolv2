@@ -167,6 +167,10 @@ impl NodeActor {
                             let request_id = self.node.swarm.behaviour_mut().request_response.send_response(response_channel, msg);
                             debug!("Sent message to response channel: {:?}", request_id);
                         }
+                        Some(SwarmSend::Inv(_share_block)) => {
+                            // Handle inventory message (optional logging or processing)
+                            tracing::info!("Received SwarmSend::Inv message");
+                        }
                         None => {
                             info!("Stopping node actor on channel close");
                             self.stopping_tx.send(()).unwrap();

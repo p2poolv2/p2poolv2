@@ -29,6 +29,7 @@ use crate::node::p2p_message_handlers::senders::{send_blocks_inventory, send_get
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::receive_mining_message::start_receiving_mining_messages;
+use crate::shares::ShareBlock;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use gossip_handler::handle_gossipsub_event;
 use libp2p::identify;
@@ -73,6 +74,7 @@ pub enum SwarmSend<C> {
     Gossip(Message),
     Request(PeerId, Message),
     Response(C, Message),
+    Inv(ShareBlock),
 }
 
 /// Node is the main struct that represents the node
