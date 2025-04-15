@@ -71,7 +71,6 @@ pub fn compute_merkle_root_from_txids(txids: &[bitcoin::Txid]) -> Option<bitcoin
 }
 
 /// Builds a bitcoin block header from a workbase and a share
-/// TOOD: Update nonce and ntime from MinerShare
 pub fn build_bitcoin_header(
     workbase: &MinerWorkbase,
     share: &MinerShare,
