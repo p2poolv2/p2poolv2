@@ -19,7 +19,7 @@
 		"0.0.0.0:3333"
 	],
 	"mindiff": 1,
-	"startdiff": 1,
+	"startdiff": 131072,
 	"maxdiff": 0,
 	"maxclients": 2,
 	"zmqblock": "tcp://bitcoind:28332",
