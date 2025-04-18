@@ -14,13 +14,55 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::bitcoind_rpc::BitcoindRpcClient;
 use crate::config::BitcoinConfig;
+use crate::bitcoind_rpc::BitcoindRpcClient;
 use crate::shares::ShareBlock;
 use bitcoin::consensus::encode::serialize;
+use bitcoin::hashes::{Hash as BitcoinHash, HashEngine, sha256};
 use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
+use bitcoin::pow::{CompactTarget, Target};
 use serde_json::json;
 use std::error::Error;
+use uint::construct_uint;
+
+// Define a 256-bit unsigned integer type
+construct_uint! {
+    pub struct U256(4);
+}
+
+/// Validate the P2Pool-specific difficulty requirements for a share
+/// Returns true if the share meets P2Pool difficulty requirements
+pub fn validate_p2pool_difficulty(share: &ShareBlock) -> bool {
+    // Calculate share hash using double SHA256
+    let mut engine = sha256::Hash::engine();
+    
+    // Serialize share data manually
+    let workinfoid_bytes = share.header.miner_share.workinfoid.to_le_bytes();
+    let nonce_bytes = share.header.miner_share.nonce.as_bytes();
+    let ntime_bytes = share.header.miner_share.ntime.to_consensus_u32().to_le_bytes();
+    
+    engine.input(&workinfoid_bytes);
+    engine.input(&nonce_bytes);
+    engine.input(&ntime_bytes);
+    
+    let first_hash = sha256::Hash::from_engine(engine);
+    let mut second_engine = sha256::Hash::engine();
+    second_engine.input(&first_hash.to_byte_array());
+    let share_hash = sha256::Hash::from_engine(second_engine);
+    
+    // Convert hash to U256
+    let hash_int = U256::from_big_endian(&share_hash.to_byte_array());
+    
+    // Calculate target from difficulty
+    // Target = (2^256 - 1) / difficulty
+    let max_target = U256::MAX;
+    let difficulty = share.header.miner_share.diff.to_u64().unwrap_or(1);
+    let target = max_target / U256::from(difficulty);
+    
+    // Check if hash is below target (meets difficulty requirement)
+    hash_int <= target
+}
 
 /// Get current bitcoin difficulty from rpc
 /// Compare that to the share difficulty.
@@ -32,6 +74,11 @@ pub async fn meets_bitcoin_difficulty(
     block: &bitcoin::Block,
     config: &BitcoinConfig,
 ) -> Result<bool, Box<dyn Error>> {
+    // First check P2Pool-specific difficulty requirements
+    if !validate_p2pool_difficulty(share) {
+        return Ok(false);
+    }
+
     let bitcoind = BitcoindRpcClient::new(&config.url, &config.username, &config.password)?;
     let difficulty = bitcoind.get_difficulty().await?;
     let share_difficulty = share.header.miner_share.sdiff;

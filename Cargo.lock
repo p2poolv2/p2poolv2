@@ -3176,6 +3176,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uint",
  "void",
  "wiremock",
  "zmq",
