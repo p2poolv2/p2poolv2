@@ -170,7 +170,7 @@ impl NodeActor {
                         Some(SwarmSend::DisconnectPeer(peer_id)) => {
                             warn!("Disconnecting peer {} for sending invalid data", peer_id);
                             if let Err(e) = self.node.swarm.disconnect_peer_id(peer_id) {
-                                error!("Failed to disconnect peer: {}", e);
+                                error!("Failed to disconnect peer: {:?}", e);
                             }
                         }
                         None => {

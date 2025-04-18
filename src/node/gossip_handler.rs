@@ -83,20 +83,16 @@ async fn handle_gossip_message(
             info!("Handling mining share: {:?}", mining_share);
             let time_provider = SystemTimeProvider {};
             
-            // Create a closure that will be used to signal when a peer should be disconnected
-            // Since we don't have direct access to the swarm here, we'll need to signal
-            // that the peer should be disconnected
+            // Create a closure that logs the peer disconnection
+            // Since in gossip context we can't directly disconnect peers, we'll return an error
+            // that will trigger disconnection at the higher level
             let disconnect_fn = Box::new(move |_: PeerId| {
-                // In this case we can't directly disconnect the peer, but we can log the issue
                 warn!("Peer {} sent an invalid share block and should be disconnected", peer_id);
-                // We would need to send a message back to the node actor to disconnect the peer
-                // But currently we don't have that channel available in this context
-                // This is handled at a higher level in the node actor
             });
             
             if let Err(e) = handle_share_block(mining_share, chain_handle, &time_provider, Some(peer_id), Some(disconnect_fn)).await {
                 error!("Failed to add share: {}", e);
-                return Err(format!("Failed to add share, Error: {}", e).into());
+                return Err(format!("Invalid share block from peer {}, peer should be disconnected: {}", peer_id, e).into());
             }
             Ok(())
         }

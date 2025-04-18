@@ -22,6 +22,8 @@ use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
 use tracing::{error, info, warn};
 use libp2p::PeerId;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Handle a ShareBlock received from a peer
 /// This is called on receiving a ShareBlock from the gossipsub protocol,
@@ -187,5 +189,44 @@ mod tests {
             result.unwrap_err().to_string(),
             "Error adding share to chain"
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_share_block_validation_error_with_peer_disconnect() {
+        let mut chain_handle = ChainHandle::default();
+        let peer_id = PeerId::random();
+        let share_block = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .workinfoid(7473434392883363843)
+            .build();
+
+        // Set up mock to return None for workbase to trigger validation error
+        chain_handle
+            .expect_get_workbase()
+            .with(eq(7473434392883363843))
+            .returning(|_| None);
+
+        let time_provider = TestTimeProvider(SystemTime::now());
+        
+        // Create a flag to track if peer disconnect was called
+        let disconnect_called = Arc::new(AtomicBool::new(false));
+        let disconnect_called_clone = disconnect_called.clone();
+        
+        // Mock disconnect function
+        let disconnect_fn = Box::new(move |p: PeerId| {
+            assert_eq!(p, peer_id);
+            disconnect_called_clone.store(true, Ordering::SeqCst);
+        });
+
+        let result = handle_share_block(share_block, chain_handle, &time_provider, Some(peer_id), Some(disconnect_fn)).await;
+        
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Share block validation failed"
+        );
+        
+        // Verify disconnect function was called
+        assert!(disconnect_called.load(Ordering::SeqCst));
     }
 }

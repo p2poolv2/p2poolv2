@@ -65,21 +65,26 @@ pub async fn handle_request<C: 'static>(
         }
         Message::ShareBlock(share_block) => {
             let peer_clone = peer.clone();
+            
+            // Define a simple closure that doesn't attempt to send through the channel
+            // This avoids the need to send the generic C type across threads
             let disconnect_fn = Box::new(move |peer_to_disconnect: libp2p::PeerId| {
-                // We can't directly call swarm methods here since we're in a different context
-                // Just log that the peer should be disconnected, actual disconnection will happen in the Node
+                // We only log the intent to disconnect - the actual disconnection happens below
                 if peer_clone == peer_to_disconnect {
                     error!("Peer {} sent invalid share block and will be disconnected", peer_clone);
-                    // Signal through a channel that this peer should be disconnected
-                    // This is handled at the higher level in the node's event loop
-                    if let Err(e) = swarm_tx.try_send(SwarmSend::DisconnectPeer(peer_clone)) {
-                        error!("Failed to send disconnect peer message: {}", e);
-                    }
                 }
             });
             
-            if let Err(e) = handle_share_block(share_block, chain_handle, time_provider, Some(peer), Some(disconnect_fn)).await {
+            // Handle the share block, passing peer_id and disconnect function
+            let result = handle_share_block(share_block, chain_handle, time_provider, Some(peer), Some(disconnect_fn)).await;
+            
+            if let Err(e) = result {
                 error!("Failed to add share: {}", e);
+                // Always try to disconnect the peer on any share validation or addition error
+                // This happens in the current thread context, not in the closure
+                if let Err(send_err) = swarm_tx.try_send(SwarmSend::DisconnectPeer(peer)) {
+                    error!("Failed to send disconnect peer message: {}", send_err);
+                }
                 return Err(format!("Failed to add share: {}", e).into());
             }
             Ok(())
