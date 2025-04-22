@@ -20,7 +20,10 @@ use crate::shares::validation;
 use crate::shares::ShareBlock;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
-use tracing::{error, info};
+use tracing::{error, info, warn};
+use libp2p::PeerId;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Handle a ShareBlock received from a peer
 /// This is called on receiving a ShareBlock from the gossipsub protocol,
@@ -29,14 +32,25 @@ use tracing::{error, info};
 /// Validate the ShareBlock and store it in the chain
 /// We do not send any inventory message as we do not want to gossip the share block.
 /// Share blocks are gossiped using the libp2p gossipsub protocol.
+/// 
+/// If validation fails, the peer will be marked for disconnection.
 pub async fn handle_share_block(
     share_block: ShareBlock,
     chain_handle: ChainHandle,
     time_provider: &impl TimeProvider,
+    peer_id: Option<PeerId>,
+    disconnect_peer: Option<Box<dyn Fn(PeerId) + Send>>,
 ) -> Result<(), Box<dyn Error>> {
     info!("Received share block: {:?}", share_block);
     if let Err(e) = validation::validate(&share_block, &chain_handle, time_provider).await {
         error!("Share block validation failed: {}", e);
+        
+        // If we have a peer_id and disconnect_peer function, disconnect the peer
+        if let (Some(peer), Some(disconnect_fn)) = (peer_id, disconnect_peer) {
+            warn!("Disconnecting peer {} for sending invalid share block", peer);
+            disconnect_fn(peer);
+        }
+        
         return Err("Share block validation failed".into());
     }
     if let Err(e) = chain_handle.add_share(share_block.clone()).await {
@@ -98,7 +112,7 @@ mod tests {
         let mut time_provider = TestTimeProvider(SystemTime::now());
         time_provider.set_time(shares[0].ntime);
 
-        let result = handle_share_block(share_block, chain_handle, &time_provider).await;
+        let result = handle_share_block(share_block, chain_handle, &time_provider, None, None).await;
         assert!(result.is_ok());
     }
 
@@ -118,7 +132,7 @@ mod tests {
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        let result = handle_share_block(share_block, chain_handle, &time_provider).await;
+        let result = handle_share_block(share_block, chain_handle, &time_provider, None, None).await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
@@ -169,11 +183,50 @@ mod tests {
         let mut time_provider = TestTimeProvider(SystemTime::now());
         time_provider.set_time(shares[0].ntime);
 
-        let result = handle_share_block(share_block, chain_handle, &time_provider).await;
+        let result = handle_share_block(share_block, chain_handle, &time_provider, None, None).await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
             "Error adding share to chain"
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_share_block_validation_error_with_peer_disconnect() {
+        let mut chain_handle = ChainHandle::default();
+        let peer_id = PeerId::random();
+        let share_block = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .workinfoid(7473434392883363843)
+            .build();
+
+        // Set up mock to return None for workbase to trigger validation error
+        chain_handle
+            .expect_get_workbase()
+            .with(eq(7473434392883363843))
+            .returning(|_| None);
+
+        let time_provider = TestTimeProvider(SystemTime::now());
+        
+        // Create a flag to track if peer disconnect was called
+        let disconnect_called = Arc::new(AtomicBool::new(false));
+        let disconnect_called_clone = disconnect_called.clone();
+        
+        // Mock disconnect function
+        let disconnect_fn = Box::new(move |p: PeerId| {
+            assert_eq!(p, peer_id);
+            disconnect_called_clone.store(true, Ordering::SeqCst);
+        });
+
+        let result = handle_share_block(share_block, chain_handle, &time_provider, Some(peer_id), Some(disconnect_fn)).await;
+        
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Share block validation failed"
+        );
+        
+        // Verify disconnect function was called
+        assert!(disconnect_called.load(Ordering::SeqCst));
     }
 }

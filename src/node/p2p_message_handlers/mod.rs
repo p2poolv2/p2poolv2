@@ -64,16 +64,41 @@ pub async fn handle_request<C: 'static>(
             handle_share_headers(share_headers, chain_handle, time_provider).await
         }
         Message::ShareBlock(share_block) => {
-            if let Err(e) = handle_share_block(share_block, chain_handle, time_provider).await {
+            let peer_clone = peer.clone();
+            
+            // Define a simple closure that doesn't attempt to send through the channel
+            // This avoids the need to send the generic C type across threads
+            let disconnect_fn = Box::new(move |peer_to_disconnect: libp2p::PeerId| {
+                // We only log the intent to disconnect - the actual disconnection happens below
+                if peer_clone == peer_to_disconnect {
+                    error!("Peer {} sent invalid share block and will be disconnected", peer_clone);
+                }
+            });
+            
+            // Handle the share block, passing peer_id and disconnect function
+            let result = handle_share_block(share_block, chain_handle, time_provider, Some(peer), Some(disconnect_fn)).await;
+            
+            if let Err(e) = result {
                 error!("Failed to add share: {}", e);
+                // Always try to disconnect the peer on any share validation or addition error
+                // This happens in the current thread context, not in the closure
+                if let Err(send_err) = swarm_tx.try_send(SwarmSend::DisconnectPeer(peer)) {
+                    error!("Failed to send disconnect peer message: {}", send_err);
+                }
                 return Err(format!("Failed to add share: {}", e).into());
             }
             Ok(())
         }
         Message::Workbase(workbase) => {
             info!("Received workbase: {:?}", workbase);
+            let peer_clone = peer.clone();
             if let Err(e) = chain_handle.add_workbase(workbase.clone()).await {
                 error!("Failed to store workbase: {}", e);
+                error!("Peer {} sent invalid blocktemplate and will be disconnected", peer_clone);
+                // Signal through a channel that this peer should be disconnected
+                if let Err(e) = swarm_tx.try_send(SwarmSend::DisconnectPeer(peer_clone)) {
+                    error!("Failed to send disconnect peer message: {}", e);
+                }
                 return Err(format!("Error storing workbase: {}", e).into());
             }
             if let Err(e) = swarm_tx
@@ -87,8 +112,14 @@ pub async fn handle_request<C: 'static>(
         }
         Message::UserWorkbase(userworkbase) => {
             info!("Received user workbase: {:?}", userworkbase);
+            let peer_clone = peer.clone();
             if let Err(e) = chain_handle.add_user_workbase(userworkbase.clone()).await {
                 error!("Failed to store user workbase: {}", e);
+                error!("Peer {} sent invalid user workbase and will be disconnected", peer_clone);
+                // Signal through a channel that this peer should be disconnected
+                if let Err(e) = swarm_tx.try_send(SwarmSend::DisconnectPeer(peer_clone)) {
+                    error!("Failed to send disconnect peer message: {}", e);
+                }
                 return Err("Error storing user workbase".into());
             }
             Ok(())

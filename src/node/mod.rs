@@ -73,6 +73,7 @@ pub enum SwarmSend<C> {
     Gossip(Message),
     Request(PeerId, Message),
     Response(C, Message),
+    DisconnectPeer(PeerId),
 }
 
 /// Node is the main struct that represents the node
@@ -403,17 +404,43 @@ impl Node {
                     }
 
                     let chain_handle = self.chain_handle.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_gossipsub_event(gossip_event, chain_handle).await {
-                            error!("Failed to handle gossipsub event: {}", e);
+                    let propagation_source_clone = *propagation_source;
+                    let swarm = &mut self.swarm;
+                    
+                    if let Err(e) = handle_gossipsub_event(gossip_event, chain_handle).await {
+                        error!("Failed to handle gossipsub event: {}", e);
+                        
+                        // Disconnect the peer for any of these validation or bad data conditions
+                        let error_msg = e.to_string().to_lowercase();
+                        if error_msg.contains("peer should be disconnected") ||
+                           error_msg.contains("invalid") || 
+                           error_msg.contains("validation failed") ||
+                           error_msg.contains("failed to add share") ||
+                           error_msg.contains("failed to store") ||
+                           error_msg.contains("bad share") ||
+                           error_msg.contains("bad blocktemplate") 
+                        {
+                            warn!("Disconnecting peer {} for sending invalid data: {}", propagation_source_clone, e);
+                            swarm
+                                .disconnect_peer_id(propagation_source_clone)
+                                .unwrap_or_else(|e| {
+                                    error!("Failed to disconnect peer: {:?}", e);
+                                });
                         }
-                    });
+                    }
                 }
                 Err(e) => {
                     warn!(
                         "Failed to deserialize gossip message from {}: {}",
                         propagation_source, e
                     );
+                    // Also disconnect peers that send messages we can't deserialize
+                    warn!("Disconnecting peer {} for sending malformed data", propagation_source);
+                    self.swarm
+                        .disconnect_peer_id(*propagation_source)
+                        .unwrap_or_else(|e| {
+                            error!("Failed to disconnect peer: {:?}", e);
+                        });
                     return Err("Failed to deserialize message".into());
                 }
             }
