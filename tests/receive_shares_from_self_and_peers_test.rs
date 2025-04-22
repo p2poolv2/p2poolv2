@@ -18,9 +18,11 @@ mod common;
 
 mod self_and_peer_messages_tests {
     use super::common::{default_test_config, simple_miner_workbase};
+    use crate::node::SwarmSend;
     use p2poolv2::node::actor::NodeHandle;
-    use p2poolv2::node::messages::{Message, SwarnCommand};
+    use p2poolv2::node::messages::Message;
     use p2poolv2::node::p2p_message_handlers::handle_request;
+    use p2poolv2::node::SwarmSend;
     use p2poolv2::shares::chain::actor::ChainHandle;
     use p2poolv2::shares::miner_message::CkPoolMessage;
     use p2poolv2::shares::ShareBlock;
@@ -126,7 +128,7 @@ mod self_and_peer_messages_tests {
         if let Ok(cmd) = swarm_rx.try_recv() {
             received_commands.push(cmd);
         }
-        assert!(received_commands.iter().any(|cmd| matches!(cmd, SwarmCommand::DisconnectPeer(p) if *p == peer_id)));
+        assert!(received_commands.iter().any(|cmd| matches!(cmd, SwarmSend::DisconnectPeer(p) if *p == peer_id)));
 
         for ckpool_msg in ckpool_iter {
             let serialized = serde_json::to_string(&ckpool_msg).unwrap();
