@@ -18,7 +18,6 @@ mod common;
 
 mod self_and_peer_messages_tests {
     use super::common::{default_test_config, simple_miner_workbase};
-    use crate::node::SwarmSend;
     use p2poolv2::node::actor::NodeHandle;
     use p2poolv2::node::messages::Message;
     use p2poolv2::node::p2p_message_handlers::handle_request;
