@@ -175,5 +175,34 @@ mod tests {
             result.unwrap_err().to_string(),
             "Error adding share to chain"
         );
+
+        // Test invalid share handling
+        let mut received_commands = Vec::new();
+
+        let invalid_share = crate::test_utils::TestBlockBuilder::new()
+            .blockhash("0000000000000000000000000000000000000000000000000000000000000000")
+            .workinfoid(7473434392883363843)
+            .build();
+
+        let response = handle_request(
+            peer_id,
+            Message::ShareBlock(invalid_share),
+            chain_handle.clone(),
+            response_channel_tx.clone(),
+            swarm_tx.clone(),
+            &time_provider,
+        )
+        .await;
+
+        assert!(
+            response.is_err(),
+            "Invalid share should result in error"
+        );
+
+        // Verify disconnect command was sent
+        if let Ok(cmd) = swarm_rx.try_recv() {
+            received_commands.push(cmd);
+        }
+        assert!(received_commands.iter().any(|cmd| matches!(cmd, SwarmSend::DisconnectPeer(p) if *p == peer_id)));
     }
 }
