@@ -3,6 +3,7 @@ name = "p2poolv2"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.83"
+default-run = "p2poolv2"
 
 [dependencies]
 libp2p = { version = "0.53", features = [
