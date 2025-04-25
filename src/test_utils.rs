@@ -15,13 +15,15 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 #[cfg(test)]
-use crate::shares::miner_message::Gbt;
+use crate::shares::transactions::coinbase::create_coinbase_transaction;
 #[cfg(test)]
-use crate::shares::miner_message::{
-    CkPoolMessage, MinerShare, MinerWorkbase, UserWorkbase, UserWorkbaseParams,
+use crate::shares::{
+    miner_message::{
+        CkPoolMessage, Gbt, MinerShare, MinerWorkbase, UserWorkbase, UserWorkbaseParams,
+    },
+    ShareBlock, ShareBlockBuilder, ShareBlockHash, ShareHeader,
 };
-#[cfg(test)]
-use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader};
+
 #[cfg(test)]
 use bitcoin::absolute::Time;
 #[cfg(test)]
@@ -74,7 +76,7 @@ pub fn simple_miner_share(
 
 #[cfg(test)]
 pub fn simple_miner_workbase() -> MinerWorkbase {
-    let json_str = include_str!("../../tests/test_data/simple_miner_workbase.json");
+    let json_str = include_str!("../tests/test_data/simple_miner_workbase.json");
     serde_json::from_str(&json_str).unwrap()
 }
 
@@ -102,18 +104,15 @@ pub fn test_coinbase_transaction() -> bitcoin::Transaction {
         .parse::<bitcoin::PublicKey>()
         .unwrap();
 
-    crate::shares::transactions::coinbase::create_coinbase_transaction(
-        &pubkey,
-        bitcoin::Network::Regtest,
-    )
+    create_coinbase_transaction(&pubkey, bitcoin::Network::Regtest)
 }
 
 #[cfg(test)]
 pub fn load_valid_workbases_userworkbases_and_shares(
 ) -> (Vec<MinerWorkbase>, Vec<UserWorkbase>, Vec<MinerShare>) {
-    let workbases_str = include_str!("../../tests/test_data/validation/workbases.json");
-    let shares_str = include_str!("../../tests/test_data/validation/shares.json");
-    let userworkbases_str = include_str!("../../tests/test_data/validation/userworkbases.json");
+    let workbases_str = include_str!("../tests/test_data/validation/workbases.json");
+    let shares_str = include_str!("../tests/test_data/validation/shares.json");
+    let userworkbases_str = include_str!("../tests/test_data/validation/userworkbases.json");
     let workbases: Vec<CkPoolMessage> = serde_json::from_str(&workbases_str).unwrap();
     let shares: Vec<CkPoolMessage> = serde_json::from_str(&shares_str).unwrap();
     let userworkbases: Vec<CkPoolMessage> = serde_json::from_str(&userworkbases_str).unwrap();
@@ -246,8 +245,6 @@ fn test_share_block(
     sdiff: Option<Decimal>,
     include_transactions: &mut Vec<Transaction>,
 ) -> ShareBlock {
-    use crate::shares::ShareBlockBuilder;
-
     let prev_share_blockhash = match prev_share_blockhash {
         Some(prev_share_blockhash) => Some(prev_share_blockhash.into()),
         None => None,
@@ -358,8 +355,7 @@ impl TestMinerShareBuilder {
         self
     }
 
-    pub fn build(self) -> crate::shares::miner_message::MinerShare {
-        use crate::shares::miner_message::MinerShare;
+    pub fn build(self) -> MinerShare {
         use rust_decimal_macros::dec;
 
         MinerShare {
@@ -404,7 +400,7 @@ pub struct TestMinerWorkbaseBuilder {
     coinb2: Option<String>,
     coinb3: Option<String>,
     header: Option<ShareHeader>,
-    gbt: Option<crate::shares::miner_message::Gbt>,
+    gbt: Option<Gbt>,
 }
 
 #[cfg(test)]
@@ -457,14 +453,12 @@ impl TestMinerWorkbaseBuilder {
         self
     }
 
-    pub fn gbt(mut self, gbt: crate::shares::miner_message::Gbt) -> Self {
+    pub fn gbt(mut self, gbt: Gbt) -> Self {
         self.gbt = Some(gbt);
         self
     }
 
-    pub fn build(self) -> crate::shares::miner_message::MinerWorkbase {
-        use crate::shares::miner_message::MinerWorkbase;
-
+    pub fn build(self) -> MinerWorkbase {
         MinerWorkbase {
             workinfoid: self.workinfoid.unwrap_or(7473434392883363843),
             txns: vec![],
@@ -527,7 +521,7 @@ impl TestUserWorkbaseBuilder {
         self
     }
 
-    pub fn build(self) -> crate::shares::miner_message::UserWorkbase {
+    pub fn build(self) -> UserWorkbase {
         UserWorkbase {
             params: self.params.unwrap(),
             id: self.id,
@@ -706,7 +700,7 @@ impl TestGbtBuilder {
         self
     }
 
-    pub fn build(self) -> crate::shares::miner_message::Gbt {
+    pub fn build(self) -> Gbt {
         Gbt {
             version: self.version.unwrap(),
             transactions: self.transactions.unwrap(),
