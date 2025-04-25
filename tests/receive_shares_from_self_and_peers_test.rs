@@ -18,13 +18,13 @@ mod common;
 
 mod self_and_peer_messages_tests {
     use super::common::{default_test_config, simple_miner_workbase};
-    use p2poolv2::node::actor::NodeHandle;
-    use p2poolv2::node::messages::Message;
-    use p2poolv2::node::p2p_message_handlers::handle_request;
-    use p2poolv2::shares::chain::actor::ChainHandle;
-    use p2poolv2::shares::miner_message::CkPoolMessage;
-    use p2poolv2::shares::ShareBlock;
-    use p2poolv2::utils::time_provider::{SystemTimeProvider, TestTimeProvider, TimeProvider};
+    use p2poolv2_lib::node::actor::NodeHandle;
+    use p2poolv2_lib::node::messages::Message;
+    use p2poolv2_lib::node::p2p_message_handlers::handle_request;
+    use p2poolv2_lib::shares::chain::actor::ChainHandle;
+    use p2poolv2_lib::shares::miner_message::CkPoolMessage;
+    use p2poolv2_lib::shares::ShareBlock;
+    use p2poolv2_lib::utils::time_provider::{SystemTimeProvider, TestTimeProvider, TimeProvider};
     use std::fs;
     use std::time::{Duration, SystemTime};
     use tempfile::tempdir;

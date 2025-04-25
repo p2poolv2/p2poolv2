@@ -48,7 +48,7 @@ base64 = "0.22.1"
 void = "1.0.2"
 
 [lib]
-name = "p2poolv2"
+name = "p2poolv2_lib"
 path = "src/lib.rs"
 
 [[bin]]

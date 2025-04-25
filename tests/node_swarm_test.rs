@@ -17,7 +17,7 @@
 mod common;
 
 use common::default_test_config;
-use p2poolv2::{node::actor::NodeHandle, shares::chain::actor::ChainHandle};
+use p2poolv2_lib::{node::actor::NodeHandle, shares::chain::actor::ChainHandle};
 use std::time::Duration;
 use tempfile::tempdir;
 
