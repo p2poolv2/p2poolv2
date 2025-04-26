@@ -20,4 +20,4 @@ check:
 # examples
 # just run --store-path ./store.db info
 cli *args:
-	cargo run --bin p2poolv2-cli -- {{args}}
+	cargo run --bin p2poolv2_cli -- {{args}}
