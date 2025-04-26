@@ -40,11 +40,7 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// List information about the store
-    Info {
-        /// Optional filter to show only specific information
-        #[arg(short, long)]
-        filter: Option<String>,
-    },
+    Info,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -60,8 +56,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         // Handle command if provided
         match &cli.command {
-            Some(Commands::Info { filter }) => {
-                cli_commands::info::execute(chain, filter)?;
+            Some(Commands::Info) => {
+                cli_commands::info::execute(chain)?;
             }
             None => {
                 println!("No command specified. Use --help for usage information.");

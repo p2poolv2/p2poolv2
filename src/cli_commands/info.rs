@@ -29,7 +29,7 @@ struct ChainInfo {
 }
 
 /// Implementation of the info command
-pub fn execute(chain: Chain, _filter: &Option<String>) -> Result<(), Box<dyn Error>> {
+pub fn execute(chain: Chain) -> Result<(), Box<dyn Error>> {
     // Get genesis block hash
     let genesis_block_hash = chain.genesis_block_hash.map(|hash| format!("{:?}", hash));
 
@@ -81,7 +81,7 @@ mod tests {
         let chain = Chain::new(store);
 
         // Execute the info command with an empty store
-        let result = execute(chain, &None);
+        let result = execute(chain);
 
         // Verify the command executed successfully
         assert!(result.is_ok(), "Execute should not return an error");
