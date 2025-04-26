@@ -5,10 +5,6 @@ edition = "2021"
 rust-version = "1.83"
 default-run = "p2poolv2"
 
-[features]
-# This feature exposes test utilities for use in integration tests
-testing = []
-
 [dependencies]
 libp2p = { version = "0.53", features = [
     "tcp",
@@ -62,7 +58,6 @@ path = "src/main.rs"
 [[bin]]
 name = "p2poolv2-cli"
 path = "src/cli.rs"
-required-features = ["testing"]
 
 [dev-dependencies]
 tempfile = "3.15.0"

@@ -21,6 +21,5 @@ pub mod node;
 pub mod shares;
 pub mod utils;
 
-// For testing - make this module public and available regardless of test cfg
-#[cfg(any(test, feature = "testing"))]
+#[cfg(test)]
 pub mod test_utils;
