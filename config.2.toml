@@ -27,6 +27,7 @@ port = 8881
 pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
 
 [bitcoin]
+# The network can be "main", "testnet4" or "signet"
 network = "signet"
 url = "http://localhost:38332"
 username = "p2pool"
