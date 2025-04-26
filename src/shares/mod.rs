@@ -198,7 +198,9 @@ impl ShareBlock {
     /// The workinfoid and clientid are 0 for genesis block on all networks
     pub fn build_genesis_for_network(public_key: PublicKey, network: bitcoin::Network) -> Self {
         assert!(
-            network == bitcoin::Network::Signet || network == bitcoin::Network::Testnet4,
+            network == bitcoin::Network::Signet
+                || network == bitcoin::Network::Testnet4
+                || network == bitcoin::Network::Bitcoin,
             "Network Bitcoin, Testnet or Regtest not yet supported"
         );
         let genesis_data = genesis::genesis_data(network).unwrap();
