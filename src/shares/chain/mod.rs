@@ -15,4 +15,4 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod actor;
-mod chain;
+pub mod chain;

@@ -14,10 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use p2poolv2::config::{
+use p2poolv2_lib::config::{
     BitcoinConfig, CkPoolConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig,
 };
-use p2poolv2::shares::miner_message::MinerWorkbase;
+use p2poolv2_lib::shares::miner_message::MinerWorkbase;
 
 #[cfg(test)]
 /// Build a default test configuration with test values that can be replaced later by each test

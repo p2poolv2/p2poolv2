@@ -18,9 +18,9 @@ mod common;
 
 mod zmq_tests {
     use super::common::default_test_config;
-    use p2poolv2::node::actor::NodeHandle;
-    use p2poolv2::shares::chain::actor::ChainHandle;
-    use p2poolv2::shares::miner_message::CkPoolMessage;
+    use p2poolv2_lib::node::actor::NodeHandle;
+    use p2poolv2_lib::shares::chain::actor::ChainHandle;
+    use p2poolv2_lib::shares::miner_message::CkPoolMessage;
     use std::fs;
     use std::time::Duration;
     use tempfile::tempdir;

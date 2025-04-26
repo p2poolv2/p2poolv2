@@ -15,3 +15,9 @@ run config="config.toml":
 
 check:
 	cargo check
+
+# Run cli commands using p2poolv2-cli
+# examples
+# just run --store-path ./store.db info
+cli *args:
+	cargo run --bin p2poolv2_cli -- {{args}}

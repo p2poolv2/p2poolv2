@@ -3,6 +3,7 @@ name = "p2poolv2"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.83"
+default-run = "p2poolv2"
 
 [dependencies]
 libp2p = { version = "0.53", features = [
@@ -47,12 +48,16 @@ base64 = "0.22.1"
 void = "1.0.2"
 
 [lib]
-name = "p2poolv2"
+name = "p2poolv2_lib"
 path = "src/lib.rs"
 
 [[bin]]
 name = "p2poolv2"
 path = "src/main.rs"
+
+[[bin]]
+name = "p2poolv2_cli"
+path = "src/cli.rs"
 
 [dev-dependencies]
 tempfile = "3.15.0"
