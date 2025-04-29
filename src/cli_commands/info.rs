@@ -77,7 +77,7 @@ mod tests {
     fn test_execute_empty_chain() {
         // Create a temporary directory for the store
         let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
         let chain = Chain::new(store);
 
         // Execute the info command with an empty store

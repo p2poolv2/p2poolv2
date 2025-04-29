@@ -309,7 +309,7 @@ impl ChainHandle {
     pub fn new(store_path: String) -> Self {
         tracing::info!("Creating ChainHandle with store_path: {}", store_path);
         let (sender, receiver) = mpsc::channel(1);
-        let store = Store::new(store_path).unwrap();
+        let store = Store::new(store_path, false).unwrap();
         let mut chain_actor = ChainActor::new(Chain::new(store), receiver);
         tokio::spawn(async move { chain_actor.run().await });
         Self { sender }

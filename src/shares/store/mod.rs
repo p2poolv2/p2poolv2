@@ -64,7 +64,7 @@ pub struct Store {
 #[allow(dead_code)]
 impl Store {
     /// Create a new share store
-    pub fn new(path: String) -> Result<Self, Box<dyn Error>> {
+    pub fn new(path: String, read_only: bool) -> Result<Self, Box<dyn Error>> {
         // for now we use default options for all column families, we can tweak this later based on performance testing
         let block_cf = ColumnFamilyDescriptor::new("block", RocksDbOptions::default());
         let block_txids_cf = ColumnFamilyDescriptor::new("block_txids", RocksDbOptions::default());
@@ -78,26 +78,27 @@ impl Store {
         let user_workbase_cf =
             ColumnFamilyDescriptor::new("user_workbase", RocksDbOptions::default());
 
+        let cfs = vec![
+            block_cf,
+            block_txids_cf,
+            inputs_cf,
+            outputs_cf,
+            tx_cf,
+            workbase_cf,
+            user_workbase_cf,
+            block_index_cf,
+            block_height_cf,
+        ];
+
         // for the db too, we use default options for now
         let mut db_options = RocksDbOptions::default();
         db_options.create_missing_column_families(true);
         db_options.create_if_missing(true);
-        let db = DB::open_cf_descriptors(
-            &db_options,
-            path.clone(),
-            vec![
-                block_cf,
-                block_txids_cf,
-                inputs_cf,
-                outputs_cf,
-                tx_cf,
-                workbase_cf,
-                user_workbase_cf,
-                block_index_cf,
-                block_height_cf,
-            ],
-        )
-        .unwrap();
+        let db = if read_only {
+            DB::open_cf_descriptors_read_only(&db_options, path.clone(), cfs, false)?
+        } else {
+            DB::open_cf_descriptors(&db_options, path.clone(), cfs)?
+        };
         Ok(Self { path, db })
     }
 
@@ -988,7 +989,7 @@ mod tests {
     #[test_log::test(test)]
     fn test_chain_with_uncles() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create initial share
         let share1 = TestBlockBuilder::new()
@@ -1218,7 +1219,7 @@ mod tests {
     #[test]
     fn test_transaction_store_should_succeed() {
         let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create a simple test transaction
         let tx = bitcoin::Transaction {
@@ -1248,7 +1249,7 @@ mod tests {
     #[test]
     fn test_transaction_store_for_nonexistent_transaction_should_fail() {
         let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Try getting non-existent transaction
         let fake_txid = "d2528fc2d7a4f95ace97860f157c895b6098667df0e43912b027cfe58edf304e"
@@ -1260,7 +1261,7 @@ mod tests {
     #[test]
     fn test_transaction_spent_by_should_succeed() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create a test transaction
         let tx = bitcoin::Transaction {
@@ -1317,7 +1318,7 @@ mod tests {
     fn test_store_retrieve_txids_by_blockhash_index() {
         use tempfile::TempDir;
         let temp_dir = TempDir::new().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create test transactions
         let tx1 = bitcoin::Transaction {
@@ -1378,7 +1379,7 @@ mod tests {
     fn test_store_share_block_with_transactions_should_retreive_txs() {
         use tempfile::TempDir;
         let temp_dir = TempDir::new().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create test transactions
         let tx1 = bitcoin::Transaction {
@@ -1433,7 +1434,7 @@ mod tests {
     #[test]
     fn test_store_tx_metadata_with_no_inputs_or_outputs_should_succeed() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         let tx = Transaction {
             version: bitcoin::transaction::Version(1),
@@ -1459,7 +1460,7 @@ mod tests {
     #[test]
     fn test_store_txs_with_inputs_or_outputs_should_succeed() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         let script_true = bitcoin::Script::builder()
             .push_opcode(bitcoin::opcodes::all::OP_PUSHNUM_1)
@@ -1514,7 +1515,7 @@ mod tests {
     fn test_store_txs_should_succeed() {
         // Create a new store with a temporary path
         let temp_dir = tempfile::tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create test transactions
         let tx1 = Transaction {
@@ -1550,7 +1551,7 @@ mod tests {
     fn test_get_share_header() {
         // Create a new store with a temporary path
         let temp_dir = tempfile::tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create test share block
         let share = TestBlockBuilder::new()
@@ -1601,7 +1602,7 @@ mod tests {
     fn test_get_share_header_nonexistent() {
         // Create a new store with a temporary path
         let temp_dir = tempfile::tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Try to get share header for non-existent blockhash
         let non_existent_blockhash =
@@ -1613,7 +1614,7 @@ mod tests {
     #[test]
     fn test_get_children() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create initial share
         let share1 = TestBlockBuilder::new()
@@ -1703,7 +1704,7 @@ mod tests {
     #[test]
     fn test_get_descendants() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create initial share
         let share1 = TestBlockBuilder::new()
@@ -1816,7 +1817,7 @@ mod tests {
     #[test]
     fn test_get_headers_for_block_locator_should_find_matching_blocks() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         let blockhashes = [
             "000000004ebadb55ee9096c9a2f8880e09da59c0d68b1c228da88e48844a1485", // genesis
@@ -1857,7 +1858,7 @@ mod tests {
     #[test_log::test(test)]
     fn test_get_headers_for_block_locator_stop_block_not_found() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         let mut blocks = Vec::new();
         let mut locator = vec![];
@@ -1896,7 +1897,7 @@ mod tests {
     #[test]
     fn test_get_blockhashes_for_block_locator_should_find_matching_blocks() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         let mut blocks = Vec::new();
 
@@ -1934,7 +1935,7 @@ mod tests {
     #[test_log::test(test)]
     fn test_block_status_operations() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create test block
         let share = TestBlockBuilder::new()
@@ -1982,7 +1983,7 @@ mod tests {
     #[test]
     fn test_block_status_for_nonexistent_block() {
         let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create a blockhash that doesn't exist in the store
         let nonexistent_blockhash =
@@ -1996,7 +1997,7 @@ mod tests {
     #[test]
     fn test_multiple_block_status_updates() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create multiple test blocks
         let share1 = TestBlockBuilder::new()
@@ -2048,7 +2049,7 @@ mod tests {
     #[test]
     fn test_set_and_get_block_height_in_metadata() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create a test block
         let share = TestBlockBuilder::new()
@@ -2100,7 +2101,7 @@ mod tests {
     #[test]
     fn test_get_workbases() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         let workbase1 = TestMinerWorkbaseBuilder::new().workinfoid(1000).build();
         let workbase2 = TestMinerWorkbaseBuilder::new().workinfoid(2000).build();
@@ -2165,7 +2166,7 @@ mod tests {
     #[test]
     fn test_get_user_workbases() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string()).unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         let user_workbase1 = TestUserWorkbaseBuilder::new().workinfoid(1000).build();
         let user_workbase2 = TestUserWorkbaseBuilder::new().workinfoid(2000).build();
