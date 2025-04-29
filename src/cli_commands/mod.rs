@@ -27,7 +27,7 @@ pub mod store {
         println!("Opening store in read-only mode: {:?}", store_path);
 
         let path_str = store_path.to_str().expect("Invalid path").to_string();
-        Store::new(path_str).map_err(|e| {
+        Store::new(path_str, true).map_err(|e| {
             println!("Failed to open store: {}", e);
             e
         })
