@@ -30,13 +30,13 @@ RUN mkdir -p /p2pool
 COPY src/ /p2pool/src
 COPY Cargo.lock /p2pool
 COPY Cargo.toml /p2pool
-WORKDIR /p2pool
-
-# Build p2pool
-RUN cargo build --release
-
 COPY config.toml /p2pool
 ENV RUST_LOG=info
+
+WORKDIR /p2pool
+
+# Build p2poolv2 and p2poolv2_cli
+RUN cargo build --lib --bins --release
 
 ENTRYPOINT [ ]
 CMD [] 
