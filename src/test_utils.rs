@@ -39,6 +39,12 @@ use rand;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
+pub fn genesis_for_testnet() -> ShareBlock {
+    TestBlockBuilder::new()
+        .blockhash("000000000822bbfaf34d53fc43d0c1382054d3aafe31893020c315db8b0a19f9")
+        .build()
+}
+
 #[cfg(test)]
 /// Build a simple miner share with consant values
 pub fn simple_miner_share(
