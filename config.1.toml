@@ -1,8 +1,6 @@
 [network]
 listen_address = "/ip4/0.0.0.0/tcp/6885"
-dial_peers = [
-    # "/ip4/127.0.0.1/tcp/6884",
-]
+dial_peers = ["/ip4/127.0.0.1/tcp/6884"]
 enable_mdns = true
 max_pending_incoming = 10
 max_pending_outgoing = 10
@@ -29,6 +27,7 @@ pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
 [bitcoin]
 # The network can be "main", "testnet4" or "signet"
 network = "signet"
+# RPC credentials are loaded from env vars
 url = "http://localhost:38332"
 username = "p2pool"
 password = "p2pool"

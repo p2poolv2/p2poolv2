@@ -47,12 +47,18 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    info!("Starting P2Pool v2...");
     // Parse command line arguments
     let args = Args::parse();
 
     // Load configuration
-    let config = config::Config::load(&args.config)?;
-
+    let config = config::Config::load(&args.config);
+    if config.is_err() {
+        let err = config.unwrap_err();
+        error!("Failed to load config: {}", err);
+        return Err(format!("Failed to load config: {}", err).into());
+    }
+    let config = config.unwrap();
     // Configure logging based on config
     setup_logging(&config.logging)?;
 
@@ -68,6 +74,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         info!("Node stopped");
     } else {
         error!("Failed to start node");
+        return Err("Failed to start node".into());
     }
     Ok(())
 }
