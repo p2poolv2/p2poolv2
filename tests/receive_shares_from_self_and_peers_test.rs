@@ -42,7 +42,10 @@ mod self_and_peer_messages_tests {
             );
 
         let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            ShareBlock::build_genesis_for_network(config.bitcoin.network),
+        );
 
         // Start the node
         let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone())
@@ -184,7 +187,10 @@ mod self_and_peer_messages_tests {
         config.network.rate_limit_window_secs = 1;
 
         let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            ShareBlock::build_genesis_for_network(config.bitcoin.network),
+        );
 
         let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone())
             .await

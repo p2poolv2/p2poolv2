@@ -56,21 +56,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Configure logging based on config
     setup_logging(&config.logging)?;
 
-    let chain_handle = ChainHandle::new(config.store.path.clone());
-    let public_key = "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
-        .parse::<PublicKey>()
-        .unwrap();
-    let genesis = ShareBlock::build_genesis_for_network(public_key, config.bitcoin.network);
-    if chain_handle
-        .get_share(genesis.cached_blockhash.unwrap())
-        .await
-        .is_none()
-    {
-        if let Err(e) = chain_handle.add_share(genesis).await {
-            error!("Failed to create genesis block: {}", e);
-            std::process::exit(1);
-        }
-    }
+    let genesis = ShareBlock::build_genesis_for_network(config.bitcoin.network);
+    let chain_handle = ChainHandle::new(config.store.path.clone(), genesis);
+
+    let tip = chain_handle.get_chain_tip().await;
+    let height = chain_handle.get_tip_height().await;
+    info!("Latest tip {} at height {}", tip.unwrap(), height.unwrap());
     if let Ok((_node_handle, stopping_rx)) = NodeHandle::new(config, chain_handle).await {
         info!("Node started");
         stopping_rx.await?;

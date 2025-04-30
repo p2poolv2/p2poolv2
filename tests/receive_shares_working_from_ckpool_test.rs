@@ -21,6 +21,7 @@ mod zmq_tests {
     use p2poolv2_lib::node::actor::NodeHandle;
     use p2poolv2_lib::shares::chain::actor::ChainHandle;
     use p2poolv2_lib::shares::miner_message::CkPoolMessage;
+    use p2poolv2_lib::shares::ShareBlock;
     use std::fs;
     use std::time::Duration;
     use tempfile::tempdir;
@@ -37,7 +38,10 @@ mod zmq_tests {
             );
 
         let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            ShareBlock::build_genesis_for_network(config.bitcoin.network),
+        );
 
         // Start the node
         let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone())
@@ -105,7 +109,10 @@ mod zmq_tests {
             );
 
         let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            ShareBlock::build_genesis_for_network(config.bitcoin.network),
+        );
 
         // Start the node
         let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone())
@@ -146,29 +153,29 @@ mod zmq_tests {
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         // load shares from the chain to verify the node received and processed the data
-        let shares = chain_handle.get_shares_at_height(0).await;
-        let share_0 = shares.values().next().unwrap();
         let shares = chain_handle.get_shares_at_height(1).await;
         let share_1 = shares.values().next().unwrap();
+        let shares = chain_handle.get_shares_at_height(2).await;
+        let share_2 = shares.values().next().unwrap();
 
         // Verify the node received and processed the data
         assert!(chain_handle
-            .get_share(share_0.cached_blockhash.unwrap())
+            .get_share(share_1.cached_blockhash.unwrap())
             .await
             .is_some());
         assert!(chain_handle
-            .get_share(share_1.cached_blockhash.unwrap())
+            .get_share(share_2.cached_blockhash.unwrap())
             .await
             .is_some());
 
-        assert_eq!(chain_handle.get_chain_tip().await, share_1.cached_blockhash);
+        assert_eq!(chain_handle.get_chain_tip().await, share_2.cached_blockhash);
         let share_at_tip = chain_handle
-            .get_share(share_1.cached_blockhash.unwrap())
+            .get_share(share_2.cached_blockhash.unwrap())
             .await
             .unwrap();
         assert_eq!(
             share_at_tip.header.prev_share_blockhash,
-            Some(share_0.cached_blockhash.unwrap())
+            Some(share_1.cached_blockhash.unwrap())
         );
 
         let workbase = chain_handle.get_workbase(7460801854683742211).await;
@@ -193,7 +200,10 @@ mod zmq_tests {
             );
 
         let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            ShareBlock::build_genesis_for_network(config.bitcoin.network),
+        );
 
         // Start the node
         let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone())

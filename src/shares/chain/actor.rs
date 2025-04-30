@@ -49,6 +49,7 @@ pub enum ChainMessage {
     GetBlockhashesForLocator(Vec<ShareBlockHash>, ShareBlockHash, usize),
     BuildLocator,
     GetMissingBlockhashes(Vec<ShareBlockHash>),
+    GetTipHeight,
 }
 
 #[derive(Debug)]
@@ -76,6 +77,7 @@ pub enum ChainResponse {
     BuildLocatorResult(Vec<ShareBlockHash>),
     GetBlockhashesForLocatorResult(Vec<ShareBlockHash>),
     GetMissingBlockhashesResult(Vec<ShareBlockHash>),
+    TipHeight(Option<u32>),
 }
 
 pub struct ChainActor {
@@ -294,6 +296,12 @@ impl ChainActor {
                         error!("Failed to send get_missing_blockhashes response: {}", e);
                     }
                 }
+                ChainMessage::GetTipHeight => {
+                    let result = self.chain.get_tip_height();
+                    if let Err(e) = response_sender.send(ChainResponse::TipHeight(result)).await {
+                        error!("Failed to send get_tip_height response: {}", e);
+                    }
+                }
             }
         }
     }
@@ -306,11 +314,12 @@ pub struct ChainHandle {
 
 #[allow(dead_code)]
 impl ChainHandle {
-    pub fn new(store_path: String) -> Self {
+    pub fn new(store_path: String, genesis_block: ShareBlock) -> Self {
         tracing::info!("Creating ChainHandle with store_path: {}", store_path);
         let (sender, receiver) = mpsc::channel(1);
         let store = Store::new(store_path, false).unwrap();
-        let mut chain_actor = ChainActor::new(Chain::new(store), receiver);
+        let chain = Chain::new(store, genesis_block);
+        let mut chain_actor = ChainActor::new(chain, receiver);
         tokio::spawn(async move { chain_actor.run().await });
         Self { sender }
     }
@@ -680,6 +689,23 @@ impl ChainHandle {
             _ => vec![],
         }
     }
+
+    pub async fn get_tip_height(&self) -> Option<u32> {
+        let (response_sender, mut response_receiver) = mpsc::channel(1);
+        if let Err(e) = self
+            .sender
+            .send((ChainMessage::GetTipHeight, response_sender))
+            .await
+        {
+            error!("Failed to send GetTipHeight message: {}", e);
+            return None;
+        }
+
+        match response_receiver.recv().await {
+            Some(ChainResponse::TipHeight(height)) => height,
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -688,7 +714,7 @@ use mockall::mock;
 #[cfg(test)]
 mock! {
     pub ChainHandle {
-        pub fn new(store_path: String) -> Self;
+        pub fn new(store_path: String, genesis_block: ShareBlock) -> Self;
         pub async fn get_tips(&self) -> HashSet<ShareBlockHash>;
         pub async fn reorg(&self, share_block: ShareBlock, total_difficulty_upto_prev_share_blockhash: Decimal) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn is_confirmed(&self, share_block: ShareBlock) -> Result<bool, Box<dyn Error + Send + Sync>>;
@@ -708,6 +734,7 @@ mock! {
         pub async fn get_blockhashes_for_locator(&self, locator: Vec<ShareBlockHash>, stop_block_hash: ShareBlockHash, max_blockhashes: usize) -> Vec<ShareBlockHash>;
         pub async fn build_locator(&self) -> Vec<ShareBlockHash>;
         pub async fn get_missing_blockhashes(&self, blockhashes: &[ShareBlockHash]) -> Vec<ShareBlockHash>;
+        pub async fn get_tip_height(&self) -> Option<u32>;
     }
 
     impl Clone for ChainHandle {
@@ -721,6 +748,7 @@ mock! {
 mod tests {
     use super::*;
     use crate::shares::miner_message::Gbt;
+    use crate::test_utils::genesis_for_testnet;
     use crate::test_utils::load_valid_workbases_userworkbases_and_shares;
     use crate::test_utils::random_hex_string;
     use crate::test_utils::TestBlockBuilder;
@@ -731,14 +759,19 @@ mod tests {
     #[tokio::test]
     async fn test_get_tips() {
         let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
 
         let tips = chain_handle.get_tips().await;
-        assert!(tips.is_empty()); // New chain should have no tips
+        assert_eq!(tips.len(), 1); // New chain should genesis block as the only tip
 
         // Add a share block
         let share_block = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .prev_share_blockhash(genesis_for_testnet().cached_blockhash.unwrap())
+            .diff(dec!(1.0))
             .build();
 
         let result = chain_handle.add_share(share_block.clone()).await;
@@ -746,21 +779,24 @@ mod tests {
 
         // Get tips should now return the blockhash
         let tips = chain_handle.get_tips().await;
-        let mut expected_tips = HashSet::new();
-        expected_tips.insert(share_block.cached_blockhash.unwrap());
-        assert_eq!(tips, expected_tips);
+        assert_eq!(tips.len(), 1);
+        assert!(tips.contains(&share_block.cached_blockhash.unwrap()));
 
         let total_difficulty = chain_handle.get_total_difficulty().await;
-        assert_eq!(total_difficulty, dec!(1.0));
+        assert_eq!(total_difficulty, dec!(2.0));
     }
 
     #[tokio::test]
     async fn test_reorg() {
         let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
 
         let share_block = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .prev_share_blockhash(genesis_for_testnet().cached_blockhash.unwrap())
             .build();
 
         // Add initial share block
@@ -785,13 +821,16 @@ mod tests {
         assert_eq!(tips, expected_tips);
 
         let total_difficulty = chain_handle.get_total_difficulty().await;
-        assert_eq!(total_difficulty, dec!(3.0));
+        assert_eq!(total_difficulty, dec!(4.0));
     }
 
     #[tokio::test]
     async fn test_is_confirmed() {
         let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
 
         let share_block = TestBlockBuilder::new()
             .blockhash(random_hex_string(64, 8).as_str())
@@ -807,7 +846,10 @@ mod tests {
     #[tokio::test]
     async fn test_add_workbase() {
         let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
         let time = bitcoin::absolute::Time::from_hex("676d6caa").unwrap();
 
         let workbase = MinerWorkbase {
@@ -855,11 +897,15 @@ mod tests {
     #[tokio::test]
     async fn test_get_depth() {
         let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
 
         // Create initial share
         let share1 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .prev_share_blockhash(genesis_for_testnet().cached_blockhash.unwrap())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
@@ -901,7 +947,10 @@ mod tests {
     #[tokio::test]
     async fn test_get_share_headers() {
         let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
 
         // Create initial share
         let share1 = TestBlockBuilder::new()
@@ -943,7 +992,10 @@ mod tests {
     #[tokio::test]
     async fn test_get_headers_for_locator() {
         let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
 
         // Create test blocks
         let block1 = TestBlockBuilder::new()
@@ -979,11 +1031,15 @@ mod tests {
     #[tokio::test]
     async fn test_build_locator() {
         let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
 
         // Create test blocks in a chain
         let block1 = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb1")
+            .prev_share_blockhash(genesis_for_testnet().cached_blockhash.unwrap())
             .build();
 
         let block2 = TestBlockBuilder::new()
@@ -1005,17 +1061,21 @@ mod tests {
         let locator = chain_handle.build_locator().await;
 
         // Should return blocks in reverse order since locator starts from tip
-        assert_eq!(locator.len(), 3);
+        assert_eq!(locator.len(), 4);
         assert_eq!(locator[0], block3.cached_blockhash.unwrap());
         assert_eq!(locator[1], block2.cached_blockhash.unwrap());
         assert_eq!(locator[2], block1.cached_blockhash.unwrap());
+        assert_eq!(locator[3], genesis_for_testnet().cached_blockhash.unwrap());
     }
 
     // add test for get_blockhashes_for_locator
     #[tokio::test]
     async fn test_get_blockhashes_for_locator() {
         let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
 
         // Create test blocks
         let block1 = TestBlockBuilder::new()
@@ -1051,7 +1111,10 @@ mod tests {
     #[tokio::test]
     async fn test_get_workbases() {
         let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
 
         let workbase1 = TestMinerWorkbaseBuilder::new().workinfoid(1000).build();
         let workbase2 = TestMinerWorkbaseBuilder::new().workinfoid(2000).build();
@@ -1093,7 +1156,10 @@ mod tests {
     #[tokio::test]
     async fn test_get_missing_blockhashes() {
         let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
 
         // Create and add some blocks to the chain
         let block1 = TestBlockBuilder::new()
@@ -1147,7 +1213,10 @@ mod tests {
     #[tokio::test]
     async fn test_get_user_workbases() {
         let temp_dir = tempdir().unwrap();
-        let chain_handle = ChainHandle::new(temp_dir.path().to_str().unwrap().to_string());
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
 
         // Create test user workbases
         let (_, user_workbases, _) = load_valid_workbases_userworkbases_and_shares();
@@ -1198,5 +1267,103 @@ mod tests {
 
         assert_eq!(mixed_workbases.len(), 1);
         assert_eq!(mixed_workbases[0].workinfoid, workinfoid1);
+    }
+
+    #[tokio::test]
+    async fn test_get_tip_height() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
+
+        // Initially the chain should have no tip height
+        let tip_height = chain_handle.get_tip_height().await;
+        assert_eq!(tip_height, Some(0));
+
+        // Create and add several blocks with increasing heights
+        let block1 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb1")
+            .prev_share_blockhash(genesis_for_testnet().cached_blockhash.unwrap())
+            .build();
+
+        let block2 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2")
+            .prev_share_blockhash(block1.cached_blockhash.unwrap())
+            .build();
+
+        let block3 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3")
+            .prev_share_blockhash(block2.cached_blockhash.unwrap())
+            .build();
+
+        // Add all blocks to the chain
+        chain_handle.add_share(block1).await.unwrap();
+        chain_handle.add_share(block2).await.unwrap();
+        chain_handle.add_share(block3.clone()).await.unwrap();
+
+        // Check if tip height returns the correct height
+        let tip_height = chain_handle.get_tip_height().await;
+        assert_eq!(tip_height, Some(3));
+
+        // Create a higher-difficulty block with a different height
+        let higher_diff_block = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
+            .prev_share_blockhash(block3.cached_blockhash.unwrap())
+            .diff(dec!(10.0))
+            .build();
+
+        // Add the higher difficulty block which should cause a reorg
+        chain_handle.add_share(higher_diff_block).await.unwrap();
+
+        let tip_height = chain_handle.get_tip_height().await;
+        assert_eq!(tip_height, Some(4));
+    }
+
+    #[tokio::test]
+    async fn test_loading_chain_from_store() {
+        let temp_dir = tempdir().unwrap();
+        let store_path = temp_dir.path().to_str().unwrap().to_string();
+        let chain_handle = ChainHandle::new(store_path.clone(), genesis_for_testnet());
+
+        // Initially the chain should have no tip height
+        let tip_height = chain_handle.get_tip_height().await;
+        assert_eq!(tip_height, Some(0));
+
+        // Create and add several blocks with increasing heights
+        let block1 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb1")
+            .prev_share_blockhash(genesis_for_testnet().cached_blockhash.unwrap())
+            .build();
+
+        let block2 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2")
+            .prev_share_blockhash(block1.cached_blockhash.unwrap())
+            .build();
+
+        let block3 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3")
+            .prev_share_blockhash(block2.cached_blockhash.unwrap())
+            .build();
+
+        // Add all blocks to the chain
+        chain_handle.add_share(block1).await.unwrap();
+        chain_handle.add_share(block2).await.unwrap();
+        chain_handle.add_share(block3.clone()).await.unwrap();
+
+        assert_eq!(chain_handle.get_tip_height().await, Some(3));
+
+        let read_only_store = Store::new(store_path, true).unwrap();
+        let read_only_chain = Chain::new(read_only_store, genesis_for_testnet());
+
+        // Check if tip height returns the correct height
+        let tip_height = read_only_chain.get_tip_height();
+        assert_eq!(tip_height, Some(3));
+
+        let (tip, _uncles) = read_only_chain.get_chain_tip_and_uncles();
+        assert_eq!(tip.unwrap(), block3.cached_blockhash.unwrap());
+
+        let total_difficulty = read_only_chain.get_total_difficulty();
+        assert_eq!(total_difficulty, dec!(4.0));
     }
 }

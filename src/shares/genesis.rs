@@ -29,6 +29,7 @@ pub struct GenesisData {
     pub diff: Decimal,
     pub sdiff: Decimal,
     pub bitcoin_blockhash: &'static str,
+    pub public_key: &'static str,
 }
 
 const SIGNET_GENESIS_DATA: GenesisData = GenesisData {
@@ -41,6 +42,7 @@ const SIGNET_GENESIS_DATA: GenesisData = GenesisData {
     diff: dec!(1.0),
     sdiff: dec!(31.465847594928551),
     bitcoin_blockhash: "000000000822bbfaf34d53fc43d0c1382054d3aafe31893020c315db8b0a19f9",
+    public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
 };
 
 const TESTNET4_GENESIS_DATA: GenesisData = GenesisData {
@@ -53,6 +55,7 @@ const TESTNET4_GENESIS_DATA: GenesisData = GenesisData {
     diff: dec!(1.0),
     sdiff: dec!(4.0170006421734943),
     bitcoin_blockhash: "000000003fba69400bbc385acd52b07dbe7779ea5f8995dd4aadf4a86b74cc55",
+    public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
 };
 
 // Using the following JSON data for the genesis block
@@ -67,6 +70,7 @@ const MAINNET_GENESIS_DATA: GenesisData = GenesisData {
     diff: dec!(600.0), // using a bitaxe client
     sdiff: dec!(1288.1044520568391),
     bitcoin_blockhash: "000000000032e088a873de36cfdb61ec3a5e941fc7b7957e18f9c09860a494bd",
+    public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
 };
 
 /// Get the genesis data for a given network

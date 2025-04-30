@@ -196,22 +196,19 @@ impl ShareBlock {
     /// Build a genesis share block for a given network
     /// The bitcoin blockhash is hardcoded, so are the coinbase, nonce2, nonce, ntime, diff, sdiff
     /// The workinfoid and clientid are 0 for genesis block on all networks
-    pub fn build_genesis_for_network(public_key: PublicKey, network: bitcoin::Network) -> Self {
+    pub fn build_genesis_for_network(network: bitcoin::Network) -> Self {
         assert!(
             network == bitcoin::Network::Signet
                 || network == bitcoin::Network::Testnet4
                 || network == bitcoin::Network::Bitcoin,
-            "Network Bitcoin, Testnet or Regtest not yet supported"
+            "Network Testnet and Regtest not yet supported"
         );
         let genesis_data = genesis::genesis_data(network).unwrap();
-        ShareBlock::build_genesis(&genesis_data, public_key, network)
+        ShareBlock::build_genesis(&genesis_data, network)
     }
 
-    fn build_genesis(
-        genesis_data: &genesis::GenesisData,
-        public_key: PublicKey,
-        network: bitcoin::Network,
-    ) -> Self {
+    fn build_genesis(genesis_data: &genesis::GenesisData, network: bitcoin::Network) -> Self {
+        let public_key = genesis_data.public_key.parse::<PublicKey>().unwrap();
         let coinbase_tx = transactions::coinbase::create_coinbase_transaction(&public_key, network);
         let transactions = vec![coinbase_tx];
         let merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
@@ -291,10 +288,7 @@ mod tests {
         let bitcoin_blockhash = "000000000822bbfaf34d53fc43d0c1382054d3aafe31893020c315db8b0a19f9"
             .parse()
             .unwrap();
-        let public_key = "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
-            .parse()
-            .unwrap();
-        let share = ShareBlock::build_genesis_for_network(public_key, bitcoin::Network::Signet);
+        let share = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
 
         assert_eq!(share.header.miner_share.workinfoid, 0);
         assert_eq!(share.header.miner_share.clientid, 0);
@@ -309,8 +303,10 @@ mod tests {
         assert_eq!(share.header.miner_share.sdiff, dec!(31.465847594928551));
         assert_eq!(share.header.miner_share.hash, bitcoin_blockhash);
         assert!(share.header.uncles.is_empty());
-        assert_eq!(share.header.miner_pubkey, public_key);
-
+        assert_eq!(
+            share.header.miner_pubkey.to_string(),
+            "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
+        );
         assert_eq!(share.transactions.len(), 1);
         assert!(share.transactions[0].is_coinbase());
         assert_eq!(share.transactions[0].output.len(), 1);
@@ -319,7 +315,12 @@ mod tests {
         let output = &share.transactions[0].output[0];
         assert_eq!(output.value.to_sat(), 1);
 
-        let expected_address = bitcoin::Address::p2pkh(public_key, bitcoin::Network::Signet);
+        let expected_address = bitcoin::Address::p2pkh(
+            "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
+                .parse::<PublicKey>()
+                .unwrap(),
+            bitcoin::Network::Signet,
+        );
         assert_eq!(output.script_pubkey, expected_address.script_pubkey());
         assert_eq!(
             share.cached_blockhash,
