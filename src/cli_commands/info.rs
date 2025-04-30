@@ -71,6 +71,7 @@ mod tests {
     use super::execute;
     use p2poolv2_lib::shares::chain::chain::Chain;
     use p2poolv2_lib::shares::store::Store;
+    use p2poolv2_lib::shares::ShareBlock;
     use tempfile::tempdir;
 
     #[test]
@@ -78,7 +79,10 @@ mod tests {
         // Create a temporary directory for the store
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let chain = Chain::new(store);
+        let chain = Chain::new(
+            store,
+            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+        );
 
         // Execute the info command with an empty store
         let result = execute(chain);

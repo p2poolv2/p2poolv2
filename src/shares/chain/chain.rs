@@ -101,9 +101,10 @@ impl Chain {
             None => 0, // If there's no previous height, this is height 0
         };
         // save to share to store for all cases
-        println!(
+        tracing::debug!(
             "Adding share to store: {:?} at height: {}",
-            share.cached_blockhash, height
+            share.cached_blockhash,
+            height
         );
         self.store.add_share(share.clone(), height);
 

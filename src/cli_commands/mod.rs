@@ -20,14 +20,12 @@ pub mod info;
 pub mod store {
     use p2poolv2_lib::shares::store::Store;
     use std::error::Error;
-    use std::path::PathBuf;
 
     /// Open a store from the given path
-    pub fn open_store(store_path: &PathBuf) -> Result<Store, Box<dyn Error>> {
+    pub fn open_store(store_path: String) -> Result<Store, Box<dyn Error>> {
         println!("Opening store in read-only mode: {:?}", store_path);
 
-        let path_str = store_path.to_str().expect("Invalid path").to_string();
-        Store::new(path_str, true).map_err(|e| {
+        Store::new(store_path, true).map_err(|e| {
             println!("Failed to open store: {}", e);
             e
         })

@@ -21,18 +21,20 @@ mod cli_commands;
 
 // Now use the external crate with its name
 use clap::{Parser, Subcommand};
+use p2poolv2_lib::config::Config;
 use p2poolv2_lib::shares::chain::chain::Chain;
+use p2poolv2_lib::shares::ShareBlock;
 use std::error::Error;
-use std::path::PathBuf;
 
 /// P2Pool v2 CLI utility
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    /// Path to the RocksDB store
+    /// Path to p2poolv2 config file
     #[arg(short, long)]
-    store_path: Option<PathBuf>,
+    config: String,
 
+    /// Command to execute
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -48,23 +50,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
+    let config = Config::load(&cli.config)?;
 
     // Check if store path is provided and handle it
-    if let Some(store_path) = cli.store_path {
-        let store = cli_commands::store::open_store(&store_path)?;
-        let chain = Chain::new(store);
+    let store = cli_commands::store::open_store(config.store.path.clone())?;
+    let genesis = ShareBlock::build_genesis_for_network(config.bitcoin.network);
+    let chain = Chain::new(store, genesis);
 
-        // Handle command if provided
-        match &cli.command {
-            Some(Commands::Info) => {
-                cli_commands::info::execute(chain)?;
-            }
-            None => {
-                println!("No command specified. Use --help for usage information.");
-            }
+    // Handle command if provided
+    match &cli.command {
+        Some(Commands::Info) => {
+            cli_commands::info::execute(chain)?;
         }
-    } else {
-        println!("No store path provided. Use --help for usage information.");
+        None => {
+            println!("No command specified. Use --help for usage information.");
+        }
     }
 
     Ok(())
