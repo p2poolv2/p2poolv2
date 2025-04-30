@@ -21,7 +21,7 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 /// The minimum number of shares that must be on the chain for a share to be considered confirmed
 const MIN_CONFIRMATION_DEPTH: usize = 100;
@@ -65,10 +65,8 @@ impl Chain {
 
     /// Load data from store and set chain cached attributes
     pub fn set_cache_from_store(mut self) -> Self {
-        println!("Loading chain from store");
         let (main_chain, total_diff) = self.store.get_main_chain(self.genesis_block_hash.unwrap());
         if main_chain.is_empty() {
-            println!("Chain is empty");
             return self;
         }
         self.chain_tip = Some(*main_chain.last().unwrap());
@@ -78,16 +76,16 @@ impl Chain {
         let tips = self.store.get_shares_at_height(height);
 
         self.tips = tips.keys().cloned().collect();
-        println!("Loaded {} shares at height {}", tips.len(), height);
-        println!("Tips: {:?}", self.tips);
-        println!("Chain tip: {:?}", self.chain_tip);
-        println!("Total difficulty: {:?}", self.total_difficulty);
+        debug!("Loaded {} shares at height {}", tips.len(), height);
+        debug!("Tips: {:?}", self.tips);
+        debug!("Chain tip: {:?}", self.chain_tip);
+        debug!("Total difficulty: {:?}", self.total_difficulty);
         self
     }
 
     /// Add a share to the chain and update the tips and total difficulty
     pub fn add_share(&mut self, share: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>> {
-        println!("Adding share to chain: {:?}", share);
+        debug!("Adding share to chain: {:?}", share);
 
         if self.tips.is_empty() {
             self.genesis_block_hash = share.cached_blockhash;
@@ -138,8 +136,7 @@ impl Chain {
                 .iter()
                 .map(|share| share.header.miner_share.diff)
                 .sum::<Decimal>();
-            println!();
-            println!(
+            debug!(
                 "Total difficulty up to prev share blockhash: {:?}. Current total difficulty: {:?}",
                 total_difficulty_upto_prev_share_blockhash, self.total_difficulty
             );
@@ -187,7 +184,7 @@ impl Chain {
         share: ShareBlock,
         total_difficulty_upto_prev_share_blockhash: Decimal,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        println!(
+        info!(
             "Reorging chain to share: {:?}",
             share.cached_blockhash.unwrap()
         );

@@ -107,7 +107,7 @@ impl Store {
     /// We use StorageShareBlock to serialize the share so that we do not store transactions serialized with the block.
     /// Transactions are stored separately. All writes are done in a single atomic batch.
     pub fn add_share(&mut self, share: ShareBlock, height: u32) {
-        println!(
+        debug!(
             "Adding share to store with {} txs: {:?}",
             share.transactions.len(),
             share.cached_blockhash
@@ -155,13 +155,10 @@ impl Store {
         let mut main_chain = vec![];
         // hard code diff 1 for the genesis block
         let mut total_difficulty = Decimal::new(1, 0);
-        println!("current blockhash: {:?}", current);
         while current.is_some() {
             main_chain.push(current.unwrap());
-            println!("main chain {:?}", main_chain);
             let children = self.get_children_blockhashes(&current.unwrap());
             if children.is_empty() {
-                println!("no children for blockhash: {:?}", current);
                 break;
             }
 
@@ -174,24 +171,14 @@ impl Store {
                 }
             });
 
-            println!("hash_and_difficulties: {:?}", hash_and_difficulties);
-
             let max_difficulty_child = hash_and_difficulties
                 .clone()
                 .max_by(|a, b| a.1.cmp(&b.1))
                 .map(|(hash, diff)| (*hash, diff));
 
-            println!("max_difficulty_child: {:?}", max_difficulty_child);
-
             total_difficulty += max_difficulty_child.map_or(Decimal::new(0, 0), |(_, diff)| diff);
 
-            println!(
-                "total_difficulty: {:?} for blockhash: {:?}",
-                total_difficulty, current
-            );
-
             if let Some((next_blockhash, _diff)) = max_difficulty_child {
-                println!("pushing next blockhash: {:?}", next_blockhash);
                 current = Some(next_blockhash);
             } else {
                 current = None;
@@ -1026,7 +1013,7 @@ impl Store {
             is_confirmed: metadata.is_confirmed,
             height,
         };
-        println!("Setting block metadata: {:?}", updated_metadata);
+        debug!("Setting block metadata: {:?}", updated_metadata);
         self.set_block_metadata(blockhash, &updated_metadata, batch)
     }
 }
