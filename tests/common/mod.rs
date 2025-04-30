@@ -43,7 +43,7 @@ pub fn default_test_config() -> Config {
             rate_limit_window_secs: 1,
         },
         bitcoin: BitcoinConfig {
-            network: bitcoin::Network::Regtest,
+            network: bitcoin::Network::Signet,
             url: "http://localhost:8332".to_string(),
             username: "testuser".to_string(),
             password: "testpass".to_string(),

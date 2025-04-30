@@ -17,7 +17,10 @@
 mod common;
 
 use common::default_test_config;
-use p2poolv2_lib::{node::actor::NodeHandle, shares::chain::actor::ChainHandle};
+use p2poolv2_lib::{
+    node::actor::NodeHandle,
+    shares::{chain::actor::ChainHandle, ShareBlock},
+};
 use std::time::Duration;
 use tempfile::tempdir;
 
@@ -53,9 +56,18 @@ async fn test_three_nodes_connectivity() {
     let temp_dir2 = tempdir().unwrap();
     let temp_dir3 = tempdir().unwrap();
 
-    let chain_handle1 = ChainHandle::new(temp_dir1.path().to_str().unwrap().to_string());
-    let chain_handle2 = ChainHandle::new(temp_dir2.path().to_str().unwrap().to_string());
-    let chain_handle3 = ChainHandle::new(temp_dir3.path().to_str().unwrap().to_string());
+    let chain_handle1 = ChainHandle::new(
+        temp_dir1.path().to_str().unwrap().to_string(),
+        ShareBlock::build_genesis_for_network(config1.bitcoin.network),
+    );
+    let chain_handle2 = ChainHandle::new(
+        temp_dir2.path().to_str().unwrap().to_string(),
+        ShareBlock::build_genesis_for_network(config2.bitcoin.network),
+    );
+    let chain_handle3 = ChainHandle::new(
+        temp_dir3.path().to_str().unwrap().to_string(),
+        ShareBlock::build_genesis_for_network(config3.bitcoin.network),
+    );
     // Start three nodes
     let (node1_handle, _stop_rx1) = NodeHandle::new(config1, chain_handle1)
         .await
