@@ -38,7 +38,7 @@ pub async fn handle_request<C: 'static>(
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     time_provider: &impl TimeProvider,
 ) -> Result<(), Box<dyn Error>> {
-    info!("Handling request from peer: {}", peer);
+    info!("Handling request {} from peer: {}", request, peer);
     match request {
         Message::GetShareHeaders(block_hashes, stop_block_hash) => {
             handle_getheaders(

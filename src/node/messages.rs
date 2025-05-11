@@ -19,6 +19,7 @@ use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader};
 use bitcoin::Txid;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
+use std::fmt::Display;
 
 /// Message trait for network messages that can be serialized/deserialized
 /// The trait provides a default implementation for serialization/deserialization
@@ -53,6 +54,24 @@ impl Message {
         match ciborium::de::from_reader(bytes) {
             Ok(msg) => Ok(msg),
             Err(e) => Err(e.into()),
+        }
+    }
+}
+
+impl Display for Message {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Message::Inventory(_) => write!(f, "Inventory"),
+            Message::NotFound(_) => write!(f, "NotFound"),
+            Message::GetShareHeaders(_, _) => write!(f, "GetShareHeaders"),
+            Message::GetShareBlocks(_, _) => write!(f, "GetShareBlocks"),
+            Message::ShareHeaders(_) => write!(f, "ShareHeaders"),
+            Message::ShareBlock(_) => write!(f, "ShareBlock"),
+            Message::GetData(_) => write!(f, "GetData"),
+            Message::Workbase(_) => write!(f, "Workbase"),
+            Message::UserWorkbase(_) => write!(f, "UserWorkbase"),
+            Message::Transaction(_) => write!(f, "Transaction"),
+            Message::MiningShare(_) => write!(f, "MiningShare"),
         }
     }
 }
