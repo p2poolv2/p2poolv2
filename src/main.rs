@@ -32,11 +32,12 @@ mod utils;
 use crate::node::actor::NodeHandle;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
-use bitcoin::PublicKey;
 use tracing::error;
 
 #[cfg(test)]
 mod test_utils;
+
+mod stratum;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
