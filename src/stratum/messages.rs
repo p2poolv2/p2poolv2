@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 // A generic stratum message structure
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) enum StratumMessage {
+pub enum StratumMessage {
     Request {
         id: Option<u64>,
         method: Option<String>,
