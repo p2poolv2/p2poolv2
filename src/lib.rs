@@ -19,6 +19,7 @@ pub mod command;
 pub mod config;
 pub mod node;
 pub mod shares;
+pub mod stratum;
 pub mod utils;
 
 #[cfg(test)]
