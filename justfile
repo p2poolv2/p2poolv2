@@ -6,6 +6,15 @@ default: test
 test:
 	RUST_LOG={{LOG_LEVEL}} cargo nextest run
 
+cov:
+	cargo llvm-cov --lcov
+
+cov-html:
+	cargo llvm-cov --html
+
+cov-open:
+	cargo llvm-cov --open
+
 build:
 	cargo build
 
