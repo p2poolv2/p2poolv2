@@ -14,6 +14,25 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub(crate) mod message_handler;
-pub(crate) mod messages;
-pub(crate) mod server;
+use crate::stratum::messages::StratumMessage;
+use tracing::debug;
+
+#[allow(dead_code)]
+// Handle incoming Stratum messages
+// This function processes the incoming Stratum messages and returns a response
+pub(crate) async fn handle_message(message: StratumMessage) -> Option<StratumMessage> {
+    match message {
+        StratumMessage::Request { id, method, params } => {
+            debug!(
+                "Handling request: id: {:?}, method: {:?}, params: {:?}",
+                id, method, params
+            );
+            Some(StratumMessage::Response {
+                id,
+                result: Some(serde_json::json!("Success")),
+                error: None,
+            })
+        }
+        _ => None,
+    }
+}

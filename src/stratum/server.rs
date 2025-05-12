@@ -18,8 +18,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, LinesCodec};
-use tracing::{debug, info};
+use tracing::info;
 
+use crate::stratum::message_handler::handle_message;
 use crate::stratum::messages::StratumMessage;
 
 // A struct to represent a Stratum server configuration
@@ -130,27 +131,9 @@ where
     Ok(())
 }
 
-#[allow(dead_code)]
-// Handle incoming Stratum messages
-// This function processes the incoming Stratum messages and returns a response
-async fn handle_message(message: StratumMessage) -> Option<StratumMessage> {
-    match message {
-        StratumMessage::Request { id, method, params } => {
-            debug!(
-                "Handling request: id: {:?}, method: {:?}, params: {:?}",
-                id, method, params
-            );
-            Some(StratumMessage::Response {
-                id,
-                result: Some(serde_json::json!("Success")),
-                error: None,
-            })
-        }
-        _ => None,
-    }
-}
 #[cfg(test)]
 mod stratum_server_tests {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::time::Duration;
     use tokio::time::sleep;
 
@@ -183,5 +166,104 @@ mod stratum_server_tests {
 
         // Wait for the task to complete
         let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_handle_connection() {
+        // Mock data
+        let request = StratumMessage::Request {
+            id: Some(1),
+            method: Some("mining.subscribe".to_string()),
+            params: None,
+        };
+        let input_string = serde_json::to_string(&request).unwrap() + "\n";
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+
+        // Setup reader and writer
+        let reader = input_string.as_bytes();
+        let mut writer = Vec::new();
+
+        // Run the handler
+        let result = handle_connection(reader, &mut writer, addr).await;
+
+        // Verify results
+        assert!(
+            result.is_ok(),
+            "handle_connection should not return an error"
+        );
+
+        // Check that response was written
+        let response = String::from_utf8_lossy(&writer);
+        assert!(
+            response.contains("\"id\":1"),
+            "Response should contain the request ID"
+        );
+        assert!(
+            response.contains("\"result\":\"Success\""),
+            "Response should contain success result"
+        );
+        assert!(
+            response.ends_with("\n"),
+            "Response should end with a newline"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_connection_invalid_json() {
+        // Invalid JSON input
+        let input = b"not valid json\n";
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+
+        // Setup reader and writer
+        let reader = &input[..];
+        let mut writer = Vec::new();
+
+        // Run the handler
+        let result = handle_connection(reader, &mut writer, addr).await;
+
+        // Verify results
+        assert!(
+            result.is_ok(),
+            "handle_connection should handle invalid JSON gracefully"
+        );
+
+        // Check that no response was written
+        assert!(
+            writer.is_empty(),
+            "No response should be written for invalid JSON"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_connection_line_too_long() {
+        // Create a line that exceeds the max length (8KB)
+        let mut long_input = String::with_capacity(10 * 1024);
+        long_input.push_str("{\"id\":1,\"method\":\"mining.subscribe\",\"params\":[\"");
+        while long_input.len() < 9 * 1024 {
+            long_input.push_str("aaaaaaaaaa");
+        }
+        long_input.push_str("\"]}\n");
+
+        let input = long_input.as_bytes();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+
+        // Setup reader and writer
+        // let reader = &input[..];
+        let mut writer = Vec::new();
+
+        // Run the handler
+        let result = handle_connection(input, &mut writer, addr).await;
+
+        // Verify results - should handle the error gracefully
+        assert!(
+            result.is_ok(),
+            "handle_connection should handle line-too-long gracefully"
+        );
+
+        // No response should be written for a line that's too long
+        assert!(
+            writer.is_empty(),
+            "No response should be written for too-long lines"
+        );
     }
 }
