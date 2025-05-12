@@ -18,7 +18,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, LinesCodec};
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::stratum::messages::StratumMessage;
 
@@ -136,7 +136,7 @@ where
 async fn handle_message(message: StratumMessage) -> Option<StratumMessage> {
     match message {
         StratumMessage::Request { id, method, params } => {
-            println!(
+            debug!(
                 "Handling request: id: {:?}, method: {:?}, params: {:?}",
                 id, method, params
             );
