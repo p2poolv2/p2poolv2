@@ -16,8 +16,7 @@
 
 #[cfg(test)]
 mod tests {
-    use p2poolv2_lib::stratum::{messages::StratumMessage, server::StratumServer};
-    use serde_json::json;
+    use p2poolv2_lib::stratum::{self, messages::StratumMessage, server::StratumServer};
     use std::io::{Read, Write};
     use std::net::SocketAddr;
     use std::net::TcpStream;
@@ -65,12 +64,10 @@ mod tests {
         let mut client = client.expect("Failed to connect to StratumServer");
 
         // Send subscribe message
-        let subscribe_msg = StratumMessage::Request {
-            id: Some(1),
-            method: Some("mining.subscribe".to_string()),
-            params: Some(json!([])),
-        };
+        let subscribe_msg =
+            StratumMessage::new_subscribe(Some(1), "agent".to_string(), "1.0".to_string(), None);
 
+        // Serialize the subscribe message
         let subscribe_str =
             serde_json::to_string(&subscribe_msg).expect("Failed to serialize subscribe message");
         client
@@ -88,8 +85,11 @@ mod tests {
 
         let response = match response_message {
             StratumMessage::Response { id, result, error } => {
-                assert!(id.is_some(), "Response missing 'id' field");
-                assert_eq!(id.unwrap(), 1, "Response ID doesn't match request ID");
+                assert_eq!(
+                    id,
+                    Some(stratum::messages::Id::Number(1)),
+                    "Response ID doesn't match request ID"
+                );
                 assert!(result.is_some(), "Response missing 'result' field");
                 assert!(error.is_none(), "Response should not contain 'error' field");
                 result.unwrap()
@@ -124,11 +124,12 @@ mod tests {
                     .expect("Connection succeeded but stream creation failed");
 
                 // Try sending a subscribe message
-                let test_msg = StratumMessage::Request {
-                    id: Some(999),
-                    method: Some("mining.subscribe".to_string()),
-                    params: Some(json!([])),
-                };
+                let test_msg = StratumMessage::new_subscribe(
+                    Some(999),
+                    "agent".to_string(),
+                    "1.0".to_string(),
+                    None,
+                );
 
                 let test_str =
                     serde_json::to_string(&test_msg).expect("Failed to serialize test message");

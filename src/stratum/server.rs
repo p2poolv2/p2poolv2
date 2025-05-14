@@ -233,11 +233,10 @@ where
 
 #[cfg(test)]
 mod stratum_server_tests {
+    use super::*;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::time::Duration;
     use tokio::time::sleep;
-
-    use super::*;
 
     #[tokio::test]
     async fn test_create_and_start_server() {
@@ -271,11 +270,8 @@ mod stratum_server_tests {
     #[tokio::test]
     async fn test_handle_connection() {
         // Mock data
-        let request = StratumMessage::Request {
-            id: Some(1),
-            method: Some("mining.subscribe".to_string()),
-            params: None,
-        };
+        let request =
+            StratumMessage::new_subscribe(Some(1), "agent".to_string(), "1.0".to_string(), None);
         let input_string = serde_json::to_string(&request).unwrap() + "\n";
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
 
@@ -294,10 +290,6 @@ mod stratum_server_tests {
 
         // Check that response was written
         let response = String::from_utf8_lossy(&writer);
-        assert!(
-            response.contains("\"id\":1"),
-            "Response should contain the request ID"
-        );
         assert!(
             response.contains("\"result\":\"Success\""),
             "Response should contain success result"
