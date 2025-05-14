@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::stratum::message_handler::handle_message;
-use crate::stratum::messages::StratumMessage;
+use crate::stratum::messages::Request;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -193,7 +193,7 @@ where
                 match line_result {
                     Some(Ok(line)) => {
                         // Process the received JSON message
-                        match serde_json::from_str::<StratumMessage>(&line) {
+                        match serde_json::from_str::<Request>(&line) {
                             Ok(message) => {
                                 info!("Received message from {}: {:?}", addr, message);
 
@@ -270,8 +270,7 @@ mod stratum_server_tests {
     #[tokio::test]
     async fn test_handle_connection() {
         // Mock data
-        let request =
-            StratumMessage::new_subscribe(Some(1), "agent".to_string(), "1.0".to_string(), None);
+        let request = Request::new_subscribe(Some(1), "agent".to_string(), "1.0".to_string(), None);
         let input_string = serde_json::to_string(&request).unwrap() + "\n";
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
 
@@ -290,9 +289,10 @@ mod stratum_server_tests {
 
         // Check that response was written
         let response = String::from_utf8_lossy(&writer);
+        println!("Response: {}", response);
         assert!(
-            response.contains("\"result\":\"Success\""),
-            "Response should contain success result"
+            response.contains("\"result\":true"),
+            "Response should contain success result as true"
         );
         assert!(
             response.ends_with("\n"),
