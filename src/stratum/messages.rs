@@ -131,6 +131,38 @@ pub enum StratumMessage {
     },
 }
 
+/// NotifyParams represents the parameters for the mining.notify message
+/// It includes job_id, prevhash, coinbase1, coinbase2, merkle_branches,
+/// version, nbits, ntime, and clean_jobs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotifyParams {
+    job_id: String,
+    prevhash: String,
+    coinbase1: String,
+    coinbase2: String,
+    merkle_branches: Vec<String>,
+    version: String,
+    nbits: String,
+    ntime: String,
+    clean_jobs: bool,
+}
+
+impl From<NotifyParams> for Params {
+    fn from(params: NotifyParams) -> Self {
+        Params::Array(vec![
+            json!(params.job_id),
+            json!(params.prevhash),
+            json!(params.coinbase1),
+            json!(params.coinbase2),
+            json!(params.merkle_branches),
+            json!(params.version),
+            json!(params.nbits),
+            json!(params.ntime),
+            json!(params.clean_jobs),
+        ])
+    }
+}
+
 impl StratumMessage {
     /// Creates a new subscribe message with an optional id and params
     /// If no params are provided, it defaults to an empty array
@@ -193,12 +225,19 @@ impl StratumMessage {
             params,
         }
     }
+
+    pub fn new_notify(id: Option<i32>, params: NotifyParams) -> Self {
+        StratumMessage::Notification {
+            id: id.map(Id::Number),
+            method: "mining.notify".to_string(),
+            params: params.into(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn test_new_subscribe() {
@@ -275,6 +314,27 @@ mod tests {
         assert_eq!(
             serialized_message,
             r#"{"id":5,"method":"mining.submit","params":["worker_name","job_id","extra_nonce2","ntime","nonce"]}"#
+        );
+    }
+
+    fn test_new_notify() {
+        let notify_params = NotifyParams {
+            job_id: "job_id".to_string(),
+            prevhash: "prevhash".to_string(),
+            coinbase1: "coinbase1".to_string(),
+            coinbase2: "coinbase2".to_string(),
+            merkle_branches: vec!["branch1".to_string(), "branch2".to_string()],
+            version: "version".to_string(),
+            nbits: "nbits".to_string(),
+            ntime: "ntime".to_string(),
+            clean_jobs: true,
+        };
+
+        let message = StratumMessage::new_notify(Some(1), notify_params);
+        let serialized_message = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serialized_message,
+            r#"{"id":1,"method":"mining.notify","params":["job_id","prevhash","coinbase1","coinbase2",["branch1","branch2"],"version","nbits","ntime",true]}"#
         );
     }
 }
