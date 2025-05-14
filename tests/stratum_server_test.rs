@@ -16,7 +16,11 @@
 
 #[cfg(test)]
 mod tests {
-    use p2poolv2_lib::stratum::{self, messages::StratumMessage, server::StratumServer};
+    use p2poolv2_lib::stratum::{
+        self,
+        messages::{Request, Response},
+        server::StratumServer,
+    };
     use std::io::{Read, Write};
     use std::net::SocketAddr;
     use std::net::TcpStream;
@@ -65,7 +69,7 @@ mod tests {
 
         // Send subscribe message
         let subscribe_msg =
-            StratumMessage::new_subscribe(Some(1), "agent".to_string(), "1.0".to_string(), None);
+            Request::new_subscribe(Some(1), "agent".to_string(), "1.0".to_string(), None);
 
         // Serialize the subscribe message
         let subscribe_str =
@@ -80,22 +84,23 @@ mod tests {
         let response_str = str::from_utf8(&buffer[..bytes_read]).expect("Invalid UTF-8");
 
         // Parse and validate response
-        let response_message: StratumMessage = serde_json::from_str(response_str)
-            .expect("Failed to deserialize response as StratumMessage");
+        let response_message: Response =
+            serde_json::from_str(response_str).expect("Failed to deserialize response as Response");
 
-        let response = match response_message {
-            StratumMessage::Response { id, result, error } => {
-                assert_eq!(
-                    id,
-                    Some(stratum::messages::Id::Number(1)),
-                    "Response ID doesn't match request ID"
-                );
-                assert!(result.is_some(), "Response missing 'result' field");
-                assert!(error.is_none(), "Response should not contain 'error' field");
-                result.unwrap()
-            }
-            _ => panic!("Unexpected response format"),
-        };
+        assert_eq!(
+            response_message.id,
+            Some(stratum::messages::Id::Number(1)),
+            "Response ID doesn't match request ID"
+        );
+        assert!(
+            response_message.result.is_some(),
+            "Response missing 'result' field"
+        );
+        assert!(
+            response_message.error.is_none(),
+            "Response should not contain 'error' field"
+        );
+        response_message.result.unwrap();
 
         // Clean up client connection
         drop(client);
@@ -120,16 +125,12 @@ mod tests {
             Ok(_) => {
                 // If we got a connection, let's try to actually use it
                 // to confirm it's a real Stratum server and not just an open socket
-                let mut test_stream = TcpStream::connect(&addr)
+                let mut test_stream = TcpStream::connect(addr)
                     .expect("Connection succeeded but stream creation failed");
 
                 // Try sending a subscribe message
-                let test_msg = StratumMessage::new_subscribe(
-                    Some(999),
-                    "agent".to_string(),
-                    "1.0".to_string(),
-                    None,
-                );
+                let test_msg =
+                    Request::new_subscribe(Some(999), "agent".to_string(), "1.0".to_string(), None);
 
                 let test_str =
                     serde_json::to_string(&test_msg).expect("Failed to serialize test message");

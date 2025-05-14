@@ -14,25 +14,19 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::stratum::messages::StratumMessage;
+use crate::stratum::messages::{Request, Response};
+use serde_json::json;
 use tracing::debug;
 
 #[allow(dead_code)]
 // Handle incoming Stratum messages
 // This function processes the incoming Stratum messages and returns a response
-pub(crate) async fn handle_message(message: StratumMessage) -> Option<StratumMessage> {
-    match message {
-        StratumMessage::Request { id, method, params } => {
-            debug!(
-                "Handling request: id: {:?}, method: {:?}, params: {:?}",
-                id, method, params
-            );
-            Some(StratumMessage::Response {
-                id,
-                result: Some(serde_json::json!("Success")),
-                error: None,
-            })
-        }
+pub(crate) async fn handle_message(message: Request) -> Option<Response> {
+    debug!("Received Stratum message: {:?}", message);
+    match message.method.as_str() {
+        "mining.subscribe" => Some(Response::new_ok(message.id, json!(true))),
+        "mining.authorize" => Some(Response::new_ok(message.id, json!(true))),
+        "mining.submit" => Some(Response::new_ok(message.id, json!(true))),
         _ => None,
     }
 }

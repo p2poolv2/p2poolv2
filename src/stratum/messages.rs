@@ -103,32 +103,30 @@ pub struct Error {
     pub data: Option<Value>,
 }
 
-/// A generic stratum message structure as defined in the protocol specification
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum StratumMessage {
-    Request {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        id: Option<Id>,
-        method: String,
-        #[serde(default)]
-        params: Params,
-    },
-    Response {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        id: Option<Id>, // Should match the id from the request
-        #[serde(skip_serializing_if = "Option::is_none")]
-        result: Option<Value>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<Error>,
-    },
-    Notification {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        id: Option<Id>, // Notifications have null id or no id field
-        method: String,
-        #[serde(default)]
-        params: Params,
-    },
+pub struct Request {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    pub method: String,
+    #[serde(default)]
+    pub params: Params,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Response {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>, // Should match the id from the request
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<Error>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Notification {
+    pub method: String,
+    #[serde(default)]
+    pub params: Params,
 }
 
 /// NotifyParams represents the parameters for the mining.notify message
@@ -163,7 +161,7 @@ impl From<NotifyParams> for Params {
     }
 }
 
-impl StratumMessage {
+impl Request {
     /// Creates a new subscribe message with an optional id and params
     /// If no params are provided, it defaults to an empty array
     /// If no id is provided, it defaults to None
@@ -180,7 +178,7 @@ impl StratumMessage {
             let extra_nonce = extra_nonce.unwrap();
             params.push(json!(extra_nonce));
         }
-        StratumMessage::Request {
+        Request {
             id: id.map(Id::Number),
             method: "mining.subscribe".to_string(),
             params: Params::Array(params),
@@ -195,7 +193,7 @@ impl StratumMessage {
         if let Some(password) = password {
             params.push(json!(password));
         }
-        StratumMessage::Request {
+        Request {
             id: id.map(Id::Number),
             method: "mining.authorize".to_string(),
             params: Params::Array(params),
@@ -219,24 +217,65 @@ impl StratumMessage {
             json!(n_time),
             json!(nonce),
         ]);
-        StratumMessage::Request {
+        Request {
             id: id.map(Id::Number),
             method: "mining.submit".to_string(),
             params,
         }
     }
+}
 
-    pub fn new_notify(id: Option<u64>, params: NotifyParams) -> Self {
-        StratumMessage::Notification {
-            id: id.map(Id::Number),
+impl Response {
+    pub fn new_set_difficulty(
+        id: Option<Id>,
+        difficulty: u64,
+        extra_nonce: String,
+        extra_nonce_size: u8,
+    ) -> Self {
+        let response_details = vec![
+            json!("mining.set_difficulty"),
+            json!(difficulty),
+            json!(extra_nonce),
+            json!(extra_nonce_size),
+        ];
+        Response {
+            id,
+            result: Some(Value::Array(response_details)),
+            error: None,
+        }
+    }
+
+    pub fn new_ok(id: Option<Id>, result: Value) -> Self {
+        Response {
+            id,
+            result: Some(result),
+            error: None,
+        }
+    }
+
+    pub fn new_error(id: Option<Id>, code: i32, message: String) -> Self {
+        Response {
+            id,
+            result: None,
+            error: Some(Error {
+                code,
+                message,
+                data: None,
+            }),
+        }
+    }
+}
+
+impl Notification {
+    pub fn new_notify(params: NotifyParams) -> Self {
+        Notification {
             method: "mining.notify".to_string(),
             params: params.into(),
         }
     }
 
-    pub fn new_set_difficulty(id: Option<u64>, difficulty: u64) -> Self {
-        StratumMessage::Notification {
-            id: id.map(Id::Number),
+    pub fn new_set_difficulty(difficulty: u64) -> Self {
+        Notification {
             method: "mining.set_difficulty".to_string(),
             params: Params::Array(vec![json!(difficulty)]),
         }
@@ -249,15 +288,14 @@ mod tests {
 
     #[test]
     fn test_new_subscribe() {
-        let message =
-            StratumMessage::new_subscribe(None, "agent".to_string(), "1.0".to_string(), None);
+        let message = Request::new_subscribe(None, "agent".to_string(), "1.0".to_string(), None);
         let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized_message,
             r#"{"method":"mining.subscribe","params":["agent/1.0"]}"#
         );
 
-        let message = StratumMessage::new_subscribe(
+        let message = Request::new_subscribe(
             Some(42),
             "agent".to_string(),
             "1.0".to_string(),
@@ -273,11 +311,8 @@ mod tests {
 
     #[test]
     fn test_new_authorize() {
-        let message = StratumMessage::new_authorize(
-            None,
-            "username".to_string(),
-            Some("password".to_string()),
-        );
+        let message =
+            Request::new_authorize(None, "username".to_string(), Some("password".to_string()));
 
         let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
@@ -285,7 +320,7 @@ mod tests {
             r#"{"method":"mining.authorize","params":["username","password"]}"#
         );
 
-        let message = StratumMessage::new_authorize(
+        let message = Request::new_authorize(
             Some(1),
             "username".to_string(),
             Some("password".to_string()),
@@ -300,7 +335,7 @@ mod tests {
 
     #[test]
     fn test_new_submit() {
-        let message = StratumMessage::new_submit(
+        let message = Request::new_submit(
             None,
             "worker_name".to_string(),
             "job_id".to_string(),
@@ -314,7 +349,7 @@ mod tests {
             r#"{"method":"mining.submit","params":["worker_name","job_id","extra_nonce2","ntime","nonce"]}"#
         );
 
-        let message = StratumMessage::new_submit(
+        let message = Request::new_submit(
             Some(5),
             "worker_name".to_string(),
             "job_id".to_string(),
@@ -343,21 +378,21 @@ mod tests {
             clean_jobs: true,
         };
 
-        let message = StratumMessage::new_notify(Some(1), notify_params);
+        let message = Notification::new_notify(notify_params);
         let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized_message,
-            r#"{"id":1,"method":"mining.notify","params":["job_id","prevhash","coinbase1","coinbase2",["branch1","branch2"],"version","nbits","ntime",true]}"#
+            r#"{"method":"mining.notify","params":["job_id","prevhash","coinbase1","coinbase2",["branch1","branch2"],"version","nbits","ntime",true]}"#
         );
     }
 
     #[test]
     fn test_new_set_difficulty() {
-        let message = StratumMessage::new_set_difficulty(Some(1), 1000);
+        let message = Notification::new_set_difficulty(1000);
         let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized_message,
-            r#"{"id":1,"method":"mining.set_difficulty","params":[1000]}"#
+            r#"{"method":"mining.set_difficulty","params":[1000]}"#
         );
     }
 
@@ -394,9 +429,9 @@ mod tests {
     fn test_id_variants() {
         // Test number ID
         let json = r#"{"id":123,"method":"test","params":[]}"#;
-        let message: StratumMessage = serde_json::from_str(json).unwrap();
+        let message: Request = serde_json::from_str(json).unwrap();
         match message {
-            StratumMessage::Request { id, .. } => {
+            Request { id, .. } => {
                 assert_eq!(id, Some(Id::Number(123)));
             }
             _ => panic!("Expected request message"),
@@ -404,9 +439,9 @@ mod tests {
 
         // Test string ID
         let json = r#"{"id":"abc","method":"test","params":[]}"#;
-        let message: StratumMessage = serde_json::from_str(json).unwrap();
+        let message: Request = serde_json::from_str(json).unwrap();
         match message {
-            StratumMessage::Request { id, .. } => {
+            Request { id, .. } => {
                 assert_eq!(id, Some(Id::String("abc".to_string())));
             }
             _ => panic!("Expected request message"),
@@ -414,9 +449,9 @@ mod tests {
 
         // Test null ID
         let json = r#"{"id":null,"method":"test","params":[]}"#;
-        let message: StratumMessage = serde_json::from_str(json).unwrap();
+        let message: Request = serde_json::from_str(json).unwrap();
         match message {
-            StratumMessage::Request { id, .. } => {
+            Request { id, .. } => {
                 assert_eq!(id, None);
             }
             _ => panic!("Expected request message"),
@@ -427,9 +462,9 @@ mod tests {
     fn test_params_variants() {
         // Test array params
         let json = r#"{"id":1,"method":"test","params":[1,2,"three"]}"#;
-        let message: StratumMessage = serde_json::from_str(json).unwrap();
+        let message: Request = serde_json::from_str(json).unwrap();
         match message {
-            StratumMessage::Request { params, .. } => match params {
+            Request { params, .. } => match params {
                 Params::Array(arr) => {
                     assert_eq!(arr.len(), 3);
                     assert_eq!(arr[0], json!(1));
@@ -437,14 +472,13 @@ mod tests {
                 }
                 _ => panic!("Expected array params"),
             },
-            _ => panic!("Expected request message"),
         }
 
         // Test object params
         let json = r#"{"id":1,"method":"test","params":{"key1":100,"key2":"value"}}"#;
-        let message: StratumMessage = serde_json::from_str(json).unwrap();
+        let message: Request = serde_json::from_str(json).unwrap();
         match message {
-            StratumMessage::Request { params, .. } => match params {
+            Request { params, .. } => match params {
                 Params::Map(map) => {
                     assert_eq!(map.len(), 2);
                     assert_eq!(map["key1"], json!(100));
@@ -457,9 +491,9 @@ mod tests {
 
         // Test null params
         let json = r#"{"id":1,"method":"test","params":null}"#;
-        let message: StratumMessage = serde_json::from_str(json).unwrap();
+        let message: Request = serde_json::from_str(json).unwrap();
         match message {
-            StratumMessage::Request { params, .. } => match params {
+            Request { params, .. } => match params {
                 Params::None(_) => {}
                 _ => panic!("Expected none params"),
             },
