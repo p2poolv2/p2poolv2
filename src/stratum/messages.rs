@@ -389,4 +389,81 @@ mod tests {
         let serialized_id_none = serde_json::to_string(&id_none).unwrap();
         assert_eq!(serialized_id_none, "null");
     }
+
+    #[test]
+    fn test_id_variants() {
+        // Test number ID
+        let json = r#"{"id":123,"method":"test","params":[]}"#;
+        let message: StratumMessage = serde_json::from_str(json).unwrap();
+        match message {
+            StratumMessage::Request { id, .. } => {
+                assert_eq!(id, Some(Id::Number(123)));
+            }
+            _ => panic!("Expected request message"),
+        }
+
+        // Test string ID
+        let json = r#"{"id":"abc","method":"test","params":[]}"#;
+        let message: StratumMessage = serde_json::from_str(json).unwrap();
+        match message {
+            StratumMessage::Request { id, .. } => {
+                assert_eq!(id, Some(Id::String("abc".to_string())));
+            }
+            _ => panic!("Expected request message"),
+        }
+
+        // Test null ID
+        let json = r#"{"id":null,"method":"test","params":[]}"#;
+        let message: StratumMessage = serde_json::from_str(json).unwrap();
+        match message {
+            StratumMessage::Request { id, .. } => {
+                assert_eq!(id, None);
+            }
+            _ => panic!("Expected request message"),
+        }
+    }
+
+    #[test]
+    fn test_params_variants() {
+        // Test array params
+        let json = r#"{"id":1,"method":"test","params":[1,2,"three"]}"#;
+        let message: StratumMessage = serde_json::from_str(json).unwrap();
+        match message {
+            StratumMessage::Request { params, .. } => match params {
+                Params::Array(arr) => {
+                    assert_eq!(arr.len(), 3);
+                    assert_eq!(arr[0], json!(1));
+                    assert_eq!(arr[2], json!("three"));
+                }
+                _ => panic!("Expected array params"),
+            },
+            _ => panic!("Expected request message"),
+        }
+
+        // Test object params
+        let json = r#"{"id":1,"method":"test","params":{"key1":100,"key2":"value"}}"#;
+        let message: StratumMessage = serde_json::from_str(json).unwrap();
+        match message {
+            StratumMessage::Request { params, .. } => match params {
+                Params::Map(map) => {
+                    assert_eq!(map.len(), 2);
+                    assert_eq!(map["key1"], json!(100));
+                    assert_eq!(map["key2"], json!("value"));
+                }
+                _ => panic!("Expected map params"),
+            },
+            _ => panic!("Expected request message"),
+        }
+
+        // Test null params
+        let json = r#"{"id":1,"method":"test","params":null}"#;
+        let message: StratumMessage = serde_json::from_str(json).unwrap();
+        match message {
+            StratumMessage::Request { params, .. } => match params {
+                Params::None(_) => {}
+                _ => panic!("Expected none params"),
+            },
+            _ => panic!("Expected request message"),
+        }
+    }
 }
