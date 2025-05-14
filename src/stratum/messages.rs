@@ -23,7 +23,7 @@ use serde_json::{json, Map, Value};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Id {
-    Number(i32),
+    Number(u64),
     String(String),
     None(()),
 }
@@ -36,7 +36,7 @@ impl From<()> for Id {
 
 impl From<i64> for Id {
     fn from(val: i64) -> Self {
-        Id::Number(val as i32)
+        Id::Number(val as u64)
     }
 }
 
@@ -169,7 +169,7 @@ impl StratumMessage {
     /// If no id is provided, it defaults to None
     /// The user agent and version are concatenated with a slash
     pub fn new_subscribe(
-        id: Option<i32>,
+        id: Option<u64>,
         user_agent: String,
         version: String,
         extra_nonce: Option<String>,
@@ -190,7 +190,7 @@ impl StratumMessage {
     /// Creates a new authorize message
     /// If no id is provided, it defaults to None
     /// The username and password are passed as parameters
-    pub fn new_authorize(id: Option<i32>, username: String, password: Option<String>) -> Self {
+    pub fn new_authorize(id: Option<u64>, username: String, password: Option<String>) -> Self {
         let mut params = vec![json!(username)];
         if let Some(password) = password {
             params.push(json!(password));
@@ -205,7 +205,7 @@ impl StratumMessage {
     /// Creates a new submit message
     /// The server never creates this message, but it is used by the client to submit work
     pub fn new_submit(
-        id: Option<i32>,
+        id: Option<u64>,
         username: String,
         job_id: String,
         extra_nonce2: String,
@@ -226,7 +226,7 @@ impl StratumMessage {
         }
     }
 
-    pub fn new_notify(id: Option<i32>, params: NotifyParams) -> Self {
+    pub fn new_notify(id: Option<u64>, params: NotifyParams) -> Self {
         StratumMessage::Notification {
             id: id.map(Id::Number),
             method: "mining.notify".to_string(),
