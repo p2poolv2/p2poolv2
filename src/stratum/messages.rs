@@ -233,6 +233,14 @@ impl StratumMessage {
             params: params.into(),
         }
     }
+
+    pub fn new_set_difficulty(id: Option<u64>, difficulty: u64) -> Self {
+        StratumMessage::Notification {
+            id: id.map(Id::Number),
+            method: "mining.set_difficulty".to_string(),
+            params: Params::Array(vec![json!(difficulty)]),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -336,5 +344,41 @@ mod tests {
             serialized_message,
             r#"{"id":1,"method":"mining.notify","params":["job_id","prevhash","coinbase1","coinbase2",["branch1","branch2"],"version","nbits","ntime",true]}"#
         );
+    }
+
+    fn test_new_set_difficulty() {
+        let message = StratumMessage::new_set_difficulty(Some(1), 1000);
+        let serialized_message = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serialized_message,
+            r#"{"id":1,"method":"mining.set_difficulty","params":[1000]}"#
+        );
+    }
+
+    fn test_error_serialization() {
+        let error = Error {
+            code: -1,
+            message: "An error occurred".to_string(),
+            data: Some(json!("Additional error data")),
+        };
+        let serialized_error = serde_json::to_string(&error).unwrap();
+        assert_eq!(
+            serialized_error,
+            r#"{"code":-1,"message":"An error occurred","data":"Additional error data"}"#
+        );
+    }
+
+    fn test_id_serialization_handle_non_numbers() {
+        let id_number = Id::Number(42);
+        let serialized_id_number = serde_json::to_string(&id_number).unwrap();
+        assert_eq!(serialized_id_number, "42");
+
+        let id_string = Id::String("test".to_string());
+        let serialized_id_string = serde_json::to_string(&id_string).unwrap();
+        assert_eq!(serialized_id_string, r#""test""#);
+
+        let id_none = Id::None(());
+        let serialized_id_none = serde_json::to_string(&id_none).unwrap();
+        assert_eq!(serialized_id_none, "null");
     }
 }
