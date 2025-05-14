@@ -46,6 +46,7 @@ bitcoin = { version = "0.32.5", features = ["serde"] }
 jsonrpsee = { version = "0.24", features = ["http-client", "client"] }
 base64 = "0.22.1"
 void = "1.0.2"
+tower = { version = "0.5.2", features = ["util"] }
 
 [lib]
 name = "p2poolv2_lib"

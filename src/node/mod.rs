@@ -22,6 +22,8 @@ pub mod gossip_handler;
 pub mod messages;
 pub mod p2p_message_handlers;
 pub mod rate_limiter;
+pub use crate::node::p2p_message_handlers::server::P2PoolService;
+use tower::Service;
 
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::Message;
@@ -44,6 +46,7 @@ use libp2p::{
 };
 use rate_limiter::RateLimiter;
 use request_response_handler::handle_request_response_event;
+use crate::node::p2p_message_handlers::server::RequestContext;
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -86,6 +89,7 @@ struct Node {
     chain_handle: ChainHandle,
     rate_limiter: RateLimiter,
     config: Config,
+    p2p_service: P2PoolService,
 }
 
 impl Node {
@@ -176,6 +180,8 @@ impl Node {
         let rate_limiter =
             RateLimiter::new(Duration::from_secs(config.network.rate_limit_window_secs));
 
+        let p2p_service = P2PoolService::new();
+
         Ok(Self {
             swarm,
             swarm_tx,
@@ -184,6 +190,7 @@ impl Node {
             chain_handle,
             rate_limiter,
             config: config.clone(),
+            p2p_service,
         })
     }
 
@@ -454,16 +461,21 @@ impl Node {
                 return Ok(());
             }
 
-            let chain_handle = self.chain_handle.clone();
-            let swarm_tx = self.swarm_tx.clone();
-            let event_clone = request_response_event;
-            tokio::spawn(async move {
-                if let Err(e) =
-                    handle_request_response_event(event_clone, chain_handle, swarm_tx).await
-                {
-                    error!("Failed to handle request-response event: {}", e);
-                }
-            });
+           // Prepare the request context for the Tower service
+            let request_context = RequestContext {
+                peer: *peer,
+                message: request.clone(),
+                channel: channel.clone(),
+                chain_handle: self.chain_handle.clone(),
+                swarm_tx: self.swarm_tx.clone(),
+            };
+
+            // Call the P2PoolService
+            let mut service = self.p2p_service.clone();
+            if let Err(e) = service.call(request_context).await {
+                error!("Failed to handle request-response event: {}", e);
+                return Err(e);
+            }
         }
         Ok(())
     }

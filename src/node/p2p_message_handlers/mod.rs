@@ -16,123 +16,170 @@
 
 pub mod receivers;
 pub mod senders;
+pub mod server;
 
 use crate::node::messages::{GetData, InventoryMessage, Message};
 use crate::node::SwarmSend;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use crate::utils::time_provider::TimeProvider;
+
 use receivers::getblocks::handle_getblocks;
 use receivers::getheaders::handle_getheaders;
 use receivers::share_blocks::handle_share_block;
 use receivers::share_headers::handle_share_headers;
-use std::error::Error;
+
+use std::{error::Error, sync::Arc, task::{Context, Poll}, pin::Pin};
 use tokio::sync::mpsc;
 use tracing::{error, info};
+use tower::{Service, ServiceExt};
+use futures::future::BoxFuture;
 
-pub async fn handle_request<C: 'static>(
+/// Handles incoming request messages using the Tower Service pattern.
+pub struct RequestHandlerService<Resp> {
+    chain_handle: ChainHandle,
+    time_provider: Arc<dyn TimeProvider + Send + Sync>,
+    swarm_tx: mpsc::Sender<SwarmSend<Resp>>,
+}
+
+impl<Resp> RequestHandlerService<Resp> {
+    pub fn new(
+        chain_handle: ChainHandle,
+        time_provider: Arc<dyn TimeProvider + Send + Sync>,
+        swarm_tx: mpsc::Sender<SwarmSend<Resp>>,
+    ) -> Self {
+        Self {
+            chain_handle,
+            time_provider,
+            swarm_tx,
+        }
+    }
+}
+
+impl<Resp> Service<Message> for RequestHandlerService<Resp>
+where
+    Resp: Send + 'static,
+{
+    type Response = ();
+    type Error = Box<dyn Error + Send + Sync>;
+    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, request: Message) -> Self::Future {
+        let chain_handle = self.chain_handle.clone();
+        let time_provider = self.time_provider.clone();
+        let swarm_tx = self.swarm_tx.clone();
+
+        Box::pin(async move {
+            match request {
+                Message::GetShareHeaders(block_hashes, stop_block_hash) => {
+                    handle_getheaders(block_hashes, stop_block_hash, chain_handle, time_provider, swarm_tx)
+                        .await
+                        .map_err(|e| format!("handle_getheaders failed: {}", e).into())
+                }
+                Message::GetShareBlocks(block_hashes, stop_block_hash) => {
+                    handle_getblocks(block_hashes, stop_block_hash, chain_handle, time_provider)
+                        .await
+                        .map_err(|e| format!("handle_getblocks failed: {}", e).into())
+                }
+                Message::ShareHeaders(share_headers) => {
+                    handle_share_headers(share_headers, chain_handle, time_provider)
+                        .await
+                        .map_err(|e| format!("handle_share_headers failed: {}", e).into())
+                }
+                Message::ShareBlock(share_block) => {
+                    if let Err(e) = handle_share_block(share_block, chain_handle, time_provider).await {
+                        error!("Failed to add share: {}", e);
+                        return Err(format!("Failed to add share: {}", e).into());
+                    }
+                    Ok(())
+                }
+                Message::Workbase(workbase) => {
+                    info!("Received workbase: {:?}", workbase);
+                    chain_handle.add_workbase(workbase.clone()).await.map_err(|e| {
+                        error!("Failed to store workbase: {}", e);
+                        format!("Error storing workbase: {}", e).into()
+                    })
+                }
+                Message::UserWorkbase(userworkbase) => {
+                    info!("Received user workbase: {:?}", userworkbase);
+                    chain_handle.add_user_workbase(userworkbase.clone()).await.map_err(|e| {
+                        error!("Failed to store user workbase: {}", e);
+                        "Error storing user workbase".into()
+                    })
+                }
+                Message::Inventory(inventory) => {
+                    info!("Received inventory: {:?}", inventory);
+                    match inventory {
+                        InventoryMessage::BlockHashes(hashes) => {
+                            info!("Block hashes: {:?}", hashes);
+                        }
+                        InventoryMessage::TransactionHashes(txs) => {
+                            info!("Transaction hashes: {:?}", txs);
+                        }
+                    }
+                    Ok(())
+                }
+                Message::NotFound(not_found) => {
+                    info!("Received not found message: {:?}", not_found);
+                    Ok(())
+                }
+                Message::GetData(data) => {
+                    info!("Received get data: {:?}", data);
+                    match data {
+                        GetData::Block(hash) => {
+                            info!("Block hash: {:?}", hash);
+                        }
+                        GetData::Txid(txid) => {
+                            info!("Txid: {:?}", txid);
+                        }
+                    }
+                    Ok(())
+                }
+                Message::Transaction(tx) => {
+                    info!("Received transaction: {:?}", tx);
+                    Ok(())
+                }
+                Message::MiningShare(share) => {
+                    info!("Received mining share: {:?}", share);
+                    Ok(())
+                }
+            }
+        })
+    }
+}
+
+/// Handles a single request using the service.
+/// Creates the service and processes the request.
+pub async fn handle_request_with_service<Resp>(
     peer: libp2p::PeerId,
     request: Message,
     chain_handle: ChainHandle,
-    response_channel: C,
-    swarm_tx: mpsc::Sender<SwarmSend<C>>,
-    time_provider: &impl TimeProvider,
-) -> Result<(), Box<dyn Error>> {
-    info!("Handling request {} from peer: {}", request, peer);
-    match request {
-        Message::GetShareHeaders(block_hashes, stop_block_hash) => {
-            handle_getheaders(
-                block_hashes,
-                stop_block_hash,
-                chain_handle,
-                response_channel,
-                swarm_tx,
-            )
-            .await
+    response_channel: Resp,
+    swarm_tx: mpsc::Sender<SwarmSend<Resp>>,
+    time_provider: &(impl TimeProvider + Clone + 'static),
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    Resp: Send + 'static,
+{
+    let time_provider = Arc::new(time_provider.clone());
+    let mut service = RequestHandlerService::new(chain_handle, time_provider, swarm_tx);
+
+    let result = service.call(request).await;
+
+    match result {
+        Ok(()) => {
+            info!("Successfully handled request from peer {}", peer);
         }
-        Message::GetShareBlocks(block_hashes, stop_block_hash) => {
-            handle_getblocks(
-                block_hashes,
-                stop_block_hash,
-                chain_handle,
-                response_channel,
-                swarm_tx,
-            )
-            .await
-        }
-        Message::ShareHeaders(share_headers) => {
-            handle_share_headers(share_headers, chain_handle, time_provider).await
-        }
-        Message::ShareBlock(share_block) => {
-            if let Err(e) = handle_share_block(share_block, chain_handle, time_provider).await {
-                error!("Failed to add share: {}", e);
-                return Err(format!("Failed to add share: {}", e).into());
-            }
-            Ok(())
-        }
-        Message::Workbase(workbase) => {
-            info!("Received workbase: {:?}", workbase);
-            if let Err(e) = chain_handle.add_workbase(workbase.clone()).await {
-                error!("Failed to store workbase: {}", e);
-                return Err(format!("Error storing workbase: {}", e).into());
-            }
-            if let Err(e) = swarm_tx
-                .send(SwarmSend::Gossip(Message::Workbase(workbase)))
-                .await
-            {
-                error!("Failed to send share: {}", e);
-                return Err("Error sending share to network".into());
-            }
-            Ok(())
-        }
-        Message::UserWorkbase(userworkbase) => {
-            info!("Received user workbase: {:?}", userworkbase);
-            if let Err(e) = chain_handle.add_user_workbase(userworkbase.clone()).await {
-                error!("Failed to store user workbase: {}", e);
-                return Err("Error storing user workbase".into());
-            }
-            Ok(())
-        }
-        Message::Inventory(inventory) => {
-            info!("Received inventory: {:?}", inventory);
-            match inventory {
-                InventoryMessage::BlockHashes(have_blocks) => {
-                    info!("Received share block inventory: {:?}", have_blocks);
-                }
-                InventoryMessage::TransactionHashes(have_transactions) => {
-                    info!(
-                        "Received share transaction inventory: {:?}",
-                        have_transactions
-                    );
-                }
-            }
-            Ok(())
-        }
-        Message::NotFound(_) => {
-            info!("Received not found message");
-            Ok(())
-        }
-        Message::GetData(get_data) => {
-            info!("Received get data: {:?}", get_data);
-            match get_data {
-                GetData::Block(block_hash) => {
-                    info!("Received block hash: {:?}", block_hash);
-                }
-                GetData::Txid(txid) => {
-                    info!("Received txid: {:?}", txid);
-                }
-            }
-            Ok(())
-        }
-        Message::Transaction(transaction) => {
-            info!("Received transaction: {:?}", transaction);
-            Ok(())
-        }
-        Message::MiningShare(share_block) => {
-            info!("Received mining share from ckpool: {:?}", share_block);
-            Ok(())
+        Err(e) => {
+            error!("Failed to handle request from peer {}: {}", peer, e);
         }
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -197,7 +244,7 @@ mod tests {
         time_provider.set_time(shares[0].ntime);
 
         // Test handle_request directly without request_id
-        let result = handle_request(
+        let result = handle_request_with_service(
             peer_id,
             Message::ShareBlock(share_block.clone()),
             chain_handle,
@@ -240,7 +287,7 @@ mod tests {
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        let result = handle_request(
+        let result = handle_request_with_service(
             peer_id,
             Message::ShareBlock(share_block),
             chain_handle,
@@ -278,7 +325,7 @@ mod tests {
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        let result = handle_request(
+        let result = handle_request_with_service(
             peer_id,
             Message::Workbase(workbase),
             chain_handle,
@@ -308,7 +355,7 @@ mod tests {
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        let result = handle_request(
+        let result = handle_request_with_service(
             peer_id,
             Message::Workbase(workbase),
             chain_handle,
@@ -353,7 +400,7 @@ mod tests {
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        let result = handle_request(
+        let result = handle_request_with_service(
             peer_id,
             Message::GetShareHeaders(block_hashes, stop_block_hash),
             chain_handle,
@@ -411,7 +458,7 @@ mod tests {
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        let result = handle_request(
+        let result = handle_request_with_service(
             peer_id,
             Message::GetShareBlocks(block_hashes.clone(), stop_block_hash),
             chain_handle,
@@ -453,7 +500,7 @@ mod tests {
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        let result = handle_request(
+        let result = handle_request_with_service(
             peer_id,
             Message::UserWorkbase(user_workbase),
             chain_handle,
@@ -484,7 +531,7 @@ mod tests {
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        let result = handle_request(
+        let result = handle_request_with_service(
             peer_id,
             Message::UserWorkbase(user_workbase),
             chain_handle,
@@ -512,7 +559,7 @@ mod tests {
         ];
         let inventory = InventoryMessage::BlockHashes(block_hashes);
 
-        let result = handle_request(
+        let result = handle_request_with_service(
             peer_id,
             Message::Inventory(inventory),
             chain_handle,
@@ -546,7 +593,7 @@ mod tests {
 
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
 
-        let result = handle_request(
+        let result = handle_request_with_service(
             peer_id,
             Message::Inventory(inventory),
             chain_handle,
@@ -567,7 +614,7 @@ mod tests {
         let chain_handle = ChainHandle::default();
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        let result = handle_request(
+        let result = handle_request_with_service(
             peer_id,
             Message::NotFound(()),
             chain_handle,
@@ -592,7 +639,7 @@ mod tests {
         let block_hash = "0000000000000000000000000000000000000000000000000000000000000001".into();
         let get_data = GetData::Block(block_hash);
 
-        let result = handle_request(
+        let result = handle_request_with_service(
             peer_id,
             Message::GetData(get_data),
             chain_handle,
@@ -619,7 +666,7 @@ mod tests {
             .unwrap();
         let get_data = GetData::Txid(txid);
 
-        let result = handle_request(
+        let result = handle_request_with_service(
             peer_id,
             Message::GetData(get_data),
             chain_handle,
@@ -643,7 +690,7 @@ mod tests {
         // Create a test transaction
         let transaction = crate::test_utils::test_coinbase_transaction();
 
-        let result = handle_request(
+        let result = handle_request_with_service(
             peer_id,
             Message::Transaction(transaction),
             chain_handle,
@@ -669,7 +716,7 @@ mod tests {
             .blockhash("0000000000000000000000000000000000000000000000000000000000000001")
             .build();
 
-        let result = handle_request(
+        let result = handle_request_with_service(
             peer_id,
             Message::MiningShare(share_block),
             chain_handle,
@@ -705,7 +752,7 @@ mod tests {
             .expect_get_headers_for_locator()
             .returning(|_, _, _| vec![]);
 
-        let result = handle_request(
+        let result = handle_request_with_service(
             peer_id,
             Message::ShareHeaders(share_headers),
             chain_handle,
