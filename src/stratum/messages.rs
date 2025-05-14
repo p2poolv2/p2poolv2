@@ -257,13 +257,17 @@ mod tests {
             r#"{"method":"mining.subscribe","params":["agent/1.0"]}"#
         );
 
-        let message =
-            StratumMessage::new_subscribe(Some(42), "agent".to_string(), "1.0".to_string(), None);
+        let message = StratumMessage::new_subscribe(
+            Some(42),
+            "agent".to_string(),
+            "1.0".to_string(),
+            Some("extra_nonce".to_string()),
+        );
 
         let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized_message,
-            r#"{"id":42,"method":"mining.subscribe","params":["agent/1.0"]}"#
+            r#"{"id":42,"method":"mining.subscribe","params":["agent/1.0","extra_nonce"]}"#
         );
     }
 
@@ -325,6 +329,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn test_new_notify() {
         let notify_params = NotifyParams {
             job_id: "job_id".to_string(),
@@ -346,6 +351,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn test_new_set_difficulty() {
         let message = StratumMessage::new_set_difficulty(Some(1), 1000);
         let serialized_message = serde_json::to_string(&message).unwrap();
@@ -355,6 +361,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn test_error_serialization() {
         let error = Error {
             code: -1,
@@ -368,6 +375,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn test_id_serialization_handle_non_numbers() {
         let id_number = Id::Number(42);
         let serialized_id_number = serde_json::to_string(&id_number).unwrap();
