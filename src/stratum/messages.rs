@@ -460,44 +460,38 @@ mod tests {
 
     #[test]
     fn test_params_variants() {
-        // Test array params
         let json = r#"{"id":1,"method":"test","params":[1,2,"three"]}"#;
         let message: Request = serde_json::from_str(json).unwrap();
-        match message {
-            Request { params, .. } => match params {
-                Params::Array(arr) => {
-                    assert_eq!(arr.len(), 3);
-                    assert_eq!(arr[0], json!(1));
-                    assert_eq!(arr[2], json!("three"));
-                }
-                _ => panic!("Expected array params"),
-            },
+        let Request { params, .. } = message;
+        match params {
+            Params::Array(arr) => {
+                assert_eq!(arr.len(), 3);
+                assert_eq!(arr[0], json!(1));
+                assert_eq!(arr[2], json!("three"));
+            }
+            _ => panic!("Expected array params"),
         }
 
         // Test object params
         let json = r#"{"id":1,"method":"test","params":{"key1":100,"key2":"value"}}"#;
         let message: Request = serde_json::from_str(json).unwrap();
-        match message {
-            Request { params, .. } => match params {
-                Params::Map(map) => {
-                    assert_eq!(map.len(), 2);
-                    assert_eq!(map["key1"], json!(100));
-                    assert_eq!(map["key2"], json!("value"));
-                }
-                _ => panic!("Expected map params"),
-            },
-            _ => panic!("Expected request message"),
+        let Request { params, .. } = message;
+        match params {
+            Params::Map(map) => {
+                assert_eq!(map.len(), 2);
+                assert_eq!(map["key1"], json!(100));
+                assert_eq!(map["key2"], json!("value"));
+            }
+            _ => panic!("Expected map params"),
         }
 
         // Test null params
         let json = r#"{"id":1,"method":"test","params":null}"#;
         let message: Request = serde_json::from_str(json).unwrap();
-        match message {
-            Request { params, .. } => match params {
-                Params::None(_) => {}
-                _ => panic!("Expected none params"),
-            },
-            _ => panic!("Expected request message"),
+        let Request { params, .. } = message;
+        match params {
+            Params::None(_) => {}
+            _ => panic!("Expected none params"),
         }
     }
 }
