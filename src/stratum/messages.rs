@@ -494,4 +494,100 @@ mod tests {
             _ => panic!("Expected none params"),
         }
     }
+
+    #[test]
+    fn test_id_conversions() {
+        // From ()
+        let id_none = Id::from(());
+        assert!(matches!(id_none, Id::None(())));
+
+        // From i64
+        let id_number = Id::from(42i64);
+        assert!(matches!(id_number, Id::Number(42)));
+
+        // From String
+        let id_string = Id::from("test".to_string());
+        assert!(matches!(id_string, Id::String(ref s) if s == "test"));
+
+        // PartialEq tests
+        assert_eq!(Id::Number(42), Id::Number(42));
+        assert_ne!(Id::Number(42), Id::Number(43));
+        assert_eq!(
+            Id::String("test".to_string()),
+            Id::String("test".to_string())
+        );
+        assert_ne!(
+            Id::String("test".to_string()),
+            Id::String("other".to_string())
+        );
+        assert_eq!(Id::None(()), Id::None(()));
+        assert_ne!(Id::Number(42), Id::String("42".to_string()));
+        assert_ne!(Id::None(()), Id::Number(0));
+    }
+
+    #[test]
+    fn test_params_conversions() {
+        // From Value::Array
+        let arr_value = Value::Array(vec![json!(1), json!("test")]);
+        let params = Params::from(arr_value);
+        assert!(matches!(params, Params::Array(ref v) if v.len() == 2));
+
+        // From Value::Object
+        let mut map = Map::new();
+        map.insert("key".to_string(), json!(42));
+        let obj_value = Value::Object(map.clone());
+        let params = Params::from(obj_value);
+        assert!(matches!(params, Params::Map(ref m) if m.len() == 1));
+
+        // From Vec<Value>
+        let vec_value = vec![json!(1), json!("test")];
+        let params = Params::from(vec_value);
+        assert!(matches!(params, Params::Array(ref v) if v.len() == 2));
+
+        // From Map<String, Value>
+        let params = Params::from(map);
+        assert!(matches!(params, Params::Map(ref m) if m.len() == 1));
+
+        // Default
+        let default_params = Params::default();
+        assert!(matches!(default_params, Params::None(())));
+    }
+
+    #[test]
+    fn test_response_creation() {
+        // Test new_ok
+        let response = Response::new_ok(Some(Id::Number(1)), json!("success"));
+        assert_eq!(response.id, Some(Id::Number(1)));
+        assert_eq!(response.result, Some(json!("success")));
+        assert!(response.error.is_none());
+
+        // Test new_error
+        let response = Response::new_error(
+            Some(Id::String("abc".to_string())),
+            -32601,
+            "Method not found".to_string(),
+        );
+        assert_eq!(response.id, Some(Id::String("abc".to_string())));
+        assert!(response.result.is_none());
+        assert!(response.error.is_some());
+        assert_eq!(response.error.as_ref().unwrap().code, -32601);
+        assert_eq!(response.error.as_ref().unwrap().message, "Method not found");
+
+        // Test new_set_difficulty
+        let response =
+            Response::new_set_difficulty(Some(Id::Number(2)), 500, "abc123".to_string(), 4);
+        assert_eq!(response.id, Some(Id::Number(2)));
+        assert!(response.result.is_some());
+        assert!(response.error.is_none());
+
+        if let Some(Value::Array(arr)) = response.result {
+            assert_eq!(arr.len(), 4);
+            assert_eq!(arr[0], json!("mining.set_difficulty"));
+            assert_eq!(arr[1], json!(500));
+            assert_eq!(arr[2], json!("abc123"));
+            assert_eq!(arr[3], json!(4));
+        } else {
+            panic!("Expected array result");
+        }
+    }
 }
