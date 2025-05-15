@@ -26,6 +26,8 @@ port = 8881
 [stratum]
 host = "localhost"
 port = 3333
+start_difficulty = 1
+minimum_difficulty = 1
 
 [miner]
 pubkey = "020202020202020202020202020202020202020202020202020202020202020202"

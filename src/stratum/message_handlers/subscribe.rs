@@ -14,7 +14,20 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod message_handlers;
-pub mod messages;
-pub mod server;
-pub mod session;
+use crate::stratum::messages::{Request, Response};
+use crate::stratum::session::Session;
+use serde_json::json;
+use tracing::debug;
+
+/// Handle the "mining.subscribe" message
+/// This function is called when a miner subscribes to the Stratum server.
+/// It sends a response with the subscription details.
+/// The function accepts a mutable reference to a `Session` object, which informs the responses.
+/// The session is also updated in response to received messages, if required.
+pub async fn handle_subscribe<'a>(
+    message: Request<'a>,
+    session: &mut Session,
+) -> Option<Response<'a>> {
+    debug!("Handling mining.subscribe message");
+    Some(Response::new_ok(message.id, json!(true)))
+}

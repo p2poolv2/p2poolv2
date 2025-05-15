@@ -19,21 +19,15 @@ use crate::stratum::session::Session;
 use serde_json::json;
 use tracing::debug;
 
-/// Handle incoming Stratum messages
-/// This function processes the incoming Stratum messages and returns a response
+/// Handle the "mining.authorize" message
+/// This function is called when a miner authorizes itself to the Stratum server.
+/// It sends a response with the authorization status.
 /// The function accepts a mutable reference to a `Session` object, which informs the responses.
 /// The session is also updated in response to received messages, if required.
-#[allow(dead_code)]
-#[allow(clippy::needless_lifetimes)]
-pub(crate) async fn handle_message<'a>(
+pub async fn handle_authorize<'a>(
     message: Request<'a>,
     session: &mut Session,
 ) -> Option<Response<'a>> {
-    debug!("Received Stratum message: {:?}", message);
-    match message.method.as_ref() {
-        "mining.subscribe" => Some(Response::new_ok(message.id, json!(true))),
-        "mining.authorize" => Some(Response::new_ok(message.id, json!(true))),
-        "mining.submit" => Some(Response::new_ok(message.id, json!(true))),
-        _ => None,
-    }
+    debug!("Handling mining.authorize message");
+    Some(Response::new_ok(message.id, json!(true)))
 }

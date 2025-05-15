@@ -48,7 +48,7 @@ mod tests {
     fn test_new_session() {
         let min_difficulty = 1000;
         let session = Session::new(min_difficulty);
-        
+
         assert_eq!(session.minimum_difficulty, min_difficulty);
         assert_eq!(session.current_difficulty, min_difficulty);
     }
@@ -57,7 +57,7 @@ mod tests {
     fn test_get_current_difficulty() {
         let min_difficulty = 2000;
         let session = Session::new(min_difficulty);
-        
+
         assert_eq!(session.get_current_difficulty(), min_difficulty);
     }
 
@@ -65,7 +65,7 @@ mod tests {
     fn test_recalculate_difficulty() {
         let min_difficulty = 3000;
         let mut session = Session::new(min_difficulty);
-        
+
         // Currently it just returns the current difficulty
         let new_difficulty = session.recalculate_difficulty();
         assert_eq!(new_difficulty, min_difficulty);
