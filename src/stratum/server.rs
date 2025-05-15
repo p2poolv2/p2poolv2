@@ -162,6 +162,10 @@ async fn remove_connection(
     connections.remove(&addr);
 }
 
+/// Handles a single connection to the Stratum server.
+/// This function reads lines from the connection, processes them,
+/// and sends responses back to the client.
+/// The function handles the session data for each connection as required for the Stratum protocol.
 #[allow(dead_code)]
 async fn handle_connection<R, W>(
     reader: R,

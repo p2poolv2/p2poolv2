@@ -21,6 +21,10 @@ path = "./store.db"
 host = "localhost"
 port = 8881
 
+[stratum]
+host = "localhost"
+port = 3333
+
 [miner]
 pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
 

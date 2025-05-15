@@ -17,6 +17,8 @@
 use bitcoin::PublicKey;
 use serde::Deserialize;
 
+use crate::stratum::server::StratumServer;
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct NetworkConfig {
     pub listen_address: String,
@@ -42,6 +44,12 @@ pub struct StoreConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct CkPoolConfig {
+    pub host: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct StratumConfig {
     pub host: String,
     pub port: u16,
 }
@@ -97,6 +105,7 @@ pub struct Config {
     pub network: NetworkConfig,
     pub store: StoreConfig,
     pub ckpool: CkPoolConfig,
+    pub stratum: StratumConfig,
     pub miner: MinerConfig,
     pub bitcoin: BitcoinConfig,
     pub logging: LoggingConfig,
@@ -167,6 +176,16 @@ impl Config {
         self
     }
 
+    pub fn with_stratum_host(mut self, stratum_host: String) -> Self {
+        self.stratum.host = stratum_host;
+        self
+    }
+
+    pub fn with_stratum_port(mut self, stratum_port: u16) -> Self {
+        self.stratum.port = stratum_port;
+        self
+    }
+
     pub fn with_miner_pubkey(mut self, miner_pubkey: String) -> Self {
         self.miner.pubkey = miner_pubkey.parse().unwrap();
         self
@@ -210,6 +229,8 @@ mod tests {
             .with_store_path("/tmp/store".to_string())
             .with_ckpool_host("ckpool.example.com".to_string())
             .with_ckpool_port(3333)
+            .with_stratum_host("stratum.example.com".to_string())
+            .with_stratum_port(3333)
             .with_miner_pubkey(
                 "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".to_string(),
             )
@@ -225,6 +246,10 @@ mod tests {
         assert_eq!(config.store.path, "/tmp/store");
         assert_eq!(config.ckpool.host, "ckpool.example.com");
         assert_eq!(config.ckpool.port, 3333);
+
+        assert_eq!(config.stratum.host, "stratum.example.com");
+        assert_eq!(config.stratum.port, 3333);
+
         assert_eq!(
             config.miner.pubkey.to_string(),
             "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
