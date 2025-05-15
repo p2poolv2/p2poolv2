@@ -16,6 +16,7 @@
 
 use p2poolv2_lib::config::{
     BitcoinConfig, CkPoolConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig,
+    StratumConfig,
 };
 use p2poolv2_lib::shares::miner_message::MinerWorkbase;
 
@@ -54,6 +55,10 @@ pub fn default_test_config() -> Config {
         ckpool: CkPoolConfig {
             host: "127.0.0.1".to_string(),
             port: 8881,
+        },
+        stratum: StratumConfig {
+            host: "127.0.0.1".to_string(),
+            port: 3333,
         },
         miner: MinerConfig {
             pubkey: "020202020202020202020202020202020202020202020202020202020202020202"

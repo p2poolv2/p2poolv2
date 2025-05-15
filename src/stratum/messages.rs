@@ -14,6 +14,9 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+/// Custom implementation of Stratum messages with JSON-RPC serialization
+/// We don't use jsonrpsee messages here as it is a general purpose library
+/// and will result in more memory allocations as messages are serialized and deserialized
 use std::borrow::Cow;
 use std::vec;
 
