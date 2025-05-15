@@ -15,14 +15,20 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::stratum::messages::{Request, Response};
+use crate::stratum::session::Session;
 use serde_json::json;
 use tracing::debug;
 
+/// Handle incoming Stratum messages
+/// This function processes the incoming Stratum messages and returns a response
+/// The function accepts a mutable reference to a `Session` object, which informs the responses.
+/// The session is also updated in response to received messages, if required.
 #[allow(dead_code)]
 #[allow(clippy::needless_lifetimes)]
-// Handle incoming Stratum messages
-// This function processes the incoming Stratum messages and returns a response
-pub(crate) async fn handle_message<'a>(message: Request<'a>) -> Option<Response<'a>> {
+pub(crate) async fn handle_message<'a>(
+    message: Request<'a>,
+    session: &mut Session,
+) -> Option<Response<'a>> {
     debug!("Received Stratum message: {:?}", message);
     match message.method.as_ref() {
         "mining.subscribe" => Some(Response::new_ok(message.id, json!(true))),

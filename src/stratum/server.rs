@@ -16,6 +16,7 @@
 
 use crate::stratum::message_handler::handle_message;
 use crate::stratum::messages::Request;
+use crate::stratum::session::Session;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -182,6 +183,7 @@ where
     const MAX_LINE_LENGTH: usize = 8 * 1024; // 8KB
 
     let mut framed = FramedRead::new(reader, LinesCodec::new_with_max_length(MAX_LINE_LENGTH));
+    let session = &mut Session::new(1);
 
     // Process each line as it arrives
     loop {
@@ -201,7 +203,7 @@ where
                             Ok(message) => {
                                 info!("Received message from {}: {:?}", addr, message);
 
-                                let response = handle_message(message).await;
+                                let response = handle_message(message, session).await;
 
                                 if let Some(response) = response {
                                     let response_json = serde_json::to_string(&response)?;

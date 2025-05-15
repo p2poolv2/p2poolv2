@@ -52,6 +52,8 @@ pub struct CkPoolConfig {
 pub struct StratumConfig {
     pub host: String,
     pub port: u16,
+    pub start_difficulty: u32,
+    pub minimum_difficulty: u32,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -183,6 +185,16 @@ impl Config {
 
     pub fn with_stratum_port(mut self, stratum_port: u16) -> Self {
         self.stratum.port = stratum_port;
+        self
+    }
+
+    pub fn with_start_difficulty(mut self, start_difficulty: u32) -> Self {
+        self.stratum.start_difficulty = start_difficulty;
+        self
+    }
+
+    pub fn with_minimum_difficulty(mut self, minimum_difficulty: u32) -> Self {
+        self.stratum.minimum_difficulty = minimum_difficulty;
         self
     }
 

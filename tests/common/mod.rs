@@ -59,6 +59,8 @@ pub fn default_test_config() -> Config {
         stratum: StratumConfig {
             host: "127.0.0.1".to_string(),
             port: 3333,
+            start_difficulty: 1,
+            minimum_difficulty: 1,
         },
         miner: MinerConfig {
             pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
