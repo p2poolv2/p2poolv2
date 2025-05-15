@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::stratum::message_handler::handle_message;
+use crate::stratum::message_handlers::handle_message;
 use crate::stratum::messages::Request;
 use crate::stratum::session::Session;
 use std::collections::HashMap;

@@ -243,6 +243,8 @@ mod tests {
             .with_ckpool_port(3333)
             .with_stratum_host("stratum.example.com".to_string())
             .with_stratum_port(3333)
+            .with_start_difficulty(1)
+            .with_minimum_difficulty(1)
             .with_miner_pubkey(
                 "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".to_string(),
             )
@@ -261,6 +263,8 @@ mod tests {
 
         assert_eq!(config.stratum.host, "stratum.example.com");
         assert_eq!(config.stratum.port, 3333);
+        assert_eq!(config.stratum.start_difficulty, 1);
+        assert_eq!(config.stratum.minimum_difficulty, 1);
 
         assert_eq!(
             config.miner.pubkey.to_string(),
