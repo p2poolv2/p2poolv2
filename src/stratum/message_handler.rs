@@ -19,11 +19,12 @@ use serde_json::json;
 use tracing::debug;
 
 #[allow(dead_code)]
+#[allow(clippy::needless_lifetimes)]
 // Handle incoming Stratum messages
 // This function processes the incoming Stratum messages and returns a response
-pub(crate) async fn handle_message(message: Request) -> Option<Response> {
+pub(crate) async fn handle_message<'a>(message: Request<'a>) -> Option<Response<'a>> {
     debug!("Received Stratum message: {:?}", message);
-    match message.method.as_str() {
+    match message.method.as_ref() {
         "mining.subscribe" => Some(Response::new_ok(message.id, json!(true))),
         "mining.authorize" => Some(Response::new_ok(message.id, json!(true))),
         "mining.submit" => Some(Response::new_ok(message.id, json!(true))),

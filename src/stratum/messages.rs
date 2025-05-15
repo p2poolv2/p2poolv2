@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use std::borrow::Cow;
 use std::vec;
 
 use serde::{Deserialize, Serialize};
@@ -57,111 +58,134 @@ impl PartialEq for Id {
     }
 }
 
-/// Params in JSON-RPC can be an array, object, or null.
-#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Params {
-    Array(Vec<Value>),
-    Map(Map<String, Value>),
-    None(()),
-}
-
-impl From<Value> for Params {
-    fn from(val: Value) -> Self {
-        match val {
-            Value::Array(v) => Params::Array(v),
-            Value::Object(v) => Params::Map(v),
-            _ => Params::None(()),
-        }
-    }
-}
-
-impl From<Vec<Value>> for Params {
-    fn from(val: Vec<Value>) -> Self {
-        Params::Array(val)
-    }
-}
-
-impl From<Map<String, Value>> for Params {
-    fn from(val: Map<String, Value>) -> Self {
-        Params::Map(val)
-    }
-}
-
-impl Default for Params {
-    fn default() -> Self {
-        Params::None(())
-    }
-}
-
 /// StratumError represents the error structure in Stratum responses
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Error {
+pub struct Error<'a> {
     pub code: i32,
-    pub message: String,
+    #[serde(borrow)]
+    pub message: Cow<'a, str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
 }
 
+/// Request represents a Stratum request message from client to the server
+/// The params in this message are all strings
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Request {
+pub struct Request<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
-    pub method: String,
-    #[serde(default)]
-    pub params: Params,
+    #[serde(borrow)]
+    pub method: Cow<'a, str>,
+    #[serde(borrow, default)]
+    pub params: Cow<'a, Vec<String>>, // All params in stratum requests are strings
 }
 
+/// Response represents a Stratum response message from the server to the client
+/// We use Value in result to allow for different types of responses.
+/// TODO: Consider using various Response types to avoing using Value (which will result in memory allocations)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Response {
+pub struct Response<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>, // Should match the id from the request
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<Error>,
+    #[serde(skip_serializing_if = "Option::is_none", borrow)]
+    pub error: Option<Error<'a>>,
 }
 
+/// The mining.notify message is used to notify the client of new work
+/// The params is an array of strings and one element is a nested array of strings (the merkle branches)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Notification {
-    pub method: String,
-    #[serde(default)]
-    pub params: Params,
+pub struct Notify<'a> {
+    #[serde(borrow)]
+    pub method: Cow<'a, str>,
+    #[serde(borrow)]
+    pub params: Cow<'a, NotifyParams<'a>>,
+}
+
+/// mining.set_difficulty message is used to notify the client of a change in difficulty
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetDifficultyNotification<'a> {
+    #[serde(borrow)]
+    pub method: Cow<'a, str>,
+    pub params: Vec<u64>,
 }
 
 /// NotifyParams represents the parameters for the mining.notify message
 /// It includes job_id, prevhash, coinbase1, coinbase2, merkle_branches,
 /// version, nbits, ntime, and clean_jobs
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NotifyParams {
-    job_id: String,
-    prevhash: String,
-    coinbase1: String,
-    coinbase2: String,
-    merkle_branches: Vec<String>,
-    version: String,
-    nbits: String,
-    ntime: String,
-    clean_jobs: bool,
+#[derive(Debug, Clone)]
+pub struct NotifyParams<'a> {
+    pub job_id: Cow<'a, str>,
+    pub prevhash: Cow<'a, str>,
+    pub coinbase1: Cow<'a, str>,
+    pub coinbase2: Cow<'a, str>,
+    pub merkle_branches: Vec<Cow<'a, str>>,
+    pub version: Cow<'a, str>,
+    pub nbits: Cow<'a, str>,
+    pub ntime: Cow<'a, str>,
+    pub clean_jobs: bool,
 }
 
-impl From<NotifyParams> for Params {
-    fn from(params: NotifyParams) -> Self {
-        Params::Array(vec![
-            json!(params.job_id),
-            json!(params.prevhash),
-            json!(params.coinbase1),
-            json!(params.coinbase2),
-            json!(params.merkle_branches),
-            json!(params.version),
-            json!(params.nbits),
-            json!(params.ntime),
-            json!(params.clean_jobs),
-        ])
+// Custom serializer to output an array format instead of keyed object
+impl Serialize for NotifyParams<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeSeq;
+
+        let mut seq = serializer.serialize_seq(Some(9))?;
+        seq.serialize_element(&self.job_id)?;
+        seq.serialize_element(&self.prevhash)?;
+        seq.serialize_element(&self.coinbase1)?;
+        seq.serialize_element(&self.coinbase2)?;
+        seq.serialize_element(&self.merkle_branches)?;
+        seq.serialize_element(&self.version)?;
+        seq.serialize_element(&self.nbits)?;
+        seq.serialize_element(&self.ntime)?;
+        seq.serialize_element(&self.clean_jobs)?;
+        seq.end()
     }
 }
 
-impl Request {
+// Custom deserializer to parse the array format into NotifyParams
+impl<'de> Deserialize<'de> for NotifyParams<'_> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let vec: Vec<Value> = Vec::deserialize(deserializer)?;
+        if vec.len() != 9 {
+            return Err(serde::de::Error::custom("Invalid number of fields"));
+        }
+
+        Ok(NotifyParams {
+            job_id: Cow::Owned(vec[0].as_str().unwrap_or_default().to_string()),
+            prevhash: Cow::Owned(vec[1].as_str().unwrap_or_default().to_string()),
+            coinbase1: Cow::Owned(vec[2].as_str().unwrap_or_default().to_string()),
+            coinbase2: Cow::Owned(vec[3].as_str().unwrap_or_default().to_string()),
+            merkle_branches: vec
+                .get(4)
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .map(|v| Cow::Owned(v.as_str().unwrap_or_default().to_string()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            version: Cow::Owned(vec[5].as_str().unwrap_or_default().to_string()),
+            nbits: Cow::Owned(vec[6].as_str().unwrap_or_default().to_string()),
+            ntime: Cow::Owned(vec[7].as_str().unwrap_or_default().to_string()),
+            clean_jobs: vec[8].as_bool().unwrap_or(false),
+        })
+    }
+}
+
+/// Request represents a Stratum request message from client to the server
+/// It includes the id, method, and params
+/// The methods supported are mining.subscribe, mining.authorize, and mining.submit
+impl Request<'_> {
     /// Creates a new subscribe message with an optional id and params
     /// If no params are provided, it defaults to an empty array
     /// If no id is provided, it defaults to None
@@ -173,15 +197,15 @@ impl Request {
         extra_nonce: Option<String>,
     ) -> Self {
         let user_agent_param = user_agent + "/" + &version;
-        let mut params = vec![json!(user_agent_param)];
+        let mut params = vec![(user_agent_param)];
         if extra_nonce.is_some() {
             let extra_nonce = extra_nonce.unwrap();
-            params.push(json!(extra_nonce));
+            params.push(extra_nonce);
         }
         Request {
             id: id.map(Id::Number),
-            method: "mining.subscribe".to_string(),
-            params: Params::Array(params),
+            method: Cow::Owned("mining.subscribe".to_string()),
+            params: Cow::Owned(params),
         }
     }
 
@@ -189,14 +213,14 @@ impl Request {
     /// If no id is provided, it defaults to None
     /// The username and password are passed as parameters
     pub fn new_authorize(id: Option<u64>, username: String, password: Option<String>) -> Self {
-        let mut params = vec![json!(username)];
+        let mut params = vec![(username)];
         if let Some(password) = password {
-            params.push(json!(password));
+            params.push(password);
         }
         Request {
             id: id.map(Id::Number),
-            method: "mining.authorize".to_string(),
-            params: Params::Array(params),
+            method: Cow::Owned("mining.authorize".to_string()),
+            params: Cow::Owned(params),
         }
     }
 
@@ -210,23 +234,19 @@ impl Request {
         n_time: String,
         nonce: String,
     ) -> Self {
-        let params = Params::Array(vec![
-            json!(username),
-            json!(job_id),
-            json!(extra_nonce2),
-            json!(n_time),
-            json!(nonce),
-        ]);
+        let params = vec![username, job_id, extra_nonce2, n_time, nonce];
         Request {
             id: id.map(Id::Number),
-            method: "mining.submit".to_string(),
-            params,
+            method: Cow::Owned("mining.submit".to_string()),
+            params: Cow::Owned(params),
         }
     }
 }
 
-impl Response {
-    pub fn new_set_difficulty(
+/// Response represents a Stratum response message from the server to the client
+/// Supported resposes are set_difficulty (in response to subscribe), ok and error.
+impl Response<'_> {
+    pub fn new_set_difficulty_response(
         id: Option<Id>,
         difficulty: u64,
         extra_nonce: String,
@@ -259,25 +279,29 @@ impl Response {
             result: None,
             error: Some(Error {
                 code,
-                message,
+                message: Cow::Owned(message),
                 data: None,
             }),
         }
     }
 }
 
-impl Notification {
-    pub fn new_notify(params: NotifyParams) -> Self {
-        Notification {
-            method: "mining.notify".to_string(),
-            params: params.into(),
+/// Notify represents a Stratum notification message from the server to the client
+/// It is used to notify the client of new work and changes in difficulty
+impl<'a> Notify<'a> {
+    /// Creates a new notify message with the given parameters
+    pub fn new_notify(params: NotifyParams<'a>) -> Self {
+        Notify {
+            method: Cow::Owned("mining.notify".to_string()),
+            params: Cow::Owned(params),
         }
     }
 
-    pub fn new_set_difficulty(difficulty: u64) -> Self {
-        Notification {
-            method: "mining.set_difficulty".to_string(),
-            params: Params::Array(vec![json!(difficulty)]),
+    /// Creates a new set_difficulty notification message
+    pub fn new_set_difficulty_notification(difficulty: u64) -> SetDifficultyNotification<'a> {
+        SetDifficultyNotification {
+            method: Cow::Owned("mining.set_difficulty".to_string()),
+            params: vec![difficulty],
         }
     }
 }
@@ -367,18 +391,18 @@ mod tests {
     #[test]
     fn test_new_notify() {
         let notify_params = NotifyParams {
-            job_id: "job_id".to_string(),
-            prevhash: "prevhash".to_string(),
-            coinbase1: "coinbase1".to_string(),
-            coinbase2: "coinbase2".to_string(),
-            merkle_branches: vec!["branch1".to_string(), "branch2".to_string()],
-            version: "version".to_string(),
-            nbits: "nbits".to_string(),
-            ntime: "ntime".to_string(),
+            job_id: Cow::Borrowed("job_id"),
+            prevhash: Cow::Borrowed("prevhash"),
+            coinbase1: Cow::Borrowed("coinbase1"),
+            coinbase2: Cow::Borrowed("coinbase2"),
+            merkle_branches: vec![Cow::Borrowed("branch1"), Cow::Borrowed("branch2")],
+            version: Cow::Borrowed("version"),
+            nbits: Cow::Borrowed("nbits"),
+            ntime: Cow::Borrowed("ntime"),
             clean_jobs: true,
         };
 
-        let message = Notification::new_notify(notify_params);
+        let message = Notify::new_notify(notify_params);
         let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized_message,
@@ -387,8 +411,38 @@ mod tests {
     }
 
     #[test]
-    fn test_new_set_difficulty() {
-        let message = Notification::new_set_difficulty(1000);
+    fn test_new_set_difficulty_response() {
+        // Test with numeric ID
+        let response = Response::new_set_difficulty_response(
+            Some(Id::Number(123)),
+            500,
+            "extranonce_value".to_string(),
+            8,
+        );
+        let serialized = serde_json::to_string(&response).unwrap();
+        assert!(serialized.contains(r#""id":123"#));
+        assert!(serialized.contains(r#""mining.set_difficulty""#));
+        assert!(serialized.contains("500"));
+        assert!(serialized.contains(r#""extranonce_value""#));
+        assert!(serialized.contains("8"));
+
+        // Test with string ID
+        let response = Response::new_set_difficulty_response(
+            Some(Id::String("test-id".to_string())),
+            1000,
+            "nonce42".to_string(),
+            4,
+        );
+        let serialized = serde_json::to_string(&response).unwrap();
+        assert!(serialized.contains(r#""id":"test-id""#));
+        assert!(serialized.contains("1000"));
+        assert!(serialized.contains(r#""nonce42""#));
+        assert!(serialized.contains("4"));
+    }
+
+    #[test]
+    fn test_new_set_difficulty_notification() {
+        let message = Notify::new_set_difficulty_notification(1000);
         let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized_message,
@@ -400,7 +454,7 @@ mod tests {
     fn test_error_serialization() {
         let error = Error {
             code: -1,
-            message: "An error occurred".to_string(),
+            message: Cow::Owned("An error occurred".to_string()),
             data: Some(json!("Additional error data")),
         };
         let serialized_error = serde_json::to_string(&error).unwrap();
@@ -459,43 +513,6 @@ mod tests {
     }
 
     #[test]
-    fn test_params_variants() {
-        let json = r#"{"id":1,"method":"test","params":[1,2,"three"]}"#;
-        let message: Request = serde_json::from_str(json).unwrap();
-        let Request { params, .. } = message;
-        match params {
-            Params::Array(arr) => {
-                assert_eq!(arr.len(), 3);
-                assert_eq!(arr[0], json!(1));
-                assert_eq!(arr[2], json!("three"));
-            }
-            _ => panic!("Expected array params"),
-        }
-
-        // Test object params
-        let json = r#"{"id":1,"method":"test","params":{"key1":100,"key2":"value"}}"#;
-        let message: Request = serde_json::from_str(json).unwrap();
-        let Request { params, .. } = message;
-        match params {
-            Params::Map(map) => {
-                assert_eq!(map.len(), 2);
-                assert_eq!(map["key1"], json!(100));
-                assert_eq!(map["key2"], json!("value"));
-            }
-            _ => panic!("Expected map params"),
-        }
-
-        // Test null params
-        let json = r#"{"id":1,"method":"test","params":null}"#;
-        let message: Request = serde_json::from_str(json).unwrap();
-        let Request { params, .. } = message;
-        match params {
-            Params::None(_) => {}
-            _ => panic!("Expected none params"),
-        }
-    }
-
-    #[test]
     fn test_id_conversions() {
         // From ()
         let id_none = Id::from(());
@@ -526,34 +543,6 @@ mod tests {
     }
 
     #[test]
-    fn test_params_conversions() {
-        // From Value::Array
-        let arr_value = Value::Array(vec![json!(1), json!("test")]);
-        let params = Params::from(arr_value);
-        assert!(matches!(params, Params::Array(ref v) if v.len() == 2));
-
-        // From Value::Object
-        let mut map = Map::new();
-        map.insert("key".to_string(), json!(42));
-        let obj_value = Value::Object(map.clone());
-        let params = Params::from(obj_value);
-        assert!(matches!(params, Params::Map(ref m) if m.len() == 1));
-
-        // From Vec<Value>
-        let vec_value = vec![json!(1), json!("test")];
-        let params = Params::from(vec_value);
-        assert!(matches!(params, Params::Array(ref v) if v.len() == 2));
-
-        // From Map<String, Value>
-        let params = Params::from(map);
-        assert!(matches!(params, Params::Map(ref m) if m.len() == 1));
-
-        // Default
-        let default_params = Params::default();
-        assert!(matches!(default_params, Params::None(())));
-    }
-
-    #[test]
     fn test_response_creation() {
         // Test new_ok
         let response = Response::new_ok(Some(Id::Number(1)), json!("success"));
@@ -574,8 +563,12 @@ mod tests {
         assert_eq!(response.error.as_ref().unwrap().message, "Method not found");
 
         // Test new_set_difficulty
-        let response =
-            Response::new_set_difficulty(Some(Id::Number(2)), 500, "abc123".to_string(), 4);
+        let response = Response::new_set_difficulty_response(
+            Some(Id::Number(2)),
+            500,
+            "abc123".to_string(),
+            4,
+        );
         assert_eq!(response.id, Some(Id::Number(2)));
         assert!(response.result.is_some());
         assert!(response.error.is_none());
