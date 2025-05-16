@@ -194,7 +194,7 @@ impl Request<'_> {
     /// If no id is provided, it defaults to None
     /// The user agent and version are concatenated with a slash
     pub fn new_subscribe(
-        id: Option<u64>,
+        id: u64,
         user_agent: String,
         version: String,
         extra_nonce: Option<String>,
@@ -206,7 +206,7 @@ impl Request<'_> {
             params.push(extra_nonce);
         }
         Request {
-            id: id.map(Id::Number),
+            id: Some(Id::Number(id)),
             method: Cow::Owned("mining.subscribe".to_string()),
             params: Cow::Owned(params),
         }
@@ -215,13 +215,13 @@ impl Request<'_> {
     /// Creates a new authorize message
     /// If no id is provided, it defaults to None
     /// The username and password are passed as parameters
-    pub fn new_authorize(id: Option<u64>, username: String, password: Option<String>) -> Self {
+    pub fn new_authorize(id: u64, username: String, password: Option<String>) -> Self {
         let mut params = vec![(username)];
         if let Some(password) = password {
             params.push(password);
         }
         Request {
-            id: id.map(Id::Number),
+            id: Some(Id::Number(id)),
             method: Cow::Owned("mining.authorize".to_string()),
             params: Cow::Owned(params),
         }
@@ -230,7 +230,7 @@ impl Request<'_> {
     /// Creates a new submit message
     /// The server never creates this message, but it is used by the client to submit work
     pub fn new_submit(
-        id: Option<u64>,
+        id: u64,
         username: String,
         job_id: String,
         extra_nonce2: String,
@@ -239,7 +239,7 @@ impl Request<'_> {
     ) -> Self {
         let params = vec![username, job_id, extra_nonce2, n_time, nonce];
         Request {
-            id: id.map(Id::Number),
+            id: Some(Id::Number(id)),
             method: Cow::Owned("mining.submit".to_string()),
             params: Cow::Owned(params),
         }
@@ -315,15 +315,15 @@ mod tests {
 
     #[test]
     fn test_new_subscribe() {
-        let message = Request::new_subscribe(None, "agent".to_string(), "1.0".to_string(), None);
+        let message = Request::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
         let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized_message,
-            r#"{"method":"mining.subscribe","params":["agent/1.0"]}"#
+            r#"{"id":1,"method":"mining.subscribe","params":["agent/1.0"]}"#
         );
 
         let message = Request::new_subscribe(
-            Some(42),
+            42,
             "agent".to_string(),
             "1.0".to_string(),
             Some("extra_nonce".to_string()),
@@ -339,19 +339,16 @@ mod tests {
     #[test]
     fn test_new_authorize() {
         let message =
-            Request::new_authorize(None, "username".to_string(), Some("password".to_string()));
+            Request::new_authorize(1, "username".to_string(), Some("password".to_string()));
 
         let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized_message,
-            r#"{"method":"mining.authorize","params":["username","password"]}"#
+            r#"{"id":1,"method":"mining.authorize","params":["username","password"]}"#
         );
 
-        let message = Request::new_authorize(
-            Some(1),
-            "username".to_string(),
-            Some("password".to_string()),
-        );
+        let message =
+            Request::new_authorize(1, "username".to_string(), Some("password".to_string()));
 
         let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
@@ -363,7 +360,7 @@ mod tests {
     #[test]
     fn test_new_submit() {
         let message = Request::new_submit(
-            None,
+            1,
             "worker_name".to_string(),
             "job_id".to_string(),
             "extra_nonce2".to_string(),
@@ -373,11 +370,11 @@ mod tests {
         let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized_message,
-            r#"{"method":"mining.submit","params":["worker_name","job_id","extra_nonce2","ntime","nonce"]}"#
+            r#"{"id":1,"method":"mining.submit","params":["worker_name","job_id","extra_nonce2","ntime","nonce"]}"#
         );
 
         let message = Request::new_submit(
-            Some(5),
+            5,
             "worker_name".to_string(),
             "job_id".to_string(),
             "extra_nonce2".to_string(),
@@ -487,32 +484,17 @@ mod tests {
         // Test number ID
         let json = r#"{"id":123,"method":"test","params":[]}"#;
         let message: Request = serde_json::from_str(json).unwrap();
-        match message {
-            Request { id, .. } => {
-                assert_eq!(id, Some(Id::Number(123)));
-            }
-            _ => panic!("Expected request message"),
-        }
+        assert_eq!(message.id, Some(Id::Number(123)));
 
         // Test string ID
         let json = r#"{"id":"abc","method":"test","params":[]}"#;
         let message: Request = serde_json::from_str(json).unwrap();
-        match message {
-            Request { id, .. } => {
-                assert_eq!(id, Some(Id::String("abc".to_string())));
-            }
-            _ => panic!("Expected request message"),
-        }
+        assert_eq!(message.id, Some(Id::String("abc".to_string())));
 
         // Test null ID
         let json = r#"{"id":null,"method":"test","params":[]}"#;
         let message: Request = serde_json::from_str(json).unwrap();
-        match message {
-            Request { id, .. } => {
-                assert_eq!(id, None);
-            }
-            _ => panic!("Expected request message"),
-        }
+        assert_eq!(message.id, None);
     }
 
     #[test]

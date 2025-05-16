@@ -29,5 +29,50 @@ pub async fn handle_subscribe<'a>(
     session: &mut Session,
 ) -> Option<Response<'a>> {
     debug!("Handling mining.subscribe message");
+    if session.subscribed {
+        debug!("Client already subscribed. No response sent.");
+        return None;
+    }
+    session.subscribed = true;
     Some(Response::new_ok(message.id, json!(true)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stratum::messages::Id;
+    use crate::stratum::session::Session;
+
+    #[tokio::test]
+    async fn test_handle_subscribe_success() {
+        // Setup
+        let message = Request::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
+        let mut session = Session::new(1);
+        session.subscribed = false;
+
+        // Execute
+        let response = handle_subscribe(message, &mut session).await;
+
+        // Verify
+        assert!(response.is_some());
+        let response = response.unwrap();
+        assert_eq!(response.id, Some(Id::Number(1)));
+        assert_eq!(response.result, Some(json!(true)));
+        assert!(session.subscribed);
+    }
+
+    #[tokio::test]
+    async fn test_handle_subscribe_already_subscribed() {
+        // Setup
+        let message = Request::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
+        let mut session = Session::new(2);
+        session.subscribed = true;
+
+        // Execute
+        let response = handle_subscribe(message, &mut session).await;
+
+        // Verify
+        assert!(response.is_none());
+        assert!(session.subscribed);
+    }
 }
