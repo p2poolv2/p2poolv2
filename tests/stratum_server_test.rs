@@ -68,8 +68,7 @@ mod tests {
         let mut client = client.expect("Failed to connect to StratumServer");
 
         // Send subscribe message
-        let subscribe_msg =
-            Request::new_subscribe(Some(1), "agent".to_string(), "1.0".to_string(), None);
+        let subscribe_msg = Request::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
 
         // Serialize the subscribe message
         let subscribe_str =
@@ -130,7 +129,7 @@ mod tests {
 
                 // Try sending a subscribe message
                 let test_msg =
-                    Request::new_subscribe(Some(999), "agent".to_string(), "1.0".to_string(), None);
+                    Request::new_subscribe(999, "agent".to_string(), "1.0".to_string(), None);
 
                 let test_str =
                     serde_json::to_string(&test_msg).expect("Failed to serialize test message");

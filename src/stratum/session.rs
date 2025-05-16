@@ -16,6 +16,8 @@
 
 /// Manages each sessions for each miner connection.
 pub struct Session {
+    pub subscribed: bool,
+    pub authorized: bool,
     pub minimum_difficulty: u32,
     pub current_difficulty: u32,
 }
@@ -24,14 +26,11 @@ impl Session {
     /// Creates a new session with the given minimum difficulty.
     pub fn new(minimum_difficulty: u32) -> Self {
         Self {
+            subscribed: false,
+            authorized: false,
             minimum_difficulty,
             current_difficulty: minimum_difficulty,
         }
-    }
-
-    /// Gets the current difficulty for the session.
-    pub fn get_current_difficulty(&self) -> u32 {
-        self.current_difficulty
     }
 
     /// Recalculate current difficulty, return the new difficulty.
@@ -58,7 +57,7 @@ mod tests {
         let min_difficulty = 2000;
         let session = Session::new(min_difficulty);
 
-        assert_eq!(session.get_current_difficulty(), min_difficulty);
+        assert_eq!(session.current_difficulty, min_difficulty);
     }
 
     #[test]
