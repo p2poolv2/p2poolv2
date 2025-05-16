@@ -32,9 +32,9 @@ mod tests {
 
     #[test_log::test]
     fn test_stratum_server_subscribe() {
-        let addr: SocketAddr = "127.0.0.1:3333".parse().expect("Invalid address");
+        let addr: SocketAddr = "127.0.0.1:9999".parse().expect("Invalid address");
         // Setup server - using Arc so we can access it for shutdown
-        let server = Arc::new(StratumServer::new(3333, "127.0.0.1".to_string()));
+        let server = Arc::new(StratumServer::new(9999, "127.0.0.1".to_string()));
         let server_for_shutdown = Arc::clone(&server);
 
         // Create a Tokio runtime for running the async server
@@ -81,6 +81,7 @@ mod tests {
         let mut buffer = [0; 1024];
         let bytes_read = client.read(&mut buffer).expect("Failed to read response");
         let response_str = str::from_utf8(&buffer[..bytes_read]).expect("Invalid UTF-8");
+        println!("Response: {}", response_str);
 
         // Parse and validate response
         let response_message: Response =
