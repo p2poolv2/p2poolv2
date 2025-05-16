@@ -24,10 +24,60 @@ use tracing::debug;
 /// It sends a response with the authorization status.
 /// The function accepts a mutable reference to a `Session` object, which informs the responses.
 /// The session is also updated in response to received messages, if required.
+///
+/// Some broken implementations of the Stratum protocol send the "mining.authorize" message before "mining.subscribe".
+/// We supoprt this by not checking if the session is subscribed before authorizing.
+///
+/// TBH, this mining.authorize message is not needed at all. No server from ckpool to dataum to SRI is doing anything meaningful with it.
+/// Stratum servers also allow all workers to authrorize over the same connection.
 pub async fn handle_authorize<'a>(
     message: Request<'a>,
     session: &mut Session,
 ) -> Option<Response<'a>> {
     debug!("Handling mining.authorize message");
+    if session.authorized {
+        debug!("Client already authorized. No response sent.");
+        return None;
+    }
+    session.authorized = true;
     Some(Response::new_ok(message.id, json!(true)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stratum::messages::Id;
+
+    #[tokio::test]
+    async fn test_handle_authorize_first_time() {
+        // Setup
+        let mut session = Session::new(1);
+        let request = Request::new_authorize(12345, "worker1".to_string(), Some("x".to_string()));
+
+        // Execute
+        let response = handle_authorize(request, &mut session).await;
+
+        // Verify
+        assert!(response.is_some());
+        let response = response.unwrap();
+        assert_eq!(response.id, Some(Id::Number(12345)));
+        assert_eq!(response.result, Some(json!(true)));
+        assert!(response.error.is_none());
+        assert!(session.authorized);
+    }
+
+    #[tokio::test]
+    async fn test_handle_authorize_already_authorized() {
+        // Setup
+        let mut session = Session::new(1);
+        session.authorized = true;
+        let request = Request::new_authorize(12345, "worker1".to_string(), None);
+
+        // Execute
+        let response = handle_authorize(request, &mut session).await;
+
+        // Verify
+        assert!(response.is_none());
+        assert!(session.authorized);
+    }
 }
