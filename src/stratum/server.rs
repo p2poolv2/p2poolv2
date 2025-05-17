@@ -24,7 +24,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{oneshot, Mutex};
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, LinesCodec};
-use tracing::info;
+use tracing::{debug, info};
 
 // A struct to represent a Stratum server configuration
 // This struct contains the port and address of the Stratum server
@@ -198,16 +198,16 @@ where
             line_result = framed.next() => {
                 match line_result {
                     Some(Ok(line)) => {
+                        debug!("Received from {}: {:?}", addr, line);
                         // Process the received JSON message
                         match serde_json::from_str::<Request>(&line) {
                             Ok(message) => {
-                                info!("Received message from {}: {:?}", addr, message);
-
                                 let response = handle_message(message, session).await;
 
                                 if let Some(response) = response {
                                     // Send the response back to the client
                                     let response_json = serde_json::to_string(&response)?;
+                                    debug!("Sending to {}: {:?}", addr, response_json);
                                     writer
                                         .write_all(format!("{}\n", response_json).as_bytes())
                                         .await?;
