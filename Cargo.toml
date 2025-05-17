@@ -42,7 +42,7 @@ rust_decimal_macros = "1.36.0"
 zmq = "0.10"
 mockall = "0.13.1"
 mockall_double = "0.3.1"
-bitcoin = { version = "0.32.5", features = ["serde"] }
+bitcoin = { version = "0.32.5", features = ["serde", "rand"] }
 jsonrpsee = { version = "0.24", features = ["http-client", "client"] }
 base64 = "0.22.1"
 void = "1.0.2"
