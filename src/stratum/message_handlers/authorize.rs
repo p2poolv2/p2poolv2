@@ -35,11 +35,12 @@ pub async fn handle_authorize<'a>(
     session: &mut Session,
 ) -> Option<Response<'a>> {
     debug!("Handling mining.authorize message");
-    if session.authorized {
+    if session.username.is_some() {
         debug!("Client already authorized. No response sent.");
         return None;
     }
-    session.authorized = true;
+    session.username = Some(message.params[0].clone());
+    session.password = Some(message.params[1].clone());
     Some(Response::new_ok(message.id, json!(true)))
 }
 
@@ -63,21 +64,24 @@ mod tests {
         assert_eq!(response.id, Some(Id::Number(12345)));
         assert_eq!(response.result, Some(json!(true)));
         assert!(response.error.is_none());
-        assert!(session.authorized);
+        assert_eq!(session.username, Some("worker1".to_string()));
+        assert_eq!(session.password, Some("x".to_string()));
     }
 
     #[tokio::test]
     async fn test_handle_authorize_already_authorized() {
         // Setup
         let mut session = Session::new(1);
-        session.authorized = true;
-        let request = Request::new_authorize(12345, "worker1".to_string(), None);
+        session.username = Some("someusername".to_string());
+        let request =
+            Request::new_authorize(12345, "worker1".to_string(), Some("password".to_string()));
 
         // Execute
         let response = handle_authorize(request, &mut session).await;
 
         // Verify
         assert!(response.is_none());
-        assert!(session.authorized);
+        assert_eq!(session.username, Some("someusername".to_string()));
+        assert!(session.password.is_none());
     }
 }
