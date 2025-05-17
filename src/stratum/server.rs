@@ -275,7 +275,7 @@ mod stratum_server_tests {
     }
 
     #[tokio::test]
-    async fn test_handle_connection() {
+    async fn test_handle_connection_with_new_subscription_check_response_is_valid() {
         // Mock data
         let request = Request::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
         let input_string = serde_json::to_string(&request).unwrap() + "\n";
@@ -297,14 +297,42 @@ mod stratum_server_tests {
         // Check that response was written
         let response = String::from_utf8_lossy(&writer);
         println!("Response: {}", response);
+        let response_json: serde_json::Value =
+            serde_json::from_str(&response).expect("Response should be valid JSON");
         assert!(
-            response.contains("\"result\":true"),
-            "Response should contain success result as true"
+            response_json.is_object(),
+            "Response should be a JSON object"
         );
-        assert!(
-            response.ends_with("\n"),
-            "Response should end with a newline"
-        );
+
+        // Check that the response has a 'result' field which is an array
+        let result = response_json
+            .get("result")
+            .expect("Response should have a 'result' field");
+        assert!(result.is_array(), "'result' should be an array");
+
+        // For subscribe, result should be an array of length 3
+        let result_array = result.as_array().unwrap();
+        assert_eq!(result_array.len(), 3, "'result' array should have length 3");
+
+        // The first element should be an array (subscriptions)
+        assert!(result_array[0][0].is_array(),);
+
+        assert_eq!(result_array[0][0][0], "mining.notify");
+        assert_eq!(result_array[0][0][1].as_str().unwrap().len(), 9); // 8 bytes + 1 for the suffix
+
+        // The second element should be an array (extranonce)
+        assert!(result_array[0][1].is_array(),);
+        assert_eq!(result_array[0][1][0], "mining.set_difficulty");
+        assert_eq!(result_array[0][1][1].as_str().unwrap().len(), 9);
+
+        // The third element can be a string or number (extranonce2_size), just check it exists
+        assert!(result_array[1].is_string(),);
+        assert_eq!(result_array[1].as_str().unwrap().len(), 8);
+
+        // enonce2 size
+        assert_eq!(result_array[2], 8);
+
+        assert!(response.ends_with("\n"),);
     }
 
     #[tokio::test]
