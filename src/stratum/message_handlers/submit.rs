@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::stratum::error::Error;
 use crate::stratum::messages::{Request, Response};
 use crate::stratum::session::Session;
 use serde_json::json;
@@ -27,7 +28,7 @@ use tracing::debug;
 pub async fn handle_submit<'a>(
     message: Request<'a>,
     session: &mut Session,
-) -> Option<Response<'a>> {
+) -> Result<Response<'a>, Error> {
     debug!("Handling mining.submit message");
-    Some(Response::new_ok(message.id, json!(true)))
+    Ok(Response::new_ok(message.id, json!(true)))
 }

@@ -14,9 +14,9 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::stratum::error::Error;
 use crate::stratum::messages::{Request, Response};
 use crate::stratum::session::Session;
-use tracing::debug;
 
 pub mod authorize;
 pub mod submit;
@@ -37,11 +37,11 @@ use subscribe::handle_subscribe;
 pub(crate) async fn handle_message<'a>(
     message: Request<'a>,
     session: &mut Session,
-) -> Option<Response<'a>> {
+) -> Result<Response<'a>, Error> {
     match message.method.as_ref() {
         "mining.subscribe" => handle_subscribe(message, session).await,
         "mining.authorize" => handle_authorize(message, session).await,
         "mining.submit" => handle_submit(message, session).await,
-        _ => None,
+        method => Err(Error::InvalidMethod(method.to_string())),
     }
 }

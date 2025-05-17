@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::stratum::error::Error;
 use crate::stratum::messages::{Request, Response};
 use crate::stratum::session::{Session, EXTRANONCE2_SIZE};
 use serde_json::json;
@@ -27,14 +28,14 @@ use tracing::debug;
 pub async fn handle_subscribe<'a>(
     message: Request<'a>,
     session: &mut Session,
-) -> Option<Response<'a>> {
+) -> Result<Response<'a>, Error> {
     debug!("Handling mining.subscribe message");
     if session.subscribed {
         debug!("Client already subscribed. No response sent.");
-        return None;
+        return Err(Error::SubscriptionFailure("Already subscribed".to_string()));
     }
     session.subscribed = true;
-    Some(Response::new_ok(
+    Ok(Response::new_ok(
         message.id,
         json!([
             [
@@ -64,7 +65,7 @@ mod tests {
         let response = handle_subscribe(message, &mut session).await;
 
         // Verify
-        assert!(response.is_some());
+        assert!(response.is_ok());
         let response = response.unwrap();
         assert_eq!(response.id, Some(Id::Number(1)));
         // Check the response.result is Some and is an array as expected
@@ -112,7 +113,7 @@ mod tests {
         let response = handle_subscribe(message, &mut session).await;
 
         // Verify
-        assert!(response.is_none());
+        assert!(response.is_err());
         assert!(session.subscribed);
     }
 }

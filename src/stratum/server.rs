@@ -204,7 +204,7 @@ where
                             Ok(message) => {
                                 let response = handle_message(message, session).await;
 
-                                if let Some(response) = response {
+                                if let Ok(response) = response {
                                     // Send the response back to the client
                                     let response_json = serde_json::to_string(&response)?;
                                     debug!("Sending to {}: {:?}", addr, response_json);
@@ -212,6 +212,9 @@ where
                                         .write_all(format!("{}\n", response_json).as_bytes())
                                         .await?;
                                     writer.flush().await?;
+                                } else {
+                                    info!("Error handling message from {}: {:?}. Closing connection.", addr, response);
+                                    break;
                                 }
                             }
                             Err(e) => {
@@ -390,6 +393,58 @@ mod stratum_server_tests {
         assert!(
             writer.is_empty(),
             "No response should be written for too-long lines"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_connection_double_subscribe_closes_connection() {
+        // Prepare two subscribe requests in a row
+        let request1 = Request::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+        let request2 = Request::new_subscribe(2, "agent".to_string(), "1.0".to_string(), None);
+        let input_string = format!(
+            "{}\n{}\n",
+            serde_json::to_string(&request1).unwrap(),
+            serde_json::to_string(&request2).unwrap()
+        );
+        let addr = std::net::SocketAddr::new(
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)),
+            8081,
+        );
+
+        // Setup reader and writer
+        let reader = input_string.as_bytes();
+        let mut writer = Vec::new();
+
+        // Run the handler
+        let result =
+            super::handle_connection(reader, &mut writer, addr, tokio::sync::oneshot::channel().1)
+                .await;
+
+        // Should be Ok (connection closed gracefully)
+        assert!(
+            result.is_ok(),
+            "handle_connection should close connection on double subscribe"
+        );
+
+        // Only one response should be written (for the first subscribe)
+        let response = String::from_utf8_lossy(&writer);
+        let responses: Vec<&str> = response.split('\n').filter(|s| !s.is_empty()).collect();
+        assert_eq!(
+            responses.len(),
+            1,
+            "Only one response should be sent before closing connection"
+        );
+
+        // The response should be a valid subscribe response
+        let response_json: serde_json::Value =
+            serde_json::from_str(responses[0]).expect("Response should be valid JSON");
+        assert!(
+            response_json.is_object(),
+            "Response should be a JSON object"
+        );
+        assert!(
+            response_json.get("result").is_some(),
+            "Subscribe response should have 'result'"
         );
     }
 }
