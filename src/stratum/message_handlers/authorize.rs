@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::stratum::error::Error;
 use crate::stratum::messages::{Request, Response};
 use crate::stratum::session::Session;
 use serde_json::json;
@@ -33,15 +34,17 @@ use tracing::debug;
 pub async fn handle_authorize<'a>(
     message: Request<'a>,
     session: &mut Session,
-) -> Option<Response<'a>> {
+) -> Result<Response<'a>, Error> {
     debug!("Handling mining.authorize message");
     if session.username.is_some() {
         debug!("Client already authorized. No response sent.");
-        return None;
+        return Err(Error::AuthorizationFailure(
+            "Already authorized".to_string(),
+        ));
     }
     session.username = Some(message.params[0].clone());
     session.password = Some(message.params[1].clone());
-    Some(Response::new_ok(message.id, json!(true)))
+    Ok(Response::new_ok(message.id, json!(true)))
 }
 
 #[cfg(test)]
@@ -59,7 +62,7 @@ mod tests {
         let response = handle_authorize(request, &mut session).await;
 
         // Verify
-        assert!(response.is_some());
+        assert!(response.is_ok());
         let response = response.unwrap();
         assert_eq!(response.id, Some(Id::Number(12345)));
         assert_eq!(response.result, Some(json!(true)));
@@ -80,7 +83,7 @@ mod tests {
         let response = handle_authorize(request, &mut session).await;
 
         // Verify
-        assert!(response.is_none());
+        assert!(response.is_err());
         assert_eq!(session.username, Some("someusername".to_string()));
         assert!(session.password.is_none());
     }
