@@ -27,7 +27,7 @@ use tracing::debug;
 pub async fn handle_submit<'a>(
     message: Request<'a>,
     session: &mut Session,
-) -> Vec<Response<'a>> {
+) -> Option<Response<'a>> {
     debug!("Handling mining.submit message");
-    vec![Response::new_ok(message.id, json!(true))]
+    Some(Response::new_ok(message.id, json!(true)))
 }

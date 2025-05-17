@@ -14,12 +14,19 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-
 use bitcoin::secp256k1::rand::{self, Rng};
+
+/// Use 8 byte extranonce2
+pub const EXTRANONCE2_SIZE: usize = 8;
 
 /// Manages each sessions for each miner connection.
 pub struct Session {
-    pub id: u32,
+    /// Unique session ID
+    pub id: String,
+    /// extranonce1 sent to the miner, computed from the session ID
+    pub enonce1: String,
+    /// Inverted enonce1 for optimising share validation later on
+    pub enonce1_inverted: String,
     pub subscribed: bool,
     pub authorized: bool,
     pub minimum_difficulty: u32,
@@ -29,16 +36,20 @@ pub struct Session {
 impl Session {
     /// Creates a new session with the given minimum difficulty.
     pub fn new(minimum_difficulty: u32) -> Self {
+        let id = Session::generate_id();
         Self {
-            id: Session::get_id(),
+            id: format!("{:08x}", id),
+            enonce1: format!("{:08x}", id),
             subscribed: false,
+            enonce1_inverted: format!("{:08x}", id.swap_bytes()),
             authorized: false,
             minimum_difficulty,
             current_difficulty: minimum_difficulty,
         }
     }
 
-    fn get_id() -> u32 {
+    /// Generates a random session ID.
+    fn generate_id() -> u32 {
         let mut rng = rand::thread_rng();
         rng.gen::<u32>()
     }
@@ -49,6 +60,7 @@ impl Session {
         self.current_difficulty
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,7 +72,13 @@ mod tests {
 
         assert_eq!(session.minimum_difficulty, min_difficulty);
         assert_eq!(session.current_difficulty, min_difficulty);
-        assert_ne!(session.id, 0);
+        assert_ne!(session.id, "");
+        assert_eq!(session.enonce1.len(), 8);
+        assert_eq!(session.enonce1_inverted.len(), 8);
+        let enonce1_val = u32::from_str_radix(&session.enonce1, 16).unwrap();
+        let enonce1_inverted_val = u32::from_str_radix(&session.enonce1_inverted, 16).unwrap();
+        assert_eq!(enonce1_val.swap_bytes(), enonce1_inverted_val);
+        assert!(!session.subscribed);
     }
 
     #[test]

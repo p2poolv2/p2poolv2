@@ -33,14 +33,14 @@ use tracing::debug;
 pub async fn handle_authorize<'a>(
     message: Request<'a>,
     session: &mut Session,
-) -> Vec<Response<'a>> {
+) -> Option<Response<'a>> {
     debug!("Handling mining.authorize message");
     if session.authorized {
         debug!("Client already authorized. No response sent.");
-        return vec![];
+        return None;
     }
     session.authorized = true;
-    vec![Response::new_ok(message.id, json!(true))]
+    Some(Response::new_ok(message.id, json!(true)))
 }
 
 #[cfg(test)]
@@ -58,10 +58,11 @@ mod tests {
         let response = handle_authorize(request, &mut session).await;
 
         // Verify
-        assert!(response.len() == 1);
-        assert_eq!(response[0].id, Some(Id::Number(12345)));
-        assert_eq!(response[0].result, Some(json!(true)));
-        assert!(response[0].error.is_none());
+        assert!(response.is_some());
+        let response = response.unwrap();
+        assert_eq!(response.id, Some(Id::Number(12345)));
+        assert_eq!(response.result, Some(json!(true)));
+        assert!(response.error.is_none());
         assert!(session.authorized);
     }
 
@@ -76,7 +77,7 @@ mod tests {
         let response = handle_authorize(request, &mut session).await;
 
         // Verify
-        assert!(response.is_empty());
+        assert!(response.is_none());
         assert!(session.authorized);
     }
 }
