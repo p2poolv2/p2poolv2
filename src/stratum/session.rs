@@ -20,6 +20,8 @@ use bitcoin::secp256k1::rand::{self, Rng};
 pub const EXTRANONCE2_SIZE: usize = 8;
 
 /// Manages each sessions for each miner connection.
+///
+/// Stores the session ID, extranonce1, and other session-related data.
 pub struct Session {
     /// Unique session ID
     pub id: String,
@@ -27,9 +29,15 @@ pub struct Session {
     pub enonce1: String,
     /// Inverted enonce1 for optimising share validation later on
     pub enonce1_inverted: String,
+    /// Did the mine subscribe already?
     pub subscribed: bool,
-    pub authorized: bool,
+    /// Optional username of the miner, supplied by the miner, we just store it in session
+    pub username: Option<String>,
+    /// Optional password of the miner, supplied by the miner, we just store it in session
+    pub password: Option<String>,
+    /// The minimum difficulty for the session
     pub minimum_difficulty: u32,
+    /// The current difficulty for the session
     pub current_difficulty: u32,
 }
 
@@ -42,7 +50,8 @@ impl Session {
             enonce1: format!("{:08x}", id),
             subscribed: false,
             enonce1_inverted: format!("{:08x}", id.swap_bytes()),
-            authorized: false,
+            username: None,
+            password: None,
             minimum_difficulty,
             current_difficulty: minimum_difficulty,
         }
