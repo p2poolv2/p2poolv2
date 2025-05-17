@@ -30,17 +30,19 @@ use subscribe::handle_subscribe;
 /// This function processes the incoming Stratum messages and returns a response
 /// The function accepts a mutable reference to a `Session` object, which informs the responses.
 /// The session is also updated in response to received messages, if required.
+///
+/// Return a vector of responses to be sent back to the client.
 #[allow(dead_code)]
 #[allow(clippy::needless_lifetimes)]
 pub(crate) async fn handle_message<'a>(
     message: Request<'a>,
     session: &mut Session,
-) -> Option<Response<'a>> {
+) -> Vec<Response<'a>> {
     debug!("Received Stratum message: {:?}", message);
     match message.method.as_ref() {
         "mining.subscribe" => handle_subscribe(message, session).await,
         "mining.authorize" => handle_authorize(message, session).await,
         "mining.submit" => handle_submit(message, session).await,
-        _ => None,
+        _ => vec![],
     }
 }

@@ -27,14 +27,14 @@ use tracing::debug;
 pub async fn handle_subscribe<'a>(
     message: Request<'a>,
     session: &mut Session,
-) -> Option<Response<'a>> {
+) -> Vec<Response<'a>> {
     debug!("Handling mining.subscribe message");
     if session.subscribed {
         debug!("Client already subscribed. No response sent.");
-        return None;
+        return vec![];
     }
     session.subscribed = true;
-    Some(Response::new_ok(message.id, json!(true)))
+    vec![Response::new_ok(message.id, json!(true))]
 }
 
 #[cfg(test)]
@@ -54,10 +54,9 @@ mod tests {
         let response = handle_subscribe(message, &mut session).await;
 
         // Verify
-        assert!(response.is_some());
-        let response = response.unwrap();
-        assert_eq!(response.id, Some(Id::Number(1)));
-        assert_eq!(response.result, Some(json!(true)));
+        assert!(response.len() == 1);
+        assert_eq!(response[0].id, Some(Id::Number(1)));
+        assert_eq!(response[0].result, Some(json!(true)));
         assert!(session.subscribed);
     }
 
@@ -72,7 +71,7 @@ mod tests {
         let response = handle_subscribe(message, &mut session).await;
 
         // Verify
-        assert!(response.is_none());
+        assert!(response.is_empty());
         assert!(session.subscribed);
     }
 }

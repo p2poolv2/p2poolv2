@@ -56,4 +56,4 @@ COPY signet/bitcoin-signet.conf /etc/bitcoin/
 COPY testnet4/bitcoin-testnet4.conf /etc/bitcoin/
 
 ENTRYPOINT []
-CMD ["/bitcoin/bitcoind"]
+CMD ["bitcoind"]
