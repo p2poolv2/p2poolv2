@@ -14,8 +14,12 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+
+use bitcoin::secp256k1::rand::{self, Rng};
+
 /// Manages each sessions for each miner connection.
 pub struct Session {
+    pub id: u32,
     pub subscribed: bool,
     pub authorized: bool,
     pub minimum_difficulty: u32,
@@ -26,11 +30,17 @@ impl Session {
     /// Creates a new session with the given minimum difficulty.
     pub fn new(minimum_difficulty: u32) -> Self {
         Self {
+            id: Session::get_id(),
             subscribed: false,
             authorized: false,
             minimum_difficulty,
             current_difficulty: minimum_difficulty,
         }
+    }
+
+    fn get_id() -> u32 {
+        let mut rng = rand::thread_rng();
+        rng.gen::<u32>()
     }
 
     /// Recalculate current difficulty, return the new difficulty.
@@ -50,6 +60,7 @@ mod tests {
 
         assert_eq!(session.minimum_difficulty, min_difficulty);
         assert_eq!(session.current_difficulty, min_difficulty);
+        assert_ne!(session.id, 0);
     }
 
     #[test]
