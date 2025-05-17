@@ -37,12 +37,12 @@ use subscribe::handle_subscribe;
 pub(crate) async fn handle_message<'a>(
     message: Request<'a>,
     session: &mut Session,
-) -> Vec<Response<'a>> {
+) -> Option<Response<'a>> {
     debug!("Received Stratum message: {:?}", message);
     match message.method.as_ref() {
         "mining.subscribe" => handle_subscribe(message, session).await,
         "mining.authorize" => handle_authorize(message, session).await,
         "mining.submit" => handle_submit(message, session).await,
-        _ => vec![],
+        _ => None,
     }
 }

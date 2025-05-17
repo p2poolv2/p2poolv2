@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::stratum::messages::{Request, Response};
-use crate::stratum::session::Session;
+use crate::stratum::session::{Session, EXTRANONCE2_SIZE};
 use serde_json::json;
 use tracing::debug;
 
@@ -27,14 +27,24 @@ use tracing::debug;
 pub async fn handle_subscribe<'a>(
     message: Request<'a>,
     session: &mut Session,
-) -> Vec<Response<'a>> {
+) -> Option<Response<'a>> {
     debug!("Handling mining.subscribe message");
     if session.subscribed {
         debug!("Client already subscribed. No response sent.");
-        return vec![];
+        return None;
     }
     session.subscribed = true;
-    vec![Response::new_ok(message.id, json!(true))]
+    Some(Response::new_ok(
+        message.id,
+        json!([
+            [
+                ["mining.notify", format!("{}1", session.id)], // we expect different ids in notify and set_difficulty, thus we suffix with 1 and 2
+                ["mining.set_difficulty", format!("{}2", session.id)],
+            ],
+            session.enonce1,
+            EXTRANONCE2_SIZE,
+        ]),
+    ))
 }
 
 #[cfg(test)]
@@ -54,9 +64,40 @@ mod tests {
         let response = handle_subscribe(message, &mut session).await;
 
         // Verify
-        assert!(response.len() == 1);
-        assert_eq!(response[0].id, Some(Id::Number(1)));
-        assert_eq!(response[0].result, Some(json!(true)));
+        assert!(response.is_some());
+        let response = response.unwrap();
+        assert_eq!(response.id, Some(Id::Number(1)));
+        // Check the response.result is Some and is an array as expected
+        let result = response
+            .result
+            .as_ref()
+            .expect("Expected result in response");
+        let arr = result.as_array().expect("Expected result to be an array");
+        assert_eq!(arr.len(), 3);
+
+        // 1. Check subscriptions array
+        let subscriptions = arr[0]
+            .as_array()
+            .expect("Expected subscriptions to be an array");
+        assert_eq!(subscriptions.len(), 2);
+
+        let notify = subscriptions[0]
+            .as_array()
+            .expect("Expected mining.notify to be an array");
+        assert_eq!(notify[0], "mining.notify");
+        assert_eq!(notify[1], format!("{}1", session.id));
+
+        let set_difficulty = subscriptions[1]
+            .as_array()
+            .expect("Expected mining.set_difficulty to be an array");
+        assert_eq!(set_difficulty[0], "mining.set_difficulty");
+        assert_eq!(set_difficulty[1], format!("{}2", session.id));
+
+        // 2. Check enonce1
+        assert_eq!(arr[1], session.enonce1);
+
+        // 3. Check extranonce2_size
+        assert_eq!(arr[2], serde_json::json!(EXTRANONCE2_SIZE));
         assert!(session.subscribed);
     }
 
@@ -71,7 +112,7 @@ mod tests {
         let response = handle_subscribe(message, &mut session).await;
 
         // Verify
-        assert!(response.is_empty());
+        assert!(response.is_none());
         assert!(session.subscribed);
     }
 }

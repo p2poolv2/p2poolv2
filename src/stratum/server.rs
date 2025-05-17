@@ -203,9 +203,10 @@ where
                             Ok(message) => {
                                 info!("Received message from {}: {:?}", addr, message);
 
-                                let responses = handle_message(message, session).await;
+                                let response = handle_message(message, session).await;
 
-                                for response in responses {
+                                if let Some(response) = response {
+                                    // Send the response back to the client
                                     let response_json = serde_json::to_string(&response)?;
                                     writer
                                         .write_all(format!("{}\n", response_json).as_bytes())
