@@ -14,12 +14,13 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::node::p2p_message_handlers::RequestHandlerError;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::validation;
 use crate::shares::ShareBlock;
 use crate::utils::time_provider::TimeProvider;
-use std::error::Error;
+use std::sync::Arc;
 use tracing::{error, info};
 
 /// Handle a ShareBlock received from a peer
@@ -32,16 +33,22 @@ use tracing::{error, info};
 pub async fn handle_share_block(
     share_block: ShareBlock,
     chain_handle: ChainHandle,
-    time_provider: &impl TimeProvider,
-) -> Result<(), Box<dyn Error>> {
+    time_provider: Arc<dyn TimeProvider + Send + Sync>,
+) -> Result<(), RequestHandlerError> {
     info!("Received share block: {:?}", share_block);
     if let Err(e) = validation::validate(&share_block, &chain_handle, time_provider).await {
         error!("Share block validation failed: {}", e);
-        return Err("Share block validation failed".into());
+        return Err(RequestHandlerError::ShareBlock(format!(
+            "Share block validation failed: {}",
+            e
+        )));
     }
     if let Err(e) = chain_handle.add_share(share_block.clone()).await {
         error!("Failed to add share: {}", e);
-        return Err("Error adding share to chain".into());
+        return Err(RequestHandlerError::ShareBlock(format!(
+            "Error adding share to chain: {}",
+            e
+        )));
     }
     info!("Successfully added share blocks to chain");
     Ok(())
@@ -98,7 +105,7 @@ mod tests {
         let mut time_provider = TestTimeProvider(SystemTime::now());
         time_provider.set_time(shares[0].ntime);
 
-        let result = handle_share_block(share_block, chain_handle, &time_provider).await;
+        let result = handle_share_block(share_block, chain_handle, Arc::new(time_provider)).await;
         assert!(result.is_ok());
     }
 
@@ -118,7 +125,7 @@ mod tests {
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        let result = handle_share_block(share_block, chain_handle, &time_provider).await;
+        let result = handle_share_block(share_block, chain_handle, Arc::new(time_provider)).await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
@@ -169,7 +176,7 @@ mod tests {
         let mut time_provider = TestTimeProvider(SystemTime::now());
         time_provider.set_time(shares[0].ntime);
 
-        let result = handle_share_block(share_block, chain_handle, &time_provider).await;
+        let result = handle_share_block(share_block, chain_handle, Arc::new(time_provider)).await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),

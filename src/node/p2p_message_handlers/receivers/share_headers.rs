@@ -14,11 +14,12 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::node::p2p_message_handlers::RequestHandlerError;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::ShareHeader;
 use crate::utils::time_provider::TimeProvider;
-use std::error::Error;
+use std::sync::Arc;
 use tracing::info;
 
 /// Handle ShareHeaders received from a peer
@@ -30,8 +31,8 @@ use tracing::info;
 pub async fn handle_share_headers(
     share_headers: Vec<ShareHeader>,
     _chain_handle: ChainHandle,
-    _time_provider: &impl TimeProvider,
-) -> Result<(), Box<dyn Error>> {
+    _time_provider: Arc<dyn TimeProvider + Send + Sync>,
+) -> Result<(), RequestHandlerError> {
     info!("Received share headers: {:?}", share_headers);
     Ok(())
 }

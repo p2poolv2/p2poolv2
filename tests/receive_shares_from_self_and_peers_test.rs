@@ -20,7 +20,7 @@ mod self_and_peer_messages_tests {
     use super::common::{default_test_config, simple_miner_workbase};
     use p2poolv2_lib::node::actor::NodeHandle;
     use p2poolv2_lib::node::messages::Message;
-    use p2poolv2_lib::node::p2p_message_handlers::handle_request;
+    use p2poolv2_lib::node::p2p_message_handlers::handle_request_with_service;
     use p2poolv2_lib::shares::chain::actor::ChainHandle;
     use p2poolv2_lib::shares::miner_message::CkPoolMessage;
     use p2poolv2_lib::shares::ShareBlock;
@@ -123,7 +123,7 @@ mod self_and_peer_messages_tests {
 
             tokio::time::sleep(Duration::from_millis(100)).await;
 
-            let response = handle_request(
+            let response = handle_request_with_service(
                 peer_id,
                 peer_msg.clone(),
                 chain_handle.clone(),
@@ -202,7 +202,7 @@ mod self_and_peer_messages_tests {
         let time_provider = SystemTimeProvider {};
 
         // sending two workbase messages quickly, the second one should be rate-limited.
-        let result1 = handle_request(
+        let result1 = handle_request_with_service(
             peer_id,
             Message::Workbase(workbase.clone()),
             chain_handle.clone(),
@@ -212,7 +212,7 @@ mod self_and_peer_messages_tests {
         )
         .await;
 
-        let result2 = handle_request(
+        let result2 = handle_request_with_service(
             peer_id,
             Message::Workbase(workbase.clone()),
             chain_handle.clone(),
@@ -227,7 +227,7 @@ mod self_and_peer_messages_tests {
 
         // wait longer than the rate limit window, then send again to succed
         tokio::time::sleep(Duration::from_secs(2)).await;
-        let result3 = handle_request(
+        let result3 = handle_request_with_service(
             peer_id,
             Message::Workbase(workbase.clone()),
             chain_handle.clone(),

@@ -28,6 +28,8 @@ use tower::Service;
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::senders::{send_blocks_inventory, send_getheaders};
+use crate::node::p2p_message_handlers::server::RequestContext;
+use crate::node::p2p_message_handlers::RequestHandlerError;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::receive_mining_message::start_receiving_mining_messages;
@@ -45,8 +47,6 @@ use libp2p::{
     Multiaddr, Swarm,
 };
 use rate_limiter::RateLimiter;
-use request_response_handler::handle_request_response_event;
-use crate::node::p2p_message_handlers::server::RequestContext;
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -441,31 +441,31 @@ impl Node {
                 libp2p::request_response::Message::Request {
                     request_id: _,
                     request,
-                    channel: _,
+                    channel,
                 },
-        } = &request_response_event
+        } = request_response_event
         {
             let message = request.clone();
             if !self
                 .rate_limiter
-                .check_rate_limit(peer, message.clone(), &self.config.network)
+                .check_rate_limit(&peer, message.clone(), &self.config.network)
                 .await
             {
                 warn!(
                     "Rate limit exceeded for peer {} with message type {:?}. Disconnecting.",
                     peer, message
                 );
-                self.swarm.disconnect_peer_id(*peer).unwrap_or_else(|e| {
+                self.swarm.disconnect_peer_id(peer).unwrap_or_else(|e| {
                     error!("Failed to disconnect rate-limited peer: {:?}", e);
                 });
                 return Ok(());
             }
 
-           // Prepare the request context for the Tower service
+            // Prepare the request context for the Tower service
             let request_context = RequestContext {
-                peer: *peer,
+                peer,
                 message: request.clone(),
-                channel: channel.clone(),
+                channel,
                 chain_handle: self.chain_handle.clone(),
                 swarm_tx: self.swarm_tx.clone(),
             };

@@ -164,8 +164,9 @@ impl NodeActor {
                             debug!("Sent message to peer: {peer_id}, request_id: {request_id}");
                         }
                         Some(SwarmSend::Response(response_channel, msg)) => {
-                            let request_id = self.node.swarm.behaviour_mut().request_response.send_response(response_channel, msg);
-                            debug!("Sent message to response channel: {:?}", request_id);
+                            if let Ok(request_id) = self.node.swarm.behaviour_mut().request_response.send_response(response_channel, msg) {
+                                debug!("Sent message to response channel: {:?}", request_id);
+                            }
                         }
                         Some(SwarmSend::Inv(_share_block)) => {
                             // Handle inventory message (optional logging or processing)

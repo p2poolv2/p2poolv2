@@ -16,11 +16,13 @@
 
 mod bitcoin_block_validation;
 
+use crate::node::p2p_message_handlers::RequestHandlerError;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::ShareBlock;
 use crate::utils::time_provider::TimeProvider;
-use std::error::Error;
+use std::sync::Arc;
+use tracing::{error, info};
 
 pub const MAX_UNCLES: usize = 3;
 pub const MAX_TIME_DIFF: u64 = 60;
@@ -35,45 +37,66 @@ pub const MAX_TIME_DIFF: u64 = 60;
 pub async fn validate(
     share: &ShareBlock,
     chain_handle: &ChainHandle,
-    time_provider: &impl TimeProvider,
-) -> Result<(), Box<dyn Error>> {
-    if let Err(e) = validate_timestamp(share, time_provider).await {
-        return Err(format!("Share timestamp validation failed: {}", e).into());
+    time_provider: Arc<dyn TimeProvider + Send + Sync>,
+) -> Result<(), RequestHandlerError> {
+    info!("Validating share block: {:?}", share);
+
+    if let Err(e) = validate_timestamp(share, time_provider.clone()).await {
+        error!("Share timestamp validation failed: {}", e);
+        return Err(RequestHandlerError::ShareBlock(format!(
+            "Share timestamp validation failed: {}",
+            e
+        )));
     }
     if let Err(e) = validate_prev_share_blockhash(share, chain_handle).await {
-        return Err(format!("Share prev_share_blockhash validation failed: {}", e).into());
+        error!("Share prev_share_blockhash validation failed: {}", e);
+        return Err(RequestHandlerError::ShareBlock(format!(
+            "Share prev_share_blockhash validation failed: {}",
+            e
+        )));
     }
     if let Err(e) = validate_uncles(share, chain_handle).await {
-        return Err(format!("Share uncles validation failed: {}", e).into());
+        error!("Share uncles validation failed: {}", e);
+        return Err(RequestHandlerError::ShareBlock(format!(
+            "Share uncles validation failed: {}",
+            e
+        )));
     }
     let workbase = chain_handle
         .get_workbase(share.header.miner_share.workinfoid)
         .await;
-    if workbase.is_none() {
-        return Err(format!(
+    let workbase = workbase.ok_or_else(|| {
+        error!(
             "Missing workbase for share - workinfoid: {}",
             share.header.miner_share.workinfoid
-        )
-        .into());
-    }
+        );
+        RequestHandlerError::ShareBlock(format!(
+            "Missing workbase for share - workinfoid: {}",
+            share.header.miner_share.workinfoid
+        ))
+    })?;
     let userworkbase = chain_handle
         .get_user_workbase(share.header.miner_share.workinfoid)
         .await;
-    if userworkbase.is_none() {
-        return Err(format!(
+    let userworkbase = userworkbase.ok_or_else(|| {
+        error!(
             "Missing user workbase for share - workinfoid: {}",
             share.header.miner_share.workinfoid
-        )
-        .into());
-    }
-    if let Err(e) = share
-        .header
-        .miner_share
-        .validate(&workbase.unwrap(), &userworkbase.unwrap())
-    {
-        return Err(format!("Share validation failed: {}", e).into());
+        );
+        RequestHandlerError::ShareBlock(format!(
+            "Missing user workbase for share - workinfoid: {}",
+            share.header.miner_share.workinfoid
+        ))
+    })?;
+    if let Err(e) = share.header.miner_share.validate(&workbase, &userworkbase) {
+        error!("Share validation failed: {}", e);
+        return Err(RequestHandlerError::ShareBlock(format!(
+            "Share validation failed: {}",
+            e
+        )));
     }
 
+    info!("Share block validated successfully");
     Ok(())
 }
 
@@ -81,15 +104,14 @@ pub async fn validate(
 pub async fn validate_prev_share_blockhash(
     share: &ShareBlock,
     chain_handle: &ChainHandle,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), RequestHandlerError> {
     match share.header.prev_share_blockhash {
         Some(prev_share_blockhash) => {
             if chain_handle.get_share(prev_share_blockhash).await.is_none() {
-                return Err(format!(
+                return Err(RequestHandlerError::ShareBlock(format!(
                     "Prev share blockhash {} not found in store",
                     prev_share_blockhash
-                )
-                .into());
+                )));
             }
             Ok(())
         }
@@ -101,13 +123,18 @@ pub async fn validate_prev_share_blockhash(
 pub async fn validate_uncles(
     share: &ShareBlock,
     chain_handle: &ChainHandle,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), RequestHandlerError> {
     if share.header.uncles.len() > MAX_UNCLES {
-        return Err("Too many uncles".into());
+        return Err(RequestHandlerError::ShareBlock(
+            "Too many uncles".to_string(),
+        ));
     }
     for uncle in &share.header.uncles {
         if chain_handle.get_share(*uncle).await.is_none() {
-            return Err(format!("Uncle {} not found in store", uncle).into());
+            return Err(RequestHandlerError::ShareBlock(format!(
+                "Uncle {} not found in store",
+                uncle
+            )));
         }
     }
     Ok(())
@@ -116,8 +143,8 @@ pub async fn validate_uncles(
 /// Validate the share timestamp is within the last 60 seconds
 pub async fn validate_timestamp(
     share: &ShareBlock,
-    time_provider: &impl TimeProvider,
-) -> Result<(), Box<dyn Error>> {
+    time_provider: Arc<dyn TimeProvider + Send + Sync>,
+) -> Result<(), RequestHandlerError> {
     let current_time = time_provider.seconds_since_epoch();
 
     let miner_share_time = share.header.miner_share.ntime.to_consensus_u32() as u64;
@@ -128,13 +155,12 @@ pub async fn validate_timestamp(
     };
 
     if time_diff > MAX_TIME_DIFF {
-        return Err(format!(
+        return Err(RequestHandlerError::ShareBlock(format!(
             "Share timestamp {} is more than {} seconds from current time {}",
             share.header.miner_share.ntime.to_consensus_u32(),
             MAX_TIME_DIFF,
             current_time
-        )
-        .into());
+        )));
     }
     Ok(())
 }
@@ -167,7 +193,7 @@ mod tests {
         time_provider
             .set_time(bitcoin::absolute::Time::from_consensus(share_timestamp as u32).unwrap());
 
-        let result = validate_timestamp(&share, &time_provider).await;
+        let result = validate_timestamp(&share, Arc::new(time_provider)).await;
         assert_eq!(
             result.err().unwrap().to_string(),
             "Share timestamp 1735224490 is more than 60 seconds from current time 1735224370"
@@ -193,7 +219,9 @@ mod tests {
             &mut vec![],
         );
 
-        assert!(validate_timestamp(&share, &time_provider).await.is_err());
+        assert!(validate_timestamp(&share, Arc::new(time_provider))
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -213,7 +241,9 @@ mod tests {
             &mut vec![],
         );
 
-        assert!(validate_timestamp(&share, &time_provider).await.is_ok());
+        assert!(validate_timestamp(&share, Arc::new(time_provider))
+            .await
+            .is_ok());
     }
 
     #[tokio::test]
@@ -408,7 +438,7 @@ mod tests {
         time_provider.set_time(shares[0].ntime);
 
         // Test handle_request directly without request_id
-        let result = validate(&share_block, &chain_handle, &time_provider).await;
+        let result = validate(&share_block, &chain_handle, Arc::new(time_provider)).await;
 
         assert!(result.is_ok());
     }

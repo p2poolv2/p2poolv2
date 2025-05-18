@@ -1,20 +1,19 @@
+use std::error::Error;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use tower::Service;
+use crate::node::p2p_message_handlers::ResponseChannel;
 use futures::Future;
 use libp2p::PeerId;
-use libp2p::request_response::ResponseChannel;
+use tokio::sync::mpsc;
+use tower::Service;
 
 use crate::node::messages::Message;
 use crate::node::SwarmSend;
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
-use crate::utils::time_provider::SystemTimeProvider;
-
-use tokio::sync::mpsc;
-use std::error::Error;
-use std::sync::Arc;
+use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 
 /// The request type passed to the Tower service.
 pub struct RequestContext {
@@ -22,7 +21,7 @@ pub struct RequestContext {
     pub message: Message,
     pub channel: ResponseChannel<Message>,
     pub chain_handle: ChainHandle,
-    pub swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
+    pub swarm_tx: mpsc::Sender<SwarmSend<crate::node::p2p_message_handlers::ResponseChannel<Message>>>,
 }
 
 /// The Tower service for processing inbound P2P requests.
@@ -45,7 +44,6 @@ impl Service<RequestContext> for P2PoolService {
     type Future = Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send>>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // Always ready to accept requests
         Poll::Ready(Ok(()))
     }
 
@@ -71,7 +69,7 @@ impl Service<RequestContext> for P2PoolService {
             .await
             .map_err(|e| {
                 tracing::error!("Service failed to process request: {}", e);
-                e
+                Box::new(e) as Box<dyn Error + Send + Sync>
             })
         })
     }

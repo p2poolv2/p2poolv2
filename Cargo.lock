@@ -3440,6 +3440,7 @@ dependencies = [
  "clap",
  "config",
  "futures",
+ "futures-channel",
  "hex",
  "jsonrpsee",
  "just",
