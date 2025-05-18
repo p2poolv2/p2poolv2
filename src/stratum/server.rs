@@ -21,11 +21,10 @@ use crate::stratum::messages::Request;
 use crate::stratum::session::Session;
 use bitcoin::consensus::encode::deserialize;
 use bitcoin::Block;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::oneshot;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, LinesCodec};
 use tracing::{debug, info};
@@ -35,7 +34,6 @@ use tracing::{debug, info};
 pub struct StratumServer<B: BitcoindRpc> {
     pub port: u16,
     pub address: String,
-    connections: Arc<Mutex<HashMap<std::net::SocketAddr, oneshot::Sender<()>>>>,
     shutdown_rx: oneshot::Receiver<()>,
     bitcoind: Arc<B>,
     blocktemplate: Option<bitcoin::Block>,
@@ -61,7 +59,6 @@ impl<B: BitcoindRpc> StratumServer<B> {
         Self {
             port,
             address,
-            connections: Arc::new(Mutex::new(HashMap::new())),
             shutdown_rx,
             bitcoind,
             blocktemplate: None,
@@ -123,9 +120,6 @@ impl<B: BitcoindRpc> StratumServer<B> {
                         Ok(connection) => {
                             let (stream, addr) = connection;
                             info!("New connection from: {}", addr);
-
-                            // Clone Arc references for the new task
-                            let connections = Arc::clone(&self.connections);
 
                             // Spawn a new task for each connection
                             tokio::spawn(async move {
