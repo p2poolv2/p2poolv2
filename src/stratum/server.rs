@@ -19,6 +19,8 @@ use crate::config::BitcoinConfig;
 use crate::stratum::message_handlers::handle_message;
 use crate::stratum::messages::Request;
 use crate::stratum::session::Session;
+use bitcoin::consensus::encode::deserialize;
+use bitcoin::Block;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -34,13 +36,19 @@ pub struct StratumServer<B: BitcoindRpc> {
     pub port: u16,
     pub address: String,
     connections: Arc<Mutex<HashMap<std::net::SocketAddr, oneshot::Sender<()>>>>,
-    shutdown_flag: Arc<Mutex<bool>>,
+    shutdown_rx: oneshot::Receiver<()>,
     bitcoind: Arc<B>,
+    blocktemplate: Option<bitcoin::Block>,
 }
 
 impl<B: BitcoindRpc> StratumServer<B> {
     // A method to create a new Stratum server configuration
-    pub fn new(port: u16, address: String, bitcoin_config: BitcoinConfig) -> Self {
+    pub fn new(
+        port: u16,
+        address: String,
+        bitcoin_config: BitcoinConfig,
+        shutdown_rx: oneshot::Receiver<()>,
+    ) -> Self {
         println!("{}", bitcoin_config.url);
         let bitcoind = Arc::new(
             B::new(
@@ -54,25 +62,47 @@ impl<B: BitcoindRpc> StratumServer<B> {
             port,
             address,
             connections: Arc::new(Mutex::new(HashMap::new())),
-            shutdown_flag: Arc::new(Mutex::new(false)),
+            shutdown_rx,
             bitcoind,
+            blocktemplate: None,
         }
     }
 
-    // A method to start the Stratum server
-    pub async fn start(&self) -> Result<(), Box<dyn std::error::Error>> {
-        info!("Starting Stratum server at {}:{}", self.address, self.port);
-
-        if self
+    /// Get a new blocktemplate from the bitcoind server and update the blocktemplate field
+    /// This function is called at startup, periodically, or when a new bitcoin block has been mined.
+    pub async fn update_block_template(&mut self) -> Option<Block> {
+        if let Ok(blocktemplate) = self
             .bitcoind
             .getblocktemplate(bitcoin::Network::Signet)
             .await
-            .is_ok()
         {
-            info!("Connected to bitcoind");
+            // Extract the hex string from the blocktemplate JSON value
+            if let Some(hex_str) = blocktemplate.as_str() {
+                match hex::decode(hex_str).map(|bytes| deserialize::<Block>(&bytes)) {
+                    Ok(Ok(block)) => {
+                        self.blocktemplate = Some(block);
+                    }
+                    Ok(Err(e)) => {
+                        info!("Failed to deserialize block: {}", e);
+                    }
+                    Err(e) => {
+                        info!("Failed to decode hex: {}", e);
+                    }
+                }
+            } else {
+                info!("blocktemplate is not a string");
+            }
         } else {
             info!("Failed to connect to bitcoind. We won't be able to mine.");
         }
+        None
+    }
+
+    // A method to start the Stratum server
+    pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        info!("Starting Stratum server at {}:{}", self.address, self.port);
+
+        self.update_block_template().await;
 
         let bind_address = format!("{}:{}", self.address, self.port);
         let listener = TcpListener::bind(&bind_address)
@@ -82,109 +112,50 @@ impl<B: BitcoindRpc> StratumServer<B> {
         info!("Stratum server listening on {}", bind_address);
 
         loop {
-            // Check if shutdown was requested
-            if *self.shutdown_flag.lock().await {
-                break;
-            }
+            tokio::select! {
+                // Check for shutdown signal
+                _ = &mut self.shutdown_rx => {
+                    info!("Shutdown signal received");
+                    break;
+                }
+                connection = listener.accept() => {
+                    match connection{
+                        Ok(connection) => {
+                            let (stream, addr) = connection;
+                            info!("New connection from: {}", addr);
 
-            // Accept connections and process them
-            let (stream, addr) = match listener.accept().await {
-                Ok(connection) => {
-                    if *self.shutdown_flag.lock().await {
-                        info!("Server is shutting down, not accepting new connections");
-                        break;
+                            // Clone Arc references for the new task
+                            let connections = Arc::clone(&self.connections);
+
+                            // Spawn a new task for each connection
+                            tokio::spawn(async move {
+                                let addr = match stream.peer_addr() {
+                                    Ok(addr) => addr,
+                                    Err(e) => {
+                                        info!("Failed to get peer address: {}", e);
+                                        return;
+                                    }
+                                };
+
+                                let (reader, writer) = stream.into_split();
+                                let buf_reader = BufReader::new(reader);
+
+                                // Handle the connection with graceful shutdown support
+                                if let Err(e) = handle_connection(buf_reader, writer, addr).await {
+                                    info!("Error handling connection from {}: {}", addr, e);
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            info!("Connection failed: {}", e);
+                            continue;
+                        }
                     }
-                    info!("Accepted connection");
-                    connection
-                }
-                Err(e) => {
-                    info!("Connection failed: {}", e);
-                    continue;
-                }
-            };
-
-            info!("New connection from: {}", addr);
-
-            // Clone Arc references for the new task
-            let connections = Arc::clone(&self.connections);
-
-            // Spawn a new task for each connection
-            tokio::spawn(async move {
-                let addr = match stream.peer_addr() {
-                    Ok(addr) => addr,
-                    Err(e) => {
-                        info!("Failed to get peer address: {}", e);
-                        return;
-                    }
-                };
-
-                // Register the connection
-                let shutdown_signal = register_connection(connections.clone(), addr).await;
-
-                let (reader, writer) = stream.into_split();
-                let buf_reader = BufReader::new(reader);
-
-                // Handle the connection with graceful shutdown support
-                if let Err(e) = handle_connection(buf_reader, writer, addr, shutdown_signal).await {
-                    info!("Error handling connection from {}: {}", addr, e);
-                }
-
-                // Remove the connection when done
-                remove_connection(connections, addr).await;
-            });
-        }
-
-        Ok(())
-    }
-
-    // A method to shut down the Stratum server
-    pub async fn shutdown(&self) -> Result<(), Box<dyn std::error::Error>> {
-        info!(
-            "Shutting down Stratum server at {}:{}",
-            self.address, self.port
-        );
-
-        // Signal all connections to terminate
-        {
-            // Set shutdown flag to stop accepting new connections
-            *self.shutdown_flag.lock().await = true;
-
-            // Send shutdown signal to all active connections
-            let mut connections = self.connections.lock().await;
-            for (addr, sender) in connections.drain() {
-                if sender.send(()).is_err() {
-                    info!("Connection to {} already closed", addr);
                 }
             }
         }
-
-        // Wait for a short period to allow graceful shutdown
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-        info!("Stratum server shutdown complete");
-
         Ok(())
     }
-}
-
-// Register a new connection
-async fn register_connection(
-    connections: Arc<Mutex<HashMap<std::net::SocketAddr, oneshot::Sender<()>>>>,
-    addr: std::net::SocketAddr,
-) -> oneshot::Receiver<()> {
-    let (tx, rx) = oneshot::channel();
-    let mut connections = connections.lock().await;
-    connections.insert(addr, tx);
-    rx
-}
-
-// Remove a connection
-async fn remove_connection(
-    connections: Arc<Mutex<HashMap<std::net::SocketAddr, oneshot::Sender<()>>>>,
-    addr: std::net::SocketAddr,
-) {
-    let mut connections = connections.lock().await;
-    connections.remove(&addr);
 }
 
 /// Handles a single connection to the Stratum server.
@@ -196,7 +167,6 @@ async fn handle_connection<R, W>(
     reader: R,
     mut writer: W,
     addr: std::net::SocketAddr,
-    mut shutdown_signal: oneshot::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     R: AsyncBufReadExt + Unpin,
@@ -211,52 +181,45 @@ where
 
     // Process each line as it arrives
     loop {
-        tokio::select! {
-            // Handle shutdown signal
-            _ = &mut shutdown_signal => {
-                info!("Received shutdown signal for connection: {}", addr);
-                break;
-            }
+        // Process incoming messages
+        match framed.next().await {
+            Some(Ok(line)) => {
+                debug!("Received from {}: {:?}", addr, line);
+                // Process the received JSON message
+                match serde_json::from_str::<Request>(&line) {
+                    Ok(message) => {
+                        let response = handle_message(message, session).await;
 
-            // Process incoming messages
-            line_result = framed.next() => {
-                match line_result {
-                    Some(Ok(line)) => {
-                        debug!("Received from {}: {:?}", addr, line);
-                        // Process the received JSON message
-                        match serde_json::from_str::<Request>(&line) {
-                            Ok(message) => {
-                                let response = handle_message(message, session).await;
-
-                                if let Ok(response) = response {
-                                    // Send the response back to the client
-                                    let response_json = serde_json::to_string(&response)?;
-                                    debug!("Sending to {}: {:?}", addr, response_json);
-                                    writer
-                                        .write_all(format!("{}\n", response_json).as_bytes())
-                                        .await?;
-                                    writer.flush().await?;
-                                } else {
-                                    info!("Error handling message from {}: {:?}. Closing connection.", addr, response);
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                info!("Error parsing message from {}: {}", addr, e);
-                                info!("Raw message: {}", line);
-                            }
+                        if let Ok(response) = response {
+                            // Send the response back to the client
+                            let response_json = serde_json::to_string(&response)?;
+                            debug!("Sending to {}: {:?}", addr, response_json);
+                            writer
+                                .write_all(format!("{}\n", response_json).as_bytes())
+                                .await?;
+                            writer.flush().await?;
+                        } else {
+                            info!(
+                                "Error handling message from {}: {:?}. Closing connection.",
+                                addr, response
+                            );
+                            break;
                         }
                     }
-                    Some(Err(e)) => {
-                        // This could be a line length error or other I/O error
-                        info!("Error reading line from {}: {}", addr, e);
-                        break;
-                    }
-                    None => {
-                        // End of stream
-                        break;
+                    Err(e) => {
+                        info!("Error parsing message from {}: {}", addr, e);
+                        info!("Raw message: {}", line);
                     }
                 }
+            }
+            Some(Err(e)) => {
+                // This could be a line length error or other I/O error
+                info!("Error reading line from {}: {}", addr, e);
+                break;
+            }
+            None => {
+                // End of stream
+                break;
             }
         }
     }
@@ -289,8 +252,13 @@ mod stratum_server_tests {
                 .returning(|_| Ok(serde_json::json!({})));
             Ok(mock)
         });
-        let server =
-            StratumServer::<MockBitcoindRpc>::new(12345, "127.0.0.1".to_string(), bitcoin_config);
+        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+        let mut server = StratumServer::<MockBitcoindRpc>::new(
+            12345,
+            "127.0.0.1".to_string(),
+            bitcoin_config,
+            shutdown_rx,
+        );
 
         // Verify the server was created with the correct parameters
         assert_eq!(server.port, 12345);
@@ -328,7 +296,7 @@ mod stratum_server_tests {
         let mut writer = Vec::new();
 
         // Run the handler
-        let result = handle_connection(reader, &mut writer, addr, oneshot::channel().1).await;
+        let result = handle_connection(reader, &mut writer, addr).await;
 
         // Verify results
         assert!(
@@ -388,7 +356,7 @@ mod stratum_server_tests {
         let mut writer = Vec::new();
 
         // Run the handler
-        let result = handle_connection(reader, &mut writer, addr, oneshot::channel().1).await;
+        let result = handle_connection(reader, &mut writer, addr).await;
 
         // Verify results
         assert!(
@@ -420,7 +388,7 @@ mod stratum_server_tests {
         let mut writer = Vec::new();
 
         // Run the handler
-        let result = handle_connection(input, &mut writer, addr, oneshot::channel().1).await;
+        let result = handle_connection(input, &mut writer, addr).await;
 
         // Verify results - should handle the error gracefully
         assert!(
@@ -455,9 +423,7 @@ mod stratum_server_tests {
         let mut writer = Vec::new();
 
         // Run the handler
-        let result =
-            super::handle_connection(reader, &mut writer, addr, tokio::sync::oneshot::channel().1)
-                .await;
+        let result = super::handle_connection(reader, &mut writer, addr).await;
 
         // Should be Ok (connection closed gracefully)
         assert!(

@@ -42,12 +42,13 @@ mod tests {
         };
         let addr: SocketAddr = "127.0.0.1:9999".parse().expect("Invalid address");
         // Setup server - using Arc so we can access it for shutdown
-        let server = Arc::new(StratumServer::<BitcoindRpcClient>::new(
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let mut server = StratumServer::<BitcoindRpcClient>::new(
             9999,
             "127.0.0.1".to_string(),
             bitcoin_config,
-        ));
-        let server_for_shutdown: Arc<StratumServer<BitcoindRpcClient>> = Arc::clone(&server);
+            shutdown_rx,
+        );
 
         // Create a Tokio runtime for running the async server
         let runtime = Runtime::new().expect("Failed to create runtime");
@@ -117,17 +118,9 @@ mod tests {
         // Clean up client connection
         drop(client);
 
-        // Test the server shutdown functionality
-        let shutdown_runtime = Runtime::new().expect("Failed to create shutdown runtime");
-        let shutdown_result =
-            shutdown_runtime.block_on(async { server_for_shutdown.shutdown().await });
-
-        // Verify shutdown completed without errors
-        assert!(
-            shutdown_result.is_ok(),
-            "Server shutdown failed: {:?}",
-            shutdown_result
-        );
+        shutdown_tx
+            .send(())
+            .expect("Failed to send shutdown signal to server");
 
         // Try to connect again - should fail because server is shut down
         thread::sleep(Duration::from_millis(500));
