@@ -18,19 +18,39 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use jsonrpsee::core::client::ClientT;
 use jsonrpsee::http_client::{HeaderMap, HttpClient, HttpClientBuilder};
 
+// Add mockall to make the trait mockable
+#[cfg(test)]
+use mockall::{automock, predicate::*};
+
+// Define a trait for the BitcoindRpc functionality
+#[cfg_attr(test, automock)]
+#[warn(async_fn_in_trait)]
+pub trait BitcoindRpc {
+    fn new(url: &str, username: &str, password: &str) -> Result<Self, Box<dyn std::error::Error>>
+    where
+        Self: Sized;
+    async fn request<T: serde::de::DeserializeOwned + 'static>(
+        &self,
+        method: &str,
+        params: Vec<serde_json::Value>,
+    ) -> Result<T, Box<dyn std::error::Error>>;
+
+    async fn get_difficulty(&self) -> Result<f64, Box<dyn std::error::Error>>;
+
+    async fn getblocktemplate(
+        &self,
+        network: bitcoin::Network,
+    ) -> Result<serde_json::Value, Box<dyn std::error::Error>>;
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct BitcoindRpcClient {
     client: HttpClient,
 }
 
-#[allow(dead_code)]
-impl BitcoindRpcClient {
-    pub fn new(
-        url: &str,
-        username: &str,
-        password: &str,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+impl BitcoindRpc for BitcoindRpcClient {
+    fn new(url: &str, username: &str, password: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let mut headers = HeaderMap::new();
         headers.insert(
             "Authorization",
@@ -46,8 +66,7 @@ impl BitcoindRpcClient {
             .build(url)?;
         Ok(Self { client })
     }
-
-    pub async fn request<T: serde::de::DeserializeOwned>(
+    async fn request<T: serde::de::DeserializeOwned>(
         &self,
         method: &str,
         params: Vec<serde_json::Value>,
@@ -57,7 +76,7 @@ impl BitcoindRpcClient {
     }
 
     /// Get current bitcoin difficulty from bitcoind rpc
-    pub async fn get_difficulty(&self) -> Result<f64, Box<dyn std::error::Error>> {
+    async fn get_difficulty(&self) -> Result<f64, Box<dyn std::error::Error>> {
         let params: Vec<serde_json::Value> = vec![];
         let result: serde_json::Value = self.request("getdifficulty", params).await?;
         Ok(result.as_f64().unwrap())
@@ -65,7 +84,7 @@ impl BitcoindRpcClient {
 
     /// Get current bitcoin block count from bitcoind rpc
     /// We use special rules for signet
-    pub async fn getblocktemplate(
+    async fn getblocktemplate(
         &self,
         network: bitcoin::Network,
     ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
@@ -95,6 +114,7 @@ impl BitcoindRpcClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mockall::predicate;
     use wiremock::{
         matchers::{body_json, header, method, path},
         Mock, MockServer, ResponseTemplate,

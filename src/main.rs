@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::bitcoind_rpc::BitcoindRpcClient;
 use crate::shares::ShareBlock;
 use clap::Parser;
 use std::error::Error;
@@ -71,9 +72,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     info!("Latest tip {} at height {}", tip.unwrap(), height.unwrap());
 
     let stratum_config = config.stratum.clone();
+    let bitcoin_config = config.bitcoin.clone();
     tokio::spawn(async move {
-        let stratum_server =
-            stratum::server::StratumServer::new(stratum_config.port, stratum_config.host);
+        let stratum_server = stratum::server::StratumServer::<BitcoindRpcClient>::new(
+            stratum_config.port,
+            stratum_config.host,
+            bitcoin_config,
+        );
         info!("Starting Stratum server...");
         let result = stratum_server.start().await;
         if result.is_err() {

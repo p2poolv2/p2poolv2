@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::bitcoind_rpc::BitcoindRpc;
 use crate::bitcoind_rpc::BitcoindRpcClient;
 use crate::config::BitcoinConfig;
 use crate::shares::ShareBlock;

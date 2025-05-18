@@ -16,6 +16,8 @@
 
 #[cfg(test)]
 mod tests {
+    use p2poolv2_lib::bitcoind_rpc::BitcoindRpcClient;
+    use p2poolv2_lib::config::BitcoinConfig;
     use p2poolv2_lib::stratum::{
         self,
         messages::{Request, Response},
@@ -32,10 +34,20 @@ mod tests {
 
     #[test_log::test]
     fn test_stratum_server_subscribe() {
+        let bitcoin_config = BitcoinConfig {
+            network: bitcoin::Network::Regtest,
+            url: "http://localhost:38332".to_string(),
+            username: "user".to_string(),
+            password: "pass".to_string(),
+        };
         let addr: SocketAddr = "127.0.0.1:9999".parse().expect("Invalid address");
         // Setup server - using Arc so we can access it for shutdown
-        let server = Arc::new(StratumServer::new(9999, "127.0.0.1".to_string()));
-        let server_for_shutdown = Arc::clone(&server);
+        let server = Arc::new(StratumServer::<BitcoindRpcClient>::new(
+            9999,
+            "127.0.0.1".to_string(),
+            bitcoin_config,
+        ));
+        let server_for_shutdown: Arc<StratumServer<BitcoindRpcClient>> = Arc::clone(&server);
 
         // Create a Tokio runtime for running the async server
         let runtime = Runtime::new().expect("Failed to create runtime");
