@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::bitcoind_rpc::BitcoindRpc;
+use crate::config::BitcoinConfig;
 use crate::stratum::message_handlers::handle_message;
 use crate::stratum::messages::Request;
 use crate::stratum::session::Session;
@@ -28,27 +30,49 @@ use tracing::{debug, info};
 
 // A struct to represent a Stratum server configuration
 // This struct contains the port and address of the Stratum server
-pub struct StratumServer {
+pub struct StratumServer<B: BitcoindRpc> {
     pub port: u16,
     pub address: String,
     connections: Arc<Mutex<HashMap<std::net::SocketAddr, oneshot::Sender<()>>>>,
     shutdown_flag: Arc<Mutex<bool>>,
+    bitcoind: Arc<B>,
 }
 
-impl StratumServer {
+impl<B: BitcoindRpc> StratumServer<B> {
     // A method to create a new Stratum server configuration
-    pub fn new(port: u16, address: String) -> Self {
+    pub fn new(port: u16, address: String, bitcoin_config: BitcoinConfig) -> Self {
+        println!("{}", bitcoin_config.url);
+        let bitcoind = Arc::new(
+            B::new(
+                &bitcoin_config.url,
+                &bitcoin_config.username,
+                &bitcoin_config.password,
+            )
+            .unwrap(),
+        );
         Self {
             port,
             address,
             connections: Arc::new(Mutex::new(HashMap::new())),
             shutdown_flag: Arc::new(Mutex::new(false)),
+            bitcoind,
         }
     }
 
     // A method to start the Stratum server
     pub async fn start(&self) -> Result<(), Box<dyn std::error::Error>> {
         info!("Starting Stratum server at {}:{}", self.address, self.port);
+
+        if self
+            .bitcoind
+            .getblocktemplate(bitcoin::Network::Signet)
+            .await
+            .is_ok()
+        {
+            info!("Connected to bitcoind");
+        } else {
+            info!("Failed to connect to bitcoind. We won't be able to mine.");
+        }
 
         let bind_address = format!("{}:{}", self.address, self.port);
         let listener = TcpListener::bind(&bind_address)
@@ -244,14 +268,29 @@ where
 #[cfg(test)]
 mod stratum_server_tests {
     use super::*;
+    use crate::bitcoind_rpc::MockBitcoindRpc;
+    use crate::config::BitcoinConfig;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::time::Duration;
     use tokio::time::sleep;
 
     #[tokio::test]
     async fn test_create_and_start_server() {
-        // Create a server with test parameters
-        let server = StratumServer::new(12345, "127.0.0.1".to_string());
+        let bitcoin_config = BitcoinConfig {
+            network: bitcoin::Network::Regtest,
+            url: "localhost:8332".to_string(),
+            username: "user".to_string(),
+            password: "pass".to_string(),
+        };
+        let ctx = MockBitcoindRpc::new_context();
+        ctx.expect().returning(|_, _, _| {
+            let mut mock = MockBitcoindRpc::default();
+            mock.expect_getblocktemplate()
+                .returning(|_| Ok(serde_json::json!({})));
+            Ok(mock)
+        });
+        let server =
+            StratumServer::<MockBitcoindRpc>::new(12345, "127.0.0.1".to_string(), bitcoin_config);
 
         // Verify the server was created with the correct parameters
         assert_eq!(server.port, 12345);
