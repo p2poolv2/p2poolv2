@@ -73,11 +73,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let stratum_config = config.stratum.clone();
     let bitcoin_config = config.bitcoin.clone();
+    let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
-        let stratum_server = stratum::server::StratumServer::<BitcoindRpcClient>::new(
+        let mut stratum_server = stratum::server::StratumServer::<BitcoindRpcClient>::new(
             stratum_config.port,
             stratum_config.host,
             bitcoin_config,
+            stratum_shutdown_rx,
         );
         info!("Starting Stratum server...");
         let result = stratum_server.start().await;
@@ -90,6 +92,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if let Ok((_node_handle, stopping_rx)) = NodeHandle::new(config, chain_handle).await {
         info!("Node started");
         stopping_rx.await?;
+        stratum_shutdown_tx
+            .send(())
+            .expect("Failed to send shutdown signal to Stratum server");
         info!("Node stopped");
     } else {
         error!("Failed to start node");
