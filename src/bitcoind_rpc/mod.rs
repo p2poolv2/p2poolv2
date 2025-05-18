@@ -62,6 +62,34 @@ impl BitcoindRpcClient {
         let result: serde_json::Value = self.request("getdifficulty", params).await?;
         Ok(result.as_f64().unwrap())
     }
+
+    /// Get current bitcoin block count from bitcoind rpc
+    /// We use special rules for signet
+    pub async fn getblocktemplate(
+        &self,
+        network: bitcoin::Network,
+    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+        let params = match network {
+            bitcoin::Network::Signet => {
+                vec![serde_json::json!([
+                    {
+                        "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+                        "rules": ["segwit", "signet"],
+                    }
+                ])]
+            }
+            _ => {
+                vec![serde_json::json!([
+                    {
+                        "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+                        "rules": ["segwit"],
+                    }
+                ])]
+            }
+        };
+        let result: serde_json::Value = self.request("getblocktemplate", params).await?;
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
@@ -157,5 +185,107 @@ mod tests {
         let difficulty = client.get_difficulty().await.unwrap();
 
         assert_eq!(difficulty, 1234.56);
+    }
+
+    #[tokio::test]
+    async fn test_getblocktemplate_mainnet() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "getblocktemplate",
+                "params": [[{
+                    "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+                    "rules": ["segwit"],
+                }]],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "result": {
+                    "version": 536870912,
+                    "previousblockhash": "0000000000000000000b4d0b2e8e7e4e6b8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
+                    "transactions": [],
+                    "coinbaseaux": {},
+                    "coinbasevalue": 625000000,
+                    "longpollid": "mockid",
+                    "target": "0000000000000000000b4d0b2e8e7e4e6b8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
+                    "mintime": 1610000000,
+                    "mutable": ["time", "transactions", "prevblock"],
+                    "noncerange": "00000000ffffffff",
+                    "sigoplimit": 80000,
+                    "sizelimit": 4000000,
+                    "curtime": 1610000000,
+                    "bits": "170d6d54",
+                    "height": 1000000,
+                    "default_witness_commitment": "6a24aa21a9ed"
+                },
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client
+            .getblocktemplate(bitcoin::Network::Bitcoin)
+            .await
+            .unwrap();
+
+        assert!(result.get("version").is_some());
+        assert_eq!(result.get("height").unwrap(), 1000000);
+    }
+
+    #[tokio::test]
+    async fn test_getblocktemplate_signet() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "getblocktemplate",
+                "params": [[{
+                    "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+                    "rules": ["segwit", "signet"],
+                }]],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "result": {
+                    "version": 536870912,
+                    "previousblockhash": "0000000000000000000b4d0b2e8e7e4e6b8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
+                    "transactions": [],
+                    "coinbaseaux": {},
+                    "coinbasevalue": 625000000,
+                    "longpollid": "mockid",
+                    "target": "0000000000000000000b4d0b2e8e7e4e6b8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
+                    "mintime": 1610000000,
+                    "mutable": ["time", "transactions", "prevblock"],
+                    "noncerange": "00000000ffffffff",
+                    "sigoplimit": 80000,
+                    "sizelimit": 4000000,
+                    "curtime": 1610000000,
+                    "bits": "170d6d54",
+                    "height": 2000000,
+                    "default_witness_commitment": "6a24aa21a9ed"
+                },
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client
+            .getblocktemplate(bitcoin::Network::Signet)
+            .await
+            .unwrap();
+
+        assert!(result.get("version").is_some());
+        assert_eq!(result.get("height").unwrap(), 2000000);
     }
 }
