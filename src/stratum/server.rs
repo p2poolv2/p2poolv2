@@ -227,6 +227,11 @@ mod stratum_server_tests {
     use super::*;
     use crate::bitcoind_rpc::MockBitcoindRpc;
     use crate::config::BitcoinConfig;
+    use bitcoin::block::Header;
+    use bitcoin::blockdata::block::Version;
+    use bitcoin::consensus::encode::serialize;
+    use bitcoin::{Block, CompactTarget};
+    use serde_json::json;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::time::Duration;
     use tokio::time::sleep;
@@ -445,5 +450,161 @@ mod stratum_server_tests {
             response_json.get("result").is_some(),
             "Subscribe response should have 'result'"
         );
+    }
+
+    #[tokio::test]
+    async fn test_update_block_template_success() {
+        // Create a dummy block and serialize it to hex
+        let block = Block {
+            header: Header {
+                version: Version::default(),
+                prev_blockhash: "000000000822bbfaf34d53fc43d0c1382054d3aafe31893020c315db8b0a19f9"
+                    .parse()
+                    .unwrap(),
+                merkle_root: "0000000000000000000000000000000000000000000000000000000000000001"
+                    .parse()
+                    .unwrap(),
+                time: 0,
+                bits: CompactTarget::from_consensus(1000),
+                nonce: 0,
+            },
+            txdata: vec![],
+        };
+        let block_bytes = serialize(&block);
+        let block_hex = hex::encode(block_bytes);
+
+        // Setup mock bitcoind to return the block hex string
+        let mut mock = MockBitcoindRpc::default();
+        mock.expect_getblocktemplate()
+            .returning(move |_| Ok(json!(block_hex.clone())));
+
+        let _bitcoin_config = BitcoinConfig {
+            network: bitcoin::Network::Signet,
+            url: "localhost:8332".to_string(),
+            username: "user".to_string(),
+            password: "pass".to_string(),
+        };
+        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+        let mut server = StratumServer {
+            port: 12345,
+            address: "127.0.0.1".to_string(),
+            shutdown_rx,
+            bitcoind: std::sync::Arc::new(mock),
+            blocktemplate: None,
+        };
+
+        let result = server.update_block_template().await;
+        // Should always return None
+        assert!(result.is_none());
+        // The blocktemplate should be set
+        assert!(server.blocktemplate.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_update_block_template_blocktemplate_not_string() {
+        // Setup mock bitcoind to return a non-string value
+        let mut mock = MockBitcoindRpc::default();
+        mock.expect_getblocktemplate()
+            .returning(|_| Ok(json!({"not": "a string"})));
+
+        let _bitcoin_config = BitcoinConfig {
+            network: bitcoin::Network::Signet,
+            url: "localhost:8332".to_string(),
+            username: "user".to_string(),
+            password: "pass".to_string(),
+        };
+        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+        let mut server = StratumServer {
+            port: 12345,
+            address: "127.0.0.1".to_string(),
+            shutdown_rx,
+            bitcoind: std::sync::Arc::new(mock),
+            blocktemplate: None,
+        };
+
+        let result = server.update_block_template().await;
+        assert!(result.is_none());
+        assert!(server.blocktemplate.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_block_template_hex_decode_error() {
+        // Setup mock bitcoind to return an invalid hex string
+        let mut mock = MockBitcoindRpc::default();
+        mock.expect_getblocktemplate()
+            .returning(|_| Ok(json!("nothex!!")));
+
+        let _bitcoin_config = BitcoinConfig {
+            network: bitcoin::Network::Signet,
+            url: "localhost:8332".to_string(),
+            username: "user".to_string(),
+            password: "pass".to_string(),
+        };
+        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+        let mut server = StratumServer {
+            port: 12345,
+            address: "127.0.0.1".to_string(),
+            shutdown_rx,
+            bitcoind: std::sync::Arc::new(mock),
+            blocktemplate: None,
+        };
+
+        let result = server.update_block_template().await;
+        assert!(result.is_none());
+        assert!(server.blocktemplate.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_block_template_deserialize_error() {
+        // Setup mock bitcoind to return a hex string that is valid hex but not a valid block
+        let mut mock = MockBitcoindRpc::default();
+        mock.expect_getblocktemplate()
+            .returning(|_| Ok(json!("deadbeef")));
+
+        let bitcoin_config = BitcoinConfig {
+            network: bitcoin::Network::Signet,
+            url: "localhost:8332".to_string(),
+            username: "user".to_string(),
+            password: "pass".to_string(),
+        };
+        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+        let mut server = StratumServer {
+            port: 12345,
+            address: "127.0.0.1".to_string(),
+            shutdown_rx,
+            bitcoind: std::sync::Arc::new(mock),
+            blocktemplate: None,
+        };
+
+        let result = server.update_block_template().await;
+        assert!(result.is_none());
+        assert!(server.blocktemplate.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_block_template_bitcoind_error() {
+        // Setup mock bitcoind to return an error
+        let mut mock = MockBitcoindRpc::default();
+        mock.expect_getblocktemplate()
+            .returning(|_| Err("bitcoind error".into()));
+
+        let _bitcoin_config = BitcoinConfig {
+            network: bitcoin::Network::Signet,
+            url: "localhost:8332".to_string(),
+            username: "user".to_string(),
+            password: "pass".to_string(),
+        };
+        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+        let mut server = StratumServer {
+            port: 12345,
+            address: "127.0.0.1".to_string(),
+            shutdown_rx,
+            bitcoind: std::sync::Arc::new(mock),
+            blocktemplate: None,
+        };
+
+        let result = server.update_block_template().await;
+        assert!(result.is_none());
+        assert!(server.blocktemplate.is_none());
     }
 }
