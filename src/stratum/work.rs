@@ -37,6 +37,26 @@ impl std::fmt::Display for WorkError {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Work {
+    /// The job ID
+    pub job_id: String,
+    /// The previous block hash
+    pub prev_hash: String,
+    /// The coinbase1 part of the coinbase transaction
+    pub coinbase1: String,
+    /// The coinbase2 part of the coinbase transaction
+    pub coinbase2: String,
+    /// The merkle branch for the block
+    pub merkle_branch: Vec<String>,
+    /// The version of the block
+    pub version: String,
+    /// The nbits (difficulty target) for the block
+    pub nbits: String,
+    /// The ntime (timestamp) for the block
+    pub ntime: String,
+}
+
 // Parse Address from a string provided by the miner
 pub fn parse_address(address: &str, network: Network) -> Result<Address, WorkError> {
     let parsed_address = Address::from_str(address).map_err(|e| WorkError {
@@ -48,6 +68,52 @@ pub fn parse_address(address: &str, network: Network) -> Result<Address, WorkErr
         .map_err(|_| WorkError {
             message: format!("Address does not match network: {}", network),
         })
+}
+
+/// Build a coinbase from the provided address, network and height.
+/// This handles a single address for now - i.e. for solo mining.
+/// TODO: Handle multiple addresses and payout proportions.
+pub fn build_coinbase_transaction(
+    address: Address,
+    value: u64,
+    height: i64,
+    default_witness_commitment: Option<String>,
+) -> Result<Transaction, WorkError> {
+    let script_pubkey = address.script_pubkey();
+
+    let coinbase_script = Builder::new()
+        .push_int(height) // block height in coinbase script
+        .into_script();
+
+    let mut outputs = vec![TxOut {
+        value: Amount::from_sat(value),
+        script_pubkey,
+    }];
+    if let Some(default_witness_commitment) = default_witness_commitment {
+        let commitment_bytes = hex::decode(&default_witness_commitment).map_err(|e| WorkError {
+            message: format!("Invalid witness commitment hex: {}", e),
+        })?;
+        let commitment = ScriptBuf::from(commitment_bytes);
+        outputs.push(TxOut {
+            value: Amount::ZERO,
+            script_pubkey: commitment,
+        });
+    }
+    let coinbase_tx = Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: bitcoin::OutPoint {
+                txid: sha256d::Hash::all_zeros().into(),
+                vout: u32::MAX,
+            },
+            script_sig: coinbase_script,
+            sequence: Sequence::MAX,
+            witness: Vec::<Vec<u8>>::new().into(),
+        }],
+        output: outputs,
+    };
+    Ok(coinbase_tx)
 }
 
 #[cfg(test)]
