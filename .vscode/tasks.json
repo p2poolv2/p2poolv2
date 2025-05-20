@@ -2,9 +2,9 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "rust: cargo test",
+            "label": "Nextest: Run all tests",
             "type": "shell",
-            "command": "cargo test",
+            "command": "cargo nextest run test --workspace",
             "group": {
                 "kind": "build",
                 // "isDefault": true
@@ -32,6 +32,19 @@
                     }
                 }
             ]
+        },
+        {
+            "label": "Nextest: Run tests for a package",
+            "type": "shell",
+            "command": "cargo",
+            "args": [
+                "nextest",
+                "run",
+                "-p",
+                "${input:packageName}"
+            ],
+            "problemMatcher": [],
+            "group": "test"
         },
         {
             "label": "rust: cargo check",
@@ -63,6 +76,13 @@
                     }
                 }
             ]
+        }
+    ],
+    "inputs": [
+        {
+            "id": "packageName",
+            "type": "promptString",
+            "description": "Enter the test binary name (not the function!)"
         }
     ]
 }

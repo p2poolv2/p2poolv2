@@ -1,3 +1,4 @@
 {
     "rust-analyzer.check.command": "clippy",
+    "task.quickOpen.showAll": true
 }
