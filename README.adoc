@@ -10,6 +10,8 @@ Rebooting P2Pool
 3. Support transactions - pay all miners with atomic swaps by market makers.
 4. Market makers buy shares from smaller miners - earning virgin coins.
 
+Jump to <<developer-setup,Developer Setup>> notes if that is what you want.
+
 == Run with Docker
 
 All docker commands are run from the docker directory.
@@ -67,3 +69,21 @@ and we do not support masochistic setups. You are on your own.
 A high level overview of the components used and the interaction between them is shown below.
 
 image::docs/p2pool-setup.png[P2Pool V2 Architecture]
+
+== Developer Setup
+
+You can use devcontainer support from vscode to quick get going.
+
+If you want to run things locally with your choice of editor, then I tend to add the 
+following in my user's ~/.cargo/config.toml. This will reduce your build time substantially
+as rust-rocksdb will link to your system wide rocksdb.
+
+cat ~/.cargo/config.toml
+```
+[env]
+ROCKSDB_LIB_DIR = "/usr/lib/librocksdb.so"
+```
+
+To install your system wide rocksdb, look up your distribution's packages.
+
+For me it was `pacman -S rocksdb`.
