@@ -1,0 +1,40 @@
+[package]
+name = "p2poolv2_lib"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+libp2p = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+config = { workspace = true }
+serde = { workspace = true }
+hex = { workspace = true }
+ciborium = { workspace = true }
+rocksdb = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+ciborium-io = { workspace = true }
+serde_json = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
+zmq = { workspace = true }
+bitcoin = { workspace = true }
+base64 = { workspace = true }
+void = { workspace = true }
+tokio-util = { workspace = true }
+tokio-stream = { workspace = true }
+bitcoindrpc = { path = '../bitcoindrpc' }
+stratum = { path = '../stratum' }
+
+[dev-dependencies]
+tempfile = "3.15.0"
+test-log = { version = "0.2.17", features = ["trace"] }
+tokio = { version = "1.0", features = ["full", "test-util"] }
+rand = "0.8"
+wiremock = "0.6.2"
+mockall = "0.13.1"
+mockall_double = "0.3.1"

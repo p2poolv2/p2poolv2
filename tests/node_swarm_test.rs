@@ -16,11 +16,11 @@
 
 mod common;
 
-use common::default_test_config;
 use p2poolv2_lib::{
     node::actor::NodeHandle,
     shares::{chain::actor::ChainHandle, ShareBlock},
 };
+
 use std::time::Duration;
 use tempfile::tempdir;
 
@@ -28,20 +28,20 @@ use tempfile::tempdir;
 async fn test_three_nodes_connectivity() {
     // Create three different configurations as strings
 
-    let config1 = default_test_config()
+    let config1 = common::default_test_config()
         .with_listen_address("/ip4/127.0.0.1/tcp/6884".to_string())
         .with_store_path("test_chain_1.db".to_string())
         .with_miner_pubkey(
             "020202020202020202020202020202020202020202020202020202020202020202".to_string(),
         );
-    let config2 = default_test_config()
+    let config2 = common::default_test_config()
         .with_listen_address("/ip4/127.0.0.1/tcp/6885".to_string())
         .with_store_path("test_chain_2.db".to_string())
         .with_miner_pubkey(
             "020202020202020202020202020202020202020202020202020202020202020202".to_string(),
         )
         .with_dial_peers(vec!["/ip4/127.0.0.1/tcp/6884".to_string()]);
-    let config3 = default_test_config()
+    let config3 = common::default_test_config()
         .with_listen_address("/ip4/127.0.0.1/tcp/6886".to_string())
         .with_store_path("test_chain_3.db".to_string())
         .with_miner_pubkey(

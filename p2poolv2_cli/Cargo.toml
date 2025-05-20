@@ -1,0 +1,19 @@
+[package]
+name = "p2poolv2_cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+p2poolv2_lib = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+config = { workspace = true }
+serde = { workspace = true }
+
+
+[[bin]]
+name = "p2poolv2_cli"
+path = "src/main.rs"

@@ -1,0 +1,24 @@
+[package]
+name = "p2poolv2"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+p2poolv2_lib = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+config = { workspace = true }
+serde = { workspace = true }
+bitcoindrpc = { path = "../bitcoindrpc" }
+stratum = { path = "../stratum" } 
+
+[[bin]]
+name = "p2poolv2"
+path = "src/main.rs"
+
+[dev-dependencies]
+mockall = "0.13.1"
+mockall_double = "0.3.1"
