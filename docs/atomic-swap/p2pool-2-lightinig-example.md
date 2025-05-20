@@ -62,7 +62,7 @@ With the revealed preimage `R`, Bob constructs and broadcasts a **redeem transac
 If Bob is **not satisfied** with the verification step:
 
 - He can **choose not to pay** the Lightning invoice.
-- Optionally, Bob can refund Alice instantly by signing instant refund path in htlc.
+- Optionally, Bob can instantly refund Alice by signing instant refund path in htlc.
 - Otherwise, Alice will need to wait until the **HTLC timeout** expires. After this, she can reclaim the locked shares using a refund path.
 
 ---
