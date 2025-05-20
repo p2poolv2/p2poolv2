@@ -44,7 +44,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Run tests
-        run: cargo nextest run
+        run: cargo nextest run --workspace
 
   coverage:
     name: Code Coverage

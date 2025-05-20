@@ -28,6 +28,7 @@ use stratum::{
 };
 use tokio::runtime::Runtime;
 
+#[test]
 fn test_stratum_server_subscribe() {
     let addr: SocketAddr = "127.0.0.1:9999".parse().expect("Invalid address");
     // Setup server - using Arc so we can access it for shutdown
