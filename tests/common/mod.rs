@@ -20,7 +20,6 @@ use p2poolv2_lib::config::{
 };
 use p2poolv2_lib::shares::miner_message::MinerWorkbase;
 
-#[cfg(test)]
 /// Build a default test configuration with test values that can be replaced later by each test
 /// We avoid providing a Default implementation for Config as it exposes us to the risk of
 /// accidentally using the default values in production.
@@ -76,8 +75,7 @@ pub fn default_test_config() -> Config {
 }
 
 #[allow(dead_code)]
-#[cfg(test)]
 pub fn simple_miner_workbase() -> MinerWorkbase {
-    let json_str = include_str!("../../tests/test_data/simple_miner_workbase.json");
+    let json_str = include_str!("../test_data/simple_miner_workbase.json");
     serde_json::from_str(json_str).unwrap()
 }

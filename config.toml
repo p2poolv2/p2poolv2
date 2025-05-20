@@ -44,3 +44,7 @@ password = "p2pool"
 # For container or local run it is recommended to use console output
 console = false
 level = "debug"
+
+[[tests]]
+name = "integration"
+path = "tests.main"

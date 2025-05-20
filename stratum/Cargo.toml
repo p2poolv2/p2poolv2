@@ -1,0 +1,33 @@
+[package]
+name = "stratum"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+
+[dependencies]
+tokio = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+config = { workspace = true }
+serde = { workspace = true }
+hex = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
+bitcoin = { workspace = true }
+base64 = { workspace = true }
+tokio-util = { workspace = true }
+tokio-stream = { workspace = true }
+bitcoindrpc = { path = '../bitcoindrpc', features = ["mock"] }
+
+[dev-dependencies]
+test-log = { version = "0.2.17", features = ["trace"] }
+rand = "0.8"
+mockall = "0.13.1"
+mockall_double = "0.3.1"
+
+[lib]
+path = "src/lib.rs"
