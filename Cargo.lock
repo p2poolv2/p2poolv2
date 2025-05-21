@@ -422,6 +422,7 @@ dependencies = [
  "mockall",
  "serde",
  "serde_json",
+ "test-log",
  "tokio",
  "wiremock",
 ]
