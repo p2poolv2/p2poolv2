@@ -1,0 +1,226 @@
+// Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
+//
+//  This file is part of P2Poolv2
+//
+// P2Poolv2 is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free
+// Software Foundation, either version 3 of the License, or (at your option)
+// any later version.
+//
+// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
+// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along with
+// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+
+use crate::session::EXTRANONCE2_SIZE;
+use crate::work::error::WorkError;
+use bitcoin::absolute::LockTime;
+use bitcoin::blockdata::script::{Builder, ScriptBuf};
+use bitcoin::consensus::serialize;
+use bitcoin::hashes::{sha256d, Hash};
+use bitcoin::network::Network;
+use bitcoin::transaction::{Sequence, Transaction, TxIn, TxOut, Version};
+use bitcoin::{Address, Amount};
+use std::str::FromStr;
+
+// Parse Address from a string provided by the miner
+pub fn parse_address(address: &str, network: Network) -> Result<Address, WorkError> {
+    let parsed_address = Address::from_str(address).map_err(|e| WorkError {
+        message: format!("Invalid address: {}", e),
+    })?;
+
+    parsed_address
+        .require_network(network)
+        .map_err(|_| WorkError {
+            message: format!("Address does not match network: {}", network),
+        })
+}
+
+/// Build a coinbase from the provided address, network and height.
+/// This handles a single address for now - i.e. for solo mining.
+/// TODO: Handle multiple addresses and payout proportions.
+pub fn build_coinbase_transaction(
+    address: Address,
+    value: u64,
+    height: i64,
+    extranonce1: u32,
+    default_witness_commitment: Option<String>,
+) -> Result<Transaction, WorkError> {
+    let script_pubkey = address.script_pubkey();
+
+    // Set height, extranonce1 and space for extranonce2 in the coinbase input scriptsig.
+    let coinbase_script = Builder::new()
+        .push_int(height) // block height in coinbase script
+        .push_slice(extranonce1.to_le_bytes())
+        .push_slice([0u8; EXTRANONCE2_SIZE])
+        .into_script();
+
+    let mut outputs = vec![TxOut {
+        value: Amount::from_sat(value),
+        script_pubkey,
+    }];
+    if let Some(default_witness_commitment) = default_witness_commitment {
+        let commitment_bytes = hex::decode(&default_witness_commitment).map_err(|e| WorkError {
+            message: format!("Invalid witness commitment hex: {}", e),
+        })?;
+        let commitment = ScriptBuf::from(commitment_bytes);
+        outputs.push(TxOut {
+            value: Amount::ZERO,
+            script_pubkey: commitment,
+        });
+    }
+    let coinbase_tx = Transaction {
+        version: Version(2),
+        lock_time: LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: bitcoin::OutPoint {
+                txid: sha256d::Hash::all_zeros().into(),
+                vout: u32::MAX,
+            },
+            script_sig: coinbase_script,
+            sequence: Sequence::MAX,
+            witness: Vec::<Vec<u8>>::new().into(),
+        }],
+        output: outputs,
+    };
+    Ok(coinbase_tx)
+}
+
+/// Splits the coinbase transaction into two parts: coinbase1 and coinbase2, separated by our
+/// extranonce2 separator.
+/// TODO: Replace with memchr or similar for performance optimization.
+fn split_coinbase(coinbase: &Transaction) -> Result<(String, String), WorkError> {
+    let deserialized_coinbase = serialize::<Transaction>(coinbase);
+    let separator = [0u8; EXTRANONCE2_SIZE];
+    let separator_pos = match deserialized_coinbase
+        .as_slice()
+        .windows(separator.len())
+        .position(|window| window == separator)
+    {
+        Some(pos) => pos,
+        None => {
+            return Err(WorkError {
+                message: "Invalid coinbase transaction".to_string(),
+            })
+        }
+    };
+
+    let coinbase1 = hex::encode(&deserialized_coinbase[..separator_pos]);
+    let coinbase2 = hex::encode(&deserialized_coinbase[separator_pos + EXTRANONCE2_SIZE..]);
+    Ok((coinbase1, coinbase2))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_address_valid_mainnet() {
+        let addr = "1HpRF3JgafxaqjhMEjLNbevpRVvAp15t3A";
+        let result = parse_address(addr, Network::Bitcoin);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_address_valid_testnet() {
+        let addr = "tb1q0afww6y0kgl4tyjjyv6xlttvfwdfqxvrfzz35f";
+        let result = parse_address(addr, Network::Testnet);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_address_invalid_format() {
+        let addr = "not_a_valid_address";
+        let result = parse_address(addr, Network::Bitcoin);
+        assert!(result.is_err());
+        assert!(result
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("Invalid address"));
+    }
+
+    #[test]
+    fn test_parse_address_wrong_network() {
+        // This is a mainnet address, but we require testnet
+        let addr = "1HpRF3JgafxaqjhMEjLNbevpRVvAp15t3A";
+        let result = parse_address(addr, Network::Testnet);
+        assert!(result.is_err());
+        let msg = result.err().unwrap().to_string();
+        println!("Error message: {}", msg);
+        assert!(msg.contains("Address does not match network"));
+        assert!(msg.contains("testnet"));
+    }
+
+    #[test]
+    fn test_build_coinbase_transaction_without_default_witness() {
+        let addr = parse_address(
+            "1HpRF3JgafxaqjhMEjLNbevpRVvAp15t3A",
+            bitcoin::Network::Bitcoin,
+        )
+        .unwrap();
+        let value = 50_0000_0000u64; // 50 BTC in satoshis
+        let height = 100;
+        let coinbase = build_coinbase_transaction(addr.clone(), value, height, 8888, None).unwrap();
+
+        // Check version and lock_time
+        assert_eq!(coinbase.version, Version(2));
+        assert_eq!(coinbase.lock_time, LockTime::ZERO);
+
+        // Check input
+        assert_eq!(coinbase.input.len(), 1);
+        let input = &coinbase.input[0];
+        assert_eq!(
+            input.previous_output.txid,
+            sha256d::Hash::all_zeros().into()
+        );
+        assert_eq!(input.previous_output.vout, u32::MAX);
+        assert_eq!(input.sequence, Sequence::MAX);
+
+        let script_bytes = input.script_sig.as_bytes();
+        // Check coinbase script contains height
+        assert!(script_bytes.contains(&(height as u8)));
+        // Check coinbase script contains extranonce1
+        assert!(script_bytes.windows(4).any(|w| w == 8888_u32.to_le_bytes()));
+        // Check coinbase script contains space for extranonce2
+        assert!(script_bytes
+            .windows(EXTRANONCE2_SIZE)
+            .any(|w| w == [0u8; EXTRANONCE2_SIZE]));
+
+        // Check output
+        assert_eq!(coinbase.output.len(), 1);
+        let output = &coinbase.output[0];
+        assert_eq!(output.value, Amount::from_sat(value));
+        assert_eq!(output.script_pubkey, addr.script_pubkey());
+    }
+
+    #[test]
+    fn test_split_coinbase_without_default_commitment() {
+        let addr = parse_address(
+            "1HpRF3JgafxaqjhMEjLNbevpRVvAp15t3A",
+            bitcoin::Network::Bitcoin,
+        )
+        .unwrap();
+        let value = 50_0000_0000u64; // 50 BTC in satoshis
+        let height = 100;
+        let coinbase = build_coinbase_transaction(addr.clone(), value, height, 8888, None).unwrap();
+
+        let (coinbase1, coinbase2) = split_coinbase(&coinbase).unwrap();
+
+        // Reconstruct the coinbase by concatenating coinbase1, extranonce2, and coinbase2
+        let extranonce2 = [0u8; EXTRANONCE2_SIZE];
+        let coinbase1_bytes = hex::decode(&coinbase1).unwrap();
+        let coinbase2_bytes = hex::decode(&coinbase2).unwrap();
+
+        let mut reconstructed = Vec::new();
+        reconstructed.extend_from_slice(&coinbase1_bytes);
+        reconstructed.extend_from_slice(&extranonce2);
+        reconstructed.extend_from_slice(&coinbase2_bytes);
+
+        let reconstructed_coinbase: Transaction =
+            bitcoin::consensus::deserialize(&reconstructed).unwrap();
+        assert_eq!(reconstructed_coinbase, coinbase);
+    }
+}
