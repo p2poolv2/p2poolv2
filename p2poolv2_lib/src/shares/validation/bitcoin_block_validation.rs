@@ -33,7 +33,11 @@ pub async fn meets_bitcoin_difficulty(
     block: &bitcoin::Block,
     config: &BitcoinConfig,
 ) -> Result<bool, Box<dyn Error>> {
-    let bitcoind = BitcoindRpcClient::new(&config.url, &config.username, &config.password)?;
+    let bitcoind = BitcoindRpcClient::new(
+        config.url.clone(),
+        config.username.clone(),
+        config.password.clone(),
+    )?;
     let difficulty = bitcoind.get_difficulty().await?;
     let share_difficulty = share.header.miner_share.sdiff;
     if share_difficulty >= Decimal::from_f64_retain(difficulty).unwrap() {
@@ -60,7 +64,11 @@ pub async fn validate_bitcoin_block(
     })];
 
     // Call getblocktemplate RPC method using config values
-    let bitcoind = BitcoindRpcClient::new(&config.url, &config.username, &config.password)?;
+    let bitcoind = BitcoindRpcClient::new(
+        config.url.clone(),
+        config.username.clone(),
+        config.password.clone(),
+    )?;
     let result: Result<serde_json::Value, _> = bitcoind.request("getblocktemplate", params).await;
 
     if let Err(e) = result {

@@ -36,9 +36,9 @@ fn test_stratum_server_subscribe() {
     let mut server = StratumServer::<BitcoindRpcClient>::new(
         9999,
         "127.0.0.1".to_string(),
-        "http://localhost:38332",
-        "user",
-        "pass",
+        "http://localhost:38332".to_string(),
+        "user".to_string(),
+        "pass".to_string(),
         shutdown_rx,
     );
 

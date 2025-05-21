@@ -67,9 +67,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut stratum_server = StratumServer::<BitcoindRpcClient>::new(
             stratum_config.port,
             stratum_config.host,
-            &bitcoin_config.url,
-            &bitcoin_config.username,
-            &bitcoin_config.password,
+            bitcoin_config.url.clone(),
+            bitcoin_config.username.clone(),
+            bitcoin_config.password.clone(),
             stratum_shutdown_rx,
         );
         info!("Starting Stratum server...");

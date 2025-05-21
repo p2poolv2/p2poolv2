@@ -43,9 +43,9 @@ impl<B: BitcoindRpc> StratumServer<B> {
     pub fn new(
         port: u16,
         address: String,
-        url: &str,
-        username: &str,
-        password: &str,
+        url: String,
+        username: String,
+        password: String,
         shutdown_rx: oneshot::Receiver<()>,
     ) -> Self {
         info!("Connection to bitcoind: {}", url);
@@ -68,20 +68,16 @@ impl<B: BitcoindRpc> StratumServer<B> {
             .await
         {
             // Extract the hex string from the blocktemplate JSON value
-            if let Some(hex_str) = blocktemplate.as_str() {
-                match hex::decode(hex_str).map(|bytes| deserialize::<Block>(&bytes)) {
-                    Ok(Ok(block)) => {
-                        self.blocktemplate = Some(block);
-                    }
-                    Ok(Err(e)) => {
-                        info!("Failed to deserialize block: {}", e);
-                    }
-                    Err(e) => {
-                        info!("Failed to decode hex: {}", e);
-                    }
+            match hex::decode(blocktemplate).map(|bytes| deserialize::<Block>(&bytes)) {
+                Ok(Ok(block)) => {
+                    self.blocktemplate = Some(block);
                 }
-            } else {
-                info!("blocktemplate is not a string");
+                Ok(Err(e)) => {
+                    info!("Failed to deserialize block: {}", e);
+                }
+                Err(e) => {
+                    info!("Failed to decode hex: {}", e);
+                }
             }
         } else {
             info!("Failed to connect to bitcoind. We won't be able to mine.");
@@ -224,7 +220,6 @@ mod stratum_server_tests {
     use bitcoin::consensus::encode::serialize;
     use bitcoin::{Block, CompactTarget};
     use bitcoindrpc::MockBitcoindRpc;
-    use serde_json::json;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::time::Duration;
     use tokio::time::sleep;
@@ -235,16 +230,16 @@ mod stratum_server_tests {
         ctx.expect().returning(|_, _, _| {
             let mut mock = MockBitcoindRpc::default();
             mock.expect_getblocktemplate()
-                .returning(|_| Ok(serde_json::json!({})));
+                .returning(|_| Box::pin(async move { Ok("".into()) }));
             Ok(mock)
         });
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
         let mut server = StratumServer::<MockBitcoindRpc>::new(
             12345,
             "127.0.0.1".to_string(),
-            "localhost:8332",
-            "user",
-            "pass",
+            "localhost:8332".to_string(),
+            "user".to_string(),
+            "pass".to_string(),
             shutdown_rx,
         );
 
@@ -464,8 +459,10 @@ mod stratum_server_tests {
 
         // Setup mock bitcoind to return the block hex string
         let mut mock = MockBitcoindRpc::default();
-        mock.expect_getblocktemplate()
-            .returning(move |_| Ok(json!(block_hex.clone())));
+        mock.expect_getblocktemplate().returning(move |_| {
+            let block_hex = block_hex.clone();
+            Box::pin(async move { Ok(block_hex) })
+        });
 
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
         let mut server = StratumServer {
@@ -488,7 +485,7 @@ mod stratum_server_tests {
         // Setup mock bitcoind to return a non-string value
         let mut mock = MockBitcoindRpc::default();
         mock.expect_getblocktemplate()
-            .returning(|_| Ok(json!({"not": "a string"})));
+            .returning(|_| Box::pin(async move { Ok("blah".into()) }));
 
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
         let mut server = StratumServer {
@@ -509,7 +506,7 @@ mod stratum_server_tests {
         // Setup mock bitcoind to return an invalid hex string
         let mut mock = MockBitcoindRpc::default();
         mock.expect_getblocktemplate()
-            .returning(|_| Ok(json!("nothex!!")));
+            .returning(|_| Box::pin(async move { Ok("nothex".into()) }));
 
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
         let mut server = StratumServer {
@@ -530,7 +527,7 @@ mod stratum_server_tests {
         // Setup mock bitcoind to return a hex string that is valid hex but not a valid block
         let mut mock = MockBitcoindRpc::default();
         mock.expect_getblocktemplate()
-            .returning(|_| Ok(json!("deadbeef")));
+            .returning(|_| Box::pin(async move { Ok("nothex".into()) }));
 
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
         let mut server = StratumServer {
@@ -551,7 +548,7 @@ mod stratum_server_tests {
         // Setup mock bitcoind to return an error
         let mut mock = MockBitcoindRpc::default();
         mock.expect_getblocktemplate()
-            .returning(|_| Err("bitcoind error".into()));
+            .returning(|_| Box::pin(async { Err("bitcoind error".into()) }));
 
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
         let mut server = StratumServer {
