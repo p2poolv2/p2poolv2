@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::work::error::WorkError;
+use bitcoin::hashes::{sha256d, Hash};
 use bitcoindrpc::BitcoindRpc;
 use serde::{Deserialize, Serialize};
 
@@ -57,6 +58,28 @@ pub struct TemplateTransaction {
     pub fee: u64,
     pub sigops: u32,
     pub weight: u32,
+}
+
+/// Compute merkle branch from coinbase transaction and BlockTemplate's transactions
+fn compute_merkle_branches(input_txids: Vec<sha256d::Hash>) -> Vec<sha256d::Hash> {
+    let mut txids = input_txids.clone();
+    let mut merkle_branches = Vec::new();
+    while !txids.is_empty() {
+        merkle_branches.push(txids[0]);
+        let mut new_txids = Vec::new();
+        for i in (1..txids.len()).step_by(2) {
+            let left = txids[i];
+            let right = if i + 1 < txids.len() {
+                txids[i + 1]
+            } else {
+                left
+            };
+            let hash = sha256d::Hash::hash(&[left, right].concat());
+            new_txids.push(hash);
+        }
+        txids = new_txids;
+    }
+    merkle_branches
 }
 
 /// Get a new blocktemplate from the bitcoind server
@@ -152,5 +175,55 @@ mod gbt_load_tests {
                     .to_string()
             )
         )
+    }
+    #[test_log::test]
+    fn test_compute_merkle_branches_single_txid() {
+        // Only one txid, branch should be just that txid
+        let txid = sha256d::Hash::hash(&[1u8; 32]);
+        let branches = compute_merkle_branches(vec![txid]);
+        assert_eq!(branches, vec![txid]);
+    }
+
+    #[test]
+    fn test_compute_merkle_branches_two_txids() {
+        let txid1 = sha256d::Hash::hash(&[1u8; 32]);
+        let txid2 = sha256d::Hash::hash(&[2u8; 32]);
+        let expected_hash = sha256d::Hash::hash(&[txid2, txid2].concat());
+        let branches = compute_merkle_branches(vec![txid1, txid2]);
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[0], txid1);
+        assert_eq!(branches[1], expected_hash);
+    }
+
+    #[test]
+    fn test_compute_merkle_branches_three_txids() {
+        let txid1 = sha256d::Hash::hash(&[1u8; 32]);
+        let txid2 = sha256d::Hash::hash(&[2u8; 32]);
+        let txid3 = sha256d::Hash::hash(&[3u8; 32]);
+
+        let h23 = sha256d::Hash::hash(&[txid2, txid3].concat());
+        let branches = compute_merkle_branches(vec![txid1, txid2, txid3]);
+
+        assert_eq!(branches[0], txid1);
+        assert_eq!(branches[1], h23);
+        assert_eq!(branches.len(), 2);
+    }
+
+    #[test]
+    fn test_compute_merkle_branches_four_txids() {
+        let txid1 = sha256d::Hash::hash(&[1u8; 32]);
+        let txid2 = sha256d::Hash::hash(&[2u8; 32]);
+        let txid3 = sha256d::Hash::hash(&[3u8; 32]);
+        let txid4 = sha256d::Hash::hash(&[4u8; 32]);
+
+        let h23 = sha256d::Hash::hash(&[txid2, txid3].concat());
+        let h44 = sha256d::Hash::hash(&[txid4, txid4].concat());
+        let h4444 = sha256d::Hash::hash(&[h44, h44].concat());
+
+        let branches = compute_merkle_branches(vec![txid1, txid2, txid3, txid4]);
+        assert_eq!(branches[0], txid1);
+        assert_eq!(branches[1], h23);
+        assert_eq!(branches[2], h4444);
+        assert_eq!(branches.len(), 3);
     }
 }
