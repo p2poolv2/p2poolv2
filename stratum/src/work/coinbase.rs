@@ -19,8 +19,10 @@ use crate::work::error::WorkError;
 use bitcoin::absolute::LockTime;
 use bitcoin::blockdata::script::{Builder, ScriptBuf};
 use bitcoin::consensus::serialize;
+use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::{sha256d, Hash};
 use bitcoin::network::Network;
+use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::{Sequence, Transaction, TxIn, TxOut, Version};
 use bitcoin::{Address, Amount};
 use std::str::FromStr;
@@ -36,6 +38,17 @@ pub fn parse_address(address: &str, network: Network) -> Result<Address, WorkErr
         .map_err(|_| WorkError {
             message: format!("Address does not match network: {}", network),
         })
+}
+
+/// Get current timestamp, converted to hex bytes
+fn get_current_timestamp_bytes() -> PushBytesBuf {
+    let ts = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()) as u32;
+    let mut ts_bytes = PushBytesBuf::new();
+    let _ = ts_bytes.extend_from_slice(&ts.to_le_bytes());
+    ts_bytes
 }
 
 /// Build a coinbase from the provided address, network and height.
@@ -222,5 +235,39 @@ mod tests {
         let reconstructed_coinbase: Transaction =
             bitcoin::consensus::deserialize(&reconstructed).unwrap();
         assert_eq!(reconstructed_coinbase, coinbase);
+    }
+
+    #[test]
+    fn test_get_current_timestamp_bytes() {
+        let timestamp_bytes = get_current_timestamp_bytes();
+
+        // Verify that the bytes length is 4 (u32 size)
+        assert_eq!(timestamp_bytes.len(), 4);
+
+        // Convert to ScriptBuf to check serialization
+        let script = Builder::new().push_slice(timestamp_bytes).into_script();
+
+        // When serialized to hex, should start with 04 (length prefix for 4 bytes)
+        // followed by the actual timestamp bytes
+        let script_hex = script.to_hex_string();
+        assert!(script_hex.starts_with("04"));
+
+        // Total length should be 10 chars:
+        // - 2 chars for the length prefix (04)
+        // - 8 chars for the timestamp bytes (4 bytes = 8 hex chars)
+        assert_eq!(script_hex.len(), 10);
+
+        // Try to parse the timestamp back from the bytes
+        let timestamp_hex = &script_hex[2..]; // Skip the 04 prefix
+        let timestamp_data = hex::decode(timestamp_hex).unwrap();
+        let timestamp = u32::from_le_bytes(timestamp_data.try_into().unwrap());
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as u32;
+
+        // Allow 10 second difference to account for test execution time
+        assert!((now - timestamp) < 10);
     }
 }
