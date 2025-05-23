@@ -18,6 +18,7 @@ use crate::work::error::WorkError;
 use bitcoin::hashes::{sha256d, Hash};
 use bitcoindrpc::BitcoindRpc;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Struct representing the getblocktemplate response from Bitcoin Core
 #[derive(Debug, Deserialize, Serialize)]
@@ -28,7 +29,7 @@ pub struct BlockTemplate {
     pub vbrequired: u32,
     pub previousblockhash: String,
     pub transactions: Vec<TemplateTransaction>,
-    pub coinbaseaux: std::collections::HashMap<String, String>,
+    pub coinbaseaux: HashMap<String, String>,
     pub coinbasevalue: u64,
     pub longpollid: String,
     pub target: String,
@@ -112,6 +113,43 @@ async fn get_block_template<R: BitcoindRpc>(
         })),
     }
 }
+
+// /// Start a task to fetch block templates from bitcoind
+// /// Listen to ZMQ notify for blocknotify and getblocktemplate when new block is found.
+// /// Later we can do fancy things like periodic updates, or updates for new txns.
+// pub async fn start_gbt<B: BitcoindRpc + Sync + Send + 'static>(
+//     url: String,
+//     username: String,
+//     password: String,
+//     result_tx: tokio::sync::mpsc::Sender<BlockTemplate>,
+// ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+//     tokio::spawn(async move {
+//         let bitcoind = match B::new(url, username, password) {
+//             Ok(bitcoind) => bitcoind,
+//             Err(e) => {
+//                 info!("Failed to connect to bitcoind: {}", e);
+//                 return;
+//             }
+//         };
+//         loop {
+//             match get_block_template(&bitcoind).await {
+//                 Ok(template) => {
+//                     debug!("Block template: {:?}", template);
+//                     if result_tx.send(template).await.is_err() {
+//                         info!("Failed to send block template to channel");
+//                     }
+//                 }
+//                 Err(e) => {
+//                     info!("Error getting block template: {}", e);
+//                 }
+//             };
+//         }
+//     })
+//     .await;
+//     Err(Box::new(WorkError {
+//         message: "Failed to start GBT".to_string(),
+//     }))
+// }
 
 #[cfg(test)]
 mod gbt_load_tests {
