@@ -1,0 +1,62 @@
+{
+    "capabilities": [
+        "proposal"
+    ],
+    "version": 536870912,
+    "rules": [
+        "csv",
+        "!segwit",
+        "testdummy",
+        "taproot"
+    ],
+    "vbavailable": {},
+    "vbrequired": 0,
+    "previousblockhash": "773baafe908901fc6a097695658199101c6cf902005bbc9ea321ce3dc531dbc2",
+    "transactions": [
+        {
+            "data": "0200000000010138e945bc0c00e5ffb532ab853720e44132971943d5d4d89bafd5841effb864720000000000fdffffff02002d310100000000160014ca81d03f2707c355502622c7db77fdf79546926efcb9d42801000000160014fce9aa6a8f2031dd1cdc8f55bc4eba33b56cb2e90247304402204b09f9f1c66ea810419e621f7a73f5fba3e18212ba323fb6e0d65f5c450c95f60220157f0d912b0a47920d3e96324e837642a704373a777a2efc2adc60c2442aafd8012102d80d2ad4f79f507bd6fc81aea98d86a64ecf4f5cf4f3e8c3e25b9abbda165459f6010000",
+            "txid": "4193df037a4d8ffb9815f2fdae19abab69821f06625004a1e84d8df73cc0c044",
+            "hash": "769bda04e71df5956f831a523de5b0b028f52ee0991075d531deaf957b0d8a91",
+            "depends": [],
+            "fee": 2820,
+            "sigops": 1,
+            "weight": 561
+        },
+        {
+            "data": "020000000001019892968cf6c4f4d4fadb4a1b122cc3d063f2c75e95a597bf07ae13d140253cd60000000000fdffffff027c445049000000001600141f5f2ac0b50db39825a629300f7597a8b0954e25002d310100000000160014ca81d03f2707c355502622c7db77fdf79546926e0247304402205ee1a9613bb4a12542524436acb15e2d29ad16c160ec8333379b2fafecd3fbb7022013bbad1b9359f0edb2acfe078e3f69c5f1d9f484e57684be2647af024b82ea86012102e32626cfc718270670a1024401c09d5a6ab3d877305e53ebf1c0162ae123957af6010000",
+            "txid": "082af095391dbb4d8918765f41524e010ee3838adf3b3b13f280a6c83cad7776",
+            "hash": "4d8820d7697cce44b415fe46737aa751ca3cae6f646062c51ae64a36df354c83",
+            "depends": [],
+            "fee": 2820,
+            "sigops": 1,
+            "weight": 561
+        },
+        {
+            "data": "0200000000010156906f80b91cb29054c965ccf81f8bc1b0061a0de976d407c6ac5254deb3abc90000000000fdffffff02fcb9d42801000000160014c639f8d1b91da7a3ec10095c7a6f6b446b35ee5a002d310100000000160014ca81d03f2707c355502622c7db77fdf79546926e0247304402205ca0fcd4c4f5ace9d92217e829cd352182a7993321b3a8716e8473389bfe6da10220410907e00af9dd18c7bc05af640ec86a5e070ebf9ee0a76c28c124d2ab3688ae0121022bbaa153eee83fe1e62220ac453b2a90def497e56f5adf6f1c28aae242f7b106f6010000",
+            "txid": "58dd52c691e92e6e9da0be3146dfdc87c2c7c1ab6e64476f26427c6d771de6a5",
+            "hash": "5476b3c521f54a9dd431467a368ce2205465c1d9376daacbedeaf9696c8646ca",
+            "depends": [],
+            "fee": 2820,
+            "sigops": 1,
+            "weight": 561
+        }
+    ],
+    "coinbaseaux": {},
+    "coinbasevalue": 625008460,
+    "longpollid": "773baafe908901fc6a097695658199101c6cf902005bbc9ea321ce3dc531dbc23",
+    "target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+    "mintime": 1747920365,
+    "mutable": [
+        "time",
+        "transactions",
+        "prevblock"
+    ],
+    "noncerange": "00000000ffffffff",
+    "sigoplimit": 80000,
+    "sizelimit": 4000000,
+    "weightlimit": 4000000,
+    "curtime": 1747934495,
+    "bits": "207fffff",
+    "height": 503,
+    "default_witness_commitment": "6a24aa21a9ed0a281cdac573b947299d0e777cc19aa78d56dba493bac5c6a573955c5aac7540"
+}

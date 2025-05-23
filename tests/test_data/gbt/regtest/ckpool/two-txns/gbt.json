@@ -1,0 +1,53 @@
+{
+    "capabilities": [
+        "proposal"
+    ],
+    "version": 536870912,
+    "rules": [
+        "csv",
+        "!segwit",
+        "testdummy",
+        "taproot"
+    ],
+    "vbavailable": {},
+    "vbrequired": 0,
+    "previousblockhash": "0dcccd75ccef0aeac469ce1456d4cd4986fee45e5d42e1a762ee0970a3aede01",
+    "transactions": [
+        {
+            "data": "0200000000010170d6d8d8e2567e07325fcb46825ef4bfaeab647f3e4c3fc3d35f034f211967c60000000000fdffffff02fcb9d42801000000160014c99b20ebe77044159a2a2059d3107c8bf38862c2002d310100000000160014ca81d03f2707c355502622c7db77fdf79546926e024730440220168294afc019b43edd226e9beac8cb72af5db9eb1ecca952947e2d11c716bd21022001fd82c49a59d38a390fa27f0781be5fb444ed687b3df4b2ba9e4f4b3a075ad7012102e32626cfc718270670a1024401c09d5a6ab3d877305e53ebf1c0162ae123957af7010000",
+            "txid": "9a1644beab4dfaccc9bb3cbd5008b0581dd314102fcd79b69a2c724a8010d706",
+            "hash": "909001384c21bcd74d21e728c619a41ff395a5cc3ff6273cb2578ffba3ab5215",
+            "depends": [],
+            "fee": 2820,
+            "sigops": 1,
+            "weight": 561
+        },
+        {
+            "data": "02000000000101a5d136e3dba50e48251272cd78fae38a6191529f07a72bf61ae5ae677a93e26c0000000000fdffffff02002d310100000000160014ca81d03f2707c355502622c7db77fdf79546926e780c1f48000000001600144c14f804ac5d48c1a82aa2eed477b584f4dad2f10247304402200c7de70d976986ce67c8507a9930c1dc9e4f4c42fcda39088e9cb6fb22c6e58102202b811cc41b480855e993731910f1d5e3b6818bd266b52237adbb34eaf91180db012102e91d6addecccd544c4235c3b84ea056377a4ba9cee73811d7344e8863f59ed36f7010000",
+            "txid": "3bca24fa1c1bc8cfcf77dfd974bb5c80ea865caa828c2e43f86cea862d5d6e40",
+            "hash": "c5c4b4ec630683cb8d9df59d2f37661abcb0796486d5e4da68453152e2fcc674",
+            "depends": [],
+            "fee": 2820,
+            "sigops": 1,
+            "weight": 561
+        }
+    ],
+    "coinbaseaux": {},
+    "coinbasevalue": 625005640,
+    "longpollid": "0dcccd75ccef0aeac469ce1456d4cd4986fee45e5d42e1a762ee0970a3aede0111",
+    "target": "7fffff0000000000000000000000000000000000000000000000000000000000",
+    "mintime": 1747920366,
+    "mutable": [
+        "time",
+        "transactions",
+        "prevblock"
+    ],
+    "noncerange": "00000000ffffffff",
+    "sigoplimit": 80000,
+    "sizelimit": 4000000,
+    "weightlimit": 4000000,
+    "curtime": 1747975972,
+    "bits": "207fffff",
+    "height": 504,
+    "default_witness_commitment": "6a24aa21a9ede76ec156e6f58d6fb8b85a12094958b1a02b99330eb4c727433c830a71068618"
+}
