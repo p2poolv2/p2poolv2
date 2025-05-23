@@ -60,6 +60,17 @@ pub struct TemplateTransaction {
     pub weight: u32,
 }
 
+/// Compute merkle branches for the transactions in the block template
+/// Uses private compute_merkle_branches after parsing the txids from the template
+pub fn build_merkle_branches_for_template(template: &BlockTemplate) -> Vec<sha256d::Hash> {
+    let txids = template
+        .transactions
+        .iter()
+        .map(|tx| tx.txid.parse().unwrap())
+        .collect();
+    compute_merkle_branches(txids)
+}
+
 /// Compute merkle branch from coinbase transaction and BlockTemplate's transactions
 fn compute_merkle_branches(input_txids: Vec<sha256d::Hash>) -> Vec<sha256d::Hash> {
     let mut txids = input_txids.clone();
