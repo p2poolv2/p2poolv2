@@ -20,6 +20,7 @@ use common::{default_test_config, simple_miner_workbase};
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::node::messages::Message;
 use p2poolv2_lib::node::p2p_message_handlers::handle_request;
+use p2poolv2_lib::service::p2p_service::RequestContext;
 use p2poolv2_lib::shares::chain::actor::ChainHandle;
 use p2poolv2_lib::shares::miner_message::CkPoolMessage;
 use p2poolv2_lib::shares::ShareBlock;
@@ -121,14 +122,15 @@ async fn receive_shares_and_workbases_from_self_and_peers() {
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        let response = handle_request(
-            peer_id,
-            peer_msg.clone(),
-            chain_handle.clone(),
-            response_channel_tx.clone(),
-            swarm_tx.clone(),
-            &time_provider,
-        )
+        let ctx = RequestContext {
+            peer: peer_id,
+            request: peer_msg.clone(),
+            chain_handle: chain_handle.clone(),
+            response_channel: response_channel_tx.clone(),
+            swarm_tx: swarm_tx.clone(),
+            time_provider: &time_provider,
+        };
+        let response = handle_request(ctx)
         .await;
         let _ww = chain_handle.get_workbase(7473434392883363844).await;
         tracing::debug!("Peer message response: {:?}", &response);
@@ -138,7 +140,8 @@ async fn receive_shares_and_workbases_from_self_and_peers() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let peer_shares = chain_handle.get_shares_at_height(0).await;
-    let peer_share = peer_shares.values().next().unwrap();
+    dbg!(&peer_shares);
+    let peer_share = peer_shares.values().next().expect("No peer shares found at height 0");
 
     // For this test, we forced prev_share_blockhash to be None
     assert!(
@@ -200,24 +203,24 @@ async fn test_rate_limiting() {
     let time_provider = SystemTimeProvider {};
 
     // sending two workbase messages quickly, the second one should be rate-limited.
-    let result1 = handle_request(
-        peer_id,
-        Message::Workbase(workbase.clone()),
-        chain_handle.clone(),
-        (),
-        swarm_tx.clone(),
-        &time_provider,
-    )
+    let result1 = handle_request(RequestContext {
+        peer: peer_id,
+        request: Message::Workbase(workbase.clone()),
+        chain_handle: chain_handle.clone(),
+        response_channel: (),
+        swarm_tx: swarm_tx.clone(),
+        time_provider: &time_provider,
+    })
     .await;
 
-    let result2 = handle_request(
-        peer_id,
-        Message::Workbase(workbase.clone()),
-        chain_handle.clone(),
-        (),
-        swarm_tx.clone(),
-        &time_provider,
-    )
+    let result2 = handle_request(RequestContext {
+        peer: peer_id,
+        request: Message::Workbase(workbase.clone()),
+        chain_handle: chain_handle.clone(),
+        response_channel: (),
+        swarm_tx: swarm_tx.clone(),
+        time_provider: &time_provider,
+    })
     .await;
 
     assert!(result1.is_ok(), "First request should succeed");
@@ -225,14 +228,14 @@ async fn test_rate_limiting() {
 
     // wait longer than the rate limit window, then send again to succed
     tokio::time::sleep(Duration::from_secs(2)).await;
-    let result3 = handle_request(
-        peer_id,
-        Message::Workbase(workbase.clone()),
-        chain_handle.clone(),
-        (),
-        swarm_tx.clone(),
-        &time_provider,
-    )
+    let result3 = handle_request(RequestContext {
+        peer: peer_id,
+        request: Message::Workbase(workbase.clone()),
+        chain_handle: chain_handle.clone(),
+        response_channel: (),
+        swarm_tx: swarm_tx.clone(),
+        time_provider: &time_provider,
+    })
     .await;
     assert!(
         result3.is_ok(),

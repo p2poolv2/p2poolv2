@@ -19,7 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Trait to get current system time, allowing for mocking in tests
 #[allow(dead_code)]
-pub trait TimeProvider {
+pub trait TimeProvider: Send + Sync {
     fn now(&self) -> SystemTime;
     fn set_time(&mut self, time: Time);
     fn seconds_since_epoch(&self) -> u64;

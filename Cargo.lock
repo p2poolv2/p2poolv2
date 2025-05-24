@@ -2205,7 +2205,7 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
- "tower",
+ "tower 0.4.13",
  "tracing",
  "url",
 ]
@@ -3181,6 +3181,8 @@ dependencies = [
  "bitcoin",
  "bitcoindrpc",
  "libp2p",
+ "mockall",
+ "mockall_double",
  "p2poolv2_lib",
  "serde",
  "serde_json",
@@ -3250,6 +3252,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "tower 0.5.2",
  "tracing",
  "tracing-subscriber",
  "void",
@@ -4745,6 +4748,16 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "tower"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d039ad9159c98b70ecfd540b2573b97f7f52c3e8d9f8ad57a24b916a536975f9"
+dependencies = [
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]

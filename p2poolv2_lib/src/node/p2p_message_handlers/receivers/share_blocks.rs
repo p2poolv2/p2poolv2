@@ -35,8 +35,8 @@ use tracing::{error, info};
 pub async fn handle_share_block(
     share_block: ShareBlock,
     chain_handle: ChainHandle,
-    time_provider: &impl TimeProvider,
-) -> Result<(), Box<dyn Error>> {
+    time_provider: &dyn TimeProvider,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Received share block: {:?}", share_block);
     if let Err(e) = validation::validate(&share_block, &chain_handle, time_provider).await {
         error!("Share block validation failed: {}", e);

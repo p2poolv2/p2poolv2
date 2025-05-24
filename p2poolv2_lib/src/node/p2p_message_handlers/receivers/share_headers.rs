@@ -33,8 +33,8 @@ use tracing::info;
 pub async fn handle_share_headers(
     share_headers: Vec<ShareHeader>,
     _chain_handle: ChainHandle,
-    _time_provider: &impl TimeProvider,
-) -> Result<(), Box<dyn Error>> {
+    _time_provider: &dyn TimeProvider,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Received share headers: {:?}", share_headers);
     Ok(())
 }

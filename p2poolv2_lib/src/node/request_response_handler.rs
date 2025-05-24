@@ -16,8 +16,9 @@
 
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::Message;
-use crate::node::p2p_message_handlers::handle_request;
 use crate::node::SwarmSend;
+use crate::service::p2p_service::{P2PService, RequestContext};
+
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
@@ -49,19 +50,14 @@ pub async fn handle_request_response_event(
         } => {
             debug!("Received request from peer: {}", peer);
             let time_provider = SystemTimeProvider {};
-            if let Err(e) = handle_request::<ResponseChannel<Message>>(
+            let request_context = RequestContext {
                 peer,
                 request,
                 chain_handle,
                 response_channel,
                 swarm_tx,
-                &time_provider,
-            )
-            .await
-            {
-                error!("Failed to handle request: {}", e);
-                return Err("Error handling request".into());
-            }
+                time_provider: &time_provider,
+            };
         }
         RequestResponseEvent::Message {
             peer,
