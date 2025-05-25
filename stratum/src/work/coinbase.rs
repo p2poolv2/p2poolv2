@@ -30,6 +30,8 @@ use std::str::FromStr;
 const EXTRANONCE_SEPARATOR: [u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE] =
     [1u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE];
 
+const POOL_SIGNATURE: [u8; 8] = *b"P2Poolv2";
+
 #[allow(dead_code)]
 pub struct OutputPair {
     pub address: Address,
@@ -128,6 +130,7 @@ pub fn build_coinbase_transaction(
         .push_slice(secs.to_le_bytes())
         .push_slice(nsecs.to_le_bytes())
         .push_slice(EXTRANONCE_SEPARATOR)
+        .push_slice(POOL_SIGNATURE)
         .into_script();
 
     let mut outputs = build_outputs(output_data);
@@ -383,7 +386,7 @@ mod tests {
         );
 
         // Check the coinbase input script to make sure we got the expected string
-        assert_eq!(coinbase.input[0].script_sig.len(), 28);
+        assert_eq!(coinbase.input[0].script_sig.len(), 37);
         let script_bytes = coinbase.input[0].script_sig.as_bytes();
         assert_eq!(script_bytes[0], 2);
         assert_eq!(script_bytes[1..3].as_hex().to_string(), "fa01"); // Height 506 in little-endian
@@ -391,6 +394,11 @@ mod tests {
         assert_eq!(script_bytes[5..6].as_hex().to_string(), "04"); // Timestamp length
         assert_eq!(script_bytes[10..11].as_hex().to_string(), "04"); // Nanosecond timestamp length, don't check value as it changes with time
         assert_eq!(script_bytes[15..16].as_hex().to_string(), "0c"); // extranonce length, don't check value as it changes with time
-        assert_eq!(script_bytes[16..], EXTRANONCE_SEPARATOR); // Extranonce separator
+        assert_eq!(script_bytes[16..28], EXTRANONCE_SEPARATOR); // Extranonce separator
+        assert_eq!(script_bytes[28], 8u8); // Pool signature length
+        assert_eq!(
+            &script_bytes[29..37],
+            POOL_SIGNATURE, // Check the pool signature
+        );
     }
 }
