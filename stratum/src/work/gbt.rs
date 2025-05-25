@@ -23,7 +23,7 @@ use std::collections::HashMap;
 /// Struct representing the getblocktemplate response from Bitcoin Core
 #[derive(Debug, Deserialize, Serialize)]
 pub struct BlockTemplate {
-    pub version: u32,
+    pub version: i32,
     pub rules: Vec<String>,
     pub vbavailable: std::collections::HashMap<String, i32>,
     pub vbrequired: u32,
@@ -63,6 +63,7 @@ pub struct TemplateTransaction {
 
 /// Compute merkle branches for the transactions in the block template
 /// Uses private compute_merkle_branches after parsing the txids from the template
+#[allow(dead_code)]
 pub fn build_merkle_branches_for_template(template: &BlockTemplate) -> Vec<sha256d::Hash> {
     let txids = template
         .transactions
@@ -73,6 +74,7 @@ pub fn build_merkle_branches_for_template(template: &BlockTemplate) -> Vec<sha25
 }
 
 /// Compute merkle branch from coinbase transaction and BlockTemplate's transactions
+#[allow(dead_code)]
 fn compute_merkle_branches(input_txids: Vec<sha256d::Hash>) -> Vec<sha256d::Hash> {
     let mut txids = input_txids.clone();
     let mut merkle_branches = Vec::new();
@@ -96,6 +98,7 @@ fn compute_merkle_branches(input_txids: Vec<sha256d::Hash>) -> Vec<sha256d::Hash
 
 /// Get a new blocktemplate from the bitcoind server
 /// Parse the received JSON into a BlockTemplate struct and return it.
+#[allow(dead_code)]
 async fn get_block_template<R: BitcoindRpc>(
     bitcoind: &R,
 ) -> Result<BlockTemplate, Box<dyn std::error::Error + Send + Sync>> {

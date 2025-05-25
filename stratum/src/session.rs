@@ -16,6 +16,8 @@
 
 use bitcoin::secp256k1::rand::{self, Rng};
 
+/// Use 4 byte extranonce1
+pub const EXTRANONCE1_SIZE: usize = 4;
 /// Use 8 byte extranonce2
 pub const EXTRANONCE2_SIZE: usize = 8;
 
