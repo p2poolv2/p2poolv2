@@ -52,7 +52,6 @@ const HEARTBEAT_INTERVAL: u64 = 15;
 // Define the events that can be emitted by our behavior
 #[derive(Debug)]
 #[allow(dead_code)]
-
 pub enum P2PoolBehaviourEvent {
     Gossipsub(gossipsub::Event),
     Kademlia(kad::Event),
@@ -62,7 +61,6 @@ pub enum P2PoolBehaviourEvent {
 }
 
 #[allow(dead_code)]
-
 impl P2PoolBehaviour {
     pub fn new(local_key: &Keypair, config: &Config) -> Result<Self, Box<dyn Error>> {
         // Initialize gossipsub

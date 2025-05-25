@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::session::EXTRANONCE2_SIZE;
+use crate::session::{EXTRANONCE1_SIZE, EXTRANONCE2_SIZE};
 use crate::work::error::WorkError;
 use bitcoin::absolute::LockTime;
 use bitcoin::blockdata::script::{Builder, ScriptBuf};
@@ -26,7 +26,18 @@ use bitcoin::transaction::{Sequence, Transaction, TxIn, TxOut, Version};
 use bitcoin::{Address, Amount};
 use std::str::FromStr;
 
+#[allow(dead_code)]
+const EXTRANONCE_SEPARATOR: [u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE] =
+    [1u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE];
+
+#[allow(dead_code)]
+pub struct OutputPair {
+    pub address: Address,
+    pub amount: Amount,
+}
+
 // Parse Address from a string provided by the miner
+#[allow(dead_code)]
 pub fn parse_address(address: &str, network: Network) -> Result<Address, WorkError> {
     let parsed_address = Address::from_str(address).map_err(|e| WorkError {
         message: format!("Invalid address: {}", e),
@@ -39,15 +50,44 @@ pub fn parse_address(address: &str, network: Network) -> Result<Address, WorkErr
         })
 }
 
-/// Get current timestamp, converted to hex bytes
-fn get_current_timestamp_bytes() -> PushBytesBuf {
-    let ts = (std::time::SystemTime::now()
+/// Get current timestamp, in seconds and nanoseconds.
+#[allow(dead_code)]
+fn get_current_timestamp_bytes() -> (u32, u32) {
+    let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()) as u32;
-    let mut ts_bytes = PushBytesBuf::new();
-    let _ = ts_bytes.extend_from_slice(&ts.to_le_bytes());
-    ts_bytes
+        .unwrap();
+    (timestamp.as_secs() as u32, timestamp.subsec_nanos())
+}
+
+/// Build outputs for the transaction from the provided address and value.
+#[allow(dead_code)]
+fn build_outputs(output_data: Vec<OutputPair>) -> Vec<TxOut> {
+    output_data
+        .iter()
+        .map(|pair| TxOut {
+            value: pair.amount,
+            script_pubkey: pair.address.script_pubkey(),
+        })
+        .collect()
+}
+
+/// Append the default witness commitment to the outputs if one is provided.
+#[allow(dead_code)]
+fn append_default_witness_commitment(
+    outputs: &mut Vec<TxOut>,
+    default_witness_commitment: Option<String>,
+) -> Result<(), WorkError> {
+    if let Some(default_witness_commitment) = default_witness_commitment {
+        let commitment_bytes = hex::decode(&default_witness_commitment).map_err(|e| WorkError {
+            message: format!("Invalid witness commitment hex: {}", e),
+        })?;
+        let commitment = ScriptBuf::from(commitment_bytes);
+        outputs.push(TxOut {
+            value: Amount::ZERO,
+            script_pubkey: commitment,
+        });
+    }
+    Ok(())
 }
 
 /// Build a coinbase from the provided address, network and height.
@@ -69,44 +109,32 @@ fn get_current_timestamp_bytes() -> PushBytesBuf {
 /// 04 68033068 - timestamp seconds
 /// 04 eba96d2d - enonce1 from tv_nsec ??
 /// 0c - 12, the length of the two nonces put together
+#[allow(dead_code)]
 pub fn build_coinbase_transaction(
-    address: Address,
-    value: u64,
+    version: Version,
+    output_data: Vec<OutputPair>,
     height: i64,
     aux_flags: PushBytesBuf,
-    extranonce1: u32,
     default_witness_commitment: Option<String>,
 ) -> Result<Transaction, WorkError> {
-    let script_pubkey = address.script_pubkey();
-
-    let mut extranonce_both = PushBytesBuf::from(extranonce1.to_le_bytes());
-    extranonce_both
-        .extend_from_slice(&[0u8; EXTRANONCE2_SIZE])
-        .unwrap();
+    // Use timestamp for providing randomness to distribute search space along with enonce1 that will be used by the miners.
+    let (secs, nsecs) = get_current_timestamp_bytes();
 
     let coinbase_script = Builder::new()
         .push_int(height)
+        // ckpool pushes just bytes. The spec recommends using PUSH opcodes, so we do that.
+        // resuling in us geting 0x0100 instead of ck's 0x00 for flags in the serialized script.
         .push_slice(aux_flags)
-        .push_slice(get_current_timestamp_bytes())
-        .push_slice(extranonce_both) // push both in single push prefixes bytes length of 12, i.e. the 0c
+        .push_slice(secs.to_le_bytes())
+        .push_slice(nsecs.to_le_bytes())
+        .push_slice(EXTRANONCE_SEPARATOR)
         .into_script();
 
-    let mut outputs = vec![TxOut {
-        value: Amount::from_sat(value),
-        script_pubkey,
-    }];
-    if let Some(default_witness_commitment) = default_witness_commitment {
-        let commitment_bytes = hex::decode(&default_witness_commitment).map_err(|e| WorkError {
-            message: format!("Invalid witness commitment hex: {}", e),
-        })?;
-        let commitment = ScriptBuf::from(commitment_bytes);
-        outputs.push(TxOut {
-            value: Amount::ZERO,
-            script_pubkey: commitment,
-        });
-    }
+    let mut outputs = build_outputs(output_data);
+    append_default_witness_commitment(&mut outputs, default_witness_commitment)?;
+
     let coinbase_tx = Transaction {
-        version: Version(2),
+        version,
         lock_time: LockTime::ZERO,
         input: vec![TxIn {
             previous_output: bitcoin::OutPoint {
@@ -124,14 +152,13 @@ pub fn build_coinbase_transaction(
 
 /// Splits the coinbase transaction into two parts: coinbase1 and coinbase2, separated by our
 /// extranonce2 separator.
-/// TODO: Replace with memchr or similar for performance optimization.
+#[allow(dead_code)]
 pub fn split_coinbase(coinbase: &Transaction) -> Result<(String, String), WorkError> {
     let deserialized_coinbase = serialize::<Transaction>(coinbase);
-    let separator = [0u8; EXTRANONCE2_SIZE];
     let separator_pos = match deserialized_coinbase
         .as_slice()
-        .windows(separator.len())
-        .position(|window| window == separator)
+        .windows(EXTRANONCE1_SIZE + EXTRANONCE2_SIZE)
+        .position(|window| window == EXTRANONCE_SEPARATOR)
     {
         Some(pos) => pos,
         None => {
@@ -142,13 +169,19 @@ pub fn split_coinbase(coinbase: &Transaction) -> Result<(String, String), WorkEr
     };
 
     let coinbase1 = hex::encode(&deserialized_coinbase[..separator_pos]);
-    let coinbase2 = hex::encode(&deserialized_coinbase[separator_pos + EXTRANONCE2_SIZE..]);
+    let coinbase2 = hex::encode(
+        &deserialized_coinbase[separator_pos + (EXTRANONCE1_SIZE + EXTRANONCE2_SIZE)..],
+    );
     Ok((coinbase1, coinbase2))
 }
 
 #[cfg(test)]
 mod tests {
+    use bitcoin::hex::DisplayHex;
+
     use super::*;
+    use crate::work::gbt::BlockTemplate;
+    use std::fs;
 
     #[test]
     fn test_parse_address_valid_mainnet() {
@@ -195,14 +228,16 @@ mod tests {
             bitcoin::Network::Bitcoin,
         )
         .unwrap();
-        let value = 50_0000_0000u64; // 50 BTC in satoshis
+        let value = Amount::from_str("50 BTC").unwrap();
         let height = 100;
         let coinbase = build_coinbase_transaction(
-            addr.clone(),
-            value,
+            Version(2),
+            vec![OutputPair {
+                address: addr.clone(),
+                amount: value,
+            }],
             height,
             PushBytesBuf::from(&[0u8]),
-            8888,
             None,
         )
         .unwrap();
@@ -224,17 +259,15 @@ mod tests {
         let script_bytes = input.script_sig.as_bytes();
         // Check coinbase script contains height
         assert!(script_bytes.contains(&(height as u8)));
-        // Check coinbase script contains extranonce1
-        assert!(script_bytes.windows(4).any(|w| w == 8888_u32.to_le_bytes()));
-        // Check coinbase script contains space for extranonce2
+        // Check coinbase script contains extranonce separator
         assert!(script_bytes
-            .windows(EXTRANONCE2_SIZE)
-            .any(|w| w == [0u8; EXTRANONCE2_SIZE]));
+            .windows(EXTRANONCE1_SIZE + EXTRANONCE2_SIZE)
+            .any(|w| w == EXTRANONCE_SEPARATOR));
 
         // Check output
         assert_eq!(coinbase.output.len(), 1);
         let output = &coinbase.output[0];
-        assert_eq!(output.value, Amount::from_sat(value));
+        assert_eq!(output.value, value);
         assert_eq!(output.script_pubkey, addr.script_pubkey());
     }
 
@@ -245,14 +278,16 @@ mod tests {
             bitcoin::Network::Bitcoin,
         )
         .unwrap();
-        let value = 50_0000_0000u64; // 50 BTC in satoshis
+        let value = Amount::from_str("50 BTC").unwrap();
         let height = 100;
         let coinbase = build_coinbase_transaction(
-            addr.clone(),
-            value,
+            Version(2),
+            vec![OutputPair {
+                address: addr.clone(),
+                amount: value,
+            }],
             height,
             PushBytesBuf::from(&[0u8]),
-            8888,
             None,
         )
         .unwrap();
@@ -260,7 +295,7 @@ mod tests {
         let (coinbase1, coinbase2) = split_coinbase(&coinbase).unwrap();
 
         // Reconstruct the coinbase by concatenating coinbase1, extranonce2, and coinbase2
-        let extranonce2 = [0u8; EXTRANONCE2_SIZE];
+        let extranonce2 = EXTRANONCE_SEPARATOR.to_vec();
         let coinbase1_bytes = hex::decode(&coinbase1).unwrap();
         let coinbase2_bytes = hex::decode(&coinbase2).unwrap();
 
@@ -275,36 +310,87 @@ mod tests {
     }
 
     #[test]
-    fn test_get_current_timestamp_bytes() {
-        let timestamp_bytes = get_current_timestamp_bytes();
+    fn test_building_coinbase_with_regtest_ckpool_data() {
+        // Load GBT and expected notify JSON
+        let gbt_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/test_data/gbt/regtest/ckpool/four-txns/gbt.json");
+        println!("GBT path: {:?}", gbt_path);
+        let data = fs::read_to_string(gbt_path).expect("Unable to read file");
+        let template: BlockTemplate = serde_json::from_str(&data).expect("Invalid JSON");
 
-        // Verify that the bytes length is 4 (u32 size)
-        assert_eq!(timestamp_bytes.len(), 4);
+        let notify_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/test_data/gbt/regtest/ckpool/four-txns/notify.json");
+        let data = fs::read_to_string(notify_path).expect("Unable to read file");
+        let _notify: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
 
-        // Convert to ScriptBuf to check serialization
-        let script = Builder::new().push_slice(timestamp_bytes).into_script();
+        // Address used in ckpool regtest conf
+        let address = parse_address(
+            "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr",
+            bitcoin::Network::Regtest,
+        )
+        .unwrap();
 
-        // When serialized to hex, should start with 04 (length prefix for 4 bytes)
-        // followed by the actual timestamp bytes
-        let script_hex = script.to_hex_string();
-        assert!(script_hex.starts_with("04"));
+        let donation_address = parse_address(
+            "bcrt1qlk935ze2fsu86zjp395uvtegztrkaezawxx0wf",
+            bitcoin::Network::Regtest,
+        )
+        .unwrap();
 
-        // Total length should be 10 chars:
-        // - 2 chars for the length prefix (04)
-        // - 8 chars for the timestamp bytes (4 bytes = 8 hex chars)
-        assert_eq!(script_hex.len(), 10);
+        let coinbase = build_coinbase_transaction(
+            Version(1), // ckpool uses version 1
+            vec![
+                OutputPair {
+                    address: address.clone(),
+                    amount: Amount::from_str("49 BTC").unwrap(),
+                },
+                OutputPair {
+                    address: donation_address.clone(),
+                    amount: Amount::from_str("1 BTC").unwrap(), // ckpool uses 2% donation address. We replicate that for test.
+                },
+            ],
+            template.height as i64,
+            PushBytesBuf::from(&[0u8]),
+            template.default_witness_commitment.clone(),
+        )
+        .unwrap();
 
-        // Try to parse the timestamp back from the bytes
-        let timestamp_hex = &script_hex[2..]; // Skip the 04 prefix
-        let timestamp_data = hex::decode(timestamp_hex).unwrap();
-        let timestamp = u32::from_le_bytes(timestamp_data.try_into().unwrap());
+        assert_eq!(coinbase.version, Version(1));
+        assert_eq!(coinbase.lock_time, LockTime::ZERO);
+        assert_eq!(coinbase.input.len(), 1);
+        let input = &coinbase.input[0];
+        assert_eq!(
+            input.previous_output.txid,
+            sha256d::Hash::all_zeros().into()
+        );
+        assert_eq!(input.previous_output.vout, u32::MAX);
+        assert_eq!(input.sequence, Sequence::MAX);
+        assert_eq!(input.witness.len(), 0); // No witness data in this test
+        assert_eq!(coinbase.output.len(), 3);
+        let output1 = &coinbase.output[0];
+        let output2 = &coinbase.output[1];
+        let output3 = &coinbase.output[2];
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as u32;
+        assert_eq!(output1.value, Amount::from_str("49 BTC").unwrap());
+        assert_eq!(output1.script_pubkey, address.script_pubkey());
 
-        // Allow 10 second difference to account for test execution time
-        assert!((now - timestamp) < 10);
+        assert_eq!(output2.value, Amount::from_str("1 BTC").unwrap());
+        assert_eq!(output2.script_pubkey, donation_address.script_pubkey());
+
+        assert_eq!(output3.value, Amount::ZERO);
+        assert_eq!(
+            Some(output3.script_pubkey.to_hex_string()),
+            template.default_witness_commitment
+        );
+
+        // Check the coinbase input script to make sure we got the expected string
+        assert_eq!(coinbase.input[0].script_sig.len(), 28);
+        let script_bytes = coinbase.input[0].script_sig.as_bytes();
+        assert_eq!(script_bytes[0], 2);
+        assert_eq!(script_bytes[1..3].as_hex().to_string(), "fa01"); // Height 506 in little-endian
+        assert_eq!(script_bytes[3..5].as_hex().to_string(), "0100"); // Flags (empty in this case)
+        assert_eq!(script_bytes[5..6].as_hex().to_string(), "04"); // Timestamp length
+        assert_eq!(script_bytes[10..11].as_hex().to_string(), "04"); // Nanosecond timestamp length, don't check value as it changes with time
+        assert_eq!(script_bytes[15..16].as_hex().to_string(), "0c"); // extranonce length, don't check value as it changes with time
+        assert_eq!(script_bytes[16..], EXTRANONCE_SEPARATOR); // Extranonce separator
     }
 }
