@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use base64::{engine::general_purpose::STANDARD, Engine};
+use bitcoin::consensus::encode::serialize_hex;
 use jsonrpsee::core::client::ClientT;
 use jsonrpsee::http_client::{HeaderMap, HttpClient, HttpClientBuilder};
 use std::error::Error;
@@ -71,6 +72,11 @@ pub trait BitcoindRpc: Send + Sync {
         &self,
         network: bitcoin::Network,
     ) -> impl std::future::Future<Output = Result<String, Box<dyn std::error::Error>>> + Send;
+
+    fn decoderawtransaction(
+        &self,
+        tx: &bitcoin::Transaction,
+    ) -> impl std::future::Future<Output = Result<bitcoin::Transaction, Box<dyn std::error::Error>>> + Send;
 }
 
 #[derive(Debug, Clone)]
@@ -147,6 +153,37 @@ impl BitcoindRpc for BitcoindRpcClient {
             Ok(result) => Ok(result.to_string()),
             Err(e) => Err(Box::new(BitcoindRpcError::Other(format!(
                 "Failed to get block template: {}",
+                e
+            )))),
+        }
+    }
+
+    /// Decode a raw transaction using bitcoind RPC
+    ///
+    /// Sends the transaction serialized as hex to the Bitcoin Core RPC,
+    /// then receives and parses the decoded transaction information.
+    async fn decoderawtransaction(
+        &self,
+        tx: &bitcoin::Transaction,
+    ) -> Result<bitcoin::Transaction, Box<dyn std::error::Error>> {
+        // Serialize the transaction to hex string
+        let tx_hex = serialize_hex(tx);
+
+        // Prepare params for the RPC call
+        let params = vec![serde_json::Value::String(tx_hex)];
+
+        // Make the RPC request
+        match self
+            .request::<serde_json::Value>("decoderawtransaction", params)
+            .await
+        {
+            Ok(result) => {
+                // Parse the response into a bitcoin::Transaction
+                let tx: bitcoin::Transaction = serde_json::from_value(result)?;
+                Ok(tx)
+            }
+            Err(e) => Err(Box::new(BitcoindRpcError::Other(format!(
+                "Failed to decode raw transaction: {}",
                 e
             )))),
         }
@@ -379,5 +416,49 @@ mod tests {
 
         assert!(result.get("version").is_some());
         assert_eq!(result.get("height").unwrap(), 2000000);
+    }
+
+    #[tokio::test]
+    async fn test_decoderawtransaction() {
+        let mock_server = MockServer::start().await;
+        let tx_hex = "0100000001000000000000000000000000000000000000000000000000000000\
+                  0000000000ffffffff1c02fa01010004bdaf326804554ce1370c0101010101\
+                  01010101010101ffffffff0300e1f50500000000160014fd8b1a0b2a4c387d\
+                  0a418969c62f2812c76ee45d0011102401000000160014ca81d03f2707c355\
+                  502622c7db77fdf79546926e0000000000000000266a24aa21a9eddd9e37e4\
+                  20b1b58781dada016dfa5812f62133a381e1a58e83389735b2330ef700000000";
+        let tx = bitcoin::consensus::encode::deserialize::<bitcoin::Transaction>(
+            hex::decode(tx_hex).unwrap().as_slice(),
+        )
+        .unwrap();
+
+        // Setup mock for decoderawtransaction
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "decoderawtransaction",
+                "params": [tx_hex],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "result": serde_json::to_value(tx.clone()).unwrap(),
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(
+            mock_server.uri(),
+            "p2pool".to_string(),
+            "p2pool".to_string(),
+        )
+        .unwrap();
+
+        let decoded_tx = client.decoderawtransaction(&tx).await.unwrap();
+
+        assert_eq!(decoded_tx, tx);
     }
 }
