@@ -20,6 +20,7 @@ pub mod senders;
 use crate::node::messages::{GetData, InventoryMessage, Message};
 use crate::node::SwarmSend;
 use crate::service::p2p_service::RequestContext;
+use crate::utils::time_provider::TimeProvider;
 use receivers::getblocks::handle_getblocks;
 use receivers::getheaders::handle_getheaders;
 use receivers::share_blocks::handle_share_block;
@@ -32,8 +33,8 @@ use tower::Service;
 use tracing::{error, info};
 
 /// The Tower service that processes inbound P2P requests.
-pub async fn handle_request<C: 'static + Send + Sync>(
-    ctx: RequestContext<'_, C>,
+pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + Sync + 'static>(
+    ctx: RequestContext<C, T>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Handling request {} from peer: {}", ctx.request, ctx.peer);
     match ctx.request {
@@ -58,11 +59,11 @@ pub async fn handle_request<C: 'static + Send + Sync>(
             .await
         }
         Message::ShareHeaders(share_headers) => {
-            handle_share_headers(share_headers, ctx.chain_handle, ctx.time_provider).await
+            handle_share_headers(share_headers, ctx.chain_handle, &ctx.time_provider).await
         }
         Message::ShareBlock(share_block) => {
             if let Err(e) =
-                handle_share_block(share_block, ctx.chain_handle, ctx.time_provider).await
+                handle_share_block(share_block, ctx.chain_handle, &ctx.time_provider).await
             {
                 error!("Failed to add share: {}", e);
                 return Err(format!("Failed to add share: {}", e).into());
@@ -143,16 +144,18 @@ pub async fn handle_request<C: 'static + Send + Sync>(
 #[derive(Clone)]
 pub struct P2PRequestService;
 
-impl<'a, C: 'static + Send + Sync> Service<RequestContext<'a, C>> for P2PRequestService {
+impl<C: 'static + Send + Sync, T: TimeProvider + Send + Sync + 'static>
+    Service<RequestContext<C, T>> for P2PRequestService
+{
     type Response = ();
     type Error = Box<dyn Error + Send + Sync>;
-    type Future = Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>>;
+    type Future = Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send>>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: RequestContext<'a, C>) -> Self::Future {
+    fn call(&mut self, req: RequestContext<C, T>) -> Self::Future {
         Box::pin(async move {
             handle_request(req).await.map_err(|e| {
                 error!("Service failed to process request: {}", e);
@@ -230,7 +233,7 @@ mod tests {
             chain_handle,
             response_channel: response_channel_tx,
             swarm_tx,
-            time_provider: &time_provider,
+            time_provider,
         };
 
         let result = handle_request(ctx).await;
@@ -272,7 +275,7 @@ mod tests {
             chain_handle,
             response_channel: response_channel_tx,
             swarm_tx,
-            time_provider: &time_provider,
+            time_provider,
         };
 
         let result = handle_request(ctx).await;
@@ -309,7 +312,7 @@ mod tests {
             chain_handle,
             response_channel: response_channel_tx,
             swarm_tx,
-            time_provider: &time_provider,
+            time_provider,
         };
 
         let result = handle_request(ctx).await;
@@ -338,7 +341,7 @@ mod tests {
             chain_handle,
             response_channel: response_channel_tx,
             swarm_tx,
-            time_provider: &time_provider,
+            time_provider,
         };
 
         let result = handle_request(ctx).await;
@@ -382,7 +385,7 @@ mod tests {
             chain_handle,
             response_channel,
             swarm_tx,
-            time_provider: &time_provider,
+            time_provider,
         };
 
         let result = handle_request(ctx).await;
@@ -439,7 +442,7 @@ mod tests {
             chain_handle,
             response_channel,
             swarm_tx,
-            time_provider: &time_provider,
+            time_provider,
         };
 
         let result = handle_request(ctx).await;
@@ -481,7 +484,7 @@ mod tests {
             chain_handle,
             response_channel: response_channel_tx,
             swarm_tx,
-            time_provider: &time_provider,
+            time_provider,
         };
 
         let result = handle_request(ctx).await;
@@ -512,7 +515,7 @@ mod tests {
             chain_handle,
             response_channel: response_channel_tx,
             swarm_tx,
-            time_provider: &time_provider,
+            time_provider,
         };
 
         let result = handle_request(ctx).await;
@@ -541,7 +544,7 @@ mod tests {
             chain_handle,
             response_channel: response_channel_tx,
             swarm_tx,
-            time_provider: &time_provider,
+            time_provider,
         };
 
         let result = handle_request(ctx).await;
@@ -574,7 +577,7 @@ mod tests {
             chain_handle,
             response_channel: response_channel_tx,
             swarm_tx,
-            time_provider: &time_provider,
+            time_provider,
         };
 
         let result = handle_request(ctx).await;
@@ -596,7 +599,7 @@ mod tests {
             chain_handle,
             response_channel: response_channel_tx,
             swarm_tx,
-            time_provider: &time_provider,
+            time_provider,
         };
 
         let result = handle_request(ctx).await;
@@ -621,7 +624,7 @@ mod tests {
             chain_handle,
             response_channel: response_channel_tx,
             swarm_tx,
-            time_provider: &time_provider,
+            time_provider,
         };
 
         let result = handle_request(ctx).await;
@@ -649,7 +652,7 @@ mod tests {
             chain_handle,
             response_channel: response_channel_tx,
             swarm_tx,
-            time_provider: &time_provider,
+            time_provider,
         };
 
         let result = handle_request(ctx).await;
@@ -674,7 +677,7 @@ mod tests {
             chain_handle,
             response_channel: response_channel_tx,
             swarm_tx,
-            time_provider: &time_provider,
+            time_provider,
         };
 
         let result = handle_request(ctx).await;
@@ -701,7 +704,7 @@ mod tests {
             chain_handle,
             response_channel: response_channel_tx,
             swarm_tx,
-            time_provider: &time_provider,
+            time_provider,
         };
 
         let result = handle_request(ctx).await;
@@ -738,7 +741,7 @@ mod tests {
             chain_handle,
             response_channel: response_channel_tx,
             swarm_tx,
-            time_provider: &time_provider,
+            time_provider,
         };
 
         let result = handle_request(ctx).await;

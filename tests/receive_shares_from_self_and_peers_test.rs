@@ -128,7 +128,7 @@ async fn receive_shares_and_workbases_from_self_and_peers() {
             chain_handle: chain_handle.clone(),
             response_channel: response_channel_tx.clone(),
             swarm_tx: swarm_tx.clone(),
-            time_provider: &time_provider,
+            time_provider,
         };
         let response = handle_request(ctx).await;
         let _ww = chain_handle.get_workbase(7473434392883363844).await;
@@ -211,7 +211,7 @@ async fn test_rate_limiting() {
         chain_handle: chain_handle.clone(),
         response_channel: (),
         swarm_tx: swarm_tx.clone(),
-        time_provider: &time_provider,
+        time_provider: time_provider.clone(),
     })
     .await;
 
@@ -221,7 +221,7 @@ async fn test_rate_limiting() {
         chain_handle: chain_handle.clone(),
         response_channel: (),
         swarm_tx: swarm_tx.clone(),
-        time_provider: &time_provider,
+        time_provider: time_provider.clone(),
     })
     .await;
 
@@ -236,7 +236,7 @@ async fn test_rate_limiting() {
         chain_handle: chain_handle.clone(),
         response_channel: (),
         swarm_tx: swarm_tx.clone(),
-        time_provider: &time_provider,
+        time_provider: time_provider.clone(),
     })
     .await;
     assert!(

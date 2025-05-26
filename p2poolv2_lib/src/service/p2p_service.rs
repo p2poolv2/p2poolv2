@@ -30,30 +30,32 @@ use crate::shares::chain::actor::ChainHandle;
 use crate::utils::time_provider::TimeProvider;
 
 /// Request context wrapping all inputs for the service call.
-pub struct RequestContext<'a, C> {
+pub struct RequestContext<C, T> {
     pub peer: libp2p::PeerId,
     pub request: Message,
     pub chain_handle: ChainHandle,
     pub response_channel: C,
     pub swarm_tx: mpsc::Sender<SwarmSend<C>>,
-    pub time_provider: &'a (dyn TimeProvider + Send + Sync),
+    pub time_provider: T,
 }
 
 /// The Tower service that processes inbound P2P requests.
 #[derive(Clone)]
 pub struct P2PService;
 
-impl<'a, C: 'static + Send + Sync> Service<RequestContext<'a, C>> for P2PService {
+impl<C: 'static + Send + Sync, T: TimeProvider + Send + Sync + 'static>
+    Service<RequestContext<C, T>> for P2PService
+{
     type Response = ();
     type Error = Box<dyn Error + Send + Sync>;
-    type Future = Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>>;
+    type Future = Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send>>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         // Always ready in this example
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: RequestContext<'a, C>) -> Self::Future {
+    fn call(&mut self, req: RequestContext<C, T>) -> Self::Future {
         Box::pin(async move {
             handle_request(req).await.map_err(|e| {
                 tracing::error!("Service failed to process request: {}", e);

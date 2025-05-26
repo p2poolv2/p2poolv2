@@ -40,7 +40,7 @@ pub const MAX_TIME_DIFF: u64 = 60;
 pub async fn validate(
     share: &ShareBlock,
     chain_handle: &ChainHandle,
-    time_provider: &dyn TimeProvider,
+    time_provider: &impl TimeProvider,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     if let Err(e) = validate_timestamp(share, time_provider).await {
         return Err(format!("Share timestamp validation failed: {}", e).into());
@@ -121,7 +121,7 @@ pub async fn validate_uncles(
 /// Validate the share timestamp is within the last 60 seconds
 pub async fn validate_timestamp(
     share: &ShareBlock,
-    time_provider: &dyn TimeProvider,
+    time_provider: &impl TimeProvider,
 ) -> Result<(), Box<dyn Error>> {
     let current_time = time_provider.seconds_since_epoch();
 
