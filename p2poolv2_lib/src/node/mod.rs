@@ -245,7 +245,7 @@ impl Node {
                                 peer_id, e
                             );
                         } else {
-                            info!("Outbound connection established to peer: {}", peer_id);
+                            info!("Outbound connection established to peer: {}", peer_id,);
                         }
                     }
                     libp2p::core::ConnectedPoint::Listener { .. } => {
@@ -264,7 +264,20 @@ impl Node {
                 error,
                 connection_id,
             } => {
-                error!("Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}");
+                // Check if we're already connected to this peer
+                if peer_id.is_some() && self.swarm.is_connected(&peer_id.unwrap()) {
+                    // This is likely just a duplicate connection attempt to a peer we're already connected to
+                    debug!(
+                        "Connection attempt to already connected peer {}: {}",
+                        peer_id.unwrap(),
+                        error
+                    );
+                } else {
+                    error!("Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}");
+                    if let Some(source) = error.source() {
+                        error!("Error source: {}", source);
+                    }
+                }
                 Ok(())
             }
             SwarmEvent::Behaviour(event) => match event {
@@ -318,16 +331,33 @@ impl Node {
         match event {
             MdnsEvent::Discovered(discovered) => {
                 info!("Discovered peer: {:?}", discovered);
+
+                // Group addresses by peer ID
+                let mut peer_addresses: std::collections::HashMap<PeerId, Vec<Multiaddr>> =
+                    std::collections::HashMap::new();
+
                 for (peer_id, addr) in discovered {
-                    // Check if we're not already connected to this peer
+                    peer_addresses.entry(peer_id).or_default().push(addr);
+                }
+
+                // Try to dial each peer (only once) if not already connected
+                for (peer_id, addresses) in peer_addresses {
                     if !self.swarm.is_connected(&peer_id) {
-                        // Try to dial the discovered peer
-                        match self.swarm.dial(addr.clone()) {
-                            Ok(_) => {
-                                // Add the peer's address to Kademlia
-                                self.swarm.behaviour_mut().add_address(peer_id, addr);
+                        // Select the first address (or implement better selection logic)
+                        if let Some(addr) = addresses.first() {
+                            // Try to dial the discovered peer
+                            match self.swarm.dial(addr.clone()) {
+                                Ok(_) => {
+                                    // Add all the peer's addresses to Kademlia
+                                    for addr in addresses {
+                                        self.swarm.behaviour_mut().add_address(peer_id, addr);
+                                    }
+                                    info!("Dialing discovered peer: {}", peer_id);
+                                }
+                                Err(e) => {
+                                    debug!("Failed to dial discovered peer {}: {}", peer_id, e)
+                                }
                             }
-                            Err(e) => debug!("Failed to dial discovered peer {}: {}", peer_id, e),
                         }
                     }
                 }
