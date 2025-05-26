@@ -3181,8 +3181,6 @@ dependencies = [
  "bitcoin",
  "bitcoindrpc",
  "libp2p",
- "mockall",
- "mockall_double",
  "p2poolv2_lib",
  "serde",
  "serde_json",

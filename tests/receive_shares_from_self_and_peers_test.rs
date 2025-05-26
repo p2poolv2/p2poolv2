@@ -130,8 +130,7 @@ async fn receive_shares_and_workbases_from_self_and_peers() {
             swarm_tx: swarm_tx.clone(),
             time_provider: &time_provider,
         };
-        let response = handle_request(ctx)
-        .await;
+        let response = handle_request(ctx).await;
         let _ww = chain_handle.get_workbase(7473434392883363844).await;
         tracing::debug!("Peer message response: {:?}", &response);
         assert!(response.is_ok(), "Peer message handling failed");
@@ -140,8 +139,11 @@ async fn receive_shares_and_workbases_from_self_and_peers() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let peer_shares = chain_handle.get_shares_at_height(0).await;
-    dbg!(&peer_shares);
-    let peer_share = peer_shares.values().next().expect("No peer shares found at height 0");
+    tracing::debug!("Peer shares: {:?}", &peer_shares);
+    let peer_share = peer_shares
+        .values()
+        .next()
+        .expect("No peer shares found at height 0");
 
     // For this test, we forced prev_share_blockhash to be None
     assert!(

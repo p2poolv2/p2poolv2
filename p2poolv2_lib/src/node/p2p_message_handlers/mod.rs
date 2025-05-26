@@ -28,7 +28,6 @@ use std::error::Error;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::sync::mpsc;
 use tower::Service;
 use tracing::{error, info};
 
@@ -144,11 +143,6 @@ pub async fn handle_request<C: 'static + Send + Sync>(
 #[derive(Clone)]
 pub struct P2PRequestService;
 
-impl P2PRequestService {
-    pub fn new() -> Self {
-        Self
-    }
-}
 impl<'a, C: 'static + Send + Sync> Service<RequestContext<'a, C>> for P2PRequestService {
     type Response = ();
     type Error = Box<dyn Error + Send + Sync>;
@@ -178,6 +172,7 @@ mod tests {
     use crate::test_utils::{load_valid_workbases_userworkbases_and_shares, TestBlockBuilder};
     use crate::utils::time_provider::TestTimeProvider;
     use crate::utils::time_provider::TimeProvider;
+    use tokio::sync::mpsc;
 
     use mockall::predicate::*;
     use std::time::SystemTime;
@@ -331,6 +326,7 @@ mod tests {
 
         let workbase = simple_miner_workbase();
 
+        // Set up mock to return error
         chain_handle
             .expect_add_workbase()
             .with(eq(workbase.clone()))
@@ -367,6 +363,7 @@ mod tests {
         let stop_block_hash =
             "0000000000000000000000000000000000000000000000000000000000000002".into();
 
+        // Mock the response headers
         let block1 = TestBlockBuilder::new()
             .blockhash("0000000000000000000000000000000000000000000000000000000000000001")
             .build();
@@ -391,6 +388,7 @@ mod tests {
         let result = handle_request(ctx).await;
         assert!(result.is_ok());
 
+        // Verify swarm message
         if let Some(SwarmSend::Response(channel, Message::ShareHeaders(headers))) =
             swarm_rx.recv().await
         {
@@ -412,6 +410,7 @@ mod tests {
         let stop_block_hash =
             "0000000000000000000000000000000000000000000000000000000000000002".into();
 
+        // Create test blocks that will be returned
         let block1 = TestBlockBuilder::new()
             .blockhash("0000000000000000000000000000000000000000000000000000000000000001")
             .build();
@@ -424,6 +423,7 @@ mod tests {
             block2.cached_blockhash.unwrap(),
         ];
 
+        // Set up mock expectations
         chain_handle
             .expect_get_blockhashes_for_locator()
             .returning(move |_, _, _| {
@@ -446,6 +446,7 @@ mod tests {
 
         assert!(result.is_ok());
 
+        // Verify swarm message
         if let Some(SwarmSend::Response(
             _,
             Message::Inventory(InventoryMessage::BlockHashes(hashes)),
@@ -468,6 +469,7 @@ mod tests {
         let (_, user_workbases, _) = load_valid_workbases_userworkbases_and_shares();
         let user_workbase = user_workbases[0].clone();
 
+        // Set up mock to return success
         chain_handle
             .expect_add_user_workbase()
             .with(eq(user_workbase.clone()))
@@ -498,6 +500,7 @@ mod tests {
         let (_, user_workbases, _) = load_valid_workbases_userworkbases_and_shares();
         let user_workbase = user_workbases[0].clone();
 
+        // Set up mock to return error
         chain_handle
             .expect_add_user_workbase()
             .with(eq(user_workbase.clone()))
@@ -525,6 +528,7 @@ mod tests {
         let chain_handle = ChainHandle::default();
         let time_provider = TestTimeProvider(SystemTime::now());
 
+        // Test BlockHashes inventory
         let block_hashes = vec![
             "0000000000000000000000000000000000000000000000000000000000000001".into(),
             "0000000000000000000000000000000000000000000000000000000000000002".into(),
@@ -553,6 +557,7 @@ mod tests {
         let chain_handle = ChainHandle::default();
         let time_provider = TestTimeProvider(SystemTime::now());
 
+        // Test TransactionHashes inventory
         let tx_hashes: Vec<bitcoin::Txid> = vec![
             "0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
@@ -632,6 +637,7 @@ mod tests {
         let chain_handle = ChainHandle::default();
         let time_provider = TestTimeProvider(SystemTime::now());
 
+        // Test GetData message with txid
         let txid = "0000000000000000000000000000000000000000000000000000000000000001"
             .parse()
             .unwrap();
@@ -659,6 +665,7 @@ mod tests {
         let chain_handle = ChainHandle::default();
         let time_provider = TestTimeProvider(SystemTime::now());
 
+        // Create a test transaction
         let transaction = crate::test_utils::test_coinbase_transaction();
 
         let ctx = RequestContext {
@@ -683,6 +690,7 @@ mod tests {
         let chain_handle = ChainHandle::default();
         let time_provider = TestTimeProvider(SystemTime::now());
 
+        // Create a test share block
         let share_block = TestBlockBuilder::new()
             .blockhash("0000000000000000000000000000000000000000000000000000000000000001")
             .build();
@@ -709,7 +717,7 @@ mod tests {
         let mut chain_handle = ChainHandle::default();
         let time_provider = TestTimeProvider(SystemTime::now());
 
-            // Create test share headers
+        // Create test share headers
         let block1 = TestBlockBuilder::new()
             .blockhash("0000000000000000000000000000000000000000000000000000000000000001")
             .build();

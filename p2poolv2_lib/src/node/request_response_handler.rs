@@ -17,7 +17,7 @@
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::Message;
 use crate::node::SwarmSend;
-use crate::service::p2p_service::{P2PService, RequestContext};
+use crate::service::p2p_service::RequestContext;
 
 #[cfg(test)]
 #[mockall_double::double]

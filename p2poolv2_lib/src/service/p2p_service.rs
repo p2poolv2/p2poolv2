@@ -43,12 +43,6 @@ pub struct RequestContext<'a, C> {
 #[derive(Clone)]
 pub struct P2PService;
 
-impl P2PService {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
 impl<'a, C: 'static + Send + Sync> Service<RequestContext<'a, C>> for P2PService {
     type Response = ();
     type Error = Box<dyn Error + Send + Sync>;
@@ -61,12 +55,10 @@ impl<'a, C: 'static + Send + Sync> Service<RequestContext<'a, C>> for P2PService
 
     fn call(&mut self, req: RequestContext<'a, C>) -> Self::Future {
         Box::pin(async move {
-            crate::node::p2p_message_handlers::handle_request(req)
-                .await
-                .map_err(|e| {
-                    tracing::error!("Service failed to process request: {}", e);
-                    e
-                })
+            handle_request(req).await.map_err(|e| {
+                tracing::error!("Service failed to process request: {}", e);
+                e
+            })
         })
     }
 }
