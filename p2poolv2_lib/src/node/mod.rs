@@ -18,7 +18,6 @@ pub mod behaviour;
 pub mod request_response_handler;
 pub use crate::config::Config;
 pub mod actor;
-pub mod gossip_handler;
 pub mod messages;
 pub mod p2p_message_handlers;
 pub mod rate_limiter;
@@ -34,12 +33,10 @@ use crate::shares::chain::actor::ChainHandle;
 use crate::shares::receive_mining_message::start_receiving_mining_messages;
 use crate::shares::ShareBlock;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
-use gossip_handler::handle_gossipsub_event;
 use libp2p::identify;
 use libp2p::request_response::ResponseChannel;
 use libp2p::PeerId;
 use libp2p::{
-    gossipsub,
     kad::{Event as KademliaEvent, QueryResult},
     swarm::SwarmEvent,
     Multiaddr, Swarm,
@@ -73,7 +70,6 @@ impl<T> SwarmResponseChannelTrait<T> for SwarmResponseChannel<T> {
 /// Capture send type for swarm p2p messages that can be sent to the swarm
 #[allow(dead_code)]
 pub enum SwarmSend<C> {
-    Gossip(Message),
     Request(PeerId, Message),
     Response(C, Message),
     Inv(ShareBlock),
@@ -84,7 +80,6 @@ struct Node {
     swarm: Swarm<P2PoolBehaviour>,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     swarm_rx: mpsc::Receiver<SwarmSend<ResponseChannel<Message>>>,
-    share_topic: gossipsub::IdentTopic,
     chain_handle: ChainHandle,
     rate_limiter: RateLimiter,
     config: Config,
@@ -161,11 +156,6 @@ impl Node {
             }
         }
 
-        let share_topic = gossipsub::IdentTopic::new("share");
-        if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&share_topic) {
-            error!("Failed to subscribe to share topic: {}", e);
-        }
-
         let (swarm_tx, swarm_rx) = mpsc::channel(100);
 
         if let Err(e) =
@@ -182,7 +172,6 @@ impl Node {
             swarm,
             swarm_tx,
             swarm_rx,
-            share_topic,
             chain_handle,
             rate_limiter,
             config: config.clone(),
@@ -275,9 +264,6 @@ impl Node {
                     self.handle_kademlia_event(kad_event);
                     Ok(())
                 }
-                P2PoolBehaviourEvent::Gossipsub(gossip_event) => {
-                    self.handle_gossipsub_event(gossip_event).await
-                }
                 P2PoolBehaviourEvent::RequestResponse(request_response_event) => {
                     self.handle_request_response_event(request_response_event)
                         .await
@@ -342,60 +328,6 @@ impl Node {
             self.swarm_tx.clone(),
         )
         .await;
-    }
-
-    /// Handle gossipsub events from the libp2p network
-    async fn handle_gossipsub_event(
-        &mut self,
-        gossip_event: gossipsub::Event,
-    ) -> Result<(), Box<dyn Error>> {
-        if let gossipsub::Event::Message {
-            propagation_source,
-            message_id: _,
-            message,
-        } = &gossip_event
-        {
-            match Message::cbor_deserialize(&message.data) {
-                Ok(deserialized_msg) => {
-                    let message_type = deserialized_msg;
-                    if !self
-                        .rate_limiter
-                        .check_rate_limit(
-                            propagation_source,
-                            message_type.clone(),
-                            &self.config.network,
-                        )
-                        .await
-                    {
-                        warn!(
-                        "Rate limit exceeded for peer {} with message type {:?}. Disconnecting.",
-                        propagation_source, message_type
-                    );
-                        self.swarm
-                            .disconnect_peer_id(*propagation_source)
-                            .unwrap_or_else(|e| {
-                                error!("Failed to disconnect rate-limited peer: {:?}", e);
-                            });
-                        return Ok(());
-                    }
-
-                    let chain_handle = self.chain_handle.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_gossipsub_event(gossip_event, chain_handle).await {
-                            error!("Failed to handle gossipsub event: {}", e);
-                        }
-                    });
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to deserialize gossip message from {}: {}",
-                        propagation_source, e
-                    );
-                    return Err("Failed to deserialize message".into());
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Handle request-response events from the libp2p network

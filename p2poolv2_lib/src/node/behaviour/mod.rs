@@ -21,7 +21,7 @@ use libp2p::connection_limits;
 use libp2p::request_response::ProtocolSupport;
 use libp2p::swarm::behaviour::toggle::Toggle;
 use libp2p::{
-    gossipsub, identify,
+    identify,
     identity::Keypair,
     kad::{self, store::MemoryStore},
     swarm::NetworkBehaviour,
@@ -36,7 +36,6 @@ use void;
 #[derive(NetworkBehaviour)]
 #[behaviour(to_swarm = "P2PoolBehaviourEvent")]
 pub struct P2PoolBehaviour {
-    pub gossipsub: gossipsub::Behaviour,
     pub kademlia: kad::Behaviour<MemoryStore>,
     pub identify: identify::Behaviour,
     pub request_response: RequestResponseBehaviour<Message, Message>,
@@ -52,7 +51,6 @@ const HEARTBEAT_INTERVAL: u64 = 15;
 #[allow(dead_code)]
 
 pub enum P2PoolBehaviourEvent {
-    Gossipsub(gossipsub::Event),
     Kademlia(kad::Event),
     Identify(identify::Event),
     RequestResponse(RequestResponseEvent<Message, Message>),
@@ -61,18 +59,6 @@ pub enum P2PoolBehaviourEvent {
 #[allow(dead_code)]
 impl P2PoolBehaviour {
     pub fn new(local_key: &Keypair, config: &Config) -> Result<Self, Box<dyn Error>> {
-        // Initialize gossipsub
-        let gossipsub_config = gossipsub::ConfigBuilder::default()
-            .heartbeat_interval(std::time::Duration::from_secs(HEARTBEAT_INTERVAL))
-            .validation_mode(gossipsub::ValidationMode::Strict)
-            .build()
-            .expect("Valid config");
-
-        let gossipsub_behaviour = gossipsub::Behaviour::new(
-            gossipsub::MessageAuthenticity::Signed(local_key.clone()),
-            gossipsub_config,
-        )?;
-
         // Initialize Kademlia
         let store = MemoryStore::new(local_key.public().to_peer_id());
         let mut kad_config = kad::Config::default();
@@ -95,7 +81,6 @@ impl P2PoolBehaviour {
         let limits = connection_limits::Behaviour::new(limits_config);
 
         let behaviour = P2PoolBehaviour {
-            gossipsub: gossipsub_behaviour,
             kademlia: kademlia_behaviour,
             identify: identify_behaviour,
             request_response: RequestResponseBehaviour::new(
@@ -114,18 +99,11 @@ impl P2PoolBehaviour {
         self.kademlia.add_address(&peer_id, addr);
         // Get the closest peers so the peer availablility propagates across the network
         self.kademlia.get_closest_peers(peer_id);
-        self.gossipsub.add_explicit_peer(&peer_id);
     }
 
     pub fn remove_peer(&mut self, peer_id: &PeerId) {
         // Remove the peer from Kademlia's routing table
         self.kademlia.remove_peer(peer_id);
-    }
-}
-
-impl From<gossipsub::Event> for P2PoolBehaviourEvent {
-    fn from(event: gossipsub::Event) -> Self {
-        P2PoolBehaviourEvent::Gossipsub(event)
     }
 }
 
