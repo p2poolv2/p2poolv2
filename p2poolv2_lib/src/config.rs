@@ -21,7 +21,6 @@ use serde::Deserialize;
 pub struct NetworkConfig {
     pub listen_address: String,
     pub dial_peers: Vec<String>,
-    pub enable_mdns: bool,
     pub max_pending_incoming: u32,
     pub max_pending_outgoing: u32,
     pub max_established_incoming: u32,
@@ -131,11 +130,6 @@ impl Config {
         self
     }
 
-    pub fn with_enable_mdns(mut self, enable_mdns: bool) -> Self {
-        self.network.enable_mdns = enable_mdns;
-        self
-    }
-
     pub fn with_max_pending_incoming(mut self, max_pending_incoming: u32) -> Self {
         self.network.max_pending_incoming = max_pending_incoming;
         self
@@ -230,7 +224,6 @@ mod tests {
                 "peer1.example.com".to_string(),
                 "peer2.example.com".to_string(),
             ])
-            .with_enable_mdns(true)
             .with_max_pending_incoming(10)
             .with_max_pending_outgoing(10)
             .with_max_established_incoming(50)

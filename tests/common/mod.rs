@@ -29,7 +29,6 @@ pub fn default_test_config() -> Config {
         network: NetworkConfig {
             listen_address: "/ip4/127.0.0.1/tcp/6891".to_string(),
             dial_peers: vec![],
-            enable_mdns: false,
             max_pending_incoming: 10,
             max_pending_outgoing: 10,
             max_established_incoming: 50,

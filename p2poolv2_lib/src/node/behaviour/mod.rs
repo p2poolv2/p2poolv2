@@ -24,7 +24,6 @@ use libp2p::{
     gossipsub, identify,
     identity::Keypair,
     kad::{self, store::MemoryStore},
-    mdns::{tokio::Behaviour as MdnsTokio, Config as MdnsConfig, Event as MdnsEvent},
     swarm::NetworkBehaviour,
     Multiaddr, PeerId,
 };
@@ -40,7 +39,6 @@ pub struct P2PoolBehaviour {
     pub gossipsub: gossipsub::Behaviour,
     pub kademlia: kad::Behaviour<MemoryStore>,
     pub identify: identify::Behaviour,
-    pub mdns: Toggle<MdnsTokio>,
     pub request_response: RequestResponseBehaviour<Message, Message>,
     pub limits: connection_limits::Behaviour,
 }
@@ -56,7 +54,6 @@ pub enum P2PoolBehaviourEvent {
     Gossipsub(gossipsub::Event),
     Kademlia(kad::Event),
     Identify(identify::Event),
-    Mdns(MdnsEvent),
     RequestResponse(RequestResponseEvent<Message, Message>),
 }
 
@@ -88,16 +85,6 @@ impl P2PoolBehaviour {
             local_key.public(),
         ));
 
-        // Initialize MDNS only if enabled in config
-        let mdns_behaviour = if config.network.enable_mdns {
-            Toggle::from(Some(MdnsTokio::new(
-                MdnsConfig::default(),
-                local_key.public().to_peer_id(),
-            )?))
-        } else {
-            Toggle::from(None)
-        };
-
         let limits_config = connection_limits::ConnectionLimits::default()
             .with_max_pending_incoming(Some(config.network.max_pending_incoming))
             .with_max_pending_outgoing(Some(config.network.max_pending_outgoing))
@@ -110,7 +97,6 @@ impl P2PoolBehaviour {
             gossipsub: gossipsub_behaviour,
             kademlia: kademlia_behaviour,
             identify: identify_behaviour,
-            mdns: mdns_behaviour,
             request_response: RequestResponseBehaviour::new(
                 [(P2PoolRequestResponseProtocol::new(), ProtocolSupport::Full)],
                 libp2p::request_response::Config::default(),
@@ -151,12 +137,6 @@ impl From<kad::Event> for P2PoolBehaviourEvent {
 impl From<identify::Event> for P2PoolBehaviourEvent {
     fn from(event: identify::Event) -> Self {
         P2PoolBehaviourEvent::Identify(event)
-    }
-}
-
-impl From<MdnsEvent> for P2PoolBehaviourEvent {
-    fn from(event: MdnsEvent) -> Self {
-        P2PoolBehaviourEvent::Mdns(event)
     }
 }
 
