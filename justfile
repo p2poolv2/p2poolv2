@@ -16,11 +16,14 @@ cov-open:
 	cargo llvm-cov --open
 
 build:
-	cargo build
+	cargo build --workspace
+
+build-release:
+	cargo build --release --workspace
 
 # For log level use RUST_LOG=<<level>> just run
 run config="config.toml":
-	RUST_LOG={{LOG_LEVEL}} cargo run -- --config={{config}}
+	RUST_LOG={{LOG_LEVEL}} cargo run -p p2poolv2 -- --config={{config}}
 
 check:
 	cargo check
@@ -29,4 +32,4 @@ check:
 # examples
 # just cli --store-path ./store.db info
 cli *args:
-	cargo run --bin p2poolv2_cli -- {{args}}
+	cargo run -p p2poolv2_cli -- {{args}}
