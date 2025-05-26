@@ -24,7 +24,6 @@ libp2p = { version = "0.53", features = [
     "macros",
     "gossipsub",
     "kad",
-    "mdns",
     "secp256k1",
     "request-response",
 ] }
@@ -90,7 +89,6 @@ libp2p = { version = "0.53", features = [
     "macros",
     "gossipsub",
     "kad",
-    "mdns",
     "secp256k1",
     "request-response",
 ] }
