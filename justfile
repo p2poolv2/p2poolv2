@@ -26,7 +26,7 @@ run config="config.toml":
 	RUST_LOG={{LOG_LEVEL}} cargo run -p p2poolv2 -- --config={{config}}
 
 check:
-	cargo check
+	cargo check --workspace
 
 # Run cli commands using p2poolv2-cli
 # examples
