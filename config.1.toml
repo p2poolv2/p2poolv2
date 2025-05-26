@@ -1,7 +1,7 @@
 [network]
 listen_address = "/ip4/0.0.0.0/tcp/6885"
 dial_peers = ["/ip4/127.0.0.1/tcp/6884"]
-enable_mdns = true
+enable_mdns = false
 max_pending_incoming = 10
 max_pending_outgoing = 10
 max_established_incoming = 50
