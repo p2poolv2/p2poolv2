@@ -26,12 +26,10 @@ use std::error::Error;
 use tracing::{error, info};
 
 /// Handle a ShareBlock received from a peer
-/// This is called on receiving a ShareBlock from the gossipsub protocol,
-/// or in response to a getblocks request.
+/// in response to a getblocks request.
 ///
 /// Validate the ShareBlock and store it in the chain
 /// We do not send any inventory message as we do not want to gossip the share block.
-/// Share blocks are gossiped using the libp2p gossipsub protocol.
 pub async fn handle_share_block(
     share_block: ShareBlock,
     chain_handle: ChainHandle,

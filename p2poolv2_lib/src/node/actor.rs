@@ -156,12 +156,6 @@ impl NodeActor {
             tokio::select! {
                 buf = self.node.swarm_rx.recv() => {
                     match buf {
-                        Some(SwarmSend::Gossip(message)) => {
-                            let buf = message.cbor_serialize().unwrap();
-                            if let Err(e) = self.node.swarm.behaviour_mut().gossipsub.publish(self.node.share_topic.clone(), buf) {
-                                error!("Error publishing share: {}", e);
-                            }
-                        }
                         Some(SwarmSend::Request(peer_id, msg)) => {
                             let request_id =    self.node.swarm.behaviour_mut().request_response.send_request(&peer_id, msg);
                             debug!("Sent message to peer: {peer_id}, request_id: {request_id}");
@@ -191,12 +185,6 @@ impl NodeActor {
                         Some(Command::GetPeers(tx)) => {
                             let peers = self.node.swarm.connected_peers().cloned().collect::<Vec<_>>();
                             tx.send(peers).unwrap();
-                        },
-                        Some(Command::SendGossip(buf, tx)) => {
-                            match self.node.swarm.behaviour_mut().gossipsub.publish(self.node.share_topic.clone(), buf) {
-                                Err(e) => error!("Error publishing share: {}", e),
-                                Ok(_) => tx.send(Ok(())).unwrap(),
-                            }
                         },
                         Some(Command::SendToPeer(peer_id, message, tx)) => {
                             match self.node.send_to_peer(peer_id, message) {
