@@ -317,14 +317,14 @@ impl Node {
             }
             KademliaEvent::OutboundQueryProgressed { result, .. } => match result {
                 QueryResult::GetClosestPeers(Ok(ok)) => {
-                    info!("Got closest peers: {:?}", ok.peers);
+                    debug!("Got closest peers: {:?}", ok.peers);
                 }
                 QueryResult::GetClosestPeers(Err(err)) => {
                     error!("Failed to get closest peers: {err}");
                 }
-                _ => info!("Other query result: {:?}", result),
+                _ => debug!("Other query result: {:?}", result),
             },
-            _ => info!("Other Kademlia event: {:?}", event),
+            _ => debug!("Other Kademlia event: {:?}", event),
         }
     }
 
