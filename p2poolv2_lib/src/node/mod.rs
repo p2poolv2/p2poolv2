@@ -285,7 +285,16 @@ impl Node {
                 for addr in info.listen_addrs {
                     self.swarm
                         .behaviour_mut()
-                        .add_address(peer_id, addr.clone());
+                        .kademlia
+                        .add_address(&peer_id, addr.clone());
+                }
+                // Also add our observed address to Kademlia so other peers can reach us
+                info!("Peer {} observed us as {}", peer_id, info.observed_addr);
+                self.swarm.add_external_address(info.observed_addr);
+                if let Err(e) = self.swarm.behaviour_mut().kademlia.bootstrap() {
+                    warn!("Failed to bootstrap Kademlia: {}", e);
+                } else {
+                    info!("Successfully started Kademlia bootstrap");
                 }
             }
             _ => {
@@ -308,14 +317,14 @@ impl Node {
             }
             KademliaEvent::OutboundQueryProgressed { result, .. } => match result {
                 QueryResult::GetClosestPeers(Ok(ok)) => {
-                    debug!("Got closest peers: {:?}", ok.peers);
+                    info!("Got closest peers: {:?}", ok.peers);
                 }
                 QueryResult::GetClosestPeers(Err(err)) => {
-                    debug!("Failed to get closest peers: {err}");
+                    error!("Failed to get closest peers: {err}");
                 }
-                _ => debug!("Other query result: {:?}", result),
+                _ => info!("Other query result: {:?}", result),
             },
-            _ => debug!("Other Kademlia event: {:?}", event),
+            _ => info!("Other Kademlia event: {:?}", event),
         }
     }
 

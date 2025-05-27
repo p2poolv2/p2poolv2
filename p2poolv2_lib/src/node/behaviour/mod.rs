@@ -19,7 +19,6 @@ use crate::config::Config;
 use crate::node::messages::Message;
 use libp2p::connection_limits;
 use libp2p::request_response::ProtocolSupport;
-use libp2p::swarm::behaviour::toggle::Toggle;
 use libp2p::{
     identify,
     identity::Keypair,
@@ -63,6 +62,7 @@ impl P2PoolBehaviour {
         let store = MemoryStore::new(local_key.public().to_peer_id());
         let mut kad_config = kad::Config::default();
         kad_config.set_query_timeout(tokio::time::Duration::from_secs(60));
+        kad_config.set_protocol_names(vec![libp2p::StreamProtocol::new("/p2pool/kad/1.0.0")]);
 
         let kademlia_behaviour =
             kad::Behaviour::with_config(local_key.public().to_peer_id(), store, kad_config);
@@ -97,8 +97,6 @@ impl P2PoolBehaviour {
     pub fn add_address(&mut self, peer_id: PeerId, addr: Multiaddr) {
         // Add the peer's address to Kademlia's routing table
         self.kademlia.add_address(&peer_id, addr);
-        // Get the closest peers so the peer availablility propagates across the network
-        self.kademlia.get_closest_peers(peer_id);
     }
 
     pub fn remove_peer(&mut self, peer_id: &PeerId) {
