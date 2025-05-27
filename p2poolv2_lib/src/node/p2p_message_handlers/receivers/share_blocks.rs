@@ -25,8 +25,7 @@ use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
 use tracing::{error, info};
 
-/// Handle a ShareBlock received from a peer
-/// in response to a getblocks request.
+/// Handle a ShareBlock received from a peer in response to a getblocks request.
 ///
 /// Validate the ShareBlock and store it in the chain
 /// We do not send any inventory message as we do not want to gossip the share block.
