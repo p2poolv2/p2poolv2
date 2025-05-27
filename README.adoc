@@ -1,6 +1,10 @@
 image:https://github.com/pool2win/p2pool-v2/actions/workflows/rust.yml/badge.svg[Rust CI, link=https://github.com/pool2win/p2pool-v2/actions/workflows/rust.yml]
 image:https://codecov.io/gh/pool2win/p2pool-v2/graph/badge.svg?token=Xeu4GFdASS[Codecov, link=https://codecov.io/gh/pool2win/p2pool-v2]
 
+We chat on [Matrix](https://matrix.to/#/#p2poolv2:matrix.org).
+
+We use [github wiki](https://github.com/pool2win/p2pool-v2/wiki) for most design documents and tools for developers.
+
 == P2Pool V2
 
 Rebooting P2Pool
@@ -9,8 +13,6 @@ Rebooting P2Pool
 2. Pay large miners in coinbase - non custodial solution for top N miners.
 3. Support transactions - pay all miners with atomic swaps by market makers.
 4. Market makers buy shares from smaller miners - earning virgin coins.
-
-Jump to <<developer-setup,Developer Setup>> notes if that is what you want.
 
 == Run with Docker
 
