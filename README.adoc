@@ -1,9 +1,11 @@
 image:https://github.com/pool2win/p2pool-v2/actions/workflows/rust.yml/badge.svg[Rust CI, link=https://github.com/pool2win/p2pool-v2/actions/workflows/rust.yml]
 image:https://codecov.io/gh/pool2win/p2pool-v2/graph/badge.svg?token=Xeu4GFdASS[Codecov, link=https://codecov.io/gh/pool2win/p2pool-v2]
 
-We chat on [Matrix](https://matrix.to/#/#p2poolv2:matrix.org).
+We chat on https://matrix.to/#/#p2poolv2:matrix.org[Matrix].
 
-We use [github wiki](https://github.com/pool2win/p2pool-v2/wiki) for most design documents and tools for developers.
+We use https://github.com/pool2win/p2pool-v2/wiki[github wiki] for most design documents and tools for developers.
+
+See detailed https://github.com/pool2win/p2pool-v2/wiki/Developer-Setup-Notes[Developer Setup Notes] on the wiki.
 
 == P2Pool V2
 
@@ -71,31 +73,3 @@ and we do not support masochistic setups. You are on your own.
 A high level overview of the components used and the interaction between them is shown below.
 
 image::docs/p2pool-setup.png[P2Pool V2 Architecture]
-
-== Developer Setup
-
-You can use devcontainer support from vscode to quick get going.
-
-=== RocksDB Optimal Setup
-
-If you want to run things locally with your choice of editor, then I tend to add the 
-following in my user's ~/.cargo/config.toml. This will reduce your build time substantially
-as rust-rocksdb will link to your system wide rocksdb.
-
-cat ~/.cargo/config.toml
-```
-[env]
-ROCKSDB_LIB_DIR = "/usr/lib/librocksdb.so"
-```
-
-To install your system wide rocksdb, look up your distribution's packages.
-
-For me it was `pacman -S rocksdb`.
-
-=== Install nextest
-
-`cargo install cargo-nextest`
-
-or
-
-`cargo binstall cargo-nextest --secure`
