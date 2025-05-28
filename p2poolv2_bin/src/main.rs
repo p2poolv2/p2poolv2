@@ -65,8 +65,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         let mut stratum_server = StratumServer::<BitcoindRpcClient>::new(
-            stratum_config.port,
             stratum_config.host,
+            stratum_config.port,
             bitcoin_config.url.clone(),
             bitcoin_config.username.clone(),
             bitcoin_config.password.clone(),
