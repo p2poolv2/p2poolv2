@@ -3,8 +3,15 @@ export LOG_LEVEL := env_var_or_default("RUST_LOG", "info")
 
 default: test
 
-test:
-	RUST_LOG={{LOG_LEVEL}} cargo nextest run --workspace
+# Run tests for entire workspace or a specific package
+# Usage: just test [package]
+test package="":
+	#!/usr/bin/env sh
+	if [ -z "{{package}}" ]; then
+		RUST_LOG={{LOG_LEVEL}} cargo nextest run --workspace
+	else
+		RUST_LOG={{LOG_LEVEL}} cargo nextest run -p {{package}}
+	fi
 
 cov:
 	cargo llvm-cov --lcov
