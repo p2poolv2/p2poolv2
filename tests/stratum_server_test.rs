@@ -33,8 +33,8 @@ async fn test_stratum_server_subscribe() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
     let mut server = StratumServer::<BitcoindRpcClient>::new(
-        9999,
         "127.0.0.1".to_string(),
+        9999,
         "http://localhost:38332".to_string(),
         "user".to_string(),
         "pass".to_string(),

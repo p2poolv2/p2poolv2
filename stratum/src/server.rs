@@ -34,7 +34,7 @@ use tracing::{debug, error, info};
 // This struct contains the port and address of the Stratum server
 pub struct StratumServer<B: BitcoindRpc> {
     pub port: u16,
-    pub address: String,
+    pub hostname: String,
     shutdown_rx: oneshot::Receiver<()>,
     bitcoind: Arc<B>,
     blocktemplate: Option<bitcoin::Block>,
@@ -44,8 +44,8 @@ pub struct StratumServer<B: BitcoindRpc> {
 impl<B: BitcoindRpc> StratumServer<B> {
     // A method to create a new Stratum server configuration
     pub async fn new(
+        hostname: String,
         port: u16,
-        address: String,
         url: String,
         username: String,
         password: String,
@@ -56,7 +56,7 @@ impl<B: BitcoindRpc> StratumServer<B> {
         let connections_handle = spawn().await;
         Self {
             port,
-            address,
+            hostname,
             shutdown_rx,
             bitcoind,
             blocktemplate: None,
@@ -95,11 +95,11 @@ impl<B: BitcoindRpc> StratumServer<B> {
         &mut self,
         ready_tx: Option<oneshot::Sender<()>>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        info!("Starting Stratum server at {}:{}", self.address, self.port);
+        info!("Starting Stratum server at {}:{}", self.hostname, self.port);
 
         self.update_block_template().await;
 
-        let bind_address = format!("{}:{}", self.address, self.port);
+        let bind_address = format!("{}:{}", self.hostname, self.port);
         let listener = TcpListener::bind(&bind_address)
             .await
             .map_err(|e| format!("Failed to bind to {}: {}", bind_address, e))?;
@@ -290,8 +290,8 @@ mod stratum_server_tests {
         });
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
         let mut server = StratumServer::<MockBitcoindRpc>::new(
-            12345,
             "127.0.0.1".to_string(),
+            12345,
             "localhost:8332".to_string(),
             "user".to_string(),
             "pass".to_string(),
@@ -301,7 +301,7 @@ mod stratum_server_tests {
 
         // Verify the server was created with the correct parameters
         assert_eq!(server.port, 12345);
-        assert_eq!(server.address, "127.0.0.1");
+        assert_eq!(server.hostname, "127.0.0.1");
 
         let (ready_tx, ready_rx) = oneshot::channel();
 
@@ -534,7 +534,7 @@ mod stratum_server_tests {
         let connections_handle = spawn().await;
         let mut server = StratumServer {
             port: 12345,
-            address: "127.0.0.1".to_string(),
+            hostname: "127.0.0.1".to_string(),
             shutdown_rx,
             bitcoind: std::sync::Arc::new(mock),
             blocktemplate: None,
@@ -560,7 +560,7 @@ mod stratum_server_tests {
 
         let mut server = StratumServer {
             port: 12345,
-            address: "127.0.0.1".to_string(),
+            hostname: "127.0.0.1".to_string(),
             shutdown_rx,
             bitcoind: std::sync::Arc::new(mock),
             blocktemplate: None,
@@ -584,7 +584,7 @@ mod stratum_server_tests {
 
         let mut server = StratumServer {
             port: 12345,
-            address: "127.0.0.1".to_string(),
+            hostname: "127.0.0.1".to_string(),
             shutdown_rx,
             bitcoind: std::sync::Arc::new(mock),
             blocktemplate: None,
@@ -608,7 +608,7 @@ mod stratum_server_tests {
 
         let mut server = StratumServer {
             port: 12345,
-            address: "127.0.0.1".to_string(),
+            hostname: "127.0.0.1".to_string(),
             shutdown_rx,
             bitcoind: std::sync::Arc::new(mock),
             blocktemplate: None,
@@ -632,7 +632,7 @@ mod stratum_server_tests {
 
         let mut server = StratumServer {
             port: 12345,
-            address: "127.0.0.1".to_string(),
+            hostname: "127.0.0.1".to_string(),
             shutdown_rx,
             bitcoind: std::sync::Arc::new(mock),
             blocktemplate: None,
