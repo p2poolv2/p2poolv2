@@ -71,9 +71,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             bitcoin_config.username.clone(),
             bitcoin_config.password.clone(),
             stratum_shutdown_rx,
-        );
+        )
+        .await;
         info!("Starting Stratum server...");
-        let result = stratum_server.start().await;
+        let result = stratum_server.start(None).await;
         if result.is_err() {
             error!("Failed to start Stratum server: {}", result.unwrap_err());
         }

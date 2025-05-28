@@ -27,7 +27,7 @@ use tracing::debug;
 /// The session is also updated in response to received messages, if required.
 pub async fn handle_submit<'a>(
     message: Request<'a>,
-    session: &mut Session,
+    _session: &mut Session,
 ) -> Result<Response<'a>, Error> {
     debug!("Handling mining.submit message");
     Ok(Response::new_ok(message.id, json!(true)))

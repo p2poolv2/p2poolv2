@@ -78,9 +78,6 @@ pub fn build_notify(template: &BlockTemplate, address: Address) -> Result<Notify
 mod tests {
     use super::*;
     use crate::work::coinbase::parse_address;
-    use bitcoin::hashes::{serde_macros::serde_details::SerdeHash, sha256::Hash};
-    use hex::FromHex;
-
     use std::fs;
 
     #[test]
