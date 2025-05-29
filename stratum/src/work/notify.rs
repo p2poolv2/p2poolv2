@@ -22,8 +22,6 @@ use crate::work::coinbase::OutputPair;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::secp256k1::{self, rand::Rng};
 use bitcoin::transaction::Version;
-use bitcoin::Address;
-use bitcoin::Amount;
 use std::borrow::Cow;
 
 /// Extract flags from template coinbaseaux and convert to PushBytesBuf
@@ -38,15 +36,15 @@ fn parse_flags(flags: Option<String>) -> PushBytesBuf {
 }
 
 #[allow(dead_code)]
-pub fn build_notify(template: &BlockTemplate, address: Address) -> Result<Notify, WorkError> {
+pub fn build_notify(
+    template: &BlockTemplate,
+    output_distribution: Vec<OutputPair>,
+) -> Result<Notify, WorkError> {
     let job_id: u64 = secp256k1::rand::thread_rng().gen();
 
     let coinbase = build_coinbase_transaction(
         Version(template.version),
-        vec![OutputPair {
-            address,
-            amount: Amount::from_sat(template.coinbasevalue),
-        }],
+        output_distribution,
         template.height as i64,
         parse_flags(template.coinbaseaux.get("flags").cloned()),
         template.default_witness_commitment.clone(),
@@ -78,6 +76,7 @@ pub fn build_notify(template: &BlockTemplate, address: Address) -> Result<Notify
 mod tests {
     use super::*;
     use crate::work::coinbase::parse_address;
+    use bitcoin::Amount;
     use std::fs;
 
     #[test]
@@ -104,7 +103,14 @@ mod tests {
         .unwrap();
 
         // Build Notify
-        let notify = build_notify(&template, address).expect("Failed to build notify");
+        let notify = build_notify(
+            &template,
+            vec![OutputPair {
+                address,
+                amount: Amount::from_sat(template.coinbasevalue),
+            }],
+        )
+        .expect("Failed to build notify");
 
         // Load expected notify JSON
         let expected_notify_json = notify_json.clone();
