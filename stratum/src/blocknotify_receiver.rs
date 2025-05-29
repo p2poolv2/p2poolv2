@@ -17,7 +17,9 @@
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 
-const SOCKET_PATH: &str = "/tmp/p2pool_blocknotify.sock";
+/// The path to the Unix socket used for block notifications.
+/// From this bin we can't import the const from work/gbt, so we redefine it here.
+pub const SOCKET_PATH: &str = "/tmp/p2pool_blocknotify.sock";
 
 /// A simple program to notify our gbt event loop in stratum server.
 ///
@@ -47,7 +49,7 @@ fn main() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::SOCKET_PATH;
+    use super::*;
     use std::fs;
     use std::io::Read;
     use std::os::unix::net::UnixListener;
@@ -70,9 +72,9 @@ mod tests {
         // Spawn a thread to run the listener
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut buffer = [0; 1];
-            stream.read_exact(&mut buffer).unwrap();
-            buffer[0]
+            let mut buffer = Vec::new();
+            stream.read_to_end(&mut buffer).unwrap();
+            buffer
         });
 
         // Call the main function
@@ -81,10 +83,10 @@ mod tests {
         });
 
         // Wait for the listener thread to receive the data
-        let received_byte = handle.join().unwrap();
+        let received = handle.join().unwrap();
 
         // Assert that the received byte is 1
-        assert_eq!(received_byte, 1);
+        assert_eq!(received, b"blocknotify\n");
 
         // Clean up
         fs::remove_file(socket_path).unwrap_or_default();
