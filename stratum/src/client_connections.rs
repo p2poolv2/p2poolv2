@@ -38,6 +38,10 @@ pub enum ClientConnectionCommand {
     SendToAll {
         message: Arc<String>,
     },
+    SendToClient {
+        addr: SocketAddr,
+        message: Arc<String>,
+    },
 }
 
 /// A handle to interact with the ClientConnections actor
@@ -63,11 +67,19 @@ impl ClientConnectionsHandle {
     }
 
     /// Send a message to all clients
+    /// Don't wait for the actor to respond. Fire and forget.
     pub async fn send_to_all(&self, message: Arc<String>) {
         let _ = self
             .cmd_tx
             .send(ClientConnectionCommand::SendToAll { message })
             .await;
+    }
+
+    /// Send a message to a specific client identified by its socket address.
+    /// Don't wait for the actor to respond. Fire and forget.
+    pub async fn send_to_client(&self, addr: SocketAddr, message: Arc<String>) -> bool {
+        let cmd = ClientConnectionCommand::SendToClient { addr, message };
+        self.cmd_tx.send(cmd).await.is_ok()
     }
 }
 
@@ -95,7 +107,6 @@ impl ClientConnections {
                 shutdown_tx,
             },
         );
-
         (message_rx, shutdown_rx)
     }
 
@@ -134,6 +145,21 @@ impl ClientConnections {
             self.remove(&addr);
         }
     }
+
+    /// Sends a message to a specific client identified by its socket address.
+    ///
+    /// Returns true if the message was sent successfully, false if the client
+    /// was not found or if sending failed (which also removes the client).
+    fn send_to_client(&mut self, addr: &SocketAddr, message: Arc<String>) -> bool {
+        if let Some(channels) = self.clients.get(addr) {
+            if channels.message_tx.try_send(message).is_ok() {
+                return true;
+            }
+            // If sending failed, remove the client
+            self.remove(addr);
+        }
+        false
+    }
 }
 
 /// Spawn a new ClientConnections actor and return a handle to it
@@ -152,6 +178,9 @@ pub async fn spawn() -> ClientConnectionsHandle {
                 }
                 ClientConnectionCommand::SendToAll { message } => {
                     connections.send_to_all(message);
+                }
+                ClientConnectionCommand::SendToClient { addr, message } => {
+                    connections.send_to_client(&addr, message);
                 }
             }
         }
@@ -222,6 +251,34 @@ mod tests {
         // And no more messages
         assert!(message_rx1.try_recv().is_err());
         assert!(message_rx2.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_client_connections_send_to_client() {
+        let mut connections = ClientConnections::default();
+        let addr1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        let addr2 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8081);
+
+        let (message_rx1, _) = connections.add(addr1);
+        let (message_rx2, _) = connections.add(addr2);
+
+        // Send message to specific client
+        let message = Arc::new("client1 message".to_string());
+        let success = connections.send_to_client(&addr1, message.clone());
+        assert!(success);
+
+        // Verify only the target client received the message
+        let mut message_rx1 = message_rx1;
+        let mut message_rx2 = message_rx2;
+
+        assert_eq!(message_rx1.try_recv().unwrap(), message);
+        assert!(message_rx2.try_recv().is_err());
+
+        // Test sending to non-existent client
+        let non_existent = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 9999);
+        let message = Arc::new("to nobody".to_string());
+        let success = connections.send_to_client(&non_existent, message);
+        assert!(!success);
     }
 
     #[tokio::test]
