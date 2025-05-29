@@ -30,6 +30,12 @@ use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, LinesCodec};
 use tracing::{debug, error, info};
 
+/// Interval in seconds to poll for new block templates since the last blocknotify signal
+const GBT_POLL_INTERVAL: u64 = 60; // seconds
+
+/// Path to the Unix socket for receiving blocknotify signals from bitcoind
+pub const SOCKET_PATH: &str = "/tmp/p2pool_blocknotify.sock";
+
 // A struct to represent a Stratum server configuration
 // This struct contains the port and address of the Stratum server
 pub struct StratumServer<B: BitcoindRpc> {
