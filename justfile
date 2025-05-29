@@ -22,8 +22,15 @@ cov-html:
 cov-open:
 	cargo llvm-cov --open
 
-build:
-	cargo build --workspace
+# Build entire workspace or a specific package
+# Usage: just build [package]
+build package="":
+	#!/usr/bin/env sh
+	if [ -z "{{package}}" ]; then
+		cargo build --workspace
+	else
+		cargo build -p {{package}}
+	fi
 
 build-release:
 	cargo build --workspace --release
