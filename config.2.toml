@@ -25,7 +25,7 @@ host = "localhost"
 port = 23333
 start_difficulty = 1
 minimum_difficulty = 1
-solo_address = "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
+solo_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 
 
 [miner]
