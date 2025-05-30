@@ -51,6 +51,7 @@ pub struct StratumConfig {
     pub port: u16,
     pub start_difficulty: u32,
     pub minimum_difficulty: u32,
+    pub solo_address: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -180,6 +181,11 @@ impl Config {
         self
     }
 
+    pub fn with_stratum_solo_address(mut self, solo_address: String) -> Self {
+        self.stratum.solo_address = Some(solo_address);
+        self
+    }
+
     pub fn with_start_difficulty(mut self, start_difficulty: u32) -> Self {
         self.stratum.start_difficulty = start_difficulty;
         self
@@ -234,6 +240,7 @@ mod tests {
             .with_ckpool_port(3333)
             .with_stratum_host("stratum.example.com".to_string())
             .with_stratum_port(3333)
+            .with_stratum_solo_address("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string())
             .with_start_difficulty(1)
             .with_minimum_difficulty(1)
             .with_miner_pubkey(
@@ -256,6 +263,10 @@ mod tests {
         assert_eq!(config.stratum.port, 3333);
         assert_eq!(config.stratum.start_difficulty, 1);
         assert_eq!(config.stratum.minimum_difficulty, 1);
+        assert_eq!(
+            config.stratum.solo_address,
+            Some("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string())
+        );
 
         assert_eq!(
             config.miner.pubkey.to_string(),

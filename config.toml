@@ -25,6 +25,7 @@ host = "localhost"
 port = 3333
 start_difficulty = 1
 minimum_difficulty = 1
+solo_address = "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
 
 [miner]
 pubkey = "020202020202020202020202020202020202020202020202020202020202020202"

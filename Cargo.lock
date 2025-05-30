@@ -3139,6 +3139,7 @@ dependencies = [
 name = "p2poolv2"
 version = "0.1.0"
 dependencies = [
+ "bitcoin",
  "bitcoindrpc",
  "clap",
  "config",

@@ -14,11 +14,15 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::client_connections::{spawn, ClientConnectionsHandle};
+#[cfg(not(test))]
+use crate::client_connections::ClientConnectionsHandle;
+#[cfg(test)]
+#[mockall_double::double]
+use crate::client_connections::ClientConnectionsHandle;
+
 use crate::message_handlers::handle_message;
 use crate::messages::Request;
 use crate::session::Session;
-use crate::work::gbt::BlockTemplate;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -34,7 +38,6 @@ pub struct StratumServer {
     pub port: u16,
     pub hostname: String,
     shutdown_rx: oneshot::Receiver<()>,
-    gbt_rx: mpsc::Receiver<BlockTemplate>,
     connections_handle: ClientConnectionsHandle,
 }
 
@@ -44,14 +47,12 @@ impl StratumServer {
         hostname: String,
         port: u16,
         shutdown_rx: oneshot::Receiver<()>,
-        gbt_rx: mpsc::Receiver<BlockTemplate>,
+        connections_handle: ClientConnectionsHandle,
     ) -> Self {
-        let connections_handle = spawn().await;
         Self {
             port,
             hostname,
             shutdown_rx,
-            gbt_rx,
             connections_handle,
         }
     }
@@ -60,7 +61,6 @@ impl StratumServer {
     pub async fn start(
         &mut self,
         ready_tx: Option<oneshot::Sender<()>>,
-        notifier_tx: mpsc::Sender<Arc<BlockTemplate>>,
     ) -> Result<(), Box<dyn std::error::Error + Send>> {
         info!("Starting Stratum server at {}:{}", self.hostname, self.port);
 
@@ -87,10 +87,6 @@ impl StratumServer {
                 _ = &mut self.shutdown_rx => {
                     info!("Shutdown signal received");
                     break;
-                }
-                // update the block template from the gbt_rx channel
-                Some(template) = self.gbt_rx.recv() => {
-                    notifier_tx.send(Arc::new(template)).await.ok();
                 }
                 connection = listener.accept() => {
                     match connection {
@@ -254,11 +250,15 @@ mod stratum_server_tests {
             Ok(mock)
         });
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
-        let (_gbt_tx, gbt_rx) = mpsc::channel(10);
-        let (notifier_tx, _notifier_rx) = mpsc::channel(10);
+        let connections_handle = ClientConnectionsHandle::default();
 
-        let mut server =
-            StratumServer::new("127.0.0.1".to_string(), 12345, shutdown_rx, gbt_rx).await;
+        let mut server = StratumServer::new(
+            "127.0.0.1".to_string(),
+            12345,
+            shutdown_rx,
+            connections_handle,
+        )
+        .await;
 
         // Verify the server was created with the correct parameters
         assert_eq!(server.port, 12345);
@@ -269,7 +269,7 @@ mod stratum_server_tests {
         // Start the server in a separate task so we can shut it down
         let server_handle = tokio::spawn(async move {
             // We'll ignore errors here since we'll forcibly shut down the server
-            let _ = server.start(Some(ready_tx), notifier_tx).await;
+            let _ = server.start(Some(ready_tx)).await;
         });
 
         ready_rx.await.expect("Server should signal readiness");
@@ -461,38 +461,5 @@ mod stratum_server_tests {
             response_json.get("result").is_some(),
             "Subscribe response should have 'result'"
         );
-    }
-
-    #[tokio::test]
-    async fn test_update_block_template_success() {
-        let template = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/gbt/signet/gbt-no-transactions.json"),
-        )
-        .expect("Failed to read block template file");
-
-        let blocktemplate: BlockTemplate =
-            serde_json::from_str(&template).expect("Failed to parse block template JSON");
-
-        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
-        let (gbt_tx, gbt_rx) = mpsc::channel(1);
-        let (notifier_tx, mut notifier_rx) = mpsc::channel(1);
-
-        let mut server =
-            StratumServer::new("127.0.0.1".to_string(), 12345, shutdown_rx, gbt_rx).await;
-
-        let (ready_tx, ready_rx) = oneshot::channel();
-
-        tokio::spawn(async move {
-            let _ = server.start(Some(ready_tx), notifier_tx).await;
-        });
-        ready_rx.await.expect("Server should signal readiness");
-
-        gbt_tx.send(blocktemplate).await.unwrap();
-
-        notifier_rx
-            .recv()
-            .await
-            .expect("Notifier should receive block template");
     }
 }

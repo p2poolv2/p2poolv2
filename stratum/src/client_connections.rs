@@ -83,6 +83,15 @@ impl ClientConnectionsHandle {
     }
 }
 
+#[cfg(test)]
+mockall::mock! {
+    pub ClientConnectionsHandle {
+        pub async fn add(&self, addr: SocketAddr) -> (mpsc::Receiver<Arc<String>>, oneshot::Receiver<()>);
+        pub async fn send_to_all(&self, message: Arc<String>);
+        pub async fn send_to_client(&self, addr: SocketAddr, message: Arc<String>) -> bool;
+    }
+}
+
 /// An actor model to manage connections to clients.
 ///
 /// Most of the time we are not sending messages to clients, so we avoid using a Mutex to protect the `clients` map.

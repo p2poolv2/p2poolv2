@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use bitcoin::Address;
 use bitcoindrpc::BitcoindRpcClient;
 use clap::Parser;
 use p2poolv2_lib::config::{Config, LoggingConfig};
@@ -22,7 +23,10 @@ use p2poolv2_lib::shares::chain::actor::ChainHandle;
 use p2poolv2_lib::shares::ShareBlock;
 use std::error::Error;
 use std::fs::File;
+use std::str::FromStr;
+use stratum::client_connections::spawn;
 use stratum::server::StratumServer;
+use stratum::work::coinbase::OutputPair;
 use stratum::work::gbt::start_gbt;
 use tracing::error;
 use tracing::{debug, info};
@@ -69,7 +73,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let bitcoin_config = config.bitcoin.clone();
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
     let (gbt_tx, gbt_rx) = tokio::sync::mpsc::channel(1);
-    let (notifier_tx, _notifier_rx) = tokio::sync::mpsc::channel(1);
 
     tokio::spawn(async move {
         start_gbt::<BitcoindRpcClient>(
@@ -84,16 +87,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .expect("Failed to start GBT polling");
     });
 
+    let connections_handle = spawn().await;
+    let connections_cloned = connections_handle.clone();
+
+    let output_address = Address::from_str(stratum_config.solo_address.unwrap().as_str())
+        .expect("Invalid output address in Stratum config")
+        .require_network(config.bitcoin.network)
+        .expect("Output address must match the Bitcoin network in config");
+
+    let solo_output = OutputPair {
+        address: output_address,
+        amount: bitcoin::Amount::from_sat(0),
+    };
+
+    tokio::spawn(async move {
+        info!("Starting Stratum notifier...");
+        // This will run indefinitely, sending new block templates to the Stratum server as they arrive
+        stratum::work::notify::start_notify(gbt_rx, connections_cloned, &[solo_output]).await;
+    });
+
     tokio::spawn(async move {
         let mut stratum_server = StratumServer::new(
             stratum_config.host,
             stratum_config.port,
             stratum_shutdown_rx,
-            gbt_rx,
+            connections_handle.clone(),
         )
         .await;
         info!("Starting Stratum server...");
-        let result = stratum_server.start(None, notifier_tx).await;
+        let result = stratum_server.start(None).await;
         if result.is_err() {
             error!("Failed to start Stratum server: {}", result.unwrap_err());
         }

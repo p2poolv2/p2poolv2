@@ -30,14 +30,19 @@ async fn test_stratum_server_subscribe() {
 
     // Setup server - using Arc so we can access it for shutdown
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    let (_gbt_tx, gbt_rx) = tokio::sync::mpsc::channel(1);
-    let (notifier_tx, _notifier_rx) = tokio::sync::mpsc::channel(1);
+    let connections_handle = stratum::client_connections::spawn().await;
 
-    let mut server = StratumServer::new("127.0.0.1".to_string(), 9999, shutdown_rx, gbt_rx).await;
+    let mut server = StratumServer::new(
+        "127.0.0.1".to_string(),
+        9999,
+        shutdown_rx,
+        connections_handle,
+    )
+    .await;
 
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
-        let _result = server.start(Some(ready_tx), notifier_tx).await;
+        let _result = server.start(Some(ready_tx)).await;
     });
     ready_rx.await.expect("Server failed to start");
 
