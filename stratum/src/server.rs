@@ -18,9 +18,7 @@ use crate::client_connections::{spawn, ClientConnectionsHandle};
 use crate::message_handlers::handle_message;
 use crate::messages::Request;
 use crate::session::Session;
-use bitcoin::consensus::encode::deserialize;
-use bitcoin::Block;
-use bitcoindrpc::BitcoindRpc;
+use crate::work::gbt::BlockTemplate;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -30,85 +28,50 @@ use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, LinesCodec};
 use tracing::{debug, error, info};
 
-/// Interval in seconds to poll for new block templates since the last blocknotify signal
-const GBT_POLL_INTERVAL: u64 = 60; // seconds
-
-/// Path to the Unix socket for receiving blocknotify signals from bitcoind
-pub const SOCKET_PATH: &str = "/tmp/p2pool_blocknotify.sock";
-
 // A struct to represent a Stratum server configuration
 // This struct contains the port and address of the Stratum server
-pub struct StratumServer<B: BitcoindRpc> {
+pub struct StratumServer {
     pub port: u16,
     pub hostname: String,
     shutdown_rx: oneshot::Receiver<()>,
-    bitcoind: Arc<B>,
-    blocktemplate: Option<bitcoin::Block>,
+    gbt_rx: mpsc::Receiver<BlockTemplate>,
     connections_handle: ClientConnectionsHandle,
 }
 
-impl<B: BitcoindRpc> StratumServer<B> {
+impl StratumServer {
     // A method to create a new Stratum server configuration
     pub async fn new(
         hostname: String,
         port: u16,
-        url: String,
-        username: String,
-        password: String,
         shutdown_rx: oneshot::Receiver<()>,
+        gbt_rx: mpsc::Receiver<BlockTemplate>,
     ) -> Self {
-        info!("Connection to bitcoind: {}", url);
-        let bitcoind = Arc::new(B::new(url, username, password).unwrap());
         let connections_handle = spawn().await;
         Self {
             port,
             hostname,
             shutdown_rx,
-            bitcoind,
-            blocktemplate: None,
+            gbt_rx,
             connections_handle,
         }
-    }
-
-    /// Get a new blocktemplate from the bitcoind server and update the blocktemplate field
-    /// This function is called at startup, periodically, or when a new bitcoin block has been mined.
-    pub async fn update_block_template(&mut self) -> Option<Block> {
-        if let Ok(blocktemplate) = self
-            .bitcoind
-            .getblocktemplate(bitcoin::Network::Signet)
-            .await
-        {
-            // Extract the hex string from the blocktemplate JSON value
-            match hex::decode(blocktemplate).map(|bytes| deserialize::<Block>(&bytes)) {
-                Ok(Ok(block)) => {
-                    self.blocktemplate = Some(block);
-                }
-                Ok(Err(e)) => {
-                    info!("Failed to deserialize block: {}", e);
-                }
-                Err(e) => {
-                    info!("Failed to decode hex: {}", e);
-                }
-            }
-        } else {
-            info!("Failed to connect to bitcoind. We won't be able to mine.");
-        }
-        None
     }
 
     // A method to start the Stratum server
     pub async fn start(
         &mut self,
         ready_tx: Option<oneshot::Sender<()>>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+        notifier_tx: mpsc::Sender<Arc<BlockTemplate>>,
+    ) -> Result<(), Box<dyn std::error::Error + Send>> {
         info!("Starting Stratum server at {}:{}", self.hostname, self.port);
 
-        self.update_block_template().await;
-
         let bind_address = format!("{}:{}", self.hostname, self.port);
-        let listener = TcpListener::bind(&bind_address)
-            .await
-            .map_err(|e| format!("Failed to bind to {}: {}", bind_address, e))?;
+        let listener = match TcpListener::bind(&bind_address).await {
+            Ok(listener) => listener,
+            Err(e) => {
+                error!("Failed to bind to {}: {}", bind_address, e);
+                return Err(Box::new(e));
+            }
+        };
 
         if let Some(ready_tx) = ready_tx {
             // Notify that the server is ready to accept connections
@@ -125,30 +88,23 @@ impl<B: BitcoindRpc> StratumServer<B> {
                     info!("Shutdown signal received");
                     break;
                 }
+                // update the block template from the gbt_rx channel
+                Some(template) = self.gbt_rx.recv() => {
+                    notifier_tx.send(Arc::new(template)).await.ok();
+                }
                 connection = listener.accept() => {
-                    match connection{
+                    match connection {
                         Ok(connection) => {
                             let (stream, addr) = connection;
                             info!("New connection from: {}", addr);
                             let (message_rx, shutdown_rx) = self.connections_handle.add(addr).await;
+                            let (reader, writer) = stream.into_split();
+                            let buf_reader = BufReader::new(reader);
 
                             // Spawn a new task for each connection
                             tokio::spawn(async move {
-                                let addr = match stream.peer_addr() {
-                                    Ok(addr) => addr,
-                                    Err(e) => {
-                                        info!("Failed to get peer address: {}", e);
-                                        return;
-                                    }
-                                };
-
-                                let (reader, writer) = stream.into_split();
-                                let buf_reader = BufReader::new(reader);
-
                                 // Handle the connection with graceful shutdown support
-                                if let Err(e) = handle_connection(buf_reader, writer, addr, message_rx, shutdown_rx).await {
-                                    info!("Error handling connection from {}: {}", addr, e);
-                                }
+                                let _ = handle_connection(buf_reader, writer, addr, message_rx, shutdown_rx).await;
                             });
                         }
                         Err(e) => {
@@ -174,7 +130,7 @@ async fn handle_connection<R, W>(
     addr: SocketAddr,
     mut message_rx: mpsc::Receiver<Arc<String>>,
     mut shutdown_rx: oneshot::Receiver<()>,
-) -> Result<(), Box<dyn std::error::Error>>
+) -> Result<(), Box<dyn std::error::Error + Send>>
 where
     R: AsyncBufReadExt + Unpin,
     W: AsyncWriteExt + Unpin,
@@ -216,12 +172,12 @@ where
                         }
                         if let Err(e) = process_incoming_message(&line, &mut writer, session, addr).await {
                             error!("Error processing message from {}: {}", addr, e);
-                            break;
+                            return Err(e);
                         }
                     }
                     Some(Err(e)) => {
                         error!("Error reading line from {}: {}", addr, e);
-                        break;
+                        return Err(Box::new(e));
                     }
                     None => {
                         info!("Connection closed by client: {}", addr);
@@ -239,7 +195,7 @@ async fn process_incoming_message<W>(
     writer: &mut W,
     session: &mut Session,
     addr: SocketAddr,
-) -> Result<(), Box<dyn std::error::Error>>
+) -> Result<(), Box<dyn std::error::Error + Send>>
 where
     W: AsyncWriteExt + Unpin,
 {
@@ -249,7 +205,14 @@ where
 
             if let Ok(response) = response {
                 // Send the response back to the client
-                let response_json = serde_json::to_string(&response)?;
+                let response_json = match serde_json::to_string(&response) {
+                    Ok(json) => json,
+                    Err(e) => {
+                        error!("Failed to serialize response for {}: {}", addr, e);
+                        return Err(Box::new(e));
+                    }
+                };
+
                 debug!("Sending to {}: {:?}", addr, response_json);
                 if let Err(e) = writer
                     .write_all(format!("{}\n", response_json).as_bytes())
@@ -278,10 +241,6 @@ where
 #[cfg(test)]
 mod stratum_server_tests {
     use super::*;
-    use bitcoin::block::Header;
-    use bitcoin::blockdata::block::Version;
-    use bitcoin::consensus::encode::serialize;
-    use bitcoin::{Block, CompactTarget};
     use bitcoindrpc::MockBitcoindRpc;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -295,15 +254,11 @@ mod stratum_server_tests {
             Ok(mock)
         });
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
-        let mut server = StratumServer::<MockBitcoindRpc>::new(
-            "127.0.0.1".to_string(),
-            12345,
-            "localhost:8332".to_string(),
-            "user".to_string(),
-            "pass".to_string(),
-            shutdown_rx,
-        )
-        .await;
+        let (_gbt_tx, gbt_rx) = mpsc::channel(10);
+        let (notifier_tx, _notifier_rx) = mpsc::channel(10);
+
+        let mut server =
+            StratumServer::new("127.0.0.1".to_string(), 12345, shutdown_rx, gbt_rx).await;
 
         // Verify the server was created with the correct parameters
         assert_eq!(server.port, 12345);
@@ -314,7 +269,7 @@ mod stratum_server_tests {
         // Start the server in a separate task so we can shut it down
         let server_handle = tokio::spawn(async move {
             // We'll ignore errors here since we'll forcibly shut down the server
-            let _ = server.start(Some(ready_tx)).await;
+            let _ = server.start(Some(ready_tx), notifier_tx).await;
         });
 
         ready_rx.await.expect("Server should signal readiness");
@@ -410,7 +365,7 @@ mod stratum_server_tests {
 
         // Verify results
         assert!(
-            result.is_ok(),
+            result.is_err(),
             "handle_connection should handle invalid JSON gracefully"
         );
 
@@ -442,9 +397,9 @@ mod stratum_server_tests {
         // Run the handler
         let result = handle_connection(input, &mut writer, addr, message_rx, shutdown_rx).await;
 
-        // Verify results - should handle the error gracefully
+        // Returns an error, so we can close the connection gracefully.
         assert!(
-            result.is_ok(),
+            result.is_err(),
             "handle_connection should handle line-too-long gracefully"
         );
 
@@ -480,9 +435,9 @@ mod stratum_server_tests {
         let result =
             super::handle_connection(reader, &mut writer, addr, message_rx, shutdown_rx).await;
 
-        // Should be Ok (connection closed gracefully)
+        // Should return error, so we can close the connection gracefully.
         assert!(
-            result.is_ok(),
+            result.is_err(),
             "handle_connection should close connection on double subscribe"
         );
 
@@ -510,143 +465,34 @@ mod stratum_server_tests {
 
     #[tokio::test]
     async fn test_update_block_template_success() {
-        // Create a dummy block and serialize it to hex
-        let block = Block {
-            header: Header {
-                version: Version::default(),
-                prev_blockhash: "000000000822bbfaf34d53fc43d0c1382054d3aafe31893020c315db8b0a19f9"
-                    .parse()
-                    .unwrap(),
-                merkle_root: "0000000000000000000000000000000000000000000000000000000000000001"
-                    .parse()
-                    .unwrap(),
-                time: 0,
-                bits: CompactTarget::from_consensus(1000),
-                nonce: 0,
-            },
-            txdata: vec![],
-        };
-        let block_bytes = serialize(&block);
-        let block_hex = hex::encode(block_bytes);
+        let template = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/gbt/signet/gbt-no-transactions.json"),
+        )
+        .expect("Failed to read block template file");
 
-        // Setup mock bitcoind to return the block hex string
-        let mut mock = MockBitcoindRpc::default();
-        mock.expect_getblocktemplate().returning(move |_| {
-            let block_hex = block_hex.clone();
-            Box::pin(async move { Ok(block_hex) })
+        let blocktemplate: BlockTemplate =
+            serde_json::from_str(&template).expect("Failed to parse block template JSON");
+
+        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (gbt_tx, gbt_rx) = mpsc::channel(1);
+        let (notifier_tx, mut notifier_rx) = mpsc::channel(1);
+
+        let mut server =
+            StratumServer::new("127.0.0.1".to_string(), 12345, shutdown_rx, gbt_rx).await;
+
+        let (ready_tx, ready_rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            let _ = server.start(Some(ready_tx), notifier_tx).await;
         });
+        ready_rx.await.expect("Server should signal readiness");
 
-        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
-        let connections_handle = spawn().await;
-        let mut server = StratumServer {
-            port: 12345,
-            hostname: "127.0.0.1".to_string(),
-            shutdown_rx,
-            bitcoind: std::sync::Arc::new(mock),
-            blocktemplate: None,
-            connections_handle,
-        };
+        gbt_tx.send(blocktemplate).await.unwrap();
 
-        let result = server.update_block_template().await;
-        // Should always return None
-        assert!(result.is_none());
-        // The blocktemplate should be set
-        assert!(server.blocktemplate.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_update_block_template_blocktemplate_not_string() {
-        // Setup mock bitcoind to return a non-string value
-        let mut mock = MockBitcoindRpc::default();
-        mock.expect_getblocktemplate()
-            .returning(|_| Box::pin(async move { Ok("blah".into()) }));
-
-        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
-        let connections_handle = spawn().await;
-
-        let mut server = StratumServer {
-            port: 12345,
-            hostname: "127.0.0.1".to_string(),
-            shutdown_rx,
-            bitcoind: std::sync::Arc::new(mock),
-            blocktemplate: None,
-            connections_handle,
-        };
-
-        let result = server.update_block_template().await;
-        assert!(result.is_none());
-        assert!(server.blocktemplate.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_update_block_template_hex_decode_error() {
-        // Setup mock bitcoind to return an invalid hex string
-        let mut mock = MockBitcoindRpc::default();
-        mock.expect_getblocktemplate()
-            .returning(|_| Box::pin(async move { Ok("nothex".into()) }));
-
-        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
-        let connections_handle = spawn().await;
-
-        let mut server = StratumServer {
-            port: 12345,
-            hostname: "127.0.0.1".to_string(),
-            shutdown_rx,
-            bitcoind: std::sync::Arc::new(mock),
-            blocktemplate: None,
-            connections_handle,
-        };
-
-        let result = server.update_block_template().await;
-        assert!(result.is_none());
-        assert!(server.blocktemplate.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_update_block_template_deserialize_error() {
-        // Setup mock bitcoind to return a hex string that is valid hex but not a valid block
-        let mut mock = MockBitcoindRpc::default();
-        mock.expect_getblocktemplate()
-            .returning(|_| Box::pin(async move { Ok("nothex".into()) }));
-
-        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
-        let connections_handle = spawn().await;
-
-        let mut server = StratumServer {
-            port: 12345,
-            hostname: "127.0.0.1".to_string(),
-            shutdown_rx,
-            bitcoind: std::sync::Arc::new(mock),
-            blocktemplate: None,
-            connections_handle,
-        };
-
-        let result = server.update_block_template().await;
-        assert!(result.is_none());
-        assert!(server.blocktemplate.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_update_block_template_bitcoind_error() {
-        // Setup mock bitcoind to return an error
-        let mut mock = MockBitcoindRpc::default();
-        mock.expect_getblocktemplate()
-            .returning(|_| Box::pin(async { Err("bitcoind error".into()) }));
-
-        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
-        let connections_handle = spawn().await;
-
-        let mut server = StratumServer {
-            port: 12345,
-            hostname: "127.0.0.1".to_string(),
-            shutdown_rx,
-            bitcoind: std::sync::Arc::new(mock),
-            blocktemplate: None,
-            connections_handle,
-        };
-
-        let result = server.update_block_template().await;
-        assert!(result.is_none());
-        assert!(server.blocktemplate.is_none());
+        notifier_rx
+            .recv()
+            .await
+            .expect("Notifier should receive block template");
     }
 }

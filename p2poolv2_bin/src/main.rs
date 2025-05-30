@@ -17,17 +17,22 @@
 use bitcoindrpc::BitcoindRpcClient;
 use clap::Parser;
 use p2poolv2_lib::config::{Config, LoggingConfig};
+use p2poolv2_lib::node::actor::NodeHandle;
+use p2poolv2_lib::shares::chain::actor::ChainHandle;
 use p2poolv2_lib::shares::ShareBlock;
 use std::error::Error;
 use std::fs::File;
 use stratum::server::StratumServer;
+use stratum::work::gbt::start_gbt;
+use tracing::error;
 use tracing::{debug, info};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Registry};
 
-use p2poolv2_lib::node::actor::NodeHandle;
-use p2poolv2_lib::shares::chain::actor::ChainHandle;
+/// Interval in seconds to poll for new block templates since the last blocknotify signal
+const GBT_POLL_INTERVAL: u64 = 60; // seconds
 
-use tracing::error;
+/// Path to the Unix socket for receiving blocknotify signals from bitcoind
+pub const SOCKET_PATH: &str = "/tmp/p2pool_blocknotify.sock";
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -63,18 +68,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let stratum_config = config.stratum.clone();
     let bitcoin_config = config.bitcoin.clone();
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
+    let (gbt_tx, gbt_rx) = tokio::sync::mpsc::channel(1);
+    let (notifier_tx, _notifier_rx) = tokio::sync::mpsc::channel(1);
+
     tokio::spawn(async move {
-        let mut stratum_server = StratumServer::<BitcoindRpcClient>::new(
+        start_gbt::<BitcoindRpcClient>(
+            bitcoin_config.url,
+            bitcoin_config.username,
+            bitcoin_config.password,
+            gbt_tx,
+            SOCKET_PATH,
+            GBT_POLL_INTERVAL,
+        )
+        .await
+        .expect("Failed to start GBT polling");
+    });
+
+    tokio::spawn(async move {
+        let mut stratum_server = StratumServer::new(
             stratum_config.host,
             stratum_config.port,
-            bitcoin_config.url.clone(),
-            bitcoin_config.username.clone(),
-            bitcoin_config.password.clone(),
             stratum_shutdown_rx,
+            gbt_rx,
         )
         .await;
         info!("Starting Stratum server...");
-        let result = stratum_server.start(None).await;
+        let result = stratum_server.start(None, notifier_tx).await;
         if result.is_err() {
             error!("Failed to start Stratum server: {}", result.unwrap_err());
         }

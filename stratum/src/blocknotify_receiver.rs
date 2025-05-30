@@ -31,7 +31,7 @@ fn main() -> std::io::Result<()> {
     // Connect to the socket
     let mut stream = match UnixStream::connect(socket_path) {
         Ok(stream) => stream,
-        Err(e) => {
+        Err(_e) => {
             println!(
                 "P2Pool server not running. No notification sent to {}",
                 socket_path

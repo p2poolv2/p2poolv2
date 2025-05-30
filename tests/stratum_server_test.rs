@@ -14,7 +14,6 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use bitcoindrpc::BitcoindRpcClient;
 use std::net::SocketAddr;
 use std::str;
 use stratum::{
@@ -31,20 +30,14 @@ async fn test_stratum_server_subscribe() {
 
     // Setup server - using Arc so we can access it for shutdown
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let (_gbt_tx, gbt_rx) = tokio::sync::mpsc::channel(1);
+    let (notifier_tx, _notifier_rx) = tokio::sync::mpsc::channel(1);
 
-    let mut server = StratumServer::<BitcoindRpcClient>::new(
-        "127.0.0.1".to_string(),
-        9999,
-        "http://localhost:38332".to_string(),
-        "user".to_string(),
-        "pass".to_string(),
-        shutdown_rx,
-    )
-    .await;
+    let mut server = StratumServer::new("127.0.0.1".to_string(), 9999, shutdown_rx, gbt_rx).await;
 
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
-        let _result = server.start(Some(ready_tx)).await;
+        let _result = server.start(Some(ready_tx), notifier_tx).await;
     });
     ready_rx.await.expect("Server failed to start");
 

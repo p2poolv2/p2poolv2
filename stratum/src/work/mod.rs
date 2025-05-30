@@ -16,5 +16,5 @@
 
 mod coinbase;
 mod error;
-mod gbt;
+pub mod gbt;
 mod notify;
