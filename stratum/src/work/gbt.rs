@@ -103,8 +103,9 @@ fn compute_merkle_branches(input_txids: Vec<sha256d::Hash>) -> Vec<sha256d::Hash
 #[allow(dead_code)]
 async fn get_block_template<B: BitcoindRpc>(
     bitcoind: Arc<B>,
+    network: bitcoin::Network,
 ) -> Result<BlockTemplate, Box<dyn std::error::Error + Send + Sync>> {
-    match bitcoind.getblocktemplate(bitcoin::Network::Signet).await {
+    match bitcoind.getblocktemplate(network).await {
         Ok(blocktemplate_json) => {
             match serde_json::from_str::<BlockTemplate>(blocktemplate_json.as_str()) {
                 Ok(template) => Ok(template),
@@ -130,6 +131,7 @@ pub async fn start_gbt<B: BitcoindRpc>(
     result_tx: tokio::sync::mpsc::Sender<BlockTemplate>,
     socket_path: &str,
     poll_interval: u64,
+    network: bitcoin::Network,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let bitcoind = match B::new(url, username, password) {
         Ok(bitcoind) => Arc::new(bitcoind),
@@ -163,7 +165,7 @@ pub async fn start_gbt<B: BitcoindRpc>(
                 _ = interval.tick() => {
                     // Only poll if it's been a while since our last blocknotify
                     if last_request_at.elapsed().as_secs() >= poll_interval {
-                        match get_block_template(bitcoind.clone()).await {
+                        match get_block_template(bitcoind.clone(), network).await {
                             Ok(template) => {
                                 debug!("Polled block template: {:?}", template);
                                 if result_tx.send(template).await.is_err() {
@@ -181,7 +183,7 @@ pub async fn start_gbt<B: BitcoindRpc>(
                     match result {
                         Ok(_) => {
                             debug!("Received blocknotify signal");
-                            match get_block_template(bitcoind.clone()).await {
+                            match get_block_template(bitcoind.clone(), network).await {
                                 Ok(template) => {
                                     debug!("Block template from notification: {:?}", template);
                                     if result_tx.send(template).await.is_err() {
@@ -227,7 +229,7 @@ mod gbt_load_tests {
                 Box::pin(async move { Ok(template) })
             });
 
-        let result = get_block_template(Arc::new(mock_rpc)).await;
+        let result = get_block_template(Arc::new(mock_rpc), bitcoin::Network::Signet).await;
         assert!(result.is_ok());
         let template = result.unwrap();
         assert_eq!(template.version, 536870912);
@@ -410,6 +412,7 @@ mod gbt_server_tests {
             template_tx,
             socket_path,
             60,
+            bitcoin::Network::Signet,
         )
         .await;
 
@@ -463,6 +466,7 @@ mod gbt_server_tests {
             template_tx,
             socket_path,
             1,
+            bitcoin::Network::Signet,
         )
         .await;
 
