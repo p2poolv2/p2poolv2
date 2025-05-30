@@ -143,6 +143,23 @@ pub async fn start_gbt<B: BitcoindRpc>(
         }
     };
 
+    if let Err(e) = get_block_template(bitcoind.clone(), network).await {
+        info!("Error getting block template: {}", e);
+        return Err(Box::new(WorkError {
+            message: format!("Error getting initial block template: {}", e),
+        }));
+    }
+
+    // Remove the socket file if it exists to avoid "address already in use" error
+    if std::path::Path::new(socket_path).exists() {
+        debug!("Removing existing socket file at {}", socket_path);
+        if let Err(e) = std::fs::remove_file(socket_path) {
+            return Err(Box::new(WorkError {
+                message: format!("Failed to remove existing socket file: {}", e),
+            }));
+        }
+    }
+
     // Setup Unix socket to receive updates from blocknotify_receiver
     let listener = match tokio::net::UnixListener::bind(socket_path) {
         Ok(listener) => {

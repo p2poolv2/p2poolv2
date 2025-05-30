@@ -23,6 +23,7 @@ use p2poolv2_lib::shares::chain::actor::ChainHandle;
 use p2poolv2_lib::shares::ShareBlock;
 use std::error::Error;
 use std::fs::File;
+use std::process::exit;
 use std::str::FromStr;
 use stratum::client_connections::spawn;
 use stratum::server::StratumServer;
@@ -75,7 +76,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (gbt_tx, gbt_rx) = tokio::sync::mpsc::channel(1);
 
     tokio::spawn(async move {
-        start_gbt::<BitcoindRpcClient>(
+        if let Err(e) = start_gbt::<BitcoindRpcClient>(
             bitcoin_config.url,
             bitcoin_config.username,
             bitcoin_config.password,
@@ -85,7 +86,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             bitcoin_config.network,
         )
         .await
-        .expect("Failed to start GBT polling");
+        {
+            tracing::error!("Failed to fetch block template. Shutting down. \n {}", e);
+            exit(1);
+        }
     });
 
     let connections_handle = spawn().await;
