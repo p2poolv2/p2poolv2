@@ -50,7 +50,7 @@ impl fmt::Display for BitcoindRpcError {
 /// All functions in the traits are desugred async functions so we can add Send as a bound.
 #[cfg_attr(any(test, feature = "mock"), automock)]
 #[warn(async_fn_in_trait)]
-pub trait BitcoindRpc: Send + Sync {
+pub trait BitcoindRpc: Send + Sync + 'static {
     fn new(
         url: String,
         username: String,
