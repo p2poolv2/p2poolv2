@@ -366,10 +366,10 @@ mod tests {
             .and(body_json(serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "getblocktemplate",
-                "params": [[{
+                "params": [{
                     "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
                     "rules": ["segwit", "signet"],
-                }]],
+                }],
                 "id": 0
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
