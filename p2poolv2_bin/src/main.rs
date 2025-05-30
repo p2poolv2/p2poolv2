@@ -82,6 +82,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             gbt_tx,
             SOCKET_PATH,
             GBT_POLL_INTERVAL,
+            bitcoin_config.network,
         )
         .await
         .expect("Failed to start GBT polling");
