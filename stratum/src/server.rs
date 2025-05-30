@@ -149,6 +149,9 @@ where
             // receive a message from the message channel
             Some(message) = message_rx.recv() => {
                 debug!("Received message from channel: {}", message);
+                if session.username.is_none() {
+                    continue; // Ignore messages until the user has authorized
+                }
                 if let Err(e) = writer.write_all(format!("{}\n", message).as_bytes()).await {
                     error!("Failed to write to {}: {}", addr, e);
                     break;
@@ -460,6 +463,175 @@ mod stratum_server_tests {
         assert!(
             response_json.get("result").is_some(),
             "Subscribe response should have 'result'"
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_handle_connection_should_include_responses_after_authorization() {
+        // Create message channel and shutdown channel
+        let (message_tx, message_rx) = mpsc::channel(10);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        // Create a channel to get the writer result for verification
+        let (writer_tx, writer_rx) = oneshot::channel::<Vec<u8>>();
+
+        // Create input with subscribe and authorize messages
+        let subscribe_message =
+            Request::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+        let subscribe_str = serde_json::to_string(&subscribe_message).unwrap();
+
+        let authorize_message = Request::new_authorize(
+            2,
+            "test_user".to_string(),
+            Some("test_password".to_string()),
+        );
+        let authorize_str = serde_json::to_string(&authorize_message).unwrap();
+
+        // Create mock IO objects
+        let mut mock_reader = tokio_test::io::Builder::new()
+            .read(format!("{}\n", subscribe_str).as_bytes())
+            .read(format!("{}\n", authorize_str).as_bytes())
+            .wait(std::time::Duration::from_millis(10_000)) // Wait for 10 seconds before continuing
+            .build();
+
+        let mut writer = Vec::new();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8082);
+
+        // Spawn the handler in a separate task
+        let handle = tokio::spawn(async move {
+            // Wrap the mock reader with a BufReader to implement AsyncBufReadExt
+            let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
+            let result =
+                handle_connection(buf_reader, &mut writer, addr, message_rx, shutdown_rx).await;
+
+            assert!(
+                result.is_ok(),
+                "handle_connection should gracefully handle shutdown"
+            );
+
+            // Send the writer content for verification
+            let _ = writer_tx.send(writer);
+        });
+
+        // Wait for processing to start
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        message_tx
+            .send(Arc::new("test message".to_string()))
+            .await
+            .expect("Failed to send message");
+
+        // Wait to allow message processing
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        // Send shutdown signal to end the test
+        shutdown_tx
+            .send(())
+            .expect("Failed to send shutdown signal");
+
+        // Wait for the task to complete
+        let _ = handle.await;
+
+        // Get the writer content and verify
+        let writer_content = writer_rx.await.expect("Failed to get writer content");
+        let response_str = String::from_utf8_lossy(&writer_content);
+
+        // Verify responses were sent for subscribe and authorize
+        let responses: Vec<&str> = response_str.split('\n').filter(|s| !s.is_empty()).collect();
+        assert_eq!(
+            responses.len(),
+            3,
+            "Should have responses for subscribe, authorize and the test message"
+        );
+
+        // Parse and verify each response
+        let subscribe_response: serde_json::Value =
+            serde_json::from_str(responses[0]).expect("Subscribe response should be valid JSON");
+        assert!(
+            subscribe_response.get("result").is_some(),
+            "Subscribe response should have 'result' field"
+        );
+
+        let authorize_response: serde_json::Value =
+            serde_json::from_str(responses[1]).expect("Authorize response should be valid JSON");
+        assert!(
+            authorize_response.get("result").is_some(),
+            "Authorize response should have 'result' field"
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_handle_connection_should_not_include_responses_before_authorization() {
+        // Create message channel and shutdown channel
+        let (message_tx, message_rx) = mpsc::channel(10);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        // Create a channel to get the writer result for verification
+        let (writer_tx, writer_rx) = oneshot::channel::<Vec<u8>>();
+
+        // Create input with subscribe and authorize messages
+        let subscribe_message =
+            Request::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+        let subscribe_str = serde_json::to_string(&subscribe_message).unwrap();
+
+        // Create mock IO objects
+        let mut mock_reader = tokio_test::io::Builder::new()
+            .read(format!("{}\n", subscribe_str).as_bytes())
+            .wait(std::time::Duration::from_millis(10_000)) // Wait for 10 seconds before continuing
+            .build();
+
+        let mut writer = Vec::new();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8082);
+
+        // Spawn the handler in a separate task
+        let handle = tokio::spawn(async move {
+            // Wrap the mock reader with a BufReader to implement AsyncBufReadExt
+            let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
+            let result =
+                handle_connection(buf_reader, &mut writer, addr, message_rx, shutdown_rx).await;
+
+            assert!(
+                result.is_ok(),
+                "handle_connection should gracefully handle shutdown"
+            );
+
+            // Send the writer content for verification
+            let _ = writer_tx.send(writer);
+        });
+
+        // Wait for processing to start
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        message_tx
+            .send(Arc::new("test message".to_string()))
+            .await
+            .expect("Failed to send message");
+
+        // Wait to allow message processing
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        // Send shutdown signal to end the test
+        shutdown_tx
+            .send(())
+            .expect("Failed to send shutdown signal");
+
+        // Wait for the task to complete
+        let _ = handle.await;
+
+        // Get the writer content and verify
+        let writer_content = writer_rx.await.expect("Failed to get writer content");
+        let response_str = String::from_utf8_lossy(&writer_content);
+
+        // Verify responses were sent for subscribe and authorize
+        let responses: Vec<&str> = response_str.split('\n').filter(|s| !s.is_empty()).collect();
+        assert_eq!(responses.len(), 1, "Should have responses for subscribe");
+
+        // Parse and verify each response
+        let subscribe_response: serde_json::Value =
+            serde_json::from_str(responses[0]).expect("Subscribe response should be valid JSON");
+        assert!(
+            subscribe_response.get("result").is_some(),
+            "Subscribe response should have 'result' field"
         );
     }
 }
