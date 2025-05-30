@@ -12,8 +12,9 @@ tracing-subscriber = { workspace = true }
 clap = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
+bitcoin = { workspace = true }
 bitcoindrpc = { path = "../bitcoindrpc" }
-stratum = { path = "../stratum" } 
+stratum = { path = "../stratum" }
 
 [[bin]]
 name = "p2poolv2"
