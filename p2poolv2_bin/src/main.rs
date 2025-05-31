@@ -100,15 +100,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .require_network(config.bitcoin.network)
         .expect("Output address must match the Bitcoin network in config");
 
-    let solo_output = OutputPair {
-        address: output_address,
-        amount: bitcoin::Amount::from_sat(0),
-    };
-
     tokio::spawn(async move {
         info!("Starting Stratum notifier...");
         // This will run indefinitely, sending new block templates to the Stratum server as they arrive
-        stratum::work::notify::start_notify(gbt_rx, connections_cloned, &[solo_output]).await;
+        stratum::work::notify::start_notify(gbt_rx, connections_cloned, Some(output_address)).await;
     });
 
     tokio::spawn(async move {

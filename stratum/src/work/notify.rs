@@ -29,6 +29,7 @@ use crate::work::coinbase::OutputPair;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::secp256k1::{self, rand::Rng};
 use bitcoin::transaction::Version;
+use bitcoin::Address;
 use std::borrow::Cow;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -44,16 +45,34 @@ fn parse_flags(flags: Option<String>) -> PushBytesBuf {
     }
 }
 
+/// Build the output distribution for the coinbase transaction.
+/// For now we only work with the solo_address provided, it will be used as the recipient of the coinbase transaction.
+fn build_output_distribution(
+    template: &BlockTemplate,
+    solo_address: Option<Address>,
+) -> Vec<OutputPair> {
+    let mut output_distribution = Vec::new();
+    if let Some(address) = solo_address {
+        output_distribution.push(OutputPair {
+            address,
+            amount: bitcoin::Amount::from_sat(template.coinbasevalue),
+        });
+    }
+    output_distribution
+}
+
 #[allow(dead_code)]
-pub fn build_notify<'a>(
-    template: &'a BlockTemplate,
-    output_distribution: &'a [OutputPair],
-) -> Result<Notify<'a>, WorkError> {
+pub fn build_notify(
+    template: &BlockTemplate,
+    solo_address: Option<Address>,
+) -> Result<Notify, WorkError> {
     let job_id: u64 = secp256k1::rand::thread_rng().gen();
+
+    let output_distribution = build_output_distribution(template, solo_address);
 
     let coinbase = build_coinbase_transaction(
         Version(template.version),
-        output_distribution,
+        output_distribution.as_slice(),
         template.height as i64,
         parse_flags(template.coinbaseaux.get("flags").cloned()),
         template.default_witness_commitment.clone(),
@@ -89,10 +108,10 @@ pub fn build_notify<'a>(
 pub async fn start_notify(
     mut notifier_rx: mpsc::Receiver<BlockTemplate>,
     connections: ClientConnectionsHandle,
-    output_distribution: &[OutputPair],
+    solo_address: Option<Address>,
 ) {
     while let Some(template) = notifier_rx.recv().await {
-        match build_notify(&template, output_distribution) {
+        match build_notify(&template, solo_address.clone()) {
             Ok(notify) => {
                 let notify_str =
                     serde_json::to_string(&notify).expect("Failed to serialize Notify message");
@@ -109,7 +128,6 @@ pub async fn start_notify(
 mod tests {
     use super::*;
     use crate::work::coinbase::parse_address;
-    use bitcoin::Amount;
     use std::fs;
     use tokio::sync::mpsc;
 
@@ -136,12 +154,8 @@ mod tests {
         )
         .unwrap();
 
-        let output_distribution = &[OutputPair {
-            address,
-            amount: Amount::from_sat(template.coinbasevalue),
-        }];
         // Build Notify
-        let notify = build_notify(&template, output_distribution).expect("Failed to build notify");
+        let notify = build_notify(&template, Some(address)).expect("Failed to build notify");
 
         // Load expected notify JSON
         let expected_notify_json = notify_json.clone();
@@ -204,17 +218,9 @@ mod tests {
         )
         .unwrap();
 
-        let output_distribution = vec![OutputPair {
-            address,
-            amount: Amount::from_sat(5000000000),
-        }];
-        // Ensure OutputPair can be cloned
-        // Clone the output_distribution_vec for the spawned task
-        let output_distribution_vec_clone = output_distribution.clone();
-
         // Start the notify task in a separate task
         let task_handle = tokio::spawn(async move {
-            start_notify(notify_rx, mock_connections, &output_distribution_vec_clone).await;
+            start_notify(notify_rx, mock_connections, Some(address)).await;
         });
 
         // Load a sample block template
