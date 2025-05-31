@@ -98,12 +98,9 @@ impl P2PoolBehaviour {
         self.kademlia.add_address(&peer_id, addr);
     }
 
-    /// Remove the peer from Kademlia's routing table,
-    /// gossipsub's explicit peers, and request/response protocols
     pub fn remove_peer(&mut self, peer_id: &PeerId) {
+        // Remove the peer from Kademlia's routing table
         self.kademlia.remove_peer(peer_id);
-        self.gossipsub.remove_explicit_peer(peer_id);
-        // self.request_response.remove_address(peer, address);
     }
 }
 
