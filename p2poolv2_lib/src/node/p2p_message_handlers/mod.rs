@@ -140,31 +140,6 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
     }
 }
 
-/// The Tower service that delegates to handle_request.
-#[derive(Clone)]
-pub struct P2PRequestService;
-
-impl<C: 'static + Send + Sync, T: TimeProvider + Send + Sync + 'static>
-    Service<RequestContext<C, T>> for P2PRequestService
-{
-    type Response = ();
-    type Error = Box<dyn Error + Send + Sync>;
-    type Future = Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send>>;
-
-    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, req: RequestContext<C, T>) -> Self::Future {
-        Box::pin(async move {
-            handle_request(req).await.map_err(|e| {
-                error!("Service failed to process request: {}", e);
-                e
-            })
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

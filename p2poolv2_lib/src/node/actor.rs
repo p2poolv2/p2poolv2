@@ -17,7 +17,11 @@
 use crate::command::Command;
 use crate::config::Config;
 use crate::node::Node;
+use crate::node::P2PoolBehaviourEvent;
+use crate::node::RequestResponseEvent;
+use crate::node::SwarmEvent;
 use crate::node::SwarmSend;
+use crate::service::p2p_service::{P2PService, RequestContext};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
@@ -25,9 +29,12 @@ use crate::shares::chain::actor::ChainHandle;
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::miner_message::MinerWorkbase;
 use crate::shares::ShareBlock;
+use crate::utils::time_provider::SystemTimeProvider;
+use crate::utils::time_provider::TimeProvider;
 use libp2p::futures::StreamExt;
 use std::error::Error;
 use tokio::sync::{mpsc, oneshot};
+use tower::Service;
 use tracing::{debug, error, info};
 
 /// NodeHandle provides an interface to interact with a Node running in a separate task
@@ -152,6 +159,9 @@ impl NodeActor {
     }
 
     async fn run(mut self) {
+        // Initialize P2PService and TimeProvider
+        let p2p_service = P2PService;
+        let time_provider = SystemTimeProvider;
         loop {
             tokio::select! {
                 buf = self.node.swarm_rx.recv() => {
@@ -182,9 +192,31 @@ impl NodeActor {
                     }
                 },
                 event = self.node.swarm.select_next_some() => {
+                    match event {
+                        SwarmEvent::Behaviour(P2PoolBehaviourEvent::RequestResponse(
+                            RequestResponseEvent::Message { peer, message: libp2p::request_response::Message::Request{request, channel, ..} }
+                        )) => {
+                            let ctx= RequestContext {
+                                peer,
+                                request,
+                                chain_handle: self.node.chain_handle.clone(),
+                                response_channel: channel,
+                                swarm_tx: self.node.swarm_tx.clone(),
+                                time_provider: time_provider.clone(),
+                            };
+                            let mut service = p2p_service.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = service.call(ctx).await {
+                                    error!("Failed to handle request: {}", e);
+                                }
+                            });
+                    }
+                    _=> {
                     if let Err(e) = self.node.handle_swarm_event(event).await {
                         error!("Error handling swarm event: {}", e);
                     }
+                }
+            }
                 },
                 command = self.command_rx.recv() => {
                     match command {
