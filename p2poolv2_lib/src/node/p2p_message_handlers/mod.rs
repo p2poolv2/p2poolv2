@@ -76,14 +76,6 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
                 error!("Failed to store workbase: {}", e);
                 return Err(format!("Error storing workbase: {}", e).into());
             }
-            if let Err(e) = ctx
-                .swarm_tx
-                .send(SwarmSend::Gossip(Message::Workbase(workbase)))
-                .await
-            {
-                error!("Failed to send share: {}", e);
-                return Err("Error sending share to network".into());
-            }
             Ok(())
         }
         Message::UserWorkbase(userworkbase) => {

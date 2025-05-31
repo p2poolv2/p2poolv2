@@ -19,14 +19,14 @@ build:
 	cargo build --workspace
 
 build-release:
-	cargo build --release --workspace
+	cargo build --workspace --release
 
 # For log level use RUST_LOG=<<level>> just run
 run config="config.toml":
 	RUST_LOG={{LOG_LEVEL}} cargo run -p p2poolv2 -- --config={{config}}
 
 check:
-	cargo check
+	cargo check --workspace
 
 # Run cli commands using p2poolv2-cli
 # examples

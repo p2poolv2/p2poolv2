@@ -168,7 +168,6 @@ mod tests {
         NetworkConfig {
             listen_address: "".to_string(),
             dial_peers: vec![],
-            enable_mdns: false,
             max_pending_incoming: 0,
             max_pending_outgoing: 0,
             max_established_incoming: 0,
