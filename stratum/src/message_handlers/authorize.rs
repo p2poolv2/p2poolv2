@@ -51,7 +51,7 @@ pub async fn handle_authorize<'a>(
             client_address: addr,
         })
         .await;
-    Ok(Response::new_no_op(message.id))
+    Ok(Response::new_ok(message.id, serde_json::json!(true)))
 }
 
 #[cfg(test)]

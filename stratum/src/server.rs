@@ -208,10 +208,6 @@ where
             let response = handle_message(message, session, addr, notify_tx).await;
 
             if let Ok(response) = response {
-                if response.is_no_op() {
-                    debug!("No-op response for {}: {:?}", addr, response);
-                    return Ok(()); // No-op responses do not need to be sent
-                }
                 // Send the response back to the client
                 let response_json = match serde_json::to_string(&response) {
                     Ok(json) => json,

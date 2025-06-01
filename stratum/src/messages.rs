@@ -287,18 +287,6 @@ impl Response<'_> {
             }),
         }
     }
-
-    pub fn new_no_op(id: Option<Id>) -> Self {
-        Response {
-            id,
-            result: None,
-            error: None,
-        }
-    }
-
-    pub fn is_no_op(&self) -> bool {
-        self.result.is_none() && self.error.is_none()
-    }
 }
 
 /// Notify represents a Stratum notification message from the server to the client
