@@ -62,7 +62,7 @@ fn get_current_timestamp_bytes() -> (u32, u32) {
     (timestamp.as_secs() as u32, timestamp.subsec_nanos())
 }
 
-/// Build outputs for the transaction from the provided address and value.
+/// Build outputs for the transaction from the provided address and value and pairs.
 #[allow(dead_code)]
 fn build_outputs(output_data: &[OutputPair]) -> Vec<TxOut> {
     output_data
