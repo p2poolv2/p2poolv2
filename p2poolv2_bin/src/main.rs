@@ -27,7 +27,6 @@ use std::process::exit;
 use std::str::FromStr;
 use stratum::client_connections::spawn;
 use stratum::server::StratumServer;
-use stratum::work::coinbase::OutputPair;
 use stratum::work::gbt::start_gbt;
 use tracing::error;
 use tracing::{debug, info};
@@ -73,14 +72,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let stratum_config = config.stratum.clone();
     let bitcoin_config = config.bitcoin.clone();
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
-    let (gbt_tx, gbt_rx) = tokio::sync::mpsc::channel(1);
+    let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(1);
 
+    let notify_tx_for_gbt = notify_tx.clone();
     tokio::spawn(async move {
         if let Err(e) = start_gbt::<BitcoindRpcClient>(
             bitcoin_config.url,
             bitcoin_config.username,
             bitcoin_config.password,
-            gbt_tx,
+            notify_tx_for_gbt,
             SOCKET_PATH,
             GBT_POLL_INTERVAL,
             bitcoin_config.network,
@@ -103,7 +103,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tokio::spawn(async move {
         info!("Starting Stratum notifier...");
         // This will run indefinitely, sending new block templates to the Stratum server as they arrive
-        stratum::work::notify::start_notify(gbt_rx, connections_cloned, Some(output_address)).await;
+        stratum::work::notify::start_notify(notify_rx, connections_cloned, Some(output_address))
+            .await;
     });
 
     tokio::spawn(async move {
@@ -115,7 +116,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await;
         info!("Starting Stratum server...");
-        let result = stratum_server.start(None).await;
+        let result = stratum_server.start(None, notify_tx).await;
         if result.is_err() {
             error!("Failed to start Stratum server: {}", result.unwrap_err());
         }

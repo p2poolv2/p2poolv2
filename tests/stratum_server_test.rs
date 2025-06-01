@@ -20,6 +20,7 @@ use stratum::{
     self,
     messages::{Request, Response},
     server::StratumServer,
+    work::notify,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -31,6 +32,7 @@ async fn test_stratum_server_subscribe() {
     // Setup server - using Arc so we can access it for shutdown
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let connections_handle = stratum::client_connections::spawn().await;
+    let (notify_tx, _notify_rx) = tokio::sync::mpsc::channel::<notify::NotifyCmd>(100);
 
     let mut server = StratumServer::new(
         "127.0.0.1".to_string(),
@@ -42,7 +44,7 @@ async fn test_stratum_server_subscribe() {
 
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
-        let _result = server.start(Some(ready_tx)).await;
+        let _result = server.start(Some(ready_tx), notify_tx).await;
     });
     ready_rx.await.expect("Server failed to start");
 

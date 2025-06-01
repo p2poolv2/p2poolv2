@@ -17,7 +17,7 @@
 use crate::error::Error;
 use crate::messages::{Request, Response};
 use crate::session::Session;
-use serde_json::json;
+use crate::work::notify::NotifyCmd;
 use tracing::debug;
 
 /// Handle the "mining.authorize" message
@@ -34,6 +34,8 @@ use tracing::debug;
 pub async fn handle_authorize<'a>(
     message: Request<'a>,
     session: &mut Session,
+    addr: std::net::SocketAddr,
+    notify_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
 ) -> Result<Response<'a>, Error> {
     debug!("Handling mining.authorize message");
     if session.username.is_some() {
@@ -44,31 +46,50 @@ pub async fn handle_authorize<'a>(
     }
     session.username = Some(message.params[0].clone());
     session.password = Some(message.params[1].clone());
-    Ok(Response::new_ok(message.id, json!(true)))
+    let _ = notify_tx
+        .send(NotifyCmd::SendToClient {
+            client_address: addr,
+        })
+        .await;
+    Ok(Response::new_no_op(message.id))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::messages::Id;
+    use std::net::SocketAddr;
 
     #[tokio::test]
     async fn test_handle_authorize_first_time() {
         // Setup
         let mut session = Session::new(1);
         let request = Request::new_authorize(12345, "worker1".to_string(), Some("x".to_string()));
+        let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(1);
 
         // Execute
-        let response = handle_authorize(request, &mut session).await;
+        let response = handle_authorize(
+            request,
+            &mut session,
+            SocketAddr::from(([127, 0, 0, 1], 8080)),
+            notify_tx,
+        )
+        .await;
 
         // Verify
         assert!(response.is_ok());
         let response = response.unwrap();
         assert_eq!(response.id, Some(Id::Number(12345)));
-        assert_eq!(response.result, Some(json!(true)));
         assert!(response.error.is_none());
+        assert!(response.result.is_none());
         assert_eq!(session.username, Some("worker1".to_string()));
         assert_eq!(session.password, Some("x".to_string()));
+
+        let notify_cmd = notify_rx.try_recv();
+        assert!(
+            notify_cmd.is_ok(),
+            "Notification should be sent to the client after authorization"
+        );
     }
 
     #[tokio::test]
@@ -78,13 +99,26 @@ mod tests {
         session.username = Some("someusername".to_string());
         let request =
             Request::new_authorize(12345, "worker1".to_string(), Some("password".to_string()));
+        let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(1);
 
         // Execute
-        let response = handle_authorize(request, &mut session).await;
+        let response = handle_authorize(
+            request,
+            &mut session,
+            SocketAddr::from(([127, 0, 0, 1], 8080)),
+            notify_tx,
+        )
+        .await;
 
         // Verify
         assert!(response.is_err());
         assert_eq!(session.username, Some("someusername".to_string()));
         assert!(session.password.is_none());
+
+        let notify_cmd = notify_rx.try_recv();
+        assert!(
+            notify_cmd.is_err(),
+            "No notification should be sent when already authorized"
+        );
     }
 }
