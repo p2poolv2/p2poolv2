@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::work::error::WorkError;
+use crate::work::notify::NotifyCmd;
 use bitcoin::hashes::{sha256d, Hash};
 use bitcoindrpc::BitcoindRpc;
 use serde::{Deserialize, Serialize};
@@ -23,7 +24,7 @@ use std::sync::Arc;
 use tracing::{debug, info};
 
 /// Struct representing the getblocktemplate response from Bitcoin Core
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct BlockTemplate {
     pub version: i32,
     pub rules: Vec<String>,
@@ -52,7 +53,7 @@ pub struct BlockTemplate {
 }
 
 /// Transaction data in the block template
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TemplateTransaction {
     pub data: String,
     pub txid: String,
@@ -128,7 +129,7 @@ pub async fn start_gbt<B: BitcoindRpc>(
     url: String,
     username: String,
     password: String,
-    result_tx: tokio::sync::mpsc::Sender<BlockTemplate>,
+    result_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
     socket_path: &str,
     poll_interval: u64,
     network: bitcoin::Network,
@@ -143,11 +144,25 @@ pub async fn start_gbt<B: BitcoindRpc>(
         }
     };
 
-    if let Err(e) = get_block_template(bitcoind.clone(), network).await {
-        info!("Error getting block template: {}", e);
-        return Err(Box::new(WorkError {
-            message: format!("Error getting initial block template: {}", e),
-        }));
+    let template = match get_block_template(bitcoind.clone(), network).await {
+        Ok(template) => template,
+        Err(e) => {
+            info!("Error getting block template: {}", e);
+            return Err(Box::new(WorkError {
+                message: format!("Error getting initial block template: {}", e),
+            }));
+        }
+    };
+
+    // Initial template sent to start gbt task.
+    if result_tx
+        .send(NotifyCmd::SendToAll {
+            template: Box::new(template),
+        })
+        .await
+        .is_err()
+    {
+        info!("Failed to send block template to channel");
     }
 
     // Remove the socket file if it exists to avoid "address already in use" error
@@ -185,7 +200,7 @@ pub async fn start_gbt<B: BitcoindRpc>(
                         match get_block_template(bitcoind.clone(), network).await {
                             Ok(template) => {
                                 debug!("Polled block template: {:?}", template);
-                                if result_tx.send(template).await.is_err() {
+                                if result_tx.send(NotifyCmd::SendToAll { template: Box::new(template) }).await.is_err() {
                                     info!("Failed to send block template to channel");
                                 }
                                 last_request_at = std::time::Instant::now();
@@ -203,7 +218,7 @@ pub async fn start_gbt<B: BitcoindRpc>(
                             match get_block_template(bitcoind.clone(), network).await {
                                 Ok(template) => {
                                     debug!("Block template from notification: {:?}", template);
-                                    if result_tx.send(template).await.is_err() {
+                                    if result_tx.send(NotifyCmd::SendToAll { template: Box::new(template) }).await.is_err() {
                                         info!("Failed to send block template to channel");
                                     }
                                     last_request_at = std::time::Instant::now();
@@ -443,9 +458,13 @@ mod gbt_server_tests {
             tokio::time::timeout(std::time::Duration::from_secs(1), template_rx.recv()).await;
 
         assert!(timeout.is_ok());
-        let template = timeout.unwrap();
-        assert!(template.is_some());
-        assert_eq!(template.unwrap().height, 108);
+        let cmd = timeout.unwrap().unwrap();
+        match cmd {
+            NotifyCmd::SendToAll { template } => {
+                assert_eq!(template.height, 108);
+            }
+            _ => panic!("Expected NotifyCmd::SendToAll"),
+        }
     }
 
     #[tokio::test]
@@ -494,8 +513,12 @@ mod gbt_server_tests {
             tokio::time::timeout(std::time::Duration::from_secs(2), template_rx.recv()).await;
 
         assert!(timeout.is_ok());
-        let template = timeout.unwrap();
-        assert!(template.is_some());
-        assert_eq!(template.unwrap().height, 108);
+        let cmd = timeout.unwrap().unwrap();
+        match cmd {
+            NotifyCmd::SendToAll { template } => {
+                assert_eq!(template.height, 108);
+            }
+            _ => panic!("Expected NotifyCmd::SendToAll"),
+        }
     }
 }

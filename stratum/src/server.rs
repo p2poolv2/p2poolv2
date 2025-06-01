@@ -23,6 +23,7 @@ use crate::client_connections::ClientConnectionsHandle;
 use crate::message_handlers::handle_message;
 use crate::messages::Request;
 use crate::session::Session;
+use crate::work::notify::NotifyCmd;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -61,6 +62,7 @@ impl StratumServer {
     pub async fn start(
         &mut self,
         ready_tx: Option<oneshot::Sender<()>>,
+        notify_tx: mpsc::Sender<NotifyCmd>,
     ) -> Result<(), Box<dyn std::error::Error + Send>> {
         info!("Starting Stratum server at {}:{}", self.hostname, self.port);
 
@@ -97,10 +99,11 @@ impl StratumServer {
                             let (reader, writer) = stream.into_split();
                             let buf_reader = BufReader::new(reader);
 
+                            let notify_tx_cloned = notify_tx.clone();
                             // Spawn a new task for each connection
                             tokio::spawn(async move {
                                 // Handle the connection with graceful shutdown support
-                                let _ = handle_connection(buf_reader, writer, addr, message_rx, shutdown_rx).await;
+                                let _ = handle_connection(buf_reader, writer, addr, message_rx, shutdown_rx, notify_tx_cloned).await;
                             });
                         }
                         Err(e) => {
@@ -126,6 +129,7 @@ async fn handle_connection<R, W>(
     addr: SocketAddr,
     mut message_rx: mpsc::Receiver<Arc<String>>,
     mut shutdown_rx: oneshot::Receiver<()>,
+    notify_tx: mpsc::Sender<NotifyCmd>,
 ) -> Result<(), Box<dyn std::error::Error + Send>>
 where
     R: AsyncBufReadExt + Unpin,
@@ -146,7 +150,7 @@ where
                 info!("Shutdown signal received, closing connection from {}", addr);
                 break;
             }
-            // receive a message from the message channel
+            // receive a message on the channel used by server to send_to_all
             Some(message) = message_rx.recv() => {
                 debug!("Received message from channel: {}", message);
                 if session.username.is_none() {
@@ -169,7 +173,7 @@ where
                         if line.is_empty() {
                             continue; // Ignore empty lines
                         }
-                        if let Err(e) = process_incoming_message(&line, &mut writer, session, addr).await {
+                        if let Err(e) = process_incoming_message(&line, &mut writer, session, addr, notify_tx.clone()).await {
                             error!("Error processing message from {}: {}", addr, e);
                             return Err(e);
                         }
@@ -194,15 +198,20 @@ async fn process_incoming_message<W>(
     writer: &mut W,
     session: &mut Session,
     addr: SocketAddr,
+    notify_tx: mpsc::Sender<NotifyCmd>,
 ) -> Result<(), Box<dyn std::error::Error + Send>>
 where
     W: AsyncWriteExt + Unpin,
 {
     match serde_json::from_str::<Request>(line) {
         Ok(message) => {
-            let response = handle_message(message, session).await;
+            let response = handle_message(message, session, addr, notify_tx).await;
 
             if let Ok(response) = response {
+                if response.is_no_op() {
+                    debug!("No-op response for {}: {:?}", addr, response);
+                    return Ok(()); // No-op responses do not need to be sent
+                }
                 // Send the response back to the client
                 let response_json = match serde_json::to_string(&response) {
                     Ok(json) => json,
@@ -268,11 +277,12 @@ mod stratum_server_tests {
         assert_eq!(server.hostname, "127.0.0.1");
 
         let (ready_tx, ready_rx) = oneshot::channel();
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
 
         // Start the server in a separate task so we can shut it down
         let server_handle = tokio::spawn(async move {
             // We'll ignore errors here since we'll forcibly shut down the server
-            let _ = server.start(Some(ready_tx)).await;
+            let _ = server.start(Some(ready_tx), notify_tx).await;
         });
 
         ready_rx.await.expect("Server should signal readiness");
@@ -301,9 +311,18 @@ mod stratum_server_tests {
         let mut writer = Vec::new();
         let (_, message_rx) = mpsc::channel(10);
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
 
         // Run the handler
-        let result = handle_connection(reader, &mut writer, addr, message_rx, shutdown_rx).await;
+        let result = handle_connection(
+            reader,
+            &mut writer,
+            addr,
+            message_rx,
+            shutdown_rx,
+            notify_tx,
+        )
+        .await;
 
         // Verify results
         assert!(
@@ -362,9 +381,18 @@ mod stratum_server_tests {
         let mut writer = Vec::new();
         let (_, message_rx) = mpsc::channel(10);
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
 
         // Run the handler
-        let result = handle_connection(reader, &mut writer, addr, message_rx, shutdown_rx).await;
+        let result = handle_connection(
+            reader,
+            &mut writer,
+            addr,
+            message_rx,
+            shutdown_rx,
+            notify_tx,
+        )
+        .await;
 
         // Verify results
         assert!(
@@ -396,9 +424,11 @@ mod stratum_server_tests {
         let mut writer = Vec::new();
         let (_, message_rx) = mpsc::channel(10);
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
 
         // Run the handler
-        let result = handle_connection(input, &mut writer, addr, message_rx, shutdown_rx).await;
+        let result =
+            handle_connection(input, &mut writer, addr, message_rx, shutdown_rx, notify_tx).await;
 
         // Returns an error, so we can close the connection gracefully.
         assert!(
@@ -433,10 +463,18 @@ mod stratum_server_tests {
         let mut writer = Vec::new();
         let (_, message_rx) = mpsc::channel(10);
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
 
         // Run the handler
-        let result =
-            super::handle_connection(reader, &mut writer, addr, message_rx, shutdown_rx).await;
+        let result = super::handle_connection(
+            reader,
+            &mut writer,
+            addr,
+            message_rx,
+            shutdown_rx,
+            notify_tx,
+        )
+        .await;
 
         // Should return error, so we can close the connection gracefully.
         assert!(
@@ -497,12 +535,21 @@ mod stratum_server_tests {
         let mut writer = Vec::new();
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8082);
 
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
+
         // Spawn the handler in a separate task
         let handle = tokio::spawn(async move {
             // Wrap the mock reader with a BufReader to implement AsyncBufReadExt
             let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
-            let result =
-                handle_connection(buf_reader, &mut writer, addr, message_rx, shutdown_rx).await;
+            let result = handle_connection(
+                buf_reader,
+                &mut writer,
+                addr,
+                message_rx,
+                shutdown_rx,
+                notify_tx,
+            )
+            .await;
 
             assert!(
                 result.is_ok(),
@@ -540,8 +587,8 @@ mod stratum_server_tests {
         let responses: Vec<&str> = response_str.split('\n').filter(|s| !s.is_empty()).collect();
         assert_eq!(
             responses.len(),
-            3,
-            "Should have responses for subscribe, authorize and the test message"
+            2,
+            "Should have responses for subscribe and the test message. No message for authorize, as notifier not plugged in."
         );
 
         // Parse and verify each response
@@ -550,13 +597,6 @@ mod stratum_server_tests {
         assert!(
             subscribe_response.get("result").is_some(),
             "Subscribe response should have 'result' field"
-        );
-
-        let authorize_response: serde_json::Value =
-            serde_json::from_str(responses[1]).expect("Authorize response should be valid JSON");
-        assert!(
-            authorize_response.get("result").is_some(),
-            "Authorize response should have 'result' field"
         );
     }
 
@@ -582,13 +622,21 @@ mod stratum_server_tests {
 
         let mut writer = Vec::new();
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8082);
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
 
         // Spawn the handler in a separate task
         let handle = tokio::spawn(async move {
             // Wrap the mock reader with a BufReader to implement AsyncBufReadExt
             let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
-            let result =
-                handle_connection(buf_reader, &mut writer, addr, message_rx, shutdown_rx).await;
+            let result = handle_connection(
+                buf_reader,
+                &mut writer,
+                addr,
+                message_rx,
+                shutdown_rx,
+                notify_tx,
+            )
+            .await;
 
             assert!(
                 result.is_ok(),

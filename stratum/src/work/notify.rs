@@ -31,8 +31,10 @@ use bitcoin::secp256k1::{self, rand::Rng};
 use bitcoin::transaction::Version;
 use bitcoin::Address;
 use std::borrow::Cow;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tracing::debug;
 
 /// Extract flags from template coinbaseaux and convert to PushBytesBuf
 /// If flags are empty, use a single byte with value 0
@@ -100,25 +102,65 @@ pub fn build_notify(
     Ok(Notify::new_notify(params))
 }
 
+/// NotifyCmd is used to send notify to all clients or a single client.
+pub enum NotifyCmd {
+    SendToAll {
+        /// The block template to notify clients about.
+        template: Box<BlockTemplate>,
+    },
+    SendToClient {
+        /// The address of the client to notify, if None, notify all clients.
+        /// The latest template is used for the notify, so there is not template here.
+        client_address: SocketAddr,
+    },
+}
+
 /// Start a task that listens for new block template events.
 /// As new templates arrives, the tasks build new Notify messages and sends them to all connected clients.
 ///
 /// The output distribution is provided and this works for solo mining. Later on we need to get the output
 /// distribution from the server or any new component we add for share accounting.
 pub async fn start_notify(
-    mut notifier_rx: mpsc::Receiver<BlockTemplate>,
+    mut notifier_rx: mpsc::Receiver<NotifyCmd>,
     connections: ClientConnectionsHandle,
     solo_address: Option<Address>,
 ) {
-    while let Some(template) = notifier_rx.recv().await {
-        match build_notify(&template, solo_address.clone()) {
-            Ok(notify) => {
-                let notify_str =
-                    serde_json::to_string(&notify).expect("Failed to serialize Notify message");
+    let mut latest_template: Option<Box<BlockTemplate>> = None;
+    while let Some(cmd) = notifier_rx.recv().await {
+        match cmd {
+            NotifyCmd::SendToAll { template } => {
+                latest_template = Some(template.clone());
+                let notify_str = match build_notify(&template, solo_address.clone()) {
+                    Ok(notify) => {
+                        serde_json::to_string(&notify).expect("Failed to serialize Notify message")
+                    }
+                    Err(e) => {
+                        debug!("Error building notify: {}", e);
+                        continue; // Skip this iteration if notify cannot be built
+                    }
+                };
                 connections.send_to_all(Arc::new(notify_str)).await;
             }
-            Err(e) => {
-                eprintln!("Error building notify: {}", e);
+            NotifyCmd::SendToClient { client_address } => {
+                if latest_template.is_none() {
+                    debug!(
+                        "No latest template available to send to client: {}",
+                        client_address
+                    );
+                    continue; // Skip if no latest template is available
+                }
+                let notify_str =
+                    match build_notify(latest_template.as_ref().unwrap(), solo_address.clone()) {
+                        Ok(notify) => serde_json::to_string(&notify)
+                            .expect("Failed to serialize Notify message"),
+                        Err(e) => {
+                            debug!("Error building notify: {}", e);
+                            continue; // Skip this iteration if notify cannot be built
+                        }
+                    };
+                connections
+                    .send_to_client(client_address, Arc::new(notify_str))
+                    .await;
             }
         }
     }
@@ -207,9 +249,13 @@ mod tests {
             .expect_send_to_all()
             .times(1)
             .returning(|_| ());
+        mock_connections
+            .expect_send_to_client()
+            .times(1)
+            .returning(|_, _| true);
 
         // Create a channel for block template notifications
-        let (notify_tx, notify_rx) = mpsc::channel::<BlockTemplate>(10);
+        let (notify_tx, notify_rx) = mpsc::channel::<NotifyCmd>(10);
 
         // Setup output distribution
         let address = parse_address(
@@ -233,12 +279,21 @@ mod tests {
 
         // Send the template through the channel
         notify_tx
-            .send(template)
+            .send(NotifyCmd::SendToAll {
+                template: Box::new(template),
+            })
             .await
             .expect("Failed to send template");
 
         // Give some time for the message to be processed
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        notify_tx
+            .send(NotifyCmd::SendToClient {
+                client_address: SocketAddr::from(([127, 0, 0, 1], 8080)), // dummy client address, mock client connections won't use this.
+            })
+            .await
+            .expect("Failed to send template to client");
 
         // Cleanup
         drop(notify_tx); // Close the channel to terminate the task

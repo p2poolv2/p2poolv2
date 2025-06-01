@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use std::net::SocketAddr;
+
 use crate::error::Error;
 use crate::messages::{Request, Response};
 use crate::session::Session;
@@ -22,6 +24,7 @@ pub mod authorize;
 pub mod submit;
 pub mod subscribe;
 
+use crate::work::notify::NotifyCmd;
 use authorize::handle_authorize;
 use submit::handle_submit;
 use subscribe::handle_subscribe;
@@ -37,10 +40,12 @@ use subscribe::handle_subscribe;
 pub(crate) async fn handle_message<'a>(
     message: Request<'a>,
     session: &mut Session,
+    addr: SocketAddr,
+    notify_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
 ) -> Result<Response<'a>, Error> {
     match message.method.as_ref() {
         "mining.subscribe" => handle_subscribe(message, session).await,
-        "mining.authorize" => handle_authorize(message, session).await,
+        "mining.authorize" => handle_authorize(message, session, addr, notify_tx).await,
         "mining.submit" => handle_submit(message, session).await,
         method => Err(Error::InvalidMethod(method.to_string())),
     }
