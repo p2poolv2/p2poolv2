@@ -85,7 +85,6 @@ mod tests {
         // Wait for the listener thread to receive the data
         let received = handle.join().unwrap();
 
-        // Assert that the received byte is 1
         assert_eq!(received, b"blocknotify\n");
 
         // Clean up
