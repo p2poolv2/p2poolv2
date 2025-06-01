@@ -208,10 +208,6 @@ where
             let response = handle_message(message, session, addr, notify_tx).await;
 
             if let Ok(response) = response {
-                if response.is_no_op() {
-                    debug!("No-op response for {}: {:?}", addr, response);
-                    return Ok(()); // No-op responses do not need to be sent
-                }
                 // Send the response back to the client
                 let response_json = match serde_json::to_string(&response) {
                     Ok(json) => json,
@@ -587,8 +583,8 @@ mod stratum_server_tests {
         let responses: Vec<&str> = response_str.split('\n').filter(|s| !s.is_empty()).collect();
         assert_eq!(
             responses.len(),
-            2,
-            "Should have responses for subscribe and the test message. No message for authorize, as notifier not plugged in."
+            3,
+            "Should have responses for subscribe, authorize and the test message."
         );
 
         // Parse and verify each response

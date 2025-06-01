@@ -51,7 +51,7 @@ pub async fn handle_authorize<'a>(
             client_address: addr,
         })
         .await;
-    Ok(Response::new_no_op(message.id))
+    Ok(Response::new_ok(message.id, serde_json::json!(true)))
 }
 
 #[cfg(test)]
@@ -81,7 +81,8 @@ mod tests {
         let response = response.unwrap();
         assert_eq!(response.id, Some(Id::Number(12345)));
         assert!(response.error.is_none());
-        assert!(response.result.is_none());
+        assert!(response.result.is_some());
+        assert_eq!(response.result.unwrap(), true);
         assert_eq!(session.username, Some("worker1".to_string()));
         assert_eq!(session.password, Some("x".to_string()));
 
