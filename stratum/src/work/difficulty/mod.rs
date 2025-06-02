@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -14,9 +14,4 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod coinbase;
-mod difficulty;
-mod error;
-pub mod gbt;
-pub mod maps;
-pub mod notify;
+pub mod validate;

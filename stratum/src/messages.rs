@@ -73,6 +73,9 @@ pub struct Error<'a> {
 
 /// Request represents a Stratum request message from client to the server
 /// The params in this message are all strings
+///
+/// We are not using enum to capture the different request types, as we want to remain flexible
+/// for handling the diverse Stratum client implementations out there.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
