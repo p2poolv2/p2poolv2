@@ -1,4 +1,9 @@
 {
     "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.check.allTargets": false,
+    "rust-analyzer.check.extraArgs": [
+        "--no-deps"
+    ],
+    "rust-analyzer.check.workspace": false,
     "task.quickOpen.showAll": true
 }
