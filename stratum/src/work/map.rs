@@ -16,6 +16,7 @@
 
 use super::gbt::BlockTemplate;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
 /// The work id used uniquely track block templates
@@ -30,7 +31,7 @@ pub struct JobId(pub &'static str);
 #[derive(Debug, Default)]
 pub struct WorkMap {
     jobs: HashMap<WorkId, Vec<JobId>>,
-    blocktemplates: HashMap<WorkId, Box<BlockTemplate>>,
+    blocktemplates: HashMap<WorkId, Arc<BlockTemplate>>,
 }
 
 impl WorkMap {
@@ -43,12 +44,12 @@ impl WorkMap {
     }
 
     /// Insert a job id under the specified work id
-    pub fn insert(&mut self, work_id: WorkId, job_id: JobId) {
+    pub fn insert_job_id(&mut self, work_id: WorkId, job_id: JobId) {
         self.jobs.entry(work_id).or_default().push(job_id);
     }
 
     /// Get all job ids for a work id
-    pub fn get(&self, work_id: &WorkId) -> Option<&Vec<JobId>> {
+    pub fn get_job_id(&self, work_id: &WorkId) -> Option<&Vec<JobId>> {
         self.jobs.get(work_id)
     }
 
@@ -75,12 +76,12 @@ impl WorkMap {
     }
 
     /// Find the block template for a given work id
-    pub fn find_block_template(&self, work_id: &WorkId) -> Option<Box<BlockTemplate>> {
+    pub fn find_block_template(&self, work_id: &WorkId) -> Option<Arc<BlockTemplate>> {
         self.blocktemplates.get(work_id).cloned()
     }
 
     /// Insert a block template under the specified work id
-    pub fn insert_block_template(&mut self, work_id: WorkId, block_template: Box<BlockTemplate>) {
+    pub fn insert_block_template(&mut self, work_id: WorkId, block_template: Arc<BlockTemplate>) {
         self.blocktemplates.insert(work_id, block_template);
     }
 }
@@ -118,12 +119,12 @@ pub enum Command {
     /// Find the block template for a given work id
     FindBlockTemplate {
         work_id: WorkId,
-        resp: oneshot::Sender<Option<Box<BlockTemplate>>>,
+        resp: oneshot::Sender<Option<Arc<BlockTemplate>>>,
     },
     /// Insert a block template under the specified work id
     InsertBlockTemplate {
         work_id: WorkId,
-        block_template: Box<BlockTemplate>,
+        block_template: Arc<BlockTemplate>, // Change from BlockTemplate to Arc<BlockTemplate>
         resp: oneshot::Sender<()>,
     },
 }
@@ -136,7 +137,7 @@ pub struct WorkMapActorHandle {
 
 impl WorkMapActorHandle {
     /// Insert a job id under the specified work id
-    pub async fn insert(&self, work_id: WorkId, job_id: JobId) -> Result<(), String> {
+    pub async fn insert_job_id(&self, work_id: WorkId, job_id: JobId) -> Result<(), String> {
         let (resp_tx, resp_rx) = oneshot::channel();
 
         self.tx
@@ -154,7 +155,7 @@ impl WorkMapActorHandle {
     }
 
     /// Get all job ids for a work id
-    pub async fn get(&self, work_id: WorkId) -> Result<Option<Vec<JobId>>, String> {
+    pub async fn get_job_id(&self, work_id: WorkId) -> Result<Option<Vec<JobId>>, String> {
         let (resp_tx, resp_rx) = oneshot::channel();
 
         self.tx
@@ -221,6 +222,51 @@ impl WorkMapActorHandle {
             .await
             .map_err(|_| "Failed to receive find_work_id_for_job response".to_string())
     }
+
+    /// Find the block template for a given work id
+    pub async fn find_block_template(
+        &self,
+        work_id: WorkId,
+    ) -> Result<Option<Arc<BlockTemplate>>, String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+
+        self.tx
+            .send(Command::FindBlockTemplate {
+                work_id,
+                resp: resp_tx,
+            })
+            .await
+            .map_err(|_| "Failed to send find_block_template command".to_string())?;
+
+        resp_rx
+            .await
+            .map_err(|_| "Failed to receive find_block_template response".to_string())
+    }
+
+    /// Insert a block template under the specified work id
+    pub async fn insert_block_template(
+        &self,
+        work_id: WorkId,
+        block_template: BlockTemplate, // Accept a BlockTemplate directly from caller
+    ) -> Result<(), String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+
+        // Create the Arc here, before sending the command
+        let arc_template = Arc::new(block_template);
+
+        self.tx
+            .send(Command::InsertBlockTemplate {
+                work_id,
+                block_template: arc_template, // Send the Arc<BlockTemplate>
+                resp: resp_tx,
+            })
+            .await
+            .map_err(|_| "Failed to send insert_block_template command".to_string())?;
+
+        resp_rx
+            .await
+            .map_err(|_| "Failed to receive insert_block_template response".to_string())
+    }
 }
 
 /// The actor that manages access to the WorkMap
@@ -253,11 +299,11 @@ impl WorkMapActor {
                     job_id,
                     resp,
                 } => {
-                    self.map.insert(work_id, job_id);
+                    self.map.insert_job_id(work_id, job_id);
                     let _ = resp.send(());
                 }
                 Command::GetJob { work_id, resp } => {
-                    let result = self.map.get(&work_id).cloned();
+                    let result = self.map.get_job_id(&work_id).cloned();
                     let _ = resp.send(result);
                 }
                 Command::ContainsWorkId { work_id, resp } => {
@@ -316,12 +362,12 @@ mod tests {
         let job_id = JobId("test_job");
 
         // Test insert and contains
-        map.insert(work_id, job_id);
+        map.insert_job_id(work_id, job_id);
         assert!(map.contains_work_id(&work_id));
         assert!(map.contains_job_id(&work_id, &job_id));
 
         // Test get
-        let jobs = map.get(&work_id).unwrap();
+        let jobs = map.get_job_id(&work_id).unwrap();
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0], job_id);
 
@@ -344,12 +390,12 @@ mod tests {
         let job_id = JobId("test_job");
 
         // Test insert job and contains
-        assert!(handle.insert(work_id, job_id).await.is_ok());
+        assert!(handle.insert_job_id(work_id, job_id).await.is_ok());
         assert_eq!(handle.contains_work_id(work_id).await.unwrap(), true);
         assert_eq!(handle.contains_job_id(work_id, job_id).await.unwrap(), true);
 
         // Test get
-        let jobs = handle.get(work_id).await.unwrap().unwrap();
+        let jobs = handle.get_job_id(work_id).await.unwrap().unwrap();
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0], job_id);
 
@@ -386,48 +432,31 @@ mod tests {
         )
         .unwrap();
 
-        let template: Box<BlockTemplate> = serde_json::from_str(&template_str).unwrap();
+        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
+        let cloned_template = template.clone();
 
         let handle = start_map_actor();
         let work_id = WorkId("test_work");
 
         // Test inserting a block template
-        let (resp_tx, resp_rx) = oneshot::channel();
-        handle
-            .tx
-            .send(Command::InsertBlockTemplate {
-                work_id,
-                block_template: template,
-                resp: resp_tx,
-            })
+        assert!(handle
+            .insert_block_template(work_id, template)
             .await
-            .unwrap();
-        resp_rx.await.unwrap();
+            .is_ok());
 
         // Test finding the block template
-        let (resp_tx, resp_rx) = oneshot::channel();
-        handle
-            .tx
-            .send(Command::FindBlockTemplate {
-                work_id,
-                resp: resp_tx,
-            })
-            .await
-            .unwrap();
-        let retrieved_template = resp_rx.await.unwrap();
+        let retrieved_template = handle.find_block_template(work_id).await.unwrap();
         assert!(retrieved_template.is_some());
+        assert_eq!(
+            cloned_template.previousblockhash,
+            retrieved_template.unwrap().previousblockhash
+        );
 
         // Test with non-existent work id
-        let (resp_tx, resp_rx) = oneshot::channel();
-        handle
-            .tx
-            .send(Command::FindBlockTemplate {
-                work_id: WorkId("non_existent"),
-                resp: resp_tx,
-            })
+        let retrieved_template = handle
+            .find_block_template(WorkId("non_existent"))
             .await
             .unwrap();
-        let retrieved_template = resp_rx.await.unwrap();
         assert!(retrieved_template.is_none());
     }
 
@@ -439,11 +468,11 @@ mod tests {
         let job_id2 = JobId("job2");
 
         // Insert multiple jobs for the same work
-        map.insert(work_id, job_id1);
-        map.insert(work_id, job_id2);
+        map.insert_job_id(work_id, job_id1);
+        map.insert_job_id(work_id, job_id2);
 
         // Verify all jobs are stored
-        let jobs = map.get(&work_id).unwrap();
+        let jobs = map.get_job_id(&work_id).unwrap();
         assert_eq!(jobs.len(), 2);
         assert!(jobs.contains(&job_id1));
         assert!(jobs.contains(&job_id2));

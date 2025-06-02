@@ -18,5 +18,5 @@ pub mod coinbase;
 mod difficulty;
 mod error;
 pub mod gbt;
-pub mod maps;
+pub mod map;
 pub mod notify;
