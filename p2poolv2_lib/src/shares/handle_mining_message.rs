@@ -31,7 +31,6 @@ use tracing::{error, info};
 /// For now the message can be a share or a GBT workbase
 /// We store the received message in the node's database
 /// we assume it is valid and add it to the chain.
-
 pub async fn handle_mining_message<C>(
     mining_message: CkPoolMessage,
     chain_handle: ChainHandle,
