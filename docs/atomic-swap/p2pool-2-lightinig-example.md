@@ -28,7 +28,7 @@ The invoice includes the **payment hash (`payment_hash`)**, which will serve as 
 
 Alice creates a **P2Pool HTLC** locking 10,000 shares using the same `payment_hash` from the Lightning invoice. This ensures that the P2Pool shares are only claimable by providing the corresponding **preimage `R`** — the same secret she generated when creating the invoice.
 
-![p2pool initiateing](/p2pool-v2/docs/atomic-swap/minner2marketmaker.png)
+![p2pool initiateing](./minner2marketmaker_initiate.png)
 
 ---
 
@@ -55,7 +55,7 @@ Upon payment, **Alice reveals the preimage `R`** as part of fulfilling the invoi
 
 With the revealed preimage `R`, Bob constructs and broadcasts a **redeem transaction** on the P2Pool chain to claim the 10,000 shares from the HTLC. Since the P2Pool HTLC was locked with `payment_hash = SHA256(R)`, providing the correct preimage `R` unlocks it, allowing Bob to take ownership of the shares.
 
-![p2pool redeem](/p2pool-v2/docs/atomic-swap/minner2marketmaker_redeem.png)
+![p2pool redeem](./minner2marketmaker_redeem.png)
 
 ### Fallbacks and Refunds
 
