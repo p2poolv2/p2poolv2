@@ -20,7 +20,10 @@ use stratum::{
     self,
     messages::{Request, Response},
     server::StratumServer,
-    work::notify,
+    work::{
+        notify,
+        tracker::{self, start_tracker_actor},
+    },
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -43,8 +46,12 @@ async fn test_stratum_server_subscribe() {
     .await;
 
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let tracker_handle = start_tracker_actor();
+
     tokio::spawn(async move {
-        let _result = server.start(Some(ready_tx), notify_tx).await;
+        let _result = server
+            .start(Some(ready_tx), notify_tx, tracker_handle)
+            .await;
     });
     ready_rx.await.expect("Server failed to start");
 

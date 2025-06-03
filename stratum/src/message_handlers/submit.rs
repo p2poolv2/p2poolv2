@@ -17,6 +17,7 @@
 use crate::error::Error;
 use crate::messages::{Request, Response};
 use crate::session::Session;
+use crate::work::tracker::TrackerHandle;
 use serde_json::json;
 use tracing::debug;
 
@@ -28,7 +29,12 @@ use tracing::debug;
 pub async fn handle_submit<'a>(
     message: Request<'a>,
     _session: &mut Session,
+    tracker_handle: TrackerHandle,
 ) -> Result<Response<'a>, Error> {
     debug!("Handling mining.submit message");
+    if message.params.len() < 4 {
+        return Err(Error::InvalidParams);
+    }
+    let job_id = &message.params[0];
     Ok(Response::new_ok(message.id, json!(true)))
 }
