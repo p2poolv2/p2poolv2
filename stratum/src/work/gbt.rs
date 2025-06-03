@@ -157,7 +157,7 @@ pub async fn start_gbt<B: BitcoindRpc>(
     // Initial template sent to start gbt task.
     if result_tx
         .send(NotifyCmd::SendToAll {
-            template: Box::new(template),
+            template: Arc::new(template),
         })
         .await
         .is_err()
@@ -200,7 +200,7 @@ pub async fn start_gbt<B: BitcoindRpc>(
                         match get_block_template(bitcoind.clone(), network).await {
                             Ok(template) => {
                                 debug!("Polled block template: {:?}", template);
-                                if result_tx.send(NotifyCmd::SendToAll { template: Box::new(template) }).await.is_err() {
+                                if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
                                     info!("Failed to send block template to channel");
                                 }
                                 last_request_at = std::time::Instant::now();
@@ -218,7 +218,7 @@ pub async fn start_gbt<B: BitcoindRpc>(
                             match get_block_template(bitcoind.clone(), network).await {
                                 Ok(template) => {
                                     debug!("Block template from notification: {:?}", template);
-                                    if result_tx.send(NotifyCmd::SendToAll { template: Box::new(template) }).await.is_err() {
+                                    if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
                                         info!("Failed to send block template to channel");
                                     }
                                     last_request_at = std::time::Instant::now();
