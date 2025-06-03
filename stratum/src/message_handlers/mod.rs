@@ -19,6 +19,7 @@ use std::net::SocketAddr;
 use crate::error::Error;
 use crate::messages::{Request, Response};
 use crate::session::Session;
+use crate::work::tracker::TrackerHandle;
 
 pub mod authorize;
 pub mod submit;
@@ -42,11 +43,12 @@ pub(crate) async fn handle_message<'a>(
     session: &mut Session,
     addr: SocketAddr,
     notify_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
+    tracker_handle: TrackerHandle,
 ) -> Result<Response<'a>, Error> {
     match message.method.as_ref() {
         "mining.subscribe" => handle_subscribe(message, session).await,
         "mining.authorize" => handle_authorize(message, session, addr, notify_tx).await,
-        "mining.submit" => handle_submit(message, session).await,
+        "mining.submit" => handle_submit(message, session, tracker_handle).await,
         method => Err(Error::InvalidMethod(method.to_string())),
     }
 }
