@@ -28,18 +28,26 @@ pub struct WorkId(pub u32);
 pub struct JobId(pub u32);
 
 /// A map that associates work ids with job ids
+///
+/// We use this to build blocks from submitted jobs and their matching block templates.
 #[derive(Debug, Default)]
-pub struct WorkMap {
+pub struct Tracker {
     jobs: HashMap<WorkId, Vec<JobId>>,
     blocktemplates: HashMap<WorkId, Arc<BlockTemplate>>,
+    latest_work_id: u32,
 }
 
-impl WorkMap {
+impl Tracker {
     /// Create a new empty Map
     pub fn new() -> Self {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u32;
         Self {
             jobs: HashMap::new(),
             blocktemplates: HashMap::new(),
+            latest_work_id: timestamp,
         }
     }
 
@@ -80,7 +88,7 @@ impl WorkMap {
         self.blocktemplates.get(work_id).cloned()
     }
 
-    /// Insert a block template under the specified work id
+    /// Insert a block template with the specified work id
     pub fn insert_block_template(&mut self, work_id: WorkId, block_template: Arc<BlockTemplate>) {
         self.blocktemplates.insert(work_id, block_template);
     }
@@ -99,6 +107,17 @@ impl WorkMap {
         self.insert_job_id(work_id, job_id);
 
         work_id
+    }
+
+    /// Get the next work id, incrementing it atomically
+    pub fn get_next_work_id(&mut self) -> WorkId {
+        self.latest_work_id += 1;
+        WorkId(self.latest_work_id)
+    }
+
+    /// Get the latest work id using the atomic counter
+    pub fn get_latest_work_id(&self) -> WorkId {
+        WorkId(self.latest_work_id)
     }
 }
 
@@ -150,15 +169,19 @@ pub enum Command {
         work_id: WorkId,
         resp: oneshot::Sender<()>,
     },
+    /// Get the next work id, incrementing it atomically
+    GetNextWorkId { resp: oneshot::Sender<WorkId> },
+    /// Get the latest work id using the atomic counter
+    GetLatestWorkId { resp: oneshot::Sender<WorkId> },
 }
 
-/// A handle to the WorkMapActor
+/// A handle to the TrackerActor
 #[derive(Debug, Clone)]
-pub struct WorkMapActorHandle {
+pub struct TrackerHandle {
     tx: mpsc::Sender<Command>,
 }
 
-impl WorkMapActorHandle {
+impl TrackerHandle {
     /// Insert a job id under the specified work id
     pub async fn insert_job_id(&self, work_id: WorkId, job_id: JobId) -> Result<(), String> {
         let (resp_tx, resp_rx) = oneshot::channel();
@@ -317,25 +340,53 @@ impl WorkMapActorHandle {
             .await
             .map_err(|_| "Failed to receive add_job_for_template response".to_string())
     }
+
+    /// Get the next work id, incrementing it atomically
+    pub async fn get_next_work_id(&self) -> Result<WorkId, String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+
+        self.tx
+            .send(Command::GetNextWorkId { resp: resp_tx })
+            .await
+            .map_err(|_| "Failed to send get_next_work_id command".to_string())?;
+
+        resp_rx
+            .await
+            .map_err(|_| "Failed to receive get_next_work_id response".to_string())
+    }
+
+    /// Get the latest work id using the atomic counter
+    pub async fn get_latest_work_id(&self) -> Result<WorkId, String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+
+        self.tx
+            .send(Command::GetLatestWorkId { resp: resp_tx })
+            .await
+            .map_err(|_| "Failed to send get_latest_work_id command".to_string())?;
+
+        resp_rx
+            .await
+            .map_err(|_| "Failed to receive get_latest_work_id response".to_string())
+    }
 }
 
-/// The actor that manages access to the WorkMap
-pub struct WorkMapActor {
-    map: WorkMap,
+/// The actor that manages access to the Tracker
+pub struct TrackerActor {
+    map: Tracker,
     rx: mpsc::Receiver<Command>,
 }
 
-impl WorkMapActor {
-    /// Create a new WorkMapActor and return a handle to it
-    pub fn new() -> (Self, WorkMapActorHandle) {
+impl TrackerActor {
+    /// Create a new TrackerActor and return a handle to it
+    pub fn new() -> (Self, TrackerHandle) {
         let (tx, rx) = mpsc::channel(100); // Buffer size of 100
 
         let actor = Self {
-            map: WorkMap::new(),
+            map: Tracker::new(),
             rx,
         };
 
-        let handle = WorkMapActorHandle { tx };
+        let handle = TrackerHandle { tx };
 
         (actor, handle)
     }
@@ -393,14 +444,22 @@ impl WorkMapActor {
                     let _work_id = self.map.add_job_for_template(job_id, template, work_id);
                     let _ = resp.send(());
                 }
+                Command::GetNextWorkId { resp } => {
+                    let next_work_id = self.map.get_next_work_id();
+                    let _ = resp.send(next_work_id);
+                }
+                Command::GetLatestWorkId { resp } => {
+                    let latest_work_id = self.map.get_latest_work_id();
+                    let _ = resp.send(latest_work_id);
+                }
             }
         }
     }
 }
 
-/// Start a new MapActor in a separate task and return a handle to it
-pub fn start_work_map_actor() -> WorkMapActorHandle {
-    let (actor, handle) = WorkMapActor::new();
+/// Start a new TrackerActor in a separate task and return a handle to it
+pub fn start_tracker_actor() -> TrackerHandle {
+    let (actor, handle) = TrackerActor::new();
 
     // Spawn the actor in a new task
     tokio::spawn(async move {
@@ -415,8 +474,47 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_workmap_operations() {
-        let mut map = WorkMap::new();
+    async fn test_work_id_generation() {
+        // Test with tracker directly
+        let mut map = Tracker::new();
+        let initial_work_id = map.get_latest_work_id();
+
+        // Get next work id should increment
+        let next_work_id = map.get_next_work_id();
+        assert_eq!(next_work_id.0, initial_work_id.0 + 1);
+
+        // Latest work id should reflect the increment
+        let latest_work_id = map.get_latest_work_id();
+        assert_eq!(latest_work_id.0, next_work_id.0);
+
+        // Multiple calls should continue incrementing
+        let next_work_id2 = map.get_next_work_id();
+        assert_eq!(next_work_id2.0, next_work_id.0 + 1);
+    }
+
+    #[tokio::test]
+    async fn test_work_id_generation_actor() {
+        let handle = start_tracker_actor();
+
+        // Get the initial latest work id
+        let initial_work_id = handle.get_latest_work_id().await.unwrap();
+
+        // Get next work id should increment
+        let next_work_id = handle.get_next_work_id().await.unwrap();
+        assert_eq!(next_work_id.0, initial_work_id.0 + 1);
+
+        // Latest work id should reflect the increment
+        let latest_work_id = handle.get_latest_work_id().await.unwrap();
+        assert_eq!(latest_work_id.0, next_work_id.0);
+
+        // Multiple calls should continue incrementing
+        let next_work_id2 = handle.get_next_work_id().await.unwrap();
+        assert_eq!(next_work_id2.0, next_work_id.0 + 1);
+    }
+
+    #[tokio::test]
+    async fn test_tracker_operations() {
+        let mut map = Tracker::new();
         let work_id = WorkId(1001);
         let job_id = JobId(2001);
 
@@ -444,7 +542,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_map_actor() {
-        let handle = start_work_map_actor();
+        let handle = start_tracker_actor();
         let work_id = WorkId(1002);
         let job_id = JobId(2002);
 
@@ -494,7 +592,7 @@ mod tests {
         let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
         let cloned_template = template.clone();
 
-        let handle = start_work_map_actor();
+        let handle = start_tracker_actor();
         let work_id = WorkId(1003);
 
         // Test inserting a block template
@@ -518,7 +616,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_multiple_jobs_per_work() {
-        let mut map = WorkMap::new();
+        let mut map = Tracker::new();
         let work_id = WorkId(1004);
         let job_id1 = JobId(2003);
         let job_id2 = JobId(2004);
@@ -550,8 +648,8 @@ mod tests {
         let job_id = JobId(2005);
         let work_id = WorkId(1004);
 
-        // Test with WorkMap directly
-        let mut map = WorkMap::new();
+        // Test with tracker directly
+        let mut map = Tracker::new();
         map.add_job_for_template(job_id, Arc::new(template.clone()), work_id);
 
         // Verify job was added
@@ -559,7 +657,7 @@ mod tests {
         assert!(map.find_block_template(&work_id).is_some());
 
         // Test with actor
-        let handle = start_work_map_actor();
+        let handle = start_tracker_actor();
         let job_id2 = JobId(2006);
         let work_id2 = WorkId(1005);
         handle
