@@ -28,6 +28,7 @@ use std::str::FromStr;
 use stratum::client_connections::spawn;
 use stratum::server::StratumServer;
 use stratum::work::gbt::start_gbt;
+use stratum::work::tracker::start_tracker_actor;
 use tracing::error;
 use tracing::{debug, info};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Registry};
@@ -73,6 +74,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let bitcoin_config = config.bitcoin.clone();
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
     let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(1);
+    let work_map_handle = start_tracker_actor();
 
     let notify_tx_for_gbt = notify_tx.clone();
     tokio::spawn(async move {
@@ -103,8 +105,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tokio::spawn(async move {
         info!("Starting Stratum notifier...");
         // This will run indefinitely, sending new block templates to the Stratum server as they arrive
-        stratum::work::notify::start_notify(notify_rx, connections_cloned, Some(output_address))
-            .await;
+        stratum::work::notify::start_notify(
+            notify_rx,
+            connections_cloned,
+            Some(output_address),
+            work_map_handle,
+        )
+        .await;
     });
 
     tokio::spawn(async move {
