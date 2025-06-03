@@ -17,6 +17,7 @@
 use super::coinbase::{build_coinbase_transaction, split_coinbase};
 use super::error::WorkError;
 use super::gbt::{build_merkle_branches_for_template, BlockTemplate};
+use super::tracker::{JobId, TrackerHandle};
 
 #[cfg(not(test))]
 use crate::client_connections::ClientConnectionsHandle;
@@ -27,7 +28,6 @@ use crate::client_connections::ClientConnectionsHandle;
 use crate::messages::{Notify, NotifyParams};
 use crate::work::coinbase::OutputPair;
 use bitcoin::script::PushBytesBuf;
-use bitcoin::secp256k1::{self, rand::Rng};
 use bitcoin::transaction::Version;
 use bitcoin::Address;
 use std::borrow::Cow;
@@ -67,9 +67,8 @@ fn build_output_distribution(
 pub fn build_notify(
     template: &BlockTemplate,
     solo_address: Option<Address>,
+    job_id: JobId,
 ) -> Result<Notify, WorkError> {
-    let job_id: u64 = secp256k1::rand::thread_rng().gen();
-
     let output_distribution = build_output_distribution(template, solo_address);
 
     let coinbase = build_coinbase_transaction(
@@ -106,7 +105,7 @@ pub fn build_notify(
 pub enum NotifyCmd {
     SendToAll {
         /// The block template to notify clients about.
-        template: Box<BlockTemplate>,
+        template: Arc<BlockTemplate>,
     },
     SendToClient {
         /// The address of the client to notify, if None, notify all clients.
@@ -124,13 +123,18 @@ pub async fn start_notify(
     mut notifier_rx: mpsc::Receiver<NotifyCmd>,
     connections: ClientConnectionsHandle,
     solo_address: Option<Address>,
+    tracker_handle: TrackerHandle,
 ) {
-    let mut latest_template: Option<Box<BlockTemplate>> = None;
+    let mut latest_template: Option<Arc<BlockTemplate>> = None;
     while let Some(cmd) = notifier_rx.recv().await {
         match cmd {
             NotifyCmd::SendToAll { template } => {
-                latest_template = Some(template.clone());
-                let notify_str = match build_notify(&template, solo_address.clone()) {
+                latest_template = Some(Arc::clone(&template));
+                let job_id = tracker_handle
+                    .insert_block_template(Arc::clone(&template))
+                    .await
+                    .unwrap();
+                let notify_str = match build_notify(&template, solo_address.clone(), job_id) {
                     Ok(notify) => {
                         serde_json::to_string(&notify).expect("Failed to serialize Notify message")
                     }
@@ -149,15 +153,23 @@ pub async fn start_notify(
                     );
                     continue; // Skip if no latest template is available
                 }
-                let notify_str =
-                    match build_notify(latest_template.as_ref().unwrap(), solo_address.clone()) {
-                        Ok(notify) => serde_json::to_string(&notify)
-                            .expect("Failed to serialize Notify message"),
-                        Err(e) => {
-                            debug!("Error building notify: {}", e);
-                            continue; // Skip this iteration if notify cannot be built
-                        }
-                    };
+                let job_id = tracker_handle
+                    .insert_block_template(Arc::clone(latest_template.as_ref().unwrap()))
+                    .await
+                    .unwrap();
+                let notify_str = match build_notify(
+                    latest_template.as_ref().unwrap(),
+                    solo_address.clone(),
+                    job_id,
+                ) {
+                    Ok(notify) => {
+                        serde_json::to_string(&notify).expect("Failed to serialize Notify message")
+                    }
+                    Err(e) => {
+                        debug!("Error building notify: {}", e);
+                        continue; // Skip this iteration if notify cannot be built
+                    }
+                };
                 connections
                     .send_to_client(client_address, Arc::new(notify_str))
                     .await;
@@ -170,6 +182,7 @@ pub async fn start_notify(
 mod tests {
     use super::*;
     use crate::work::coinbase::parse_address;
+    use crate::work::tracker::start_tracker_actor;
     use std::fs;
     use tokio::sync::mpsc;
 
@@ -196,8 +209,11 @@ mod tests {
         )
         .unwrap();
 
+        let job_id = JobId(1);
+
         // Build Notify
-        let notify = build_notify(&template, Some(address)).expect("Failed to build notify");
+        let notify =
+            build_notify(&template, Some(address), job_id).expect("Failed to build notify");
 
         // Load expected notify JSON
         let expected_notify_json = notify_json.clone();
@@ -257,6 +273,8 @@ mod tests {
         // Create a channel for block template notifications
         let (notify_tx, notify_rx) = mpsc::channel::<NotifyCmd>(10);
 
+        let work_map_handle = start_tracker_actor();
+
         // Setup output distribution
         let address = parse_address(
             "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr",
@@ -266,7 +284,7 @@ mod tests {
 
         // Start the notify task in a separate task
         let task_handle = tokio::spawn(async move {
-            start_notify(notify_rx, mock_connections, Some(address)).await;
+            start_notify(notify_rx, mock_connections, Some(address), work_map_handle).await;
         });
 
         // Load a sample block template
@@ -280,7 +298,7 @@ mod tests {
         // Send the template through the channel
         notify_tx
             .send(NotifyCmd::SendToAll {
-                template: Box::new(template),
+                template: Arc::new(template),
             })
             .await
             .expect("Failed to send template");

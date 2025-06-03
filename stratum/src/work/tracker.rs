@@ -24,6 +24,13 @@ use tokio::sync::{mpsc, oneshot};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct JobId(pub u32);
 
+/// Delegate to u32's lower hex
+impl std::fmt::LowerHex for JobId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::LowerHex::fmt(&self.0, f)
+    }
+}
+
 /// A map that associates templates with job id
 ///
 /// We use this to build blocks from submitted jobs and their matching block templates.
