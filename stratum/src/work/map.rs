@@ -21,11 +21,11 @@ use tokio::sync::{mpsc, oneshot};
 
 /// The work id used uniquely tracks block templates
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WorkId(pub &'static str);
+pub struct WorkId(pub u32);
 
 /// The work id used uniquely tracks jobs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct JobId(pub &'static str);
+pub struct JobId(pub u32);
 
 /// A map that associates work ids with job ids
 #[derive(Debug, Default)]
@@ -84,6 +84,22 @@ impl WorkMap {
     pub fn insert_block_template(&mut self, work_id: WorkId, block_template: Arc<BlockTemplate>) {
         self.blocktemplates.insert(work_id, block_template);
     }
+
+    /// Add a job ID for a template, creating and inserting the template if it doesn't exist
+    pub fn add_job_for_template(
+        &mut self,
+        job_id: JobId,
+        template: Arc<BlockTemplate>,
+        work_id: WorkId,
+    ) -> WorkId {
+        // Insert the block template if it doesn't exist
+        self.blocktemplates.entry(work_id).or_insert(template);
+
+        // Add the job ID to the work ID
+        self.insert_job_id(work_id, job_id);
+
+        work_id
+    }
 }
 
 /// Commands that can be sent to the MapActor
@@ -124,7 +140,14 @@ pub enum Command {
     /// Insert a block template under the specified work id
     InsertBlockTemplate {
         work_id: WorkId,
-        block_template: Arc<BlockTemplate>, // Change from BlockTemplate to Arc<BlockTemplate>
+        block_template: Arc<BlockTemplate>,
+        resp: oneshot::Sender<()>,
+    },
+    /// Add a job ID for a template, creating and inserting the template if it doesn't exist
+    AddJobForTemplate {
+        job_id: JobId,
+        template: Arc<BlockTemplate>,
+        work_id: WorkId,
         resp: oneshot::Sender<()>,
     },
 }
@@ -155,7 +178,7 @@ impl WorkMapActorHandle {
     }
 
     /// Get all job ids for a work id
-    pub async fn get_job_id(&self, work_id: WorkId) -> Result<Option<Vec<JobId>>, String> {
+    pub async fn get_job_ids(&self, work_id: WorkId) -> Result<Option<Vec<JobId>>, String> {
         let (resp_tx, resp_rx) = oneshot::channel();
 
         self.tx
@@ -247,7 +270,7 @@ impl WorkMapActorHandle {
     pub async fn insert_block_template(
         &self,
         work_id: WorkId,
-        block_template: BlockTemplate, // Accept a BlockTemplate directly from caller
+        block_template: BlockTemplate,
     ) -> Result<(), String> {
         let (resp_tx, resp_rx) = oneshot::channel();
 
@@ -257,7 +280,7 @@ impl WorkMapActorHandle {
         self.tx
             .send(Command::InsertBlockTemplate {
                 work_id,
-                block_template: arc_template, // Send the Arc<BlockTemplate>
+                block_template: arc_template,
                 resp: resp_tx,
             })
             .await
@@ -266,6 +289,33 @@ impl WorkMapActorHandle {
         resp_rx
             .await
             .map_err(|_| "Failed to receive insert_block_template response".to_string())
+    }
+
+    /// Add a job ID for a template, creating and inserting the template if it doesn't exist
+    pub async fn add_job_for_template(
+        &self,
+        job_id: JobId,
+        template: BlockTemplate,
+        work_id: WorkId,
+    ) -> Result<(), String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+
+        // Create Arc here
+        let arc_template = Arc::new(template);
+
+        self.tx
+            .send(Command::AddJobForTemplate {
+                job_id,
+                template: arc_template,
+                work_id,
+                resp: resp_tx,
+            })
+            .await
+            .map_err(|_| "Failed to send add_job_for_template command".to_string())?;
+
+        resp_rx
+            .await
+            .map_err(|_| "Failed to receive add_job_for_template response".to_string())
     }
 }
 
@@ -334,13 +384,22 @@ impl WorkMapActor {
                     self.map.insert_block_template(work_id, block_template);
                     let _ = resp.send(());
                 }
+                Command::AddJobForTemplate {
+                    job_id,
+                    template,
+                    work_id,
+                    resp,
+                } => {
+                    let _work_id = self.map.add_job_for_template(job_id, template, work_id);
+                    let _ = resp.send(());
+                }
             }
         }
     }
 }
 
 /// Start a new MapActor in a separate task and return a handle to it
-pub fn start_map_actor() -> WorkMapActorHandle {
+pub fn start_work_map_actor() -> WorkMapActorHandle {
     let (actor, handle) = WorkMapActor::new();
 
     // Spawn the actor in a new task
@@ -358,8 +417,8 @@ mod tests {
     #[tokio::test]
     async fn test_workmap_operations() {
         let mut map = WorkMap::new();
-        let work_id = WorkId("test_work");
-        let job_id = JobId("test_job");
+        let work_id = WorkId(1001);
+        let job_id = JobId(2001);
 
         // Test insert and contains
         map.insert_job_id(work_id, job_id);
@@ -376,8 +435,8 @@ mod tests {
         assert_eq!(found_work_id, work_id);
 
         // Test with non-existent ids
-        let non_existent_work_id = WorkId("non_existent");
-        let non_existent_job_id = JobId("non_existent");
+        let non_existent_work_id = WorkId(9999);
+        let non_existent_job_id = JobId(9999);
         assert!(!map.contains_work_id(&non_existent_work_id));
         assert!(!map.contains_job_id(&work_id, &non_existent_job_id));
         assert!(map.find_work_id_for_job(&non_existent_job_id).is_none());
@@ -385,9 +444,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_map_actor() {
-        let handle = start_map_actor();
-        let work_id = WorkId("test_work");
-        let job_id = JobId("test_job");
+        let handle = start_work_map_actor();
+        let work_id = WorkId(1002);
+        let job_id = JobId(2002);
 
         // Test insert job and contains
         assert!(handle.insert_job_id(work_id, job_id).await.is_ok());
@@ -395,7 +454,7 @@ mod tests {
         assert_eq!(handle.contains_job_id(work_id, job_id).await.unwrap(), true);
 
         // Test get
-        let jobs = handle.get_job_id(work_id).await.unwrap().unwrap();
+        let jobs = handle.get_job_ids(work_id).await.unwrap().unwrap();
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0], job_id);
 
@@ -404,8 +463,8 @@ mod tests {
         assert_eq!(found_work_id, work_id);
 
         // Test with non-existent ids
-        let non_existent_work_id = WorkId("non_existent");
-        let non_existent_job_id = JobId("non_existent");
+        let non_existent_work_id = WorkId(9998);
+        let non_existent_job_id = JobId(9998);
         assert_eq!(
             handle.contains_work_id(non_existent_work_id).await.unwrap(),
             false
@@ -435,8 +494,8 @@ mod tests {
         let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
         let cloned_template = template.clone();
 
-        let handle = start_map_actor();
-        let work_id = WorkId("test_work");
+        let handle = start_work_map_actor();
+        let work_id = WorkId(1003);
 
         // Test inserting a block template
         assert!(handle
@@ -453,19 +512,16 @@ mod tests {
         );
 
         // Test with non-existent work id
-        let retrieved_template = handle
-            .find_block_template(WorkId("non_existent"))
-            .await
-            .unwrap();
+        let retrieved_template = handle.find_block_template(WorkId(9997)).await.unwrap();
         assert!(retrieved_template.is_none());
     }
 
     #[tokio::test]
     async fn test_multiple_jobs_per_work() {
         let mut map = WorkMap::new();
-        let work_id = WorkId("multi_job_work");
-        let job_id1 = JobId("job1");
-        let job_id2 = JobId("job2");
+        let work_id = WorkId(1004);
+        let job_id1 = JobId(2003);
+        let job_id2 = JobId(2004);
 
         // Insert multiple jobs for the same work
         map.insert_job_id(work_id, job_id1);
@@ -480,5 +536,58 @@ mod tests {
         // Check find_work_id_for_job for both jobs
         assert_eq!(map.find_work_id_for_job(&job_id1).unwrap(), work_id);
         assert_eq!(map.find_work_id_for_job(&job_id2).unwrap(), work_id);
+    }
+
+    #[tokio::test]
+    async fn test_add_job_for_template() {
+        let template_str = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/gbt/signet/gbt-no-transactions.json"),
+        )
+        .unwrap();
+
+        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
+        let job_id = JobId(2005);
+        let work_id = WorkId(1004);
+
+        // Test with WorkMap directly
+        let mut map = WorkMap::new();
+        map.add_job_for_template(job_id, Arc::new(template.clone()), work_id);
+
+        // Verify job was added
+        assert!(map.contains_job_id(&work_id, &job_id));
+        assert!(map.find_block_template(&work_id).is_some());
+
+        // Test with actor
+        let handle = start_work_map_actor();
+        let job_id2 = JobId(2006);
+        let work_id2 = WorkId(1005);
+        handle
+            .add_job_for_template(job_id2, template.clone(), work_id2)
+            .await
+            .unwrap();
+
+        // Verify results
+        assert_eq!(
+            handle.contains_job_id(work_id2, job_id2).await.unwrap(),
+            true
+        );
+        assert!(handle
+            .find_block_template(work_id2)
+            .await
+            .unwrap()
+            .is_some());
+
+        // Test adding another job for the same template
+        let job_id3 = JobId(2007);
+        handle
+            .add_job_for_template(job_id3, template, work_id2)
+            .await
+            .unwrap();
+
+        // Both jobs should be present
+        let jobs = handle.get_job_ids(work_id2).await.unwrap().unwrap();
+        assert!(jobs.contains(&job_id2));
+        assert!(jobs.contains(&job_id3));
     }
 }
