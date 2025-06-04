@@ -14,61 +14,87 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use super::gbt::BlockTemplate;
+use super::{coinbase, gbt::BlockTemplate};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
 /// The job id sent to miners.
 /// A job id matches a block template.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct JobId(pub u32);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct JobId(pub u64);
 
-/// Delegate to u32's lower hex
+/// Delegate to u64's lower hex
 impl std::fmt::LowerHex for JobId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::LowerHex::fmt(&self.0, f)
     }
 }
 
+/// Implement Add for JobId
+impl std::ops::Add<u64> for JobId {
+    type Output = Self;
+
+    fn add(self, rhs: u64) -> Self::Output {
+        Self(self.0 + rhs)
+    }
+}
+
+/// Capture job details to be used when reconstructing the block from a submitted job.
+#[derive(Debug, Clone)]
+pub struct JobDetails {
+    pub blocktemplate: Arc<BlockTemplate>,
+    pub coinbase1: String,
+    pub coinbase2: String,
+}
+
 /// A map that associates templates with job id
 ///
 /// We use this to build blocks from submitted jobs and their matching block templates.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone)]
 pub struct Tracker {
-    blocktemplates: HashMap<JobId, Arc<BlockTemplate>>,
-    latest_job_id: u32,
+    job_details: HashMap<JobId, JobDetails>,
+    latest_job_id: JobId,
 }
 
 impl Tracker {
-    /// Create a new empty Map
-    pub fn new() -> Self {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u32;
-        Self {
-            blocktemplates: HashMap::new(),
-            latest_job_id: timestamp,
-        }
-    }
-
     /// Insert a block template with the specified job id
-    pub fn insert_block_template(&mut self, block_template: Arc<BlockTemplate>) -> JobId {
-        let job_id = self.get_next_job_id();
-        self.blocktemplates.insert(job_id, block_template);
+    pub fn insert_job(
+        &mut self,
+        block_template: Arc<BlockTemplate>,
+        coinbase1: String,
+        coinbase2: String,
+        job_id: JobId,
+    ) -> JobId {
+        self.job_details.insert(
+            job_id,
+            JobDetails {
+                blocktemplate: block_template,
+                coinbase1,
+                coinbase2,
+            },
+        );
         job_id
     }
 
     /// Get the next job id, incrementing it atomically
     pub fn get_next_job_id(&mut self) -> JobId {
-        self.latest_job_id += 1;
-        JobId(self.latest_job_id)
+        self.latest_job_id = self.latest_job_id + 1;
+        self.latest_job_id
     }
+}
 
-    /// Get the latest job id using the atomic counter
-    pub fn get_latest_job_id(&self) -> JobId {
-        JobId(self.latest_job_id)
+impl Default for Tracker {
+    /// Create a default empty Map
+    fn default() -> Self {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        Self {
+            job_details: HashMap::new(),
+            latest_job_id: JobId(timestamp),
+        }
     }
 }
 
@@ -76,14 +102,17 @@ impl Tracker {
 #[derive(Debug)]
 pub enum Command {
     /// Insert a block template under the specified job id
-    InsertBlockTemplate {
+    InsertJob {
         block_template: Arc<BlockTemplate>,
+        coinbase1: String,
+        coinbase2: String,
+        job_id: JobId,
         resp: oneshot::Sender<JobId>,
     },
-    /// Find block template by job id
-    FindBlockTemplate {
+    /// Get job details by job id
+    GetJob {
         job_id: JobId,
-        resp: oneshot::Sender<Option<Arc<BlockTemplate>>>,
+        resp: oneshot::Sender<Option<JobDetails>>,
     },
     /// Get the next job id, incrementing it atomically
     GetNextJobId { resp: oneshot::Sender<JobId> },
@@ -99,15 +128,21 @@ pub struct TrackerHandle {
 
 impl TrackerHandle {
     /// Insert a block template under the specified job id
-    pub async fn insert_block_template(
+    pub async fn insert_job(
         &self,
         block_template: Arc<BlockTemplate>,
+        coinbase1: String,
+        coinbase2: String,
+        job_id: JobId,
     ) -> Result<JobId, String> {
         let (resp_tx, resp_rx) = oneshot::channel();
 
         self.tx
-            .send(Command::InsertBlockTemplate {
+            .send(Command::InsertJob {
                 block_template,
+                coinbase1,
+                coinbase2,
+                job_id,
                 resp: resp_tx,
             })
             .await
@@ -119,14 +154,11 @@ impl TrackerHandle {
     }
 
     /// Find a block template by job id
-    pub async fn find_block_template(
-        &self,
-        job_id: JobId,
-    ) -> Result<Option<Arc<BlockTemplate>>, String> {
+    pub async fn get_job(&self, job_id: JobId) -> Result<Option<JobDetails>, String> {
         let (resp_tx, resp_rx) = oneshot::channel();
 
         self.tx
-            .send(Command::FindBlockTemplate {
+            .send(Command::GetJob {
                 job_id,
                 resp: resp_tx,
             })
@@ -179,7 +211,7 @@ impl TrackerActor {
         let (tx, rx) = mpsc::channel(100); // Buffer size of 100
 
         let actor = Self {
-            map: Tracker::new(),
+            map: Tracker::default(),
             rx,
         };
 
@@ -192,23 +224,28 @@ impl TrackerActor {
     pub async fn run(mut self) {
         while let Some(cmd) = self.rx.recv().await {
             match cmd {
-                Command::InsertBlockTemplate {
+                Command::InsertJob {
                     block_template,
+                    coinbase1,
+                    coinbase2,
+                    job_id,
                     resp,
                 } => {
-                    let job_id = self.map.insert_block_template(block_template);
+                    let job_id = self
+                        .map
+                        .insert_job(block_template, coinbase1, coinbase2, job_id);
                     let _ = resp.send(job_id);
                 }
-                Command::FindBlockTemplate { job_id, resp } => {
-                    let template = self.map.blocktemplates.get(&job_id).cloned();
-                    let _ = resp.send(template);
+                Command::GetJob { job_id, resp } => {
+                    let details = self.map.job_details.get(&job_id).cloned();
+                    let _ = resp.send(details);
                 }
                 Command::GetNextJobId { resp } => {
                     let next_job_id = self.map.get_next_job_id();
                     let _ = resp.send(next_job_id);
                 }
                 Command::GetLatestJobId { resp } => {
-                    let latest_job_id = self.map.get_latest_job_id();
+                    let latest_job_id = self.map.latest_job_id;
                     let _ = resp.send(latest_job_id);
                 }
             }
@@ -235,15 +272,15 @@ mod tests {
     #[tokio::test]
     async fn test_job_id_generation() {
         // Test with tracker directly
-        let mut map = Tracker::new();
-        let initial_job_id = map.get_latest_job_id();
+        let mut map = Tracker::default();
+        let initial_job_id = map.latest_job_id;
 
         // Get next job id should increment
         let next_job_id = map.get_next_job_id();
         assert_eq!(next_job_id.0, initial_job_id.0 + 1);
 
         // Latest job id should reflect the increment
-        let latest_job_id = map.get_latest_job_id();
+        let latest_job_id = map.latest_job_id;
         assert_eq!(latest_job_id.0, next_job_id.0);
 
         // Multiple calls should continue incrementing
@@ -284,20 +321,28 @@ mod tests {
 
         let handle = start_tracker_actor();
 
-        let job_id = handle.insert_block_template(Arc::new(template)).await;
+        let job_id = handle
+            .insert_job(
+                Arc::new(template),
+                "cb1".to_string(),
+                "cb2".to_string(),
+                JobId(1),
+            )
+            .await;
         // Test inserting a block template
         assert!(job_id.is_ok());
 
-        // Test finding the block template
-        let retrieved_template = handle.find_block_template(job_id.unwrap()).await.unwrap();
-        assert!(retrieved_template.is_some());
+        // Test finding the job
+        let retrieved_job = &handle.get_job(job_id.unwrap()).await.unwrap().unwrap();
         assert_eq!(
             cloned_template.previousblockhash,
-            retrieved_template.unwrap().previousblockhash
+            retrieved_job.blocktemplate.previousblockhash
         );
+        assert_eq!(retrieved_job.coinbase1, "cb1".to_string());
+        assert_eq!(retrieved_job.coinbase2, "cb2".to_string());
 
         // Test with non-existent job id
-        let retrieved_template = handle.find_block_template(JobId(9997)).await.unwrap();
-        assert!(retrieved_template.is_none());
+        let retrieved_job = handle.get_job(JobId(9997)).await.unwrap();
+        assert!(retrieved_job.is_none());
     }
 }
