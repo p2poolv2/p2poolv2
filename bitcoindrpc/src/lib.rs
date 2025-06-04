@@ -50,7 +50,7 @@ impl fmt::Display for BitcoindRpcError {
 /// All functions in the traits are desugred async functions so we can add Send as a bound.
 #[cfg_attr(any(test, feature = "mock"), automock)]
 #[warn(async_fn_in_trait)]
-pub trait BitcoindRpc: Send + Sync {
+pub trait BitcoindRpc: Send + Sync + 'static {
     fn new(
         url: String,
         username: String,
@@ -130,20 +130,16 @@ impl BitcoindRpc for BitcoindRpcClient {
     ) -> Result<String, Box<dyn std::error::Error>> {
         let params = match network {
             bitcoin::Network::Signet => {
-                vec![serde_json::json!([
-                    {
-                        "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
-                        "rules": ["segwit", "signet"],
-                    }
-                ])]
+                vec![serde_json::json!({
+                    "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+                    "rules": ["segwit", "signet"],
+                })]
             }
             _ => {
-                vec![serde_json::json!([
-                    {
-                        "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
-                        "rules": ["segwit"],
-                    }
-                ])]
+                vec![serde_json::json!({
+                    "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+                    "rules": ["segwit"],
+                })]
             }
         };
         match self
@@ -314,10 +310,10 @@ mod tests {
             .and(body_json(serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "getblocktemplate",
-                "params": [[{
+                "params": [{
                     "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
                     "rules": ["segwit"],
-                }]],
+                }],
                 "id": 0
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -370,10 +366,10 @@ mod tests {
             .and(body_json(serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "getblocktemplate",
-                "params": [[{
+                "params": [{
                     "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
                     "rules": ["segwit", "signet"],
-                }]],
+                }],
                 "id": 0
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({

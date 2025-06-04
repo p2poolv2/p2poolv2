@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-mod coinbase;
+pub mod coinbase;
 mod error;
-mod gbt;
-mod notify;
+pub mod gbt;
+pub mod notify;

@@ -17,14 +17,24 @@
 use super::coinbase::{build_coinbase_transaction, split_coinbase};
 use super::error::WorkError;
 use super::gbt::{build_merkle_branches_for_template, BlockTemplate};
+
+#[cfg(not(test))]
+use crate::client_connections::ClientConnectionsHandle;
+#[cfg(test)]
+#[mockall_double::double]
+use crate::client_connections::ClientConnectionsHandle;
+
 use crate::messages::{Notify, NotifyParams};
 use crate::work::coinbase::OutputPair;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::secp256k1::{self, rand::Rng};
 use bitcoin::transaction::Version;
 use bitcoin::Address;
-use bitcoin::Amount;
 use std::borrow::Cow;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use tracing::debug;
 
 /// Extract flags from template coinbaseaux and convert to PushBytesBuf
 /// If flags are empty, use a single byte with value 0
@@ -37,16 +47,34 @@ fn parse_flags(flags: Option<String>) -> PushBytesBuf {
     }
 }
 
+/// Build the output distribution for the coinbase transaction.
+/// For now we only work with the solo_address provided, it will be used as the recipient of the coinbase transaction.
+fn build_output_distribution(
+    template: &BlockTemplate,
+    solo_address: Option<Address>,
+) -> Vec<OutputPair> {
+    let mut output_distribution = Vec::new();
+    if let Some(address) = solo_address {
+        output_distribution.push(OutputPair {
+            address,
+            amount: bitcoin::Amount::from_sat(template.coinbasevalue),
+        });
+    }
+    output_distribution
+}
+
 #[allow(dead_code)]
-pub fn build_notify(template: &BlockTemplate, address: Address) -> Result<Notify, WorkError> {
+pub fn build_notify(
+    template: &BlockTemplate,
+    solo_address: Option<Address>,
+) -> Result<Notify, WorkError> {
     let job_id: u64 = secp256k1::rand::thread_rng().gen();
+
+    let output_distribution = build_output_distribution(template, solo_address);
 
     let coinbase = build_coinbase_transaction(
         Version(template.version),
-        vec![OutputPair {
-            address,
-            amount: Amount::from_sat(template.coinbasevalue),
-        }],
+        output_distribution.as_slice(),
         template.height as i64,
         parse_flags(template.coinbaseaux.get("flags").cloned()),
         template.default_witness_commitment.clone(),
@@ -74,14 +102,76 @@ pub fn build_notify(template: &BlockTemplate, address: Address) -> Result<Notify
     Ok(Notify::new_notify(params))
 }
 
+/// NotifyCmd is used to send notify to all clients or a single client.
+pub enum NotifyCmd {
+    SendToAll {
+        /// The block template to notify clients about.
+        template: Box<BlockTemplate>,
+    },
+    SendToClient {
+        /// The address of the client to notify, if None, notify all clients.
+        /// The latest template is used for the notify, so there is not template here.
+        client_address: SocketAddr,
+    },
+}
+
+/// Start a task that listens for new block template events.
+/// As new templates arrives, the tasks build new Notify messages and sends them to all connected clients.
+///
+/// The output distribution is provided and this works for solo mining. Later on we need to get the output
+/// distribution from the server or any new component we add for share accounting.
+pub async fn start_notify(
+    mut notifier_rx: mpsc::Receiver<NotifyCmd>,
+    connections: ClientConnectionsHandle,
+    solo_address: Option<Address>,
+) {
+    let mut latest_template: Option<Box<BlockTemplate>> = None;
+    while let Some(cmd) = notifier_rx.recv().await {
+        match cmd {
+            NotifyCmd::SendToAll { template } => {
+                latest_template = Some(template.clone());
+                let notify_str = match build_notify(&template, solo_address.clone()) {
+                    Ok(notify) => {
+                        serde_json::to_string(&notify).expect("Failed to serialize Notify message")
+                    }
+                    Err(e) => {
+                        debug!("Error building notify: {}", e);
+                        continue; // Skip this iteration if notify cannot be built
+                    }
+                };
+                connections.send_to_all(Arc::new(notify_str)).await;
+            }
+            NotifyCmd::SendToClient { client_address } => {
+                if latest_template.is_none() {
+                    debug!(
+                        "No latest template available to send to client: {}",
+                        client_address
+                    );
+                    continue; // Skip if no latest template is available
+                }
+                let notify_str =
+                    match build_notify(latest_template.as_ref().unwrap(), solo_address.clone()) {
+                        Ok(notify) => serde_json::to_string(&notify)
+                            .expect("Failed to serialize Notify message"),
+                        Err(e) => {
+                            debug!("Error building notify: {}", e);
+                            continue; // Skip this iteration if notify cannot be built
+                        }
+                    };
+                connections
+                    .send_to_client(client_address, Arc::new(notify_str))
+                    .await;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::work::coinbase::parse_address;
-    use bitcoin::hashes::{serde_macros::serde_details::SerdeHash, sha256::Hash};
-    use hex::FromHex;
-
     use std::fs;
+    use tokio::sync::mpsc;
 
     #[test]
     fn test_build_notify_from_gbt_and_compare_to_expected() {
@@ -107,7 +197,7 @@ mod tests {
         .unwrap();
 
         // Build Notify
-        let notify = build_notify(&template, address).expect("Failed to build notify");
+        let notify = build_notify(&template, Some(address)).expect("Failed to build notify");
 
         // Load expected notify JSON
         let expected_notify_json = notify_json.clone();
@@ -147,5 +237,66 @@ mod tests {
         // Test with valid hex string
         let flags = parse_flags(Some(String::from("deadbeef")));
         assert_eq!(flags.as_bytes(), &[0xde, 0xad, 0xbe, 0xef]);
+    }
+
+    #[tokio::test]
+    async fn test_start_notify() {
+        // Set up mock connections
+        let mut mock_connections = ClientConnectionsHandle::default();
+
+        // Set up expectations
+        mock_connections
+            .expect_send_to_all()
+            .times(1)
+            .returning(|_| ());
+        mock_connections
+            .expect_send_to_client()
+            .times(1)
+            .returning(|_, _| true);
+
+        // Create a channel for block template notifications
+        let (notify_tx, notify_rx) = mpsc::channel::<NotifyCmd>(10);
+
+        // Setup output distribution
+        let address = parse_address(
+            "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr",
+            bitcoin::Network::Regtest,
+        )
+        .unwrap();
+
+        // Start the notify task in a separate task
+        let task_handle = tokio::spawn(async move {
+            start_notify(notify_rx, mock_connections, Some(address)).await;
+        });
+
+        // Load a sample block template
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json");
+        let data = fs::read_to_string(path).expect("Unable to read file");
+        let gbt_json: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
+        let template: BlockTemplate =
+            serde_json::from_value(gbt_json.clone()).expect("Failed to parse BlockTemplate");
+
+        // Send the template through the channel
+        notify_tx
+            .send(NotifyCmd::SendToAll {
+                template: Box::new(template),
+            })
+            .await
+            .expect("Failed to send template");
+
+        // Give some time for the message to be processed
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        notify_tx
+            .send(NotifyCmd::SendToClient {
+                client_address: SocketAddr::from(([127, 0, 0, 1], 8080)), // dummy client address, mock client connections won't use this.
+            })
+            .await
+            .expect("Failed to send template to client");
+
+        // Cleanup
+        drop(notify_tx); // Close the channel to terminate the task
+        task_handle.await.expect("Task failed");
     }
 }

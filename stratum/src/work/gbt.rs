@@ -15,13 +15,16 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::work::error::WorkError;
+use crate::work::notify::NotifyCmd;
 use bitcoin::hashes::{sha256d, Hash};
 use bitcoindrpc::BitcoindRpc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
+use tracing::{debug, info};
 
 /// Struct representing the getblocktemplate response from Bitcoin Core
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct BlockTemplate {
     pub version: i32,
     pub rules: Vec<String>,
@@ -50,7 +53,7 @@ pub struct BlockTemplate {
 }
 
 /// Transaction data in the block template
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TemplateTransaction {
     pub data: String,
     pub txid: String,
@@ -99,10 +102,11 @@ fn compute_merkle_branches(input_txids: Vec<sha256d::Hash>) -> Vec<sha256d::Hash
 /// Get a new blocktemplate from the bitcoind server
 /// Parse the received JSON into a BlockTemplate struct and return it.
 #[allow(dead_code)]
-async fn get_block_template<R: BitcoindRpc>(
-    bitcoind: &R,
+async fn get_block_template<B: BitcoindRpc>(
+    bitcoind: Arc<B>,
+    network: bitcoin::Network,
 ) -> Result<BlockTemplate, Box<dyn std::error::Error + Send + Sync>> {
-    match bitcoind.getblocktemplate(bitcoin::Network::Signet).await {
+    match bitcoind.getblocktemplate(network).await {
         Ok(blocktemplate_json) => {
             match serde_json::from_str::<BlockTemplate>(blocktemplate_json.as_str()) {
                 Ok(template) => Ok(template),
@@ -117,42 +121,123 @@ async fn get_block_template<R: BitcoindRpc>(
     }
 }
 
-// /// Start a task to fetch block templates from bitcoind
-// /// Listen to ZMQ notify for blocknotify and getblocktemplate when new block is found.
-// /// Later we can do fancy things like periodic updates, or updates for new txns.
-// pub async fn start_gbt<B: BitcoindRpc + Sync + Send + 'static>(
-//     url: String,
-//     username: String,
-//     password: String,
-//     result_tx: tokio::sync::mpsc::Sender<BlockTemplate>,
-// ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-//     tokio::spawn(async move {
-//         let bitcoind = match B::new(url, username, password) {
-//             Ok(bitcoind) => bitcoind,
-//             Err(e) => {
-//                 info!("Failed to connect to bitcoind: {}", e);
-//                 return;
-//             }
-//         };
-//         loop {
-//             match get_block_template(&bitcoind).await {
-//                 Ok(template) => {
-//                     debug!("Block template: {:?}", template);
-//                     if result_tx.send(template).await.is_err() {
-//                         info!("Failed to send block template to channel");
-//                     }
-//                 }
-//                 Err(e) => {
-//                     info!("Error getting block template: {}", e);
-//                 }
-//             };
-//         }
-//     })
-//     .await;
-//     Err(Box::new(WorkError {
-//         message: "Failed to start GBT".to_string(),
-//     }))
-// }
+/// Start a task to fetch block templates from bitcoind
+///
+/// Listen to blocknotify signal from bitcoind.
+/// Otherwise, poll for new block templates every poll_interval seconds.
+pub async fn start_gbt<B: BitcoindRpc>(
+    url: String,
+    username: String,
+    password: String,
+    result_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
+    socket_path: &str,
+    poll_interval: u64,
+    network: bitcoin::Network,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let bitcoind = match B::new(url, username, password) {
+        Ok(bitcoind) => Arc::new(bitcoind),
+        Err(e) => {
+            info!("Failed to connect to bitcoind: {}", e);
+            return Err(Box::new(WorkError {
+                message: format!("Failed to connect to bitcoind: {}", e),
+            }));
+        }
+    };
+
+    let template = match get_block_template(bitcoind.clone(), network).await {
+        Ok(template) => template,
+        Err(e) => {
+            info!("Error getting block template: {}", e);
+            return Err(Box::new(WorkError {
+                message: format!("Error getting initial block template: {}", e),
+            }));
+        }
+    };
+
+    // Initial template sent to start gbt task.
+    if result_tx
+        .send(NotifyCmd::SendToAll {
+            template: Box::new(template),
+        })
+        .await
+        .is_err()
+    {
+        info!("Failed to send block template to channel");
+    }
+
+    // Remove the socket file if it exists to avoid "address already in use" error
+    if std::path::Path::new(socket_path).exists() {
+        debug!("Removing existing socket file at {}", socket_path);
+        if let Err(e) = std::fs::remove_file(socket_path) {
+            return Err(Box::new(WorkError {
+                message: format!("Failed to remove existing socket file: {}", e),
+            }));
+        }
+    }
+
+    // Setup Unix socket to receive updates from blocknotify_receiver
+    let listener = match tokio::net::UnixListener::bind(socket_path) {
+        Ok(listener) => {
+            info!("Listening for blocknotify signals on {}", socket_path);
+            listener
+        }
+        Err(_) => {
+            return Err(Box::new(WorkError {
+                message: format!("Failed to bind Unix socket at {}", socket_path),
+            }));
+        }
+    };
+
+    tokio::spawn(async move {
+        let mut last_request_at = std::time::Instant::now();
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(poll_interval));
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    // Only poll if it's been a while since our last blocknotify
+                    if last_request_at.elapsed().as_secs() >= poll_interval {
+                        match get_block_template(bitcoind.clone(), network).await {
+                            Ok(template) => {
+                                debug!("Polled block template: {:?}", template);
+                                if result_tx.send(NotifyCmd::SendToAll { template: Box::new(template) }).await.is_err() {
+                                    info!("Failed to send block template to channel");
+                                }
+                                last_request_at = std::time::Instant::now();
+                            }
+                            Err(e) => {
+                                info!("Error polling block template: {}", e);
+                            }
+                        }
+                    }
+                }
+                result = listener.accept() => {
+                    match result {
+                        Ok(_) => {
+                            debug!("Received blocknotify signal");
+                            match get_block_template(bitcoind.clone(), network).await {
+                                Ok(template) => {
+                                    debug!("Block template from notification: {:?}", template);
+                                    if result_tx.send(NotifyCmd::SendToAll { template: Box::new(template) }).await.is_err() {
+                                        info!("Failed to send block template to channel");
+                                    }
+                                    last_request_at = std::time::Instant::now();
+                                }
+                                Err(e) => {
+                                    info!("Error getting block template after notification: {}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            info!("Error accepting Unix socket connection: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+    });
+    Ok(())
+}
 
 #[cfg(test)]
 mod gbt_load_tests {
@@ -176,7 +261,7 @@ mod gbt_load_tests {
                 Box::pin(async move { Ok(template) })
             });
 
-        let result = get_block_template(&mock_rpc).await;
+        let result = get_block_template(Arc::new(mock_rpc), bitcoin::Network::Signet).await;
         assert!(result.is_ok());
         let template = result.unwrap();
         assert_eq!(template.version, 536870912);
@@ -315,5 +400,125 @@ mod gbt_load_tests {
             sha256d::Hash::from_slice(&v3).unwrap(),
         ];
         assert_eq!(branches, expected);
+    }
+}
+
+#[cfg(test)]
+mod gbt_server_tests {
+    use super::*;
+    use bitcoindrpc::MockBitcoindRpc;
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn test_start_gbt_trigger_from_socket_event() {
+        let binding = tempfile::tempdir().unwrap();
+        let binding = binding.path().join("notify.sock");
+        let socket_path = binding.to_str().unwrap();
+
+        // Mock bitcoind RPC
+        let template = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/gbt/signet/gbt-no-transactions.json"),
+        )
+        .expect("Failed to read test fixture");
+
+        let ctx = MockBitcoindRpc::new_context();
+        ctx.expect().returning(move |_, _, _| {
+            let template_str = template.clone();
+            let mut mock = MockBitcoindRpc::default();
+            mock.expect_getblocktemplate().returning(move |_| {
+                let template_value = template_str.clone();
+                Box::pin(async move { Ok(template_value) })
+            });
+            Ok(mock)
+        });
+
+        // Setup channel for receiving templates
+        let (template_tx, mut template_rx) = mpsc::channel(10);
+
+        // Start GBT server
+        let result = start_gbt::<MockBitcoindRpc>(
+            "http://localhost:8332".to_string(),
+            "user".to_string(),
+            "pass".to_string(),
+            template_tx,
+            socket_path,
+            60,
+            bitcoin::Network::Signet,
+        )
+        .await;
+
+        assert!(result.is_ok());
+
+        // Send a blocknotify signal
+        let _ = tokio::net::UnixStream::connect(socket_path).await;
+
+        // We should receive a template
+        let timeout =
+            tokio::time::timeout(std::time::Duration::from_secs(1), template_rx.recv()).await;
+
+        assert!(timeout.is_ok());
+        let cmd = timeout.unwrap().unwrap();
+        match cmd {
+            NotifyCmd::SendToAll { template } => {
+                assert_eq!(template.height, 108);
+            }
+            _ => panic!("Expected NotifyCmd::SendToAll"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_start_gbt_trigger_from_timeout() {
+        let binding = tempfile::tempdir().unwrap();
+        let binding = binding.path().join("notify.sock");
+        let socket_path = binding.to_str().unwrap();
+
+        // Mock bitcoind RPC
+        let template = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/gbt/signet/gbt-no-transactions.json"),
+        )
+        .expect("Failed to read test fixture");
+
+        let ctx = MockBitcoindRpc::new_context();
+        ctx.expect().returning(move |_, _, _| {
+            let template_str = template.clone();
+            let mut mock = MockBitcoindRpc::default();
+            mock.expect_getblocktemplate().returning(move |_| {
+                let template_value = template_str.clone();
+                Box::pin(async move { Ok(template_value) })
+            });
+            Ok(mock)
+        });
+
+        // Setup channel for receiving templates
+        let (template_tx, mut template_rx) = mpsc::channel(10);
+
+        // Start GBT server
+        let result = start_gbt::<MockBitcoindRpc>(
+            "http://localhost:8332".to_string(),
+            "user".to_string(),
+            "pass".to_string(),
+            template_tx,
+            socket_path,
+            1,
+            bitcoin::Network::Signet,
+        )
+        .await;
+
+        assert!(result.is_ok());
+
+        // We should receive a template after a second, but we wait for 2 seconds to ensure it is received
+        let timeout =
+            tokio::time::timeout(std::time::Duration::from_secs(2), template_rx.recv()).await;
+
+        assert!(timeout.is_ok());
+        let cmd = timeout.unwrap().unwrap();
+        match cmd {
+            NotifyCmd::SendToAll { template } => {
+                assert_eq!(template.height, 108);
+            }
+            _ => panic!("Expected NotifyCmd::SendToAll"),
+        }
     }
 }

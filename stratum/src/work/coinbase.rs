@@ -33,6 +33,7 @@ const EXTRANONCE_SEPARATOR: [u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE] =
 const POOL_SIGNATURE: [u8; 8] = *b"P2Poolv2";
 
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub struct OutputPair {
     pub address: Address,
     pub amount: Amount,
@@ -61,9 +62,9 @@ fn get_current_timestamp_bytes() -> (u32, u32) {
     (timestamp.as_secs() as u32, timestamp.subsec_nanos())
 }
 
-/// Build outputs for the transaction from the provided address and value.
+/// Build outputs for the transaction from the provided address and value and pairs.
 #[allow(dead_code)]
-fn build_outputs(output_data: Vec<OutputPair>) -> Vec<TxOut> {
+fn build_outputs(output_data: &[OutputPair]) -> Vec<TxOut> {
     output_data
         .iter()
         .map(|pair| TxOut {
@@ -114,7 +115,7 @@ fn append_default_witness_commitment(
 #[allow(dead_code)]
 pub fn build_coinbase_transaction(
     version: Version,
-    output_data: Vec<OutputPair>,
+    output_data: &[OutputPair],
     height: i64,
     aux_flags: PushBytesBuf,
     default_witness_commitment: Option<String>,
@@ -235,7 +236,7 @@ mod tests {
         let height = 100;
         let coinbase = build_coinbase_transaction(
             Version(2),
-            vec![OutputPair {
+            &[OutputPair {
                 address: addr.clone(),
                 amount: value,
             }],
@@ -285,7 +286,7 @@ mod tests {
         let height = 100;
         let coinbase = build_coinbase_transaction(
             Version(2),
-            vec![OutputPair {
+            &[OutputPair {
                 address: addr.clone(),
                 amount: value,
             }],
@@ -341,7 +342,7 @@ mod tests {
 
         let coinbase = build_coinbase_transaction(
             Version(1), // ckpool uses version 1
-            vec![
+            &[
                 OutputPair {
                     address: address.clone(),
                     amount: Amount::from_str("49 BTC").unwrap(),

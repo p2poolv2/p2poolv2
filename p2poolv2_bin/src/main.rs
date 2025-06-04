@@ -14,20 +14,29 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use bitcoin::Address;
 use bitcoindrpc::BitcoindRpcClient;
 use clap::Parser;
 use p2poolv2_lib::config::{Config, LoggingConfig};
+use p2poolv2_lib::node::actor::NodeHandle;
+use p2poolv2_lib::shares::chain::actor::ChainHandle;
 use p2poolv2_lib::shares::ShareBlock;
 use std::error::Error;
 use std::fs::File;
+use std::process::exit;
+use std::str::FromStr;
+use stratum::client_connections::spawn;
 use stratum::server::StratumServer;
+use stratum::work::gbt::start_gbt;
+use tracing::error;
 use tracing::{debug, info};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Registry};
 
-use p2poolv2_lib::node::actor::NodeHandle;
-use p2poolv2_lib::shares::chain::actor::ChainHandle;
+/// Interval in seconds to poll for new block templates since the last blocknotify signal
+const GBT_POLL_INTERVAL: u64 = 60; // seconds
 
-use tracing::error;
+/// Path to the Unix socket for receiving blocknotify signals from bitcoind
+pub const SOCKET_PATH: &str = "/tmp/p2pool_blocknotify.sock";
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -63,17 +72,51 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let stratum_config = config.stratum.clone();
     let bitcoin_config = config.bitcoin.clone();
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
+    let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(1);
+
+    let notify_tx_for_gbt = notify_tx.clone();
     tokio::spawn(async move {
-        let mut stratum_server = StratumServer::<BitcoindRpcClient>::new(
-            stratum_config.port,
+        if let Err(e) = start_gbt::<BitcoindRpcClient>(
+            bitcoin_config.url,
+            bitcoin_config.username,
+            bitcoin_config.password,
+            notify_tx_for_gbt,
+            SOCKET_PATH,
+            GBT_POLL_INTERVAL,
+            bitcoin_config.network,
+        )
+        .await
+        {
+            tracing::error!("Failed to fetch block template. Shutting down. \n {}", e);
+            exit(1);
+        }
+    });
+
+    let connections_handle = spawn().await;
+    let connections_cloned = connections_handle.clone();
+
+    let output_address = Address::from_str(stratum_config.solo_address.unwrap().as_str())
+        .expect("Invalid output address in Stratum config")
+        .require_network(config.bitcoin.network)
+        .expect("Output address must match the Bitcoin network in config");
+
+    tokio::spawn(async move {
+        info!("Starting Stratum notifier...");
+        // This will run indefinitely, sending new block templates to the Stratum server as they arrive
+        stratum::work::notify::start_notify(notify_rx, connections_cloned, Some(output_address))
+            .await;
+    });
+
+    tokio::spawn(async move {
+        let mut stratum_server = StratumServer::new(
             stratum_config.host,
-            bitcoin_config.url.clone(),
-            bitcoin_config.username.clone(),
-            bitcoin_config.password.clone(),
+            stratum_config.port,
             stratum_shutdown_rx,
-        );
+            connections_handle.clone(),
+        )
+        .await;
         info!("Starting Stratum server...");
-        let result = stratum_server.start().await;
+        let result = stratum_server.start(None, notify_tx).await;
         if result.is_err() {
             error!("Failed to start Stratum server: {}", result.unwrap_err());
         }
