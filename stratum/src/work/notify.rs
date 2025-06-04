@@ -130,12 +130,20 @@ pub async fn start_notify(
         match cmd {
             NotifyCmd::SendToAll { template } => {
                 latest_template = Some(Arc::clone(&template));
-                let job_id = tracker_handle
-                    .insert_block_template(Arc::clone(&template))
-                    .await
-                    .unwrap();
+                let job_id = tracker_handle.get_next_job_id().await.unwrap();
+
                 let notify_str = match build_notify(&template, solo_address.clone(), job_id) {
                     Ok(notify) => {
+                        tracker_handle
+                            .insert_job(
+                                Arc::clone(&template),
+                                notify.params.coinbase1.to_string(),
+                                notify.params.coinbase2.to_string(),
+                                job_id,
+                            )
+                            .await
+                            .unwrap();
+
                         serde_json::to_string(&notify).expect("Failed to serialize Notify message")
                     }
                     Err(e) => {
@@ -153,16 +161,22 @@ pub async fn start_notify(
                     );
                     continue; // Skip if no latest template is available
                 }
-                let job_id = tracker_handle
-                    .insert_block_template(Arc::clone(latest_template.as_ref().unwrap()))
-                    .await
-                    .unwrap();
+                let job_id = tracker_handle.get_next_job_id().await.unwrap();
                 let notify_str = match build_notify(
                     latest_template.as_ref().unwrap(),
                     solo_address.clone(),
                     job_id,
                 ) {
                     Ok(notify) => {
+                        tracker_handle
+                            .insert_job(
+                                Arc::clone(latest_template.as_ref().unwrap()),
+                                notify.params.coinbase1.to_string(),
+                                notify.params.coinbase2.to_string(),
+                                job_id,
+                            )
+                            .await
+                            .unwrap();
                         serde_json::to_string(&notify).expect("Failed to serialize Notify message")
                     }
                     Err(e) => {
