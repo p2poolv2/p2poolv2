@@ -17,7 +17,8 @@
 use crate::error::Error;
 use crate::messages::{Request, Response};
 use crate::session::Session;
-use crate::work::tracker::TrackerHandle;
+use crate::work::difficulty::validate::validate_submission_difficulty;
+use crate::work::tracker::{JobId, TrackerHandle};
 use serde_json::json;
 use tracing::debug;
 
@@ -35,6 +36,28 @@ pub async fn handle_submit<'a>(
     if message.params.len() < 4 {
         return Err(Error::InvalidParams);
     }
-    let job_id = &message.params[0];
+
+    let job_id = u64::from_str_radix(&message.params[0], 16).map_err(|_| Error::InvalidParams)?;
+
+    let job = match tracker_handle.get_job(JobId(job_id)).await {
+        Ok(job) => match job {
+            Some(job) => job,
+            None => {
+                return Err(Error::SubmitFailure(
+                    "No job found for the given ID".to_string(),
+                ))
+            }
+        },
+        Err(_) => {
+            return Err(Error::SubmitFailure(
+                "No job found for the given ID".to_string(),
+            ))
+        }
+    };
+
+    // Validate the difficulty of the submitted share
+    validate_submission_difficulty(&job, &message)
+        .map_err(|e| Error::SubmitFailure(e.to_string()))?;
+
     Ok(Response::new_ok(message.id, json!(true)))
 }
