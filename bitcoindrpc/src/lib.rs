@@ -77,6 +77,11 @@ pub trait BitcoindRpc: Send + Sync + 'static {
         &self,
         tx: &bitcoin::Transaction,
     ) -> impl std::future::Future<Output = Result<bitcoin::Transaction, Box<dyn std::error::Error>>> + Send;
+
+    fn submit_block(
+        &self,
+        block: &bitcoin::Block,
+    ) -> impl std::future::Future<Output = Result<String, Box<dyn std::error::Error>>> + Send;
 }
 
 #[derive(Debug, Clone)]
@@ -184,11 +189,35 @@ impl BitcoindRpc for BitcoindRpcClient {
             )))),
         }
     }
+
+    async fn submit_block(
+        &self,
+        block: &bitcoin::Block,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        // Serialize the block to hex string
+        let block_hex = serialize_hex(block);
+
+        // Prepare params for the RPC call
+        let params = vec![serde_json::Value::String(block_hex)];
+
+        // Make the RPC request
+        match self
+            .request::<serde_json::Value>("submitblock", params)
+            .await
+        {
+            Ok(result) => Ok(result.to_string()),
+            Err(e) => Err(Box::new(BitcoindRpcError::Other(format!(
+                "Failed to submit block: {}",
+                e
+            )))),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::CompactTarget;
     use wiremock::{
         matchers::{body_json, header, method, path},
         Mock, MockServer, ResponseTemplate,
@@ -456,5 +485,57 @@ mod tests {
         let decoded_tx = client.decoderawtransaction(&tx).await.unwrap();
 
         assert_eq!(decoded_tx, tx);
+    }
+
+    #[tokio::test]
+    async fn test_submit_block() {
+        let mock_server = MockServer::start().await;
+
+        // Create a simple block
+        let block = bitcoin::Block {
+            header: bitcoin::blockdata::block::Header {
+                version: bitcoin::blockdata::block::Version::from_consensus(1),
+                prev_blockhash: "5e9a183768460fbf56eab199a66057375b424bdca195e7ecc808374365a7ea67"
+                    .parse()
+                    .unwrap(),
+                merkle_root: "277c298e9f1254a59411cfc29f1a88ec6ee12cf4c955044d8bb8a7242cfed919"
+                    .parse()
+                    .unwrap(),
+                time: 1610000000,
+                bits: CompactTarget::from_consensus(503543726),
+                nonce: 12345,
+            },
+            txdata: vec![],
+        };
+
+        let block_hex = serialize_hex(&block);
+
+        // Setup mock for submitblock
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "submitblock",
+                "params": [block_hex],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "result": null,  // null indicates success in Bitcoin Core
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(
+            mock_server.uri(),
+            "p2pool".to_string(),
+            "p2pool".to_string(),
+        )
+        .unwrap();
+
+        let result = client.submit_block(&block).await.unwrap();
+        assert_eq!(result, "null"); // Successful submission returns null
     }
 }
