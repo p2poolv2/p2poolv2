@@ -32,13 +32,13 @@ const MAX_HEADERS: usize = 2000;
 /// - start from chain tip, find blockhashes up to the stop block hash
 /// - limit the number of blocks to MAX_HEADERS
 /// - respond with send all headers found
-pub async fn handle_getheaders<C: 'static>(
+pub async fn handle_getheaders<C: 'static + Send + Sync>(
     block_hashes: Vec<ShareBlockHash>,
     stop_block_hash: ShareBlockHash,
     chain_handle: ChainHandle,
     response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Received getheaders: {:?}", block_hashes);
     let response_headers = chain_handle
         .get_headers_for_locator(block_hashes, stop_block_hash, MAX_HEADERS)

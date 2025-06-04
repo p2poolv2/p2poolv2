@@ -233,7 +233,7 @@ impl Node {
                                 peer_id, e
                             );
                         } else {
-                            info!("Outbound connection established to peer: {}", peer_id);
+                            info!("Outbound connection established to peer: {}", peer_id,);
                         }
                     }
                     libp2p::core::ConnectedPoint::Listener { .. } => {
@@ -252,7 +252,20 @@ impl Node {
                 error,
                 connection_id,
             } => {
-                error!("Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}");
+                // Check if we're already connected to this peer
+                if peer_id.is_some() && self.swarm.is_connected(&peer_id.unwrap()) {
+                    // This is likely just a duplicate connection attempt to a peer we're already connected to
+                    debug!(
+                        "Connection attempt to already connected peer {}: {}",
+                        peer_id.unwrap(),
+                        error
+                    );
+                } else {
+                    error!("Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}");
+                    if let Some(source) = error.source() {
+                        error!("Error source: {}", source);
+                    }
+                }
                 Ok(())
             }
             SwarmEvent::Behaviour(event) => match event {

@@ -33,13 +33,13 @@ const MAX_BLOCKS: usize = 500;
 /// - use the locator to find the blockhashes to respond with
 /// - limit the number of blocks to MAX_BLOCKS
 /// - generate an inventory message to send blockhashes
-pub async fn handle_getblocks<C: 'static>(
+pub async fn handle_getblocks<C: 'static + Send + Sync>(
     locator: Vec<ShareBlockHash>,
     stop_block_hash: ShareBlockHash,
     chain_handle: ChainHandle,
     response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Received getblocks: {:?}", locator);
     let response_block_hashes = chain_handle
         .get_blockhashes_for_locator(locator, stop_block_hash, MAX_BLOCKS)
