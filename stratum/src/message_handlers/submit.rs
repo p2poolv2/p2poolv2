@@ -56,8 +56,11 @@ pub async fn handle_submit<'a>(
     };
 
     // Validate the difficulty of the submitted share
-    validate_submission_difficulty(&job, &message)
-        .map_err(|e| Error::SubmitFailure(e.to_string()))?;
-
+    if let Ok(block) = validate_submission_difficulty(&job, &message) {
+        bitcoind
+            .submit_block(&block)
+            .await
+            .map_err(|e| Error::SubmitFailure(format!("Failed to submit block: {}", e)))?;
+    }
     Ok(Response::new_ok(message.id, json!(true)))
 }
