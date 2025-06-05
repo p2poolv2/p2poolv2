@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
-/// The work id used uniquely track block templates
+/// The work id used uniquely tracks block templates
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WorkId(pub &'static str);
 
