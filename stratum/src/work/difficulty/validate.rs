@@ -18,7 +18,7 @@ use crate::error::Error;
 use crate::messages::Request;
 use crate::work::gbt::BlockTemplate;
 use crate::work::tracker::JobDetails;
-use bitcoin::blockdata::block::Header;
+use bitcoin::blockdata::block::{Block, Header};
 use bitcoin::consensus::Decodable;
 use bitcoin::CompactTarget;
 use bitcoin::Target;
@@ -61,7 +61,7 @@ pub fn build_coinbase_from_submission(
 pub fn validate_submission_difficulty(
     job: &JobDetails,
     submission: &Request<'_>,
-) -> Result<Option<Header>, Error> {
+) -> Result<Option<Block>, Error> {
     let compact_target = CompactTarget::from_unprefixed_hex(&job.blocktemplate.bits)
         .map_err(|_| Error::InvalidParams)?;
     let target = Target::from_compact(compact_target);
@@ -94,5 +94,21 @@ pub fn validate_submission_difficulty(
     if header.validate_pow(target).is_err() {
         return Err(Error::InsufficientWork);
     }
-    Ok(Some(header))
+
+    // Decode transactions from the block template
+    let transactions = job
+        .blocktemplate
+        .transactions
+        .iter()
+        .map(|tx| {
+            let tx_bytes = hex::decode(&tx.data).unwrap();
+            bitcoin::Transaction::consensus_decode(&mut std::io::Cursor::new(tx_bytes)).unwrap()
+        })
+        .collect();
+
+    let block = Block {
+        header,
+        txdata: transactions,
+    };
+    Ok(Some(block))
 }
