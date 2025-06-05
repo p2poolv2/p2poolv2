@@ -23,7 +23,7 @@ use tokio::sync::{mpsc, oneshot};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WorkId(pub &'static str);
 
-/// The work id used uniquely track jobs
+/// The work id used uniquely tracks jobs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct JobId(pub &'static str);
 
