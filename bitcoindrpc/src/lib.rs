@@ -51,37 +51,33 @@ impl fmt::Display for BitcoindRpcError {
 #[cfg_attr(any(test, feature = "mock"), automock)]
 #[warn(async_fn_in_trait)]
 pub trait BitcoindRpc: Send + Sync + 'static {
-    fn new(
-        url: String,
-        username: String,
-        password: String,
-    ) -> Result<Self, Box<dyn std::error::Error>>
+    fn new(url: String, username: String, password: String) -> Result<Self, BitcoindRpcError>
     where
         Self: Sized;
     fn request<T: serde::de::DeserializeOwned + 'static>(
         &self,
         method: &str,
         params: Vec<serde_json::Value>,
-    ) -> impl std::future::Future<Output = Result<T, Box<dyn std::error::Error>>> + Send;
+    ) -> impl std::future::Future<Output = Result<T, BitcoindRpcError>> + Send;
 
     fn get_difficulty(
         &self,
-    ) -> impl std::future::Future<Output = Result<f64, Box<dyn std::error::Error>>> + Send;
+    ) -> impl std::future::Future<Output = Result<f64, BitcoindRpcError>> + Send;
 
     fn getblocktemplate(
         &self,
         network: bitcoin::Network,
-    ) -> impl std::future::Future<Output = Result<String, Box<dyn std::error::Error>>> + Send;
+    ) -> impl std::future::Future<Output = Result<String, BitcoindRpcError>> + Send;
 
     fn decoderawtransaction(
         &self,
         tx: &bitcoin::Transaction,
-    ) -> impl std::future::Future<Output = Result<bitcoin::Transaction, Box<dyn std::error::Error>>> + Send;
+    ) -> impl std::future::Future<Output = Result<bitcoin::Transaction, BitcoindRpcError>> + Send;
 
     fn submit_block(
         &self,
         block: &bitcoin::Block,
-    ) -> impl std::future::Future<Output = Result<String, Box<dyn std::error::Error>>> + Send;
+    ) -> impl std::future::Future<Output = Result<String, BitcoindRpcError>> + Send;
 }
 
 #[derive(Debug, Clone)]
@@ -91,11 +87,7 @@ pub struct BitcoindRpcClient {
 }
 
 impl BitcoindRpc for BitcoindRpcClient {
-    fn new(
-        url: String,
-        username: String,
-        password: String,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    fn new(url: String, username: String, password: String) -> Result<Self, BitcoindRpcError> {
         let mut headers = HeaderMap::new();
         headers.insert(
             "Authorization",
@@ -106,22 +98,33 @@ impl BitcoindRpc for BitcoindRpcClient {
             .parse()
             .unwrap(),
         );
-        let client = HttpClientBuilder::default()
-            .set_headers(headers)
-            .build(url)?;
+        let client = match HttpClientBuilder::default().set_headers(headers).build(url) {
+            Ok(client) => client,
+            Err(e) => {
+                return Err(BitcoindRpcError::Other(format!(
+                    "Failed to create HTTP client: {}",
+                    e
+                )))
+            }
+        };
         Ok(Self { client })
     }
     async fn request<T: serde::de::DeserializeOwned>(
         &self,
         method: &str,
         params: Vec<serde_json::Value>,
-    ) -> Result<T, Box<dyn std::error::Error>> {
-        let response = self.client.request(method, params).await?;
-        Ok(response)
+    ) -> Result<T, BitcoindRpcError> {
+        match self.client.request(method, params).await {
+            Ok(response) => Ok(response),
+            Err(e) => Err(BitcoindRpcError::Other(format!(
+                "Failed to send RPC request: {}",
+                e
+            ))),
+        }
     }
 
     /// Get current bitcoin difficulty from bitcoind rpc
-    async fn get_difficulty(&self) -> Result<f64, Box<dyn std::error::Error>> {
+    async fn get_difficulty(&self) -> Result<f64, BitcoindRpcError> {
         let params: Vec<serde_json::Value> = vec![];
         let result: serde_json::Value = self.request("getdifficulty", params).await?;
         Ok(result.as_f64().unwrap())
@@ -132,7 +135,7 @@ impl BitcoindRpc for BitcoindRpcClient {
     async fn getblocktemplate(
         &self,
         network: bitcoin::Network,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<String, BitcoindRpcError> {
         let params = match network {
             bitcoin::Network::Signet => {
                 vec![serde_json::json!({
@@ -152,10 +155,10 @@ impl BitcoindRpc for BitcoindRpcClient {
             .await
         {
             Ok(result) => Ok(result.to_string()),
-            Err(e) => Err(Box::new(BitcoindRpcError::Other(format!(
+            Err(e) => Err(BitcoindRpcError::Other(format!(
                 "Failed to get block template: {}",
                 e
-            )))),
+            ))),
         }
     }
 
@@ -166,7 +169,7 @@ impl BitcoindRpc for BitcoindRpcClient {
     async fn decoderawtransaction(
         &self,
         tx: &bitcoin::Transaction,
-    ) -> Result<bitcoin::Transaction, Box<dyn std::error::Error>> {
+    ) -> Result<bitcoin::Transaction, BitcoindRpcError> {
         // Serialize the transaction to hex string
         let tx_hex = serialize_hex(tx);
 
@@ -180,20 +183,25 @@ impl BitcoindRpc for BitcoindRpcClient {
         {
             Ok(result) => {
                 // Parse the response into a bitcoin::Transaction
-                let tx: bitcoin::Transaction = serde_json::from_value(result)?;
+                let tx: bitcoin::Transaction = match serde_json::from_value(result) {
+                    Ok(tx) => tx,
+                    Err(e) => {
+                        return Err(BitcoindRpcError::Other(format!(
+                            "Failed to decode raw transaction: {}",
+                            e
+                        )))
+                    }
+                };
                 Ok(tx)
             }
-            Err(e) => Err(Box::new(BitcoindRpcError::Other(format!(
+            Err(e) => Err(BitcoindRpcError::Other(format!(
                 "Failed to decode raw transaction: {}",
                 e
-            )))),
+            ))),
         }
     }
 
-    async fn submit_block(
-        &self,
-        block: &bitcoin::Block,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    async fn submit_block(&self, block: &bitcoin::Block) -> Result<String, BitcoindRpcError> {
         // Serialize the block to hex string
         let block_hex = serialize_hex(block);
 
@@ -206,10 +214,10 @@ impl BitcoindRpc for BitcoindRpcClient {
             .await
         {
             Ok(result) => Ok(result.to_string()),
-            Err(e) => Err(Box::new(BitcoindRpcError::Other(format!(
+            Err(e) => Err(BitcoindRpcError::Other(format!(
                 "Failed to submit block: {}",
                 e
-            )))),
+            ))),
         }
     }
 }
@@ -275,8 +283,7 @@ mod tests {
         )
         .unwrap();
         let params: Vec<serde_json::Value> = vec![];
-        let result: Result<String, Box<dyn std::error::Error>> =
-            client.request("test", params).await;
+        let result: Result<String, BitcoindRpcError> = client.request("test", params).await;
         assert!(result.is_err());
     }
 
