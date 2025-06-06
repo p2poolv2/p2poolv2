@@ -17,7 +17,7 @@
 use crate::work::error::WorkError;
 use crate::work::notify::NotifyCmd;
 use bitcoin::hashes::{sha256d, Hash};
-use bitcoindrpc::BitcoindRpc;
+use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -102,12 +102,13 @@ fn compute_merkle_branches(input_txids: Vec<sha256d::Hash>) -> Vec<sha256d::Hash
 /// Get a new blocktemplate from the bitcoind server
 /// Parse the received JSON into a BlockTemplate struct and return it.
 #[allow(dead_code)]
-async fn get_block_template<B: BitcoindRpc>(
-    bitcoind: Arc<B>,
+async fn get_block_template(
+    bitcoind: Arc<BitcoindRpcClient>,
     network: bitcoin::Network,
 ) -> Result<BlockTemplate, Box<dyn std::error::Error + Send + Sync>> {
     match bitcoind.getblocktemplate(network).await {
         Ok(blocktemplate_json) => {
+            println!("Block template JSON: {}", blocktemplate_json);
             match serde_json::from_str::<BlockTemplate>(blocktemplate_json.as_str()) {
                 Ok(template) => Ok(template),
                 Err(e) => Err(Box::new(WorkError {
@@ -125,16 +126,18 @@ async fn get_block_template<B: BitcoindRpc>(
 ///
 /// Listen to blocknotify signal from bitcoind.
 /// Otherwise, poll for new block templates every poll_interval seconds.
-pub async fn start_gbt<B: BitcoindRpc>(
-    url: String,
-    username: String,
-    password: String,
+pub async fn start_gbt(
+    bitcoin_config: &BitcoinRpcConfig,
     result_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
     socket_path: &str,
     poll_interval: u64,
     network: bitcoin::Network,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let bitcoind = match B::new(url, username, password) {
+    let bitcoind: Arc<BitcoindRpcClient> = match BitcoindRpcClient::new(
+        &bitcoin_config.url,
+        &bitcoin_config.username,
+        &bitcoin_config.password,
+    ) {
         Ok(bitcoind) => Arc::new(bitcoind),
         Err(e) => {
             info!("Failed to connect to bitcoind: {}", e);
@@ -243,25 +246,32 @@ pub async fn start_gbt<B: BitcoindRpc>(
 mod gbt_load_tests {
     use super::*;
     use bitcoin::hex::FromHex;
-    use bitcoindrpc::MockBitcoindRpc;
+    use bitcoindrpc::test_utils::{mock_getblocktemplate, setup_mock_bitcoin_rpc};
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_get_block_template() {
         let template = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../tests/test_data/gbt/signet/gbt-no-transactions.json"),
         )
         .expect("Failed to read test fixture");
-        let mut mock_rpc = MockBitcoindRpc::default();
-        mock_rpc
-            .expect_getblocktemplate()
-            .with(mockall::predicate::eq(bitcoin::Network::Signet))
-            .returning(move |_| {
-                let template = template.clone();
-                Box::pin(async move { Ok(template) })
-            });
 
-        let result = get_block_template(Arc::new(mock_rpc), bitcoin::Network::Signet).await;
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let params = serde_json::json!([{
+            "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+            "rules": ["segwit", "signet"],
+        }]);
+        mock_getblocktemplate(&mock_server, params, template).await;
+
+        let rpc = BitcoindRpcClient::new(
+            &bitcoinrpc_config.url,
+            &bitcoinrpc_config.username,
+            &bitcoinrpc_config.password,
+        )
+        .unwrap();
+
+        let result = get_block_template(Arc::new(rpc), bitcoin::Network::Signet).await;
+
         assert!(result.is_ok());
         let template = result.unwrap();
         assert_eq!(template.version, 536870912);
@@ -406,7 +416,7 @@ mod gbt_load_tests {
 #[cfg(test)]
 mod gbt_server_tests {
     use super::*;
-    use bitcoindrpc::MockBitcoindRpc;
+    use bitcoindrpc::test_utils::{mock_getblocktemplate, setup_mock_bitcoin_rpc};
     use tokio::sync::mpsc;
 
     #[tokio::test]
@@ -422,25 +432,19 @@ mod gbt_server_tests {
         )
         .expect("Failed to read test fixture");
 
-        let ctx = MockBitcoindRpc::new_context();
-        ctx.expect().returning(move |_, _, _| {
-            let template_str = template.clone();
-            let mut mock = MockBitcoindRpc::default();
-            mock.expect_getblocktemplate().returning(move |_| {
-                let template_value = template_str.clone();
-                Box::pin(async move { Ok(template_value) })
-            });
-            Ok(mock)
-        });
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let params = serde_json::json!([{
+            "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+            "rules": ["segwit", "signet"],
+        }]);
+        mock_getblocktemplate(&mock_server, params, template).await;
 
         // Setup channel for receiving templates
         let (template_tx, mut template_rx) = mpsc::channel(10);
 
         // Start GBT server
-        let result = start_gbt::<MockBitcoindRpc>(
-            "http://localhost:8332".to_string(),
-            "user".to_string(),
-            "pass".to_string(),
+        let result = start_gbt(
+            &bitcoinrpc_config,
             template_tx,
             socket_path,
             60,
@@ -480,25 +484,19 @@ mod gbt_server_tests {
         )
         .expect("Failed to read test fixture");
 
-        let ctx = MockBitcoindRpc::new_context();
-        ctx.expect().returning(move |_, _, _| {
-            let template_str = template.clone();
-            let mut mock = MockBitcoindRpc::default();
-            mock.expect_getblocktemplate().returning(move |_| {
-                let template_value = template_str.clone();
-                Box::pin(async move { Ok(template_value) })
-            });
-            Ok(mock)
-        });
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let params = serde_json::json!([{
+            "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+            "rules": ["segwit", "signet"],
+        }]);
+        mock_getblocktemplate(&mock_server, params, template).await;
 
         // Setup channel for receiving templates
         let (template_tx, mut template_rx) = mpsc::channel(10);
 
         // Start GBT server
-        let result = start_gbt::<MockBitcoindRpc>(
-            "http://localhost:8332".to_string(),
-            "user".to_string(),
-            "pass".to_string(),
+        let result = start_gbt(
+            &bitcoinrpc_config,
             template_tx,
             socket_path,
             1,

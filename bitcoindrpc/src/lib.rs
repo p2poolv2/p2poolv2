@@ -18,12 +18,21 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use bitcoin::consensus::encode::serialize_hex;
 use jsonrpsee::core::client::ClientT;
 use jsonrpsee::http_client::{HeaderMap, HttpClient, HttpClientBuilder};
+use serde::Deserialize;
 use std::error::Error;
 use std::fmt;
+use tracing::debug;
 
-// Add mockall to make the trait mockable
-#[cfg(any(test, feature = "mock"))]
-pub use mockall::{automock, predicate::*};
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
+pub struct BitcoinRpcConfig {
+    pub url: String,
+    pub username: String,
+    pub password: String,
+}
 
 /// Error type for the BitcoindRpcClient
 #[derive(Debug)]
@@ -46,48 +55,14 @@ impl fmt::Display for BitcoindRpcError {
     }
 }
 
-/// Define a trait for the BitcoindRpc functionality
-/// All functions in the traits are desugred async functions so we can add Send as a bound.
-#[cfg_attr(any(test, feature = "mock"), automock)]
-#[warn(async_fn_in_trait)]
-pub trait BitcoindRpc: Send + Sync + 'static {
-    fn new(url: String, username: String, password: String) -> Result<Self, BitcoindRpcError>
-    where
-        Self: Sized;
-    fn request<T: serde::de::DeserializeOwned + 'static>(
-        &self,
-        method: &str,
-        params: Vec<serde_json::Value>,
-    ) -> impl std::future::Future<Output = Result<T, BitcoindRpcError>> + Send;
-
-    fn get_difficulty(
-        &self,
-    ) -> impl std::future::Future<Output = Result<f64, BitcoindRpcError>> + Send;
-
-    fn getblocktemplate(
-        &self,
-        network: bitcoin::Network,
-    ) -> impl std::future::Future<Output = Result<String, BitcoindRpcError>> + Send;
-
-    fn decoderawtransaction(
-        &self,
-        tx: &bitcoin::Transaction,
-    ) -> impl std::future::Future<Output = Result<bitcoin::Transaction, BitcoindRpcError>> + Send;
-
-    fn submit_block(
-        &self,
-        block: &bitcoin::Block,
-    ) -> impl std::future::Future<Output = Result<String, BitcoindRpcError>> + Send;
-}
-
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct BitcoindRpcClient {
     client: HttpClient,
 }
 
-impl BitcoindRpc for BitcoindRpcClient {
-    fn new(url: String, username: String, password: String) -> Result<Self, BitcoindRpcError> {
+impl BitcoindRpcClient {
+    pub fn new(url: &str, username: &str, password: &str) -> Result<Self, BitcoindRpcError> {
         let mut headers = HeaderMap::new();
         headers.insert(
             "Authorization",
@@ -109,7 +84,8 @@ impl BitcoindRpc for BitcoindRpcClient {
         };
         Ok(Self { client })
     }
-    async fn request<T: serde::de::DeserializeOwned>(
+
+    pub async fn request<T: serde::de::DeserializeOwned>(
         &self,
         method: &str,
         params: Vec<serde_json::Value>,
@@ -124,7 +100,7 @@ impl BitcoindRpc for BitcoindRpcClient {
     }
 
     /// Get current bitcoin difficulty from bitcoind rpc
-    async fn get_difficulty(&self) -> Result<f64, BitcoindRpcError> {
+    pub async fn get_difficulty(&self) -> Result<f64, BitcoindRpcError> {
         let params: Vec<serde_json::Value> = vec![];
         let result: serde_json::Value = self.request("getdifficulty", params).await?;
         Ok(result.as_f64().unwrap())
@@ -132,7 +108,7 @@ impl BitcoindRpc for BitcoindRpcClient {
 
     /// Get current bitcoin block count from bitcoind rpc
     /// We use special rules for signet
-    async fn getblocktemplate(
+    pub async fn getblocktemplate(
         &self,
         network: bitcoin::Network,
     ) -> Result<String, BitcoindRpcError> {
@@ -150,11 +126,15 @@ impl BitcoindRpc for BitcoindRpcClient {
                 })]
             }
         };
+        debug!("Requesting getblocktemplate with params: {:?}", params);
         match self
             .request::<serde_json::Value>("getblocktemplate", params)
             .await
         {
-            Ok(result) => Ok(result.to_string()),
+            Ok(result) => {
+                debug!("Received getblocktemplate response: {}", result);
+                Ok(result.to_string())
+            }
             Err(e) => Err(BitcoindRpcError::Other(format!(
                 "Failed to get block template: {}",
                 e
@@ -166,7 +146,7 @@ impl BitcoindRpc for BitcoindRpcClient {
     ///
     /// Sends the transaction serialized as hex to the Bitcoin Core RPC,
     /// then receives and parses the decoded transaction information.
-    async fn decoderawtransaction(
+    pub async fn decoderawtransaction(
         &self,
         tx: &bitcoin::Transaction,
     ) -> Result<bitcoin::Transaction, BitcoindRpcError> {
@@ -201,7 +181,7 @@ impl BitcoindRpc for BitcoindRpcClient {
         }
     }
 
-    async fn submit_block(&self, block: &bitcoin::Block) -> Result<String, BitcoindRpcError> {
+    pub async fn submit_block(&self, block: &bitcoin::Block) -> Result<String, BitcoindRpcError> {
         // Serialize the block to hex string
         let block_hex = serialize_hex(block);
 
@@ -259,12 +239,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = BitcoindRpcClient::new(
-            mock_server.uri(),
-            "testuser".to_string(),
-            "testpass".to_string(),
-        )
-        .unwrap();
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "testuser", "testpass").unwrap();
 
         let params: Vec<serde_json::Value> = vec![];
         let result: String = client.request("test", params).await.unwrap();
@@ -276,12 +251,8 @@ mod tests {
     async fn test_bitcoin_client_with_invalid_credentials() {
         let mock_server = MockServer::start().await;
 
-        let client = BitcoindRpcClient::new(
-            mock_server.uri(),
-            "invaliduser".to_string(),
-            "invalidpass".to_string(),
-        )
-        .unwrap();
+        let client =
+            BitcoindRpcClient::new(&mock_server.uri(), "invaliduser", "invalidpass").unwrap();
         let params: Vec<serde_json::Value> = vec![];
         let result: Result<String, BitcoindRpcError> = client.request("test", params).await;
         assert!(result.is_err());
@@ -290,12 +261,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // Ignore by default since we only use it to test the connection to a locally running bitcoind
     async fn test_bitcoin_client_real_connection() {
-        let client = BitcoindRpcClient::new(
-            "http://localhost:38332".to_string(),
-            "p2pool".to_string(),
-            "p2pool".to_string(),
-        )
-        .unwrap();
+        let client = BitcoindRpcClient::new("http://localhost:38332", "p2pool", "p2pool").unwrap();
 
         let params: Vec<serde_json::Value> = vec![];
         let result: serde_json::Value = client.request("getblockchaininfo", params).await.unwrap();
@@ -325,12 +291,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = BitcoindRpcClient::new(
-            mock_server.uri(),
-            "p2pool".to_string(),
-            "p2pool".to_string(),
-        )
-        .unwrap();
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
         let difficulty = client.get_difficulty().await.unwrap();
 
         assert_eq!(difficulty, 1234.56);
@@ -377,12 +338,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = BitcoindRpcClient::new(
-            mock_server.uri(),
-            "p2pool".to_string(),
-            "p2pool".to_string(),
-        )
-        .unwrap();
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
         let result = client.getblocktemplate(bitcoin::Network::Bitcoin).await;
         let result = result.unwrap();
 
@@ -433,12 +389,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = BitcoindRpcClient::new(
-            mock_server.uri(),
-            "p2pool".to_string(),
-            "p2pool".to_string(),
-        )
-        .unwrap();
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
         let result = client
             .getblocktemplate(bitcoin::Network::Signet)
             .await
@@ -482,12 +433,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = BitcoindRpcClient::new(
-            mock_server.uri(),
-            "p2pool".to_string(),
-            "p2pool".to_string(),
-        )
-        .unwrap();
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
 
         let decoded_tx = client.decoderawtransaction(&tx).await.unwrap();
 
@@ -535,12 +481,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = BitcoindRpcClient::new(
-            mock_server.uri(),
-            "p2pool".to_string(),
-            "p2pool".to_string(),
-        )
-        .unwrap();
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
 
         let result = client.submit_block(&block).await.unwrap();
         assert_eq!(result, "null"); // Successful submission returns null

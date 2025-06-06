@@ -19,8 +19,9 @@ use crate::messages::{Request, Response};
 use crate::session::Session;
 use crate::work::difficulty::validate::validate_submission_difficulty;
 use crate::work::tracker::{JobId, TrackerHandle};
+use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use serde_json::json;
-use tracing::debug;
+use tracing::{debug, info};
 
 /// Handle the "mining.submit" message
 /// This function is called when a miner submits a share to the Stratum server.
@@ -31,6 +32,7 @@ pub async fn handle_submit<'a>(
     message: Request<'a>,
     _session: &mut Session,
     tracker_handle: TrackerHandle,
+    bitcoinrpc_config: BitcoinRpcConfig,
 ) -> Result<Response<'a>, Error> {
     debug!("Handling mining.submit message");
     if message.params.len() < 4 {
@@ -56,11 +58,38 @@ pub async fn handle_submit<'a>(
     };
 
     // Validate the difficulty of the submitted share
-    if let Ok(block) = validate_submission_difficulty(&job, &message) {
-        bitcoind
-            .submit_block(&block)
-            .await
-            .map_err(|e| Error::SubmitFailure(format!("Failed to submit block: {}", e)))?;
+    match validate_submission_difficulty(&job, &message) {
+        Ok(block) => match block {
+            Some(block) => {
+                info!(
+                    "Submitting block to bitcoind: {:?}",
+                    block.header.block_hash()
+                );
+                match BitcoindRpcClient::new(
+                    &bitcoinrpc_config.url,
+                    &bitcoinrpc_config.username,
+                    &bitcoinrpc_config.password,
+                ) {
+                    Ok(bitcoind) => {
+                        bitcoind.submit_block(&block).await.map_err(|e| {
+                            Error::SubmitFailure(format!("Failed to submit block: {}", e))
+                        })?;
+                    }
+                    Err(e) => {
+                        return Err(Error::SubmitFailure(format!(
+                            "Failed to create BitcoindRpc: {}",
+                            e
+                        )));
+                    }
+                }
+            }
+            None => {
+                info!("Share difficulty didn't meet the target. No block submitted.");
+            }
+        },
+        Err(_e) => {
+            info!("Share difficulty didn't meet the target");
+        }
     }
     Ok(Response::new_ok(message.id, json!(true)))
 }

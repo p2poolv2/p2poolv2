@@ -72,6 +72,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let stratum_config = config.stratum.clone();
     let bitcoin_config = config.bitcoin.clone();
+    let bitcoinrpc_config = config.bitcoinrpc.clone();
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
     let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(1);
     let tracker_handle = start_tracker_actor();
@@ -79,9 +80,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let notify_tx_for_gbt = notify_tx.clone();
     tokio::spawn(async move {
         if let Err(e) = start_gbt::<BitcoindRpcClient>(
-            bitcoin_config.url,
-            bitcoin_config.username,
-            bitcoin_config.password,
+            &bitcoinrpc_config,
             notify_tx_for_gbt,
             SOCKET_PATH,
             GBT_POLL_INTERVAL,
@@ -124,7 +123,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await;
         info!("Starting Stratum server...");
-        let result = stratum_server.start(None, notify_tx, tracker_handle).await;
+        let result = stratum_server
+            .start(None, notify_tx, tracker_handle, bitcoinrpc_config)
+            .await;
         if result.is_err() {
             error!("Failed to start Stratum server: {}", result.unwrap_err());
         }
