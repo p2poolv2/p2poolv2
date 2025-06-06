@@ -34,6 +34,8 @@ pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
 [bitcoin]
 # The network can be "main", "testnet4" or "signet"
 network = "signet"
+
+[bitcoinrpc]
 # RPC credentials are loaded from env vars
 url = "http://localhost:38332"
 username = "p2pool"

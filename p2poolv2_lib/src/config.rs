@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use bitcoin::PublicKey;
+use bitcoindrpc::BitcoinRpcConfig;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -59,6 +60,12 @@ pub struct MinerConfig {
     pub pubkey: PublicKey,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct BitcoinConfig {
+    #[serde(deserialize_with = "deserialize_network")]
+    pub network: bitcoin::Network,
+}
+
 /// helper function to deserialize the network from the config file, which is provided as a string like Core
 /// Possible values are: main, test, testnet4, signet, regtest
 fn deserialize_network<'de, D>(deserializer: D) -> Result<bitcoin::Network, D::Error>
@@ -67,16 +74,6 @@ where
 {
     let s: String = serde::Deserialize::deserialize(deserializer)?;
     bitcoin::Network::from_core_arg(&s).map_err(serde::de::Error::custom)
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[allow(dead_code)]
-pub struct BitcoinConfig {
-    #[serde(deserialize_with = "deserialize_network")]
-    pub network: bitcoin::Network,
-    pub url: String,
-    pub username: String,
-    pub password: String,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -108,6 +105,7 @@ pub struct Config {
     pub stratum: StratumConfig,
     pub miner: MinerConfig,
     pub bitcoin: BitcoinConfig,
+    pub bitcoinrpc: BitcoinRpcConfig,
     pub logging: LoggingConfig,
 }
 
@@ -201,18 +199,23 @@ impl Config {
         self
     }
 
-    pub fn with_bitcoin_url(mut self, bitcoin_url: String) -> Self {
-        self.bitcoin.url = bitcoin_url;
+    pub fn with_bitcoinrpc_url(mut self, bitcoin_url: String) -> Self {
+        self.bitcoinrpc.url = bitcoin_url;
         self
     }
 
-    pub fn with_bitcoin_username(mut self, bitcoin_username: String) -> Self {
-        self.bitcoin.username = bitcoin_username;
+    pub fn with_bitcoinrpc_username(mut self, bitcoin_username: String) -> Self {
+        self.bitcoinrpc.username = bitcoin_username;
         self
     }
 
-    pub fn with_bitcoin_password(mut self, bitcoin_password: String) -> Self {
-        self.bitcoin.password = bitcoin_password;
+    pub fn with_bitcoinrpc_password(mut self, bitcoin_password: String) -> Self {
+        self.bitcoinrpc.password = bitcoin_password;
+        self
+    }
+
+    pub fn with_bitcoin_network(mut self, bitcoin_network: bitcoin::Network) -> Self {
+        self.bitcoin.network = bitcoin_network;
         self
     }
 }
@@ -246,9 +249,10 @@ mod tests {
             .with_miner_pubkey(
                 "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".to_string(),
             )
-            .with_bitcoin_url("http://localhost:8332".to_string())
-            .with_bitcoin_username("testuser".to_string())
-            .with_bitcoin_password("testpass".to_string());
+            .with_bitcoinrpc_url("http://localhost:8332".to_string())
+            .with_bitcoinrpc_username("testuser".to_string())
+            .with_bitcoinrpc_password("testpass".to_string())
+            .with_bitcoin_network(bitcoin::Network::Regtest);
 
         assert_eq!(config.network.listen_address, "127.0.0.1:8080");
         assert_eq!(
@@ -272,9 +276,9 @@ mod tests {
             config.miner.pubkey.to_string(),
             "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
         );
-        assert_eq!(config.bitcoin.url, "http://localhost:8332");
-        assert_eq!(config.bitcoin.username, "testuser");
-        assert_eq!(config.bitcoin.password, "testpass");
+        assert_eq!(config.bitcoinrpc.url, "http://localhost:8332");
+        assert_eq!(config.bitcoinrpc.username, "testuser");
+        assert_eq!(config.bitcoinrpc.password, "testpass");
 
         assert_eq!(config.network.max_pending_incoming, 10);
         assert_eq!(config.network.max_pending_outgoing, 10);
@@ -286,15 +290,15 @@ mod tests {
     #[test]
     fn test_config_from_env_vars() {
         // Set environment variable for bitcoin URL
-        std::env::set_var("P2POOL_BITCOIN_URL", "http://bitcoin-from-env:8332");
+        std::env::set_var("P2POOL_BITCOINRPC_URL", "http://bitcoin-from-env:8332");
 
         // Load config from file first
         let config = Config::load("../config.toml").unwrap();
 
         // Check that the environment variable overrides the config file value
-        assert_eq!(config.bitcoin.url, "http://bitcoin-from-env:8332");
+        assert_eq!(config.bitcoinrpc.url, "http://bitcoin-from-env:8332");
 
         // Clean up environment variable after test
-        std::env::remove_var("P2POOL_BITCOIN_URL");
+        std::env::remove_var("P2POOL_BITCOINRPC_URL");
     }
 }

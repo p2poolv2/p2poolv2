@@ -14,11 +14,9 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::config::BitcoinConfig;
 use crate::shares::ShareBlock;
 use bitcoin::consensus::encode::serialize;
-use bitcoindrpc::BitcoindRpc;
-use bitcoindrpc::BitcoindRpcClient;
+use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use rust_decimal::Decimal;
 use serde_json::json;
 use std::error::Error;
@@ -31,13 +29,9 @@ use std::error::Error;
 pub async fn meets_bitcoin_difficulty(
     share: &ShareBlock,
     block: &bitcoin::Block,
-    config: &BitcoinConfig,
+    config: &BitcoinRpcConfig,
 ) -> Result<bool, Box<dyn Error>> {
-    let bitcoind = BitcoindRpcClient::new(
-        config.url.clone(),
-        config.username.clone(),
-        config.password.clone(),
-    )?;
+    let bitcoind = BitcoindRpcClient::new(&config.url, &config.username, &config.password)?;
     let difficulty = bitcoind.get_difficulty().await?;
     let share_difficulty = share.header.miner_share.sdiff;
     if share_difficulty >= Decimal::from_f64_retain(difficulty).unwrap() {
@@ -52,7 +46,7 @@ pub async fn meets_bitcoin_difficulty(
 #[allow(dead_code)]
 pub async fn validate_bitcoin_block(
     block: &bitcoin::Block,
-    config: &BitcoinConfig,
+    config: &BitcoinRpcConfig,
 ) -> Result<bool, Box<dyn Error>> {
     // Serialize block to hex string for RPC call
     let block_hex = hex::encode(serialize(block));
@@ -64,11 +58,7 @@ pub async fn validate_bitcoin_block(
     })];
 
     // Call getblocktemplate RPC method using config values
-    let bitcoind = BitcoindRpcClient::new(
-        config.url.clone(),
-        config.username.clone(),
-        config.password.clone(),
-    )?;
+    let bitcoind = BitcoindRpcClient::new(&config.url, &config.username, &config.password)?;
     let result: Result<serde_json::Value, _> = bitcoind.request("getblocktemplate", params).await;
 
     if let Err(e) = result {
@@ -87,6 +77,7 @@ mod tests {
     use super::*;
     use base64::Engine;
     use bitcoin::consensus::Decodable;
+    use bitcoindrpc::BitcoinRpcConfig;
     use rust_decimal_macros::dec;
     use wiremock::{
         matchers::{body_json, header, method, path},
@@ -129,8 +120,7 @@ mod tests {
             .await;
 
         // Create test config
-        let config = BitcoinConfig {
-            network: bitcoin::Network::Regtest,
+        let config = BitcoinRpcConfig {
             url: mock_server.uri(),
             username: "testuser".to_string(),
             password: "testpass".to_string(),
@@ -178,8 +168,7 @@ mod tests {
             .await;
 
         // Create test config
-        let config = BitcoinConfig {
-            network: bitcoin::Network::Regtest,
+        let config = BitcoinRpcConfig {
             url: mock_server.uri(),
             username: "testuser".to_string(),
             password: "testpass".to_string(),
@@ -224,8 +213,7 @@ mod tests {
             .await;
 
         // Create test config
-        let config = BitcoinConfig {
-            network: bitcoin::Network::Regtest,
+        let config = BitcoinRpcConfig {
             url: mock_server.uri(),
             username: "testuser".to_string(),
             password: "testpass".to_string(),
@@ -291,8 +279,7 @@ mod tests {
             .await;
 
         // Create test config
-        let config = BitcoinConfig {
-            network: bitcoin::Network::Regtest,
+        let config = BitcoinRpcConfig {
             url: mock_server.uri(),
             username: "testuser".to_string(),
             password: "testpass".to_string(),
@@ -343,8 +330,7 @@ mod tests {
             .await;
 
         // Create test config
-        let config = BitcoinConfig {
-            network: bitcoin::Network::Regtest,
+        let config = BitcoinRpcConfig {
             url: mock_server.uri(),
             username: "testuser".to_string(),
             password: "testpass".to_string(),

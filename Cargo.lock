@@ -441,6 +441,8 @@ dependencies = [
  "serde_json",
  "test-log",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "wiremock",
 ]
 
@@ -4354,6 +4356,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]
