@@ -25,6 +25,7 @@ pub mod rate_limiter;
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::senders::{send_blocks_inventory, send_getheaders};
+use crate::service::p2p_service::{P2PService, RequestContext};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
@@ -32,6 +33,7 @@ use crate::shares::chain::actor::ChainHandle;
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::receive_mining_message::start_receiving_mining_messages;
 use crate::shares::ShareBlock;
+use crate::utils::time_provider::SystemTimeProvider;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::identify;
 use libp2p::request_response::ResponseChannel;
@@ -46,6 +48,7 @@ use request_response_handler::handle_request_response_event;
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tower::Service;
 use tracing::{debug, error, info, warn};
 
 pub struct SwarmResponseChannel<T> {
@@ -233,7 +236,7 @@ impl Node {
                                 peer_id, e
                             );
                         } else {
-                            info!("Outbound connection established to peer: {}", peer_id,);
+                            info!("Outbound connection established to peer: {}", peer_id);
                         }
                     }
                     libp2p::core::ConnectedPoint::Listener { .. } => {
@@ -252,20 +255,7 @@ impl Node {
                 error,
                 connection_id,
             } => {
-                // Check if we're already connected to this peer
-                if peer_id.is_some() && self.swarm.is_connected(&peer_id.unwrap()) {
-                    // This is likely just a duplicate connection attempt to a peer we're already connected to
-                    debug!(
-                        "Connection attempt to already connected peer {}: {}",
-                        peer_id.unwrap(),
-                        error
-                    );
-                } else {
-                    error!("Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}");
-                    if let Some(source) = error.source() {
-                        error!("Error source: {}", source);
-                    }
-                }
+                error!("Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}");
                 Ok(())
             }
             SwarmEvent::Behaviour(event) => match event {
@@ -363,34 +353,41 @@ impl Node {
                 libp2p::request_response::Message::Request {
                     request_id: _,
                     request,
-                    channel: _,
+                    channel: channel,
                 },
-        } = &request_response_event
+        } = request_response_event
         {
             let message = request.clone();
             if !self
                 .rate_limiter
-                .check_rate_limit(peer, message.clone(), &self.config.network)
+                .check_rate_limit(&peer, message.clone(), &self.config.network)
                 .await
             {
                 warn!(
                     "Rate limit exceeded for peer {} with message type {:?}. Disconnecting.",
                     peer, message
                 );
-                self.swarm.disconnect_peer_id(*peer).unwrap_or_else(|e| {
+                self.swarm.disconnect_peer_id(peer).unwrap_or_else(|e| {
                     error!("Failed to disconnect rate-limited peer: {:?}", e);
                 });
                 return Ok(());
             }
 
-            let chain_handle = self.chain_handle.clone();
-            let swarm_tx = self.swarm_tx.clone();
-            let event_clone = request_response_event;
+            // Create the RequestContext
+            let ctx = RequestContext::<ResponseChannel<Message>, _> {
+                peer,
+                request: request.clone(),
+                chain_handle: self.chain_handle.clone(),
+                response_channel: channel,
+                swarm_tx: self.swarm_tx.clone(),
+                time_provider: SystemTimeProvider,
+            };
+
+            // Spawn the tower service
             tokio::spawn(async move {
-                if let Err(e) =
-                    handle_request_response_event(event_clone, chain_handle, swarm_tx).await
-                {
-                    error!("Failed to handle request-response event: {}", e);
+                let mut service = P2PService;
+                if let Err(e) = service.call(ctx).await {
+                    error!("P2PService failed: {}", e);
                 }
             });
         }
