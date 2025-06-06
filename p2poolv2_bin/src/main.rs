@@ -78,9 +78,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let tracker_handle = start_tracker_actor();
 
     let notify_tx_for_gbt = notify_tx.clone();
+    let bitcoinrpc_config_cloned = bitcoinrpc_config.clone();
     tokio::spawn(async move {
-        if let Err(e) = start_gbt::<BitcoindRpcClient>(
-            &bitcoinrpc_config,
+        if let Err(e) = start_gbt(
+            &bitcoinrpc_config_cloned,
             notify_tx_for_gbt,
             SOCKET_PATH,
             GBT_POLL_INTERVAL,

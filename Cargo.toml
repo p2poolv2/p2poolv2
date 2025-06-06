@@ -67,7 +67,7 @@ publish = false
 [dependencies]
 p2poolv2_lib = { path = "p2poolv2_lib" }
 stratum = { path = "stratum" }
-bitcoindrpc = { path = "bitcoindrpc" }
+bitcoindrpc = { path = "bitcoindrpc", features = ["test-utils"] }
 
 # Repeat dev dependencies for use integration tests
 [dev-dependencies]

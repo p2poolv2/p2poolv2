@@ -17,7 +17,7 @@
 use crate::BitcoinRpcConfig;
 use base64::Engine;
 #[cfg(any(test, feature = "test-utils"))]
-use wiremock::matchers::{any, body_json, header, method, path};
+use wiremock::matchers::{body_json, header, method, path};
 #[cfg(any(test, feature = "test-utils"))]
 use wiremock::MockServer;
 #[cfg(any(test, feature = "test-utils"))]
@@ -38,10 +38,11 @@ pub async fn setup_mock_bitcoin_rpc() -> (MockServer, BitcoinRpcConfig) {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-pub async fn mock_getblocktemplate(
+pub async fn mock_method(
     mock_server: &MockServer,
+    api_method: &str,
     params: serde_json::Value,
-    template_response: String,
+    response: String,
 ) {
     let auth_header = format!(
         "Basic {}",
@@ -49,7 +50,7 @@ pub async fn mock_getblocktemplate(
     );
 
     let template_json: serde_json::Value =
-        serde_json::from_str(&template_response).expect("Template response should be valid JSON");
+        serde_json::from_str(&response).expect("Template response should be valid JSON");
 
     Mock::given(method("POST"))
         .and(path("/"))
@@ -57,7 +58,7 @@ pub async fn mock_getblocktemplate(
         .and(body_json(serde_json::json!({
             "jsonrpc": "2.0",
             "id": 0,
-            "method": "getblocktemplate",
+            "method": api_method,
             "params": params,
         })))
         .respond_with(ResponseTemplate::new(200).set_body_json(
