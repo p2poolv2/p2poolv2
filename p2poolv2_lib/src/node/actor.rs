@@ -160,8 +160,8 @@ impl NodeActor {
 
     async fn run(mut self) {
         // Initialize P2PService and TimeProvider
-        let p2p_service = P2PService;
-        let time_provider = SystemTimeProvider;
+        let p2p_service = P2PService {};
+        let time_provider = SystemTimeProvider {};
         loop {
             tokio::select! {
                 buf = self.node.swarm_rx.recv() => {
