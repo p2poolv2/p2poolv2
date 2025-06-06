@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use bitcoindrpc::BitcoinRpcConfig;
 use p2poolv2_lib::config::{
     BitcoinConfig, CkPoolConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig,
     StratumConfig,
@@ -43,6 +44,8 @@ pub fn default_test_config() -> Config {
         },
         bitcoin: BitcoinConfig {
             network: bitcoin::Network::Signet,
+        },
+        bitcoinrpc: BitcoinRpcConfig {
             url: "http://localhost:8332".to_string(),
             username: "testuser".to_string(),
             password: "testpass".to_string(),

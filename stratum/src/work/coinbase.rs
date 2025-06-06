@@ -220,7 +220,6 @@ mod tests {
         let result = parse_address(addr, Network::Testnet);
         assert!(result.is_err());
         let msg = result.err().unwrap().to_string();
-        println!("Error message: {}", msg);
         assert!(msg.contains("Address does not match network"));
         assert!(msg.contains("testnet"));
     }
@@ -318,7 +317,6 @@ mod tests {
         // Load GBT and expected notify JSON
         let gbt_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/test_data/gbt/regtest/ckpool/four-txns/gbt.json");
-        println!("GBT path: {:?}", gbt_path);
         let data = fs::read_to_string(gbt_path).expect("Unable to read file");
         let template: BlockTemplate = serde_json::from_str(&data).expect("Invalid JSON");
 

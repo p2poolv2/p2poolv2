@@ -14,16 +14,14 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use bitcoindrpc::test_utils::{mock_method, setup_mock_bitcoin_rpc};
 use std::net::SocketAddr;
 use std::str;
 use stratum::{
     self,
     messages::{Request, Response},
     server::StratumServer,
-    work::{
-        notify,
-        tracker::{self, start_tracker_actor},
-    },
+    work::{notify, tracker::start_tracker_actor},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -36,6 +34,18 @@ async fn test_stratum_server_subscribe() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let connections_handle = stratum::client_connections::spawn().await;
     let (notify_tx, _notify_rx) = tokio::sync::mpsc::channel::<notify::NotifyCmd>(100);
+
+    let template = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/test_data/gbt/signet/gbt-no-transactions.json"),
+    )
+    .expect("Failed to read test fixture");
+    let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+    let params = serde_json::json!([{
+        "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+        "rules": ["segwit", "signet"],
+    }]);
+    mock_method(&mock_server, "getblocktemplate", params, template).await;
 
     let mut server = StratumServer::new(
         "127.0.0.1".to_string(),
@@ -50,7 +60,7 @@ async fn test_stratum_server_subscribe() {
 
     tokio::spawn(async move {
         let _result = server
-            .start(Some(ready_tx), notify_tx, tracker_handle)
+            .start(Some(ready_tx), notify_tx, tracker_handle, bitcoinrpc_config)
             .await;
     });
     ready_rx.await.expect("Server failed to start");

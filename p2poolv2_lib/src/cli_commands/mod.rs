@@ -23,10 +23,10 @@ pub mod store {
 
     /// Open a store from the given path
     pub fn open_store(store_path: String) -> Result<Store, Box<dyn Error>> {
-        println!("Opening store in read-only mode: {:?}", store_path);
+        tracing::info!("Opening store in read-only mode: {:?}", store_path);
 
         Store::new(store_path, true).map_err(|e| {
-            println!("Failed to open store: {}", e);
+            tracing::error!("Failed to open store: {}", e);
             e
         })
     }

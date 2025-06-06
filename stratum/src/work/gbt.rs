@@ -108,7 +108,6 @@ async fn get_block_template(
 ) -> Result<BlockTemplate, Box<dyn std::error::Error + Send + Sync>> {
     match bitcoind.getblocktemplate(network).await {
         Ok(blocktemplate_json) => {
-            println!("Block template JSON: {}", blocktemplate_json);
             match serde_json::from_str::<BlockTemplate>(blocktemplate_json.as_str()) {
                 Ok(template) => Ok(template),
                 Err(e) => Err(Box::new(WorkError {
@@ -246,7 +245,7 @@ pub async fn start_gbt(
 mod gbt_load_tests {
     use super::*;
     use bitcoin::hex::FromHex;
-    use bitcoindrpc::test_utils::{mock_getblocktemplate, setup_mock_bitcoin_rpc};
+    use bitcoindrpc::test_utils::{mock_method, setup_mock_bitcoin_rpc};
 
     #[test_log::test(tokio::test)]
     async fn test_get_block_template() {
@@ -261,7 +260,7 @@ mod gbt_load_tests {
             "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
             "rules": ["segwit", "signet"],
         }]);
-        mock_getblocktemplate(&mock_server, params, template).await;
+        mock_method(&mock_server, "getblocktemplate", params, template).await;
 
         let rpc = BitcoindRpcClient::new(
             &bitcoinrpc_config.url,
@@ -416,7 +415,7 @@ mod gbt_load_tests {
 #[cfg(test)]
 mod gbt_server_tests {
     use super::*;
-    use bitcoindrpc::test_utils::{mock_getblocktemplate, setup_mock_bitcoin_rpc};
+    use bitcoindrpc::test_utils::{mock_method, setup_mock_bitcoin_rpc};
     use tokio::sync::mpsc;
 
     #[tokio::test]
@@ -437,7 +436,7 @@ mod gbt_server_tests {
             "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
             "rules": ["segwit", "signet"],
         }]);
-        mock_getblocktemplate(&mock_server, params, template).await;
+        mock_method(&mock_server, "getblocktemplate", params, template).await;
 
         // Setup channel for receiving templates
         let (template_tx, mut template_rx) = mpsc::channel(10);
@@ -489,7 +488,7 @@ mod gbt_server_tests {
             "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
             "rules": ["segwit", "signet"],
         }]);
-        mock_getblocktemplate(&mock_server, params, template).await;
+        mock_method(&mock_server, "getblocktemplate", params, template).await;
 
         // Setup channel for receiving templates
         let (template_tx, mut template_rx) = mpsc::channel(10);
