@@ -20,12 +20,12 @@ use crate::work::gbt::BlockTemplate;
 use crate::work::tracker::JobDetails;
 use bitcoin::blockdata::block::{Block, Header};
 use bitcoin::consensus::Decodable;
-use bitcoin::CompactTarget;
-use bitcoin::Target;
+use bitcoin::hex::DisplayHex;
 use std::str::FromStr;
+use tracing::info;
 
 /// parse all transactions from block template with data and txid
-fn decode_txns(blocktemplate: &BlockTemplate) -> Result<Vec<bitcoin::Txid>, Error> {
+fn decode_txids(blocktemplate: &BlockTemplate) -> Result<Vec<bitcoin::Txid>, Error> {
     blocktemplate
         .transactions
         .iter()
@@ -37,15 +37,15 @@ fn decode_txns(blocktemplate: &BlockTemplate) -> Result<Vec<bitcoin::Txid>, Erro
 pub fn build_coinbase_from_submission(
     job: &JobDetails,
     submission: &Request<'_>,
+    enonce1: &str,
 ) -> Result<bitcoin::Transaction, Error> {
     use hex::FromHex;
 
     let coinb1 = &job.coinbase1;
     let coinb2 = &job.coinbase2;
-    let enonce1 = &submission.params[4];
-    let nonce2 = &submission.params[2];
+    let enonce2 = &submission.params[2];
 
-    let complete_tx = format!("{}{}{}{}", coinb1, enonce1, nonce2, coinb2);
+    let complete_tx = format!("{}{}{}{}", coinb1, enonce1, enonce2, coinb2);
 
     let tx_bytes = Vec::from_hex(&complete_tx).unwrap();
     bitcoin::Transaction::consensus_decode(&mut std::io::Cursor::new(tx_bytes))
@@ -61,38 +61,58 @@ pub fn build_coinbase_from_submission(
 pub fn validate_submission_difficulty(
     job: &JobDetails,
     submission: &Request<'_>,
-) -> Result<Option<Block>, Error> {
-    let compact_target = CompactTarget::from_unprefixed_hex(&job.blocktemplate.bits)
+    enonce1: &str,
+) -> Result<Block, Error> {
+    let compact_target = bitcoin::CompactTarget::from_unprefixed_hex(&job.blocktemplate.bits)
         .map_err(|_| Error::InvalidParams)?;
-    let target = Target::from_compact(compact_target);
+    let target = bitcoin::Target::from_compact(compact_target);
 
     // build coinbase from submission
-    let coinbase =
-        build_coinbase_from_submission(job, submission).map_err(|_| Error::InvalidParams)?;
+    let coinbase = build_coinbase_from_submission(job, submission, enonce1)
+        .map_err(|_| Error::InvalidParams)?;
 
-    // build the merkle root from the coinbase and other transactions
-    let txns = decode_txns(&job.blocktemplate).map_err(|_| Error::InvalidParams)?;
+    info!(
+        "Coinbase: {}",
+        bitcoin::consensus::serialize::<bitcoin::Transaction>(&coinbase).as_hex()
+    );
+    info!("Coinbase is coinbase: {}", coinbase.is_coinbase());
+    info!("Coinbase txid: {}", coinbase.compute_txid());
 
-    let mut all_txns = vec![coinbase.compute_txid()];
-    all_txns.extend(txns);
+    // decode txids for making merkle root
+    let txids = decode_txids(&job.blocktemplate).map_err(|_| Error::InvalidParams)?;
 
-    let hashes = all_txns.iter().map(|obj| obj.to_raw_hash());
-    let merkle_root = bitcoin::merkle_tree::calculate_root(hashes)
+    let mut all_txids = vec![coinbase.compute_txid()];
+    all_txids.extend(txids);
+
+    let hashes = all_txids.iter().map(|obj| obj.to_raw_hash());
+    let merkle_root: bitcoin::TxMerkleNode = bitcoin::merkle_tree::calculate_root(hashes)
         .map(|h| h.into())
         .unwrap();
 
+    info!("Merkle root: {}", merkle_root);
+
+    let n_time =
+        u32::from_str_radix(&submission.params[3], 16).map_err(|_| Error::InvalidParams)?;
+
     // build the block header from the block template and submission
     let header = Header {
-        version: bitcoin::blockdata::block::Version::from_consensus(job.blocktemplate.version),
-        prev_blockhash: job.blocktemplate.previousblockhash.parse().unwrap(),
+        version: bitcoin::block::Version::from_consensus(job.blocktemplate.version),
+        prev_blockhash: bitcoin::BlockHash::from_str(&job.blocktemplate.previousblockhash).unwrap(),
         merkle_root,
-        time: job.blocktemplate.curtime,
-        bits: CompactTarget::from_unprefixed_hex(&job.blocktemplate.bits).unwrap(),
+        time: n_time,
+        bits: bitcoin::pow::CompactTarget::from_unprefixed_hex(&job.blocktemplate.bits).unwrap(),
         nonce: u32::from_str_radix(&submission.params[4], 16).unwrap(),
     };
 
-    if header.validate_pow(target).is_err() {
-        return Err(Error::InsufficientWork);
+    info!("Header hash : {}", header.block_hash().to_string());
+    // info!("Target      : {}", hex::encode(target));
+
+    match header.validate_pow(target) {
+        Ok(_) => info!("Header meets the target"),
+        Err(e) => {
+            info!("Header does not meet the target: {}", e);
+            return Err(Error::InsufficientWork);
+        }
     }
 
     // Decode transactions from the block template
@@ -110,5 +130,5 @@ pub fn validate_submission_difficulty(
         header,
         txdata: transactions,
     };
-    Ok(Some(block))
+    Ok(block)
 }

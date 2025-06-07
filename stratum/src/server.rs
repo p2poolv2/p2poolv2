@@ -272,7 +272,7 @@ mod stratum_server_tests {
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
         let connections_handle = ClientConnectionsHandle::default();
         let tracker_handle = start_tracker_actor();
-        let (mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
         let mut server = StratumServer::new(
             "127.0.0.1".to_string(),
@@ -316,7 +316,7 @@ mod stratum_server_tests {
         let request = Request::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
         let input_string = serde_json::to_string(&request).unwrap() + "\n";
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-        let (mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
         // Setup reader and writer
         let reader = input_string.as_bytes();
@@ -399,7 +399,7 @@ mod stratum_server_tests {
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
-        let (mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
         // Run the handler
         let result = handle_connection(
@@ -446,7 +446,7 @@ mod stratum_server_tests {
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
-        let (mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
         // Run the handler
         let result = handle_connection(
@@ -496,7 +496,7 @@ mod stratum_server_tests {
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
-        let (mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
         // Run the handler
         let result = super::handle_connection(
@@ -544,7 +544,7 @@ mod stratum_server_tests {
         // Create message channel and shutdown channel
         let (message_tx, message_rx) = mpsc::channel(10);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let (mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
         // Create a channel to get the writer result for verification
         let (writer_tx, writer_rx) = oneshot::channel::<Vec<u8>>();
@@ -644,7 +644,7 @@ mod stratum_server_tests {
         // Create message channel and shutdown channel
         let (message_tx, message_rx) = mpsc::channel(10);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let (mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
         // Create a channel to get the writer result for verification
         let (writer_tx, writer_rx) = oneshot::channel::<Vec<u8>>();

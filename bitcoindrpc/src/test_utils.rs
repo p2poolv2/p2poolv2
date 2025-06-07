@@ -67,3 +67,28 @@ pub async fn mock_method(
         .mount(mock_server)
         .await;
 }
+
+#[cfg(any(test, feature = "test-utils"))]
+pub async fn mock_submit_block_with_any_body(mock_server: &MockServer) {
+    use wiremock::matchers::any;
+
+    let auth_header = format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", "testuser", "testpass"))
+    );
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(header("Authorization", auth_header))
+        // .and(any())
+        // .and(body_json(serde_json::json!({
+        //     "jsonrpc": "2.0",
+        //     "id": 0,
+        //     "method":"submitblock",
+        // })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({ "jsonrpc": "2.0", "result": serde_json::Value::Null, "id": 0 }),
+        ))
+        .mount(mock_server)
+        .await;
+}
