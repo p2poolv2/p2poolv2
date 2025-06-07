@@ -29,11 +29,12 @@ use tracing::{error, info};
 ///
 /// Validate the ShareBlock and store it in the chain
 /// We do not send any inventory message as we do not want to gossip the share block.
-pub async fn handle_share_block(
+/// Share blocks are gossiped using the libp2p gossipsub protocol.
+pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
     share_block: ShareBlock,
     chain_handle: ChainHandle,
-    time_provider: &impl TimeProvider,
-) -> Result<(), Box<dyn Error>> {
+    time_provider: &T,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Received share block: {:?}", share_block);
     if let Err(e) = validation::validate(&share_block, &chain_handle, time_provider).await {
         error!("Share block validation failed: {}", e);

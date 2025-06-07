@@ -30,11 +30,11 @@ use tracing::info;
 /// 2. TODO: Store the headers
 /// 2. TODO: Push the header into a task queue to fetch txs to build the ShareBlock
 /// 3. TODO: We need to start a task in node to pull from the task queue and send getData message for txs
-pub async fn handle_share_headers(
+pub async fn handle_share_headers<T: TimeProvider + Send + Sync>(
     share_headers: Vec<ShareHeader>,
     _chain_handle: ChainHandle,
-    _time_provider: &impl TimeProvider,
-) -> Result<(), Box<dyn Error>> {
+    _time_provider: &T,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Received share headers: {:?}", share_headers);
     Ok(())
 }

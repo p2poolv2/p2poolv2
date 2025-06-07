@@ -41,7 +41,7 @@ pub async fn validate(
     share: &ShareBlock,
     chain_handle: &ChainHandle,
     time_provider: &impl TimeProvider,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     if let Err(e) = validate_timestamp(share, time_provider).await {
         return Err(format!("Share timestamp validation failed: {}", e).into());
     }
