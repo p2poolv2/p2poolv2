@@ -70,8 +70,6 @@ pub async fn mock_method(
 
 #[cfg(any(test, feature = "test-utils"))]
 pub async fn mock_submit_block_with_any_body(mock_server: &MockServer) {
-    use wiremock::matchers::any;
-
     let auth_header = format!(
         "Basic {}",
         base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", "testuser", "testpass"))

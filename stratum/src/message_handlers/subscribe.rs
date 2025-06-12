@@ -42,7 +42,7 @@ pub async fn handle_subscribe<'a>(
                 ["mining.notify", format!("{}1", session.id)], // we expect different ids in notify and set_difficulty, thus we suffix with 1 and 2
                 ["mining.set_difficulty", format!("{}2", session.id)],
             ],
-            session.enonce1,
+            session.enonce1_hex,
             EXTRANONCE2_SIZE,
         ]),
     ))
@@ -95,7 +95,7 @@ mod tests {
         assert_eq!(set_difficulty[1], format!("{}2", session.id));
 
         // 2. Check enonce1
-        assert_eq!(arr[1], session.enonce1);
+        assert_eq!(arr[1], session.enonce1_hex);
 
         // 3. Check extranonce2_size
         assert_eq!(arr[2], serde_json::json!(EXTRANONCE2_SIZE));

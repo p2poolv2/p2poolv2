@@ -1,11 +1,11 @@
 {
     "method": "mining.submit",
     "params": [
-        "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr",
-        "18468e1f5fa5cbaa",
+        "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
+        "184809ff85923e7d",
         "0000000000000000",
-        "68434faa",
-        "6a921cd0"
+        "6849afec",
+        "e33674f1"
     ],
     "id": 4
 }

@@ -1,4 +1,5 @@
 {
+    "method": "mining.notify",
     "params": [
         "18468e1f5fa5cbaa",
         "6d600f568f665af26301fcafa53326454b9db355ff5d87f9863a956300000000",
@@ -8,7 +9,6 @@
         "20000000",
         "1e0377ae",
         "67b6f938",
-        false
-    ],
-    "method": "mining.notify"
+        true
+    ]
 }

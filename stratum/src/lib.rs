@@ -20,4 +20,5 @@ pub mod message_handlers;
 pub mod messages;
 pub mod server;
 pub mod session;
+pub mod util;
 pub mod work;

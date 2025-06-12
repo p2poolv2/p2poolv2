@@ -18,14 +18,9 @@ use super::coinbase::{build_coinbase_transaction, split_coinbase};
 use super::error::WorkError;
 use super::gbt::{build_merkle_branches_for_template, BlockTemplate};
 use super::tracker::{JobId, TrackerHandle};
-
-#[cfg(not(test))]
-use crate::client_connections::ClientConnectionsHandle;
-#[cfg(test)]
-#[mockall_double::double]
-use crate::client_connections::ClientConnectionsHandle;
-
 use crate::messages::{Notify, NotifyParams};
+use crate::util::reverse_four_byte_chunks;
+use crate::util::to_be_hex;
 use crate::work::coinbase::OutputPair;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::Version;
@@ -35,6 +30,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::debug;
+
+#[cfg(not(test))]
+use crate::client_connections::ClientConnectionsHandle;
+#[cfg(test)]
+#[mockall_double::double]
+use crate::client_connections::ClientConnectionsHandle;
 
 /// Extract flags from template coinbaseaux and convert to PushBytesBuf
 /// If flags are empty, use a single byte with value 0
@@ -66,13 +67,11 @@ fn build_output_distribution(
 #[allow(dead_code)]
 pub fn build_notify(
     template: &BlockTemplate,
-    solo_address: Option<Address>,
+    output_distribution: Vec<OutputPair>,
     job_id: JobId,
 ) -> Result<Notify, WorkError> {
-    let output_distribution = build_output_distribution(template, solo_address);
-
     let coinbase = build_coinbase_transaction(
-        Version(template.version),
+        Version::TWO,
         output_distribution.as_slice(),
         template.height as i64,
         parse_flags(template.coinbaseaux.get("flags").cloned()),
@@ -83,19 +82,24 @@ pub fn build_notify(
 
     let merkle_branches = build_merkle_branches_for_template(template)
         .iter()
-        .map(|branch| Cow::Owned(branch.to_string()))
+        .map(|branch| Cow::Owned(to_be_hex(&branch.to_string())))
         .collect::<Vec<_>>();
+
+    let prevhash_byte_swapped =
+        reverse_four_byte_chunks(&template.previousblockhash).map_err(|e| WorkError {
+            message: format!("Failed to reverse previous block hash: {}", e),
+        })?;
 
     let params = NotifyParams {
         job_id: Cow::Owned(format!("{:016x}", job_id)),
-        prevhash: Cow::Owned(template.previousblockhash.clone()),
+        prevhash: Cow::Owned(prevhash_byte_swapped),
         coinbase1: Cow::Owned(coinbase1),
         coinbase2: Cow::Owned(coinbase2),
         merkle_branches,
-        version: Cow::Owned(format!("{:08x}", template.version)),
+        version: Cow::Owned(hex::encode(template.version.to_be_bytes())),
         nbits: Cow::Owned(template.bits.clone()),
-        ntime: Cow::Owned(format!("{:08x}", template.curtime)),
-        clean_jobs: true,
+        ntime: Cow::Owned(hex::encode(template.curtime.to_be_bytes())),
+        clean_jobs: false,
     };
 
     Ok(Notify::new_notify(params))
@@ -127,12 +131,13 @@ pub async fn start_notify(
 ) {
     let mut latest_template: Option<Arc<BlockTemplate>> = None;
     while let Some(cmd) = notifier_rx.recv().await {
+        let solo = solo_address.clone();
         match cmd {
             NotifyCmd::SendToAll { template } => {
                 latest_template = Some(Arc::clone(&template));
                 let job_id = tracker_handle.get_next_job_id().await.unwrap();
-
-                let notify_str = match build_notify(&template, solo_address.clone(), job_id) {
+                let output_distribution = build_output_distribution(&template, solo);
+                let notify_str = match build_notify(&template, output_distribution, job_id) {
                     Ok(notify) => {
                         tracker_handle
                             .insert_job(
@@ -162,9 +167,11 @@ pub async fn start_notify(
                     continue; // Skip if no latest template is available
                 }
                 let job_id = tracker_handle.get_next_job_id().await.unwrap();
+                let output_distribution =
+                    build_output_distribution(latest_template.as_ref().unwrap(), solo);
                 let notify_str = match build_notify(
                     latest_template.as_ref().unwrap(),
-                    solo_address.clone(),
+                    output_distribution,
                     job_id,
                 ) {
                     Ok(notify) => {
@@ -195,12 +202,15 @@ pub async fn start_notify(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::messages::{Request, Response};
+    use crate::session::Session;
     use crate::work::coinbase::parse_address;
     use crate::work::tracker::start_tracker_actor;
+    use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use std::fs;
     use tokio::sync::mpsc;
 
-    #[test]
+    #[test_log::test]
     fn test_build_notify_from_gbt_and_compare_to_expected() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json");
@@ -210,7 +220,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/test_data/gbt/regtest/ckpool/one-txn/notify.json");
         let data = fs::read_to_string(path).expect("Unable to read file");
-        let notify_json: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
+        let _notify_json: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
 
         // Parse BlockTemplate from GBT
         let template: BlockTemplate =
@@ -225,33 +235,28 @@ mod tests {
 
         let job_id = JobId(1);
 
+        let output_distribution = build_output_distribution(&template, Some(address));
         // Build Notify
         let notify =
-            build_notify(&template, Some(address), job_id).expect("Failed to build notify");
-
-        // Load expected notify JSON
-        let expected_notify_json = notify_json.clone();
-        let expected_notify_value: serde_json::Value =
-            serde_json::from_value(expected_notify_json).expect("Failed to convert to Value");
-        let expected_notify: Notify<'static> = Notify::new_notify(
-            serde_json::from_value(expected_notify_value["params"].clone())
-                .expect("Failed to parse NotifyParams"),
-        );
+            build_notify(&template, output_distribution, job_id).expect("Failed to build notify");
 
         // Compare all fields except job_id (random) coinbase which also have current time component
-        assert_eq!(notify.params.version, expected_notify.params.version);
-        assert_eq!(notify.params.nbits, expected_notify.params.nbits);
-        assert_eq!(notify.params.ntime, "68300262"); // we use current time in notify, so it is diff from the ckpool og response
-        assert_eq!(notify.params.clean_jobs, expected_notify.params.clean_jobs);
+        assert_eq!(notify.params.version, "20000000");
+        assert_eq!(notify.params.nbits, "207fffff");
+        assert_eq!(notify.params.ntime, "68300262"); // we use curtime from gbt
+        assert_eq!(notify.params.clean_jobs, false);
+        assert_eq!(
+            notify.params.prevhash,
+            "aadbdeb0c770ef1cc9115a42aa0a34e91732c422c0cd7ddbe71b3d9145f85fa6"
+        );
 
-        // TODO: Fix comparison of using endian conversion. Also mock current time so we can compare coinbase1 and coinbase2
-        // assert_eq!(notify.params.prevhash, expected_notify.params.prevhash);
+        // TODO: Mock current time so we can compare coinbase1 and coinbase2
         // // assert_eq!(notify.params.coinbase1, expected_notify.params.coinbase1);
         // // assert_eq!(notify.params.coinbase2, expected_notify.params.coinbase2);
-        // assert_eq!(
-        //     notify.params.merkle_branches,
-        //     expected_notify.params.merkle_branches
-        // );
+        assert_eq!(
+            notify.params.merkle_branches,
+            vec!["fecdf8cf1147587b0b3a262b16a955849053c6dfe0239718559f6a3d3ed20523".to_string()]
+        );
     }
 
     #[test]
@@ -330,5 +335,60 @@ mod tests {
         // Cleanup
         drop(notify_tx); // Close the channel to terminate the task
         task_handle.await.expect("Task failed");
+    }
+
+    #[tokio::test]
+    async fn test_build_notify_from_ckpool_sample() {
+        let mut session = Session::new(1);
+        let _tracker_handle = start_tracker_actor();
+
+        let (mock_server, _bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        mock_submit_block_with_any_body(&mock_server).await;
+
+        let template_str = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/validation/stratum/b/template.json"),
+        )
+        .unwrap();
+        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
+
+        let notify_str = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/validation/stratum/b/notify.json"),
+        )
+        .unwrap();
+        let notify: Notify = serde_json::from_str(&notify_str).unwrap();
+
+        let submit_str = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/validation/stratum/b/submit.json"),
+        )
+        .unwrap();
+        let _submit: Request = serde_json::from_str(&submit_str).unwrap();
+
+        let authorize_response_str = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/validation/stratum/b/authorize_response.json"),
+        )
+        .unwrap();
+        let authorize_response: Response = serde_json::from_str(&authorize_response_str).unwrap();
+
+        let enonce1 = authorize_response.result.unwrap()[1].clone();
+        let enonce1: &str = enonce1.as_str().unwrap();
+        session.enonce1 =
+            u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
+        session.enonce1_hex = enonce1.to_string();
+
+        let job_id = u64::from_str_radix(&notify.params.job_id, 16).unwrap();
+        let address = parse_address(
+            "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d",
+            bitcoin::Network::Signet,
+        )
+        .unwrap();
+        let output_distribution = build_output_distribution(&template, Some(address));
+
+        let result = build_notify(&template, output_distribution, JobId(job_id));
+
+        assert_eq!(result.unwrap().params.prevhash, notify.params.prevhash);
     }
 }
