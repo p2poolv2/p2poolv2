@@ -53,6 +53,7 @@ pub struct StratumConfig {
     pub start_difficulty: u32,
     pub minimum_difficulty: u32,
     pub solo_address: Option<String>,
+    pub zmqpubhashblock: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -184,6 +185,11 @@ impl Config {
         self
     }
 
+    pub fn with_stratum_zmqpubhashblock(mut self, zmqpubhashblock: String) -> Self {
+        self.stratum.zmqpubhashblock = zmqpubhashblock;
+        self
+    }
+
     pub fn with_start_difficulty(mut self, start_difficulty: u32) -> Self {
         self.stratum.start_difficulty = start_difficulty;
         self
@@ -244,6 +250,7 @@ mod tests {
             .with_stratum_host("stratum.example.com".to_string())
             .with_stratum_port(3333)
             .with_stratum_solo_address("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string())
+            .with_stratum_zmqpubhashblock("tcp://127.0.0.1:28332".to_string())
             .with_start_difficulty(1)
             .with_minimum_difficulty(1)
             .with_miner_pubkey(
@@ -270,6 +277,10 @@ mod tests {
         assert_eq!(
             config.stratum.solo_address,
             Some("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string())
+        );
+        assert_eq!(
+            config.stratum.zmqpubhashblock,
+            "tcp://127.0.0.1:28332".to_string()
         );
 
         assert_eq!(

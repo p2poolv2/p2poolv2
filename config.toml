@@ -26,6 +26,7 @@ port = 3333
 start_difficulty = 1
 minimum_difficulty = 1
 solo_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
+zmqpubhashblock = "tcp://127.0.0.1:28332"
 
 [miner]
 pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
