@@ -27,10 +27,10 @@ pub const EXTRANONCE2_SIZE: usize = 8;
 pub struct Session {
     /// Unique session ID
     pub id: String,
-    /// extranonce1 sent to the miner, computed from the session ID
-    pub enonce1: String,
-    /// Inverted enonce1 for optimising share validation later on
-    pub enonce1_inverted: String,
+    /// extranonce1 in le. Sent to the miner, computed from the session ID
+    pub enonce1: u32,
+    /// Extranonce1 in le, as a hex string. Sent to miner.
+    pub enonce1_hex: String,
     /// Did the mine subscribe already?
     pub subscribed: bool,
     /// Optional username of the miner, supplied by the miner, we just store it in session
@@ -47,11 +47,12 @@ impl Session {
     /// Creates a new session with the given minimum difficulty.
     pub fn new(minimum_difficulty: u32) -> Self {
         let id = Session::generate_id();
+        let enonce1 = id.to_le();
         Self {
-            id: format!("{:08x}", id),
-            enonce1: format!("{:08x}", id),
+            id: hex::encode(id.to_be_bytes()),
+            enonce1,
+            enonce1_hex: hex::encode(enonce1.to_le_bytes()),
             subscribed: false,
-            enonce1_inverted: format!("{:08x}", id.swap_bytes()),
             username: None,
             password: None,
             minimum_difficulty,
@@ -84,11 +85,37 @@ mod tests {
         assert_eq!(session.minimum_difficulty, min_difficulty);
         assert_eq!(session.current_difficulty, min_difficulty);
         assert_ne!(session.id, "");
-        assert_eq!(session.enonce1.len(), 8);
-        assert_eq!(session.enonce1_inverted.len(), 8);
-        let enonce1_val = u32::from_str_radix(&session.enonce1, 16).unwrap();
-        let enonce1_inverted_val = u32::from_str_radix(&session.enonce1_inverted, 16).unwrap();
-        assert_eq!(enonce1_val.swap_bytes(), enonce1_inverted_val);
+
+        // Verify that id and enonce1_hex are reverse encodings of each other
+        let id_bytes = hex::decode(&session.id).unwrap();
+        let enonce1_hex_bytes = hex::decode(&session.enonce1_hex).unwrap();
+        assert_eq!(
+            id_bytes,
+            enonce1_hex_bytes.iter().rev().cloned().collect::<Vec<_>>()
+        );
+
+        // session.id is BE encoded
+        assert_eq!(
+            session.enonce1,
+            u32::from_be_bytes(
+                hex::decode(session.id)
+                    .unwrap()
+                    .as_slice()
+                    .try_into()
+                    .unwrap()
+            )
+        );
+
+        // session.enonce1 is LE encoded
+        assert_eq!(
+            session.enonce1,
+            u32::from_le_bytes(
+                hex::decode(&session.enonce1_hex)
+                    .unwrap()
+                    .try_into()
+                    .unwrap()
+            )
+        );
         assert!(!session.subscribed);
     }
 

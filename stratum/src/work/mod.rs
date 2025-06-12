@@ -16,7 +16,7 @@
 
 pub mod coinbase;
 pub mod difficulty;
-mod error;
+pub(crate) mod error;
 pub mod gbt;
 pub mod notify;
 pub mod tracker;

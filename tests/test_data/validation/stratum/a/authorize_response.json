@@ -1,0 +1,17 @@
+{
+    "id": 1,
+    "result": [
+        [
+            [
+                "mining.notify",
+                "eb9af6d41"
+            ],
+            [
+                "mining.set_difficulty",
+                "eb9af6d42"
+            ]
+        ],
+        "d4f69aeb",
+        8
+    ]
+}

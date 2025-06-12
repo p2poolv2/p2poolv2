@@ -5,18 +5,18 @@
     ],
     "coinbaseaux": {},
     "coinbasevalue": 5000000000,
-    "curtime": 1749241770,
+    "curtime": 1749659628,
     "default_witness_commitment": "6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9",
-    "height": 156,
-    "longpollid": "00000000044a23dd986cd2562a5bbad49b42e2dd5068adb4aa57e50bff8d29970",
-    "mintime": 1747918242,
+    "height": 157,
+    "longpollid": "00000000cbdd48c69c45ffd07dc26fc3668bb70870374354535061f8f5304c7c1",
+    "mintime": 1747918275,
     "mutable": [
         "time",
         "transactions",
         "prevblock"
     ],
     "noncerange": "00000000ffffffff",
-    "previousblockhash": "00000000044a23dd986cd2562a5bbad49b42e2dd5068adb4aa57e50bff8d2997",
+    "previousblockhash": "00000000cbdd48c69c45ffd07dc26fc3668bb70870374354535061f8f5304c7c",
     "rules": [
         "csv",
         "!segwit",
