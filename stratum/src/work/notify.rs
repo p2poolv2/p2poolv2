@@ -69,6 +69,7 @@ pub fn build_notify(
     template: &BlockTemplate,
     output_distribution: Vec<OutputPair>,
     job_id: JobId,
+    clean_jobs: bool,
 ) -> Result<Notify, WorkError> {
     let coinbase = build_coinbase_transaction(
         Version::TWO,
@@ -99,7 +100,7 @@ pub fn build_notify(
         version: Cow::Owned(hex::encode(template.version.to_be_bytes())),
         nbits: Cow::Owned(template.bits.clone()),
         ntime: Cow::Owned(hex::encode(template.curtime.to_be_bytes())),
-        clean_jobs: false,
+        clean_jobs,
     };
 
     Ok(Notify::new_notify(params))
@@ -134,28 +135,32 @@ pub async fn start_notify(
         let solo = solo_address.clone();
         match cmd {
             NotifyCmd::SendToAll { template } => {
+                let clean_jobs = latest_template.is_none()
+                    || latest_template.unwrap().previousblockhash != template.previousblockhash;
                 latest_template = Some(Arc::clone(&template));
                 let job_id = tracker_handle.get_next_job_id().await.unwrap();
                 let output_distribution = build_output_distribution(&template, solo);
-                let notify_str = match build_notify(&template, output_distribution, job_id) {
-                    Ok(notify) => {
-                        tracker_handle
-                            .insert_job(
-                                Arc::clone(&template),
-                                notify.params.coinbase1.to_string(),
-                                notify.params.coinbase2.to_string(),
-                                job_id,
-                            )
-                            .await
-                            .unwrap();
+                let notify_str =
+                    match build_notify(&template, output_distribution, job_id, clean_jobs) {
+                        Ok(notify) => {
+                            tracker_handle
+                                .insert_job(
+                                    Arc::clone(&template),
+                                    notify.params.coinbase1.to_string(),
+                                    notify.params.coinbase2.to_string(),
+                                    job_id,
+                                )
+                                .await
+                                .unwrap();
 
-                        serde_json::to_string(&notify).expect("Failed to serialize Notify message")
-                    }
-                    Err(e) => {
-                        debug!("Error building notify: {}", e);
-                        continue; // Skip this iteration if notify cannot be built
-                    }
-                };
+                            serde_json::to_string(&notify)
+                                .expect("Failed to serialize Notify message")
+                        }
+                        Err(e) => {
+                            debug!("Error building notify: {}", e);
+                            continue; // Skip this iteration if notify cannot be built
+                        }
+                    };
                 connections.send_to_all(Arc::new(notify_str)).await;
             }
             NotifyCmd::SendToClient { client_address } => {
@@ -173,6 +178,7 @@ pub async fn start_notify(
                     latest_template.as_ref().unwrap(),
                     output_distribution,
                     job_id,
+                    false, // clean_jobs is false for individual client notifications
                 ) {
                     Ok(notify) => {
                         tracker_handle
@@ -237,8 +243,8 @@ mod tests {
 
         let output_distribution = build_output_distribution(&template, Some(address));
         // Build Notify
-        let notify =
-            build_notify(&template, output_distribution, job_id).expect("Failed to build notify");
+        let notify = build_notify(&template, output_distribution, job_id, false)
+            .expect("Failed to build notify");
 
         // Compare all fields except job_id (random) coinbase which also have current time component
         assert_eq!(notify.params.version, "20000000");
@@ -387,7 +393,7 @@ mod tests {
         .unwrap();
         let output_distribution = build_output_distribution(&template, Some(address));
 
-        let result = build_notify(&template, output_distribution, JobId(job_id));
+        let result = build_notify(&template, output_distribution, JobId(job_id), false);
 
         assert_eq!(result.unwrap().params.prevhash, notify.params.prevhash);
     }
