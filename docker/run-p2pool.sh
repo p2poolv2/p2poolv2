@@ -23,9 +23,11 @@ NETWORK=${1:-signet}
 if [ "$NETWORK" = "signet" ]; then
   BTC_P2P_PORT=38333
   BTC_RPC_PORT=38332
+  BTC_ZMQ_PORT=28332
 elif [ "$NETWORK" = "testnet4" ]; then
   BTC_P2P_PORT=48333
   BTC_RPC_PORT=48332
+  BTC_ZMQ_PORT=28332 # Note: ZMQ port is the same for both networks
 else
   echo "Unsupported network: $NETWORK. Use 'signet' or 'testnet4'."
   exit 1
@@ -35,6 +37,7 @@ fi
 export NETWORK=$NETWORK
 export BTC_P2P_PORT=$BTC_P2P_PORT
 export BTC_RPC_PORT=$BTC_RPC_PORT
+export BTC_ZMQ_PORT=$BTC_ZMQ_PORT
 
 # Remove the first argument (network) to pass remaining args to docker-compose
 shift
