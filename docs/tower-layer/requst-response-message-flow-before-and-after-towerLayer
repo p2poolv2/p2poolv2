@@ -1,0 +1,131 @@
+#  Request-Response Refactor with DoS Protection Middleware
+
+This document explains the architectural changes made to the libp2p REQ/REP message-handling flow. The **primary goal** was to introduce **DoS protection** using **Tower middleware layers**, and in the process, improve the structure, maintainability, and scalability of the codebase.
+
+---
+
+##  Goal of the Refactor
+
+###  Primary Objective
+- **Mitigate denial-of-service (DoS) attacks** by throttling or filtering malicious or excessive peer requests.
+- Introduce a **Tower-based middleware layer** that allows injecting reusable logic such as:
+  - Rate limiting
+  - Peer scoring
+  - Request validation
+  - Logging / metrics
+  - Early rejection
+
+###  Secondary Objectives
+- Improve modularity, maintainability, and testability of the request-handling logic.
+- Simplify addition of new message types.
+
+---
+
+##   Before Refactoring
+
+![Before Refactoring](/p2pool-v2/docs/tower-layer/before_refactor.png)
+
+###  Design Summary
+
+- All REQ/REP messages flowed through:
+  - `Receive->RequestResponseEvent` → `MessageProcessor` → match branches (`ProcessRequest`, `LogResponse`, `LogFailure`)
+- Business logic (like getting blocks/headers or sharing blocks) was hard-coded in a central dispatcher.
+- No clear entry point to inject rate-limiting or pre-processing middleware.
+
+###  Limitations
+
+| Concern | Problem |
+|--------|---------|
+| **No Middleware Hooks** | No centralized layer to apply filtering or rate-limiting before request dispatch. |
+| **Centralized Logic** | `ProcessRequest` became bloated and error-prone. |
+| **Hard to Extend** | New messages required editing a large match block in a monolithic file. |
+| **Poor Test Isolation** | Logic and dispatch were tightly coupled. |
+
+---
+
+##  After Refactoring (Tower Middleware Architecture)
+
+![After Refactoring](./E/p2pool-v2/docs/tower-layer/after_refactor.png)
+
+###  Key Changes
+
+1. **Tower-Based Request Layer**
+   - Incoming requests now flow through a `RequestResponseHandler` → `RequestResponseService` stack.
+   - These services implement the `tower::Service` trait.
+   - Middleware can be inserted between layers to intercept and act on requests before they hit business logic.
+
+- Created a `service/` folder containing:
+  - `p2p_service.rs`: core service logic implementing the Tower `Service` trait.
+-  Updated `p2pool_v2/src/node/mod.rs`:
+  - Injected the `p2p_service` using a Tower middleware stack.
+  - Hooked into `handle_request_response_event` to route incoming messages through this layer.
+
+---
+
+##  DoS Protection via Tower Middleware
+
+The refactor enabled us to inject **middleware between libp2p and the message-handling logic**.
+
+###  Middleware Examples Added (or Possible to Add)
+
+| Middleware Type        | Function |
+|------------------------|----------|
+| **Rate Limiting**      | Throttle number of messages per peer over time |
+| **Peer Scoring**       | Penalize abusive peers |
+| **Timeout Enforcement**| Cancel slow/blocked responses |
+| **Request Validation** | Drop malformed messages early |
+| **Logging/Monitoring** | Log metrics without polluting business logic |
+
+###  Benefits of Middleware Approach
+
+- Middleware is reusable and stackable.
+- Keeps the business logic untouched and clean.
+- Easy to extend with new protections as needed.
+
+---
+
+##  Example Flow: GetBlock Request
+
+| Step | Component |
+|------|-----------|
+| Peer sends GetBlock | `Libp2p REQ/REP Flow` |
+| Message enters Tower | `RequestResponseHandler` |
+| DoS Middleware runs | Throttle / Validate peer |
+| Request allowed | Passed to `MessageHandler` |
+| Matched to handler | `handle_getblock` in `p2p/receivers/getblocks.rs` |
+| Business logic called | `Access chain getblocks` in `chain/actor.rs` |
+| Response sent via channel | Back to Peer |
+
+---
+
+##  Summary: Impact of Refactor
+
+| Area                 | Improvement |
+|----------------------|-------------|
+| **Security**         | DoS filtering via middleware layer |
+| **Modularity**       | Decoupled handlers and cleaner interfaces |
+| **Extensibility**    | Add new message types with minimal friction |
+| **Testability**      | Handlers and middleware independently testable |
+| **Maintainability**  | Easier to reason about message flow and state |
+
+---
+
+##  Directory Highlights
+
+| File / Module                         | Role |
+|--------------------------------------|------|
+| `p2poolv2_lib/src/request_response_handlers.rs` | Entry point for REQ/REP |
+| `p2poolv2_lib/src/service`        | Tower service layer logic |
+| `p2p_message_handler.rs`             | Central message matching logic |
+| `p2p_message_handler/receivers.rs`                 | Individual handlers (getblocks, getheaders, etc.) |
+| `actor.rs`                     | Business logic layer |
+| `docs/tower-layer/*.png`            | Architecture diagrams (before/after) |
+
+---
+
+## 📎 Notes
+
+- This refactor prepares the system for advanced peer protection and request analytics.
+- More middleware layers can be inserted without disrupting handler logic.
+- The Tower model gives us composability and maintainable isolation of concerns.
+
