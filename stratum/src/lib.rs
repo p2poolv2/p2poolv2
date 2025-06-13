@@ -22,4 +22,4 @@ pub mod server;
 pub mod session;
 pub mod util;
 pub mod work;
-pub(crate) mod zmq_listener;
+pub mod zmq_listener;

@@ -131,7 +131,7 @@ pub async fn start_gbt(
     socket_path: &str,
     poll_interval: u64,
     network: bitcoin::Network,
-    zmqpubhashblock: &str,
+    mut zmq_trigger_rx: tokio::sync::mpsc::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let bitcoind: Arc<BitcoindRpcClient> = match BitcoindRpcClient::new(
         &bitcoin_config.url,
@@ -233,6 +233,29 @@ pub async fn start_gbt(
                         }
                         Err(e) => {
                             info!("Error accepting Unix socket connection: {}", e);
+                        }
+                    }
+                }
+                result = zmq_trigger_rx.recv() => {
+                    match result {
+                        Some(_) => {
+                            debug!("Received ZMQ block notification");
+                            match get_block_template(bitcoind.clone(), network).await {
+                                Ok(template) => {
+                                    debug!("Block template from ZMQ: {:?}", template);
+                                    if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
+                                        info!("Failed to send block template to channel");
+                                    }
+                                    last_request_at = std::time::Instant::now();
+                                }
+                                Err(e) => {
+                                    info!("Error getting block template after ZMQ notification: {}", e);
+                                }
+                            }
+                        }
+                        None => {
+                            info!("ZMQ channel closed, stopping GBT task");
+                            break;
                         }
                     }
                 }
@@ -441,7 +464,7 @@ mod gbt_server_tests {
         }]);
         mock_method(&mock_server, "getblocktemplate", params, template).await;
 
-        let mock_zmq_server = MockServer::start().await;
+        let (zmq_trigger_tx, zmq_trigger_rx) = mpsc::channel(1);
 
         // Setup channel for receiving templates
         let (template_tx, mut template_rx) = mpsc::channel(10);
@@ -453,7 +476,7 @@ mod gbt_server_tests {
             socket_path,
             60,
             bitcoin::Network::Signet,
-            &mock_zmq_server.uri(),
+            zmq_trigger_rx,
         )
         .await;
 
@@ -496,7 +519,7 @@ mod gbt_server_tests {
         }]);
         mock_method(&mock_server, "getblocktemplate", params, template).await;
 
-        let mock_zmq_server = MockServer::start().await;
+        let (zmq_trigger_tx, zmq_trigger_rx) = mpsc::channel(1);
 
         // Setup channel for receiving templates
         let (template_tx, mut template_rx) = mpsc::channel(10);
@@ -508,7 +531,7 @@ mod gbt_server_tests {
             socket_path,
             1,
             bitcoin::Network::Signet,
-            &mock_zmq_server.uri(),
+            zmq_trigger_rx,
         )
         .await;
 
@@ -517,6 +540,63 @@ mod gbt_server_tests {
         // We should receive a template after a second, but we wait for 2 seconds to ensure it is received
         let timeout =
             tokio::time::timeout(std::time::Duration::from_secs(2), template_rx.recv()).await;
+
+        assert!(timeout.is_ok());
+        let cmd = timeout.unwrap().unwrap();
+        match cmd {
+            NotifyCmd::SendToAll { template } => {
+                assert_eq!(template.height, 108);
+            }
+            _ => panic!("Expected NotifyCmd::SendToAll"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_start_gbt_trigger_from_zmq_event() {
+        let binding = tempfile::tempdir().unwrap();
+        let binding = binding.path().join("notify.sock");
+        let socket_path = binding.to_str().unwrap();
+
+        // Mock bitcoind RPC
+        let template = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/gbt/signet/gbt-no-transactions.json"),
+        )
+        .expect("Failed to read test fixture");
+
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let params = serde_json::json!([{
+            "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+            "rules": ["segwit", "signet"],
+        }]);
+        mock_method(&mock_server, "getblocktemplate", params, template).await;
+
+        let (zmq_trigger_tx, zmq_trigger_rx) = mpsc::channel(1);
+
+        // Setup channel for receiving templates
+        let (template_tx, mut template_rx) = mpsc::channel(10);
+
+        // Start GBT server
+        let result = start_gbt(
+            &bitcoinrpc_config,
+            template_tx,
+            socket_path,
+            60,
+            bitcoin::Network::Signet,
+            zmq_trigger_rx,
+        )
+        .await;
+
+        println!("Result: {:?}", result);
+
+        assert!(result.is_ok());
+
+        // send message from ZMQ server
+        zmq_trigger_tx.send(()).await.unwrap();
+
+        // We should receive a template
+        let timeout =
+            tokio::time::timeout(std::time::Duration::from_secs(1), template_rx.recv()).await;
 
         assert!(timeout.is_ok());
         let cmd = timeout.unwrap().unwrap();
