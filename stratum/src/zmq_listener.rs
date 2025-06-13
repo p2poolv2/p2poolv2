@@ -67,7 +67,10 @@ impl ZmqListenerTrait for ZmqListener {
                         if msg.is_empty() {
                             continue; // Skip empty messages
                         }
-                        tx.send(()).await.unwrap();
+                        if let Err(e) = tx.send(()).await {
+                            info!("Failed to send ZMQ message: {}", e);
+                            break; // Exit if the channel is closed
+                        }
                     }
                     Err(e) => {
                         info!("Failed to receive ZMQ message: {}", e);
