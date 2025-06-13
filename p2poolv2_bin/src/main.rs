@@ -15,7 +15,6 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use bitcoin::Address;
-use bitcoindrpc::BitcoindRpcClient;
 use clap::Parser;
 use p2poolv2_lib::config::{Config, LoggingConfig};
 use p2poolv2_lib::node::actor::NodeHandle;
@@ -29,6 +28,7 @@ use stratum::client_connections::spawn;
 use stratum::server::StratumServer;
 use stratum::work::gbt::start_gbt;
 use stratum::work::tracker::start_tracker_actor;
+use stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
 use tracing::error;
 use tracing::{debug, info};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Registry};
@@ -47,7 +47,7 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), String> {
     info!("Starting P2Pool v2...");
     // Parse command line arguments
     let args = Args::parse();
@@ -57,11 +57,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if config.is_err() {
         let err = config.unwrap_err();
         error!("Failed to load config: {}", err);
-        return Err(format!("Failed to load config: {}", err).into());
+        return Err(format!("Failed to load config: {}", err));
     }
     let config = config.unwrap();
     // Configure logging based on config
-    setup_logging(&config.logging)?;
+    if let Err(e) = setup_logging(&config.logging) {
+        error!("Failed to set up logging: {}", e);
+        return Err(format!("Failed to set up logging: {}", e));
+    }
 
     let genesis = ShareBlock::build_genesis_for_network(config.bitcoin.network);
     let chain_handle = ChainHandle::new(config.store.path.clone(), genesis);
@@ -79,6 +82,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let notify_tx_for_gbt = notify_tx.clone();
     let bitcoinrpc_config_cloned = bitcoinrpc_config.clone();
+    // Setup ZMQ publisher for block notifications
+    let zmq_trigger_rx = match ZmqListener.start(&stratum_config.zmqpubhashblock) {
+        Ok(rx) => rx,
+        Err(e) => {
+            error!("Failed to set up ZMQ publisher: {}", e);
+            return Err("Failed to set up ZMQ publisher".into());
+        }
+    };
+
     tokio::spawn(async move {
         if let Err(e) = start_gbt(
             &bitcoinrpc_config_cloned,
@@ -86,7 +98,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             SOCKET_PATH,
             GBT_POLL_INTERVAL,
             bitcoin_config.network,
-            &stratum_config.zmqpubhashblock,
+            zmq_trigger_rx,
         )
         .await
         {
@@ -134,16 +146,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
         info!("Stratum server stopped");
     });
 
-    if let Ok((_node_handle, stopping_rx)) = NodeHandle::new(config, chain_handle).await {
-        info!("Node started");
-        stopping_rx.await?;
-        stratum_shutdown_tx
-            .send(())
-            .expect("Failed to send shutdown signal to Stratum server");
-        info!("Node stopped");
-    } else {
-        error!("Failed to start node");
-        return Err("Failed to start node".into());
+    match NodeHandle::new(config, chain_handle).await {
+        Ok((_node_handle, stopping_rx)) => {
+            info!("Node started");
+            if let Ok(_) = stopping_rx.await {
+                stratum_shutdown_tx
+                    .send(())
+                    .expect("Failed to send shutdown signal to Stratum server");
+                info!("Node stopped");
+            }
+        }
+        Err(e) => {
+            error!("Failed to start node: {}", e);
+            return Err(format!("Failed to start node: {}", e));
+        }
     }
     Ok(())
 }

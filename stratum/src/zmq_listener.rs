@@ -16,7 +16,9 @@
 
 use tracing::info;
 
+#[allow(dead_code)]
 const ZMQ_PUB_BLOCKHASH: &str = "zmqpubblockhash";
+#[allow(dead_code)]
 const ZMQ_CHANNEL_SIZE: usize = 1;
 
 #[derive(Debug)]
@@ -30,14 +32,18 @@ impl std::fmt::Display for ZmqError {
 }
 impl std::error::Error for ZmqError {}
 
-pub(crate) trait ZmqListenerTrait {
+#[allow(dead_code)]
+pub trait ZmqListenerTrait {
     /// Starts the ZeroMQ subscriber socket.
     /// Asynchronously listens for messages on the specified address and topic, sending unit message to a channel.
     /// Returns the receiver end of the channel.
     fn start(&self, address: &str) -> Result<tokio::sync::mpsc::Receiver<()>, ZmqError>;
 }
 
-struct ZmqListener;
+#[allow(dead_code)]
+#[derive(Default)]
+pub struct ZmqListener;
+
 impl ZmqListenerTrait for ZmqListener {
     fn start(&self, address: &str) -> Result<tokio::sync::mpsc::Receiver<()>, ZmqError> {
         let context = zmq::Context::new();
@@ -142,7 +148,7 @@ mod tests {
         let mut received = false;
 
         rt.block_on(async {
-            let mut rx = ZmqListener {}
+            let mut rx = ZmqListener
                 .start(address)
                 .expect("Should create zmq listener");
 
@@ -162,7 +168,7 @@ mod tests {
     #[test]
     fn test_start_invalid_address() {
         let invalid_address = "invalid-address";
-        let result = ZmqListener {}.start(invalid_address);
+        let result = ZmqListener.start(invalid_address);
         assert!(result.is_err());
         let err = result.err().unwrap();
         assert!(err.message.contains("Failed to connect ZMQ socket"));
