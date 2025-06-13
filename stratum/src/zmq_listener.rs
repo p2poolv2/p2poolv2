@@ -14,10 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use tracing::info;
+use tracing::{debug, info};
 
 #[allow(dead_code)]
-const ZMQ_PUB_BLOCKHASH: &str = "zmqpubblockhash";
+const ZMQ_PUB_BLOCKHASH: &str = "hashblock"; // all messages
 #[allow(dead_code)]
 const ZMQ_CHANNEL_SIZE: usize = 1;
 

@@ -8,12 +8,13 @@ services:
     ports:
       - "${BTC_P2P_PORT:-38333}:${BTC_P2P_PORT:-38333}" # P2P port
       - "${BTC_RPC_PORT:-38332}:${BTC_RPC_PORT:-38332}" # RPC port
+      - "28332:28332" # ZMQ port is always the same
     environment:
       - NETWORK=${NETWORK:-signet}
     command: bitcoind -conf=/etc/bitcoin/bitcoin-${NETWORK:-signet}.conf -datadir=/data-${NETWORK:-signet}
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD", "nc", "-z", "0.0.0.0", "${BTC_P2P_PORT:-38333}" ]
+      test: ["CMD", "nc", "-z", "0.0.0.0", "${BTC_P2P_PORT:-38333}"]
       interval: 5s
       timeout: 3s
       retries: 3
@@ -55,7 +56,7 @@ services:
     restart: unless-stopped
     command: /ckpool/src/ckpool --btcsolo --config=/ckpool-solo-${NETWORK:-signet}.json --log-shares --loglevel=7
     healthcheck:
-      test: [ "CMD", "nc", "-z", "localhost", "3333" ]
+      test: ["CMD", "nc", "-z", "localhost", "3333"]
       interval: 5s
       timeout: 3s
       retries: 3
@@ -96,7 +97,6 @@ services:
 volumes:
   bitcoin_data:
   p2pool_data:
-
 
 networks:
   p2pool_network:
