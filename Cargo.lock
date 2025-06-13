@@ -4357,6 +4357,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wiremock",
+ "zmq",
 ]
 
 [[package]]

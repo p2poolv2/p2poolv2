@@ -131,6 +131,7 @@ pub async fn start_gbt(
     socket_path: &str,
     poll_interval: u64,
     network: bitcoin::Network,
+    zmqpubhashblock: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let bitcoind: Arc<BitcoindRpcClient> = match BitcoindRpcClient::new(
         &bitcoin_config.url,
@@ -417,6 +418,8 @@ mod gbt_server_tests {
     use super::*;
     use bitcoindrpc::test_utils::{mock_method, setup_mock_bitcoin_rpc};
     use tokio::sync::mpsc;
+    use wiremock::MockServer;
+    use wiremock::{Mock, ResponseTemplate};
 
     #[tokio::test]
     async fn test_start_gbt_trigger_from_socket_event() {
@@ -438,6 +441,8 @@ mod gbt_server_tests {
         }]);
         mock_method(&mock_server, "getblocktemplate", params, template).await;
 
+        let mock_zmq_server = MockServer::start().await;
+
         // Setup channel for receiving templates
         let (template_tx, mut template_rx) = mpsc::channel(10);
 
@@ -448,6 +453,7 @@ mod gbt_server_tests {
             socket_path,
             60,
             bitcoin::Network::Signet,
+            &mock_zmq_server.uri(),
         )
         .await;
 
@@ -490,6 +496,8 @@ mod gbt_server_tests {
         }]);
         mock_method(&mock_server, "getblocktemplate", params, template).await;
 
+        let mock_zmq_server = MockServer::start().await;
+
         // Setup channel for receiving templates
         let (template_tx, mut template_rx) = mpsc::channel(10);
 
@@ -500,6 +508,7 @@ mod gbt_server_tests {
             socket_path,
             1,
             bitcoin::Network::Signet,
+            &mock_zmq_server.uri(),
         )
         .await;
 

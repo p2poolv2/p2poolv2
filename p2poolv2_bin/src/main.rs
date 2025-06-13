@@ -86,6 +86,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             SOCKET_PATH,
             GBT_POLL_INTERVAL,
             bitcoin_config.network,
+            &stratum_config.zmqpubhashblock,
         )
         .await
         {
