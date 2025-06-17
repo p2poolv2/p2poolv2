@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod client_connections;
+pub mod difficulty_adjuster;
 pub mod error;
 pub mod message_handlers;
 pub mod messages;
