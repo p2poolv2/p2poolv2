@@ -4,7 +4,7 @@
         {
             "label": "Nextest: Run all tests",
             "type": "shell",
-            "command": "cargo nextest run test --workspace",
+            "command": "RUST_LOG=debug cargo nextest run test --workspace",
             "group": {
                 "kind": "build",
                 // "isDefault": true
@@ -36,7 +36,7 @@
         {
             "label": "Nextest: Run tests for a package",
             "type": "shell",
-            "command": "cargo",
+            "command": "RUST_LOG=debug cargo",
             "args": [
                 "nextest",
                 "run",

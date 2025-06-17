@@ -5,5 +5,11 @@
         "--no-deps"
     ],
     "rust-analyzer.check.workspace": false,
-    "task.quickOpen.showAll": true
+    "task.quickOpen.showAll": true,
+    "rust-analyzer.runnables.extraEnv": {
+        "RUST_LOG": "debug"
+    },
+    "rust-analyzer.cargo.extraEnv": {
+        "RUST_LOG": "debug"
+    }
 }
