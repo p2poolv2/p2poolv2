@@ -23,7 +23,8 @@ This document explains the architectural changes made to the libp2p REQ/REP mess
 
 ##   Before Refactoring
 
-![Before Refactoring](/p2pool-v2/docs/tower-layer/before_refactor.png)
+Before Refactoring
+![before-refctoring](before-refactoring.png)
 
 ###  Design Summary
 
@@ -45,8 +46,8 @@ This document explains the architectural changes made to the libp2p REQ/REP mess
 
 ##  After Refactoring (Tower Middleware Architecture)
 
-![After Refactoring](./E/p2pool-v2/docs/tower-layer/after_refactor.png)
-
+After Refactoring
+![after-refactoring](after-refactoring.png)
 ###  Key Changes
 
 1. **Tower-Based Request Layer**
