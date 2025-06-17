@@ -36,7 +36,7 @@
         {
             "label": "Nextest: Run tests for a package",
             "type": "shell",
-            "command": "RUST_LOG=debug cargo",
+            "command": "cargo",
             "args": [
                 "nextest",
                 "run",
