@@ -38,7 +38,7 @@ where
     C: Send + Sync + Clone + 'static,
     T: TimeProvider + Send + Sync + 'static,
 {
-    // Build the base service with your swarm_tx
+    // Build the base service with swarm_tx
     let base_service = P2PService::new(swarm_tx.clone());
 
     // Build layered service stack
