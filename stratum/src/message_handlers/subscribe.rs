@@ -58,7 +58,7 @@ mod tests {
     async fn test_handle_subscribe_success() {
         // Setup
         let message = Request::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
-        let mut session = Session::new(1);
+        let mut session = Session::new(1, None, 2);
         session.subscribed = false;
 
         // Execute
@@ -106,7 +106,7 @@ mod tests {
     async fn test_handle_subscribe_already_subscribed() {
         // Setup
         let message = Request::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
-        let mut session = Session::new(2);
+        let mut session = Session::new(2, None, 2);
         session.subscribed = true;
 
         // Execute

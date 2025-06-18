@@ -104,7 +104,7 @@ mod handle_submit_tests {
 
     #[test_log::test(tokio::test)]
     async fn test_handle_submit_meets_difficulty_should_submit() {
-        let mut session = Session::new(1);
+        let mut session = Session::new(1, None, 2);
         let tracker_handle = start_tracker_actor();
 
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
@@ -169,7 +169,7 @@ mod handle_submit_tests {
 
     #[test_log::test(tokio::test)]
     async fn test_handle_submit_a_meets_difficulty_should_submit() {
-        let mut session = Session::new(1);
+        let mut session = Session::new(1, None, 2);
         let tracker_handle = start_tracker_actor();
 
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;

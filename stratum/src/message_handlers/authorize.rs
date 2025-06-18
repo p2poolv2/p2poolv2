@@ -63,7 +63,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_authorize_first_time() {
         // Setup
-        let mut session = Session::new(1);
+        let mut session = Session::new(1, None, 1);
         let request = Request::new_authorize(12345, "worker1".to_string(), Some("x".to_string()));
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(1);
 
@@ -96,7 +96,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_authorize_already_authorized() {
         // Setup
-        let mut session = Session::new(1);
+        let mut session = Session::new(1, None, 1);
         session.username = Some("someusername".to_string());
         let request =
             Request::new_authorize(12345, "worker1".to_string(), Some("password".to_string()));
