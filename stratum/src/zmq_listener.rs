@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use tracing::{debug, info};
+use tracing::info;
 
 #[allow(dead_code)]
 const ZMQ_PUB_BLOCKHASH: &str = "hashblock"; // all messages
@@ -85,27 +85,9 @@ impl ZmqListenerTrait for ZmqListener {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
     use tokio::runtime::Runtime;
-
-    // Helper function to start a ZMQ publisher in a background thread
-    fn start_zmq_publisher(address: &str, topic: &str, message: &[u8]) {
-        let address = address.to_string();
-        let topic = topic.as_bytes().to_vec();
-        let message = message.to_vec();
-        thread::spawn(move || {
-            let ctx = zmq::Context::new();
-            let publisher = ctx.socket(zmq::PUB).unwrap();
-            publisher.bind(&address).unwrap();
-            // Give the subscriber time to connect
-            thread::sleep(Duration::from_millis(2000));
-            let mut msg = topic.clone();
-            msg.extend_from_slice(&message);
-            publisher.send(msg, 0).unwrap();
-        });
-    }
 
     #[test]
     fn test_zmq_error_display() {
@@ -125,7 +107,7 @@ mod tests {
         // Use a latch to ensure the publisher is ready
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
 
-        let publisher_thread = thread::spawn(move || {
+        let _ = thread::spawn(move || {
             let ctx = zmq::Context::new();
             let publisher = ctx.socket(zmq::PUB).unwrap();
             publisher.bind(&address).unwrap();
