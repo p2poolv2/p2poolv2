@@ -4,11 +4,8 @@
     "rust-analyzer.check.extraArgs": [
         "--no-deps"
     ],
-    "rust-analyzer.check.workspace": false,
+    "rust-analyzer.check.workspace": true,
     "task.quickOpen.showAll": true,
-    "rust-analyzer.runnables.extraEnv": {
-        "RUST_LOG": "debug"
-    },
     "rust-analyzer.cargo.extraEnv": {
         "RUST_LOG": "debug"
     }
