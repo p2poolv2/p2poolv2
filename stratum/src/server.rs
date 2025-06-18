@@ -108,6 +108,8 @@ impl StratumServer {
                                 notify_tx: notify_tx.clone(),
                                 tracker_handle: tracker_handle.clone(),
                                 bitcoinrpc_config: bitcoinrpc_config.clone(),
+                                minimum_difficulty: self.config.minimum_difficulty,
+                                maximum_difficulty: self.config.maximum_difficulty,
                             };
                             // Spawn a new task for each connection
                             tokio::spawn(async move {
@@ -133,6 +135,8 @@ pub(crate) struct StratumContext {
     pub notify_tx: mpsc::Sender<NotifyCmd>,
     pub tracker_handle: TrackerHandle,
     pub bitcoinrpc_config: BitcoinRpcConfig,
+    pub minimum_difficulty: u32,
+    pub maximum_difficulty: Option<u32>,
 }
 
 /// Handles a single connection to the Stratum server.
@@ -155,7 +159,11 @@ where
     const MAX_LINE_LENGTH: usize = 8 * 1024; // 8KB
 
     let mut framed = FramedRead::new(reader, LinesCodec::new_with_max_length(MAX_LINE_LENGTH));
-    let session = &mut Session::new(1);
+    let session = &mut Session::new(
+        ctx.minimum_difficulty,
+        ctx.maximum_difficulty,
+        ctx.maximum_difficulty.unwrap_or(ctx.minimum_difficulty),
+    );
 
     // Process each line as it arrives
     loop {
@@ -338,6 +346,8 @@ mod stratum_server_tests {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
         };
 
         // Run the handler
@@ -409,6 +419,8 @@ mod stratum_server_tests {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
         };
 
         // Run the handler
@@ -453,6 +465,8 @@ mod stratum_server_tests {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
         };
 
         // Run the handler
@@ -500,6 +514,8 @@ mod stratum_server_tests {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
         };
 
         // Run the handler
@@ -573,6 +589,8 @@ mod stratum_server_tests {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
         };
 
         // Spawn the handler in a separate task
@@ -662,6 +680,8 @@ mod stratum_server_tests {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
         };
 
         // Spawn the handler in a separate task

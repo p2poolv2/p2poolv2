@@ -345,7 +345,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_notify_from_ckpool_sample() {
-        let mut session = Session::new(1);
+        let mut session = Session::new(1, None, 1);
         let _tracker_handle = start_tracker_actor();
 
         let (mock_server, _bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;

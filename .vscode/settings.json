@@ -6,7 +6,4 @@
     ],
     "rust-analyzer.check.workspace": true,
     "task.quickOpen.showAll": true,
-    "rust-analyzer.cargo.extraEnv": {
-        "RUST_LOG": "debug"
-    }
 }

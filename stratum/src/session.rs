@@ -38,17 +38,17 @@ pub struct Session {
     pub username: Option<String>,
     /// Optional password of the miner, supplied by the miner, we just store it in session
     pub password: Option<String>,
-    /// The minimum difficulty for the session
-    pub minimum_difficulty: u32,
-    /// The current difficulty for the session
-    pub current_difficulty: u32,
     /// Difficulty adjuster for the session
     pub difficulty_adjuster: DifficultyAdjuster,
 }
 
 impl Session {
     /// Creates a new session with the given minimum difficulty.
-    pub fn new(minimum_difficulty: u32) -> Self {
+    pub fn new(
+        minimum_difficulty: u32,
+        maximum_difficulty: Option<u32>,
+        network_difficulty: u32,
+    ) -> Self {
         let id = Session::generate_id();
         let enonce1 = id.to_le();
         Self {
@@ -58,9 +58,11 @@ impl Session {
             subscribed: false,
             username: None,
             password: None,
-            minimum_difficulty,
-            current_difficulty: minimum_difficulty,
-            difficulty_adjuster: DifficultyAdjuster::new(minimum_difficulty, 100_000, 200_000),
+            difficulty_adjuster: DifficultyAdjuster::new(
+                minimum_difficulty,
+                maximum_difficulty,
+                network_difficulty,
+            ),
         }
     }
 
@@ -68,12 +70,6 @@ impl Session {
     fn generate_id() -> u32 {
         let mut rng = rand::thread_rng();
         rng.gen::<u32>()
-    }
-
-    /// Recalculate current difficulty, return the new difficulty.
-    /// TODO(pool2win): Implement the actual difficulty adjustment algorithm.
-    pub fn recalculate_difficulty(&mut self) -> u32 {
-        self.current_difficulty
     }
 }
 
@@ -84,10 +80,16 @@ mod tests {
     #[test]
     fn test_new_session() {
         let min_difficulty = 1000;
-        let session = Session::new(min_difficulty);
+        let session = Session::new(min_difficulty, Some(2000), 1500);
 
-        assert_eq!(session.minimum_difficulty, min_difficulty);
-        assert_eq!(session.current_difficulty, min_difficulty);
+        assert_eq!(
+            session.difficulty_adjuster.pool_minimum_difficulty,
+            min_difficulty
+        );
+        assert_eq!(
+            session.difficulty_adjuster.current_difficulty,
+            min_difficulty
+        );
         assert_ne!(session.id, "");
 
         // Verify that id and enonce1_hex are reverse encodings of each other
@@ -126,19 +128,11 @@ mod tests {
     #[test]
     fn test_get_current_difficulty() {
         let min_difficulty = 2000;
-        let session = Session::new(min_difficulty);
+        let session = Session::new(min_difficulty, Some(3000), 2500);
 
-        assert_eq!(session.current_difficulty, min_difficulty);
-    }
-
-    #[test]
-    fn test_recalculate_difficulty() {
-        let min_difficulty = 3000;
-        let mut session = Session::new(min_difficulty);
-
-        // Currently it just returns the current difficulty
-        let new_difficulty = session.recalculate_difficulty();
-        assert_eq!(new_difficulty, min_difficulty);
-        assert_eq!(session.current_difficulty, min_difficulty);
+        assert_eq!(
+            session.difficulty_adjuster.current_difficulty,
+            min_difficulty
+        );
     }
 }
