@@ -41,10 +41,18 @@ pub struct RequestContext<C, T> {
 
 /// The Tower service that processes inbound P2P requests.
 #[derive(Clone)]
-pub struct P2PService;
+pub struct P2PService<C> {
+    pub swarm_tx: mpsc::Sender<SwarmSend<C>>,
+}
+
+impl<C> P2PService<C> {
+    pub fn new(swarm_tx: mpsc::Sender<SwarmSend<C>>) -> Self {
+        Self { swarm_tx }
+    }
+}
 
 impl<C: 'static + Send + Sync, T: TimeProvider + Send + Sync + 'static>
-    Service<RequestContext<C, T>> for P2PService
+    Service<RequestContext<C, T>> for P2PService<C>
 {
     type Response = ();
     type Error = Box<dyn Error + Send + Sync>;

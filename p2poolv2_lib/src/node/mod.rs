@@ -18,6 +18,7 @@ pub mod behaviour;
 pub mod request_response_handler;
 pub use crate::config::Config;
 pub mod actor;
+pub mod layers;
 pub mod messages;
 pub mod p2p_message_handlers;
 pub mod rate_limiter;
@@ -383,8 +384,9 @@ impl Node {
             };
 
             // Spawn the tower service
+            let swarm_tx = self.swarm_tx.clone();
             tokio::spawn(async move {
-                let mut service = P2PService;
+                let mut service = P2PService::new(swarm_tx);
                 if let Err(e) = service.call(ctx).await {
                     error!("P2PService failed: {}", e);
                 }
