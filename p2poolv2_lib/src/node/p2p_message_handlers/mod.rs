@@ -18,7 +18,6 @@ pub mod receivers;
 pub mod senders;
 
 use crate::node::messages::{GetData, InventoryMessage, Message};
-use crate::node::SwarmSend;
 use crate::service::p2p_service::RequestContext;
 use crate::utils::time_provider::TimeProvider;
 use receivers::getblocks::handle_getblocks;
@@ -26,10 +25,6 @@ use receivers::getheaders::handle_getheaders;
 use receivers::share_blocks::handle_share_block;
 use receivers::share_headers::handle_share_headers;
 use std::error::Error;
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use tower::Service;
 use tracing::{error, info};
 
 /// The Tower service that processes inbound P2P requests.
@@ -135,6 +130,7 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node::SwarmSend;
     #[mockall_double::double]
     use crate::shares::chain::actor::ChainHandle;
     use crate::shares::ShareBlockHash;

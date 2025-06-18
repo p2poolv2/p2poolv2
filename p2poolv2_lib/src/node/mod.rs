@@ -44,7 +44,6 @@ use libp2p::{
     Multiaddr, Swarm,
 };
 use rate_limiter::RateLimiter;
-use request_response_handler::handle_request_response_event;
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -353,7 +352,7 @@ impl Node {
                 libp2p::request_response::Message::Request {
                     request_id: _,
                     request,
-                    channel: channel,
+                    channel,
                 },
         } = request_response_event
         {

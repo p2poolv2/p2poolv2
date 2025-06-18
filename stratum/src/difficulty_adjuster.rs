@@ -22,7 +22,6 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
-use tracing_subscriber::field::debug;
 
 /// The target Difficulty Rate Ratio (DRR) for standard clients
 /// This aims for about 1 share every 3.33 seconds
@@ -322,7 +321,6 @@ impl DifficultyAdjuster {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread::sleep;
 
     #[test]
     fn test_new_difficulty_adjuster() {
