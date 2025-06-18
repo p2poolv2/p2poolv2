@@ -18,18 +18,15 @@ use std::net::SocketAddr;
 
 use crate::error::Error;
 use crate::messages::{Request, Response};
+use crate::server::StratumContext;
 use crate::session::Session;
-use crate::work::tracker::TrackerHandle;
-use bitcoindrpc::BitcoinRpcConfig;
+use authorize::handle_authorize;
+use submit::handle_submit;
+use subscribe::handle_subscribe;
 
 pub mod authorize;
 pub mod submit;
 pub mod subscribe;
-
-use crate::work::notify::NotifyCmd;
-use authorize::handle_authorize;
-use submit::handle_submit;
-use subscribe::handle_subscribe;
 
 /// Handle incoming Stratum messages
 /// This function processes the incoming Stratum messages and returns a response
@@ -43,14 +40,14 @@ pub(crate) async fn handle_message<'a>(
     message: Request<'a>,
     session: &mut Session,
     addr: SocketAddr,
-    notify_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
-    tracker_handle: TrackerHandle,
-    bitcoinrpc_config: BitcoinRpcConfig,
+    ctx: StratumContext,
 ) -> Result<Response<'a>, Error> {
     match message.method.as_ref() {
         "mining.subscribe" => handle_subscribe(message, session).await,
-        "mining.authorize" => handle_authorize(message, session, addr, notify_tx).await,
-        "mining.submit" => handle_submit(message, session, tracker_handle, bitcoinrpc_config).await,
+        "mining.authorize" => handle_authorize(message, session, addr, ctx.notify_tx).await,
+        "mining.submit" => {
+            handle_submit(message, session, ctx.tracker_handle, ctx.bitcoinrpc_config).await
+        }
         method => Err(Error::InvalidMethod(method.to_string())),
     }
 }
