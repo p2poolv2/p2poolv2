@@ -47,13 +47,17 @@ async fn test_stratum_server_subscribe() {
     }]);
     mock_method(&mock_server, "getblocktemplate", params, template).await;
 
-    let mut server = StratumServer::new(
-        "127.0.0.1".to_string(),
-        9999,
-        shutdown_rx,
-        connections_handle,
-    )
-    .await;
+    let config = stratum::config::StratumConfig {
+        hostname: "127.0.0.1".to_string(),
+        port: 9999,
+        start_difficulty: 1,
+        minimum_difficulty: 1,
+        maximum_difficulty: Some(2),
+        solo_address: None,
+        zmqpubhashblock: "tcp://127.0.0.1:28332".to_string(),
+    };
+
+    let mut server = StratumServer::new(config, shutdown_rx, connections_handle).await;
 
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let tracker_handle = start_tracker_actor();

@@ -21,7 +21,7 @@ host = "localhost"
 port = 8881
 
 [stratum]
-host = "localhost"
+hostname = "localhost"
 port = 13333
 start_difficulty = 1
 minimum_difficulty = 1

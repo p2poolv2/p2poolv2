@@ -110,7 +110,7 @@ async fn main() -> Result<(), String> {
     let connections_handle = spawn().await;
     let connections_cloned = connections_handle.clone();
 
-    let output_address = Address::from_str(stratum_config.solo_address.unwrap().as_str())
+    let output_address = Address::from_str(stratum_config.solo_address.clone().unwrap().as_str())
         .expect("Invalid output address in Stratum config")
         .require_network(config.bitcoin.network)
         .expect("Output address must match the Bitcoin network in config");
@@ -130,8 +130,7 @@ async fn main() -> Result<(), String> {
 
     tokio::spawn(async move {
         let mut stratum_server = StratumServer::new(
-            stratum_config.host,
-            stratum_config.port,
+            stratum_config,
             stratum_shutdown_rx,
             connections_handle.clone(),
         )
