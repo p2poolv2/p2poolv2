@@ -104,13 +104,15 @@ impl StratumServer {
                             let (reader, writer) = stream.into_split();
                             let buf_reader = BufReader::new(reader);
 
-                            let notify_tx_cloned = notify_tx.clone();
-                            let tracker_handle_cloned = tracker_handle.clone();
-                            let bitcoinrpc_config_cloned = bitcoinrpc_config.clone();
+                            let ctx = StratumContext {
+                                notify_tx: notify_tx.clone(),
+                                tracker_handle: tracker_handle.clone(),
+                                bitcoinrpc_config: bitcoinrpc_config.clone(),
+                            };
                             // Spawn a new task for each connection
                             tokio::spawn(async move {
                                 // Handle the connection with graceful shutdown support
-                                let _ = handle_connection(buf_reader, writer, addr, message_rx, shutdown_rx, notify_tx_cloned, tracker_handle_cloned, bitcoinrpc_config_cloned).await;
+                                let _ = handle_connection(buf_reader, writer, addr, message_rx, shutdown_rx, ctx).await;
                             });
                         }
                         Err(e) => {
@@ -125,20 +127,24 @@ impl StratumServer {
     }
 }
 
+/// A context for the Stratum server easing the number of parameters passed around.
+#[derive(Clone)]
+pub(crate) struct StratumContext {
+    pub notify_tx: mpsc::Sender<NotifyCmd>,
+    pub tracker_handle: TrackerHandle,
+    pub bitcoinrpc_config: BitcoinRpcConfig,
+}
+
 /// Handles a single connection to the Stratum server.
 /// This function reads lines from the connection, processes them,
 /// and sends responses back to the client.
-/// The function handles the session data for each connection as required for the Stratum protocol.
-#[allow(dead_code)]
 async fn handle_connection<R, W>(
     reader: R,
     mut writer: W,
     addr: SocketAddr,
     mut message_rx: mpsc::Receiver<Arc<String>>,
     mut shutdown_rx: oneshot::Receiver<()>,
-    notify_tx: mpsc::Sender<NotifyCmd>,
-    tracker_handle: TrackerHandle,
-    bitcoinrpc_config: BitcoinRpcConfig,
+    ctx: StratumContext,
 ) -> Result<(), Box<dyn std::error::Error + Send>>
 where
     R: AsyncBufReadExt + Unpin,
@@ -182,7 +188,13 @@ where
                         if line.is_empty() {
                             continue; // Ignore empty lines
                         }
-                        if let Err(e) = process_incoming_message(&line, &mut writer, session, addr, notify_tx.clone(), tracker_handle.clone(), bitcoinrpc_config.clone()).await {
+                        if let Err(e) = process_incoming_message(
+                            &line,
+                            &mut writer,
+                            session,
+                            addr,
+                            ctx.clone(),
+                        ).await {
                             error!("Error processing message from {}: {}", addr, e);
                             return Err(e);
                         }
@@ -207,24 +219,14 @@ async fn process_incoming_message<W>(
     writer: &mut W,
     session: &mut Session,
     addr: SocketAddr,
-    notify_tx: mpsc::Sender<NotifyCmd>,
-    tracker_handle: TrackerHandle,
-    bitcoinrpc_config: BitcoinRpcConfig,
+    ctx: StratumContext,
 ) -> Result<(), Box<dyn std::error::Error + Send>>
 where
     W: AsyncWriteExt + Unpin,
 {
     match serde_json::from_str::<Request>(line) {
         Ok(message) => {
-            let response = handle_message(
-                message,
-                session,
-                addr,
-                notify_tx,
-                tracker_handle,
-                bitcoinrpc_config,
-            )
-            .await;
+            let response = handle_message(message, session, addr, ctx).await;
 
             if let Ok(response) = response {
                 // Send the response back to the client
@@ -332,18 +334,15 @@ mod stratum_server_tests {
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
 
-        // Run the handler
-        let result = handle_connection(
-            reader,
-            &mut writer,
-            addr,
-            message_rx,
-            shutdown_rx,
+        let ctx = StratumContext {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
-        )
-        .await;
+        };
+
+        // Run the handler
+        let result =
+            handle_connection(reader, &mut writer, addr, message_rx, shutdown_rx, ctx).await;
 
         // Verify results
         assert!(
@@ -406,18 +405,15 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
-        // Run the handler
-        let result = handle_connection(
-            reader,
-            &mut writer,
-            addr,
-            message_rx,
-            shutdown_rx,
+        let ctx = StratumContext {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
-        )
-        .await;
+        };
+
+        // Run the handler
+        let result =
+            handle_connection(reader, &mut writer, addr, message_rx, shutdown_rx, ctx).await;
 
         // Verify results
         assert!(
@@ -453,18 +449,15 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
-        // Run the handler
-        let result = handle_connection(
-            input,
-            &mut writer,
-            addr,
-            message_rx,
-            shutdown_rx,
+        let ctx = StratumContext {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
-        )
-        .await;
+        };
+
+        // Run the handler
+        let result =
+            handle_connection(input, &mut writer, addr, message_rx, shutdown_rx, ctx).await;
 
         // Returns an error, so we can close the connection gracefully.
         assert!(
@@ -503,18 +496,15 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
-        // Run the handler
-        let result = super::handle_connection(
-            reader,
-            &mut writer,
-            addr,
-            message_rx,
-            shutdown_rx,
+        let ctx = StratumContext {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
-        )
-        .await;
+        };
+
+        // Run the handler
+        let result =
+            super::handle_connection(reader, &mut writer, addr, message_rx, shutdown_rx, ctx).await;
 
         // Should return error, so we can close the connection gracefully.
         assert!(
@@ -579,21 +569,19 @@ mod stratum_server_tests {
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
 
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle,
+            bitcoinrpc_config,
+        };
+
         // Spawn the handler in a separate task
         let handle = tokio::spawn(async move {
             // Wrap the mock reader with a BufReader to implement AsyncBufReadExt
             let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
-            let result = handle_connection(
-                buf_reader,
-                &mut writer,
-                addr,
-                message_rx,
-                shutdown_rx,
-                notify_tx,
-                tracker_handle,
-                bitcoinrpc_config,
-            )
-            .await;
+            let result =
+                handle_connection(buf_reader, &mut writer, addr, message_rx, shutdown_rx, ctx)
+                    .await;
 
             assert!(
                 result.is_ok(),
@@ -670,21 +658,19 @@ mod stratum_server_tests {
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
 
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle,
+            bitcoinrpc_config,
+        };
+
         // Spawn the handler in a separate task
         let handle = tokio::spawn(async move {
             // Wrap the mock reader with a BufReader to implement AsyncBufReadExt
             let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
-            let result = handle_connection(
-                buf_reader,
-                &mut writer,
-                addr,
-                message_rx,
-                shutdown_rx,
-                notify_tx,
-                tracker_handle,
-                bitcoinrpc_config,
-            )
-            .await;
+            let result =
+                handle_connection(buf_reader, &mut writer, addr, message_rx, shutdown_rx, ctx)
+                    .await;
 
             assert!(
                 result.is_ok(),
