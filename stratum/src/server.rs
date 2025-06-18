@@ -20,6 +20,7 @@ use crate::client_connections::ClientConnectionsHandle;
 #[mockall_double::double]
 use crate::client_connections::ClientConnectionsHandle;
 
+use crate::config::StratumConfig;
 use crate::message_handlers::handle_message;
 use crate::messages::Request;
 use crate::session::Session;
@@ -38,8 +39,7 @@ use tracing::{debug, error, info};
 // A struct to represent a Stratum server configuration
 // This struct contains the port and address of the Stratum server
 pub struct StratumServer {
-    pub port: u16,
-    pub hostname: String,
+    pub config: StratumConfig,
     shutdown_rx: oneshot::Receiver<()>,
     connections_handle: ClientConnectionsHandle,
 }
@@ -47,14 +47,12 @@ pub struct StratumServer {
 impl StratumServer {
     // A method to create a new Stratum server configuration
     pub async fn new(
-        hostname: String,
-        port: u16,
+        config: StratumConfig,
         shutdown_rx: oneshot::Receiver<()>,
         connections_handle: ClientConnectionsHandle,
     ) -> Self {
         Self {
-            port,
-            hostname,
+            config,
             shutdown_rx,
             connections_handle,
         }
@@ -68,9 +66,12 @@ impl StratumServer {
         tracker_handle: TrackerHandle,
         bitcoinrpc_config: BitcoinRpcConfig,
     ) -> Result<(), Box<dyn std::error::Error + Send>> {
-        info!("Starting Stratum server at {}:{}", self.hostname, self.port);
+        info!(
+            "Starting Stratum server at {}:{}",
+            self.config.hostname, self.config.port
+        );
 
-        let bind_address = format!("{}:{}", self.hostname, self.port);
+        let bind_address = format!("{}:{}", self.config.hostname, self.config.port);
         let listener = match TcpListener::bind(&bind_address).await {
             Ok(listener) => listener,
             Err(e) => {
@@ -274,17 +275,21 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
-        let mut server = StratumServer::new(
-            "127.0.0.1".to_string(),
-            12345,
-            shutdown_rx,
-            connections_handle,
-        )
-        .await;
+        let config = StratumConfig {
+            hostname: "127.0.0.1".to_string(),
+            port: 12345,
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
+            solo_address: None,
+            zmqpubhashblock: "tcp://127.0.0.1:28332".to_string(),
+        };
+
+        let mut server = StratumServer::new(config, shutdown_rx, connections_handle).await;
 
         // Verify the server was created with the correct parameters
-        assert_eq!(server.port, 12345);
-        assert_eq!(server.hostname, "127.0.0.1");
+        assert_eq!(server.config.port, 12345);
+        assert_eq!(server.config.hostname, "127.0.0.1");
 
         let (ready_tx, ready_rx) = oneshot::channel();
         let (notify_tx, _notify_rx) = mpsc::channel(10);

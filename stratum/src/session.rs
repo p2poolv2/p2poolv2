@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::difficulty_adjuster::DifficultyAdjuster;
 use bitcoin::secp256k1::rand::{self, Rng};
 
 /// Use 4 byte extranonce1
@@ -41,6 +42,8 @@ pub struct Session {
     pub minimum_difficulty: u32,
     /// The current difficulty for the session
     pub current_difficulty: u32,
+    /// Difficulty adjuster for the session
+    pub difficulty_adjuster: DifficultyAdjuster,
 }
 
 impl Session {
@@ -57,6 +60,7 @@ impl Session {
             password: None,
             minimum_difficulty,
             current_difficulty: minimum_difficulty,
+            difficulty_adjuster: DifficultyAdjuster::new(minimum_difficulty, 100_000, 200_000),
         }
     }
 

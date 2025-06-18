@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -14,14 +14,15 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod client_connections;
-pub mod config;
-pub mod difficulty_adjuster;
-pub mod error;
-pub mod message_handlers;
-pub mod messages;
-pub mod server;
-pub mod session;
-pub mod util;
-pub mod work;
-pub mod zmq_listener;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct StratumConfig {
+    pub hostname: String,
+    pub port: u16,
+    pub start_difficulty: u32,
+    pub minimum_difficulty: u32,
+    pub maximum_difficulty: Option<u32>,
+    pub solo_address: Option<String>,
+    pub zmqpubhashblock: String,
+}

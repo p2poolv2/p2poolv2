@@ -17,6 +17,7 @@
 use bitcoin::PublicKey;
 use bitcoindrpc::BitcoinRpcConfig;
 use serde::Deserialize;
+pub use stratum::config::StratumConfig;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct NetworkConfig {
@@ -44,17 +45,6 @@ pub struct StoreConfig {
 pub struct CkPoolConfig {
     pub host: String,
     pub port: u16,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct StratumConfig {
-    pub host: String,
-    pub port: u16,
-    pub start_difficulty: u32,
-    pub minimum_difficulty: u32,
-    pub maximum_difficulty: Option<u32>,
-    pub solo_address: Option<String>,
-    pub zmqpubhashblock: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -171,8 +161,8 @@ impl Config {
         self
     }
 
-    pub fn with_stratum_host(mut self, stratum_host: String) -> Self {
-        self.stratum.host = stratum_host;
+    pub fn with_stratum_hostname(mut self, stratum_hostname: String) -> Self {
+        self.stratum.hostname = stratum_hostname;
         self
     }
 
@@ -253,7 +243,7 @@ mod tests {
             .with_store_path("/tmp/store".to_string())
             .with_ckpool_host("ckpool.example.com".to_string())
             .with_ckpool_port(3333)
-            .with_stratum_host("stratum.example.com".to_string())
+            .with_stratum_hostname("stratum.example.com".to_string())
             .with_stratum_port(3333)
             .with_stratum_solo_address("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string())
             .with_stratum_zmqpubhashblock("tcp://127.0.0.1:28332".to_string())
@@ -277,7 +267,7 @@ mod tests {
         assert_eq!(config.ckpool.host, "ckpool.example.com");
         assert_eq!(config.ckpool.port, 3333);
 
-        assert_eq!(config.stratum.host, "stratum.example.com");
+        assert_eq!(config.stratum.hostname, "stratum.example.com");
         assert_eq!(config.stratum.port, 3333);
         assert_eq!(config.stratum.start_difficulty, 1);
         assert_eq!(config.stratum.minimum_difficulty, 1);

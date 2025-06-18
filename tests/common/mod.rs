@@ -58,7 +58,7 @@ pub fn default_test_config() -> Config {
             port: 8881,
         },
         stratum: StratumConfig {
-            host: "127.0.0.1".to_string(),
+            hostname: "127.0.0.1".to_string(),
             port: 3333,
             start_difficulty: 1,
             minimum_difficulty: 1,
