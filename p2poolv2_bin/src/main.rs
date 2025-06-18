@@ -148,7 +148,7 @@ async fn main() -> Result<(), String> {
     match NodeHandle::new(config, chain_handle).await {
         Ok((_node_handle, stopping_rx)) => {
             info!("Node started");
-            if let Ok(_) = stopping_rx.await {
+            if (stopping_rx.await).is_ok() {
                 stratum_shutdown_tx
                     .send(())
                     .expect("Failed to send shutdown signal to Stratum server");
