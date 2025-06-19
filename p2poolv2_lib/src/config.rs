@@ -52,22 +52,6 @@ pub struct MinerConfig {
     pub pubkey: PublicKey,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct BitcoinConfig {
-    #[serde(deserialize_with = "deserialize_network")]
-    pub network: bitcoin::Network,
-}
-
-/// helper function to deserialize the network from the config file, which is provided as a string like Core
-/// Possible values are: main, test, testnet4, signet, regtest
-fn deserialize_network<'de, D>(deserializer: D) -> Result<bitcoin::Network, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let s: String = serde::Deserialize::deserialize(deserializer)?;
-    bitcoin::Network::from_core_arg(&s).map_err(serde::de::Error::custom)
-}
-
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct LoggingConfig {
     /// Log to file if specified
@@ -96,7 +80,6 @@ pub struct Config {
     pub ckpool: CkPoolConfig,
     pub stratum: StratumConfig,
     pub miner: MinerConfig,
-    pub bitcoin: BitcoinConfig,
     pub bitcoinrpc: BitcoinRpcConfig,
     pub logging: LoggingConfig,
 }
@@ -216,8 +199,8 @@ impl Config {
         self
     }
 
-    pub fn with_bitcoin_network(mut self, bitcoin_network: bitcoin::Network) -> Self {
-        self.bitcoin.network = bitcoin_network;
+    pub fn with_bitcoin_network(mut self, network: bitcoin::Network) -> Self {
+        self.stratum.network = network;
         self
     }
 }
@@ -256,7 +239,7 @@ mod tests {
             .with_bitcoinrpc_url("http://localhost:8332".to_string())
             .with_bitcoinrpc_username("testuser".to_string())
             .with_bitcoinrpc_password("testpass".to_string())
-            .with_bitcoin_network(bitcoin::Network::Regtest);
+            .with_bitcoin_network(bitcoin::Network::Signet);
 
         assert_eq!(config.network.listen_address, "127.0.0.1:8080");
         assert_eq!(

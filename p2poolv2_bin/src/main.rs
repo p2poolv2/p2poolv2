@@ -66,7 +66,7 @@ async fn main() -> Result<(), String> {
         return Err(format!("Failed to set up logging: {}", e));
     }
 
-    let genesis = ShareBlock::build_genesis_for_network(config.bitcoin.network);
+    let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
     let chain_handle = ChainHandle::new(config.store.path.clone(), genesis);
 
     let tip = chain_handle.get_chain_tip().await;
@@ -74,7 +74,6 @@ async fn main() -> Result<(), String> {
     info!("Latest tip {} at height {}", tip.unwrap(), height.unwrap());
 
     let stratum_config = config.stratum.clone();
-    let bitcoin_config = config.bitcoin.clone();
     let bitcoinrpc_config = config.bitcoinrpc.clone();
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
     let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(1);
@@ -97,7 +96,7 @@ async fn main() -> Result<(), String> {
             notify_tx_for_gbt,
             SOCKET_PATH,
             GBT_POLL_INTERVAL,
-            bitcoin_config.network,
+            stratum_config.network,
             zmq_trigger_rx,
         )
         .await
@@ -112,8 +111,8 @@ async fn main() -> Result<(), String> {
 
     let output_address = Address::from_str(stratum_config.solo_address.clone().unwrap().as_str())
         .expect("Invalid output address in Stratum config")
-        .require_network(config.bitcoin.network)
-        .expect("Output address must match the Bitcoin network in config");
+        .require_network(stratum_config.network)
+        .expect("Output address must match the bitcoin network in config");
 
     let tracker_handle_cloned = tracker_handle.clone();
     tokio::spawn(async move {

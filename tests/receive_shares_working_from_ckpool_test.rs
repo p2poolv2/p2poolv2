@@ -39,7 +39,7 @@ async fn test_single_node_with_zmq_feed_of_workbases_only() {
     let temp_dir = tempdir().unwrap();
     let chain_handle = ChainHandle::new(
         temp_dir.path().to_str().unwrap().to_string(),
-        ShareBlock::build_genesis_for_network(config.bitcoin.network),
+        ShareBlock::build_genesis_for_network(config.stratum.network),
     );
 
     // Start the node
@@ -110,7 +110,7 @@ async fn test_single_node_with_zmq_feed_of_shares_only() {
     let temp_dir = tempdir().unwrap();
     let chain_handle = ChainHandle::new(
         temp_dir.path().to_str().unwrap().to_string(),
-        ShareBlock::build_genesis_for_network(config.bitcoin.network),
+        ShareBlock::build_genesis_for_network(config.stratum.network),
     );
 
     // Start the node
@@ -201,7 +201,7 @@ async fn test_single_node_with_shares_and_workbases() {
     let temp_dir = tempdir().unwrap();
     let chain_handle = ChainHandle::new(
         temp_dir.path().to_str().unwrap().to_string(),
-        ShareBlock::build_genesis_for_network(config.bitcoin.network),
+        ShareBlock::build_genesis_for_network(config.stratum.network),
     );
 
     // Start the node
