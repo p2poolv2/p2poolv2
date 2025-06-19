@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::error::Error;
-use crate::messages::{Request, Response};
+use crate::messages::{Message, Request, Response};
 use crate::session::{Session, EXTRANONCE2_SIZE};
 use serde_json::json;
 use tracing::debug;
@@ -28,14 +28,14 @@ use tracing::debug;
 pub async fn handle_subscribe<'a>(
     message: Request<'a>,
     session: &mut Session,
-) -> Result<Response<'a>, Error> {
+) -> Result<Message<'a>, Error> {
     debug!("Handling mining.subscribe message");
     if session.subscribed {
         debug!("Client already subscribed. No response sent.");
         return Err(Error::SubscriptionFailure("Already subscribed".to_string()));
     }
     session.subscribed = true;
-    Ok(Response::new_ok(
+    Ok(Message::Response(Response::new_ok(
         message.id,
         json!([
             [
@@ -45,7 +45,7 @@ pub async fn handle_subscribe<'a>(
             session.enonce1_hex,
             EXTRANONCE2_SIZE,
         ]),
-    ))
+    )))
 }
 
 #[cfg(test)]
@@ -66,7 +66,13 @@ mod tests {
 
         // Verify
         assert!(response.is_ok());
-        let response = response.unwrap();
+        let message = response.unwrap();
+
+        let response = match message {
+            Message::Response(response) => response,
+            _ => panic!("Expected a Response message"),
+        };
+
         assert_eq!(response.id, Some(Id::Number(1)));
         // Check the response.result is Some and is an array as expected
         let result = response

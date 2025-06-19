@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::error::Error;
-use crate::messages::{Request, Response};
+use crate::messages::{Message, Request, Response, SetDifficultyNotification};
 use crate::session::Session;
 use crate::work::difficulty::validate::validate_submission_difficulty;
 use crate::work::tracker::{JobId, TrackerHandle};
@@ -38,7 +38,8 @@ pub async fn handle_submit<'a>(
     session: &mut Session,
     tracker_handle: TrackerHandle,
     bitcoinrpc_config: BitcoinRpcConfig,
-) -> Result<Response<'a>, Error> {
+    network: bitcoin::Network,
+) -> Result<Message<'a>, Error> {
     debug!("Handling mining.submit message");
     if message.params.len() < 4 {
         return Err(Error::InvalidParams);
@@ -60,18 +61,33 @@ pub async fn handle_submit<'a>(
         Ok(block) => block,
         Err(e) => {
             info!("Share validation failed: {}", e);
-            return Ok(Response::new_ok(message.id, json!(false)));
+            return Ok(Message::Response(Response::new_ok(
+                message.id,
+                json!(false),
+            )));
         }
     };
 
-    submit_block(block, bitcoinrpc_config).await;
-    Ok(Response::new_ok(message.id, json!(true)))
+    // Submit block asap, do difficulty adjustment after submission
+    submit_block(&block, bitcoinrpc_config).await;
+
+    let (new_difficulty, _is_first_share) = session
+        .difficulty_adjuster
+        .record_share_submission(block.header.difficulty(network), job_id);
+
+    if let Some(difficulty) = new_difficulty {
+        return Ok(Message::SetDifficulty(SetDifficultyNotification::new(
+            difficulty as u64,
+        )));
+    }
+
+    Ok(Message::Response(Response::new_ok(message.id, json!(true))))
 }
 
 /// Submit block to bitcoind
 ///
 /// Build bitcoindrpc from config and call submit block
-pub async fn submit_block(block: Block, bitcoinrpc_config: BitcoinRpcConfig) {
+pub async fn submit_block(block: &Block, bitcoinrpc_config: BitcoinRpcConfig) {
     info!(
         "Submitting block to bitcoind: {:?}",
         block.header.block_hash()
@@ -154,10 +170,21 @@ mod handle_submit_tests {
             )
             .await;
 
-        let response = handle_submit(submit, &mut session, tracker_handle, bitcoinrpc_config).await;
+        let message = handle_submit(
+            submit,
+            &mut session,
+            tracker_handle,
+            bitcoinrpc_config,
+            bitcoin::network::Network::Regtest,
+        )
+        .await
+        .unwrap();
 
-        assert!(response.is_ok());
-        let response = response.unwrap();
+        let response = match message {
+            Message::Response(response) => response,
+            _ => panic!("Expected a Response message"),
+        };
+
         assert_eq!(response.id, Some(Id::Number(4)));
 
         // The response should indicate that the share met required difficulty
@@ -220,9 +247,21 @@ mod handle_submit_tests {
             )
             .await;
 
-        let response = handle_submit(submit, &mut session, tracker_handle, bitcoinrpc_config).await;
-        assert!(response.is_ok());
-        let response = response.unwrap();
+        let response = handle_submit(
+            submit,
+            &mut session,
+            tracker_handle,
+            bitcoinrpc_config,
+            bitcoin::network::Network::Regtest,
+        )
+        .await
+        .unwrap();
+
+        let response = match response {
+            Message::Response(response) => response,
+            _ => panic!("Expected a Response message"),
+        };
+
         assert_eq!(response.id, Some(Id::Number(4)));
 
         // The response should indicate that the share met required difficulty

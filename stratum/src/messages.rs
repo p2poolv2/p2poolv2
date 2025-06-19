@@ -71,6 +71,17 @@ pub struct Error<'a> {
     pub data: Option<Value>,
 }
 
+/// Message type capturing all possible stratum message types.
+/// This allows our message handlers to return any of the types and be able to send updates to clients as required.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum Message<'a> {
+    Request(Request<'a>),
+    Response(Response<'a>),
+    Notify(Notify<'a>),
+    SetDifficulty(SetDifficultyNotification<'a>),
+}
+
 /// Request represents a Stratum request message from client to the server
 /// The params in this message are all strings
 ///
@@ -302,11 +313,13 @@ impl<'a> Notify<'a> {
             params: Cow::Owned(params),
         }
     }
+}
 
-    /// Creates a new set_difficulty notification message
-    pub fn new_set_difficulty_notification(difficulty: u64) -> SetDifficultyNotification<'a> {
+impl SetDifficultyNotification<'_> {
+    /// Creates a new set_difficulty notification with the given parameters
+    pub fn new(difficulty: u64) -> Self {
         SetDifficultyNotification {
-            method: Cow::Owned("mining.set_difficulty".to_string()),
+            method: Cow::Borrowed("mining.set_difficulty"),
             params: vec![difficulty],
         }
     }
@@ -478,7 +491,7 @@ mod tests {
 
     #[test]
     fn test_new_set_difficulty_notification() {
-        let message = Notify::new_set_difficulty_notification(1000);
+        let message = SetDifficultyNotification::new(1000);
         let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized_message,

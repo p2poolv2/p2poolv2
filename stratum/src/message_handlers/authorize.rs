@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::error::Error;
-use crate::messages::{Request, Response};
+use crate::messages::{Message, Request, Response};
 use crate::session::Session;
 use crate::work::notify::NotifyCmd;
 use tracing::debug;
@@ -36,7 +36,7 @@ pub async fn handle_authorize<'a>(
     session: &mut Session,
     addr: std::net::SocketAddr,
     notify_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
-) -> Result<Response<'a>, Error> {
+) -> Result<Message<'a>, Error> {
     debug!("Handling mining.authorize message");
     if session.username.is_some() {
         debug!("Client already authorized. No response sent.");
@@ -51,7 +51,10 @@ pub async fn handle_authorize<'a>(
             client_address: addr,
         })
         .await;
-    Ok(Response::new_ok(message.id, serde_json::json!(true)))
+    Ok(Message::Response(Response::new_ok(
+        message.id,
+        serde_json::json!(true),
+    )))
 }
 
 #[cfg(test)]
@@ -68,17 +71,21 @@ mod tests {
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(1);
 
         // Execute
-        let response = handle_authorize(
+        let message = handle_authorize(
             request,
             &mut session,
             SocketAddr::from(([127, 0, 0, 1], 8080)),
             notify_tx,
         )
-        .await;
+        .await
+        .unwrap();
+
+        let response = match message {
+            Message::Response(response) => response,
+            _ => panic!("Expected a Response message"),
+        };
 
         // Verify
-        assert!(response.is_ok());
-        let response = response.unwrap();
         assert_eq!(response.id, Some(Id::Number(12345)));
         assert!(response.error.is_none());
         assert!(response.result.is_some());
@@ -103,7 +110,7 @@ mod tests {
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(1);
 
         // Execute
-        let response = handle_authorize(
+        let message = handle_authorize(
             request,
             &mut session,
             SocketAddr::from(([127, 0, 0, 1], 8080)),
@@ -112,7 +119,7 @@ mod tests {
         .await;
 
         // Verify
-        assert!(response.is_err());
+        assert!(message.is_err());
         assert_eq!(session.username, Some("someusername".to_string()));
         assert!(session.password.is_none());
 
