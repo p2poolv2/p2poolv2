@@ -45,9 +45,9 @@ pub struct Session {
 impl Session {
     /// Creates a new session with the given minimum difficulty.
     pub fn new(
-        minimum_difficulty: u32,
-        maximum_difficulty: Option<u32>,
-        network_difficulty: u32,
+        minimum_difficulty: u128,
+        maximum_difficulty: Option<u128>,
+        network_difficulty: u128,
     ) -> Self {
         let id = Session::generate_id();
         let enonce1 = id.to_le();

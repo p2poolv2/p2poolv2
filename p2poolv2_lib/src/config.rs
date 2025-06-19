@@ -181,17 +181,17 @@ impl Config {
         self
     }
 
-    pub fn with_start_difficulty(mut self, start_difficulty: u32) -> Self {
+    pub fn with_start_difficulty(mut self, start_difficulty: u64) -> Self {
         self.stratum.start_difficulty = start_difficulty;
         self
     }
 
-    pub fn with_minimum_difficulty(mut self, minimum_difficulty: u32) -> Self {
+    pub fn with_minimum_difficulty(mut self, minimum_difficulty: u64) -> Self {
         self.stratum.minimum_difficulty = minimum_difficulty;
         self
     }
 
-    pub fn with_maximum_difficulty(mut self, maximum_difficulty: Option<u32>) -> Self {
+    pub fn with_maximum_difficulty(mut self, maximum_difficulty: Option<u64>) -> Self {
         self.stratum.maximum_difficulty = maximum_difficulty;
         self
     }
