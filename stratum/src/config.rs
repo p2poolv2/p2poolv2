@@ -25,4 +25,16 @@ pub struct StratumConfig {
     pub maximum_difficulty: Option<u64>,
     pub solo_address: Option<String>,
     pub zmqpubhashblock: String,
+    #[serde(deserialize_with = "deserialize_network")]
+    pub network: bitcoin::Network,
+}
+
+/// helper function to deserialize the network from the config file, which is provided as a string like Core
+/// Possible values are: main, test, testnet4, signet, regtest
+fn deserialize_network<'de, D>(deserializer: D) -> Result<bitcoin::Network, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = serde::Deserialize::deserialize(deserializer)?;
+    bitcoin::Network::from_core_arg(&s).map_err(serde::de::Error::custom)
 }

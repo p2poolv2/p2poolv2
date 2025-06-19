@@ -58,15 +58,15 @@ async fn test_three_nodes_connectivity() {
 
     let chain_handle1 = ChainHandle::new(
         temp_dir1.path().to_str().unwrap().to_string(),
-        ShareBlock::build_genesis_for_network(config1.bitcoin.network),
+        ShareBlock::build_genesis_for_network(config1.stratum.network),
     );
     let chain_handle2 = ChainHandle::new(
         temp_dir2.path().to_str().unwrap().to_string(),
-        ShareBlock::build_genesis_for_network(config2.bitcoin.network),
+        ShareBlock::build_genesis_for_network(config2.stratum.network),
     );
     let chain_handle3 = ChainHandle::new(
         temp_dir3.path().to_str().unwrap().to_string(),
-        ShareBlock::build_genesis_for_network(config3.bitcoin.network),
+        ShareBlock::build_genesis_for_network(config3.stratum.network),
     );
     // Start three nodes
     let (node1_handle, _stop_rx1) = NodeHandle::new(config1, chain_handle1)

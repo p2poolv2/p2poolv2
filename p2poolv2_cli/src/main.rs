@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Check if store path is provided and handle it
     let store = cli_commands::store::open_store(config.store.path.clone())?;
-    let genesis = ShareBlock::build_genesis_for_network(config.bitcoin.network);
+    let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
     let chain = Chain::new(store, genesis);
 
     // Handle command if provided

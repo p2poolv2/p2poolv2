@@ -27,13 +27,11 @@ start_difficulty = 1
 minimum_difficulty = 1
 solo_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 zmqpubhashblock = "tcp://127.0.0.1:28332"
+# The network can be "main", "testnet4" or "signet"
+network = "signet"
 
 [miner]
 pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
-
-[bitcoin]
-# The network can be "main", "testnet4" or "signet"
-network = "signet"
 
 [bitcoinrpc]
 url = "http://localhost:38332"

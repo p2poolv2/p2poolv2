@@ -44,7 +44,7 @@ async fn receive_shares_and_workbases_from_self_and_peers() {
     let temp_dir = tempdir().unwrap();
     let chain_handle = ChainHandle::new(
         temp_dir.path().to_str().unwrap().to_string(),
-        ShareBlock::build_genesis_for_network(config.bitcoin.network),
+        ShareBlock::build_genesis_for_network(config.stratum.network),
     );
 
     // Start the node
@@ -192,7 +192,7 @@ async fn test_rate_limiting() {
     let temp_dir = tempdir().unwrap();
     let chain_handle = ChainHandle::new(
         temp_dir.path().to_str().unwrap().to_string(),
-        ShareBlock::build_genesis_for_network(config.bitcoin.network),
+        ShareBlock::build_genesis_for_network(config.stratum.network),
     );
 
     let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone())

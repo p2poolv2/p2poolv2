@@ -110,6 +110,7 @@ impl StratumServer {
                                 bitcoinrpc_config: bitcoinrpc_config.clone(),
                                 minimum_difficulty: self.config.minimum_difficulty as u128,
                                 maximum_difficulty: self.config.maximum_difficulty.map(|v| v as u128),
+                                network: self.config.network,
                             };
                             // Spawn a new task for each connection
                             tokio::spawn(async move {
@@ -137,6 +138,7 @@ pub(crate) struct StratumContext {
     pub bitcoinrpc_config: BitcoinRpcConfig,
     pub minimum_difficulty: u128,
     pub maximum_difficulty: Option<u128>,
+    pub network: bitcoin::network::Network,
 }
 
 /// Handles a single connection to the Stratum server.
@@ -293,6 +295,7 @@ mod stratum_server_tests {
             maximum_difficulty: Some(2),
             solo_address: None,
             zmqpubhashblock: "tcp://127.0.0.1:28332".to_string(),
+            network: bitcoin::network::Network::Regtest,
         };
 
         let mut server = StratumServer::new(config, shutdown_rx, connections_handle).await;
@@ -348,6 +351,7 @@ mod stratum_server_tests {
             bitcoinrpc_config,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
+            network: bitcoin::network::Network::Regtest,
         };
 
         // Run the handler
@@ -421,6 +425,7 @@ mod stratum_server_tests {
             bitcoinrpc_config,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
+            network: bitcoin::network::Network::Regtest,
         };
 
         // Run the handler
@@ -467,6 +472,7 @@ mod stratum_server_tests {
             bitcoinrpc_config,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
+            network: bitcoin::network::Network::Regtest,
         };
 
         // Run the handler
@@ -516,6 +522,7 @@ mod stratum_server_tests {
             bitcoinrpc_config,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
+            network: bitcoin::network::Network::Regtest,
         };
 
         // Run the handler
@@ -591,6 +598,7 @@ mod stratum_server_tests {
             bitcoinrpc_config,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
+            network: bitcoin::network::Network::Regtest,
         };
 
         // Spawn the handler in a separate task
@@ -682,6 +690,7 @@ mod stratum_server_tests {
             bitcoinrpc_config,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
+            network: bitcoin::network::Network::Regtest,
         };
 
         // Spawn the handler in a separate task
