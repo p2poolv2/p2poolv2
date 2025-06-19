@@ -20,9 +20,9 @@ use serde::Deserialize;
 pub struct StratumConfig {
     pub hostname: String,
     pub port: u16,
-    pub start_difficulty: u32,
-    pub minimum_difficulty: u32,
-    pub maximum_difficulty: Option<u32>,
+    pub start_difficulty: u64,
+    pub minimum_difficulty: u64,
+    pub maximum_difficulty: Option<u64>,
     pub solo_address: Option<String>,
     pub zmqpubhashblock: String,
 }
