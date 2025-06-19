@@ -17,7 +17,7 @@
 use std::net::SocketAddr;
 
 use crate::error::Error;
-use crate::messages::{Request, Response};
+use crate::messages::{Message, Request};
 use crate::server::StratumContext;
 use crate::session::Session;
 use authorize::handle_authorize;
@@ -41,12 +41,19 @@ pub(crate) async fn handle_message<'a>(
     session: &mut Session,
     addr: SocketAddr,
     ctx: StratumContext,
-) -> Result<Response<'a>, Error> {
+) -> Result<Message<'a>, Error> {
     match message.method.as_ref() {
         "mining.subscribe" => handle_subscribe(message, session).await,
         "mining.authorize" => handle_authorize(message, session, addr, ctx.notify_tx).await,
         "mining.submit" => {
-            handle_submit(message, session, ctx.tracker_handle, ctx.bitcoinrpc_config).await
+            handle_submit(
+                message,
+                session,
+                ctx.tracker_handle,
+                ctx.bitcoinrpc_config,
+                ctx.network,
+            )
+            .await
         }
         method => Err(Error::InvalidMethod(method.to_string())),
     }
