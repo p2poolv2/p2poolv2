@@ -21,6 +21,7 @@ use crate::client_connections::ClientConnectionsHandle;
 use crate::client_connections::ClientConnectionsHandle;
 
 use crate::config::StratumConfig;
+use crate::difficulty_adjuster::{DifficultyAdjuster, DifficultyAdjusterTrait};
 use crate::message_handlers::handle_message;
 use crate::messages::Request;
 use crate::session::Session;
@@ -161,7 +162,7 @@ where
     const MAX_LINE_LENGTH: usize = 8 * 1024; // 8KB
 
     let mut framed = FramedRead::new(reader, LinesCodec::new_with_max_length(MAX_LINE_LENGTH));
-    let session = &mut Session::new(
+    let session = &mut Session::<DifficultyAdjuster>::new(
         ctx.minimum_difficulty,
         ctx.maximum_difficulty,
         ctx.maximum_difficulty.unwrap_or(ctx.minimum_difficulty),
@@ -224,15 +225,16 @@ where
     Ok(())
 }
 
-async fn process_incoming_message<W>(
+async fn process_incoming_message<W, D>(
     line: &str,
     writer: &mut W,
-    session: &mut Session,
+    session: &mut Session<D>,
     addr: SocketAddr,
     ctx: StratumContext,
 ) -> Result<(), Box<dyn std::error::Error + Send>>
 where
     W: AsyncWriteExt + Unpin,
+    D: DifficultyAdjusterTrait + Send + Sync,
 {
     match serde_json::from_str::<Request>(line) {
         Ok(message) => {
@@ -248,7 +250,7 @@ where
                     }
                 };
 
-                debug!("Sending to {}: {:?}", addr, response_json);
+                info!("Sending to {}: {:?}", addr, response_json);
                 if let Err(e) = writer
                     .write_all(format!("{}\n", response_json).as_bytes())
                     .await

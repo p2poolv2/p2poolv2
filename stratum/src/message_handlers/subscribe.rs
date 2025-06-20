@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
 use crate::messages::{Message, Request, Response};
 use crate::session::{Session, EXTRANONCE2_SIZE};
@@ -25,9 +26,9 @@ use tracing::debug;
 /// It sends a response with the subscription details.
 /// The function accepts a mutable reference to a `Session` object, which informs the responses.
 /// The session is also updated in response to received messages, if required.
-pub async fn handle_subscribe<'a>(
+pub async fn handle_subscribe<'a, D: DifficultyAdjusterTrait>(
     message: Request<'a>,
-    session: &mut Session,
+    session: &mut Session<D>,
 ) -> Result<Message<'a>, Error> {
     debug!("Handling mining.subscribe message");
     if session.subscribed {
@@ -51,6 +52,7 @@ pub async fn handle_subscribe<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::difficulty_adjuster::DifficultyAdjuster;
     use crate::messages::Id;
     use crate::session::Session;
 
@@ -58,7 +60,7 @@ mod tests {
     async fn test_handle_subscribe_success() {
         // Setup
         let message = Request::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
-        let mut session = Session::new(1, None, 2);
+        let mut session = Session::<DifficultyAdjuster>::new(1, None, 2);
         session.subscribed = false;
 
         // Execute
@@ -112,7 +114,7 @@ mod tests {
     async fn test_handle_subscribe_already_subscribed() {
         // Setup
         let message = Request::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
-        let mut session = Session::new(2, None, 2);
+        let mut session = Session::<DifficultyAdjuster>::new(2, None, 2);
         session.subscribed = true;
 
         // Execute

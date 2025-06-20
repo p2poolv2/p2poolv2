@@ -24,6 +24,7 @@ tokio-stream = { workspace = true }
 bitcoindrpc = { path = '../bitcoindrpc', features = ["test-utils"] }
 zmq = { workspace = true }
 
+
 [dev-dependencies]
 test-log = { version = "0.2.17", features = ["trace"] }
 rand = "0.8"

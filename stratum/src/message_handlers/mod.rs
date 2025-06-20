@@ -16,6 +16,7 @@
 
 use std::net::SocketAddr;
 
+use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
 use crate::messages::{Message, Request};
 use crate::server::StratumContext;
@@ -36,9 +37,9 @@ pub mod subscribe;
 /// Return a vector of responses to be sent back to the client.
 #[allow(dead_code)]
 #[allow(clippy::needless_lifetimes)]
-pub(crate) async fn handle_message<'a>(
+pub(crate) async fn handle_message<'a, D: DifficultyAdjusterTrait>(
     message: Request<'a>,
-    session: &mut Session,
+    session: &mut Session<D>,
     addr: SocketAddr,
     ctx: StratumContext,
 ) -> Result<Message<'a>, Error> {

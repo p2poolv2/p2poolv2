@@ -20,6 +20,8 @@
 //! CKPool documentation. It tracks the client's share rate and dynamically
 //! adjusts the difficulty to maintain an optimal share submission frequency.
 
+#[cfg(test)]
+use mockall::automock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
 
@@ -77,9 +79,47 @@ pub struct DifficultyAdjuster {
     pub network_difficulty: u128,
 }
 
-impl DifficultyAdjuster {
+#[cfg_attr(test, automock)]
+pub trait DifficultyAdjusterTrait {
     /// Create a new DifficultyAdjuster with the given minimum difficulty
-    pub fn new(
+    fn new(
+        pool_minimum_difficulty: u128,
+        pool_maximum_difficulty: Option<u128>,
+        network_difficulty: u128,
+    ) -> Self;
+
+    /// Records a share submission and updates metrics
+    ///
+    /// Returns a tuple of (Option<u32>, bool) where the first element is the new difficulty
+    /// if it changed, and the second element is true if this was the first share.
+    fn record_share_submission(&mut self, share_diff: u128, job_id: u64) -> (Option<u128>, bool);
+
+    /// Calculate the optimal difficulty based on client performance
+    fn calculate_new_difficulty(&self) -> u128;
+
+    /// Update the difficulty shares per second metric for a given time window
+    fn update_difficulty_shares_per_second_metric(
+        &mut self,
+        share_diff: u128,
+        time_window_seconds: f64,
+        window_duration_seconds: f64,
+    );
+
+    /// Update the DSPS (Difficulty Shares Per Second) metrics using exponential decay
+    fn apply_difficulty_constraints(&self, new_diff: u128) -> u128;
+
+    /// Get the current difficulty
+    fn current_difficulty(&self) -> u128;
+
+    /// Reset the difficulty adjuster with a new minimum difficulty
+    fn reset(&mut self, pool_minimum_difficulty: u128);
+
+    /// Set the network difficulty
+    fn set_network_difficulty(&mut self, network_difficulty: u128);
+}
+
+impl DifficultyAdjusterTrait for DifficultyAdjuster {
+    fn new(
         pool_minimum_difficulty: u128,
         pool_maximum_difficulty: Option<u128>,
         network_difficulty: u128,
@@ -102,15 +142,7 @@ impl DifficultyAdjuster {
         }
     }
 
-    /// Records a share submission and updates metrics
-    ///
-    /// Returns a tuple of (Option<u32>, bool) where the first element is the new difficulty
-    /// if it changed, and the second element is true if this was the first share.
-    pub fn record_share_submission(
-        &mut self,
-        share_diff: u128,
-        job_id: u64,
-    ) -> (Option<u128>, bool) {
+    fn record_share_submission(&mut self, share_diff: u128, job_id: u64) -> (Option<u128>, bool) {
         let now = SystemTime::now();
         let mut first_share = false;
 
@@ -170,7 +202,7 @@ impl DifficultyAdjuster {
         if should_adjust {
             let new_diff = self.calculate_new_difficulty();
 
-            debug!(
+            info!(
                 "Calculated new difficulty: {}, current difficulty: {}",
                 new_diff, self.current_difficulty
             );
@@ -183,7 +215,7 @@ impl DifficultyAdjuster {
                 self.last_difficulty_change_timestamp = Some(now); // Update last difficulty change time
                 self.last_diff_change_job_id = Some(job_id);
 
-                debug!(
+                info!(
                     "Difficulty changed from {} to {} based on DRR calculation",
                     self.old_difficulty, self.current_difficulty
                 );
@@ -195,7 +227,6 @@ impl DifficultyAdjuster {
         (None, first_share)
     }
 
-    /// Calculate the optimal difficulty based on client performance
     fn calculate_new_difficulty(&self) -> u128 {
         // Calculate the bias factor, which increases as time since first share increases
         let time_since_first_share = SystemTime::now()
@@ -237,7 +268,6 @@ impl DifficultyAdjuster {
         constrained_diff
     }
 
-    /// Apply constraints to ensure difficulty is within acceptable bounds
     fn apply_difficulty_constraints(&self, calculated_diff: u128) -> u128 {
         // 1. Maximum of pool minimum difficulty and calculated optimal
         let mut diff = calculated_diff.max(self.pool_minimum_difficulty);
@@ -251,7 +281,6 @@ impl DifficultyAdjuster {
         diff.min(self.network_difficulty)
     }
 
-    /// Update the DSPS (Difficulty Shares Per Second) metrics using exponential decay
     fn update_difficulty_shares_per_second_metric(
         &mut self,
         diff_share: u128,
@@ -293,17 +322,15 @@ impl DifficultyAdjuster {
         *dsps = (*dsps + (diff_share as f64 * fprop / elapsed_time)) / (1.0 + fprop);
     }
 
-    /// Get the current difficulty
     #[inline]
-    pub fn current_difficulty(&self) -> u128 {
+    fn current_difficulty(&self) -> u128 {
         self.current_difficulty
     }
 
-    /// Reset the difficulty adjuster with a new minimum difficulty
-    pub fn reset(&mut self, min_diff: u128) {
+    fn reset(&mut self, pool_minimum_difficulty: u128) {
         self.share_submission_difficulty_counter = 0;
-        self.current_difficulty = min_diff;
-        self.old_difficulty = min_diff;
+        self.current_difficulty = pool_minimum_difficulty;
+        self.old_difficulty = pool_minimum_difficulty;
         self.first_share_timestamp = None;
         self.last_difficulty_change_timestamp = None;
         self.difficulty_shares_per_second_1min_window = 0.0;
@@ -314,9 +341,8 @@ impl DifficultyAdjuster {
         self.last_diff_change_job_id = None;
     }
 
-    /// Set the network difficulty
-    pub fn set_network_difficulty(&mut self, network_diff: u128) {
-        self.network_difficulty = network_diff;
+    fn set_network_difficulty(&mut self, network_difficulty: u128) {
+        self.network_difficulty = network_difficulty;
     }
 }
 
