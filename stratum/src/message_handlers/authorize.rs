@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
 use crate::messages::{Message, Request, Response};
 use crate::session::Session;
@@ -31,9 +32,9 @@ use tracing::debug;
 ///
 /// TBH, this mining.authorize message is not needed at all. No server from ckpool to dataum to SRI is doing anything meaningful with it.
 /// Stratum servers also allow all workers to authrorize over the same connection.
-pub async fn handle_authorize<'a>(
+pub async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
     message: Request<'a>,
-    session: &mut Session,
+    session: &mut Session<D>,
     addr: std::net::SocketAddr,
     notify_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
 ) -> Result<Message<'a>, Error> {
@@ -60,13 +61,14 @@ pub async fn handle_authorize<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::difficulty_adjuster::DifficultyAdjuster;
     use crate::messages::Id;
     use std::net::SocketAddr;
 
     #[tokio::test]
     async fn test_handle_authorize_first_time() {
         // Setup
-        let mut session = Session::new(1, None, 1);
+        let mut session = Session::<DifficultyAdjuster>::new(1, None, 1);
         let request = Request::new_authorize(12345, "worker1".to_string(), Some("x".to_string()));
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(1);
 
@@ -103,7 +105,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_authorize_already_authorized() {
         // Setup
-        let mut session = Session::new(1, None, 1);
+        let mut session = Session::<DifficultyAdjuster>::new(1, None, 1);
         session.username = Some("someusername".to_string());
         let request =
             Request::new_authorize(12345, "worker1".to_string(), Some("password".to_string()));

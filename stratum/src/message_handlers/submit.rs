@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
 use crate::messages::{Message, Request, Response, SetDifficultyNotification};
 use crate::session::Session;
@@ -33,9 +34,9 @@ use tracing::{debug, error, info};
 /// {"id": 1, "method": "mining.submit", "params": ["username", "jobid", "extranonce2", "nTime", "nonce"]}
 /// Example message:
 /// {"id": 1, "method": "mining.submit", "params": ["username", "4f", "fe36a31b", "504e86ed", "e9695791"]}
-pub async fn handle_submit<'a>(
+pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     message: Request<'a>,
-    session: &mut Session,
+    session: &mut Session<D>,
     tracker_handle: TrackerHandle,
     bitcoinrpc_config: BitcoinRpcConfig,
     network: bitcoin::Network,
@@ -98,7 +99,7 @@ pub async fn submit_block(block: &Block, bitcoinrpc_config: BitcoinRpcConfig) {
         &bitcoinrpc_config.password,
     );
     match rpc {
-        Ok(bitcoind) => match bitcoind.submit_block(&block).await {
+        Ok(bitcoind) => match bitcoind.submit_block(block).await {
             Ok(_) => info!("Block submitted successfully"),
             Err(e) => error!("Failed to submit block: {}", e),
         },
@@ -111,6 +112,8 @@ pub async fn submit_block(block: &Block, bitcoinrpc_config: BitcoinRpcConfig) {
 #[cfg(test)]
 mod handle_submit_tests {
     use super::*;
+    use crate::difficulty_adjuster::{DifficultyAdjuster, MockDifficultyAdjusterTrait};
+    use crate::messages::SetDifficultyNotification;
     use crate::messages::{Id, Notify, Request};
     use crate::session::Session;
     use crate::work::gbt::BlockTemplate;
@@ -120,7 +123,7 @@ mod handle_submit_tests {
 
     #[test_log::test(tokio::test)]
     async fn test_handle_submit_meets_difficulty_should_submit() {
-        let mut session = Session::new(1, None, 2);
+        let mut session = Session::<DifficultyAdjuster>::new(1, None, 2);
         let tracker_handle = start_tracker_actor();
 
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
@@ -194,9 +197,9 @@ mod handle_submit_tests {
         mock_server.verify().await;
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_handle_submit_a_meets_difficulty_should_submit() {
-        let mut session = Session::new(1, None, 2);
+        let mut session = Session::<DifficultyAdjuster>::new(1, None, 2);
         let tracker_handle = start_tracker_actor();
 
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
@@ -268,6 +271,88 @@ mod handle_submit_tests {
         assert_eq!(response.result, Some(json!(true)));
 
         // Verify that the block was not submitted to the mock server
+        mock_server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn test_handle_submit_triggers_difficulty_adjustment() {
+        let ctx = MockDifficultyAdjusterTrait::new_context();
+        ctx.expect().returning(|_, _, _| {
+            let mut mock = MockDifficultyAdjusterTrait::default();
+            mock.expect_record_share_submission()
+                .returning(|_difficulty, _job_id| (Some(12345), false));
+            mock
+        });
+
+        let mut session = Session::<MockDifficultyAdjusterTrait>::new(1, None, 2);
+        let tracker_handle = start_tracker_actor();
+
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        mock_submit_block_with_any_body(&mock_server).await;
+
+        // Use test data from "a" as a base
+        let template_str = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/validation/stratum/a/template.json"),
+        )
+        .unwrap();
+        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
+
+        let notify_str = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/validation/stratum/a/notify.json"),
+        )
+        .unwrap();
+        let notify: Notify = serde_json::from_str(&notify_str).unwrap();
+
+        let submit_str = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/validation/stratum/a/submit.json"),
+        )
+        .unwrap();
+        let submit: Request = serde_json::from_str(&submit_str).unwrap();
+
+        let authorize_response_str = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/validation/stratum/a/authorize_response.json"),
+        )
+        .unwrap();
+        let authorize_response: Response = serde_json::from_str(&authorize_response_str).unwrap();
+
+        let enonce1 = authorize_response.result.unwrap()[1].clone();
+        let enonce1: &str = enonce1.as_str().unwrap();
+        session.enonce1 =
+            u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
+        session.enonce1_hex = enonce1.to_string();
+
+        let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
+
+        let _ = tracker_handle
+            .insert_job(
+                Arc::new(template),
+                notify.params.coinbase1.to_string(),
+                notify.params.coinbase2.to_string(),
+                job_id,
+            )
+            .await;
+
+        let message = handle_submit(
+            submit,
+            &mut session,
+            tracker_handle,
+            bitcoinrpc_config,
+            bitcoin::network::Network::Regtest,
+        )
+        .await
+        .unwrap();
+
+        match message {
+            Message::SetDifficulty(SetDifficultyNotification { method: _, params }) => {
+                assert_eq!(params[0], 12345);
+            }
+            _ => panic!("Expected SetDifficultyNotification message"),
+        }
+
         mock_server.verify().await;
     }
 }
