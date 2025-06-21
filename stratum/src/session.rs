@@ -45,9 +45,9 @@ pub struct Session<D: DifficultyAdjusterTrait> {
 impl<D: DifficultyAdjusterTrait> Session<D> {
     /// Creates a new session with the given minimum difficulty.
     pub fn new(
-        minimum_difficulty: u128,
-        maximum_difficulty: Option<u128>,
-        network_difficulty: u128,
+        minimum_difficulty: u64,
+        maximum_difficulty: Option<u64>,
+        network_difficulty: u64,
     ) -> Self {
         let id = Session::<D>::generate_id();
         let enonce1 = id.to_le();
