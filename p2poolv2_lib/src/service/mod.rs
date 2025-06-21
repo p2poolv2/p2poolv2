@@ -54,76 +54,46 @@ mod tests {
     use crate::node::messages::Message;
     use crate::service::p2p_service::{P2PService, RequestContext};
     use crate::shares::chain::actor::ChainHandle;
-    use crate::utils::time_provider::TimeProvider;
+    use crate::utils::time_provider::TestTimeProvider;
+
     use libp2p::PeerId;
-    use std::sync::Arc;
-    use std::time::Duration;
-    use tokio::sync::mpsc;
+    use std::time::{Duration, SystemTime};
+    use tokio::sync::{mpsc, oneshot};
     use tower::limit::RateLimitLayer;
-    use tower::{Service, ServiceBuilder, ServiceExt};
-
-    // Dummy TimeProvider
-    #[derive(Clone)]
-    struct DummyTimeProvider;
-    impl TimeProvider for DummyTimeProvider {
-        fn now(&self) -> std::time::SystemTime {
-            std::time::SystemTime::UNIX_EPOCH
-        }
-
-        fn set_time(&self, _time: std::time::SystemTime) {
-            // No-op for dummy
-        }
-
-        fn seconds_since_epoch(&self) -> u64 {
-            0
-        }
-    }
-
-    // Dummy ChainHandle
-    #[derive(Clone, Default)]
-    struct DummyChainHandle;
-    impl ChainHandle for DummyChainHandle {}
-
-    // dummy RequestContext
-    fn dummy_request_context<C>() -> RequestContext<C, DummyTimeProvider> {
-        RequestContext {
-            peer: PeerId::random(),
-            request: Message::Ping,
-            chain_handle: Arc::new(DummyChainHandle),
-            response_channel: None::<C>.unwrap_or_else(|| panic!("Response channel unused")),
-            swarm_tx: mpsc::channel(10).0,
-            time_provider: DummyTimeProvider,
-        }
-    }
+    use tower::{Service, ServiceBuilder};
 
     #[tokio::test]
     async fn test_rate_limit_blocks_excess_requests() {
-        // We hardcode rate limit for this unit test
-        let (swarm_tx, _rx) = mpsc::channel(10);
+        let mut chain_handle = ChainHandle::default();
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
+
+        let peer_id = PeerId::random();
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        let ctx = RequestContext {
+            peer: peer_id,
+            request: Message::Ping,
+            chain_handle,
+            response_channel: response_channel_tx,
+            swarm_tx: swarm_tx.clone(),
+            time_provider,
+        };
+
+        // Build the base service
         let base_service = P2PService::new(swarm_tx.clone());
 
+        // Apply the rate limiting layer
         let mut service = ServiceBuilder::new()
             .layer(RateLimitLayer::new(1, Duration::from_secs(1)))
             .service(base_service);
 
-        let req_context = dummy_request_context();
-
         // First call should succeed
-        let result1 = service
-            .ready()
-            .await
-            .unwrap()
-            .call(req_context.clone())
-            .await;
+        let result1 = service.ready().await.unwrap().call(ctx.clone()).await;
         assert!(result1.is_ok(), "First request should succeed");
 
-        // Second call immediately should be blocked by rate limiter
-        let result2 = service
-            .ready()
-            .await
-            .unwrap()
-            .call(req_context.clone())
-            .await;
+        // Second call immediately should be blocked by the rate limiter
+        let result2 = service.ready().await.unwrap().call(ctx.clone()).await;
         assert!(result2.is_err(), "Second request should be rate limited");
     }
 }
