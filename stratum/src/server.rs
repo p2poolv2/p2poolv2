@@ -109,8 +109,8 @@ impl StratumServer {
                                 notify_tx: notify_tx.clone(),
                                 tracker_handle: tracker_handle.clone(),
                                 bitcoinrpc_config: bitcoinrpc_config.clone(),
-                                minimum_difficulty: self.config.minimum_difficulty as u128,
-                                maximum_difficulty: self.config.maximum_difficulty.map(|v| v as u128),
+                                minimum_difficulty: self.config.minimum_difficulty,
+                                maximum_difficulty: self.config.maximum_difficulty,
                                 network: self.config.network,
                             };
                             // Spawn a new task for each connection
@@ -137,8 +137,8 @@ pub(crate) struct StratumContext {
     pub notify_tx: mpsc::Sender<NotifyCmd>,
     pub tracker_handle: TrackerHandle,
     pub bitcoinrpc_config: BitcoinRpcConfig,
-    pub minimum_difficulty: u128,
-    pub maximum_difficulty: Option<u128>,
+    pub minimum_difficulty: u64,
+    pub maximum_difficulty: Option<u64>,
     pub network: bitcoin::network::Network,
 }
 
