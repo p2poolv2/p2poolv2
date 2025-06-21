@@ -34,6 +34,7 @@ pub struct NetworkConfig {
     pub max_inventory_per_second: u32,
     pub max_transaction_per_second: u32,
     pub rate_limit_window_secs: u64,
+    pub max_requests_per_second: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]

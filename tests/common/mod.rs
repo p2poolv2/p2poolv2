@@ -40,6 +40,7 @@ pub fn default_test_config() -> Config {
             max_inventory_per_second: 100,
             max_transaction_per_second: 100,
             rate_limit_window_secs: 1,
+            max_requests_per_second: 1,
         },
         bitcoinrpc: BitcoinRpcConfig {
             url: "http://localhost:8332".to_string(),
