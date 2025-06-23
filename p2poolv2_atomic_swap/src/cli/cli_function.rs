@@ -14,14 +14,14 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-
-
 use ldk_node::lightning::ln::channelmanager::PaymentId;
-use ldk_node::{ Node, UserChannelId};
-use ldk_node::{bitcoin::{Address,secp256k1::PublicKey},
-    lightning::ln::msgs::SocketAddress};
-use ldk_node::lightning_invoice::{Description,Bolt11InvoiceDescription,Bolt11Invoice};
-pub use ldk_node::lightning_types::payment::{PaymentHash,PaymentPreimage};
+use ldk_node::lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription, Description};
+pub use ldk_node::lightning_types::payment::{PaymentHash, PaymentPreimage};
+use ldk_node::{
+    bitcoin::{secp256k1::PublicKey, Address},
+    lightning::ln::msgs::SocketAddress,
+};
+use ldk_node::{Node, UserChannelId};
 
 /// Default invoice expiry time in seconds (24 hours)
 const DEFAULT_EXPIRY_SECS: u32 = 86_400;
@@ -36,19 +36,22 @@ fn handle_error<E: std::fmt::Debug>(context: &str, error: E) {
 }
 
 /// Sends an on-chain transfer to a specified address.
-pub(crate) async fn onchaintransfer(node: &Node, destination_address: &Address, amount_sats:u64 ){
-    match node.onchain_payment().send_to_address(destination_address, amount_sats, None) {
+pub(crate) async fn onchaintransfer(node: &Node, destination_address: &Address, amount_sats: u64) {
+    match node
+        .onchain_payment()
+        .send_to_address(destination_address, amount_sats, None)
+    {
         Ok(txid) => println!("On-chain transfer successful. Transaction ID: {}", txid),
         Err(e) => handle_error("sending on-chain transfer", e),
     };
 }
 
 /// Sends all available on-chain funds to a specified address.
-pub(crate) async fn onchaintransfer_all(
-    node: &Node,
-    destination: &Address,
-) {
-    match node.onchain_payment().send_all_to_address(destination, false, None) {
+pub(crate) async fn onchaintransfer_all(node: &Node, destination: &Address) {
+    match node
+        .onchain_payment()
+        .send_all_to_address(destination, false, None)
+    {
         Ok(txid) => println!("On-chain transfer successful. Transaction ID: {}", txid),
         Err(e) => handle_error("sending all on-chain funds", e),
     }
@@ -70,8 +73,14 @@ pub(crate) async fn openchannel(
 // Prints the node's on-chain and Lightning balances.
 pub(crate) async fn balance(node: &Node) {
     let balances = node.list_balances();
-    println!("On-Chain Balance: {} sats", balances.total_onchain_balance_sats);
-    println!("Lightning Balance: {} sats", balances.total_lightning_balance_sats);
+    println!(
+        "On-Chain Balance: {} sats",
+        balances.total_onchain_balance_sats
+    );
+    println!(
+        "Lightning Balance: {} sats",
+        balances.total_lightning_balance_sats
+    );
 }
 
 /// Generates a new on-chain funding address.
@@ -82,7 +91,7 @@ pub(crate) async fn getaddress(node: &Node) {
     }
 }
 
-pub(crate) async fn listallchannels(node: &Node){
+pub(crate) async fn listallchannels(node: &Node) {
     let channels = node.list_channels();
     if channels.is_empty() {
         println!("No channels found.");
@@ -91,14 +100,23 @@ pub(crate) async fn listallchannels(node: &Node){
         for channel in channels.iter() {
             println!("--------------------------------------------");
             println!("Channel ID: {}", channel.channel_id);
-            println!("User Channel ID: {:?}",channel.user_channel_id);
+            println!("User Channel ID: {:?}", channel.user_channel_id);
             println!("Channel Counterparty: {}", channel.counterparty_node_id);
             println!("Channel Value: {} sats", channel.channel_value_sats);
-            println!("Spendable (Outbound) Balance: {} sats", channel.outbound_capacity_msat / 1000);
-            println!("Receivable (Inbound) Balance: {} sats", channel.inbound_capacity_msat / 1000);
+            println!(
+                "Spendable (Outbound) Balance: {} sats",
+                channel.outbound_capacity_msat / 1000
+            );
+            println!(
+                "Receivable (Inbound) Balance: {} sats",
+                channel.inbound_capacity_msat / 1000
+            );
             println!("Channel Ready?: {}", channel.is_channel_ready);
             println!("Is Usable?: {}", channel.is_usable);
-            println!("Max Htlc Spendable: {} sats",channel.counterparty_outbound_htlc_maximum_msat.unwrap()/1000);
+            println!(
+                "Max Htlc Spendable: {} sats",
+                channel.counterparty_outbound_htlc_maximum_msat.unwrap() / 1000
+            );
             if !channel.is_usable {
                 println!("Channel not usable. Possible reasons:");
                 if !channel.is_channel_ready {
@@ -114,7 +132,11 @@ pub(crate) async fn listallchannels(node: &Node){
 }
 
 /// Closes a Lightning channel cooperatively.
-pub(crate) async fn closechannel(node: &Node, channel_id: &UserChannelId, counterparty_node_id: PublicKey){
+pub(crate) async fn closechannel(
+    node: &Node,
+    channel_id: &UserChannelId,
+    counterparty_node_id: PublicKey,
+) {
     match node.close_channel(channel_id, counterparty_node_id) {
         Ok(_) => println!("Channel closed successfully."),
         Err(e) => handle_error("Error closing channel", e),
@@ -122,65 +144,85 @@ pub(crate) async fn closechannel(node: &Node, channel_id: &UserChannelId, counte
 }
 
 /// Force-closes a Lightning channel with a reason
-pub(crate) async fn force_close_channel(node: &Node, channel_id: &UserChannelId, counterparty_node_id: PublicKey, reason:&str){
+pub(crate) async fn force_close_channel(
+    node: &Node,
+    channel_id: &UserChannelId,
+    counterparty_node_id: PublicKey,
+    reason: &str,
+) {
     // Ensure the reason is in snake_case or camelCase format
-    if !reason.chars().all(|c| c.is_alphanumeric() || c == '_' || c.is_lowercase() || c.is_uppercase()) {
+    if !reason
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c.is_lowercase() || c.is_uppercase())
+    {
         println!("Error: 'reason' must be in snake_case or camelCase format.");
         return;
     }
 
-    match node.force_close_channel(channel_id, counterparty_node_id, Option::from(String::from(reason))) {
+    match node.force_close_channel(
+        channel_id,
+        counterparty_node_id,
+        Option::from(String::from(reason)),
+    ) {
         Ok(_) => println!("Channel force closed successfully."),
         Err(e) => handle_error("Error force closing channel", e),
     };
 }
 
 /// Generates a new Bolt11 invoice for a specified amount.
-pub(crate) async fn getinvoice(node: &Node, amount_msats:  u64, ){
-   let bolt11payment = node.bolt11_payment();
-   let description = Description::new(DEFAULT_INVOICE_DESCRIPTION.to_string()).unwrap();
-   let description = Bolt11InvoiceDescription::Direct(description);
-    match bolt11payment.receive(amount_msats,&description , DEFAULT_EXPIRY_SECS) {
+pub(crate) async fn getinvoice(node: &Node, amount_msats: u64) {
+    let bolt11payment = node.bolt11_payment();
+    let description = Description::new(DEFAULT_INVOICE_DESCRIPTION.to_string()).unwrap();
+    let description = Bolt11InvoiceDescription::Direct(description);
+    match bolt11payment.receive(amount_msats, &description, DEFAULT_EXPIRY_SECS) {
         Ok(invoice) => {
             println!("Invoice: {}", invoice);
-        },
+        }
         Err(e) => handle_error("Creating invoice", e),
     }
 }
 
 /// Generates a hold invoice with a specified payment hash.
-pub(crate) async fn getholdinvoice(node: &Node,  amount_msats: u64,
-    payment_hash: PaymentHash) {
-         let bolt11_payment = node.bolt11_payment();
-        let description = Description::new("Test invoice".to_string()).unwrap();
-        let description = Bolt11InvoiceDescription::Direct(description);
-        match bolt11_payment.receive_for_hash(amount_msats, &description, DEFAULT_EXPIRY_SECS, payment_hash){
-            Ok(invoice) => {
-                println!("Hold Invoice: {}", invoice);
-            },
-            Err(e) => {
-                handle_error("Creating hold invoice", e);
+pub(crate) async fn getholdinvoice(node: &Node, amount_msats: u64, payment_hash: PaymentHash) {
+    let bolt11_payment = node.bolt11_payment();
+    let description = Description::new("Test invoice".to_string()).unwrap();
+    let description = Bolt11InvoiceDescription::Direct(description);
+    match bolt11_payment.receive_for_hash(
+        amount_msats,
+        &description,
+        DEFAULT_EXPIRY_SECS,
+        payment_hash,
+    ) {
+        Ok(invoice) => {
+            println!("Hold Invoice: {}", invoice);
         }
-    
+        Err(e) => {
+            handle_error("Creating hold invoice", e);
+        }
     }
 }
 
 /// Redeems a hold invoice with the provided preimage.
-pub (crate) async fn redeeminvoice(node: &Node, payment_hash: PaymentHash, preimage:PaymentPreimage, claimable_amount_msats: u64) {
-        let bolt11_payment = node.bolt11_payment();
-        match bolt11_payment.claim_for_hash(payment_hash, claimable_amount_msats, preimage) {
-            Ok(_) => println!("Invoice redeemed successfully."),
-            Err(e) => handle_error("Redeeming invoice", e),
-        };
-    }
+pub(crate) async fn redeeminvoice(
+    node: &Node,
+    payment_hash: PaymentHash,
+    preimage: PaymentPreimage,
+    claimable_amount_msats: u64,
+) {
+    let bolt11_payment = node.bolt11_payment();
+    match bolt11_payment.claim_for_hash(payment_hash, claimable_amount_msats, preimage) {
+        Ok(_) => println!("Invoice redeemed successfully."),
+        Err(e) => handle_error("Redeeming invoice", e),
+    };
+}
 
 /// Pays a Bolt11 invoice
-pub(crate) async fn payinvoice(node: &Node, invoice: &Bolt11Invoice ){
+pub(crate) async fn payinvoice(node: &Node, invoice: &Bolt11Invoice) {
     let bolt11payment = node.bolt11_payment();
-    match bolt11payment.send(invoice, None){
+    match bolt11payment.send(invoice, None) {
         Ok(payment_id) => {
             println!("Payment send. Payment Id: {}", payment_id);
-        },
+        }
         Err(e) => {
             handle_error("Paying invoice", e);
         }
@@ -198,17 +240,13 @@ pub(crate) async fn paymentid_status(node: &Node, payment_id: &PaymentId) {
             println!("Fee Paid (msat): {:?}", payment_details.fee_paid_msat);
             println!("Direction: {:?}", payment_details.direction);
             println!("Status: {:?}", payment_details.status);
-            println!("Latest Update Timestamp: {}", payment_details.latest_update_timestamp);
-        },
+            println!(
+                "Latest Update Timestamp: {}",
+                payment_details.latest_update_timestamp
+            );
+        }
         None => {
             println!("No payment found with this payment id");
         }
     }
 }
-
-
-
-
-
-
-

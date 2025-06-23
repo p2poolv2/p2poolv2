@@ -17,16 +17,13 @@
 mod cli_function;
 
 use cli_function::{
-    balance, closechannel, force_close_channel,  getaddress, getholdinvoice,
-    getinvoice, listallchannels, onchaintransfer, onchaintransfer_all, openchannel, 
-    payinvoice, paymentid_status, redeeminvoice,
+    balance, closechannel, force_close_channel, getaddress, getholdinvoice, getinvoice,
+    listallchannels, onchaintransfer, onchaintransfer_all, openchannel, payinvoice,
+    paymentid_status, redeeminvoice,
 };
 use ldk_node::{
     bitcoin::{secp256k1::PublicKey, Address},
-    lightning::ln::{
-        channelmanager::PaymentId,
-        msgs::SocketAddress,
-    },
+    lightning::ln::{channelmanager::PaymentId, msgs::SocketAddress},
     lightning_invoice::Bolt11Invoice,
     lightning_types::payment::{PaymentHash, PaymentPreimage},
     Node, UserChannelId,
@@ -69,12 +66,10 @@ pub async fn run_node_cli(node: Arc<Node>) {
                         (Some("onchaintransfer"), [addr, sats]) => {
                             let network = node.config().network;
                             match Address::from_str(addr).and_then(|a| a.require_network(network)) {
-                                Ok(dest_addr) => {
-                                    match sats.parse::<u64>() {
-                                        Ok(amount) => onchaintransfer(&node, &dest_addr, amount).await,
-                                        Err(e) => println!("Error: Invalid amount: {}", e),
-                                    }
-                                }
+                                Ok(dest_addr) => match sats.parse::<u64>() {
+                                    Ok(amount) => onchaintransfer(&node, &dest_addr, amount).await,
+                                    Err(e) => println!("Error: Invalid amount: {}", e),
+                                },
                                 Err(e) => println!("Error: Invalid address: {}", e),
                             }
                         }
@@ -86,7 +81,11 @@ pub async fn run_node_cli(node: Arc<Node>) {
                             }
                         }
                         (Some("openchannel"), [node_id, addr, sats]) => {
-                            match (node_id.parse::<PublicKey>(), addr.parse::<SocketAddress>(), sats.parse::<u64>()) {
+                            match (
+                                node_id.parse::<PublicKey>(),
+                                addr.parse::<SocketAddress>(),
+                                sats.parse::<u64>(),
+                            ) {
                                 (Ok(id), Ok(net_addr), Ok(amount)) => {
                                     openchannel(&node, id, net_addr, amount).await
                                 }
@@ -98,17 +97,15 @@ pub async fn run_node_cli(node: Arc<Node>) {
                         (Some("balance"), []) => balance(&node).await,
                         (Some("getaddress"), []) => getaddress(&node).await,
                         (Some("listallchannels"), []) => listallchannels(&node).await,
-                        (Some("paymentid_status"), [payment_id]) => {
-                            match hex::decode(payment_id) {
-                                Ok(bytes) if bytes.len() == 32 => {
-                                    let mut array = [0u8; 32];
-                                    array.copy_from_slice(&bytes);
-                                    paymentid_status(&node, &PaymentId(array)).await;
-                                }
-                                Ok(_) => println!("Error: Payment ID must be a 32-byte hex string"),
-                                Err(e) => println!("Error: Invalid payment ID: {}", e),
+                        (Some("paymentid_status"), [payment_id]) => match hex::decode(payment_id) {
+                            Ok(bytes) if bytes.len() == 32 => {
+                                let mut array = [0u8; 32];
+                                array.copy_from_slice(&bytes);
+                                paymentid_status(&node, &PaymentId(array)).await;
                             }
-                        }
+                            Ok(_) => println!("Error: Payment ID must be a 32-byte hex string"),
+                            Err(e) => println!("Error: Invalid payment ID: {}", e),
+                        },
                         (Some("closechannel"), [chan_id, node_id]) => {
                             match (chan_id.parse::<u128>(), node_id.parse::<PublicKey>()) {
                                 (Ok(id), Ok(counterparty)) => {
@@ -125,26 +122,33 @@ pub async fn run_node_cli(node: Arc<Node>) {
                             }
                             match (chan_id.parse::<u128>(), node_id.parse::<PublicKey>()) {
                                 (Ok(id), Ok(counterparty)) => {
-                                    force_close_channel(&node, &UserChannelId(id), counterparty, reason).await
+                                    force_close_channel(
+                                        &node,
+                                        &UserChannelId(id),
+                                        counterparty,
+                                        reason,
+                                    )
+                                    .await
                                 }
                                 (Err(e), _) => println!("Error: Invalid channel ID: {}", e),
                                 (_, Err(e)) => println!("Error: Invalid node ID: {}", e),
                             }
                         }
-                        (Some("getinvoice"), [amount]) => {
-                            match amount.parse::<u64>() {
-                                Ok(amount_sats) => getinvoice(&node, amount_sats*1000).await,
-                                Err(e) => println!("Error: Invalid amount: {}", e),
-                            }
-                        }
+                        (Some("getinvoice"), [amount]) => match amount.parse::<u64>() {
+                            Ok(amount_sats) => getinvoice(&node, amount_sats * 1000).await,
+                            Err(e) => println!("Error: Invalid amount: {}", e),
+                        },
                         (Some("getholdinvoice"), [amount, hash]) => {
                             match (amount.parse::<u64>(), hex::decode(hash)) {
                                 (Ok(amt), Ok(bytes)) if bytes.len() == 32 => {
                                     let amount_msats = amt * 1000;
                                     let secret_hash: [u8; 32] = bytes.try_into().unwrap();
-                                    getholdinvoice(&node, amount_msats, PaymentHash(secret_hash)).await;
+                                    getholdinvoice(&node, amount_msats, PaymentHash(secret_hash))
+                                        .await;
                                 }
-                                (Ok(_), Ok(_)) => println!("Error: Payment hash must be a 32-byte hex string"),
+                                (Ok(_), Ok(_)) => {
+                                    println!("Error: Payment hash must be a 32-byte hex string")
+                                }
                                 (Ok(_), Err(e)) => println!("Error: Invalid payment hash: {}", e),
                                 (Err(e), _) => println!("Error: Invalid amount: {}", e),
                             }
@@ -155,7 +159,9 @@ pub async fn run_node_cli(node: Arc<Node>) {
                                 hex::decode(preimage),
                                 amount.parse::<u64>(),
                             ) {
-                                (Ok(h_bytes), Ok(p_bytes), Ok(amt)) if h_bytes.len() == 32 && p_bytes.len() == 32 => {
+                                (Ok(h_bytes), Ok(p_bytes), Ok(amt))
+                                    if h_bytes.len() == 32 && p_bytes.len() == 32 =>
+                                {
                                     let secret_hash: [u8; 32] = h_bytes.try_into().unwrap();
                                     let preimage: [u8; 32] = p_bytes.try_into().unwrap();
                                     let amount_msats = amt * 1000;
@@ -175,12 +181,10 @@ pub async fn run_node_cli(node: Arc<Node>) {
                                 (_, _, Err(e)) => println!("Error: Invalid amount: {}", e),
                             }
                         }
-                        (Some("payinvoice"), [invoice]) => {
-                            match Bolt11Invoice::from_str(invoice) {
-                                Ok(inv) => payinvoice(&node, &inv).await,
-                                Err(e) => println!("Error: Invalid invoice: {}", e),
-                            }
-                        }
+                        (Some("payinvoice"), [invoice]) => match Bolt11Invoice::from_str(invoice) {
+                            Ok(inv) => payinvoice(&node, &inv).await,
+                            Err(e) => println!("Error: Invalid invoice: {}", e),
+                        },
                         (Some("help"), _) => print_help(),
                         (Some("exit"), _) => std::process::exit(0),
                         _ => println!("Unknown command or incorrect arguments: {}", input),
@@ -201,14 +205,20 @@ pub async fn run_node_cli(node: Arc<Node>) {
 /// Prints the help message with available commands and their descriptions.
 fn print_help() {
     println!("\nAvailable commands for {}:", SERVER_NAME);
-    println!("  onchaintransfer <destination_address> <sats> - Transfer sats to an on-chain address");
-    println!("  onchaintransferall <destination_address> - Transfer all on-chain funds to an address");
+    println!(
+        "  onchaintransfer <destination_address> <sats> - Transfer sats to an on-chain address"
+    );
+    println!(
+        "  onchaintransferall <destination_address> - Transfer all on-chain funds to an address"
+    );
     println!("  openchannel <node_id> <listening_address> <sats> - Open a channel with a peer");
     println!("  balance - Display on-chain and channel balances");
     println!("  getaddress - Generate a new on-chain address");
     println!("  listallchannels - List all open channels");
     println!("  closechannel <channel_id> <counterparty_node_id> - Close a channel cooperatively");
-    println!("  forceclosechannel <channel_id> <counterparty_node_id> <reason> - Force-close a channel");
+    println!(
+        "  forceclosechannel <channel_id> <counterparty_node_id> <reason> - Force-close a channel"
+    );
     println!("  getinvoice <amount> - Generate a BOLT11 invoice for the specified amount");
     println!("  payinvoice <invoice> - Pay a BOLT11 invoice");
     println!("  paymentid_status <payment_id> - Check the status of a payment by ID");

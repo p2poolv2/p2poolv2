@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use ldk_node::{Node, Event};
+use ldk_node::{Event, Node};
 
 /// Handles Lightning node events in a loop, logging each event and acknowledging it.
 pub async fn handle_events(node: &Node) {

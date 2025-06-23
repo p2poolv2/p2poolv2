@@ -14,10 +14,9 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-
+use config::Config;
 use serde::{Deserialize, Serialize};
 use std::io;
-use config::Config;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NodeConfig {
