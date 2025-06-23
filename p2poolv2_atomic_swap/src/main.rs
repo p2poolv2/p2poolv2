@@ -14,7 +14,6 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-//TODO config file has to be made much better. As of now i am using default values for most of the fields.
 
 mod configuration;
 mod cli;
