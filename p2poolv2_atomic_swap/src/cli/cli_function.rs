@@ -136,12 +136,11 @@ pub(crate) async fn force_close_channel(node: &Node, channel_id: &UserChannelId,
 }
 
 /// Generates a new Bolt11 invoice for a specified amount.
-pub(crate) async fn getinvoice(node: &Node, amount: u64, ){
-    let amount_in_sats = amount * 1000;
+pub(crate) async fn getinvoice(node: &Node, amount_msats:  u64, ){
    let bolt11payment = node.bolt11_payment();
    let description = Description::new(DEFAULT_INVOICE_DESCRIPTION.to_string()).unwrap();
    let description = Bolt11InvoiceDescription::Direct(description);
-    match bolt11payment.receive(amount_in_sats,&description , DEFAULT_EXPIRY_SECS) {
+    match bolt11payment.receive(amount_msats,&description , DEFAULT_EXPIRY_SECS) {
         Ok(invoice) => {
             println!("Invoice: {}", invoice);
         },

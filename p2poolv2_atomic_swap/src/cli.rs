@@ -133,7 +133,7 @@ pub async fn run_node_cli(node: Arc<Node>) {
                         }
                         (Some("getinvoice"), [amount]) => {
                             match amount.parse::<u64>() {
-                                Ok(value) => getinvoice(&node, value).await,
+                                Ok(amount_sats) => getinvoice(&node, amount_sats*1000).await,
                                 Err(e) => println!("Error: Invalid amount: {}", e),
                             }
                         }
