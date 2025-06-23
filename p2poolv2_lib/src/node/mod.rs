@@ -46,7 +46,7 @@ use request_response_handler::handle_request_response_event;
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tower::{limit::RateLimitLayer, Service, ServiceBuilder};
+use tower::{limit::RateLimitLayer, Service, ServiceExt};
 use tracing::{debug, error, info, warn};
 
 pub struct SwarmResponseChannel<T> {
@@ -360,15 +360,29 @@ impl Node {
                 time_provider: SystemTimeProvider,
             };
 
-            // Spawn the tower service
             let swarm_tx = self.swarm_tx.clone();
-            tokio::spawn(async move {
-                let mut service = P2PService::new(swarm_tx);
-                if let Err(e) = service.call(ctx).await {
-                    error!("P2PService failed: {}", e);
-                }
-            });
+            let mut service = P2PService::new(swarm_tx.clone());
+
+            // First check readiness (rate limit handled here)
+            if let Err(e) = <P2PService<ResponseChannel<Message>> as ServiceExt<
+                RequestContext<ResponseChannel<Message>, SystemTimeProvider>,
+            >>::ready(&mut service)
+            .await
+            {
+                // Readiness failed (rate limit hit or inner service error)
+                error!("Service not ready for peer {}: {}", peer, e);
+
+                // Disconnect the peer directly
+                self.swarm.disconnect_peer_id(peer).unwrap_or_default();
+                return Ok(()); // Early return after disconnection
+            }
+
+            // Call service normally
+            if let Err(e) = service.call(ctx).await {
+                error!("P2PService failed for peer {}: {}", peer, e);
+            }
         }
+
         Ok(())
     }
 }

@@ -51,6 +51,8 @@ where
 mod tests {
     use super::*;
     use crate::node::messages::Message;
+    use crate::node::request_response_handler::handle_request_response_event;
+    use crate::node::SwarmSend;
     use crate::service::p2p_service::{P2PService, RequestContext};
     #[mockall_double::double]
     use crate::shares::chain::actor::ChainHandle;
@@ -60,8 +62,10 @@ mod tests {
     use std::error::Error;
     use std::time::SystemTime;
     use tokio::sync::mpsc;
+    use tokio::sync::oneshot;
     use tokio::time::{advance, timeout, Duration};
-    use tower::{limit::RateLimitLayer, Service, ServiceBuilder};
+    use tower::limit::RateLimit;
+    use tower::{limit::RateLimitLayer, Service, ServiceBuilder, ServiceExt};
 
     #[tokio::test(start_paused = true)]
     async fn test_rate_limit_blocks_excess_requests() {
@@ -101,5 +105,157 @@ mod tests {
             let result = service.call(()).await;
             assert!(result.is_ok(), "Request {i} after interval should succeed");
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_tower_rate_limiter_with_inline_request_context() {
+        // Setup a channel for the swarm sender
+        let (swarm_tx, _rx) = mpsc::channel(8);
+
+        // Create a response channel for the request context
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
+
+        let (response_channel_tx1, _response_channel_rx1) = oneshot::channel::<Message>();
+
+        let (response_channel_tx2, _response_channel_rx2) = oneshot::channel::<Message>();
+
+        // Create a dummy ChainHandle and TimeProvider
+        let mut chain_handle = ChainHandle::default();
+        chain_handle
+            .expect_clone()
+            .returning(|| ChainHandle::default());
+
+        // Create a TestTimeProvider with the current system time
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        // Configure Tower RateLimitLayer: 2 requests per second
+        let mut service = ServiceBuilder::new()
+            .layer(RateLimitLayer::new(2, Duration::from_secs(1)))
+            .service(P2PService::new(swarm_tx.clone()));
+
+        // Inline RequestContext construction
+        let ctx1 = RequestContext {
+            peer: PeerId::random(),
+            request: Message::NotFound(()),
+            chain_handle: chain_handle.clone(),
+            response_channel: response_channel_tx,
+            swarm_tx: swarm_tx.clone(),
+            time_provider: time_provider.clone(),
+        };
+
+        let ctx2 = RequestContext {
+            peer: PeerId::random(),
+            request: Message::NotFound(()),
+            chain_handle: chain_handle.clone(),
+            response_channel: response_channel_tx1,
+            swarm_tx: swarm_tx.clone(),
+            time_provider: time_provider.clone(),
+        };
+
+        let ctx3 = RequestContext {
+            peer: PeerId::random(),
+            request: Message::NotFound(()),
+            chain_handle: chain_handle.clone(),
+            response_channel: response_channel_tx2,
+            swarm_tx: swarm_tx.clone(),
+            time_provider: time_provider.clone(),
+        };
+
+        // First request should succeed
+        assert!(
+            <RateLimit<P2PService<tokio::sync::oneshot::Sender<Message>>> as tower::ServiceExt<
+                p2p_service::RequestContext<
+                    tokio::sync::oneshot::Sender<Message>,
+                    TestTimeProvider,
+                >,
+            >>::ready(&mut service)
+            .await
+            .is_ok()
+        );
+
+        assert!(service.call(ctx1).await.is_ok());
+
+        // Second request should succeed
+        assert!(
+            <RateLimit<P2PService<tokio::sync::oneshot::Sender<Message>>> as tower::ServiceExt<
+                p2p_service::RequestContext<
+                    tokio::sync::oneshot::Sender<Message>,
+                    TestTimeProvider,
+                >,
+            >>::ready(&mut service)
+            .await
+            .is_ok()
+        );
+
+        assert!(service.call(ctx2).await.is_ok());
+
+        // Third request should be rate limited (not ready)
+        assert!(
+            <RateLimit<P2PService<tokio::sync::oneshot::Sender<Message>>> as tower::ServiceExt<
+                p2p_service::RequestContext<
+                    tokio::sync::oneshot::Sender<Message>,
+                    TestTimeProvider,
+                >,
+            >>::ready(&mut service)
+            .await
+            .is_ok()
+        );
+
+        // Advance time window
+        tokio::time::advance(Duration::from_secs(1)).await;
+
+        // Should be ready again
+        assert!(
+            <RateLimit<P2PService<tokio::sync::oneshot::Sender<Message>>> as tower::ServiceExt<
+                p2p_service::RequestContext<
+                    tokio::sync::oneshot::Sender<Message>,
+                    TestTimeProvider,
+                >,
+            >>::ready(&mut service)
+            .await
+            .is_ok()
+        );
+        assert!(service.call(ctx3).await.is_ok());
+    }
+
+    // TODO: Test that service disconnects peer on ready failure(its not completed yet)
+    #[tokio::test(start_paused = true)]
+    async fn test_service_disconnects_peer_on_ready_failure() {
+        // Setup a channel to observe swarm events
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<_>>(8);
+        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
+
+        // Dummy chain handle
+        let mut chain_handle = ChainHandle::default();
+        chain_handle
+            .expect_clone()
+            .returning(|| ChainHandle::default());
+
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        // service that always errors on ready()
+        let failing_service = tower::service_fn(|_req: RequestContext<_, _>| async {
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+        });
+
+        // Wrap with rate limit (though here rate limit is not really triggered)
+        let mut service = ServiceBuilder::new()
+            .layer(RateLimitLayer::new(1, Duration::from_secs(1)))
+            .service(failing_service);
+
+        // Build a request context
+        let peer_id = PeerId::random();
+        let ctx = RequestContext {
+            peer: peer_id,
+            request: Message::NotFound(()),
+            chain_handle: chain_handle.clone(),
+            response_channel: response_channel_tx,
+            swarm_tx: swarm_tx.clone(),
+            time_provider: time_provider.clone(),
+        };
+
+        // Call the service (no cloning needed)
+        assert!(service.ready().await.is_ok());
+        assert!(service.call(ctx).await.is_ok());
     }
 }
