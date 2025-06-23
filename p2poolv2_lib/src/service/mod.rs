@@ -24,7 +24,7 @@ use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
-use tower::{limit::RateLimitLayer, util::BoxService,ServiceBuilder, ServiceExt};
+use tower::{limit::RateLimitLayer, util::BoxService, ServiceBuilder, ServiceExt};
 
 // Build the full service stack
 pub fn build_service<C, T>(
@@ -62,7 +62,6 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio::time::{advance, timeout, Duration};
     use tower::{limit::RateLimitLayer, Service, ServiceBuilder};
-    use tower::{Service, ServiceBuilder};
 
     #[tokio::test(start_paused = true)]
     async fn test_rate_limit_blocks_excess_requests() {
