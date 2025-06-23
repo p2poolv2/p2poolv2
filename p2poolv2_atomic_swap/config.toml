@@ -1,0 +1,43 @@
+#Node Config
+
+#The path where the underlying LDK and BDK persist their data.
+storage_dir_path = "data/ldk_node"
+
+#Network [Bitcoin, Testnet, Testnet4, Signet, Regtest]
+network = "Signet"
+
+#The addresses on which the node will listen for incoming connections.
+#has to be in formate of TcpIpV4, TcpIpV6, OnionV2, OnionV3 and multiple socket address can be given as a list.
+#only allow opening and accepting public channels if the node_alias and the listening_addresses are set.
+listening_addresses = "127.0.0.1:9735"
+
+#The node alias that will be used when broadcasting announcements to the gossip network.
+#The provided alias must be a valid UTF-8 string and no longer than 32 bytes in total.
+node_alias = "p2pool_mm_node"
+
+#bitcoin esplora_url
+esplora_url = "https://mutinynet.com/api/"
+
+#set gossip source rgs
+rgs_server_url = "https://mutinynet.ltbl.io/snapshot"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
