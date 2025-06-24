@@ -24,7 +24,7 @@ use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
-use tower::{limit::RateLimitLayer, util::BoxService, ServiceBuilder, ServiceExt};
+use tower::{limit::RateLimitLayer, util::BoxService, ServiceBuilder};
 
 // Build the full service stack
 pub fn build_service<C, T>(
@@ -56,10 +56,8 @@ mod tests {
     use crate::service::p2p_service::{P2PService, RequestContext};
     #[mockall_double::double]
     use crate::shares::chain::actor::ChainHandle;
-    use crate::shares::miner_message::{UserWorkbase, UserWorkbaseParams};
     use crate::utils::time_provider::TestTimeProvider;
     use libp2p::PeerId;
-    use std::error::Error;
     use std::time::SystemTime;
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
@@ -222,7 +220,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn test_service_disconnects_peer_on_ready_failure() {
         // Setup a channel to observe swarm events
-        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<_>>(8);
+        let (swarm_tx, swarm_rx) = mpsc::channel::<SwarmSend<_>>(8);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
 
         // Dummy chain handle

@@ -42,11 +42,10 @@ use libp2p::{
     swarm::SwarmEvent,
     Multiaddr, Swarm,
 };
-use request_response_handler::handle_request_response_event;
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tower::{limit::RateLimitLayer, Service, ServiceExt};
+use tower::{Service, ServiceExt};
 use tracing::{debug, error, info, warn};
 
 pub struct SwarmResponseChannel<T> {
