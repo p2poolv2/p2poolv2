@@ -24,3 +24,5 @@ pub mod utils;
 
 #[cfg(test)]
 pub mod test_utils;
+
+pub use service::build_service;
