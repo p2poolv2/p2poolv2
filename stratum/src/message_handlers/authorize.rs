@@ -37,7 +37,7 @@ pub async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
     session: &mut Session<D>,
     addr: std::net::SocketAddr,
     notify_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
-) -> Result<Message<'a>, Error> {
+) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.authorize message");
     if session.username.is_some() {
         debug!("Client already authorized. No response sent.");
@@ -52,10 +52,10 @@ pub async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             client_address: addr,
         })
         .await;
-    Ok(Message::Response(Response::new_ok(
+    Ok(vec![Message::Response(Response::new_ok(
         message.id,
         serde_json::json!(true),
-    )))
+    ))])
 }
 
 #[cfg(test)]
@@ -82,8 +82,8 @@ mod tests {
         .await
         .unwrap();
 
-        let response = match message {
-            Message::Response(response) => response,
+        let response = match &message[..] {
+            [Message::Response(response)] => response,
             _ => panic!("Expected a Response message"),
         };
 
@@ -91,7 +91,10 @@ mod tests {
         assert_eq!(response.id, Some(Id::Number(12345)));
         assert!(response.error.is_none());
         assert!(response.result.is_some());
-        assert_eq!(response.result.unwrap(), true);
+        assert_eq!(
+            response.result.as_ref().unwrap(),
+            &serde_json::Value::Bool(true)
+        );
         assert_eq!(session.username, Some("worker1".to_string()));
         assert_eq!(session.password, Some("x".to_string()));
 

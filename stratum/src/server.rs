@@ -238,24 +238,26 @@ where
 {
     match serde_json::from_str::<Request>(line) {
         Ok(message) => {
-            let response = handle_message(message, session, addr, ctx).await;
+            let responses = handle_message(message, session, addr, ctx).await;
 
-            if let Ok(response) = response {
+            if let Ok(responses) = responses {
                 // Send the response back to the client
-                let response_json = match serde_json::to_string(&response) {
-                    Ok(json) => json,
-                    Err(e) => {
-                        error!("Failed to serialize response for {}: {}", addr, e);
+                for response in responses {
+                    let response_json = match serde_json::to_string(&response) {
+                        Ok(json) => json,
+                        Err(e) => {
+                            error!("Failed to serialize response for {}: {}", addr, e);
+                            return Err(Box::new(e));
+                        }
+                    };
+
+                    info!("Sending to {}: {:?}", addr, response_json);
+                    if let Err(e) = writer
+                        .write_all(format!("{}\n", response_json).as_bytes())
+                        .await
+                    {
                         return Err(Box::new(e));
                     }
-                };
-
-                info!("Sending to {}: {:?}", addr, response_json);
-                if let Err(e) = writer
-                    .write_all(format!("{}\n", response_json).as_bytes())
-                    .await
-                {
-                    return Err(Box::new(e));
                 }
                 if let Err(e) = writer.flush().await {
                     Err(Box::new(e))
@@ -266,9 +268,9 @@ where
             } else {
                 error!(
                     "Error handling message from {}: {:?}. Closing connection.",
-                    addr, response
+                    addr, responses
                 );
-                Err(Box::new(response.unwrap_err()))
+                Err(Box::new(responses.unwrap_err()))
             }
         }
         Err(e) => Err(Box::new(e)),

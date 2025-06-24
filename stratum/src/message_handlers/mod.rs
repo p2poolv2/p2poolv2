@@ -42,7 +42,7 @@ pub(crate) async fn handle_message<'a, D: DifficultyAdjusterTrait>(
     session: &mut Session<D>,
     addr: SocketAddr,
     ctx: StratumContext,
-) -> Result<Message<'a>, Error> {
+) -> Result<Vec<Message<'a>>, Error> {
     match message.method.as_ref() {
         "mining.subscribe" => handle_subscribe(message, session).await,
         "mining.authorize" => handle_authorize(message, session, addr, ctx.notify_tx).await,
