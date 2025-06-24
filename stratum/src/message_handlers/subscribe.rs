@@ -16,7 +16,7 @@
 
 use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
-use crate::messages::{Message, Request, Response};
+use crate::messages::{Message, Request, Response, SetDifficultyNotification};
 use crate::session::{Session, EXTRANONCE2_SIZE};
 use serde_json::json;
 use tracing::debug;
@@ -29,6 +29,7 @@ use tracing::debug;
 pub async fn handle_subscribe<'a, D: DifficultyAdjusterTrait>(
     message: Request<'a>,
     session: &mut Session<D>,
+    pool_min_difficulty: u64,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.subscribe message");
     if session.subscribed {
@@ -36,17 +37,20 @@ pub async fn handle_subscribe<'a, D: DifficultyAdjusterTrait>(
         return Err(Error::SubscriptionFailure("Already subscribed".to_string()));
     }
     session.subscribed = true;
-    Ok(vec![Message::Response(Response::new_ok(
-        message.id,
-        json!([
-            [
-                ["mining.notify", format!("{}1", session.id)], // we expect different ids in notify and set_difficulty, thus we suffix with 1 and 2
-                ["mining.set_difficulty", format!("{}2", session.id)],
-            ],
-            session.enonce1_hex,
-            EXTRANONCE2_SIZE,
-        ]),
-    ))])
+    Ok(vec![
+        Message::Response(Response::new_ok(
+            message.id,
+            json!([
+                [
+                    ["mining.notify", format!("{}1", session.id)], // we expect different ids in notify and set_difficulty, thus we suffix with 1 and 2
+                    ["mining.set_difficulty", format!("{}2", session.id)],
+                ],
+                session.enonce1_hex,
+                EXTRANONCE2_SIZE,
+            ]),
+        )),
+        Message::SetDifficulty(SetDifficultyNotification::new(pool_min_difficulty)),
+    ])
 }
 
 #[cfg(test)]
@@ -64,20 +68,22 @@ mod tests {
         session.subscribed = false;
 
         // Execute
-        let response = handle_subscribe(message, &mut session).await;
+        let response = handle_subscribe(message, &mut session, 1000).await;
 
         // Verify
         assert!(response.is_ok());
         let message = response.unwrap();
 
-        let response = match &message[..] {
-            [Message::Response(response)] => response,
+        let (subscribe_response, difficulty_notification) = match &message[..] {
+            [Message::Response(response), Message::SetDifficulty(difficulty_notification)] => {
+                (response, difficulty_notification)
+            }
             _ => panic!("Expected a Response message"),
         };
 
-        assert_eq!(response.id, Some(Id::Number(1)));
+        assert_eq!(subscribe_response.id, Some(Id::Number(1)));
         // Check the response.result is Some and is an array as expected
-        let result = response
+        let result = subscribe_response
             .result
             .as_ref()
             .expect("Expected result in response");
@@ -108,6 +114,16 @@ mod tests {
         // 3. Check extranonce2_size
         assert_eq!(arr[2], serde_json::json!(EXTRANONCE2_SIZE));
         assert!(session.subscribed);
+
+        // Check difficulty notification
+        assert_eq!(
+            difficulty_notification.method, "mining.set_difficulty",
+            "Expected method to be 'mining.set_difficulty'"
+        );
+        assert_eq!(
+            difficulty_notification.params[0], 1000,
+            "Expected difficulty notification to match pool minimum difficulty"
+        );
     }
 
     #[tokio::test]
@@ -118,7 +134,7 @@ mod tests {
         session.subscribed = true;
 
         // Execute
-        let response = handle_subscribe(message, &mut session).await;
+        let response = handle_subscribe(message, &mut session, 1000).await;
 
         // Verify
         assert!(response.is_err());

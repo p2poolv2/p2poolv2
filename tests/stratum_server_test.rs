@@ -92,8 +92,10 @@ async fn test_stratum_server_subscribe() {
         .expect("Failed to read response");
     let response_str = str::from_utf8(&buffer[..bytes_read]).expect("Invalid UTF-8");
 
+    let responses: Vec<&str> = response_str.split('\n').filter(|s| !s.is_empty()).collect();
+
     let response_message: Response =
-        serde_json::from_str(response_str).expect("Failed to deserialize response as Response");
+        serde_json::from_str(&responses[0]).expect("Failed to deserialize response as Response");
 
     assert_eq!(
         response_message.id,
