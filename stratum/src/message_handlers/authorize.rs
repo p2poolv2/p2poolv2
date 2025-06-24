@@ -16,7 +16,7 @@
 
 use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
-use crate::messages::{Message, Request, Response};
+use crate::messages::{Message, Request, Response, SetDifficultyNotification};
 use crate::session::Session;
 use crate::work::notify::NotifyCmd;
 use tracing::debug;
@@ -37,6 +37,7 @@ pub async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
     session: &mut Session<D>,
     addr: std::net::SocketAddr,
     notify_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
+    pool_min_difficulty: u64,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.authorize message");
     if session.username.is_some() {
@@ -52,10 +53,10 @@ pub async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             client_address: addr,
         })
         .await;
-    Ok(vec![Message::Response(Response::new_ok(
-        message.id,
-        serde_json::json!(true),
-    ))])
+    Ok(vec![
+        Message::Response(Response::new_ok(message.id, serde_json::json!(true))),
+        Message::SetDifficulty(SetDifficultyNotification::new(pool_min_difficulty)),
+    ])
 }
 
 #[cfg(test)]
@@ -78,21 +79,24 @@ mod tests {
             &mut session,
             SocketAddr::from(([127, 0, 0, 1], 8080)),
             notify_tx,
+            1000,
         )
         .await
         .unwrap();
 
-        let response = match &message[..] {
-            [Message::Response(response)] => response,
+        let (subscribe_response, difficulty_notification) = match &message[..] {
+            [Message::Response(response), Message::SetDifficulty(difficulty_notification)] => {
+                (response, difficulty_notification)
+            }
             _ => panic!("Expected a Response message"),
         };
 
         // Verify
-        assert_eq!(response.id, Some(Id::Number(12345)));
-        assert!(response.error.is_none());
-        assert!(response.result.is_some());
+        assert_eq!(subscribe_response.id, Some(Id::Number(12345)));
+        assert!(subscribe_response.error.is_none());
+        assert!(subscribe_response.result.is_some());
         assert_eq!(
-            response.result.as_ref().unwrap(),
+            subscribe_response.result.as_ref().unwrap(),
             &serde_json::Value::Bool(true)
         );
         assert_eq!(session.username, Some("worker1".to_string()));
@@ -102,6 +106,16 @@ mod tests {
         assert!(
             notify_cmd.is_ok(),
             "Notification should be sent to the client after authorization"
+        );
+
+        // Check difficulty notification
+        assert_eq!(
+            difficulty_notification.method, "mining.set_difficulty",
+            "Expected method to be 'mining.set_difficulty'"
+        );
+        assert_eq!(
+            difficulty_notification.params[0], 1000,
+            "Expected difficulty notification to match pool minimum difficulty"
         );
     }
 
@@ -120,6 +134,7 @@ mod tests {
             &mut session,
             SocketAddr::from(([127, 0, 0, 1], 8080)),
             notify_tx,
+            1000,
         )
         .await;
 
