@@ -664,7 +664,7 @@ mod stratum_server_tests {
         let responses: Vec<&str> = response_str.split('\n').filter(|s| !s.is_empty()).collect();
         assert_eq!(
             responses.len(),
-            4,
+            5,
             "Should have responses for subscribe, authorize and the test message."
         );
 
