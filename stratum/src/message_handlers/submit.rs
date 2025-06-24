@@ -51,9 +51,11 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     let job = match tracker_handle.get_job(JobId(job_id)).await {
         Ok(Some(job)) => job,
         _ => {
-            return Err(Error::SubmitFailure(
-                "No job found for the given ID".to_string(),
-            ))
+            debug!("Job not found for job_id: {}", job_id);
+            return Ok(Message::Response(Response::new_ok(
+                message.id,
+                json!(false),
+            )));
         }
     };
 
@@ -78,7 +80,7 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
 
     if let Some(difficulty) = new_difficulty {
         return Ok(Message::SetDifficulty(SetDifficultyNotification::new(
-            difficulty as u64,
+            difficulty,
         )));
     }
 
@@ -354,5 +356,57 @@ mod handle_submit_tests {
         }
 
         mock_server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn test_handle_submit_with_unknown_job_id_returns_false() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, None, 2);
+        let tracker_handle = start_tracker_actor();
+
+        let (_mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+
+        // Prepare a valid submit message but with a job_id that is not inserted into the tracker
+        let submit_str = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/validation/stratum/a/submit.json"),
+        )
+        .unwrap();
+        let mut submit: Request = serde_json::from_str(&submit_str).unwrap();
+
+        // Overwrite job_id param to an unknown value (e.g., "deadbeef")
+        if submit.params.len() > 1 {
+            submit.params.to_mut()[1] = "deadbeef".to_string();
+        }
+
+        // Set enonce1 from authorize_response
+        let authorize_response_str = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/validation/stratum/a/authorize_response.json"),
+        )
+        .unwrap();
+        let authorize_response: Response = serde_json::from_str(&authorize_response_str).unwrap();
+        let enonce1 = authorize_response.result.unwrap()[1].clone();
+        let enonce1: &str = enonce1.as_str().unwrap();
+        session.enonce1 =
+            u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
+        session.enonce1_hex = enonce1.to_string();
+
+        let message = handle_submit(
+            submit,
+            &mut session,
+            tracker_handle,
+            bitcoinrpc_config,
+            bitcoin::network::Network::Regtest,
+        )
+        .await
+        .unwrap();
+
+        let response = match message {
+            Message::Response(response) => response,
+            _ => panic!("Expected a Response message"),
+        };
+
+        // Should return result false for unknown job_id
+        assert_eq!(response.result, Some(json!(false)));
     }
 }
