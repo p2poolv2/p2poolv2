@@ -29,14 +29,14 @@ use tracing::debug;
 pub async fn handle_subscribe<'a, D: DifficultyAdjusterTrait>(
     message: Request<'a>,
     session: &mut Session<D>,
-) -> Result<Message<'a>, Error> {
+) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.subscribe message");
     if session.subscribed {
         debug!("Client already subscribed. No response sent.");
         return Err(Error::SubscriptionFailure("Already subscribed".to_string()));
     }
     session.subscribed = true;
-    Ok(Message::Response(Response::new_ok(
+    Ok(vec![Message::Response(Response::new_ok(
         message.id,
         json!([
             [
@@ -46,7 +46,7 @@ pub async fn handle_subscribe<'a, D: DifficultyAdjusterTrait>(
             session.enonce1_hex,
             EXTRANONCE2_SIZE,
         ]),
-    )))
+    ))])
 }
 
 #[cfg(test)]
@@ -70,8 +70,8 @@ mod tests {
         assert!(response.is_ok());
         let message = response.unwrap();
 
-        let response = match message {
-            Message::Response(response) => response,
+        let response = match &message[..] {
+            [Message::Response(response)] => response,
             _ => panic!("Expected a Response message"),
         };
 

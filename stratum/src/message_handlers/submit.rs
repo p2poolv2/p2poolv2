@@ -40,7 +40,7 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     tracker_handle: TrackerHandle,
     bitcoinrpc_config: BitcoinRpcConfig,
     network: bitcoin::Network,
-) -> Result<Message<'a>, Error> {
+) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.submit message");
     if message.params.len() < 4 {
         return Err(Error::InvalidParams);
@@ -52,10 +52,10 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         Ok(Some(job)) => job,
         _ => {
             debug!("Job not found for job_id: {}", job_id);
-            return Ok(Message::Response(Response::new_ok(
+            return Ok(vec![Message::Response(Response::new_ok(
                 message.id,
                 json!(false),
-            )));
+            ))]);
         }
     };
 
@@ -64,10 +64,10 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         Ok(block) => block,
         Err(e) => {
             info!("Share validation failed: {}", e);
-            return Ok(Message::Response(Response::new_ok(
+            return Ok(vec![Message::Response(Response::new_ok(
                 message.id,
                 json!(false),
-            )));
+            ))]);
         }
     };
 
@@ -79,12 +79,15 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         .record_share_submission(block.header.difficulty(network), job_id);
 
     if let Some(difficulty) = new_difficulty {
-        return Ok(Message::SetDifficulty(SetDifficultyNotification::new(
-            difficulty,
-        )));
+        return Ok(vec![Message::SetDifficulty(
+            SetDifficultyNotification::new(difficulty),
+        )]);
     }
 
-    Ok(Message::Response(Response::new_ok(message.id, json!(true))))
+    Ok(vec![Message::Response(Response::new_ok(
+        message.id,
+        json!(true),
+    ))])
 }
 
 /// Submit block to bitcoind
@@ -185,8 +188,8 @@ mod handle_submit_tests {
         .await
         .unwrap();
 
-        let response = match message {
-            Message::Response(response) => response,
+        let response = match &message[..] {
+            [Message::Response(response)] => response,
             _ => panic!("Expected a Response message"),
         };
 
@@ -262,8 +265,8 @@ mod handle_submit_tests {
         .await
         .unwrap();
 
-        let response = match response {
-            Message::Response(response) => response,
+        let response = match &response[..] {
+            [Message::Response(response)] => response,
             _ => panic!("Expected a Response message"),
         };
 
@@ -348,8 +351,8 @@ mod handle_submit_tests {
         .await
         .unwrap();
 
-        match message {
-            Message::SetDifficulty(SetDifficultyNotification { method: _, params }) => {
+        match &message[..] {
+            [Message::SetDifficulty(SetDifficultyNotification { method: _, params })] => {
                 assert_eq!(params[0], 12345);
             }
             _ => panic!("Expected SetDifficultyNotification message"),
@@ -401,8 +404,8 @@ mod handle_submit_tests {
         .await
         .unwrap();
 
-        let response = match message {
-            Message::Response(response) => response,
+        let response = match &message[..] {
+            [Message::Response(response)] => response,
             _ => panic!("Expected a Response message"),
         };
 
