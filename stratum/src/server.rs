@@ -370,8 +370,9 @@ mod stratum_server_tests {
 
         // Check that response was written
         let response = String::from_utf8_lossy(&writer);
+        let responses: Vec<&str> = response.split('\n').filter(|s| !s.is_empty()).collect();
         let response_json: serde_json::Value =
-            serde_json::from_str(&response).expect("Response should be valid JSON");
+            serde_json::from_str(&responses[0]).expect("Response should be valid JSON");
         assert!(
             response_json.is_object(),
             "Response should be a JSON object"
@@ -404,6 +405,24 @@ mod stratum_server_tests {
 
         // enonce2 size
         assert_eq!(result_array[2], 8);
+
+        let set_difficulty_response = responses[1];
+        let set_difficulty_json: serde_json::Value = serde_json::from_str(set_difficulty_response)
+            .expect("Set difficulty response should be valid JSON");
+        assert!(
+            set_difficulty_json.is_object(),
+            "Set difficulty response should be a JSON object"
+        );
+        assert_eq!(
+            set_difficulty_json.get("method").unwrap(),
+            "mining.set_difficulty",
+            "Set difficulty response should have method 'mining.set_difficulty'"
+        );
+        assert_eq!(
+            set_difficulty_json.get("params").unwrap(),
+            &serde_json::json!([1]),
+            "Set difficulty response should have params [1]"
+        );
 
         assert!(response.ends_with("\n"),);
     }
@@ -542,11 +561,7 @@ mod stratum_server_tests {
         // Only one response should be written (for the first subscribe)
         let response = String::from_utf8_lossy(&writer);
         let responses: Vec<&str> = response.split('\n').filter(|s| !s.is_empty()).collect();
-        assert_eq!(
-            responses.len(),
-            1,
-            "Only one response should be sent before closing connection"
-        );
+        assert_eq!(responses.len(), 2);
 
         // The response should be a valid subscribe response
         let response_json: serde_json::Value =
@@ -649,7 +664,7 @@ mod stratum_server_tests {
         let responses: Vec<&str> = response_str.split('\n').filter(|s| !s.is_empty()).collect();
         assert_eq!(
             responses.len(),
-            3,
+            4,
             "Should have responses for subscribe, authorize and the test message."
         );
 
@@ -739,7 +754,7 @@ mod stratum_server_tests {
 
         // Verify responses were sent for subscribe and authorize
         let responses: Vec<&str> = response_str.split('\n').filter(|s| !s.is_empty()).collect();
-        assert_eq!(responses.len(), 1, "Should have responses for subscribe");
+        assert_eq!(responses.len(), 2, "Should have responses for subscribe");
 
         // Parse and verify each response
         let subscribe_response: serde_json::Value =
