@@ -1,6 +1,6 @@
 [network]
-listen_address = "/ip4/127.0.0.1/tcp/6885"
-dial_peers = ["/ip4/127.0.0.1/tcp/6884"]
+listen_address = "/ip4/127.0.0.1/tcp/6884"
+dial_peers = []
 max_pending_incoming = 10
 max_pending_outgoing = 10
 max_established_incoming = 50
@@ -14,7 +14,7 @@ max_transaction_per_second = 100
 rate_limit_window_secs = 1
 
 [store]
-path = "./store.1.db"
+path = "./store-testnet4.db"
 
 [ckpool]
 host = "localhost"
@@ -22,7 +22,7 @@ port = 8881
 
 [stratum]
 hostname = "0.0.0.0"
-port = 13333
+port = 3333
 start_difficulty = 1
 minimum_difficulty = 1
 solo_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
@@ -35,7 +35,7 @@ pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
 
 [bitcoinrpc]
 # RPC credentials are loaded from env vars
-url = "http://localhost:38332"
+url = "http://localhost:48332"
 username = "p2pool"
 password = "p2pool"
 
@@ -44,4 +44,8 @@ password = "p2pool"
 # file = "/var/log/p2pool/p2pool.log"
 # For container or local run it is recommended to use console output
 console = false
-level = "debug"
+level = "info"
+
+[[tests]]
+name = "integration"
+path = "tests.main"
