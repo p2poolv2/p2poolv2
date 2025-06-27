@@ -73,6 +73,7 @@ pub enum SwarmSend<C> {
     Request(PeerId, Message),
     Response(C, Message),
     Inv(ShareBlock),
+    Disconnect(PeerId),
 }
 
 /// Node is the main struct that represents the node

@@ -17,10 +17,10 @@
 pub mod p2p_service;
 
 use crate::config::NetworkConfig;
+use crate::middleware::inactivity::InactivityLayer;
 use crate::node::SwarmSend;
 use crate::service::p2p_service::{P2PService, RequestContext};
 use crate::utils::time_provider::TimeProvider;
-
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
@@ -32,15 +32,22 @@ pub fn build_service<C, T>(
     swarm_tx: Sender<SwarmSend<C>>,
 ) -> BoxService<RequestContext<C, T>, (), Box<dyn Error + Send + Sync>>
 where
-    C: Send + Sync + 'static,
+    C: Send + Sync + Clone + 'static,
     T: TimeProvider + Send + Sync + 'static,
 {
-    let base_service = P2PService::new(swarm_tx);
+    let base_service = P2PService::new(swarm_tx.clone());
 
-    let builder = ServiceBuilder::new().layer(RateLimitLayer::new(
-        config.max_requests_per_second,
-        Duration::from_secs(1),
-    ));
+    let inactivity_layer = InactivityLayer::new(
+        Duration::from_secs(60 * 60 * 24 * 3), // 3 days
+        swarm_tx,
+    );
+
+    let builder = ServiceBuilder::new()
+        .layer(RateLimitLayer::new(
+            config.max_requests_per_second,
+            Duration::from_secs(1),
+        ))
+        .layer(inactivity_layer);
 
     let service = builder.service(base_service);
 
