@@ -1,0 +1,15 @@
+{
+    "name": "mock-bitcoind",
+    "version": "1.0.0",
+    "description": "Mock Bitcoin JSON-RPC server for load testing.",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js"
+    },
+    "dependencies": {
+        "jayson": "^4.1.0"
+    },
+    "engines": {
+        "node": "18.20.3"
+    }
+}
