@@ -1,0 +1,56 @@
+== Load Tests For Stratum
+
+We use jmeter to run load tests for our implmentation of the Stratum protocol.
+
+The load test is repeated with the same parameters CKPool's stratum implementation. The goal of the comparison is to show that our implementation can the same load as CKPool's implementation with similar degradation in performance as the load increases, if any.
+
+== Setup
+
+The load tests uses jmeter to support spawning thousands of threads acting as ASIC miner clients.
+
+We simulate 10,000 ASIC miners, connecting over a ramp-up time period of 10 seconds. Once all clients are connected, each submits a share to the server every 15 seconds for a total of 10 minutes.
+
+=== Bitcoin Node
+
+We simulate a bitcoin node using a http server that responds with the same block template in response to the `getblocktemplate` request. The simulated bitcoin node also responds with success to all `submitblock` requests. By avoiding a real bitcoin node, we avoid the complications of generating suitable work and the corresponding proof of work for all the simulated clients.
+
+== Running the Tests
+
+We use jmeter to build the test and the load test file can be editted by using the jmeter GUI. The load test file is located at `load-tests/stratum.jmx`.
+
+To run the tests, you need to have jmeter installed. You can download it from https://jmeter.apache.org/download_jmeter.cgi.
+
+Once you have jmeter installed and available in your PATH, you can run the load tests using the provided script. But first we need to run some required services.
+
+=== Run the simulated bitcoin node:
+
+```bash
+cargo run --release -p mock-bitcoind
+```
+
+=== Run the stratum server to test:
+
+==== P2Poolv2 Stratum Server
+
+```bash
+cd p2pool-v2
+cargo build --workspace --release
+./target/release/p2pool-v2 --config=config-testnet4.toml
+```
+
+==== CKPool Stratum Server
+
+First build CKPool's ckpool-solo branch.
+Then run the CKPool stratum server using the provided configuration file.
+
+```bash
+./src/ckpool --btcsolo --config=<path to this directory>/ckpool-testnet4-solo.json
+```
+
+== Modify the Load Test File
+
+Use the jmeter GUI to modify the load test file as needed. You can open the file `load-tests/stratum.jmx` in jmeter and make changes to the test parameters, such as the number of threads, ramp-up time, and other settings.
+
+```bash
+./load-tests/run_jmeter.sh
+```
