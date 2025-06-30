@@ -24,7 +24,8 @@ pub mod p2p_message_handlers;
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::senders::{send_blocks_inventory, send_getheaders};
-use crate::service::p2p_service::{P2PService, RequestContext};
+use crate::service::build_service;
+use crate::service::p2p_service::RequestContext;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
@@ -359,26 +360,23 @@ impl Node {
                 time_provider: SystemTimeProvider,
             };
 
-            let swarm_tx = self.swarm_tx.clone();
-            let mut service = P2PService::new(swarm_tx.clone());
+            // Build the middleware-wrapped service using your config
+            let mut service = build_service::<ResponseChannel<Message>, _>(
+                self.config.network.clone(),
+                self.swarm_tx.clone(),
+            );
 
-            // First check readiness (rate limit handled here)
-            if let Err(e) = <P2PService<ResponseChannel<Message>> as ServiceExt<
-                RequestContext<ResponseChannel<Message>, SystemTimeProvider>,
-            >>::ready(&mut service)
-            .await
-            {
-                // Readiness failed (rate limit hit or inner service error)
-                error!("Service not ready for peer {}: {}", peer, e);
-
-                // Disconnect the peer directly
-                self.swarm.disconnect_peer_id(peer).unwrap_or_default();
-                return Ok(()); // Early return after disconnection
+            // First check readiness
+            if let Err(err) = service.ready().await {
+                error!("Service not ready for peer {}: {}", peer, err);
+                if let Err(e) = self.swarm.disconnect_peer_id(peer) {
+                    error!("Failed to disconnect peer {}: {:?}", peer, e);
+                }
+                return Ok(());
             }
-
-            // Call service normally
-            if let Err(e) = service.call(ctx).await {
-                error!("P2PService failed for peer {}: {}", peer, e);
+            // Call the service
+            if let Err(err) = service.call(ctx).await {
+                error!("Service call failed for peer {}: {}", peer, err);
             }
         }
 
