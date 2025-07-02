@@ -1,5 +1,10 @@
 const jayson = require('jayson');
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
+
+const gbtPath = path.join(__dirname, '../../tests/test_data/gbt/signet/gbt-no-transactions.json');
+const gbt = JSON.parse(fs.readFileSync(gbtPath, 'utf8'));
 
 // JSON-RPC 1.0 server
 const server = new jayson.Server({
@@ -7,30 +12,14 @@ const server = new jayson.Server({
         callback(null, 'hey');
     },
     getblocktemplate: function (args, callback) {
-        // Placeholder block template
-        callback(null, {
-            version: 536870912,
-            previousblockhash: '0000000000000000000placeholder',
-            transactions: [],
-            coinbaseaux: {},
-            coinbasevalue: 5000000000,
-            target: '00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
-            mintime: 1620000000,
-            mutable: ['time', 'transactions', 'prevblock'],
-            noncerange: '00000000ffffffff',
-            sigoplimit: 80000,
-            sizelimit: 1000000,
-            curtime: Math.floor(Date.now() / 1000),
-            bits: '1d00ffff',
-            height: 1000000
-        });
+        callback(null, gbt);
     },
     submitblock: function (args, callback) {
         callback(null, null);
     }
 }, { version: 1 }); // Enforce JSON-RPC 1.0
 
-const PORT = 8332;
+const PORT = 48332;
 
 // Custom HTTP server to accept text/plain as JSON
 http.createServer((req, res) => {
@@ -56,8 +45,21 @@ http.createServer((req, res) => {
                 res.end(JSON.stringify(response));
             });
         } else {
-            // fallback to jayson default handler
-            console.log("Bitcoind RPC accepts text/plain");
+            // Default: handle as application/json
+            try {
+                req.body = JSON.parse(data);
+            } catch (e) {
+                res.writeHead(400);
+                return res.end('Invalid JSON');
+            }
+            server.call(req.body, (err, response) => {
+                if (err) {
+                    res.writeHead(500);
+                    return res.end('Server error');
+                }
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify(response));
+            });
         }
     });
 }).listen(PORT, () => {
