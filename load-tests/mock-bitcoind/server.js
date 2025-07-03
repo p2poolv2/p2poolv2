@@ -17,7 +17,7 @@ const server = new jayson.Server({
     submitblock: function (args, callback) {
         callback(null, null);
     }
-}, { version: 1 }); // Enforce JSON-RPC 1.0
+});
 
 const PORT = 48332;
 
@@ -26,6 +26,7 @@ http.createServer((req, res) => {
     let data = '';
     req.on('data', chunk => { data += chunk; });
     req.on('end', () => {
+        console.log(`Received request: ${data}`);
         // Accept both application/json and text/plain
         const contentType = req.headers['content-type'] || '';
         if (contentType.includes('text/plain')) {
