@@ -46,7 +46,7 @@ use libp2p::{
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tower::{Service, ServiceExt};
+use tower::{util::BoxService, Service, ServiceExt};
 use tracing::{debug, error, info, warn};
 
 pub struct SwarmResponseChannel<T> {
@@ -70,10 +70,12 @@ impl<T> SwarmResponseChannelTrait<T> for SwarmResponseChannel<T> {
 
 /// Capture send type for swarm p2p messages that can be sent to the swarm
 #[allow(dead_code)]
+#[derive(Debug)]
 pub enum SwarmSend<C> {
     Request(PeerId, Message),
     Response(C, Message),
     Inv(ShareBlock),
+    Disconnect(PeerId),
 }
 
 /// Node is the main struct that represents the node
@@ -83,6 +85,11 @@ struct Node {
     swarm_rx: mpsc::Receiver<SwarmSend<ResponseChannel<Message>>>,
     chain_handle: ChainHandle,
     config: Config,
+    service: BoxService<
+        RequestContext<ResponseChannel<Message>, SystemTimeProvider>,
+        (),
+        Box<dyn Error + Send + Sync>,
+    >,
 }
 
 impl Node {
@@ -165,12 +172,17 @@ impl Node {
             return Err(e);
         }
 
+        // Initialize the service field before constructing the Node
+        let service =
+            build_service::<ResponseChannel<Message>, _>(config.network.clone(), swarm_tx.clone());
+
         Ok(Self {
             swarm,
             swarm_tx,
             swarm_rx,
             chain_handle,
             config: config.clone(),
+            service,
         })
     }
 
@@ -360,26 +372,37 @@ impl Node {
                 time_provider: SystemTimeProvider,
             };
 
-            // Build the middleware-wrapped service using your config
-            let mut service = build_service::<ResponseChannel<Message>, _>(
-                self.config.network.clone(),
-                self.swarm_tx.clone(),
-            );
-
-            // First check readiness
-            if let Err(err) = service.ready().await {
-                error!("Service not ready for peer {}: {}", peer, err);
-                if let Err(e) = self.swarm.disconnect_peer_id(peer) {
-                    error!("Failed to disconnect peer {}: {:?}", peer, e);
+            // Check readiness with a timeout
+            match tokio::time::timeout(Duration::from_millis(500), self.service.ready()).await {
+                Ok(Ok(_)) => {
+                    // Service is ready, call it
+                    if let Err(err) = self.service.call(ctx).await {
+                        error!("Service call failed for peer {}: {}", peer, err);
+                    }
                 }
-                return Ok(());
-            }
-            // Call the service
-            if let Err(err) = service.call(ctx).await {
-                error!("Service call failed for peer {}: {}", peer, err);
+                Ok(Err(err)) => {
+                    // Service failed permanently
+                    error!("Service not ready for peer {}: {}", peer, err);
+                    if let Err(send_err) = self.swarm_tx.send(SwarmSend::Disconnect(peer)).await {
+                        error!(
+                            "Failed to send disconnect command for peer {}: {:?}",
+                            peer, send_err
+                        );
+                    }
+                }
+
+                Err(_) => {
+                    // Timeout due to rate limit or other delay
+                    error!("Service readiness timed out for peer {}", peer);
+                    if let Err(send_err) = self.swarm_tx.send(SwarmSend::Disconnect(peer)).await {
+                        error!(
+                            "Failed to send disconnect command for peer {}: {:?}",
+                            peer, send_err
+                        );
+                    }
+                }
             }
         }
-
         Ok(())
     }
 }
