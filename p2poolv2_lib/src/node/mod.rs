@@ -373,7 +373,7 @@ impl Node {
             };
 
             // Check readiness with a timeout
-            match tokio::time::timeout(Duration::from_millis(500), self.service.ready()).await {
+            match tokio::time::timeout(Duration::from_secs(1), self.service.ready()).await {
                 Ok(Ok(_)) => {
                     // Service is ready, call it
                     if let Err(err) = self.service.call(ctx).await {
