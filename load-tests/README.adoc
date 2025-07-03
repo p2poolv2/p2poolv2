@@ -45,6 +45,15 @@ Then run the CKPool stratum server using the provided configuration file.
 
 ```bash
 ./src/ckpool --btcsolo --config=<path to this directory>/ckpool-testnet4-solo.json
+
+
+=== Run the Load Test Script
+
+Replace stratum.jtl with the different jmeter test files for the P2Poolv2 and CKPool implementations.
+
+```bash
+cd load-tests
+jmeter -n -t stratum.jmx -l stratum.jtl
 ```
 
 == Modify the Load Test File
