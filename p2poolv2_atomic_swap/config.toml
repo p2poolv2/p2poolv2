@@ -38,3 +38,6 @@ rpc_url = "https://mutinynet.com/api/"
 #bitcoin_netowrk 
 bitcoin_network = "signet"
 
+confirmation_threshold = 3
+min_buffer_block_for_refund = 2
+

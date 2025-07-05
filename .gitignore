@@ -1,3 +1,4 @@
 /target
 store.*.db
+/p2poolv2_atomic_swap/data
 

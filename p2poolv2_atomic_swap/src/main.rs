@@ -16,9 +16,10 @@
 
 mod cli;
 mod configuration;
-mod event_handler;
 mod swap;
 mod htlc;
+mod lightning_node;
+mod bitcoin;
 
 use ldk_node::Builder;
 
@@ -26,7 +27,7 @@ use ldk_node::bitcoin::Network;
 
 use cli::run_node_cli;
 use configuration::{parse_config, NodeConfig};
-use event_handler::handle_events;
+use lightning_node::event_handler::handle_events;
 use std::sync::Arc;
 
 // building node from config

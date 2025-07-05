@@ -5,7 +5,7 @@ use ldk_node::bitcoin::{
 };
 use std::error::Error;
 use std::str::FromStr;
-use crate::htlc::tx_utils::{build_transaction, build_input, build_output, derive_keypair,compute_taproot_sighash,sign_schnorr};
+use crate::bitcoin::tx_utils::{build_transaction, build_input, build_output, derive_keypair,compute_taproot_sighash,sign_schnorr};
 
 // Well-recognized NUMS point from BIP-341 (SHA-256 of generator point's compressed public key)
 const NUMS_POINT: &str = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";

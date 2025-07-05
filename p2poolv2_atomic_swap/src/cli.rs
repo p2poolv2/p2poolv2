@@ -14,9 +14,9 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-mod cli_function;
+use crate::lightning_node;
 
-use cli_function::{
+use lightning_node::{
     balance, closechannel, force_close_channel, getaddress, getholdinvoice, getinvoice,
     listallchannels, onchaintransfer, onchaintransfer_all, openchannel, payinvoice,
     paymentid_status, redeeminvoice,

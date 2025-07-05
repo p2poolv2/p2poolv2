@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+pub mod event_handler;
+
 use ldk_node::lightning::ln::channelmanager::PaymentId;
 use ldk_node::lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription, Description};
 pub use ldk_node::lightning_types::payment::{PaymentHash, PaymentPreimage};

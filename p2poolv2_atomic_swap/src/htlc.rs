@@ -1,8 +1,4 @@
-mod p2tr2;
-mod p2wsh2;
-mod tx_utils;
-mod utils;
-mod checks;
+use crate::bitcoin::p2tr2;
 
 use crate::swap::{Swap, HTLCType};
 use ldk_node::bitcoin::{Address, KnownHrp};

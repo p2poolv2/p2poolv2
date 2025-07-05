@@ -1,6 +1,7 @@
 use crate::swap::Swap;
 use crate::configuration::HtlcConfig;
-use crate::htlc::{generate_htlc_address,utils::{fetch_utxos_for_address,fetch_tip_block_height}};
+use crate::htlc::generate_htlc_address;
+use crate::bitcoin::utils::{fetch_utxos_for_address,fetch_tip_block_height};
 use ldk_node::lightning_invoice::Bolt11Invoice;
 
 
