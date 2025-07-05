@@ -1,25 +1,21 @@
 use crate::swap::{Bitcoin, HTLCType, Swap};
 use ldk_node::bitcoin::{
-    opcodes, script::PushBytesBuf, secp256k1::Secp256k1, taproot::{TaprootSpendInfo, TaprootBuilder,LeafVersion},
-    ScriptBuf, XOnlyPublicKey, Address, KnownHrp,Txid,Amount,OutPoint,TxOut,TapLeafHash,TapSighashType,Witness,Transaction
+    opcodes, script::PushBytesBuf, secp256k1::Secp256k1, taproot::{TaprootSpendInfo, TaprootBuilder, LeafVersion},
+    ScriptBuf, XOnlyPublicKey, Address, KnownHrp, Txid, Amount, OutPoint, TxOut, TapLeafHash, TapSighashType, Witness, Transaction
 };
 use std::error::Error;
 use std::str::FromStr;
-use crate::bitcoin::tx_utils::{build_transaction, build_input, build_output, derive_keypair,compute_taproot_sighash,sign_schnorr};
+use crate::bitcoin::tx_utils::{build_transaction, build_input, build_output, derive_keypair, compute_taproot_sighash, sign_schnorr};
 
 // Well-recognized NUMS point from BIP-341 (SHA-256 of generator point's compressed public key)
 const NUMS_POINT: &str = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
 
-// // This constant should ideally be a real NUMS point from BIP-341, not `0x01`
-// const NUMS_POINT: &str = "0000000000000000000000000000000000000000000000000000000000000001";
-
 // Default fee for the transaction, can be adjusted based on network conditions
-const DEFAULT_FEE : Amount = Amount::from_sat(200); 
+const DEFAULT_FEE: Amount = Amount::from_sat(200);
 
-pub fn generate_p2tr_address(swap: &Swap, network:KnownHrp ) -> Result<Address, Box<dyn Error>> {
+pub fn generate_p2tr_address(swap: &Swap, network: KnownHrp) -> Result<Address, Box<dyn Error>> {
     let secp = Secp256k1::new();
     let taproot_spend_info = get_spending_info(&swap.from_chain, &swap.payment_hash)?;
-
     let address = Address::p2tr(
         &secp,
         taproot_spend_info.internal_key(),
@@ -29,21 +25,34 @@ pub fn generate_p2tr_address(swap: &Swap, network:KnownHrp ) -> Result<Address, 
     Ok(address)
 }
 
-pub fn redeem_taproot_htlc(swap: &Swap, preimage: &str, receiver_private_key: &str ,prev_txid: Txid,vout: u32,amount: Amount, transfer_to_address: &Address,  fee_rate_per_vb: u64, network:KnownHrp)-> Result<Transaction,  Box<dyn Error>> {
-
+pub fn redeem_taproot_htlc(
+    swap: &Swap,
+    preimage: &str,
+    receiver_private_key: &str,
+    prev_txid: Txid,
+    vout: u32,
+    amount: Amount,
+    transfer_to_address: &Address,
+    fee_rate_per_vb: u64,
+    network: KnownHrp,
+) -> Result<Transaction, Box<dyn Error>> {
     let secp = Secp256k1::new();
     // Get TaprootSpendInfo
     let spend_info = get_spending_info(&swap.from_chain, &swap.payment_hash)?;
 
-    let redeem_script = p2tr2_redeem_script(
-        PushBytesBuf::try_from(hex::decode(&swap.payment_hash).unwrap()).unwrap(),
-        &XOnlyPublicKey::from_str(&swap.from_chain.responder_pubkey).unwrap(),
-    );
+    let payment_hash_bytes = hex::decode(&swap.payment_hash)
+        .map_err(|e| format!("Invalid payment hash: {}", e))?;
+    let preimage_buf = PushBytesBuf::try_from(payment_hash_bytes)
+        .map_err(|e| format!("Failed to create PushBytesBuf: {}", e))?;
+    let responder_pubkey = XOnlyPublicKey::from_str(&swap.from_chain.responder_pubkey)
+        .map_err(|e| format!("Invalid responder pubkey: {}", e))?;
+    let redeem_script = p2tr2_redeem_script(preimage_buf, &responder_pubkey);
 
-    let script_ver = (redeem_script.clone(),LeafVersion::TapScript);
+    let script_ver = (redeem_script.clone(), LeafVersion::TapScript);
 
-    let control_block = spend_info.control_block(&script_ver)
-        .expect("Failed to get control block");
+    let control_block = spend_info
+        .control_block(&script_ver)
+        .ok_or("Failed to get control block")?;
 
     // Derive keypair
     let keypair = derive_keypair(receiver_private_key)?;
@@ -56,46 +65,55 @@ pub fn redeem_taproot_htlc(swap: &Swap, preimage: &str, receiver_private_key: &s
     // Compute sighash
     let prevouts = [TxOut {
         value: amount,
-        script_pubkey: generate_p2tr_address(swap, network).unwrap().script_pubkey(),
+        script_pubkey: generate_p2tr_address(swap, network)?.script_pubkey(),
     }];
     let leaf_hash = TapLeafHash::from_script(&redeem_script, LeafVersion::TapScript);
-    let message = compute_taproot_sighash(&tx, 0, &prevouts, leaf_hash, TapSighashType::Default).unwrap();
+    let message = compute_taproot_sighash(&tx, 0, &prevouts, leaf_hash, TapSighashType::Default)
+        .map_err(|e| format!("Failed to compute taproot sighash: {}", e))?;
 
     // Sign
     let signature = sign_schnorr(&secp, &message, &keypair);
 
-     let preimage_hex = hex::decode(preimage).unwrap();
+    let preimage_hex = hex::decode(preimage)
+        .map_err(|e| format!("Invalid preimage: {}", e))?;
     // Construct witness
     let mut witness = Witness::new();
-    witness.push(signature.as_ref());    
-    witness.push(preimage_hex);  
-    witness.push(redeem_script.to_bytes());   
-    witness.push(&control_block.serialize());     
+    witness.push(signature.as_ref());
+    witness.push(preimage_hex);
+    witness.push(redeem_script.to_bytes());
+    witness.push(&control_block.serialize());
 
     // Assign witness
     tx.input[0].witness = witness;
 
     Ok(tx)
-
-
 }
 
-
-pub fn refund_taproot_htlc(swap: &Swap, sender_private_key:&str, prev_txid: Txid, vout: u32,   refund_amount: Amount,refund_to_address: &Address,  block_num_lock: u32,fee_rate_per_vb: u64, network:KnownHrp )-> Result<Transaction, Box<dyn Error>> {
+pub fn refund_taproot_htlc(
+    swap: &Swap,
+    sender_private_key: &str,
+    prev_txid: Txid,
+    vout: u32,
+    refund_amount: Amount,
+    refund_to_address: &Address,
+    block_num_lock: u32,
+    fee_rate_per_vb: u64,
+    network: KnownHrp,
+) -> Result<Transaction, Box<dyn Error>> {
     let secp = Secp256k1::new();
 
     // Get TaprootSpendInfo
     let spend_info = get_spending_info(&swap.from_chain, &swap.payment_hash)?;
 
-    let refund_script = p2tr2_refund_script(
-        swap.from_chain.timelock,
-        &XOnlyPublicKey::from_str(&swap.from_chain.initiator_pubkey).unwrap(),
-    );
+    let initiator_pubkey = XOnlyPublicKey::from_str(&swap.from_chain.initiator_pubkey)
+        .map_err(|e| format!("Invalid initiator pubkey: {}", e))?;
+    let refund_script = p2tr2_refund_script(swap.from_chain.timelock, &initiator_pubkey);
 
-    let script_ver = (refund_script.clone(),LeafVersion::TapScript);
+    let script_ver = (refund_script.clone(), LeafVersion::TapScript);
 
-    let control_block = spend_info.control_block(&script_ver)
-        .expect("Failed to get control block");
+    let control_block = spend_info
+        .control_block(&script_ver)
+        .ok_or("Failed to get control block")?;
 
     // Derive keypair
     let keypair = derive_keypair(sender_private_key)?;
@@ -108,28 +126,26 @@ pub fn refund_taproot_htlc(swap: &Swap, sender_private_key:&str, prev_txid: Txid
     // Compute sighash
     let prevouts = [TxOut {
         value: refund_amount,
-        script_pubkey: generate_p2tr_address(swap, network).unwrap().script_pubkey(),
+        script_pubkey: generate_p2tr_address(swap, network)?.script_pubkey(),
     }];
     let leaf_hash = TapLeafHash::from_script(&refund_script, LeafVersion::TapScript);
-    let msg = compute_taproot_sighash(&tx, 0, &prevouts, leaf_hash, TapSighashType::Default).unwrap();
+    let msg = compute_taproot_sighash(&tx, 0, &prevouts, leaf_hash, TapSighashType::Default)
+        .map_err(|e| format!("Failed to compute taproot sighash: {}", e))?;
 
-     // Sign
+    // Sign
     let signature = sign_schnorr(&secp, &msg, &keypair);
 
     // Construct witness
-    // Construct witness for refund path
     let mut witness = Witness::new();
-    witness.push(signature.as_ref());             // Schnorr signature
-    witness.push(refund_script.as_bytes());  // Refund script
-    witness.push(&control_block.serialize());     // Control block
+    witness.push(signature.as_ref());
+    witness.push(refund_script.as_bytes());
+    witness.push(&control_block.serialize());
 
     // Assign witness
     tx.input[0].witness = witness;
 
     Ok(tx)
-
 }
-
 
 fn get_spending_info(bitcoin: &Bitcoin, payment_hash: &str) -> Result<TaprootSpendInfo, Box<dyn Error>> {
     if bitcoin.htlc_type != HTLCType::P2tr2 {
@@ -151,17 +167,15 @@ fn get_spending_info(bitcoin: &Bitcoin, payment_hash: &str) -> Result<TaprootSpe
     let payment_hash_bytes = hex::decode(payment_hash)
         .map_err(|e| format!("Invalid payment hash: {}", e))?;
     if payment_hash_bytes.len() != 32 {
-        return Err("Payment hash must be 32 bytes (SHA-256)".into());
+        return Err(" payment hash must be 32 bytes (SHA-256)".into());
     }
     let preimage_buf = PushBytesBuf::try_from(payment_hash_bytes)?;
 
     // Create redeem script: OP_SHA256 <hash> OP_EQUALVERIFY <responder_pubkey> OP_CHECKSIG
     let redeem_script = p2tr2_redeem_script(preimage_buf, &responder_pubkey);
-   
 
     // Create refund script: <timelock> OP_CSV OP_DROP <initiator_pubkey> OP_CHECKSIG
     let refund_script = p2tr2_refund_script(bitcoin.timelock, &initiator_pubkey);
-   
 
     // Use a NUMS point as the internal key
     let internal_key = XOnlyPublicKey::from_str(NUMS_POINT)
@@ -169,8 +183,8 @@ fn get_spending_info(bitcoin: &Bitcoin, payment_hash: &str) -> Result<TaprootSpe
 
     // Build Taproot script tree with redeem and refund paths
     let taproot_builder = TaprootBuilder::new()
-        .add_leaf(1, redeem_script)? // Clone necessary due to TaprootBuilder consuming the script
-        .add_leaf(1, refund_script)?; // Clone necessary due to TaprootBuilder consuming the script
+        .add_leaf(1, redeem_script)?
+        .add_leaf(1, refund_script)?;
 
     let secp = Secp256k1::new();
     let taproot_spend_info = taproot_builder
@@ -316,6 +330,6 @@ mod tests {
         let tx_hex = bitcoin::consensus::encode::serialize_hex(&trx);
 
         assert_eq!(tx_hex,"0200000000010161d3b455f6f4a93d31ea9c548f239ac9876bcbb158c7f6d6d8cc7694f2ce0b3f0000000000050000000120030000000000001600145bd1371a74cca0123d7f091d50c88b891b0b6dc1034075c4d455a491a2618656dd5776eed4dc8c82d085cc4a00ef47691a070936b816501f44fbd648fad5bd5f060da054a1a931a910f55e9945a74a6d2356f3c77bce2555b27520fdfbf55076737c3b8e150ab1fcf138caa7a8671d2185695944c2581ef11aa866ac41c150929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac048e28665843ab4618bef68a6a5ae7040f87c719c6d535139147eb812bdd1178400000000");
-       Ok(())
+        Ok(())
     }
 }
