@@ -17,6 +17,8 @@
 mod cli;
 mod configuration;
 mod event_handler;
+mod swap;
+mod htlc;
 
 use ldk_node::Builder;
 
@@ -77,7 +79,7 @@ async fn main() {
 
     println!("Node configuration: {:?}", node_config);
 
-    let node = make_node(node_config).await;
+    let node = make_node(node_config.node).await;
     let node = Arc::new(node);
 
     // tokio runtime for spawning in background (event handler)
