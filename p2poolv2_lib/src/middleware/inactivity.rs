@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use std::clone::Clone;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
@@ -27,51 +28,53 @@ use crate::node::SwarmSend;
 use crate::service::p2p_service::RequestContext;
 
 /// Middleware to track peer activity and disconnect inactive peers.
+///
+/// When applied, it starts a background task that runs every 30 seconds
+/// to check for inactive peers based on the last time they sent a request.
+///
+/// If a peer is inactive beyond the configured timeout, it is removed
+/// and a `SwarmSend::Disconnect(peer)` is sent via `swarm_tx`.
+///
+/// Peer activity is tracked by updating a `last_seen` timestamp
+/// on each request received from a peer.
+
 #[derive(Clone)]
-pub struct InactivityLayer<S: std::clone::Clone, C: std::clone::Clone> {
-    inner: Arc<Mutex<InactivityService<S, C>>>,
+pub struct InactivityLayer<C: Clone> {
+    timeout_duration: Duration,
+    swarm_tx: Sender<SwarmSend<C>>,
 }
 
-impl<S: Clone, C: std::clone::Clone + std::marker::Send + 'static> InactivityLayer<S, C> {
+impl<C: Clone + std::marker::Send + 'static> InactivityLayer<C> {
     pub fn new(timeout_duration: Duration, swarm_tx: Sender<SwarmSend<C>>) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(InactivityService::new(
-                timeout_duration,
-                swarm_tx,
-            ))),
+            timeout_duration,
+            swarm_tx,
         }
-    }
-
-    pub fn start_monitoring(&self) {
-        self.inner.lock().unwrap().start_monitoring();
     }
 }
 
-impl<S: Clone, C: Clone> Layer<S> for InactivityLayer<S, C> {
+impl<S: Clone, C: Clone + Send + 'static> Layer<S> for InactivityLayer<C> {
     type Service = InactivityService<S, C>;
 
     fn layer(&self, service: S) -> Self::Service {
-        let mut inner = (*self.inner.lock().unwrap()).clone();
-        inner.service = service;
-        inner
+        let svc = InactivityService::new(service, self.timeout_duration, self.swarm_tx.clone());
+        svc.start_monitoring();
+        svc
     }
 }
 
 #[derive(Clone)]
-pub struct InactivityService<S: Clone, C>
-where
-    C: std::clone::Clone,
-{
+pub struct InactivityService<S: Clone, C: Clone> {
     pub service: S,
     pub timeout_duration: Duration,
     pub last_seen: Arc<Mutex<HashMap<PeerId, Instant>>>,
     pub swarm_tx: Sender<SwarmSend<C>>,
 }
 
-impl<S: Clone, C: std::clone::Clone + std::marker::Send + 'static> InactivityService<S, C> {
-    pub fn new(timeout_duration: Duration, swarm_tx: Sender<SwarmSend<C>>) -> Self {
+impl<S: Clone, C: Clone + std::marker::Send + 'static> InactivityService<S, C> {
+    pub fn new(service: S, timeout_duration: Duration, swarm_tx: Sender<SwarmSend<C>>) -> Self {
         Self {
-            service: panic!("Service not initialized"), // overwritten in layer()
+            service,
             timeout_duration,
             last_seen: Arc::new(Mutex::new(HashMap::new())),
             swarm_tx,
@@ -81,7 +84,7 @@ impl<S: Clone, C: std::clone::Clone + std::marker::Send + 'static> InactivitySer
     pub fn start_monitoring(&self) {
         let timeout_duration = self.timeout_duration;
         let last_seen = self.last_seen.clone();
-        let mut swarm_tx = self.swarm_tx.clone();
+        let swarm_tx = self.swarm_tx.clone();
 
         tokio::spawn(async move {
             let check_interval = Duration::from_secs(30);
@@ -125,7 +128,7 @@ where
         >
         + Send
         + 'static
-        + std::clone::Clone,
+        + Clone,
     S::Future: Send + 'static,
     C: Send + Sync + Clone + 'static,
     T: Send + Sync + 'static,
@@ -163,7 +166,7 @@ mod tests {
         let timeout_duration = Duration::from_millis(100); // fast timeout
         let check_interval = Duration::from_millis(50); // frequent check
 
-        let mut service = InactivityService {
+        let service = InactivityService {
             service: MockService,
             timeout_duration,
             last_seen: Arc::new(Mutex::new(HashMap::new())),

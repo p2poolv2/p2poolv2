@@ -38,7 +38,7 @@ where
     let base_service = P2PService::new(swarm_tx.clone());
 
     let inactivity_layer = InactivityLayer::new(
-        Duration::from_secs(60 * 60 * 24 * 3), // 3 days
+        Duration::from_secs(config.peer_inactivity_timeout_secs),
         swarm_tx,
     );
 
