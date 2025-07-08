@@ -32,6 +32,7 @@ use crate::shares::chain::actor::ChainHandle;
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::receive_mining_message::start_receiving_mining_messages;
 use crate::shares::ShareBlock;
+use crate::spammer::spam_service::SpammerService;
 use crate::utils::time_provider::SystemTimeProvider;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::identify;
@@ -155,7 +156,11 @@ impl Node {
             }
         }
 
-        let (swarm_tx, swarm_rx) = mpsc::channel(100);
+        // Create the primary swarm channel
+        let (swarm_tx, swarm_rx): (
+            mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
+            mpsc::Receiver<SwarmSend<ResponseChannel<Message>>>,
+        ) = mpsc::channel(100);
 
         if let Err(e) =
             start_receiving_mining_messages(config, chain_handle.clone(), swarm_tx.clone())
@@ -163,6 +168,40 @@ impl Node {
             error!("Failed to start receiving shares: {}", e);
             return Err(e);
         }
+        // Start the spammer service
+        // Extract PeerIds from multiaddrs
+        // We parse PeerIds directly from Multiaddr strings provided in the config.
+        //     We intentionally do NOT generate random PeerIds here.
+        //    - These PeerIds represent real remote nodes that we want to dial and spam.
+        //    - Random PeerIds wouldn't correspond to real, reachable nodes and would cause failed connections.
+        //    - This ensures spam messages are sent only to known, connected peers.
+
+        let dial_peer_ids: Vec<libp2p::PeerId> = config
+            .network
+            .dial_peers
+            .iter()
+            .filter_map(|s| {
+                s.parse::<Multiaddr>().ok().and_then(|addr| {
+                    addr.iter()
+                        .filter_map(|proto| {
+                            if let libp2p::multiaddr::Protocol::P2p(multihash) = proto {
+                                PeerId::from_multihash(multihash.into()).ok()
+                            } else {
+                                None
+                            }
+                        })
+                        .next()
+                })
+            })
+            .collect();
+
+        // Start the spammer service using the real swarm_tx
+        let (spammer, handle) = SpammerService::new(
+            swarm_tx.clone(),
+            dial_peer_ids,
+            Message::NotFound(()),
+            Duration::from_millis(100),
+        );
 
         Ok(Self {
             swarm,

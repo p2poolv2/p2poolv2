@@ -14,17 +14,4 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod cli_commands;
-pub mod command;
-pub mod config;
-pub mod node;
-pub mod service;
-pub mod shares;
-mod spammer;
-pub mod utils;
-
-#[cfg(test)]
-pub mod test_utils;
-
-pub use service::build_service;
-pub use spammer::spam_service::SpammerService;
+pub mod spam_service;
