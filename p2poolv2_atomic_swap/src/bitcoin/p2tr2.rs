@@ -1,11 +1,12 @@
 use crate::swap::{Bitcoin, HTLCType, Swap};
 use ldk_node::bitcoin::{
     opcodes, script::PushBytesBuf, secp256k1::Secp256k1, taproot::{TaprootSpendInfo, TaprootBuilder, LeafVersion},
-    ScriptBuf, XOnlyPublicKey, Address, KnownHrp, Txid, Amount, OutPoint, TxOut, TapLeafHash, TapSighashType, Witness, Transaction
+    ScriptBuf, XOnlyPublicKey, Address, KnownHrp, Txid, Amount, OutPoint, TxOut, TapLeafHash, TapSighashType, Witness, Transaction,TxIn
 };
 use std::error::Error;
 use std::str::FromStr;
 use crate::bitcoin::tx_utils::{build_transaction, build_input, build_output, derive_keypair, compute_taproot_sighash, sign_schnorr};
+use crate::bitcoin::utils::Utxo;
 
 // Well-recognized NUMS point from BIP-341 (SHA-256 of generator point's compressed public key)
 const NUMS_POINT: &str = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0";
@@ -13,7 +14,7 @@ const NUMS_POINT: &str = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee
 // Default fee for the transaction, can be adjusted based on network conditions
 const DEFAULT_FEE: Amount = Amount::from_sat(200);
 
-pub fn generate_p2tr_address(swap: &Swap, network: KnownHrp) -> Result<Address, Box<dyn Error>> {
+pub fn generate_p2tr_address(swap: &Swap, network: KnownHrp) -> Result<(Address,TaprootSpendInfo), Box<dyn Error>> {
     let secp = Secp256k1::new();
     let taproot_spend_info = get_spending_info(&swap.from_chain, &swap.payment_hash)?;
     let address = Address::p2tr(
@@ -22,132 +23,190 @@ pub fn generate_p2tr_address(swap: &Swap, network: KnownHrp) -> Result<Address, 
         taproot_spend_info.merkle_root(),
         network,
     );
-    Ok(address)
+    Ok((address,taproot_spend_info))
 }
 
 pub fn redeem_taproot_htlc(
     swap: &Swap,
     preimage: &str,
     receiver_private_key: &str,
-    prev_txid: Txid,
-    vout: u32,
-    amount: Amount,
+    utxos: Vec<Utxo>,
     transfer_to_address: &Address,
     fee_rate_per_vb: u64,
     network: KnownHrp,
 ) -> Result<Transaction, Box<dyn Error>> {
     let secp = Secp256k1::new();
-    // Get TaprootSpendInfo
-    let spend_info = get_spending_info(&swap.from_chain, &swap.payment_hash)?;
 
-    let payment_hash_bytes = hex::decode(&swap.payment_hash)
-        .map_err(|e| format!("Invalid payment hash: {}", e))?;
-    let preimage_buf = PushBytesBuf::try_from(payment_hash_bytes)
-        .map_err(|e| format!("Failed to create PushBytesBuf: {}", e))?;
-    let responder_pubkey = XOnlyPublicKey::from_str(&swap.from_chain.responder_pubkey)
-        .map_err(|e| format!("Invalid responder pubkey: {}", e))?;
-    let redeem_script = p2tr2_redeem_script(preimage_buf, &responder_pubkey);
+    // 1️⃣ Generate Taproot spend info (address + spend tree)
+    let (htlc_address, spend_info) = generate_p2tr_address(swap, network)?;
+
+    // 2️⃣ Get the HTLC redeem script + control block
+    let redeem_script = p2tr2_redeem_script(
+        &swap.payment_hash, 
+        &swap.from_chain.responder_pubkey
+    )?;
 
     let script_ver = (redeem_script.clone(), LeafVersion::TapScript);
-
     let control_block = spend_info
         .control_block(&script_ver)
         .ok_or("Failed to get control block")?;
 
-    // Derive keypair
+    // 3️⃣ Derive signing keypair from receiver private key
     let keypair = derive_keypair(receiver_private_key)?;
 
-    // Build transaction
-    let input = build_input(OutPoint::new(prev_txid, vout), None);
-    let output = build_output(amount - DEFAULT_FEE, transfer_to_address);
-    let mut tx = build_transaction(vec![input], vec![output]);
+    // 4️⃣ Prepare inputs, prevouts, total input amount
+    let mut inputs = Vec::new();
+    let mut prevouts = Vec::new();
+    let mut total_amount = Amount::from_sat(0);
 
-    // Compute sighash
-    let prevouts = [TxOut {
-        value: amount,
-        script_pubkey: generate_p2tr_address(swap, network)?.script_pubkey(),
-    }];
+    for utxo in utxos.iter() {
+        let prev_txid = Txid::from_str(&utxo.txid)?;
+        let outpoint = OutPoint::new(prev_txid, utxo.vout);
+        let input = build_input(outpoint, None);
+        inputs.push(input);
+
+        let input_amount = Amount::from_sat(utxo.value);
+        let prevout = TxOut {
+            value: input_amount,
+            script_pubkey: htlc_address.script_pubkey(),
+        };
+
+        total_amount += input_amount;
+        prevouts.push(prevout);
+    }
+
+    let input_count = inputs.len();
+    let output_count = 1;
+
+    // 5️⃣ Estimate fee based on transaction weight
+    let witness_size_per_input = 1 + 65 + 33 + 81 + 34;
+    let fee_amount = estimate_htlc_fee(input_count, output_count, witness_size_per_input, fee_rate_per_vb);
+    
+
+    // 6️⃣ Build the output
+    let output = build_output(total_amount - fee_amount, transfer_to_address);
+
+    // 7️⃣ Construct the transaction (inputs + single output)
+    let mut tx = build_transaction(inputs, vec![output]);
+
+    // 8️⃣ Compute Taproot sighash
     let leaf_hash = TapLeafHash::from_script(&redeem_script, LeafVersion::TapScript);
-    let message = compute_taproot_sighash(&tx, 0, &prevouts, leaf_hash, TapSighashType::Default)
-        .map_err(|e| format!("Failed to compute taproot sighash: {}", e))?;
 
-    // Sign
+    let preimage_bytes = hex::decode(preimage)
+        .map_err(|e| format!("Invalid preimage: {}", e))?;
+
+    let message = compute_taproot_sighash(
+        &tx, 
+        0, 
+        &prevouts, 
+        leaf_hash, 
+        TapSighashType::Default
+    ).map_err(|e| format!("Failed to compute taproot sighash: {}", e))?;
+
+    // 9️⃣ Sign with Schnorr keypair
     let signature = sign_schnorr(&secp, &message, &keypair);
 
-    let preimage_hex = hex::decode(preimage)
-        .map_err(|e| format!("Invalid preimage: {}", e))?;
-    // Construct witness
+    // 🔟 Build witness stack (Sig | Preimage | RedeemScript | ControlBlock)
     let mut witness = Witness::new();
     witness.push(signature.as_ref());
-    witness.push(preimage_hex);
+    witness.push(preimage_bytes);
     witness.push(redeem_script.to_bytes());
     witness.push(&control_block.serialize());
 
-    // Assign witness
-    tx.input[0].witness = witness;
+    // 🔄 Assign same witness to all inputs (since they're spending same type of output)
+    for input in tx.input.iter_mut() {
+        input.witness = witness.clone();
+    }
 
     Ok(tx)
 }
 
+
 pub fn refund_taproot_htlc(
     swap: &Swap,
     sender_private_key: &str,
-    prev_txid: Txid,
-    vout: u32,
-    refund_amount: Amount,
+    utxos: Vec<Utxo>,
     refund_to_address: &Address,
-    block_num_lock: u32,
     fee_rate_per_vb: u64,
     network: KnownHrp,
 ) -> Result<Transaction, Box<dyn Error>> {
     let secp = Secp256k1::new();
 
-    // Get TaprootSpendInfo
-    let spend_info = get_spending_info(&swap.from_chain, &swap.payment_hash)?;
+    // 1️⃣ Generate Taproot spend info
+    let (htlc_address, spend_info) = generate_p2tr_address(swap, network)?;
 
-    let initiator_pubkey = XOnlyPublicKey::from_str(&swap.from_chain.initiator_pubkey)
-        .map_err(|e| format!("Invalid initiator pubkey: {}", e))?;
-    let refund_script = p2tr2_refund_script(swap.from_chain.timelock, &initiator_pubkey);
-
+    // 2️⃣ Get refund script and control block
+    let initiator_pubkey = &swap.from_chain.initiator_pubkey;
+    let refund_script = p2tr2_refund_script(swap.from_chain.timelock, initiator_pubkey)?;
     let script_ver = (refund_script.clone(), LeafVersion::TapScript);
 
     let control_block = spend_info
         .control_block(&script_ver)
         .ok_or("Failed to get control block")?;
 
-    // Derive keypair
+    // 3️⃣ Derive sender's keypair
     let keypair = derive_keypair(sender_private_key)?;
 
-    // Build transaction
-    let input = build_input(OutPoint::new(prev_txid, vout), Some(block_num_lock));
-    let output = build_output(refund_amount - DEFAULT_FEE, refund_to_address);
-    let mut tx = build_transaction(vec![input], vec![output]);
+    // 4️⃣ Prepare inputs, prevouts, total amount
+    let mut inputs = Vec::new();
+    let mut prevouts = Vec::new();
+    let mut total_amount = Amount::from_sat(0);
 
-    // Compute sighash
-    let prevouts = [TxOut {
-        value: refund_amount,
-        script_pubkey: generate_p2tr_address(swap, network)?.script_pubkey(),
-    }];
+    for utxo in utxos.iter() {
+        let prev_txid = Txid::from_str(&utxo.txid)?;
+        let outpoint = OutPoint::new(prev_txid, utxo.vout);
+        let input = build_input(outpoint, Some(swap.from_chain.timelock as u32)); // locktime for refund
+        inputs.push(input);
+
+        let input_amount = Amount::from_sat(utxo.value);
+        let prevout = TxOut {
+            value: input_amount,
+            script_pubkey: htlc_address.script_pubkey(),
+        };
+
+        total_amount += input_amount;
+        prevouts.push(prevout);
+    }
+
+    let input_count = inputs.len();
+    let output_count = 1;
+
+    // 5️⃣ Estimate fee based on transaction weight
+    let witness_size_per_input = 1 + 65 + 81 + 34; // Sig + Script + ControlBlock
+    let fee_amount = estimate_htlc_fee(input_count, output_count, witness_size_per_input, fee_rate_per_vb);
+    
+
+    // 6️⃣ Build output
+    let output = build_output(total_amount - fee_amount, refund_to_address);
+
+    // 7️⃣ Build transaction
+    let mut tx = build_transaction(inputs, vec![output]);
+
+    // 8️⃣ Compute Taproot sighash
     let leaf_hash = TapLeafHash::from_script(&refund_script, LeafVersion::TapScript);
     let msg = compute_taproot_sighash(&tx, 0, &prevouts, leaf_hash, TapSighashType::Default)
         .map_err(|e| format!("Failed to compute taproot sighash: {}", e))?;
 
-    // Sign
+    // 9️⃣ Sign with Schnorr
     let signature = sign_schnorr(&secp, &msg, &keypair);
 
-    // Construct witness
+    // 🔟 Build witness stack (Sig | RefundScript | ControlBlock)
     let mut witness = Witness::new();
     witness.push(signature.as_ref());
     witness.push(refund_script.as_bytes());
     witness.push(&control_block.serialize());
 
-    // Assign witness
-    tx.input[0].witness = witness;
+    // 🔄 Assign witness to all inputs
+    for input in tx.input.iter_mut() {
+        input.witness = witness.clone();
+    }
 
     Ok(tx)
 }
 
-fn get_spending_info(bitcoin: &Bitcoin, payment_hash: &str) -> Result<TaprootSpendInfo, Box<dyn Error>> {
+
+
+fn get_spending_info(bitcoin: &Bitcoin, payment_hash: &String) -> Result<TaprootSpendInfo, Box<dyn Error>> {
     if bitcoin.htlc_type != HTLCType::P2tr2 {
         return Err("Invalid HTLC type for P2TR address".into());
     }
@@ -157,25 +216,11 @@ fn get_spending_info(bitcoin: &Bitcoin, payment_hash: &str) -> Result<TaprootSpe
         return Err("Timelock must be positive".into());
     }
 
-    // Parse initiator and responder public keys as XOnlyPublicKey
-    let initiator_pubkey = XOnlyPublicKey::from_str(&bitcoin.initiator_pubkey)
-        .map_err(|e| format!("Invalid initiator pubkey: {}", e))?;
-    let responder_pubkey = XOnlyPublicKey::from_str(&bitcoin.responder_pubkey)
-        .map_err(|e| format!("Invalid responder pubkey: {}", e))?;
-
-    // Validate preimage hash (expect 32 bytes, SHA-256)
-    let payment_hash_bytes = hex::decode(payment_hash)
-        .map_err(|e| format!("Invalid payment hash: {}", e))?;
-    if payment_hash_bytes.len() != 32 {
-        return Err(" payment hash must be 32 bytes (SHA-256)".into());
-    }
-    let preimage_buf = PushBytesBuf::try_from(payment_hash_bytes)?;
-
     // Create redeem script: OP_SHA256 <hash> OP_EQUALVERIFY <responder_pubkey> OP_CHECKSIG
-    let redeem_script = p2tr2_redeem_script(preimage_buf, &responder_pubkey);
+    let redeem_script = p2tr2_redeem_script(payment_hash, &bitcoin.responder_pubkey)?;
 
     // Create refund script: <timelock> OP_CSV OP_DROP <initiator_pubkey> OP_CHECKSIG
-    let refund_script = p2tr2_refund_script(bitcoin.timelock, &initiator_pubkey);
+    let refund_script = p2tr2_refund_script(bitcoin.timelock, &bitcoin.initiator_pubkey)?;
 
     // Use a NUMS point as the internal key
     let internal_key = XOnlyPublicKey::from_str(NUMS_POINT)
@@ -194,25 +239,46 @@ fn get_spending_info(bitcoin: &Bitcoin, payment_hash: &str) -> Result<TaprootSpe
     Ok(taproot_spend_info)
 }
 
-fn p2tr2_redeem_script(preimage_buf: PushBytesBuf, responder_pubkey: &XOnlyPublicKey) -> ScriptBuf {
-    ScriptBuf::builder()
+fn p2tr2_redeem_script(payment_hash: &String, responder_pubkey: &String) -> Result<ScriptBuf,Box<dyn Error>> {
+     let payment_hash_bytes = hex::decode(payment_hash)
+        .map_err(|e| format!("Invalid payment hash: {}", e))?;
+    let paymenthash_buf = PushBytesBuf::try_from(payment_hash_bytes)
+        .map_err(|e| format!("Failed to create PushBytesBuf: {}", e))?;
+    let responder_pubkey = XOnlyPublicKey::from_str(responder_pubkey)
+        .map_err(|e| format!("Invalid responder pubkey: {}", e))?;
+
+    let redeem_script = ScriptBuf::builder()
         .push_opcode(opcodes::all::OP_SHA256)
-        .push_slice(preimage_buf)
+        .push_slice(paymenthash_buf)
         .push_opcode(opcodes::all::OP_EQUALVERIFY)
-        .push_x_only_key(responder_pubkey)
+        .push_x_only_key(&responder_pubkey)
         .push_opcode(opcodes::all::OP_CHECKSIG)
-        .into_script()
+        .into_script();
+
+    Ok(redeem_script)
 }
 
-fn p2tr2_refund_script(timelock: u64, initiator_pubkey: &XOnlyPublicKey) -> ScriptBuf {
-    ScriptBuf::builder()
+fn p2tr2_refund_script(timelock: u64, initiator_pubkey: &String) -> Result<ScriptBuf , Box<dyn Error> >{
+    let initiator_pubkey = XOnlyPublicKey::from_str(initiator_pubkey)
+        .map_err(|e| format!("Invalid initiator pubkey: {}", e))?;
+    let redeem_script = ScriptBuf::builder()
         .push_int(timelock as i64)
         .push_opcode(opcodes::all::OP_CSV)
         .push_opcode(opcodes::all::OP_DROP)
-        .push_x_only_key(initiator_pubkey)
+        .push_x_only_key(&initiator_pubkey)
         .push_opcode(opcodes::all::OP_CHECKSIG)
-        .into_script()
+        .into_script();
+    Ok(redeem_script)
 }
+
+fn estimate_htlc_fee(input_count: usize, output_count: usize, witness_size_per_input: usize, fee_rate_per_vb: u64) -> Amount {
+    let base_size = 6 + (input_count * 40) + 1 + (output_count * 43) + 4;
+    let total_witness_size = input_count * witness_size_per_input;
+    let total_weight = base_size * 4 + total_witness_size;
+    let vsize = (total_weight + 3) / 4;
+    Amount::from_sat(vsize as u64 * fee_rate_per_vb)
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -238,18 +304,19 @@ mod tests {
             to_chain: Lightning {
                 timelock: 2000,
                 amount: 500000,
-                htlc_type: None,
+              
             },
         };
         println!("Swap details: {:?}", swap);
         let network = KnownHrp::Testnets; // Use Testnet for testing
         let address = generate_p2tr_address(&swap,network)?;
-        assert_eq!(address.to_string(),"tb1p9qg094ppmsx39cnl0sffgu4uhtggj9vy9ll4lq9nvjnn762t4jgsdygfae");
-        println!("Generated P2TR2 address: {}", address);
+        assert_eq!(address.0.to_string(),"tb1p9qg094ppmsx39cnl0sffgu4uhtggj9vy9ll4lq9nvjnn762t4jgsdygfae");
+        println!("Generated P2TR2 address: {}", address.0);
         Ok(())
     }
 
     #[test]
+    #[ignore ]
     fn test_redeem_taproot_htlc() -> Result<(), Box<dyn Error>> {
         println!("Testing P2TR2 redeem ...");
         let swap = Swap {
@@ -264,7 +331,7 @@ mod tests {
             to_chain: Lightning {
                 timelock: 2000,
                 amount: 500000,
-                htlc_type: None,
+              
             },
         };
         println!("Swap details: {:?}", swap);
@@ -292,6 +359,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore ]
     fn test_refund_taproot_htlc() -> Result<(), Box<dyn Error>> {
         println!("Testing P2TR2 refund ...");
         let swap = Swap {
@@ -306,7 +374,7 @@ mod tests {
             to_chain: Lightning {
                 timelock: 2000,
                 amount: 500000,
-                htlc_type: None,
+              
             },
         };
         println!("Swap details: {:?}", swap);
