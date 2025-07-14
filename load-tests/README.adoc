@@ -2,7 +2,7 @@
 
 We use jmeter to run load tests for our implmentation of the Stratum protocol.
 
-The load test is repeated with the same parameters CKPool's stratum implementation. The goal of the comparison is to show that our implementation can the same load as CKPool's implementation with similar degradation in performance as the load increases, if any.
+The load test is repeated with the same parameters as CKPool's stratum implementation. The goal of the comparison is to show that our implementation can handle the same load as CKPool's implementation with similar degradation in performance as the load increases, if any.
 
 == Setup
 
@@ -12,7 +12,7 @@ We simulate 10,000 ASIC miners, connecting over a ramp-up time period of 10 seco
 
 === Bitcoin Node
 
-We simulate a bitcoin node using a http server that responds with the same block template in response to the `getblocktemplate` request. The simulated bitcoin node also responds with success to all `submitblock` requests. By avoiding a real bitcoin node, we avoid the complications of generating suitable work and the corresponding proof of work for all the simulated clients.
+We simulate a bitcoin node using a http server that responds with the same block template in response to the `getblocktemplate` request. The simulated bitcoin node also responds with success to all `submitblock` requests. By avoiding a mainnet bitcoin node, we avoid the complications of generating suitable work and the corresponding proof of work for all the simulated clients.
 
 == Running the Tests
 
