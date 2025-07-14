@@ -22,10 +22,12 @@ use crate::messages::{Message, Request};
 use crate::server::StratumContext;
 use crate::session::Session;
 use authorize::handle_authorize;
+use configure::handle_configure;
 use submit::handle_submit;
 use subscribe::handle_subscribe;
 
 pub mod authorize;
+pub mod configure;
 pub mod submit;
 pub mod subscribe;
 
@@ -65,6 +67,7 @@ pub(crate) async fn handle_message<'a, D: DifficultyAdjusterTrait>(
             )
             .await
         }
+        "mining.configure" => handle_configure(message, session).await,
         method => Err(Error::InvalidMethod(method.to_string())),
     }
 }
