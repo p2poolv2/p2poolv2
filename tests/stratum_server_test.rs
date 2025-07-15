@@ -56,6 +56,7 @@ async fn test_stratum_server_subscribe() {
         solo_address: None,
         zmqpubhashblock: "tcp://127.0.0.1:28332".to_string(),
         network: bitcoin::network::Network::Regtest,
+        version_mask: 0x1fffe000,
     };
 
     let mut server = StratumServer::new(config, shutdown_rx, connections_handle).await;
