@@ -112,6 +112,7 @@ impl StratumServer {
                                 minimum_difficulty: self.config.minimum_difficulty,
                                 maximum_difficulty: self.config.maximum_difficulty,
                                 network: self.config.network,
+                                version_mask: self.config.version_mask,
                             };
                             // Spawn a new task for each connection
                             tokio::spawn(async move {
@@ -140,6 +141,7 @@ pub(crate) struct StratumContext {
     pub minimum_difficulty: u64,
     pub maximum_difficulty: Option<u64>,
     pub network: bitcoin::network::Network,
+    pub version_mask: u32,
 }
 
 /// Handles a single connection to the Stratum server.
@@ -357,6 +359,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,
+            version_mask: 0x1fffe000,
         };
 
         // Run the handler
@@ -450,6 +453,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,
+            version_mask: 0x1fffe000,
         };
 
         // Run the handler
@@ -497,6 +501,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,
+            version_mask: 0x1fffe000,
         };
 
         // Run the handler
@@ -547,6 +552,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,
+            version_mask: 0x1fffe000,
         };
 
         // Run the handler
@@ -619,6 +625,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,
+            version_mask: 0x1fffe000,
         };
 
         // Spawn the handler in a separate task
@@ -711,6 +718,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,
+            version_mask: 0x1fffe000,
         };
 
         // Spawn the handler in a separate task

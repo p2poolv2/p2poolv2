@@ -21,7 +21,7 @@ use std::fmt;
 #[derive(Debug)]
 pub enum Error {
     InvalidMethod(String),
-    InvalidParams,
+    InvalidParams(String),
     AuthorizationFailure(String),
     SubmitFailure(String),
     SubscriptionFailure(String),
@@ -33,8 +33,8 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidMethod(method) => write!(f, "Invalid stratum method: {}", method),
-            Self::InvalidParams => write!(f, "Invalid parameters provided"),
-            Self::AuthorizationFailure(reason) => write!(f, "Authorization failed {}", reason),
+            Self::InvalidParams(msg) => write!(f, "Invalid parameters provided: {}", msg),
+            Self::AuthorizationFailure(reason) => write!(f, "Authorization failed: {}", reason),
             Self::SubmitFailure(reason) => write!(f, "Submit failure: {}", reason),
             Self::SubscriptionFailure(reason) => write!(f, "Subscription failure: {}", reason),
             Self::IoError(err) => write!(f, "IO error: {}", err),
