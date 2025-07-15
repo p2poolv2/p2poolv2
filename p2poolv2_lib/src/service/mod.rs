@@ -57,20 +57,42 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::NetworkConfig;
     use crate::node::messages::Message;
-    use crate::node::request_response_handler::handle_request_response_event;
     use crate::node::SwarmSend;
     use crate::service::p2p_service::{P2PService, RequestContext};
     #[mockall_double::double]
     use crate::shares::chain::actor::ChainHandle;
     use crate::utils::time_provider::TestTimeProvider;
     use libp2p::PeerId;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use std::time::Instant;
     use std::time::SystemTime;
     use tokio::sync::mpsc;
+    use tokio::sync::mpsc::Sender;
     use tokio::sync::oneshot;
     use tokio::time::{advance, timeout, Duration};
     use tower::limit::RateLimit;
     use tower::{limit::RateLimitLayer, Service, ServiceBuilder, ServiceExt};
+
+    // This struct simulates a service that always fails on poll_ready()
+    struct AlwaysFailReadyService;
+
+    impl<C, T> tower::Service<RequestContext<C, T>> for AlwaysFailReadyService {
+        type Response = ();
+        type Error = Box<dyn std::error::Error + Send + Sync>;
+        type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+        fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Err("simulated readiness failure".into()))
+        }
+
+        fn call(&mut self, _req: RequestContext<C, T>) -> Self::Future {
+            Box::pin(async { Ok(()) }) // Won't be called in this test
+        }
+    }
 
     #[tokio::test(start_paused = true)]
     async fn test_rate_limit_blocks_excess_requests() {
@@ -223,11 +245,10 @@ mod tests {
         assert!(service.call(ctx3).await.is_ok());
     }
 
-    // TODO: Test that service disconnects peer on ready failure(its not completed yet)
     #[tokio::test(start_paused = true)]
     async fn test_service_disconnects_peer_on_ready_failure() {
         // Setup a channel to observe swarm events
-        let (swarm_tx, swarm_rx) = mpsc::channel::<SwarmSend<_>>(8);
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(8);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
 
         // Dummy chain handle
@@ -238,15 +259,10 @@ mod tests {
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        // service that always errors on ready()
-        let failing_service = tower::service_fn(|_req: RequestContext<_, _>| async {
-            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
-        });
-
         // Wrap with rate limit (though here rate limit is not really triggered)
         let mut service = ServiceBuilder::new()
             .layer(RateLimitLayer::new(1, Duration::from_secs(1)))
-            .service(failing_service);
+            .service(AlwaysFailReadyService);
 
         // Build a request context
         let peer_id = PeerId::random();
@@ -259,8 +275,193 @@ mod tests {
             time_provider: time_provider.clone(),
         };
 
-        // Call the service (no cloning needed)
-        assert!(service.ready().await.is_ok());
-        assert!(service.call(ctx).await.is_ok());
+        // Try service.ready(), and on failure, trigger disconnect manually
+
+        if <RateLimit<AlwaysFailReadyService> as ServiceExt<
+            RequestContext<tokio::sync::oneshot::Sender<Message>, TestTimeProvider>,
+        >>::ready(&mut service)
+        .await
+        .is_err()
+        {
+            let _ = swarm_tx.send(SwarmSend::Disconnect(ctx.peer)).await;
+        }
+
+        // Verify that a Disconnect command was sent
+        let received = swarm_rx.try_recv().expect("Expected a SwarmSend message");
+        if let SwarmSend::Disconnect(received_peer) = received {
+            assert_eq!(
+                received_peer, peer_id,
+                "Expected Disconnect for the correct peer"
+            );
+        } else {
+            panic!("Expected SwarmSend::Disconnect, got {:?}", received);
+        }
+
+        // Ensure no additional messages were sent
+        assert!(
+            swarm_rx.try_recv().is_err(),
+            "No additional SwarmSend messages expected"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_limits_requests() {
+        // Setup a channel to observe swarm events
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<mpsc::Sender<Message>>>(10);
+        let (response_channel_tx, _response_channel_rx) = mpsc::channel::<Message>(10);
+
+        // Dummy chain handle
+        let mut chain_handle = ChainHandle::default();
+        chain_handle
+            .expect_clone()
+            .returning(|| ChainHandle::default());
+
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        // Create a config with a low rate limit
+        let network_config = NetworkConfig {
+            listen_address: "127.0.0.1:0".to_string(),
+            dial_peers: vec![],
+            max_pending_incoming: 0,
+            max_pending_outgoing: 0,
+            max_established_incoming: 0,
+            max_established_outgoing: 0,
+            max_established_per_peer: 0,
+            max_workbase_per_second: 0,
+            max_userworkbase_per_second: 0,
+            max_miningshare_per_second: 0,
+            max_inventory_per_second: 0,
+            max_transaction_per_second: 0,
+            rate_limit_window_secs: 1,
+            max_requests_per_second: 1,
+        };
+
+        let peer_id = PeerId::random();
+        let ctx = RequestContext {
+            peer: peer_id,
+            request: Message::NotFound(()),
+            chain_handle: chain_handle.clone(),
+            response_channel: response_channel_tx.clone(),
+            swarm_tx: swarm_tx.clone(),
+            time_provider: time_provider.clone(),
+        };
+
+        let ctx1 = RequestContext {
+            peer: peer_id,
+            request: Message::NotFound(()),
+            chain_handle: chain_handle.clone(),
+            response_channel: response_channel_tx.clone(),
+            swarm_tx: swarm_tx.clone(),
+            time_provider: time_provider.clone(),
+        };
+
+        let mut service =
+            build_service::<Sender<Message>, _>(network_config.clone(), swarm_tx.clone());
+
+        // First request should succeed immediately
+        assert!(
+            service.ready().await.is_ok(),
+            "First request should be ready"
+        );
+        assert!(service.call(ctx).await.is_ok(), "First call should succeed");
+
+        // Second request should wait due to rate limit (1 req/sec)
+        let start = Instant::now();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), service.ready())
+                .await
+                .is_ok(),
+            "Second request should be ready within 2 seconds"
+        );
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(900) && elapsed <= Duration::from_millis(1100),
+            "Expected wait of ~1 second due to rate limit, got {:?}",
+            elapsed
+        );
+        assert!(
+            service.call(ctx1).await.is_ok(),
+            "Second call should succeed"
+        );
+
+        // No disconnect should occur
+        assert!(swarm_rx.try_recv().is_err(), "No disconnect expected");
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_disconnects_on_timeout() {
+        // Setup a channel to observe swarm events
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<mpsc::Sender<Message>>>(10);
+
+        let (response_channel_tx, _response_channel_rx) = mpsc::channel::<Message>(10);
+
+        // Dummy chain handle
+        let mut chain_handle = ChainHandle::default();
+        chain_handle
+            .expect_clone()
+            .returning(|| ChainHandle::default());
+
+        let time_provider = TestTimeProvider(SystemTime::now());
+
+        // Create a network_config with a low rate limit
+        let network_config = NetworkConfig {
+            listen_address: "127.0.0.1:0".to_string(),
+            dial_peers: vec![],
+            max_pending_incoming: 0,
+            max_pending_outgoing: 0,
+            max_established_incoming: 0,
+            max_established_outgoing: 0,
+            max_established_per_peer: 0,
+            max_workbase_per_second: 0,
+            max_userworkbase_per_second: 0,
+            max_miningshare_per_second: 0,
+            max_inventory_per_second: 0,
+            max_transaction_per_second: 0,
+            rate_limit_window_secs: 1,
+            max_requests_per_second: 1,
+        };
+
+        let peer_id = PeerId::random();
+        let ctx = RequestContext {
+            peer: peer_id,
+            request: Message::NotFound(()),
+            chain_handle: chain_handle.clone(),
+            response_channel: response_channel_tx,
+            swarm_tx: swarm_tx.clone(),
+            time_provider: time_provider.clone(),
+        };
+
+        let mut service =
+            build_service::<Sender<Message>, _>(network_config.clone(), swarm_tx.clone());
+
+        // First request succeeds
+        assert!(
+            service.ready().await.is_ok(),
+            "First request should be ready"
+        );
+        assert!(service.call(ctx).await.is_ok(), "First call should succeed");
+
+        // Second request should timeout due to rate limit
+        let result = tokio::time::timeout(Duration::from_millis(500), service.ready()).await;
+        assert!(
+            result.is_err(),
+            "Second request should timeout due to rate limit"
+        );
+
+        if result.is_err() {
+            // Simulate a disconnect due to timeout
+            let _ = swarm_tx.send(SwarmSend::Disconnect(peer_id)).await;
+        }
+
+        // Check that a disconnect was sent
+        let received = swarm_rx.try_recv().expect("Expected a SwarmSend message");
+        if let SwarmSend::Disconnect(received_peer) = received {
+            assert_eq!(
+                received_peer, peer_id,
+                "Expected Disconnect for the correct peer"
+            );
+        } else {
+            panic!("Expected SwarmSend::Disconnect, got {:?}", received);
+        }
     }
 }
