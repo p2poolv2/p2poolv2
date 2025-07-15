@@ -32,7 +32,7 @@ pub fn build_service<C, T>(
     swarm_tx: Sender<SwarmSend<C>>,
 ) -> BoxService<RequestContext<C, T>, (), Box<dyn Error + Send + Sync>>
 where
-    C: Send + Sync + Clone + 'static,
+    C: Send + Sync + 'static,
     T: TimeProvider + Send + Sync + 'static,
 {
     let base_service = P2PService::new(swarm_tx.clone());
@@ -334,6 +334,7 @@ mod tests {
             max_transaction_per_second: 0,
             rate_limit_window_secs: 1,
             max_requests_per_second: 1,
+            peer_inactivity_timeout_secs: 30,
         };
 
         let peer_id = PeerId::random();
@@ -419,6 +420,7 @@ mod tests {
             max_transaction_per_second: 0,
             rate_limit_window_secs: 1,
             max_requests_per_second: 1,
+            peer_inactivity_timeout_secs: 30,
         };
 
         let peer_id = PeerId::random();

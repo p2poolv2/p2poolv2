@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use libp2p::PeerId;
 use tokio::sync::mpsc::Sender;
+use tokio::time::sleep;
 use tower::{Layer, Service};
 
 use crate::node::SwarmSend;
@@ -38,13 +39,13 @@ use crate::service::p2p_service::RequestContext;
 /// Peer activity is tracked by updating a `last_seen` timestamp
 /// on each request received from a peer.
 
-#[derive(Clone)]
-pub struct InactivityLayer<C: Clone> {
+/// Layer that injects the InactivityService middleware into the stack.
+pub struct InactivityLayer<C> {
     timeout_duration: Duration,
     swarm_tx: Sender<SwarmSend<C>>,
 }
 
-impl<C: Clone + std::marker::Send + 'static> InactivityLayer<C> {
+impl<C> InactivityLayer<C> {
     pub fn new(timeout_duration: Duration, swarm_tx: Sender<SwarmSend<C>>) -> Self {
         Self {
             timeout_duration,
@@ -53,7 +54,7 @@ impl<C: Clone + std::marker::Send + 'static> InactivityLayer<C> {
     }
 }
 
-impl<S: Clone, C: Clone + Send + 'static> Layer<S> for InactivityLayer<C> {
+impl<S, C: Send + Sync + 'static> Layer<S> for InactivityLayer<C> {
     type Service = InactivityService<S, C>;
 
     fn layer(&self, service: S) -> Self::Service {
@@ -63,15 +64,18 @@ impl<S: Clone, C: Clone + Send + 'static> Layer<S> for InactivityLayer<C> {
     }
 }
 
-#[derive(Clone)]
-pub struct InactivityService<S: Clone, C: Clone> {
-    pub service: S,
-    pub timeout_duration: Duration,
-    pub last_seen: Arc<Mutex<HashMap<PeerId, Instant>>>,
-    pub swarm_tx: Sender<SwarmSend<C>>,
+/// Middleware that tracks and disconnects inactive peers.
+pub struct InactivityService<S, C> {
+    service: S,
+    timeout_duration: Duration,
+    last_seen: Arc<Mutex<HashMap<PeerId, Instant>>>,
+    swarm_tx: Sender<SwarmSend<C>>,
 }
 
-impl<S: Clone, C: Clone + std::marker::Send + 'static> InactivityService<S, C> {
+impl<S, C> InactivityService<S, C>
+where
+    C: Send + Sync + 'static,
+{
     pub fn new(service: S, timeout_duration: Duration, swarm_tx: Sender<SwarmSend<C>>) -> Self {
         Self {
             service,
@@ -81,16 +85,17 @@ impl<S: Clone, C: Clone + std::marker::Send + 'static> InactivityService<S, C> {
         }
     }
 
+    /// Starts the periodic task that checks for inactive peers.
     pub fn start_monitoring(&self) {
         let timeout_duration = self.timeout_duration;
-        let last_seen = self.last_seen.clone();
+        let last_seen = Arc::clone(&self.last_seen);
         let swarm_tx = self.swarm_tx.clone();
 
         tokio::spawn(async move {
             let check_interval = Duration::from_secs(30);
 
             loop {
-                tokio::time::sleep(check_interval).await;
+                sleep(check_interval).await;
                 let now = Instant::now();
                 let mut to_disconnect = Vec::new();
 
@@ -125,12 +130,10 @@ where
             RequestContext<C, T>,
             Response = (),
             Error = Box<dyn std::error::Error + Send + Sync>,
-        >
-        + Send
-        + 'static
-        + Clone,
+        > + Send
+        + 'static,
     S::Future: Send + 'static,
-    C: Send + Sync + Clone + 'static,
+    C: Send + Sync + 'static,
     T: Send + Sync + 'static,
 {
     type Response = ();
