@@ -17,10 +17,10 @@
 pub mod p2p_service;
 
 use crate::config::NetworkConfig;
+use crate::middleware::inactivity::InactivityLayer;
 use crate::node::SwarmSend;
 use crate::service::p2p_service::{P2PService, RequestContext};
 use crate::utils::time_provider::TimeProvider;
-
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
@@ -35,12 +35,19 @@ where
     C: Send + Sync + 'static,
     T: TimeProvider + Send + Sync + 'static,
 {
-    let base_service = P2PService::new(swarm_tx);
+    let base_service = P2PService::new(swarm_tx.clone());
 
-    let builder = ServiceBuilder::new().layer(RateLimitLayer::new(
-        config.max_requests_per_second,
-        Duration::from_secs(1),
-    ));
+    let inactivity_layer = InactivityLayer::new(
+        Duration::from_secs(config.peer_inactivity_timeout_secs),
+        swarm_tx,
+    );
+
+    let builder = ServiceBuilder::new()
+        .layer(RateLimitLayer::new(
+            config.max_requests_per_second,
+            Duration::from_secs(1),
+        ))
+        .layer(inactivity_layer);
 
     let service = builder.service(base_service);
 
@@ -327,6 +334,7 @@ mod tests {
             max_transaction_per_second: 0,
             rate_limit_window_secs: 1,
             max_requests_per_second: 1,
+            peer_inactivity_timeout_secs: 30,
         };
 
         let peer_id = PeerId::random();
@@ -412,6 +420,7 @@ mod tests {
             max_transaction_per_second: 0,
             rate_limit_window_secs: 1,
             max_requests_per_second: 1,
+            peer_inactivity_timeout_secs: 30,
         };
 
         let peer_id = PeerId::random();
