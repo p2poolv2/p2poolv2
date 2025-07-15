@@ -1,0 +1,269 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Stratum Load Test Plan">
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables">
+        <collectionProp name="Arguments.arguments"/>
+      </elementProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+    </TestPlan>
+    <hashTree>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Thread Group">
+        <intProp name="ThreadGroup.num_threads">1000</intProp>
+        <intProp name="ThreadGroup.ramp_time">1</intProp>
+        <longProp name="ThreadGroup.duration">300</longProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">false</boolProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.on_sample_error">stopthread</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller">
+          <stringProp name="LoopController.loops">1</stringProp>
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+        <ResultCollector guiclass="ViewResultsFullVisualizer" testclass="ResultCollector" testname="View Results Tree" enabled="false">
+          <boolProp name="ResultCollector.error_logging">false</boolProp>
+          <objProp>
+            <name>saveConfig</name>
+            <value class="SampleSaveConfiguration">
+              <time>true</time>
+              <latency>true</latency>
+              <timestamp>true</timestamp>
+              <success>true</success>
+              <label>true</label>
+              <code>true</code>
+              <message>true</message>
+              <threadName>true</threadName>
+              <dataType>true</dataType>
+              <encoding>false</encoding>
+              <assertions>true</assertions>
+              <subresults>true</subresults>
+              <responseData>false</responseData>
+              <samplerData>false</samplerData>
+              <xml>false</xml>
+              <fieldNames>true</fieldNames>
+              <responseHeaders>false</responseHeaders>
+              <requestHeaders>false</requestHeaders>
+              <responseDataOnError>false</responseDataOnError>
+              <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+              <assertionsResultsToSave>0</assertionsResultsToSave>
+              <bytes>true</bytes>
+              <sentBytes>true</sentBytes>
+              <url>true</url>
+              <threadCounts>true</threadCounts>
+              <idleTime>true</idleTime>
+              <connectTime>true</connectTime>
+            </value>
+          </objProp>
+          <stringProp name="filename"></stringProp>
+        </ResultCollector>
+        <hashTree/>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="Subscribe Authorize Sampler" enabled="false">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="parameters"></stringProp>
+          <stringProp name="filename"></stringProp>
+          <stringProp name="cacheKey">false</stringProp>
+          <stringProp name="script">import java.net.*
+import java.io.*
+import java.util.concurrent.atomic.AtomicBoolean
+
+log.info(&quot;Starting sampler&quot;)
+
+// Prevent reinitializing socket in every iteration
+
+    log.info(&quot;Starting persistent Stratum client&quot;)
+
+    thread = Thread.start {
+        try {
+            def socket = new Socket(&quot;127.0.0.1&quot;, 3333)
+
+            def out = new PrintWriter(socket.getOutputStream(), true)
+            def in = new BufferedReader(new InputStreamReader(socket.getInputStream()))
+
+            def subscribe = &quot;&quot;&quot;{&quot;id&quot;:1,&quot;method&quot;:&quot;mining.subscribe&quot;,&quot;params&quot;:[&quot;jmeter/1.0&quot;]}\n&quot;&quot;&quot;
+            def authorize = &quot;&quot;&quot;{&quot;id&quot;:1,&quot;method&quot;:&quot;mining.authorize&quot;,&quot;params&quot;:[&quot;tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk&quot;,&quot;x&quot;]}\n&quot;&quot;&quot;
+            out.print(subscribe)
+            out.flush()
+
+            log.info(&quot;Sent subscribe. Listening for responses...&quot;)
+
+           def subscribe_response = in.readLine()
+           if (subscribe_response != null) {
+               log.info(&quot;Received: ${subscribe_response}&quot;)
+               out.print(authorize)
+               out.flush()
+           }
+
+           def authorize_response = in.readLine()
+           if (authorize_response != null) {
+           	log.info(&quot;Received: ${authorize_response}&quot;)
+           }
+
+           while (true) {
+           	def message_received = in.readLine()
+           	log.info(&quot;Received: ${message_received}&quot;)
+           }
+
+            log.info(&quot;Shutting down reader&quot;)
+            in.close()
+            out.close()
+            socket.close()
+        } catch (Exception e) {
+            log.warn(&quot;Stratum client error: ${e}&quot;)
+        }
+    }
+    thread.join()
+
+log.info(&quot;Ending sampler&quot;)
+</stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="Subscribe Sampler">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="parameters"></stringProp>
+          <stringProp name="filename"></stringProp>
+          <stringProp name="cacheKey">true</stringProp>
+          <stringProp name="script">import java.net.Socket
+import java.io.*
+
+long startTime = System.nanoTime()
+
+def socket = new Socket(&quot;127.0.0.1&quot;, 3333)
+socket.setSoTimeout(3000)
+def writer = new PrintWriter(socket.getOutputStream(), true)
+def reader = new BufferedReader(new InputStreamReader(socket.getInputStream()))
+
+vars.putObject(&quot;socket&quot;, socket)
+vars.putObject(&quot;reader&quot;, reader)
+vars.putObject(&quot;writer&quot;, writer)
+
+writer.print(&apos;{&quot;id&quot;:1,&quot;method&quot;:&quot;mining.subscribe&quot;,&quot;params&quot;:[&quot;jmeter/1.0&quot;]}\n&apos;)
+writer.flush()
+
+def response = reader.readLine()
+long endTime = System.nanoTime()
+
+SampleResult.setLatency(((endTime - startTime) / 1_000_000) as long)
+SampleResult.sampleEnd()
+SampleResult.setSuccessful(response != null)
+SampleResult.setResponseData(response ?: &quot;no response&quot;, &quot;UTF-8&quot;)
+SampleResult.setResponseMessage(&quot;Subscribe response&quot;)
+SampleResult.setDataType(SampleResult.TEXT)
+SampleResult.setResponseCodeOK()
+</stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="Authorize Sampler">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="parameters"></stringProp>
+          <stringProp name="filename"></stringProp>
+          <stringProp name="cacheKey">true</stringProp>
+          <stringProp name="script">def writer = vars.getObject(&quot;writer&quot;)
+def reader = vars.getObject(&quot;reader&quot;)
+
+long startTime = System.nanoTime()
+
+writer.print(&apos;{&quot;id&quot;:2,&quot;method&quot;:&quot;mining.authorize&quot;,&quot;params&quot;:[&quot;tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk&quot;,&quot;x&quot;]}\n&apos;)
+writer.flush()
+
+def response = reader.readLine()
+long endTime = System.nanoTime()
+
+log.info(&quot;Received ${response}&quot;)
+
+SampleResult.setLatency(((endTime - startTime) / 1_000_000) as long)
+SampleResult.sampleEnd()
+SampleResult.setSuccessful(response != null)
+SampleResult.setResponseData(response ?: &quot;no response&quot;, &quot;UTF-8&quot;)
+SampleResult.setResponseMessage(&quot;Authorize response&quot;)
+SampleResult.setDataType(SampleResult.TEXT)
+SampleResult.setResponseCodeOK()
+
+</stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+        <SyncTimer guiclass="TestBeanGUI" testclass="SyncTimer" testname="Synchronizing Timer" enabled="false">
+          <intProp name="groupSize">100</intProp>
+          <longProp name="timeoutInMs">0</longProp>
+        </SyncTimer>
+        <hashTree/>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="Submit Sampler" enabled="false">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="parameters"></stringProp>
+          <stringProp name="filename"></stringProp>
+          <stringProp name="cacheKey">true</stringProp>
+          <stringProp name="script">def writer = vars.getObject(&quot;writer&quot;)
+def reader = vars.getObject(&quot;reader&quot;)
+
+def submit = [
+    id     : 3,
+    method : &quot;mining.submit&quot;,
+    params : [&quot;tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk&quot;,
+        &quot;184809ff85923e7d&quot;,
+        &quot;0000000000000000&quot;,
+        &quot;6849afec&quot;,
+        &quot;e33674f1&quot;
+    ]
+]
+
+long startTime = System.nanoTime()
+
+writer.print(new groovy.json.JsonBuilder(submit).toString() + &quot;\n&quot;)
+writer.flush()
+
+def response = reader.readLine()
+long endTime = System.nanoTime()
+
+SampleResult.setLatency(((endTime - startTime) / 1_000_000) as long)
+SampleResult.sampleEnd()
+SampleResult.setSuccessful(response != null)
+SampleResult.setResponseData(response ?: &quot;no response&quot;, &quot;UTF-8&quot;)
+SampleResult.setResponseMessage(&quot;Submit response&quot;)
+SampleResult.setDataType(SampleResult.TEXT)
+SampleResult.setResponseCodeOK()
+
+</stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+        <ResultCollector guiclass="GraphVisualizer" testclass="ResultCollector" testname="Graph Results">
+          <boolProp name="ResultCollector.error_logging">false</boolProp>
+          <objProp>
+            <name>saveConfig</name>
+            <value class="SampleSaveConfiguration">
+              <time>true</time>
+              <latency>true</latency>
+              <timestamp>true</timestamp>
+              <success>true</success>
+              <label>true</label>
+              <code>true</code>
+              <message>true</message>
+              <threadName>true</threadName>
+              <dataType>true</dataType>
+              <encoding>false</encoding>
+              <assertions>true</assertions>
+              <subresults>true</subresults>
+              <responseData>false</responseData>
+              <samplerData>false</samplerData>
+              <xml>false</xml>
+              <fieldNames>true</fieldNames>
+              <responseHeaders>false</responseHeaders>
+              <requestHeaders>false</requestHeaders>
+              <responseDataOnError>false</responseDataOnError>
+              <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+              <assertionsResultsToSave>0</assertionsResultsToSave>
+              <bytes>true</bytes>
+              <sentBytes>true</sentBytes>
+              <url>true</url>
+              <threadCounts>true</threadCounts>
+              <idleTime>true</idleTime>
+              <connectTime>true</connectTime>
+            </value>
+          </objProp>
+          <stringProp name="filename"></stringProp>
+        </ResultCollector>
+        <hashTree/>
+      </hashTree>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>
