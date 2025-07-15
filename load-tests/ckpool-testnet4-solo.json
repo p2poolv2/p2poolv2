@@ -1,0 +1,27 @@
+{
+	"btcd": [
+		{
+			"url": "127.0.0.1:48332",
+			"auth": "p2pool",
+			"pass": "p2pool",
+			"notify": false
+		}
+	],
+	"btcaddress": "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
+	"btcsig": "/p2poolv2/",
+	"blockpoll": 100,
+	"donation": 2.0,
+	"nonce1length": 4,
+	"nonce2length": 8,
+	"update_interval": 30,
+	"version_mask": "1fffe000",
+	"serverurl": [
+		"0.0.0.0:3333"
+	],
+	"mindiff": 1,
+	"startdiff": 1,
+	"maxdiff": 0,
+	"zmqblock": "tcp://127.0.0.1:28332",
+	"logdir": "./logs",
+	"btcnetwork": "signet"
+}

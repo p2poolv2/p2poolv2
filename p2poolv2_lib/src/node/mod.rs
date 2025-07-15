@@ -24,7 +24,8 @@ pub mod p2p_message_handlers;
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::senders::{send_blocks_inventory, send_getheaders};
-use crate::service::p2p_service::{P2PService, RequestContext};
+use crate::service::build_service;
+use crate::service::p2p_service::RequestContext;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
@@ -46,7 +47,7 @@ use libp2p::{
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tower::{Service, ServiceExt};
+use tower::{util::BoxService, Service, ServiceExt};
 use tracing::{debug, error, info, warn};
 
 pub struct SwarmResponseChannel<T> {
@@ -70,10 +71,12 @@ impl<T> SwarmResponseChannelTrait<T> for SwarmResponseChannel<T> {
 
 /// Capture send type for swarm p2p messages that can be sent to the swarm
 #[allow(dead_code)]
+#[derive(Debug)]
 pub enum SwarmSend<C> {
     Request(PeerId, Message),
     Response(C, Message),
     Inv(ShareBlock),
+    Disconnect(PeerId),
 }
 
 /// Node is the main struct that represents the node
@@ -83,6 +86,11 @@ struct Node {
     swarm_rx: mpsc::Receiver<SwarmSend<ResponseChannel<Message>>>,
     chain_handle: ChainHandle,
     config: Config,
+    service: BoxService<
+        RequestContext<ResponseChannel<Message>, SystemTimeProvider>,
+        (),
+        Box<dyn Error + Send + Sync>,
+    >,
 }
 
 impl Node {
@@ -203,12 +211,17 @@ impl Node {
             Duration::from_millis(100),
         );
 
+        // Initialize the service field before constructing the Node
+        let service =
+            build_service::<ResponseChannel<Message>, _>(config.network.clone(), swarm_tx.clone());
+
         Ok(Self {
             swarm,
             swarm_tx,
             swarm_rx,
             chain_handle,
             config: config.clone(),
+            service,
         })
     }
 
@@ -398,29 +411,37 @@ impl Node {
                 time_provider: SystemTimeProvider,
             };
 
-            let swarm_tx = self.swarm_tx.clone();
-            let mut service = P2PService::new(swarm_tx.clone());
+            // Check readiness with a timeout
+            match tokio::time::timeout(Duration::from_secs(1), self.service.ready()).await {
+                Ok(Ok(_)) => {
+                    // Service is ready, call it
+                    if let Err(err) = self.service.call(ctx).await {
+                        error!("Service call failed for peer {}: {}", peer, err);
+                    }
+                }
+                Ok(Err(err)) => {
+                    // Service failed permanently
+                    error!("Service not ready for peer {}: {}", peer, err);
+                    if let Err(send_err) = self.swarm_tx.send(SwarmSend::Disconnect(peer)).await {
+                        error!(
+                            "Failed to send disconnect command for peer {}: {:?}",
+                            peer, send_err
+                        );
+                    }
+                }
 
-            // First check readiness (rate limit handled here)
-            if let Err(e) = <P2PService<ResponseChannel<Message>> as ServiceExt<
-                RequestContext<ResponseChannel<Message>, SystemTimeProvider>,
-            >>::ready(&mut service)
-            .await
-            {
-                // Readiness failed (rate limit hit or inner service error)
-                error!("Service not ready for peer {}: {}", peer, e);
-
-                // Disconnect the peer directly
-                self.swarm.disconnect_peer_id(peer).unwrap_or_default();
-                return Ok(()); // Early return after disconnection
-            }
-
-            // Call service normally
-            if let Err(e) = service.call(ctx).await {
-                error!("P2PService failed for peer {}: {}", peer, e);
+                Err(_) => {
+                    // Timeout due to rate limit or other delay
+                    error!("Service readiness timed out for peer {}", peer);
+                    if let Err(send_err) = self.swarm_tx.send(SwarmSend::Disconnect(peer)).await {
+                        error!(
+                            "Failed to send disconnect command for peer {}: {:?}",
+                            peer, send_err
+                        );
+                    }
+                }
             }
         }
-
         Ok(())
     }
 }
