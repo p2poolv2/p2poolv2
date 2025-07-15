@@ -64,6 +64,7 @@ pub fn default_test_config() -> Config {
             solo_address: Some("tb1q9w4x5z5v5f5g5h5j5k5l5m5n5o5p5q5r5s5t5u".to_string()),
             zmqpubhashblock: "tcp://127.0.0.1:28332".to_string(),
             network: bitcoin::network::Network::Signet,
+            version_mask: 0x1fffe000,
         },
         miner: MinerConfig {
             pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
