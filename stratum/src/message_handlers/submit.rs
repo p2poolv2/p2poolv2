@@ -43,10 +43,11 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.submit message");
     if message.params.len() < 4 {
-        return Err(Error::InvalidParams);
+        return Err(Error::InvalidParams("Missing parameters".into()));
     }
 
-    let job_id = u64::from_str_radix(&message.params[1], 16).map_err(|_| Error::InvalidParams)?;
+    let job_id = u64::from_str_radix(&message.params[1], 16)
+        .map_err(|_| Error::InvalidParams("Invalid job_id".into()))?;
 
     let job = match tracker_handle.get_job(JobId(job_id)).await {
         Ok(Some(job)) => job,

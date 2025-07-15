@@ -28,7 +28,9 @@ fn decode_txids(blocktemplate: &BlockTemplate) -> Result<Vec<bitcoin::Txid>, Err
     blocktemplate
         .transactions
         .iter()
-        .map(|tx| bitcoin::Txid::from_str(&tx.txid).map_err(|_| Error::InvalidParams))
+        .map(|tx| {
+            bitcoin::Txid::from_str(&tx.txid).map_err(|_| Error::InvalidParams("Bad txid".into()))
+        })
         .collect()
 }
 
@@ -54,10 +56,8 @@ pub fn build_coinbase_from_submission(
     debug!("Complete coinbase tx hex: {}", complete_tx);
 
     let tx_bytes = Vec::from_hex(&complete_tx).unwrap();
-    bitcoin::Transaction::consensus_decode(&mut std::io::Cursor::new(tx_bytes)).map_err(|e| {
-        error!("Failed to decode coinbase transaction: {}", e);
-        Error::InvalidParams
-    })
+    bitcoin::Transaction::consensus_decode(&mut std::io::Cursor::new(tx_bytes))
+        .map_err(|_e| Error::InvalidParams("Failed to decode coinbase transaction".into()))
 }
 
 /// Validate the difficulty of a submitted share against the block template
@@ -72,17 +72,18 @@ pub fn validate_submission_difficulty(
     enonce1_hex: &str,
 ) -> Result<Block, Error> {
     let compact_target = bitcoin::CompactTarget::from_unprefixed_hex(&job.blocktemplate.bits)
-        .map_err(|_| Error::InvalidParams)?;
+        .map_err(|_| Error::InvalidParams("Failed to parse compact target".into()))?;
     let target = bitcoin::Target::from_compact(compact_target);
 
     // build coinbase from submission
     let coinbase = build_coinbase_from_submission(job, submission, enonce1_hex)
-        .map_err(|_| Error::InvalidParams)?;
+        .map_err(|_| Error::InvalidParams("Failed to build coinbase transaction".into()))?;
 
     debug!("Coinbase transaction: {:?}", coinbase);
 
     // decode txids for making merkle root
-    let txids = decode_txids(&job.blocktemplate).map_err(|_| Error::InvalidParams)?;
+    let txids = decode_txids(&job.blocktemplate)
+        .map_err(|_| Error::InvalidParams("Failed to decode txids".into()))?;
 
     let mut all_txids = vec![coinbase.compute_txid()];
     all_txids.extend(txids);
@@ -94,8 +95,8 @@ pub fn validate_submission_difficulty(
 
     info!("Merkle root: {}", merkle_root);
 
-    let n_time =
-        u32::from_str_radix(&submission.params[3], 16).map_err(|_| Error::InvalidParams)?;
+    let n_time = u32::from_str_radix(&submission.params[3], 16)
+        .map_err(|_| Error::InvalidParams("Bad nTime".into()))?;
 
     // build the block header from the block template and submission
     let header = Header {
