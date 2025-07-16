@@ -36,6 +36,7 @@ pub struct NetworkConfig {
     pub rate_limit_window_secs: u64,
     pub max_requests_per_second: u64,
     pub peer_inactivity_timeout_secs: u64,
+    pub dial_timeout_secs: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]

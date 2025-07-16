@@ -42,6 +42,7 @@ pub fn default_test_config() -> Config {
             rate_limit_window_secs: 1,
             max_requests_per_second: 1,
             peer_inactivity_timeout_secs: 60,
+            dial_timeout_secs: 30,
         },
         bitcoinrpc: BitcoinRpcConfig {
             url: "http://localhost:8332".to_string(),
