@@ -16,7 +16,7 @@
 
 use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
-use crate::messages::{Message, Request};
+use crate::messages::{Message, Request, Response};
 use crate::session::Session;
 use tracing::debug;
 
@@ -66,8 +66,11 @@ pub async fn handle_configure<'a, D: DifficultyAdjusterTrait>(
     let params = parse_configure_params(&message);
     if let Ok(config_params) = params {
         if config_params.contains_key("version-rolling.mask") {
-            Ok(vec![Message::Request(Request::new_set_version_mask(
-                version_mask,
+            Ok(vec![Message::Response(Response::new_ok(
+                message.id,
+                serde_json::json!({
+                    "version-rolling": true,
+                    "version-rolling.mask": format!("{:x}", version_mask)}),
             ))])
         } else {
             // return Ok, so we don't disconnect client. Also, we don't send any message back for unsupported configure methods.
@@ -206,18 +209,28 @@ mod mining_configure_response_tests {
         };
 
         let mut session = Session::<DifficultyAdjuster>::new(1, Some(1000), 100000);
-        let version_mask = 0xffffffff;
+        let version_mask = 0x1fffe000;
 
         let result = handle_configure(message, version_mask, &mut session).await;
         assert!(result.is_ok());
         let messages = result.unwrap();
         assert_eq!(messages.len(), 1);
 
-        if let Message::Request(req) = &messages[0] {
-            assert_eq!(req.method, "mining.set_version_mask");
-            assert_eq!(req.params[0], format!("{:x}", version_mask));
-        } else {
-            panic!("Expected a Request message");
+        match &messages[0] {
+            Message::Response(response) => {
+                assert_eq!(response.id, Some(Id::Number(1)));
+                assert!(response.error.is_none());
+                assert!(response.result.is_some());
+                let result = response.result.as_ref().unwrap();
+                assert_eq!(
+                    result,
+                    &serde_json::json!({
+                        "version-rolling": true,
+                        "version-rolling.mask": "1fffe000"
+                    })
+                );
+            }
+            _ => panic!("Expected a Response message"),
         }
     }
 }

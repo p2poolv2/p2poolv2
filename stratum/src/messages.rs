@@ -271,16 +271,6 @@ impl Request<'_> {
             params: Cow::Owned(params),
         }
     }
-
-    /// Create a message with method mining.set_version_mask
-    /// The message is sent by server after version-rolling mining.configure is received, but it is not sent as a response
-    pub fn new_set_version_mask(mask: u32) -> Self {
-        Request {
-            id: None,
-            method: Cow::Owned("mining.set_version_mask".to_string()),
-            params: Cow::Owned(vec![format!("{:08x}", mask)]),
-        }
-    }
 }
 
 /// Response represents a Stratum response message from the server to the client
@@ -649,31 +639,5 @@ mod tests {
             serialized_message,
             r#"{"id":42,"method":"mining.configure","params":["\"version-rolling\"","{\"version-rolling.mask\":\"00000fff\"}"]}"#
         );
-    }
-
-    #[test]
-    fn test_new_set_version_mask() {
-        let message = Request::new_set_version_mask(0x00000fff);
-        let serialized_message = serde_json::to_string(&message).unwrap();
-        assert_eq!(
-            serialized_message,
-            r#"{"method":"mining.set_version_mask","params":["00000fff"]}"#
-        );
-        
-        // Test with different mask value
-        let message = Request::new_set_version_mask(0x0000ffff);
-        let serialized_message = serde_json::to_string(&message).unwrap();
-        assert_eq!(
-            serialized_message,
-            r#"{"method":"mining.set_version_mask","params":["0000ffff"]}"#
-        );
-        
-        // Verify deserialization
-        let deserialized: Request = serde_json::from_str(
-            r#"{"method":"mining.set_version_mask","params":["0000ffff"]}"#
-        ).unwrap();
-        assert_eq!(deserialized.method, "mining.set_version_mask");
-        assert_eq!(deserialized.params[0], "0000ffff");
-        assert!(deserialized.id.is_none());
     }
 }
