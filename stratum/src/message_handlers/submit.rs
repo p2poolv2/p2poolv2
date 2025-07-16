@@ -129,7 +129,7 @@ mod handle_submit_tests {
 
     #[test_log::test(tokio::test)]
     async fn test_handle_submit_meets_difficulty_should_submit() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, None, 2);
+        let mut session = Session::<DifficultyAdjuster>::new(1, None, 2, 0x1fffe000);
         let tracker_handle = start_tracker_actor();
 
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
@@ -205,7 +205,7 @@ mod handle_submit_tests {
 
     #[tokio::test]
     async fn test_handle_submit_a_meets_difficulty_should_submit() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, None, 2);
+        let mut session = Session::<DifficultyAdjuster>::new(1, None, 2, 0x1fffe000);
         let tracker_handle = start_tracker_actor();
 
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
@@ -290,7 +290,7 @@ mod handle_submit_tests {
             mock
         });
 
-        let mut session = Session::<MockDifficultyAdjusterTrait>::new(1, None, 2);
+        let mut session = Session::<MockDifficultyAdjusterTrait>::new(1, None, 2, 0x1fffe000);
         let tracker_handle = start_tracker_actor();
 
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
@@ -364,7 +364,7 @@ mod handle_submit_tests {
 
     #[tokio::test]
     async fn test_handle_submit_with_unknown_job_id_returns_false() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, None, 2);
+        let mut session = Session::<DifficultyAdjuster>::new(1, None, 2, 0x1fffe000);
         let tracker_handle = start_tracker_actor();
 
         let (_mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;

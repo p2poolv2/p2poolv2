@@ -112,12 +112,12 @@ impl StratumServer {
                                 minimum_difficulty: self.config.minimum_difficulty,
                                 maximum_difficulty: self.config.maximum_difficulty,
                                 network: self.config.network,
-                                version_mask: self.config.version_mask,
                             };
+                            let version_mask = self.config.version_mask;
                             // Spawn a new task for each connection
                             tokio::spawn(async move {
                                 // Handle the connection with graceful shutdown support
-                                let _ = handle_connection(buf_reader, writer, addr, message_rx, shutdown_rx, ctx).await;
+                                let _ = handle_connection(buf_reader, writer, addr, message_rx, shutdown_rx, version_mask, ctx).await;
                             });
                         }
                         Err(e) => {
@@ -141,7 +141,6 @@ pub(crate) struct StratumContext {
     pub minimum_difficulty: u64,
     pub maximum_difficulty: Option<u64>,
     pub network: bitcoin::network::Network,
-    pub version_mask: u32,
 }
 
 /// Handles a single connection to the Stratum server.
@@ -153,6 +152,7 @@ async fn handle_connection<R, W>(
     addr: SocketAddr,
     mut message_rx: mpsc::Receiver<Arc<String>>,
     mut shutdown_rx: oneshot::Receiver<()>,
+    version_mask: u32,
     ctx: StratumContext,
 ) -> Result<(), Box<dyn std::error::Error + Send>>
 where
@@ -168,6 +168,7 @@ where
         ctx.minimum_difficulty,
         ctx.maximum_difficulty,
         ctx.maximum_difficulty.unwrap_or(ctx.minimum_difficulty),
+        version_mask,
     );
 
     // Process each line as it arrives
@@ -359,12 +360,19 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,
-            version_mask: 0x1fffe000,
         };
 
         // Run the handler
-        let result =
-            handle_connection(reader, &mut writer, addr, message_rx, shutdown_rx, ctx).await;
+        let result = handle_connection(
+            reader,
+            &mut writer,
+            addr,
+            message_rx,
+            shutdown_rx,
+            0x1fffe000,
+            ctx,
+        )
+        .await;
 
         // Verify results
         assert!(
@@ -453,12 +461,19 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,
-            version_mask: 0x1fffe000,
         };
 
         // Run the handler
-        let result =
-            handle_connection(reader, &mut writer, addr, message_rx, shutdown_rx, ctx).await;
+        let result = handle_connection(
+            reader,
+            &mut writer,
+            addr,
+            message_rx,
+            shutdown_rx,
+            0x1fffe000,
+            ctx,
+        )
+        .await;
 
         // Verify results
         assert!(
@@ -501,12 +516,19 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,
-            version_mask: 0x1fffe000,
         };
 
         // Run the handler
-        let result =
-            handle_connection(input, &mut writer, addr, message_rx, shutdown_rx, ctx).await;
+        let result = handle_connection(
+            input,
+            &mut writer,
+            addr,
+            message_rx,
+            shutdown_rx,
+            0x1fffe000,
+            ctx,
+        )
+        .await;
 
         // Returns an error, so we can close the connection gracefully.
         assert!(
@@ -552,12 +574,19 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,
-            version_mask: 0x1fffe000,
         };
 
         // Run the handler
-        let result =
-            super::handle_connection(reader, &mut writer, addr, message_rx, shutdown_rx, ctx).await;
+        let result = super::handle_connection(
+            reader,
+            &mut writer,
+            addr,
+            message_rx,
+            shutdown_rx,
+            0x1fffe000,
+            ctx,
+        )
+        .await;
 
         // Should return error, so we can close the connection gracefully.
         assert!(
@@ -625,16 +654,22 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,
-            version_mask: 0x1fffe000,
         };
 
         // Spawn the handler in a separate task
         let handle = tokio::spawn(async move {
             // Wrap the mock reader with a BufReader to implement AsyncBufReadExt
             let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
-            let result =
-                handle_connection(buf_reader, &mut writer, addr, message_rx, shutdown_rx, ctx)
-                    .await;
+            let result = handle_connection(
+                buf_reader,
+                &mut writer,
+                addr,
+                message_rx,
+                shutdown_rx,
+                0x1fffe000,
+                ctx,
+            )
+            .await;
 
             assert!(
                 result.is_ok(),
@@ -718,16 +753,22 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,
-            version_mask: 0x1fffe000,
         };
 
         // Spawn the handler in a separate task
         let handle = tokio::spawn(async move {
             // Wrap the mock reader with a BufReader to implement AsyncBufReadExt
             let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
-            let result =
-                handle_connection(buf_reader, &mut writer, addr, message_rx, shutdown_rx, ctx)
-                    .await;
+            let result = handle_connection(
+                buf_reader,
+                &mut writer,
+                addr,
+                message_rx,
+                shutdown_rx,
+                0x1fffe000,
+                ctx,
+            )
+            .await;
 
             assert!(
                 result.is_ok(),

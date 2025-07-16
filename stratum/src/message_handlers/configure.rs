@@ -58,8 +58,7 @@ fn parse_configure_params(
 /// Handle the "mining.configure" message
 pub async fn handle_configure<'a, D: DifficultyAdjusterTrait>(
     message: Request<'a>,
-    version_mask: u32,
-    _session: &mut Session<D>,
+    session: &Session<D>,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.configure message");
 
@@ -70,7 +69,7 @@ pub async fn handle_configure<'a, D: DifficultyAdjusterTrait>(
                 message.id,
                 serde_json::json!({
                     "version-rolling": true,
-                    "version-rolling.mask": format!("{:x}", version_mask)}),
+                    "version-rolling.mask": format!("{:x}", session.version_mask)}),
             ))])
         } else {
             // return Ok, so we don't disconnect client. Also, we don't send any message back for unsupported configure methods.
@@ -208,10 +207,9 @@ mod mining_configure_response_tests {
             ]),
         };
 
-        let mut session = Session::<DifficultyAdjuster>::new(1, Some(1000), 100000);
-        let version_mask = 0x1fffe000;
+        let mut session = Session::<DifficultyAdjuster>::new(1, Some(1000), 100000, 0x1fffe000);
 
-        let result = handle_configure(message, version_mask, &mut session).await;
+        let result = handle_configure(message, &session).await;
         assert!(result.is_ok());
         let messages = result.unwrap();
         assert_eq!(messages.len(), 1);
