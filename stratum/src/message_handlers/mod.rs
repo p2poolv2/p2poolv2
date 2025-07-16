@@ -67,7 +67,7 @@ pub(crate) async fn handle_message<'a, D: DifficultyAdjusterTrait>(
             )
             .await
         }
-        "mining.configure" => handle_configure(message, ctx.version_mask, session).await,
+        "mining.configure" => handle_configure(message, session).await,
         method => Err(Error::InvalidMethod(method.to_string())),
     }
 }
