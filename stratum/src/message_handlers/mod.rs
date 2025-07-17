@@ -30,6 +30,7 @@ pub mod authorize;
 pub mod configure;
 pub mod submit;
 pub mod subscribe;
+pub mod suggest_difficulty;
 
 /// Handle incoming Stratum messages
 /// This function processes the incoming Stratum messages and returns a response
@@ -68,6 +69,9 @@ pub(crate) async fn handle_message<'a, D: DifficultyAdjusterTrait>(
             .await
         }
         "mining.configure" => handle_configure(message, session).await,
+        "mining.suggest_difficulty" => {
+            suggest_difficulty::handle_suggest_difficulty(message, session).await
+        }
         method => Err(Error::InvalidMethod(method.to_string())),
     }
 }
