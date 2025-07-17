@@ -71,10 +71,10 @@ fn apply_version_mask(
         info!("Applying version mask from params: {}", params[5]);
         let bits = i32::from_be_bytes(
             hex::decode(&params[5])
-                .unwrap()
+                .map_err(|_| Error::InvalidParams("Failed to decode hex".into()))?
                 .as_slice()
                 .try_into()
-                .unwrap(),
+                .map_err(|_| Error::InvalidParams("Failed to decode hex".into()))?,
         );
         Ok((header_version & !version_mask) | (bits & version_mask))
     } else {

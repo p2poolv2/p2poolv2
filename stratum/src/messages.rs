@@ -262,7 +262,7 @@ impl Request<'_> {
     /// Create a new mining.configure message for version-rolling
     pub fn new_version_rolling_configure(id: u64, version_mask: String) -> Self {
         let params = vec![
-            "\"version-rolling\"".to_string(),
+            "version-rolling".to_string(),
             format!("{{\"version-rolling.mask\":\"{}\"}}", version_mask),
         ];
         Request {
@@ -637,7 +637,7 @@ mod tests {
         let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized_message,
-            r#"{"id":42,"method":"mining.configure","params":["\"version-rolling\"","{\"version-rolling.mask\":\"00000fff\"}"]}"#
+            r#"{"id":42,"method":"mining.configure","params":["version-rolling","{\"version-rolling.mask\":\"00000fff\"}"]}"#
         );
     }
 }
