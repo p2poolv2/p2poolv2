@@ -1,0 +1,15 @@
+{
+    "id": 5,
+    "method": "mining.submit",
+    "params": [
+        "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
+        "6878b60200000001",
+        "0000000000000000",
+        "6878b602",
+        "58f90070",
+        "083ac000"
+    ],
+    "client_id": 1,
+    "address": "192.168.178.127",
+    "server": 0
+}

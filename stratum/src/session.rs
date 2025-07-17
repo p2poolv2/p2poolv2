@@ -41,7 +41,7 @@ pub struct Session<D: DifficultyAdjusterTrait> {
     /// Difficulty adjuster for the session
     pub difficulty_adjuster: D,
     /// version_mask used in this session, defaults to one provided from config
-    pub version_mask: u32,
+    pub version_mask: i32,
 }
 
 impl<D: DifficultyAdjusterTrait> Session<D> {
@@ -50,7 +50,7 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
         minimum_difficulty: u64,
         maximum_difficulty: Option<u64>,
         network_difficulty: u64,
-        version_mask: u32,
+        version_mask: i32,
     ) -> Self {
         let id = Session::<D>::generate_id();
         let enonce1 = id.to_le();
