@@ -37,7 +37,7 @@ pub struct StratumConfig {
     pub network: bitcoin::Network,
     /// The version mask to use for version-rolling
     #[serde(deserialize_with = "deserialize_version_mask")]
-    pub version_mask: u32,
+    pub version_mask: i32,
 }
 
 /// helper function to deserialize the network from the config file, which is provided as a string like Core
@@ -50,12 +50,12 @@ where
     bitcoin::Network::from_core_arg(&s).map_err(serde::de::Error::custom)
 }
 
-fn deserialize_version_mask<'de, D>(deserializer: D) -> Result<u32, D::Error>
+fn deserialize_version_mask<'de, D>(deserializer: D) -> Result<i32, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let s: String = serde::Deserialize::deserialize(deserializer)?;
-    u32::from_str_radix(&s, 16).map_err(serde::de::Error::custom)
+    i32::from_str_radix(&s, 16).map_err(serde::de::Error::custom)
 }
 
 #[cfg(test)]

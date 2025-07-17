@@ -152,7 +152,7 @@ async fn handle_connection<R, W>(
     addr: SocketAddr,
     mut message_rx: mpsc::Receiver<Arc<String>>,
     mut shutdown_rx: oneshot::Receiver<()>,
-    version_mask: u32,
+    version_mask: i32,
     ctx: StratumContext,
 ) -> Result<(), Box<dyn std::error::Error + Send>>
 where
