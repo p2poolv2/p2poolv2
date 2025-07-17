@@ -92,10 +92,15 @@ pub trait DifficultyAdjusterTrait {
     ///
     /// Returns a tuple of (Option<u32>, bool) where the first element is the new difficulty
     /// if it changed, and the second element is true if this was the first share.
-    fn record_share_submission(&mut self, share_diff: u128, job_id: u64) -> (Option<u64>, bool);
+    fn record_share_submission(
+        &mut self,
+        share_diff: u128,
+        job_id: u64,
+        suggested_difficulty: Option<u64>,
+    ) -> (Option<u64>, bool);
 
     /// Calculate the optimal difficulty based on client performance
-    fn calculate_new_difficulty(&self) -> u64;
+    fn calculate_new_difficulty(&self, suggested_difficulty: Option<u64>) -> u64;
 
     /// Update the difficulty shares per second metric for a given time window
     fn update_difficulty_shares_per_second_metric(
@@ -106,7 +111,8 @@ pub trait DifficultyAdjusterTrait {
     );
 
     /// Update the DSPS (Difficulty Shares Per Second) metrics using exponential decay
-    fn apply_difficulty_constraints(&self, new_diff: u64) -> u64;
+    fn apply_difficulty_constraints(&self, new_diff: u64, suggested_difficulty: Option<u64>)
+        -> u64;
 
     /// Get the current difficulty
     fn current_difficulty(&self) -> u64;
@@ -152,7 +158,12 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         }
     }
 
-    fn record_share_submission(&mut self, share_diff: u128, job_id: u64) -> (Option<u64>, bool) {
+    fn record_share_submission(
+        &mut self,
+        share_diff: u128,
+        job_id: u64,
+        suggested_difficulty: Option<u64>,
+    ) -> (Option<u64>, bool) {
         let now = SystemTime::now();
         let mut first_share = false;
 
@@ -210,7 +221,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         );
 
         if should_adjust {
-            let new_diff = self.calculate_new_difficulty();
+            let new_diff = self.calculate_new_difficulty(suggested_difficulty);
 
             info!(
                 "Calculated new difficulty: {}, current difficulty: {}",
@@ -237,7 +248,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         (None, first_share)
     }
 
-    fn calculate_new_difficulty(&self) -> u64 {
+    fn calculate_new_difficulty(&self, suggested_difficulty: Option<u64>) -> u64 {
         // Calculate the bias factor, which increases as time since first share increases
         let time_since_first_share = SystemTime::now()
             .duration_since(self.first_share_timestamp.unwrap())
@@ -270,7 +281,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         let saturated = self.saturated_to_u64(optimal_diff);
 
         // Apply constraints to the calculated difficulty
-        let constrained_diff = self.apply_difficulty_constraints(saturated);
+        let constrained_diff = self.apply_difficulty_constraints(saturated, suggested_difficulty);
 
         info!(
             "Difficulty adjustment: dsps5={}, bias={}, adjusted_dsps={}, drr={}, optimal={}, constrained={}",
@@ -280,16 +291,25 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         constrained_diff
     }
 
-    fn apply_difficulty_constraints(&self, calculated_diff: u64) -> u64 {
-        // 1. Maximum of pool minimum difficulty and calculated optimal
+    fn apply_difficulty_constraints(
+        &self,
+        calculated_diff: u64,
+        suggested_difficulty: Option<u64>,
+    ) -> u64 {
+        // Maximum of pool minimum difficulty and calculated optimal
         let mut diff = calculated_diff.max(self.pool_minimum_difficulty);
 
-        // 3. Minimum of calculated optimal and pool maximum difficulty
+        // Use max of difficulty suggested by client and the calculated optimal
+        if let Some(suggested) = suggested_difficulty {
+            diff = diff.max(suggested);
+        }
+
+        // Cap diff to pool maximum difficulty
         if self.pool_maximum_difficulty.is_some() {
             diff = diff.min(self.pool_maximum_difficulty.unwrap());
         }
 
-        // 4. Minimum of calculated optimal and network difficulty
+        // Minimum of diff and network difficulty
         diff.min(self.network_difficulty)
     }
 
@@ -387,7 +407,7 @@ mod tests {
         let min_diff = 1000;
         let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000), 200000);
 
-        let (new_diff, is_first) = adjuster.record_share_submission(min_diff as u128, 1);
+        let (new_diff, is_first) = adjuster.record_share_submission(min_diff as u128, 1, None);
 
         assert!(is_first);
         assert!(new_diff.is_none());
@@ -402,12 +422,12 @@ mod tests {
         let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000), 200000);
 
         // Submit first share to initialize
-        let _ = adjuster.record_share_submission(min_diff as u128, 1);
+        let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
 
         // Submit several shares but less than MIN_SHARES_BEFORE_ADJUST
         for i in 0..(MIN_SHARES_BEFORE_ADJUST - 1) {
             let (new_diff, is_first) =
-                adjuster.record_share_submission(min_diff as u128, (i + 2) as u64);
+                adjuster.record_share_submission(min_diff as u128, (i + 2) as u64, None);
             assert!(!is_first);
             assert!(new_diff.is_none());
         }
@@ -425,7 +445,7 @@ mod tests {
         let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000), 200000);
 
         // Submit first share to initialize
-        let _ = adjuster.record_share_submission(min_diff as u128, 1);
+        let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
 
         // Force the timestamps to be old enough to trigger adjustment
         let past_time = SystemTime::now() - Duration::from_secs(MIN_SECONDS_BEFORE_ADJUST + 10);
@@ -436,7 +456,7 @@ mod tests {
         adjuster.difficulty_shares_per_second_5min_window = 0.5; // This should increase the difficulty
 
         // Submit a share that should trigger adjustment
-        let (new_diff, _) = adjuster.record_share_submission(min_diff as u128, 2);
+        let (new_diff, _) = adjuster.record_share_submission(min_diff as u128, 2, None);
 
         // We expect difficulty to increase because dsps5/bias is higher than the target DRR
         assert!(new_diff.is_some());
@@ -452,7 +472,7 @@ mod tests {
         let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000), 200000);
 
         // Submit first share to initialize
-        let _ = adjuster.record_share_submission(min_diff as u128, 1);
+        let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
 
         // Force the timestamps to be old enough
         let past_time = SystemTime::now() - Duration::from_secs(31); // Just over 30 seconds
@@ -466,12 +486,12 @@ mod tests {
         for i in 0..MIN_SHARES_BEFORE_ADJUST {
             if i < MIN_SHARES_BEFORE_ADJUST - 1 {
                 let (new_diff, _) =
-                    adjuster.record_share_submission(min_diff as u128, (i + 2) as u64);
+                    adjuster.record_share_submission(min_diff as u128, (i + 2) as u64, None);
                 assert!(new_diff.is_none());
             } else {
                 // The last share should trigger adjustment
                 let (new_diff, _) =
-                    adjuster.record_share_submission(min_diff as u128, (i + 2) as u64);
+                    adjuster.record_share_submission(min_diff as u128, (i + 2) as u64, None);
                 assert!(new_diff.is_some());
                 assert_eq!(new_diff.unwrap(), 5);
             }
@@ -487,12 +507,12 @@ mod tests {
 
         // Test minimum constraint
         let calculated = 500; // Below pool minimum
-        let constrained = adjuster.apply_difficulty_constraints(calculated);
+        let constrained = adjuster.apply_difficulty_constraints(calculated, None);
         assert_eq!(constrained, min_diff);
 
         // Test maximum pool constraint
         let calculated = 150_000; // Above pool maximum
-        let constrained = adjuster.apply_difficulty_constraints(calculated);
+        let constrained = adjuster.apply_difficulty_constraints(calculated, None);
         assert_eq!(constrained, pool_max_diff);
 
         let network_diff = 50_000; // Lower than pool_max to test constraint
@@ -500,8 +520,13 @@ mod tests {
 
         // Test network constraint
         let calculated = 75_000; // Above network but below pool max
-        let constrained = adjuster.apply_difficulty_constraints(calculated);
+        let constrained = adjuster.apply_difficulty_constraints(calculated, None);
         assert_eq!(constrained, network_diff);
+
+        // Test cap with suggested difficulty
+        let calculated = 500;
+        let constrained = adjuster.apply_difficulty_constraints(calculated, Some(2000));
+        assert_eq!(constrained, 2000);
     }
 
     #[test]
@@ -510,7 +535,7 @@ mod tests {
         let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100_000), 200_000);
 
         // Submit first share to initialize
-        let _ = adjuster.record_share_submission(min_diff as u128, 1);
+        let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
 
         // Set a 30-minute-old first share time to get bias close to 1.0
         let past_time = SystemTime::now() - Duration::from_secs(1800);
@@ -522,7 +547,7 @@ mod tests {
         adjuster.difficulty_shares_per_second_5min_window = 600.0;
 
         // Calculate new difficulty
-        let new_diff = adjuster.calculate_new_difficulty();
+        let new_diff = adjuster.calculate_new_difficulty(None);
 
         // Expected optimal diff with dsps=600 and TARGET_DRR=0.3 is about 2000
         assert!(new_diff > min_diff);
@@ -536,7 +561,7 @@ mod tests {
         let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000), 200000);
 
         // Submit first share to initialize
-        let _ = adjuster.record_share_submission(min_diff as u128, 1);
+        let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
 
         // Set bias close to 1.0 with an old first share time
         let past_time = SystemTime::now() - Duration::from_secs(1800);
@@ -547,7 +572,7 @@ mod tests {
         adjuster.difficulty_shares_per_second_5min_window = 200.0;
 
         // Calculate new difficulty
-        let new_diff = adjuster.calculate_new_difficulty();
+        let new_diff = adjuster.calculate_new_difficulty(None);
 
         // Should not change as DRR is within acceptable range
         assert_eq!(new_diff, min_diff);
@@ -559,7 +584,7 @@ mod tests {
         let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000), 200000);
 
         // Submit first share to initialize
-        let _ = adjuster.record_share_submission(min_diff as u128, 1);
+        let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
 
         // Set a first share time that's recent (1 minute ago)
         // This should result in a significant bias effect
@@ -571,13 +596,13 @@ mod tests {
         adjuster.difficulty_shares_per_second_5min_window = 600.0;
 
         // Calculate new difficulty with 1-minute bias
-        let new_diff_with_bias = adjuster.calculate_new_difficulty();
+        let new_diff_with_bias = adjuster.calculate_new_difficulty(None);
 
         // Now simulate the same miner after 30 minutes (bias close to 1.0)
         adjuster.first_share_timestamp = Some(SystemTime::now() - Duration::from_secs(1800));
 
         // Calculate difficulty again with reduced bias
-        let new_diff_no_bias = adjuster.calculate_new_difficulty();
+        let new_diff_no_bias = adjuster.calculate_new_difficulty(None);
 
         // With bias closer to 1.0, the adjusted rate is lower, resulting in lower difficulty
         assert!(new_diff_no_bias < new_diff_with_bias);
@@ -589,7 +614,7 @@ mod tests {
         let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000), 200000);
 
         // Make some changes to the adjuster state
-        adjuster.record_share_submission(min_diff as u128, 1);
+        adjuster.record_share_submission(min_diff as u128, 1, None);
         adjuster.difficulty_shares_per_second_5min_window = 500.0;
         adjuster.current_difficulty = 2000;
         adjuster.old_difficulty = 1500;
