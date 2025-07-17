@@ -42,6 +42,8 @@ pub struct Session<D: DifficultyAdjusterTrait> {
     pub difficulty_adjuster: D,
     /// version_mask used in this session, defaults to one provided from config
     pub version_mask: i32,
+    /// Difficulty suggested by the client
+    pub suggested_difficulty: Option<u64>,
 }
 
 impl<D: DifficultyAdjusterTrait> Session<D> {
@@ -63,6 +65,7 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
             password: None,
             difficulty_adjuster: D::new(minimum_difficulty, maximum_difficulty, network_difficulty),
             version_mask,
+            suggested_difficulty: None,
         }
     }
 
