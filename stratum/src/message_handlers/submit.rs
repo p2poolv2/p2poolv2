@@ -86,9 +86,11 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     // Submit block asap, do difficulty adjustment after submission
     submit_block(&block, bitcoinrpc_config).await;
 
-    let (new_difficulty, _is_first_share) = session
-        .difficulty_adjuster
-        .record_share_submission(block.header.difficulty(network), job_id);
+    let (new_difficulty, _is_first_share) = session.difficulty_adjuster.record_share_submission(
+        block.header.difficulty(network),
+        job_id,
+        session.suggested_difficulty,
+    );
 
     if let Some(difficulty) = new_difficulty {
         return Ok(vec![Message::SetDifficulty(
@@ -374,7 +376,7 @@ mod handle_submit_tests {
         ctx.expect().returning(|_, _, _| {
             let mut mock = MockDifficultyAdjusterTrait::default();
             mock.expect_record_share_submission()
-                .returning(|_difficulty, _job_id| (Some(12345), false));
+                .returning(|_difficulty, _job_id, _suggested_difficulty| (Some(12345), false));
             mock
         });
 
