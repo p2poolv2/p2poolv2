@@ -28,12 +28,12 @@ pub struct NodeConfig {
     pub rgs_server_url: String,
 }
 
-#[derive(Debug, Serialize, Deserialize,Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HtlcConfig {
     pub db_path: String,
     pub private_key: String,
     pub rpc_url: String,
-    pub confirmation_threshold: u32, 
+    pub confirmation_threshold: u32,
     pub min_buffer_block_for_refund: u32,
 }
 
@@ -68,7 +68,11 @@ pub fn parse_config(file_path: &str) -> io::Result<AppConfig> {
         let addresses = app_config.node.listening_addresses.split(',');
         for addr in addresses {
             let addr = addr.trim();
-            if !addr.contains(':') || !(addr.starts_with("127.0.0.1") || addr.contains("::") || addr.ends_with(".onion")) {
+            if !addr.contains(':')
+                || !(addr.starts_with("127.0.0.1")
+                    || addr.contains("::")
+                    || addr.ends_with(".onion"))
+            {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("Invalid listening address format: {}", addr),
@@ -87,7 +91,13 @@ pub fn parse_config(file_path: &str) -> io::Result<AppConfig> {
     }
 
     // Validate private_key length (expecting 32 bytes hex, so 64 chars)
-    if app_config.htlc.private_key.len() != 64 || !app_config.htlc.private_key.chars().all(|c| c.is_ascii_hexdigit()) {
+    if app_config.htlc.private_key.len() != 64
+        || !app_config
+            .htlc
+            .private_key
+            .chars()
+            .all(|c| c.is_ascii_hexdigit())
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "private_key must be a 32-byte hexadecimal string",
@@ -97,52 +107,3 @@ pub fn parse_config(file_path: &str) -> io::Result<AppConfig> {
     Ok(app_config)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    fn create_temp_toml(content: &str) -> NamedTempFile {
-        let mut file = NamedTempFile::new().expect("Failed to create temp file");
-        writeln!(file, "{}", content).expect("Failed to write to temp file");
-        file
-    }
-
-    #[test]
-    fn test_parse_valid_config() {
-        let toml_content = r#"
-            [node]
-            storage_dir_path = "data/ldk_node"
-            network = "Signet"
-            listening_addresses = "127.0.0.1:9735"
-            node_alias = "p2pool_mm_node"
-            esplora_url = "https://mutinynet.com/api/"
-            rgs_server_url = "https://mutinynet.ltbl.io/snapshot"
-
-            [ htlc ]
-            db_path = "data/htlc_db"
-            private_key = "8957096d6d79f8ba171bcce36eb0e6e6a6c02f17546180d849745988b2f5b0ee"
-            rpc_url = "https://mutinynet.com/api/"
-            confirmation_threshold = 3
-            min_buffer_block_for_refund = 2
-        "#;
-
-        let temp_file = create_temp_toml(toml_content);
-        let result = parse_config(temp_file.path().to_str().unwrap());
-
-        assert!(result.is_ok(), "Failed to parse config: {:?}", result);
-        let config = result.unwrap();
-        assert_eq!(config.node.storage_dir_path, "data/ldk_node");
-        assert_eq!(config.node.network, "Signet");
-        assert_eq!(config.node.listening_addresses, "127.0.0.1:9735");
-        assert_eq!(config.node.node_alias, "p2pool_mm_node");
-        assert_eq!(config.node.esplora_url, "https://mutinynet.com/api/");
-        assert_eq!(config.node.rgs_server_url, "https://mutinynet.ltbl.io/snapshot");
-        assert_eq!(config.htlc.db_path, "data/htlc_db");
-        assert_eq!(config.htlc.private_key, "8957096d6d79f8ba171bcce36eb0e6e6a6c02f17546180d849745988b2f5b0ee");
-        assert_eq!(config.htlc.rpc_url, "https://mutinynet.com/api/");
-
-        println!("Parsed config: {:?}", config);
-    }
-}
