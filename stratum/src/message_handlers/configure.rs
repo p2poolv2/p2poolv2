@@ -86,8 +86,7 @@ pub async fn handle_configure<'a, D: DifficultyAdjusterTrait>(
 #[cfg(test)]
 mod mining_configure_parse_tests {
     use super::*;
-    use crate::messages::{Id, Message, Request};
-    use crate::session::Session;
+    use crate::messages::{Id, Request};
     use std::borrow::Cow;
 
     #[test]
@@ -207,7 +206,7 @@ mod mining_configure_response_tests {
             ]),
         };
 
-        let mut session = Session::<DifficultyAdjuster>::new(1, Some(1000), 100000, 0x1fffe000);
+        let session = Session::<DifficultyAdjuster>::new(1, Some(1000), 100000, 0x1fffe000);
 
         let result = handle_configure(message, &session).await;
         assert!(result.is_ok());
