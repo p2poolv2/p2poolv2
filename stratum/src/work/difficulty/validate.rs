@@ -21,7 +21,7 @@ use crate::work::tracker::JobDetails;
 use bitcoin::blockdata::block::{Block, Header};
 use bitcoin::consensus::Decodable;
 use std::str::FromStr;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 /// parse all transactions from block template with data and txid
 fn decode_txids(blocktemplate: &BlockTemplate) -> Result<Vec<bitcoin::Txid>, Error> {
@@ -60,6 +60,28 @@ pub fn build_coinbase_from_submission(
         .map_err(|_e| Error::InvalidParams("Failed to decode coinbase transaction".into()))
 }
 
+/// Applies version mask received with submission, if the version_bits is compatible with version_mask from session
+/// If params don't include version_bits, it returns the original header version
+fn apply_version_mask(
+    header_version: i32,
+    version_mask: i32,
+    params: &[String],
+) -> Result<i32, Error> {
+    if params.len() > 5 {
+        info!("Applying version mask from params: {}", params[5]);
+        let bits = i32::from_be_bytes(
+            hex::decode(&params[5])
+                .unwrap()
+                .as_slice()
+                .try_into()
+                .unwrap(),
+        );
+        Ok((header_version & !version_mask) | (bits & version_mask))
+    } else {
+        Ok(header_version)
+    }
+}
+
 /// Validate the difficulty of a submitted share against the block template
 ///
 /// We build the block header from received submission and the corresponding block template.
@@ -70,6 +92,7 @@ pub fn validate_submission_difficulty(
     job: &JobDetails,
     submission: &Request<'_>,
     enonce1_hex: &str,
+    version_mask: i32,
 ) -> Result<Block, Error> {
     let compact_target = bitcoin::CompactTarget::from_unprefixed_hex(&job.blocktemplate.bits)
         .map_err(|_| Error::InvalidParams("Failed to parse compact target".into()))?;
@@ -98,9 +121,11 @@ pub fn validate_submission_difficulty(
     let n_time = u32::from_str_radix(&submission.params[3], 16)
         .map_err(|_| Error::InvalidParams("Bad nTime".into()))?;
 
+    let version = apply_version_mask(job.blocktemplate.version, version_mask, &submission.params)?;
+
     // build the block header from the block template and submission
     let header = Header {
-        version: bitcoin::block::Version::from_consensus(job.blocktemplate.version),
+        version: bitcoin::block::Version::from_consensus(version),
         prev_blockhash: bitcoin::BlockHash::from_str(&job.blocktemplate.previousblockhash).unwrap(),
         merkle_root,
         time: n_time,

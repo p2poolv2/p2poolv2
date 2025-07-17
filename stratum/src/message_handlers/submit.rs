@@ -34,6 +34,12 @@ use tracing::{debug, error, info};
 /// {"id": 1, "method": "mining.submit", "params": ["username", "jobid", "extranonce2", "nTime", "nonce"]}
 /// Example message:
 /// {"id": 1, "method": "mining.submit", "params": ["username", "4f", "fe36a31b", "504e86ed", "e9695791"]}
+/// We can also receive messages with version_mask as the last parameter
+/// {"id": 1, "method": "mining.submit", "params": ["username", "jobid", "extranonce2", "nTime", "nonce", "version_mask"]}
+/// Example message:
+/// {"id": 1, "method": "mining.submit", "params": ["username", "4f", "fe36a31b", "504e86ed", "e9695791", "1fffe000"]}
+///
+/// Handling version mask, we check mask is valid and then apply it to the block header
 pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     message: Request<'a>,
     session: &mut Session<D>,
@@ -61,7 +67,12 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     };
 
     // Validate the difficulty of the submitted share
-    let block = match validate_submission_difficulty(&job, &message, &session.enonce1_hex) {
+    let block = match validate_submission_difficulty(
+        &job,
+        &message,
+        &session.enonce1_hex,
+        session.version_mask,
+    ) {
         Ok(block) => block,
         Err(e) => {
             info!("Share validation failed: {}", e);
@@ -272,6 +283,83 @@ mod handle_submit_tests {
         };
 
         assert_eq!(response.id, Some(Id::Number(4)));
+
+        // The response should indicate that the share met required difficulty
+        assert_eq!(response.result, Some(json!(true)));
+
+        // Verify that the block was not submitted to the mock server
+        mock_server.verify().await;
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_handle_submit_with_version_rolling_meets_difficulty_should_submit() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, None, 2, 0x1fffe000);
+        let tracker_handle = start_tracker_actor();
+
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        mock_submit_block_with_any_body(&mock_server).await;
+
+        let template_str = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/validation/stratum/with_version_rolling/template.json"),
+        )
+        .unwrap();
+        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
+
+        let notify_str = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/validation/stratum/with_version_rolling/notify.json"),
+        )
+        .unwrap();
+        let notify: Notify = serde_json::from_str(&notify_str).unwrap();
+
+        let submit_str = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/validation/stratum/with_version_rolling/submit.json"),
+        )
+        .unwrap();
+        let submit: Request = serde_json::from_str(&submit_str).unwrap();
+
+        let authorize_response_str = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/validation/stratum/with_version_rolling/authorize_response.json"),
+        )
+        .unwrap();
+        let authorize_response: Response = serde_json::from_str(&authorize_response_str).unwrap();
+
+        let enonce1 = authorize_response.result.unwrap()[1].clone();
+        let enonce1: &str = enonce1.as_str().unwrap();
+        session.enonce1 =
+            u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
+        session.enonce1_hex = enonce1.to_string();
+
+        let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
+
+        let _ = tracker_handle
+            .insert_job(
+                Arc::new(template),
+                notify.params.coinbase1.to_string(),
+                notify.params.coinbase2.to_string(),
+                job_id,
+            )
+            .await;
+
+        let response = handle_submit(
+            submit,
+            &mut session,
+            tracker_handle,
+            bitcoinrpc_config,
+            bitcoin::network::Network::Regtest,
+        )
+        .await
+        .unwrap();
+
+        let response = match &response[..] {
+            [Message::Response(response)] => response,
+            _ => panic!("Expected a Response message"),
+        };
+
+        assert_eq!(response.id, Some(Id::Number(5)));
 
         // The response should indicate that the share met required difficulty
         assert_eq!(response.result, Some(json!(true)));
