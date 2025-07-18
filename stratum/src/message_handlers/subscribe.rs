@@ -16,7 +16,7 @@
 
 use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
-use crate::messages::{Message, Request, Response, SetDifficultyNotification};
+use crate::messages::{Message, SimpleRequest, Response, SetDifficultyNotification};
 use crate::session::{Session, EXTRANONCE2_SIZE};
 use serde_json::json;
 use tracing::debug;
@@ -27,7 +27,7 @@ use tracing::debug;
 /// The function accepts a mutable reference to a `Session` object, which informs the responses.
 /// The session is also updated in response to received messages, if required.
 pub async fn handle_subscribe<'a, D: DifficultyAdjusterTrait>(
-    message: Request<'a>,
+    message: SimpleRequest<'a>,
     session: &mut Session<D>,
     pool_min_difficulty: u64,
 ) -> Result<Vec<Message<'a>>, Error> {
@@ -63,7 +63,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_subscribe_success() {
         // Setup
-        let message = Request::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
+        let message = SimpleRequest::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
         let mut session = Session::<DifficultyAdjuster>::new(1, None, 2, 0x1fffe000);
         session.subscribed = false;
 
@@ -129,7 +129,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_subscribe_already_subscribed() {
         // Setup
-        let message = Request::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
+        let message = SimpleRequest::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
         let mut session = Session::<DifficultyAdjuster>::new(2, None, 2, 0x1fffe000);
         session.subscribed = true;
 

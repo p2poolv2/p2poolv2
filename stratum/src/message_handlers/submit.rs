@@ -16,7 +16,7 @@
 
 use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
-use crate::messages::{Message, Request, Response, SetDifficultyNotification};
+use crate::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
 use crate::session::Session;
 use crate::work::difficulty::validate::validate_submission_difficulty;
 use crate::work::tracker::{JobId, TrackerHandle};
@@ -41,7 +41,7 @@ use tracing::{debug, error, info};
 ///
 /// Handling version mask, we check mask is valid and then apply it to the block header
 pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
-    message: Request<'a>,
+    message: SimpleRequest<'a>,
     session: &mut Session<D>,
     tracker_handle: TrackerHandle,
     bitcoinrpc_config: BitcoinRpcConfig,
@@ -133,7 +133,7 @@ mod handle_submit_tests {
     use super::*;
     use crate::difficulty_adjuster::{DifficultyAdjuster, MockDifficultyAdjusterTrait};
     use crate::messages::SetDifficultyNotification;
-    use crate::messages::{Id, Notify, Request};
+    use crate::messages::{Id, Notify, SimpleRequest};
     use crate::session::Session;
     use crate::work::gbt::BlockTemplate;
     use crate::work::tracker::start_tracker_actor;
@@ -167,7 +167,7 @@ mod handle_submit_tests {
                 .join("../tests/test_data/validation/stratum/b/submit.json"),
         )
         .unwrap();
-        let submit: Request = serde_json::from_str(&submit_str).unwrap();
+        let submit: SimpleRequest = serde_json::from_str(&submit_str).unwrap();
 
         let authorize_response_str = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -243,7 +243,7 @@ mod handle_submit_tests {
                 .join("../tests/test_data/validation/stratum/a/submit.json"),
         )
         .unwrap();
-        let submit: Request = serde_json::from_str(&submit_str).unwrap();
+        let submit: SimpleRequest = serde_json::from_str(&submit_str).unwrap();
 
         let authorize_response_str = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -320,7 +320,7 @@ mod handle_submit_tests {
                 .join("../tests/test_data/validation/stratum/with_version_rolling/submit.json"),
         )
         .unwrap();
-        let submit: Request = serde_json::from_str(&submit_str).unwrap();
+        let submit: SimpleRequest = serde_json::from_str(&submit_str).unwrap();
 
         let authorize_response_str = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -406,7 +406,7 @@ mod handle_submit_tests {
                 .join("../tests/test_data/validation/stratum/a/submit.json"),
         )
         .unwrap();
-        let submit: Request = serde_json::from_str(&submit_str).unwrap();
+        let submit: SimpleRequest = serde_json::from_str(&submit_str).unwrap();
 
         let authorize_response_str = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -465,7 +465,7 @@ mod handle_submit_tests {
                 .join("../tests/test_data/validation/stratum/a/submit.json"),
         )
         .unwrap();
-        let mut submit: Request = serde_json::from_str(&submit_str).unwrap();
+        let mut submit: SimpleRequest = serde_json::from_str(&submit_str).unwrap();
 
         // Overwrite job_id param to an unknown value (e.g., "deadbeef")
         if submit.params.len() > 1 {

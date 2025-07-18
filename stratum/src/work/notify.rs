@@ -209,7 +209,7 @@ pub async fn start_notify(
 mod tests {
     use super::*;
     use crate::difficulty_adjuster::DifficultyAdjuster;
-    use crate::messages::{Request, Response};
+    use crate::messages::{SimpleRequest, Response};
     use crate::session::Session;
     use crate::work::coinbase::parse_address;
     use crate::work::tracker::start_tracker_actor;
@@ -371,7 +371,7 @@ mod tests {
                 .join("../tests/test_data/validation/stratum/b/submit.json"),
         )
         .unwrap();
-        let _submit: Request = serde_json::from_str(&submit_str).unwrap();
+        let _submit: SimpleRequest = serde_json::from_str(&submit_str).unwrap();
 
         let authorize_response_str = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
