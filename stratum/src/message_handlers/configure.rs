@@ -16,173 +16,42 @@
 
 use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
-use crate::messages::{Message, Request, Response};
+use crate::messages::{Message, MiningConfigure, Request, Response};
 use crate::session::Session;
-use tracing::debug;
-
-/// Parse the parameters for the "mining.configure" message
-/// This function checks if the parameters are valid for the "version-rolling" method.
-fn parse_configure_params(
-    message: &Request,
-) -> Result<serde_json::Map<String, serde_json::Value>, Error> {
-    if message.params[0] == "version-rolling" {
-        let config_params = match serde_json::from_str::<serde_json::Value>(&message.params[1]) {
-            Ok(value) => Some(value),
-            Err(_) => {
-                debug!("Failed to parse configuration parameters");
-                None
-            }
-        };
-
-        match config_params {
-            Some(params) => {
-                if params.is_object() {
-                    debug!("Parsed configuration parameters: {:?}", params);
-                    Ok(params.as_object().unwrap().clone())
-                } else {
-                    Err(Error::InvalidParams(
-                        "Configuration parameters are not an object".into(),
-                    ))
-                }
-            }
-            None => Err(Error::InvalidParams(
-                "No configuration parameters provided".into(),
-            )),
-        }
-    } else {
-        // return empty map for unsupported methods with Ok.
-        Ok(serde_json::Map::new())
-    }
-}
+use tracing::{debug, info};
 
 /// Handle the "mining.configure" message
 pub async fn handle_configure<'a, D: DifficultyAdjusterTrait>(
-    message: Request<'a>,
+    request: Request<'a>,
     session: &Session<D>,
 ) -> Result<Vec<Message<'a>>, Error> {
-    debug!("Handling mining.configure message");
-
-    let params = parse_configure_params(&message);
-    if let Ok(config_params) = params {
-        if config_params.contains_key("version-rolling.mask") {
-            Ok(vec![Message::Response(Response::new_ok(
-                message.id,
-                serde_json::json!({
-                    "version-rolling": true,
-                    "version-rolling.mask": format!("{:x}", session.version_mask)}),
-            ))])
-        } else {
-            // return Ok, so we don't disconnect client. Also, we don't send any message back for unsupported configure methods.
-            Ok(vec![])
+    info!("Handling mining.configure message");
+    match request {
+        Request::MiningConfigureRequest(configure) => {
+            debug!("Received mining.configure request: {:?}", configure);
+            handle_mining_configure(configure, session)
         }
-    } else {
-        debug!("Invalid configuration parameters");
-        Err(Error::InvalidParams(
-            "Invalid configuration parameters".into(),
-        ))
+        _ => Err(Error::InvalidParams(
+            "Invalid method for mining.configure".into(),
+        )),
     }
 }
 
-#[cfg(test)]
-mod mining_configure_parse_tests {
-    use super::*;
-    use crate::messages::{Id, Request};
-    use std::borrow::Cow;
-
-    #[test]
-    fn test_parse_configure_params_valid() {
-        let message = Request {
-            id: Some(Id::Number(1)),
-            method: Cow::Owned("mining.configure".to_string()),
-            params: Cow::Owned(vec![
-                "version-rolling".to_string(),
-                r#"{"version-rolling.mask":"ffffffff"}"#.to_string(),
-            ]),
-        };
-        let result = parse_configure_params(&message);
-        assert!(result.is_ok());
-        let params = result.unwrap();
-        assert!(params.contains_key("version-rolling.mask"));
-        assert_eq!(params["version-rolling.mask"], "ffffffff");
-    }
-
-    #[test]
-    fn test_parse_configure_params_invalid_mask_should_return_ok() {
-        let message = Request {
-            id: Some(Id::Number(1)),
-            method: Cow::Owned("mining.configure".to_string()),
-            params: Cow::Owned(vec![
-                "version-rolling".to_string(),
-                r#"{"version-rolling.mask":"invalid"}"#.to_string(),
-            ]),
-        };
-        let result = parse_configure_params(&message);
-        assert!(result.is_ok());
-        let params = result.unwrap();
-        assert!(params.contains_key("version-rolling.mask"));
-        assert_eq!(params["version-rolling.mask"], "invalid");
-    }
-
-    #[test]
-    fn test_parse_configure_params_unsupported_method_should_return_ok() {
-        let message = Request {
-            id: Some(Id::Number(1)),
-            method: Cow::Owned("mining.configure".to_string()),
-            params: Cow::Owned(vec!["unsupported-method".to_string(), r#"{}"#.to_string()]),
-        };
-
-        let result = parse_configure_params(&message);
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_parse_configure_params_not_object_should_return_err() {
-        let message = Request {
-            id: Some(Id::Number(1)),
-            method: Cow::Owned("mining.configure".to_string()),
-            params: Cow::Owned(vec![
-                "version-rolling".to_string(),
-                r#"["not", "an", "object"]"#.to_string(),
-            ]),
-        };
-
-        let result = parse_configure_params(&message);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_configure_params_missing_required_key_should_return_ok() {
-        let message = Request {
-            id: Some(Id::Number(1)),
-            method: Cow::Owned("mining.configure".to_string()),
-            params: Cow::Owned(vec![
-                "version-rolling".to_string(),
-                r#"{"wrong-key":"value"}"#.to_string(),
-            ]),
-        };
-
-        let result = parse_configure_params(&message);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_parse_configure_params_additional_keys_should_return_ok() {
-        let message = Request {
-            id: Some(Id::Number(1)),
-            method: Cow::Owned("mining.configure".to_string()),
-            params: Cow::Owned(vec![
-                "version-rolling".to_string(),
-                r#"{"version-rolling.mask":"ffffffff", "extra-param":"value"}"#.to_string(),
-            ]),
-        };
-
-        let result = parse_configure_params(&message);
-        assert!(result.is_ok());
-        let params = result.unwrap();
-        assert!(params.contains_key("version-rolling.mask"));
-        assert_eq!(params["version-rolling.mask"], "ffffffff");
-        assert_eq!(params["extra-param"], "value");
+fn handle_mining_configure<'a>(
+    request: MiningConfigure,
+    session: &Session<impl DifficultyAdjusterTrait>,
+) -> Result<Vec<Message<'a>>, Error> {
+    let configure_params = &request.params.1;
+    if configure_params.version_rolling_mask.is_some() {
+        Ok(vec![Message::Response(Response::new_ok(
+            Some(request.id),
+            serde_json::json!({
+                    "version-rolling": true,
+                    "version-rolling.mask": format!("{:x}", session.version_mask)}),
+        ))])
+    } else {
+        // return Ok, so we don't disconnect client. Also, we don't send any message back for unsupported configure methods.
+        Ok(vec![])
     }
 }
 
@@ -191,20 +60,17 @@ mod mining_configure_response_tests {
     use super::*;
     use crate::{
         difficulty_adjuster::DifficultyAdjuster,
-        messages::{Id, Message, Request},
+        messages::{Id, Message, MiningConfigure},
     };
-    use std::borrow::Cow;
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_handle_configure_valid_request() {
-        let message = Request {
-            id: Some(Id::Number(1)),
-            method: Cow::Owned("mining.configure".to_string()),
-            params: Cow::Owned(vec![
-                "version-rolling".to_string(),
-                r#"{"version-rolling.mask":"ffffffff"}"#.to_string(),
-            ]),
-        };
+        let message = MiningConfigure::new_version_rolling_configure(
+            1,
+            Some("ffffffff".to_string()),
+            None,
+            None,
+        );
 
         let session = Session::<DifficultyAdjuster>::new(1, Some(1000), 100000, 0x1fffe000);
 

@@ -16,7 +16,7 @@
 
 use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
-use crate::messages::{Message, Request, Response, SetDifficultyNotification};
+use crate::messages::{Message, SimpleRequest, Response, SetDifficultyNotification};
 use crate::session::Session;
 use crate::work::notify::NotifyCmd;
 use tracing::debug;
@@ -33,7 +33,7 @@ use tracing::debug;
 /// TBH, this mining.authorize message is not needed at all. No server from ckpool to dataum to SRI is doing anything meaningful with it.
 /// Stratum servers also allow all workers to authrorize over the same connection.
 pub async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
-    message: Request<'a>,
+    message: SimpleRequest<'a>,
     session: &mut Session<D>,
     addr: std::net::SocketAddr,
     notify_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
@@ -70,7 +70,7 @@ mod tests {
     async fn test_handle_authorize_first_time() {
         // Setup
         let mut session = Session::<DifficultyAdjuster>::new(1, None, 1, 0x1fffe000);
-        let request = Request::new_authorize(12345, "worker1".to_string(), Some("x".to_string()));
+        let request = SimpleRequest::new_authorize(12345, "worker1".to_string(), Some("x".to_string()));
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(1);
 
         // Execute
@@ -125,7 +125,7 @@ mod tests {
         let mut session = Session::<DifficultyAdjuster>::new(1, None, 1, 0x1fffe000);
         session.username = Some("someusername".to_string());
         let request =
-            Request::new_authorize(12345, "worker1".to_string(), Some("password".to_string()));
+            SimpleRequest::new_authorize(12345, "worker1".to_string(), Some("password".to_string()));
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(1);
 
         // Execute

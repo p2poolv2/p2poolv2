@@ -16,12 +16,12 @@
 
 use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
-use crate::messages::{Message, Request, SetDifficultyNotification};
+use crate::messages::{Message, SetDifficultyNotification, SimpleRequest};
 use crate::session::Session;
 use tracing::debug;
 
 pub async fn handle_suggest_difficulty<'a, D: DifficultyAdjusterTrait>(
-    message: Request<'a>,
+    message: SimpleRequest<'a>,
     session: &mut Session<D>,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.suggest_difficulty message");
@@ -48,13 +48,13 @@ pub async fn handle_suggest_difficulty<'a, D: DifficultyAdjusterTrait>(
 mod tests {
     use super::*;
     use crate::difficulty_adjuster::DifficultyAdjuster;
-    use crate::messages::{Id, Request};
+    use crate::messages::{Id, SimpleRequest};
     use std::borrow::Cow;
 
     #[tokio::test]
     async fn test_handle_suggest_difficulty_valid_param() {
         let mut session = Session::<DifficultyAdjuster>::new(1, None, 1, 0x1fffe000);
-        let request = Request {
+        let request = SimpleRequest {
             id: Some(Id::Number(1)),
             method: "mining.suggest_difficulty".into(),
             params: Cow::Owned(vec!["1000".into()]),
@@ -76,7 +76,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_suggest_difficulty_invalid_param() {
         let mut session = Session::<DifficultyAdjuster>::new(1, None, 1, 0x1fffe000);
-        let request = Request {
+        let request = SimpleRequest {
             id: Some(Id::Number(1)),
             method: "mining.suggest_difficulty".into(),
             params: Cow::Owned(vec!["invalid".into()]),
@@ -95,7 +95,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_suggest_difficulty_no_param() {
         let mut session = Session::<DifficultyAdjuster>::new(1, None, 1, 0x1fffe000);
-        let request = Request {
+        let request = SimpleRequest {
             id: Some(Id::Number(1)),
             method: "mining.suggest_difficulty".into(),
             params: Cow::Owned(vec![]),
