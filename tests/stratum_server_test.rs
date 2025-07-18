@@ -19,7 +19,7 @@ use std::net::SocketAddr;
 use std::str;
 use stratum::{
     self,
-    messages::{SimpleRequest, Response},
+    messages::{Response, SimpleRequest},
     server::StratumServer,
     work::{notify, tracker::start_tracker_actor},
 };
@@ -78,7 +78,8 @@ async fn test_stratum_server_subscribe() {
         }
     };
 
-    let subscribe_msg = SimpleRequest::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+    let subscribe_msg =
+        SimpleRequest::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
     let subscribe_str =
         serde_json::to_string(&subscribe_msg).expect("Failed to serialize subscribe message");
     client

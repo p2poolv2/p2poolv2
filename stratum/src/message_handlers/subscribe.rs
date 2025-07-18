@@ -16,7 +16,7 @@
 
 use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
-use crate::messages::{Message, SimpleRequest, Response, SetDifficultyNotification};
+use crate::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
 use crate::session::{Session, EXTRANONCE2_SIZE};
 use serde_json::json;
 use tracing::debug;
