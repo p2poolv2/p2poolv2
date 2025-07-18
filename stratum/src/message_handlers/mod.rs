@@ -25,6 +25,7 @@ use authorize::handle_authorize;
 use configure::handle_configure;
 use submit::handle_submit;
 use subscribe::handle_subscribe;
+use suggest_difficulty::handle_suggest_difficulty;
 use tracing::debug;
 
 pub mod authorize;
@@ -49,6 +50,9 @@ pub(crate) async fn handle_message<'a, D: DifficultyAdjusterTrait>(
 ) -> Result<Vec<Message<'a>>, Error> {
     match message {
         Request::MiningConfigureRequest(_) => handle_configure(message, session).await,
+        Request::SuggestDifficultyRequest(suggest_difficulty_request) => {
+            handle_suggest_difficulty(suggest_difficulty_request, session).await
+        }
         Request::SimpleRequest(simple_request) => {
             handle_simple_request(simple_request, session, addr, ctx).await
         }
@@ -83,9 +87,6 @@ async fn handle_simple_request<'a, D: DifficultyAdjusterTrait>(
                 ctx.network,
             )
             .await
-        }
-        "mining.suggest_difficulty" => {
-            suggest_difficulty::handle_suggest_difficulty(message, session).await
         }
         method => Err(Error::InvalidMethod(method.to_string())),
     }
