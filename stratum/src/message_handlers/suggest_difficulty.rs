@@ -23,10 +23,6 @@ use tracing::debug;
 /// Handle the "mining.suggest_difficulty" message
 /// Applies difficulty adjuster's constraints to the suggested difficulty
 /// and stores the constrained difficulty to session.
-///
-/// The set_difficulty notification still returns the same difficulty as received from the client.
-/// This is required of bitaxes, which will disconnect if the set_difficulty value is different from
-/// the suggest_difficulty value.
 pub async fn handle_suggest_difficulty<'a, D: DifficultyAdjusterTrait>(
     message: SuggestDifficulty<'a>,
     session: &mut Session<D>,
