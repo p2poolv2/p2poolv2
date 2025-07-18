@@ -16,7 +16,7 @@
 
 use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
-use crate::messages::{Message, SimpleRequest, Response, SetDifficultyNotification};
+use crate::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
 use crate::session::Session;
 use crate::work::notify::NotifyCmd;
 use tracing::debug;
@@ -70,7 +70,8 @@ mod tests {
     async fn test_handle_authorize_first_time() {
         // Setup
         let mut session = Session::<DifficultyAdjuster>::new(1, None, 1, 0x1fffe000);
-        let request = SimpleRequest::new_authorize(12345, "worker1".to_string(), Some("x".to_string()));
+        let request =
+            SimpleRequest::new_authorize(12345, "worker1".to_string(), Some("x".to_string()));
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(1);
 
         // Execute
@@ -124,8 +125,11 @@ mod tests {
         // Setup
         let mut session = Session::<DifficultyAdjuster>::new(1, None, 1, 0x1fffe000);
         session.username = Some("someusername".to_string());
-        let request =
-            SimpleRequest::new_authorize(12345, "worker1".to_string(), Some("password".to_string()));
+        let request = SimpleRequest::new_authorize(
+            12345,
+            "worker1".to_string(),
+            Some("password".to_string()),
+        );
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(1);
 
         // Execute
