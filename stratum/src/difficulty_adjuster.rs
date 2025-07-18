@@ -114,9 +114,6 @@ pub trait DifficultyAdjusterTrait {
     fn apply_difficulty_constraints(&self, new_diff: u64, suggested_difficulty: Option<u64>)
         -> u64;
 
-    /// Get the current difficulty
-    fn current_difficulty(&self) -> u64;
-
     /// Reset the difficulty adjuster with a new minimum difficulty
     fn reset(&mut self, pool_minimum_difficulty: u64);
 
@@ -291,6 +288,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         constrained_diff
     }
 
+    /// Apply constraints to difficulty given the pool min/max difficulty and the optionally provided client's suggested difficulty
     fn apply_difficulty_constraints(
         &self,
         calculated_diff: u64,
@@ -352,11 +350,6 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         // Update dsps using the formula:
         // f_new = (f_old + (diff_share * fprop / elapsed_time)) / (1 + fprop)
         *dsps = (*dsps + (diff_share as f64 * fprop / elapsed_time)) / (1.0 + fprop);
-    }
-
-    #[inline]
-    fn current_difficulty(&self) -> u64 {
-        self.current_difficulty
     }
 
     fn reset(&mut self, pool_minimum_difficulty: u64) {

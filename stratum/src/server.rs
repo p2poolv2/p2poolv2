@@ -479,9 +479,9 @@ mod stratum_server_tests {
         )
         .await;
 
-        // Verify results
+        // Verify results - even with bad json, we do not return an error to close the connection
         assert!(
-            result.is_err(),
+            result.is_ok(),
             "handle_connection should handle invalid JSON gracefully"
         );
 

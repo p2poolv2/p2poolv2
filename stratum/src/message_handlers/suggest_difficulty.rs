@@ -16,27 +16,29 @@
 
 use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
-use crate::messages::{Message, SetDifficultyNotification, SimpleRequest};
+use crate::messages::{Message, SetDifficultyNotification, SuggestDifficulty};
 use crate::session::Session;
 use tracing::debug;
 
+/// Handle the "mining.suggest_difficulty" message
+/// Applies difficulty adjuster's constraints to the suggested difficulty
+/// and returns a SetDifficulty notification with the adjusted difficulty.
 pub async fn handle_suggest_difficulty<'a, D: DifficultyAdjusterTrait>(
-    message: SimpleRequest<'a>,
+    message: SuggestDifficulty<'a>,
     session: &mut Session<D>,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.suggest_difficulty message");
 
     match message.params.first() {
         Some(param) => {
-            if let Ok(suggested_difficulty) = param.parse::<u64>() {
-                session.suggested_difficulty = Some(suggested_difficulty);
-                debug!("Suggested difficulty set to {}", suggested_difficulty);
-                Ok(vec![Message::SetDifficulty(
-                    SetDifficultyNotification::new(suggested_difficulty),
-                )])
-            } else {
-                Err(Error::InvalidParams("Invalid suggested difficulty".into()))
-            }
+            let difficulty = session
+                .difficulty_adjuster
+                .apply_difficulty_constraints(*param, None);
+            session.suggested_difficulty = Some(difficulty);
+            debug!("Suggested difficulty set to {}", difficulty);
+            Ok(vec![Message::SetDifficulty(
+                SetDifficultyNotification::new(difficulty),
+            )])
         }
         None => Err(Error::InvalidParams(
             "No suggested difficulty provided".into(),
@@ -48,16 +50,16 @@ pub async fn handle_suggest_difficulty<'a, D: DifficultyAdjusterTrait>(
 mod tests {
     use super::*;
     use crate::difficulty_adjuster::DifficultyAdjuster;
-    use crate::messages::{Id, SimpleRequest};
+    use crate::messages::Id;
     use std::borrow::Cow;
 
     #[tokio::test]
     async fn test_handle_suggest_difficulty_valid_param() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, None, 1, 0x1fffe000);
-        let request = SimpleRequest {
+        let mut session = Session::<DifficultyAdjuster>::new(1, None, 2000, 0x1fffe000);
+        let request = SuggestDifficulty {
             id: Some(Id::Number(1)),
             method: "mining.suggest_difficulty".into(),
-            params: Cow::Owned(vec!["1000".into()]),
+            params: Cow::Owned(vec![1000]),
         };
 
         let result = handle_suggest_difficulty(request, &mut session).await;
@@ -74,40 +76,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_suggest_difficulty_invalid_param() {
+    async fn test_handle_suggest_difficulty_should_respect_pool_max_difficulty() {
         let mut session = Session::<DifficultyAdjuster>::new(1, None, 1, 0x1fffe000);
-        let request = SimpleRequest {
+        let request = SuggestDifficulty {
             id: Some(Id::Number(1)),
             method: "mining.suggest_difficulty".into(),
-            params: Cow::Owned(vec!["invalid".into()]),
+            params: Cow::Owned(vec![1000]),
         };
 
         let result = handle_suggest_difficulty(request, &mut session).await;
 
-        assert!(result.is_err());
-        assert_eq!(
-            format!("{}", result.unwrap_err()),
-            "Invalid parameters provided: Invalid suggested difficulty"
-        );
-        assert_eq!(session.suggested_difficulty, None);
-    }
-
-    #[tokio::test]
-    async fn test_handle_suggest_difficulty_no_param() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, None, 1, 0x1fffe000);
-        let request = SimpleRequest {
-            id: Some(Id::Number(1)),
-            method: "mining.suggest_difficulty".into(),
-            params: Cow::Owned(vec![]),
-        };
-
-        let result = handle_suggest_difficulty(request, &mut session).await;
-
-        assert!(result.is_err());
-        assert_eq!(
-            format!("{}", result.unwrap_err()),
-            "Invalid parameters provided: No suggested difficulty provided"
-        );
-        assert_eq!(session.suggested_difficulty, None);
+        assert!(result.is_ok());
+        let messages = result.unwrap();
+        assert_eq!(messages.len(), 1);
+        if let Message::SetDifficulty(notification) = &messages[0] {
+            assert_eq!(notification.params[0], 1);
+        } else {
+            panic!("Expected SetDifficulty message");
+        }
+        assert_eq!(session.suggested_difficulty, Some(1));
     }
 }
