@@ -276,17 +276,20 @@ where
                 Err(Box::new(responses.unwrap_err()))
             }
         }
-        Err(e) => Err(Box::new(e)),
+        Err(e) => {
+            error!("Failed to parse message from {}: {}", addr, e);
+            Ok(())
+        }
     }
 }
 
 #[cfg(test)]
 mod stratum_server_tests {
     use super::*;
+    use crate::messages::SimpleRequest;
     use crate::work::tracker::start_tracker_actor;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-    use crate::messages::SimpleRequest;
 
     #[tokio::test]
     async fn test_create_and_start_server() {
