@@ -286,6 +286,7 @@ mod stratum_server_tests {
     use crate::work::tracker::start_tracker_actor;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use crate::messages::SimpleRequest;
 
     #[tokio::test]
     async fn test_create_and_start_server() {
@@ -339,7 +340,7 @@ mod stratum_server_tests {
     #[tokio::test]
     async fn test_handle_connection_with_new_subscription_check_response_is_valid() {
         // Mock data
-        let request = Request::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+        let request = SimpleRequest::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
         let input_string = serde_json::to_string(&request).unwrap() + "\n";
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
@@ -546,8 +547,10 @@ mod stratum_server_tests {
     #[tokio::test]
     async fn test_handle_connection_double_subscribe_closes_connection() {
         // Prepare two subscribe requests in a row
-        let request1 = Request::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
-        let request2 = Request::new_subscribe(2, "agent".to_string(), "1.0".to_string(), None);
+        let request1 =
+            SimpleRequest::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+        let request2 =
+            SimpleRequest::new_subscribe(2, "agent".to_string(), "1.0".to_string(), None);
         let input_string = format!(
             "{}\n{}\n",
             serde_json::to_string(&request1).unwrap(),
@@ -624,10 +627,10 @@ mod stratum_server_tests {
 
         // Create input with subscribe and authorize messages
         let subscribe_message =
-            Request::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+            SimpleRequest::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
         let subscribe_str = serde_json::to_string(&subscribe_message).unwrap();
 
-        let authorize_message = Request::new_authorize(
+        let authorize_message = SimpleRequest::new_authorize(
             2,
             "test_user".to_string(),
             Some("test_password".to_string()),
@@ -732,7 +735,7 @@ mod stratum_server_tests {
 
         // Create input with subscribe and authorize messages
         let subscribe_message =
-            Request::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+            SimpleRequest::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
         let subscribe_str = serde_json::to_string(&subscribe_message).unwrap();
 
         // Create mock IO objects

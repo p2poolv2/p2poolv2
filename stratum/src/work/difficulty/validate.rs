@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::error::Error;
-use crate::messages::Request;
+use crate::messages::SimpleRequest;
 use crate::work::gbt::BlockTemplate;
 use crate::work::tracker::JobDetails;
 use bitcoin::blockdata::block::{Block, Header};
@@ -37,7 +37,7 @@ fn decode_txids(blocktemplate: &BlockTemplate) -> Result<Vec<bitcoin::Txid>, Err
 /// Build coinbase from the submitted share and block template.
 pub fn build_coinbase_from_submission(
     job: &JobDetails,
-    submission: &Request<'_>,
+    submission: &SimpleRequest<'_>,
     enonce1_hex: &str,
 ) -> Result<bitcoin::Transaction, Error> {
     use hex::FromHex;
@@ -90,7 +90,7 @@ fn apply_version_mask(
 /// Returns result with optional header if the PoW is met. Else returns an error.
 pub fn validate_submission_difficulty(
     job: &JobDetails,
-    submission: &Request<'_>,
+    submission: &SimpleRequest<'_>,
     enonce1_hex: &str,
     version_mask: i32,
 ) -> Result<Block, Error> {

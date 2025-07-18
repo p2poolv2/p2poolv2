@@ -82,19 +82,64 @@ pub enum Message<'a> {
     SetDifficulty(SetDifficultyNotification<'a>),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged, bound(deserialize = "'de: 'a"))]
+pub enum Request<'a> {
+    MiningConfigureRequest(MiningConfigure<'a>),
+    SimpleRequest(SimpleRequest<'a>),
+}
+
 /// Request represents a Stratum request message from client to the server
 /// The params in this message are all strings
 ///
 /// We are not using enum to capture the different request types, as we want to remain flexible
 /// for handling the diverse Stratum client implementations out there.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Request<'a> {
+pub struct SimpleRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
     #[serde(borrow)]
     pub method: Cow<'a, str>,
     #[serde(borrow, default)]
-    pub params: Cow<'a, Vec<String>>, // All params in stratum requests are strings
+    pub params: Cow<'a, Vec<String>>,
+}
+
+/// Struct for mining.configure messages
+/// These messages have mixed types in params and those are defined in MiningConfigureParams.
+///
+/// mining.configure params example:
+/// params: [["minimum-difficulty", "version-rolling"], {<min diff object>, {version rolling object}}]
+/// Ref: https://github.com/bitcoin/bips/blob/master/bip-0310.mediawiki
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MiningConfigure<'a> {
+    pub id: Id,
+    #[serde(borrow)]
+    pub method: Cow<'a, String>,
+    #[serde(borrow)]
+    pub params: Cow<'a, (Vec<String>, MiningConfigureParams<'a>)>,
+}
+
+/// The object part of the mining.configure messages
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MiningConfigureParams<'a> {
+    #[serde(
+        rename = "minimum-difficulty.value",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub minimum_difficulty_value: Option<u32>,
+
+    #[serde(
+        rename = "version-rolling.mask",
+        skip_serializing_if = "Option::is_none",
+        borrow
+    )]
+    pub version_rolling_mask: Cow<'a, Option<String>>,
+
+    #[serde(
+        rename = "version-rolling.min-bit-count",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub version_rolling_min_bit_count: Option<u32>,
 }
 
 /// Response represents a Stratum response message from the server to the client
@@ -202,7 +247,7 @@ impl<'de> Deserialize<'de> for NotifyParams<'_> {
 /// Request represents a Stratum request message from client to the server
 /// It includes the id, method, and params
 /// The methods supported are mining.subscribe, mining.authorize, and mining.submit
-impl Request<'_> {
+impl SimpleRequest<'_> {
     /// Creates a new subscribe message with an optional id and params
     /// If no params are provided, it defaults to an empty array
     /// If no id is provided, it defaults to None
@@ -219,7 +264,7 @@ impl Request<'_> {
             let extra_nonce = extra_nonce.unwrap();
             params.push(extra_nonce);
         }
-        Request {
+        SimpleRequest {
             id: Some(Id::Number(id)),
             method: Cow::Owned("mining.subscribe".to_string()),
             params: Cow::Owned(params),
@@ -234,7 +279,7 @@ impl Request<'_> {
         if let Some(password) = password {
             params.push(password);
         }
-        Request {
+        SimpleRequest {
             id: Some(Id::Number(id)),
             method: Cow::Owned("mining.authorize".to_string()),
             params: Cow::Owned(params),
@@ -252,24 +297,36 @@ impl Request<'_> {
         nonce: String,
     ) -> Self {
         let params = vec![username, job_id, extra_nonce2, n_time, nonce];
-        Request {
+        SimpleRequest {
             id: Some(Id::Number(id)),
             method: Cow::Owned("mining.submit".to_string()),
             params: Cow::Owned(params),
         }
     }
+}
 
+impl<'a> MiningConfigure<'a> {
     /// Create a new mining.configure message for version-rolling
-    pub fn new_version_rolling_configure(id: u64, version_mask: String) -> Self {
-        let params = vec![
-            "version-rolling".to_string(),
-            format!("{{\"version-rolling.mask\":\"{}\"}}", version_mask),
-        ];
-        Request {
-            id: Some(Id::Number(id)),
+    pub fn new_version_rolling_configure(
+        id: u64,
+        version_rolling_mask: Option<String>,
+        version_rolling_min_bit_count: Option<u32>,
+        minimum_difficulty_value: Option<u32>,
+    ) -> Request<'a> {
+        let params = (
+            vec!["version-rolling".to_string()],
+            MiningConfigureParams {
+                minimum_difficulty_value,
+                version_rolling_mask: Cow::Owned(version_rolling_mask),
+                version_rolling_min_bit_count,
+            },
+        );
+
+        Request::MiningConfigureRequest(MiningConfigure {
+            id: Id::Number(id),
             method: Cow::Owned("mining.configure".to_string()),
             params: Cow::Owned(params),
-        }
+        })
     }
 }
 
@@ -344,14 +401,14 @@ mod tests {
 
     #[test]
     fn test_new_subscribe() {
-        let message = Request::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+        let message = SimpleRequest::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
         let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized_message,
             r#"{"id":1,"method":"mining.subscribe","params":["agent/1.0"]}"#
         );
 
-        let message = Request::new_subscribe(
+        let message = SimpleRequest::new_subscribe(
             42,
             "agent".to_string(),
             "1.0".to_string(),
@@ -368,7 +425,7 @@ mod tests {
     #[test]
     fn test_new_authorize() {
         let message =
-            Request::new_authorize(1, "username".to_string(), Some("password".to_string()));
+            SimpleRequest::new_authorize(1, "username".to_string(), Some("password".to_string()));
 
         let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
@@ -377,7 +434,7 @@ mod tests {
         );
 
         let message =
-            Request::new_authorize(1, "username".to_string(), Some("password".to_string()));
+            SimpleRequest::new_authorize(1, "username".to_string(), Some("password".to_string()));
 
         let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
@@ -388,7 +445,7 @@ mod tests {
 
     #[test]
     fn test_new_submit() {
-        let message = Request::new_submit(
+        let message = SimpleRequest::new_submit(
             1,
             "worker_name".to_string(),
             "job_id".to_string(),
@@ -402,7 +459,7 @@ mod tests {
             r#"{"id":1,"method":"mining.submit","params":["worker_name","job_id","extra_nonce2","ntime","nonce"]}"#
         );
 
-        let message = Request::new_submit(
+        let message = SimpleRequest::new_submit(
             5,
             "worker_name".to_string(),
             "job_id".to_string(),
@@ -545,17 +602,17 @@ mod tests {
     fn test_id_variants() {
         // Test number ID
         let json = r#"{"id":123,"method":"test","params":[]}"#;
-        let message: Request = serde_json::from_str(json).unwrap();
+        let message: SimpleRequest = serde_json::from_str(json).unwrap();
         assert_eq!(message.id, Some(Id::Number(123)));
 
         // Test string ID
         let json = r#"{"id":"abc","method":"test","params":[]}"#;
-        let message: Request = serde_json::from_str(json).unwrap();
+        let message: SimpleRequest = serde_json::from_str(json).unwrap();
         assert_eq!(message.id, Some(Id::String("abc".to_string())));
 
         // Test null ID
         let json = r#"{"id":null,"method":"test","params":[]}"#;
-        let message: Request = serde_json::from_str(json).unwrap();
+        let message: SimpleRequest = serde_json::from_str(json).unwrap();
         assert_eq!(message.id, None);
     }
 
@@ -633,11 +690,12 @@ mod tests {
 
     #[test]
     fn test_new_version_rolling_configure() {
-        let message = Request::new_version_rolling_configure(42, "00000fff".to_string());
+        let message =
+            MiningConfigure::new_version_rolling_configure(42, Some("00000fff".into()), None, None);
         let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
             serialized_message,
-            r#"{"id":42,"method":"mining.configure","params":["version-rolling","{\"version-rolling.mask\":\"00000fff\"}"]}"#
+            r#"{"id":42,"method":"mining.configure","params":[["version-rolling"],{"version-rolling.mask":"00000fff"}]}"#
         );
     }
 }
