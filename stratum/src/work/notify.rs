@@ -209,7 +209,7 @@ pub async fn start_notify(
 mod tests {
     use super::*;
     use crate::difficulty_adjuster::DifficultyAdjuster;
-    use crate::messages::{SimpleRequest, Response};
+    use crate::messages::{Response, SimpleRequest};
     use crate::session::Session;
     use crate::work::coinbase::parse_address;
     use crate::work::tracker::start_tracker_actor;
