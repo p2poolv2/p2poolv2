@@ -85,8 +85,9 @@ pub enum Message<'a> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged, bound(deserialize = "'de: 'a"))]
 pub enum Request<'a> {
-    MiningConfigureRequest(MiningConfigure<'a>),
     SimpleRequest(SimpleRequest<'a>),
+    MiningConfigureRequest(MiningConfigure<'a>),
+    SuggestDifficultyRequest(SuggestDifficulty<'a>),
 }
 
 /// Request represents a Stratum request message from client to the server
@@ -102,6 +103,18 @@ pub struct SimpleRequest<'a> {
     pub method: Cow<'a, str>,
     #[serde(borrow, default)]
     pub params: Cow<'a, Vec<String>>,
+}
+
+/// Suggested difficulty request uses a vector of integers of size one as params
+/// This is different from SimpleRequest using a vector of string.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuggestDifficulty<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    #[serde(borrow)]
+    pub method: Cow<'a, str>,
+    #[serde(borrow, default)]
+    pub params: Cow<'a, Vec<u64>>,
 }
 
 /// Struct for mining.configure messages
