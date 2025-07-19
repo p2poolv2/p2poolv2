@@ -207,23 +207,31 @@ impl NodeActor {
                             tx.send(()).unwrap();
                             return;
                         },
+                        // spawn AddShare into background task
                         Some(Command::AddShare(share, tx)) => {
-                            match self.node.chain_handle.add_share(share).await {
-                                Ok(_) => tx.send(Ok(())).unwrap(),
-                                Err(e) => {
-                                    error!("Error adding share to chain: {}", e);
-                                    tx.send(Err("Error adding share to chain".into())).unwrap()
-                                },
-                            };
+                            let chain_handle = self.node.chain_handle.clone();
+                            tokio::spawn(async move {
+                                let _ = tx.send(match chain_handle.add_share(share).await {
+                                    Ok(_) => Ok(()),
+                                    Err(e) => {
+                                        error!("Error adding share to chain: {}", e);
+                                        Err("Error adding share to chain".into())
+                                    }
+                                });
+                            });
                         },
+                        // spawn StoreWorkbase into background task
                         Some(Command::StoreWorkbase(workbase, tx)) => {
-                            match self.node.chain_handle.add_workbase(workbase).await {
-                                Ok(_) => tx.send(Ok(())).unwrap(),
-                                Err(e) => {
-                                    error!("Error storing workbase: {}", e);
-                                    tx.send(Err("Error storing workbase".into())).unwrap()
-                                },
-                            };
+                            let chain_handle = self.node.chain_handle.clone();
+                            tokio::spawn(async move {
+                                let _ = tx.send(match chain_handle.add_workbase(workbase).await {
+                                    Ok(_) => Ok(()),
+                                    Err(e) => {
+                                        error!("Error storing workbase: {}", e);
+                                        Err("Error storing workbase".into())
+                                    }
+                                });
+                            });
                         },
                         None => {
                             info!("Stopping node actor on channel close");
