@@ -46,6 +46,7 @@ pub struct JobDetails {
     pub blocktemplate: Arc<BlockTemplate>,
     pub coinbase1: String,
     pub coinbase2: String,
+    pub generation_timestamp: u64,
 }
 
 /// A map that associates templates with job id
@@ -72,6 +73,10 @@ impl Tracker {
                 blocktemplate: block_template,
                 coinbase1,
                 coinbase2,
+                generation_timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
             },
         );
         job_id
@@ -340,6 +345,12 @@ mod tests {
         );
         assert_eq!(retrieved_job.coinbase1, "cb1".to_string());
         assert_eq!(retrieved_job.coinbase2, "cb2".to_string());
+        let current_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        assert!(current_timestamp >= retrieved_job.generation_timestamp);
+        assert!(current_timestamp - retrieved_job.generation_timestamp <= 5); // Allow a small margin for time difference
 
         // Test with non-existent job id
         let retrieved_job = handle.get_job(JobId(9997)).await.unwrap();
