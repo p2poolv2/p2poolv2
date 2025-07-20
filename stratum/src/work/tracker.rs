@@ -18,6 +18,7 @@ use super::gbt::BlockTemplate;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
+use tracing::{debug, warn};
 
 /// The job id sent to miners.
 /// A job id matches a block template.
@@ -87,6 +88,24 @@ impl Tracker {
         self.latest_job_id = self.latest_job_id + 1;
         self.latest_job_id
     }
+
+    /// Remove job details that are older than the specified duration in seconds
+    /// Returns the number of jobs that were removed
+    pub fn cleanup_old_jobs(&mut self, max_age_secs: u64) -> usize {
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let before_count = self.job_details.len();
+
+        // Remove jobs older than max_age_secs
+        self.job_details.retain(|_, details| {
+            current_time.saturating_sub(details.generation_timestamp) < max_age_secs
+        });
+
+        before_count - self.job_details.len()
+    }
 }
 
 impl Default for Tracker {
@@ -123,6 +142,11 @@ pub enum Command {
     GetNextJobId { resp: oneshot::Sender<JobId> },
     /// Get the latest job id using the atomic counter
     GetLatestJobId { resp: oneshot::Sender<JobId> },
+    /// Clean up old job ids that are older than the specified duration
+    CleanupOldJobs {
+        max_age_secs: u64,
+        resp: oneshot::Sender<usize>,
+    },
 }
 
 /// A handle to the TrackerActor
@@ -202,6 +226,24 @@ impl TrackerHandle {
             .await
             .map_err(|_| "Failed to receive get_latest_job_id response".to_string())
     }
+
+    /// Clean up old job ids that are older than the specified duration in seconds
+    /// Returns the number of jobs that were removed
+    pub async fn cleanup_old_jobs(&self, max_age_secs: u64) -> Result<usize, String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+
+        self.tx
+            .send(Command::CleanupOldJobs {
+                max_age_secs,
+                resp: resp_tx,
+            })
+            .await
+            .map_err(|_| "Failed to send cleanup_old_jobs command".to_string())?;
+
+        resp_rx
+            .await
+            .map_err(|_| "Failed to receive cleanup_old_jobs response".to_string())
+    }
 }
 
 /// The actor that manages access to the Tracker
@@ -253,6 +295,10 @@ impl TrackerActor {
                     let latest_job_id = self.map.latest_job_id;
                     let _ = resp.send(latest_job_id);
                 }
+                Command::CleanupOldJobs { max_age_secs, resp } => {
+                    let removed_count = self.map.cleanup_old_jobs(max_age_secs);
+                    let _ = resp.send(removed_count);
+                }
             }
         }
     }
@@ -261,10 +307,31 @@ impl TrackerActor {
 /// Start a new TrackerActor in a separate task and return a handle to it
 pub fn start_tracker_actor() -> TrackerHandle {
     let (actor, handle) = TrackerActor::new();
+    let cleanup_handle = handle.clone();
 
     // Spawn the actor in a new task
     tokio::spawn(async move {
         actor.run().await;
+    });
+
+    // Spawn a task for periodic cleanup
+    tokio::spawn(async move {
+        let cleanup_interval = tokio::time::Duration::from_secs(15 * 60); // 15 minutes
+        let max_age_secs = 15 * 60; // 15 minutes
+
+        loop {
+            tokio::time::sleep(cleanup_interval).await;
+            match cleanup_handle.cleanup_old_jobs(max_age_secs).await {
+                Ok(count) => {
+                    if count > 0 {
+                        debug!("Cleaned up {} old job IDs", count);
+                    }
+                }
+                Err(err) => {
+                    warn!("Failed to clean up old job IDs: {}", err);
+                }
+            }
+        }
     });
 
     handle
@@ -355,5 +422,81 @@ mod tests {
         // Test with non-existent job id
         let retrieved_job = handle.get_job(JobId(9997)).await.unwrap();
         assert!(retrieved_job.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_job_cleanup() {
+        let template_str = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/test_data/gbt/signet/gbt-no-transactions.json"),
+        )
+        .unwrap();
+
+        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
+
+        // Create tracker with direct access
+        let mut tracker = Tracker::default();
+
+        // Insert jobs with different timestamps
+        let old_job_id = JobId(1);
+        tracker.insert_job(
+            Arc::new(template.clone()),
+            "old_cb1".to_string(),
+            "old_cb2".to_string(),
+            old_job_id,
+        );
+
+        // Manually set an old timestamp (20 minutes ago)
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if let Some(job) = tracker.job_details.get_mut(&old_job_id) {
+            job.generation_timestamp = current_time - (20 * 60);
+        }
+
+        // Insert a new job
+        let new_job_id = JobId(2);
+        tracker.insert_job(
+            Arc::new(template.clone()),
+            "new_cb1".to_string(),
+            "new_cb2".to_string(),
+            new_job_id,
+        );
+
+        // Verify both jobs exist
+        assert!(tracker.job_details.contains_key(&old_job_id));
+        assert!(tracker.job_details.contains_key(&new_job_id));
+
+        // Run cleanup (15 minutes max age)
+        let removed = tracker.cleanup_old_jobs(15 * 60);
+        assert_eq!(removed, 1);
+
+        // Verify only the new job remains
+        assert!(!tracker.job_details.contains_key(&old_job_id));
+        assert!(tracker.job_details.contains_key(&new_job_id));
+
+        // Now test with the actor
+        let handle = start_tracker_actor();
+
+        // Insert jobs
+        let old_actor_job = handle
+            .insert_job(
+                Arc::new(template.clone()),
+                "old_actor_cb1".to_string(),
+                "old_actor_cb2".to_string(),
+                JobId(3),
+            )
+            .await
+            .unwrap();
+
+        // We can't modify timestamps directly with the actor, so we'll test cleanup command
+        // by just verifying it executes successfully
+        let removed = handle.cleanup_old_jobs(0).await.unwrap(); // All jobs should be cleaned
+        assert_eq!(removed, 1);
+
+        // Verify job was removed
+        let result = handle.get_job(old_actor_job).await.unwrap();
+        assert!(result.is_none());
     }
 }
