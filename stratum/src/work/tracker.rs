@@ -20,6 +20,8 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 
+const MAX_JOB_AGE_SECS: u64 = 15 * 60; // 15 minutes
+
 /// The job id sent to miners.
 /// A job id matches a block template.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -316,12 +318,10 @@ pub fn start_tracker_actor() -> TrackerHandle {
 
     // Spawn a task for periodic cleanup
     tokio::spawn(async move {
-        let cleanup_interval = tokio::time::Duration::from_secs(15 * 60); // 15 minutes
-        let max_age_secs = 15 * 60; // 15 minutes
-
+        let cleanup_interval = tokio::time::Duration::from_secs(MAX_JOB_AGE_SECS);
         loop {
             tokio::time::sleep(cleanup_interval).await;
-            match cleanup_handle.cleanup_old_jobs(max_age_secs).await {
+            match cleanup_handle.cleanup_old_jobs(MAX_JOB_AGE_SECS).await {
                 Ok(count) => {
                     if count > 0 {
                         debug!("Cleaned up {} old job IDs", count);
