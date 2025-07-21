@@ -73,7 +73,6 @@ pub fn default_test_config() -> Config {
         },
         logging: LoggingConfig {
             level: "info".to_string(),
-            console: false,
             file: Some("./p2pool.log".to_string()),
         },
     }
