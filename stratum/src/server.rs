@@ -167,7 +167,6 @@ where
     let session = &mut Session::<DifficultyAdjuster>::new(
         ctx.minimum_difficulty,
         ctx.maximum_difficulty,
-        ctx.maximum_difficulty.unwrap_or(ctx.minimum_difficulty),
         version_mask,
     );
 
