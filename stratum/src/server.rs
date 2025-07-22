@@ -196,7 +196,7 @@ where
             }
             // Read a line from the stream
             line = framed.next() => {
-                debug!("Read line {:?} from {}...", line, addr);
+                info!("Rx {} {:?}", addr, line);
                 match line {
                     Some(Ok(line)) => {
                         if line.is_empty() {
@@ -254,7 +254,7 @@ where
                         }
                     };
 
-                    info!("Sending to {}: {:?}", addr, response_json);
+                    info!("Tx {} {:?}", addr, response_json);
                     if let Err(e) = writer
                         .write_all(format!("{}\n", response_json).as_bytes())
                         .await
