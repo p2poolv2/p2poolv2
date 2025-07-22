@@ -25,7 +25,7 @@ pub async fn handle_configure<'a, D: DifficultyAdjusterTrait>(
     request: Request<'a>,
     session: &Session<D>,
 ) -> Result<Vec<Message<'a>>, Error> {
-    info!("Handling mining.configure message");
+    debug!("Handling mining.configure message");
     match request {
         Request::MiningConfigureRequest(configure) => {
             debug!("Received mining.configure request: {:?}", configure);
