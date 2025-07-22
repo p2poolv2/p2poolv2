@@ -18,7 +18,7 @@ use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
 use crate::messages::{Message, MiningConfigure, Request, Response};
 use crate::session::Session;
-use tracing::{debug, info};
+use tracing::debug;
 
 /// Handle the "mining.configure" message
 pub async fn handle_configure<'a, D: DifficultyAdjusterTrait>(
@@ -72,7 +72,7 @@ mod mining_configure_response_tests {
             None,
         );
 
-        let session = Session::<DifficultyAdjuster>::new(1, Some(1000), 100000, 0x1fffe000);
+        let session = Session::<DifficultyAdjuster>::new(1, Some(1000), 0x1fffe000);
 
         let result = handle_configure(message, &session).await;
         assert!(result.is_ok());
