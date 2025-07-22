@@ -284,7 +284,10 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
             "Applying difficulty constraints: calculated={}, pool_min={}, pool_max={}",
             calculated_diff,
             self.pool_minimum_difficulty,
-            self.pool_maximum_difficulty.unwrap_or(u64::MAX),
+            match self.pool_maximum_difficulty {
+                Some(max) => max.to_string(),
+                None => "None".to_string(),
+            },
         );
         // Maximum of pool minimum difficulty and calculated optimal
         let mut diff = calculated_diff.max(self.pool_minimum_difficulty);
