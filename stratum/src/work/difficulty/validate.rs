@@ -21,7 +21,7 @@ use crate::work::tracker::JobDetails;
 use bitcoin::blockdata::block::{Block, Header};
 use bitcoin::consensus::Decodable;
 use std::str::FromStr;
-use tracing::{debug, info};
+use tracing::debug;
 
 /// parse all transactions from block template with data and txid
 fn decode_txids(blocktemplate: &BlockTemplate) -> Result<Vec<bitcoin::Txid>, Error> {
@@ -68,7 +68,7 @@ fn apply_version_mask(
     params: &[String],
 ) -> Result<i32, Error> {
     if params.len() > 5 {
-        info!("Applying version mask from params: {}", params[5]);
+        debug!("Applying version mask from params: {}", params[5]);
         let bits = i32::from_be_bytes(
             hex::decode(&params[5])
                 .map_err(|_| Error::InvalidParams("Failed to decode hex".into()))?
@@ -116,7 +116,7 @@ pub fn validate_submission_difficulty(
         .map(|h| h.into())
         .unwrap();
 
-    info!("Merkle root: {}", merkle_root);
+    debug!("Merkle root: {}", merkle_root);
 
     let n_time = u32::from_str_radix(&submission.params[3], 16)
         .map_err(|_| Error::InvalidParams("Bad nTime".into()))?;
@@ -133,13 +133,12 @@ pub fn validate_submission_difficulty(
         nonce: u32::from_str_radix(&submission.params[4], 16).unwrap(),
     };
 
-    info!("Header hash : {}", header.block_hash().to_string());
-    // info!("Target      : {}", hex::encode(target));
+    debug!("Header hash : {}", header.block_hash().to_string());
 
     match header.validate_pow(target) {
-        Ok(_) => info!("Header meets the target"),
+        Ok(_) => debug!("Header meets the target"),
         Err(e) => {
-            info!("Header does not meet the target: {}", e);
+            debug!("Header does not meet the target: {}", e);
             return Err(Error::InsufficientWork);
         }
     }

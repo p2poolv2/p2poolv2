@@ -220,7 +220,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         if should_adjust {
             let new_diff = self.calculate_new_difficulty(suggested_difficulty);
 
-            info!(
+            debug!(
                 "Calculated new difficulty: {}, current difficulty: {}",
                 new_diff, self.current_difficulty
             );
@@ -280,7 +280,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         // Apply constraints to the calculated difficulty
         let constrained_diff = self.apply_difficulty_constraints(saturated, suggested_difficulty);
 
-        info!(
+        debug!(
             "Difficulty adjustment: dsps5={}, bias={}, adjusted_dsps={}, drr={}, optimal={}, constrained={}",
             self.difficulty_shares_per_second_5min_window, bias, difficulty_shares_per_second, difficulty_rate_ratio, optimal_diff, constrained_diff
         );
