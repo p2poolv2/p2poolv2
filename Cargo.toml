@@ -17,7 +17,7 @@ panic = "abort"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.83"
+rust-version = "1.88"
 
 [workspace.dependencies]
 libp2p = { version = "0.53", features = [
