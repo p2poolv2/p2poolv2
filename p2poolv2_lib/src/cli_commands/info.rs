@@ -69,9 +69,9 @@ pub fn execute(chain: Chain) -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::execute;
+    use crate::shares::ShareBlock;
     use crate::shares::chain::chain::Chain;
     use crate::shares::store::Store;
-    use crate::shares::ShareBlock;
     use tempfile::tempdir;
 
     #[test]

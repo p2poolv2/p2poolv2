@@ -18,7 +18,7 @@ use crate::node::messages::Message;
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{ShareBlock, ShareHeader, StorageShareBlock};
 use bitcoin::Transaction;
-use rocksdb::{ColumnFamilyDescriptor, Options as RocksDbOptions, DB};
+use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -1158,22 +1158,30 @@ mod tests {
         // Verify uncles of share2
         let uncles_share2 = store.get_uncles(&share2.cached_blockhash.unwrap());
         assert_eq!(uncles_share2.len(), 2);
-        assert!(uncles_share2
-            .iter()
-            .any(|u| u.header.miner_share.hash == uncle1_share2.header.miner_share.hash));
-        assert!(uncles_share2
-            .iter()
-            .any(|u| u.header.miner_share.hash == uncle2_share2.header.miner_share.hash));
+        assert!(
+            uncles_share2
+                .iter()
+                .any(|u| u.header.miner_share.hash == uncle1_share2.header.miner_share.hash)
+        );
+        assert!(
+            uncles_share2
+                .iter()
+                .any(|u| u.header.miner_share.hash == uncle2_share2.header.miner_share.hash)
+        );
 
         // Verify uncles of share3
         let uncles_share3 = store.get_uncles(&share3.cached_blockhash.unwrap());
         assert_eq!(uncles_share3.len(), 2);
-        assert!(uncles_share3
-            .iter()
-            .any(|u| u.header.miner_share.hash == uncle1_share3.header.miner_share.hash));
-        assert!(uncles_share3
-            .iter()
-            .any(|u| u.header.miner_share.hash == uncle2_share3.header.miner_share.hash));
+        assert!(
+            uncles_share3
+                .iter()
+                .any(|u| u.header.miner_share.hash == uncle1_share3.header.miner_share.hash)
+        );
+        assert!(
+            uncles_share3
+                .iter()
+                .any(|u| u.header.miner_share.hash == uncle2_share3.header.miner_share.hash)
+        );
 
         // Verify children of share1
         let children_share1 = store.get_children_blockhashes(&share1.cached_blockhash.unwrap());

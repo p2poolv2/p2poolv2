@@ -24,7 +24,7 @@ use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
-use tower::{limit::RateLimitLayer, util::BoxService, ServiceBuilder};
+use tower::{ServiceBuilder, limit::RateLimitLayer, util::BoxService};
 
 // Build the full service stack
 pub fn build_service<C, T>(
@@ -58,8 +58,8 @@ where
 mod tests {
     use super::*;
     use crate::config::NetworkConfig;
-    use crate::node::messages::Message;
     use crate::node::SwarmSend;
+    use crate::node::messages::Message;
     use crate::service::p2p_service::{P2PService, RequestContext};
     #[mockall_double::double]
     use crate::shares::chain::actor::ChainHandle;
@@ -73,9 +73,9 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio::sync::mpsc::Sender;
     use tokio::sync::oneshot;
-    use tokio::time::{advance, timeout, Duration};
+    use tokio::time::{Duration, advance, timeout};
     use tower::limit::RateLimit;
-    use tower::{limit::RateLimitLayer, Service, ServiceBuilder, ServiceExt};
+    use tower::{Service, ServiceBuilder, ServiceExt, limit::RateLimitLayer};
 
     // This struct simulates a service that always fails on poll_ready()
     struct AlwaysFailReadyService;

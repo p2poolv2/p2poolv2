@@ -25,7 +25,7 @@ use crate::shares::handle_mining_message::handle_mining_message;
 use crate::shares::miner_message::CkPoolMessage;
 use crate::{
     node::SwarmSend,
-    shares::ckpool_socket::{create_zmq_socket, start_receiving_from_ckpool, CkPoolSocket},
+    shares::ckpool_socket::{CkPoolSocket, create_zmq_socket, start_receiving_from_ckpool},
 };
 use std::error::Error;
 use std::thread;
