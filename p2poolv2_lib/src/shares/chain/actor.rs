@@ -748,11 +748,11 @@ mock! {
 mod tests {
     use super::*;
     use crate::shares::miner_message::Gbt;
+    use crate::test_utils::TestBlockBuilder;
+    use crate::test_utils::TestMinerWorkbaseBuilder;
     use crate::test_utils::genesis_for_testnet;
     use crate::test_utils::load_valid_workbases_userworkbases_and_shares;
     use crate::test_utils::random_hex_string;
-    use crate::test_utils::TestBlockBuilder;
-    use crate::test_utils::TestMinerWorkbaseBuilder;
     use rust_decimal_macros::dec;
     use tempfile::tempdir;
 

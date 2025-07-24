@@ -14,13 +14,13 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::shares::ShareBlock;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 #[cfg(not(test))]
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::validation;
-use crate::shares::ShareBlock;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
 use tracing::{error, info};
@@ -51,7 +51,7 @@ pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{load_valid_workbases_userworkbases_and_shares, TestBlockBuilder};
+    use crate::test_utils::{TestBlockBuilder, load_valid_workbases_userworkbases_and_shares};
     use crate::utils::time_provider::TestTimeProvider;
     use mockall::predicate::*;
     use std::time::SystemTime;

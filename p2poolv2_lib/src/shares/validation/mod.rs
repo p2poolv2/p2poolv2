@@ -148,9 +148,9 @@ pub async fn validate_timestamp(
 mod tests {
     use super::*;
     use crate::shares::{PublicKey, ShareBlockHash};
+    use crate::test_utils::TestBlockBuilder;
     use crate::test_utils::load_valid_workbases_userworkbases_and_shares;
     use crate::test_utils::simple_miner_share;
-    use crate::test_utils::TestBlockBuilder;
     use crate::utils::time_provider::TestTimeProvider;
     use std::time::SystemTime;
     #[tokio::test]
@@ -244,9 +244,11 @@ mod tests {
             ))
             .returning(move |_| Some(initial_share.clone()));
 
-        assert!(validate_prev_share_blockhash(&valid_share, &chain_handle)
-            .await
-            .is_ok());
+        assert!(
+            validate_prev_share_blockhash(&valid_share, &chain_handle)
+                .await
+                .is_ok()
+        );
 
         // Create share pointing to non-existent previous hash - should fail validation
         let non_existent_hash: ShareBlockHash =
@@ -261,9 +263,11 @@ mod tests {
             .with(mockall::predicate::eq(non_existent_hash))
             .returning(move |_| None);
 
-        assert!(validate_prev_share_blockhash(&invalid_share, &chain_handle)
-            .await
-            .is_err());
+        assert!(
+            validate_prev_share_blockhash(&invalid_share, &chain_handle)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -343,9 +347,11 @@ mod tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
-        assert!(validate_uncles(&invalid_share, &chain_handle)
-            .await
-            .is_err());
+        assert!(
+            validate_uncles(&invalid_share, &chain_handle)
+                .await
+                .is_err()
+        );
 
         // Test share with non-existent uncle
         let non_existent_hash: ShareBlockHash =
@@ -362,9 +368,11 @@ mod tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
-        assert!(validate_uncles(&invalid_share, &chain_handle)
-            .await
-            .is_err());
+        assert!(
+            validate_uncles(&invalid_share, &chain_handle)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

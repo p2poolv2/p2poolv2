@@ -20,11 +20,10 @@ use crate::node::messages::Message;
 use libp2p::connection_limits;
 use libp2p::request_response::ProtocolSupport;
 use libp2p::{
-    identify,
+    Multiaddr, PeerId, identify,
     identity::Keypair,
     kad::{self, store::MemoryStore},
     swarm::NetworkBehaviour,
-    Multiaddr, PeerId,
 };
 use request_response::P2PoolRequestResponseProtocol;
 use request_response::{RequestResponseBehaviour, RequestResponseEvent};

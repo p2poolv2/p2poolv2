@@ -18,8 +18,8 @@ pub mod builders;
 
 use crate::shares::genesis;
 use crate::utils::serde_support::time::{deserialize_time, serialize_time};
-use bitcoin::absolute::Time;
 use bitcoin::BlockHash;
+use bitcoin::absolute::Time;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -360,8 +360,14 @@ mod tests {
             params.prevhash,
             "6d600f568f665af26301fcafa53326454b9db355ff5d87f9863a956300000000"
         );
-        assert_eq!(params.coinb1, "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff2c017b000438f9b667049c0fc52d0c");
-        assert_eq!(params.coinb2, "0a636b706f6f6c0a2f7032706f6f6c76322fffffffff0300111024010000001600148f1b6f0d5a0422afad259ec03977bdf2c74a037600e1f50500000000160014a248cf2f99f449511b22bab1a3d001719f84cd090000000000000000266a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf900000000");
+        assert_eq!(
+            params.coinb1,
+            "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff2c017b000438f9b667049c0fc52d0c"
+        );
+        assert_eq!(
+            params.coinb2,
+            "0a636b706f6f6c0a2f7032706f6f6c76322fffffffff0300111024010000001600148f1b6f0d5a0422afad259ec03977bdf2c74a037600e1f50500000000160014a248cf2f99f449511b22bab1a3d001719f84cd090000000000000000266a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf900000000"
+        );
         assert!(params.merkles.is_empty());
         assert_eq!(params.version, "20000000");
         assert_eq!(params.nbit, "1e0377ae");

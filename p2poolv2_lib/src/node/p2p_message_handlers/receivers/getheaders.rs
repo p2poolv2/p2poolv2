@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
+// Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
 // This file is part of P2Poolv2
 //
@@ -16,12 +16,12 @@
 
 use crate::node::Message;
 use crate::node::SwarmSend;
+use crate::shares::ShareBlockHash;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 #[cfg(not(test))]
 use crate::shares::chain::actor::ChainHandle;
-use crate::shares::ShareBlockHash;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::info;

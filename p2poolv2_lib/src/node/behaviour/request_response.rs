@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use ciborium::{de::from_reader, ser::into_writer};
 use libp2p::futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::request_response::{Codec, OutboundFailure};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 use std::io;
 
 // Protocol name for our request-response protocol
