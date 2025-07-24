@@ -204,6 +204,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use temp_env::with_var;
 
     #[test]
     fn test_config_builder() {
@@ -277,16 +278,16 @@ mod tests {
 
     #[test]
     fn test_config_from_env_vars() {
-        // Set environment variable for bitcoin URL
-        std::env::set_var("P2POOL_BITCOINRPC_URL", "http://bitcoin-from-env:8332");
+        with_var(
+            "P2POOL_BITCOINRPC_URL",
+            Some("http://bitcoin-from-env:8332"),
+            || {
+                // Load config from file first
+                let config = Config::load("../config.toml").unwrap();
 
-        // Load config from file first
-        let config = Config::load("../config.toml").unwrap();
-
-        // Check that the environment variable overrides the config file value
-        assert_eq!(config.bitcoinrpc.url, "http://bitcoin-from-env:8332");
-
-        // Clean up environment variable after test
-        std::env::remove_var("P2POOL_BITCOINRPC_URL");
+                // Check that the environment variable overrides the config file value
+                assert_eq!(config.bitcoinrpc.url, "http://bitcoin-from-env:8332");
+            },
+        );
     }
 }
