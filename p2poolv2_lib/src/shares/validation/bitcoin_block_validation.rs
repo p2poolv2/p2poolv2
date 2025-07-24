@@ -80,8 +80,8 @@ mod tests {
     use bitcoindrpc::BitcoinRpcConfig;
     use rust_decimal_macros::dec;
     use wiremock::{
-        matchers::{body_json, header, method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{body_json, header, method, path},
     };
 
     #[tokio::test]

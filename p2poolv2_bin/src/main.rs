@@ -18,8 +18,8 @@ use bitcoin::Address;
 use clap::Parser;
 use p2poolv2_lib::config::{Config, LoggingConfig};
 use p2poolv2_lib::node::actor::NodeHandle;
-use p2poolv2_lib::shares::chain::actor::ChainHandle;
 use p2poolv2_lib::shares::ShareBlock;
+use p2poolv2_lib::shares::chain::actor::ChainHandle;
 use std::error::Error;
 use std::fs::File;
 use std::process::exit;
@@ -31,7 +31,7 @@ use stratum::work::tracker::start_tracker_actor;
 use stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
 use tracing::error;
 use tracing::info;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Registry};
+use tracing_subscriber::{EnvFilter, Registry, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Interval in seconds to poll for new block templates since the last blocknotify signal
 const GBT_POLL_INTERVAL: u64 = 60; // seconds

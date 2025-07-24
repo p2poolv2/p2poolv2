@@ -22,9 +22,9 @@ use futures::Future;
 use tokio::sync::mpsc;
 use tower::Service;
 
+use crate::node::SwarmSend;
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::handle_request;
-use crate::node::SwarmSend;
 #[cfg_attr(test, mockall_double::double)]
 use crate::shares::chain::actor::ChainHandle;
 use crate::utils::time_provider::TimeProvider;
