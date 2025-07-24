@@ -184,7 +184,7 @@ where
                 if session.username.is_none() {
                     continue; // Ignore messages until the user has authorized
                 }
-                if let Err(e) = writer.write_all(format!("{}\n", message).as_bytes()).await {
+                if let Err(e) = writer.write_all(format!("{message}\n").as_bytes()).await {
                     error!("Failed to write to {}: {}", addr, e);
                     break;
                 }
@@ -255,7 +255,7 @@ where
 
                     info!("Tx {} {:?}", addr, response_json);
                     if let Err(e) = writer
-                        .write_all(format!("{}\n", response_json).as_bytes())
+                        .write_all(format!("{response_json}\n").as_bytes())
                         .await
                     {
                         return Err(Box::new(e));
