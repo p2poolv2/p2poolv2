@@ -39,7 +39,7 @@ pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
 
 [bitcoinrpc]
 # RPC credentials are loaded from env vars
-url = "http://localhost:38332"
+url = "http://127.0.0.1:38332"
 username = "p2pool"
 password = "p2pool"
 
