@@ -111,12 +111,12 @@ async fn get_block_template(
             match serde_json::from_str::<BlockTemplate>(blocktemplate_json.as_str()) {
                 Ok(template) => Ok(template),
                 Err(e) => Err(Box::new(WorkError {
-                    message: format!("Failed to parse block template: {}", e),
+                    message: format!("Failed to parse block template: {e}"),
                 })),
             }
         }
         Err(e) => Err(Box::new(WorkError {
-            message: format!("Failed to get block template: {}", e),
+            message: format!("Failed to get block template: {e}"),
         })),
     }
 }
@@ -142,7 +142,7 @@ pub async fn start_gbt(
         Err(e) => {
             info!("Failed to connect to bitcoind: {}", e);
             return Err(Box::new(WorkError {
-                message: format!("Failed to connect to bitcoind: {}", e),
+                message: format!("Failed to connect to bitcoind: {e}"),
             }));
         }
     };
@@ -152,7 +152,7 @@ pub async fn start_gbt(
         Err(e) => {
             info!("Error getting block template: {}", e);
             return Err(Box::new(WorkError {
-                message: format!("Error getting initial block template: {}", e),
+                message: format!("Error getting initial block template: {e}"),
             }));
         }
     };
@@ -173,7 +173,7 @@ pub async fn start_gbt(
         debug!("Removing existing socket file at {}", socket_path);
         if let Err(e) = std::fs::remove_file(socket_path) {
             return Err(Box::new(WorkError {
-                message: format!("Failed to remove existing socket file: {}", e),
+                message: format!("Failed to remove existing socket file: {e}"),
             }));
         }
     }
@@ -186,7 +186,7 @@ pub async fn start_gbt(
         }
         Err(_) => {
             return Err(Box::new(WorkError {
-                message: format!("Failed to bind Unix socket at {}", socket_path),
+                message: format!("Failed to bind Unix socket at {socket_path}"),
             }));
         }
     };

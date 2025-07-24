@@ -32,10 +32,7 @@ fn main() -> std::io::Result<()> {
     let mut stream = match UnixStream::connect(socket_path) {
         Ok(stream) => stream,
         Err(_e) => {
-            println!(
-                "P2Pool server not running. No notification sent to {}",
-                socket_path
-            );
+            println!("P2Pool server not running. No notification sent to {socket_path}");
             return Ok(());
         }
     };
@@ -43,7 +40,7 @@ fn main() -> std::io::Result<()> {
     // Write a single byte to trigger the listener
     stream.write_all(b"blocknotify\n")?;
 
-    println!("Block notification sent to {}", socket_path);
+    println!("Block notification sent to {socket_path}");
     Ok(())
 }
 
