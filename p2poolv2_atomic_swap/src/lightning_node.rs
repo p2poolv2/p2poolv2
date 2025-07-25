@@ -14,18 +14,16 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod checks;
 pub mod event_handler;
 
 use ldk_node::lightning::ln::channelmanager::PaymentId;
 use ldk_node::lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription, Description};
 pub use ldk_node::lightning_types::payment::{PaymentHash, PaymentPreimage};
 use ldk_node::{
-    bitcoin::{secp256k1::PublicKey, Address, Txid},
+    bitcoin::{secp256k1::PublicKey, Address},
     lightning::ln::msgs::SocketAddress,
 };
 use ldk_node::{Node, UserChannelId};
-use std::error::Error;
 
 /// Default invoice expiry time in seconds (24 hours)
 const DEFAULT_EXPIRY_SECS: u32 = 86_400;
@@ -40,24 +38,14 @@ fn handle_error<E: std::fmt::Debug>(context: &str, error: E) {
 }
 
 /// Sends an on-chain transfer to a specified address.
-pub(crate) async fn onchaintransfer(
-    node: &Node,
-    destination_address: &Address,
-    amount_sats: u64,
-) -> Result<Txid, Box<dyn std::error::Error>> {
+pub(crate) async fn onchaintransfer(node: &Node, destination_address: &Address, amount_sats: u64) {
     match node
         .onchain_payment()
         .send_to_address(destination_address, amount_sats, None)
     {
-        Ok(txid) => {
-            println!("On-chain transfer successful. Transaction ID: {}", txid);
-            Ok(txid)
-        }
-        Err(e) => {
-            handle_error("sending on-chain transfer", &e);
-            Err(Box::new(e))
-        }
-    }
+        Ok(txid) => println!("On-chain transfer successful. Transaction ID: {}", txid),
+        Err(e) => handle_error("sending on-chain transfer", e),
+    };
 }
 
 /// Sends all available on-chain funds to a specified address.
@@ -98,13 +86,10 @@ pub(crate) async fn balance(node: &Node) {
 }
 
 /// Generates a new on-chain funding address.
-pub(crate) async fn getaddress(node: &Node) -> Result<Address, Box<dyn std::error::Error>> {
+pub(crate) async fn getaddress(node: &Node) {
     match node.onchain_payment().new_address() {
-        Ok(addr) => Ok(addr),
-        Err(e) => {
-            handle_error("getting funding address", &e);
-            Err(Box::new(e))
-        },
+        Ok(addr) => println!("Funding Address: {}", addr),
+        Err(e) => handle_error("getting funding address", e),
     }
 }
 
@@ -187,22 +172,15 @@ pub(crate) async fn force_close_channel(
 }
 
 /// Generates a new Bolt11 invoice for a specified amount.
-pub(crate) async fn getinvoice(
-    node: &Node,
-    amount_msats: u64,
-) -> Result<Bolt11Invoice, Box<dyn Error>> {
+pub(crate) async fn getinvoice(node: &Node, amount_msats: u64) {
     let bolt11payment = node.bolt11_payment();
-    let description = Description::new(DEFAULT_INVOICE_DESCRIPTION.to_string())?;
+    let description = Description::new(DEFAULT_INVOICE_DESCRIPTION.to_string()).unwrap();
     let description = Bolt11InvoiceDescription::Direct(description);
     match bolt11payment.receive(amount_msats, &description, DEFAULT_EXPIRY_SECS) {
         Ok(invoice) => {
-            println!("invoice : {}", invoice);
-            Ok(invoice)
+            println!("Invoice: {}", invoice);
         }
-        Err(e) => {
-            handle_error("Creating invoice", &e);
-            Err(Box::new(e))
-        }
+        Err(e) => handle_error("Creating invoice", e),
     }
 }
 
@@ -241,19 +219,14 @@ pub(crate) async fn redeeminvoice(
 }
 
 /// Pays a Bolt11 invoice
-pub(crate) async fn payinvoice(
-    node: &Node,
-    invoice: &Bolt11Invoice,
-) -> Result<PaymentId, Box<dyn std::error::Error>> {
+pub(crate) async fn payinvoice(node: &Node, invoice: &Bolt11Invoice) {
     let bolt11payment = node.bolt11_payment();
     match bolt11payment.send(invoice, None) {
         Ok(payment_id) => {
-            println!("Payment sent. Payment Id: {}", payment_id);
-            Ok(payment_id)
+            println!("Payment send. Payment Id: {}", payment_id);
         }
         Err(e) => {
-            handle_error("Paying invoice", &e);
-            Err(Box::new(e))
+            handle_error("Paying invoice", e);
         }
     }
 }

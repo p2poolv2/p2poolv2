@@ -14,25 +14,19 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-mod atomic_swap_functions;
-
 use crate::lightning_node;
-use crate::swap::HTLCType;
 
-use atomic_swap_functions::{initiate_onchain_to_lightning_swap, store_swap_to_db, read_swap_from_db,redeem_swap};
-
+use lightning_node::{
+    balance, closechannel, force_close_channel, getaddress, getholdinvoice, getinvoice,
+    listallchannels, onchaintransfer, onchaintransfer_all, openchannel, payinvoice,
+    paymentid_status, redeeminvoice,
+};
 use ldk_node::{
     bitcoin::{secp256k1::PublicKey, Address},
     lightning::ln::{channelmanager::PaymentId, msgs::SocketAddress},
     lightning_invoice::Bolt11Invoice,
     lightning_types::payment::{PaymentHash, PaymentPreimage},
     Node, UserChannelId,
-};
-use crate::configuration::HtlcConfig;
-use lightning_node::{
-    balance, closechannel, force_close_channel, getaddress, getholdinvoice, getinvoice,
-    listallchannels, onchaintransfer, onchaintransfer_all, openchannel, payinvoice,
-    paymentid_status, redeeminvoice,
 };
 use std::{
     io::{self, Write},
@@ -58,7 +52,7 @@ fn get_user_input(prompt: &str) -> io::Result<(String, Option<String>, Vec<Strin
 }
 
 /// Runs the CLI loop, processing user commands for the Lightning node.
-pub async fn run_node_cli(node: Arc<Node>,htlc_config: HtlcConfig) {
+pub async fn run_node_cli(node: Arc<Node>) {
     // Print help message on startup
     print_help();
 
@@ -66,334 +60,139 @@ pub async fn run_node_cli(node: Arc<Node>,htlc_config: HtlcConfig) {
         match get_user_input(&format!("{}> ", SERVER_NAME)) {
             Ok((input, command, args)) => {
                 let node = Arc::clone(&node); // Clone Arc only once per iteration
-                let db_path = htlc_config.db_path.clone();
-                let htlc_config = htlc_config.clone();
-                // REMOVE tokio::spawn and run match arms directly
-                match (command.as_deref(), args.as_slice()) {
-                    (Some("onchaintransfer"), [addr, sats]) => {
-                        let network = node.config().network;
-                        let result = Address::from_str(addr)
-                            .and_then(|a| a.require_network(network))
-                            .map_err(|e| format!("Invalid address: {}", e))
-                            .and_then(|dest_addr| {
-                                sats.parse::<u64>()
-                                    .map_err(|e| format!("Invalid amount: {}", e))
-                                    .map(|amount| (dest_addr, amount))
-                            });
 
-                        match result {
-                            Ok((dest_addr, amount)) => {
-                                match onchaintransfer(&node, &dest_addr, amount).await {
-                                    Ok(txid) => println!("Transaction sent successfully: {}", txid),
-                                    Err(e) => println!("On-chain transfer failed: {}", e),
+                let task = tokio::spawn(async move {
+                    match (command.as_deref(), args.as_slice()) {
+                        (Some("onchaintransfer"), [addr, sats]) => {
+                            let network = node.config().network;
+                            match Address::from_str(addr).and_then(|a| a.require_network(network)) {
+                                Ok(dest_addr) => match sats.parse::<u64>() {
+                                    Ok(amount) => onchaintransfer(&node, &dest_addr, amount).await,
+                                    Err(e) => println!("Error: Invalid amount: {}", e),
+                                },
+                                Err(e) => println!("Error: Invalid address: {}", e),
+                            }
+                        }
+                        (Some("onchaintransferall"), [addr]) => {
+                            let network = node.config().network;
+                            match Address::from_str(addr).and_then(|a| a.require_network(network)) {
+                                Ok(dest_addr) => onchaintransfer_all(&node, &dest_addr).await,
+                                Err(e) => println!("Error: Invalid address: {}", e),
+                            }
+                        }
+                        (Some("openchannel"), [node_id, addr, sats]) => {
+                            match (
+                                node_id.parse::<PublicKey>(),
+                                addr.parse::<SocketAddress>(),
+                                sats.parse::<u64>(),
+                            ) {
+                                (Ok(id), Ok(net_addr), Ok(amount)) => {
+                                    openchannel(&node, id, net_addr, amount).await
                                 }
+                                (Err(e), _, _) => println!("Error: Invalid node ID: {}", e),
+                                (_, Err(e), _) => println!("Error: Invalid address: {}", e),
+                                (_, _, Err(e)) => println!("Error: Invalid amount: {}", e),
                             }
-                            Err(e) => println!("Error: {}", e),
                         }
-                    }
-                    (Some("onchaintransferall"), [addr]) => {
-                        let network = node.config().network;
-                        match Address::from_str(addr).and_then(|a| a.require_network(network)) {
-                            Ok(dest_addr) => onchaintransfer_all(&node, &dest_addr).await,
-                            Err(e) => println!("Error: Invalid address: {}", e),
-                        }
-                    }
-                    (Some("openchannel"), [node_id, addr, sats]) => {
-                        match (
-                            node_id.parse::<PublicKey>(),
-                            addr.parse::<SocketAddress>(),
-                            sats.parse::<u64>(),
-                        ) {
-                            (Ok(id), Ok(net_addr), Ok(amount)) => {
-                                openchannel(&node, id, net_addr, amount).await
+                        (Some("balance"), []) => balance(&node).await,
+                        (Some("getaddress"), []) => getaddress(&node).await,
+                        (Some("listallchannels"), []) => listallchannels(&node).await,
+                        (Some("paymentid_status"), [payment_id]) => match hex::decode(payment_id) {
+                            Ok(bytes) if bytes.len() == 32 => {
+                                let mut array = [0u8; 32];
+                                array.copy_from_slice(&bytes);
+                                paymentid_status(&node, &PaymentId(array)).await;
                             }
-                            (Err(e), _, _) => println!("Error: Invalid node ID: {}", e),
-                            (_, Err(e), _) => println!("Error: Invalid address: {}", e),
-                            (_, _, Err(e)) => println!("Error: Invalid amount: {}", e),
-                        }
-                    }
-                    (Some("balance"), []) => balance(&node).await,
-                    (Some("getaddress"), []) => {
-                        match getaddress(&node).await {
-                            Ok(addr) => println!("Address: {}", addr),
-                            Err(e) => println!("Error getting address: {}", e),
-                        }
-                    },
-                    (Some("listallchannels"), []) => listallchannels(&node).await,
-                    (Some("paymentid_status"), [payment_id]) => match hex::decode(payment_id) {
-                        Ok(bytes) if bytes.len() == 32 => {
-                            let mut array = [0u8; 32];
-                            array.copy_from_slice(&bytes);
-                            paymentid_status(&node, &PaymentId(array)).await;
-                        }
-                        Ok(_) => println!("Error: Payment ID must be a 32-byte hex string"),
-                        Err(e) => println!("Error: Invalid payment ID: {}", e),
-                    },
-                    (Some("closechannel"), [chan_id, node_id]) => {
-                        match (chan_id.parse::<u128>(), node_id.parse::<PublicKey>()) {
-                            (Ok(id), Ok(counterparty)) => {
-                                closechannel(&node, &UserChannelId(id), counterparty).await
-                            }
-                            (Err(e), _) => println!("Error: Invalid channel ID: {}", e),
-                            (_, Err(e)) => println!("Error: Invalid node ID: {}", e),
-                        }
-                    }
-                    (Some("forceclosechannel"), [chan_id, node_id, reason]) => {
-                        if !reason.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                            println!("Error: Reason must be in snake_case format");
-                            return;
-                        }
-                        match (chan_id.parse::<u128>(), node_id.parse::<PublicKey>()) {
-                            (Ok(id), Ok(counterparty)) => {
-                                force_close_channel(
-                                    &node,
-                                    &UserChannelId(id),
-                                    counterparty,
-                                    reason,
-                                )
-                                .await
-                            }
-                            (Err(e), _) => println!("Error: Invalid channel ID: {}", e),
-                            (_, Err(e)) => println!("Error: Invalid node ID: {}", e),
-                        }
-                    }
-                    (Some("getinvoice"), [amount]) => match amount.parse::<u64>() {
-                        Ok(amount_sats) => match getinvoice(&node, amount_sats * 1000).await {
-                            Ok(invoice) => println!("Invoice: {}", invoice),
-                            Err(e) => println!("Error creating invoice: {}", e),
+                            Ok(_) => println!("Error: Payment ID must be a 32-byte hex string"),
+                            Err(e) => println!("Error: Invalid payment ID: {}", e),
                         },
-                        Err(_) => println!("Error: Invalid amount"),
-                    },
-                    (Some("getholdinvoice"), [amount, hash]) => {
-                        match (amount.parse::<u64>(), hex::decode(hash)) {
-                            (Ok(amt), Ok(bytes)) if bytes.len() == 32 => {
-                                let amount_msats = amt * 1000;
-                                let secret_hash: [u8; 32] = bytes.try_into().unwrap();
-                                getholdinvoice(&node, amount_msats, PaymentHash(secret_hash))
+                        (Some("closechannel"), [chan_id, node_id]) => {
+                            match (chan_id.parse::<u128>(), node_id.parse::<PublicKey>()) {
+                                (Ok(id), Ok(counterparty)) => {
+                                    closechannel(&node, &UserChannelId(id), counterparty).await
+                                }
+                                (Err(e), _) => println!("Error: Invalid channel ID: {}", e),
+                                (_, Err(e)) => println!("Error: Invalid node ID: {}", e),
+                            }
+                        }
+                        (Some("forceclosechannel"), [chan_id, node_id, reason]) => {
+                            if !reason.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                                println!("Error: Reason must be in snake_case format");
+                                return;
+                            }
+                            match (chan_id.parse::<u128>(), node_id.parse::<PublicKey>()) {
+                                (Ok(id), Ok(counterparty)) => {
+                                    force_close_channel(
+                                        &node,
+                                        &UserChannelId(id),
+                                        counterparty,
+                                        reason,
+                                    )
+                                    .await
+                                }
+                                (Err(e), _) => println!("Error: Invalid channel ID: {}", e),
+                                (_, Err(e)) => println!("Error: Invalid node ID: {}", e),
+                            }
+                        }
+                        (Some("getinvoice"), [amount]) => match amount.parse::<u64>() {
+                            Ok(amount_sats) => getinvoice(&node, amount_sats * 1000).await,
+                            Err(e) => println!("Error: Invalid amount: {}", e),
+                        },
+                        (Some("getholdinvoice"), [amount, hash]) => {
+                            match (amount.parse::<u64>(), hex::decode(hash)) {
+                                (Ok(amt), Ok(bytes)) if bytes.len() == 32 => {
+                                    let amount_msats = amt * 1000;
+                                    let secret_hash: [u8; 32] = bytes.try_into().unwrap();
+                                    getholdinvoice(&node, amount_msats, PaymentHash(secret_hash))
+                                        .await;
+                                }
+                                (Ok(_), Ok(_)) => {
+                                    println!("Error: Payment hash must be a 32-byte hex string")
+                                }
+                                (Ok(_), Err(e)) => println!("Error: Invalid payment hash: {}", e),
+                                (Err(e), _) => println!("Error: Invalid amount: {}", e),
+                            }
+                        }
+                        (Some("redeeminvoice"), [hash, preimage, amount]) => {
+                            match (
+                                hex::decode(hash),
+                                hex::decode(preimage),
+                                amount.parse::<u64>(),
+                            ) {
+                                (Ok(h_bytes), Ok(p_bytes), Ok(amt))
+                                    if h_bytes.len() == 32 && p_bytes.len() == 32 =>
+                                {
+                                    let secret_hash: [u8; 32] = h_bytes.try_into().unwrap();
+                                    let preimage: [u8; 32] = p_bytes.try_into().unwrap();
+                                    let amount_msats = amt * 1000;
+                                    redeeminvoice(
+                                        &node,
+                                        PaymentHash(secret_hash),
+                                        PaymentPreimage(preimage),
+                                        amount_msats,
+                                    )
                                     .await;
+                                }
+                                (Ok(_), Ok(_), Ok(_)) => {
+                                    println!("Error: Hash and preimage must be 32-byte hex strings")
+                                }
+                                (Err(e), _, _) => println!("Error: Invalid payment hash: {}", e),
+                                (_, Err(e), _) => println!("Error: Invalid preimage: {}", e),
+                                (_, _, Err(e)) => println!("Error: Invalid amount: {}", e),
                             }
-                            (Ok(_), Ok(_)) => {
-                                println!("Error: Payment hash must be a 32-byte hex string")
-                            }
-                            (Ok(_), Err(e)) => println!("Error: Invalid payment hash: {}", e),
-                            (Err(e), _) => println!("Error: Invalid amount: {}", e),
                         }
-                    }
-                    (Some("redeeminvoice"), [hash, preimage, amount]) => {
-                        match (
-                            hex::decode(hash),
-                            hex::decode(preimage),
-                            amount.parse::<u64>(),
-                        ) {
-                            (Ok(h_bytes), Ok(p_bytes), Ok(amt))
-                                if h_bytes.len() == 32 && p_bytes.len() == 32 =>
-                            {
-                                let secret_hash: [u8; 32] = h_bytes.try_into().unwrap();
-                                let preimage: [u8; 32] = p_bytes.try_into().unwrap();
-                                let amount_msats = amt * 1000;
-                                redeeminvoice(
-                                    &node,
-                                    PaymentHash(secret_hash),
-                                    PaymentPreimage(preimage),
-                                    amount_msats,
-                                )
-                                .await;
-                            }
-                            (Ok(_), Ok(_), Ok(_)) => {
-                                println!("Error: Hash and preimage must be 32-byte hex strings")
-                            }
-                            (Err(e), _, _) => println!("Error: Invalid payment hash: {}", e),
-                            (_, Err(e), _) => println!("Error: Invalid preimage: {}", e),
-                            (_, _, Err(e)) => println!("Error: Invalid amount: {}", e),
-                        }
-                    }
-                    (Some("payinvoice"), [invoice]) => {
-                        match Bolt11Invoice::from_str(invoice) {
-                            Ok(inv) => match payinvoice(&node, &inv).await {
-                                Ok(payment_id) => println!("Payment sent. Payment ID: {:?}", payment_id),
-                                Err(e) => println!("Payment failed: {}", e),
-                            },
+                        (Some("payinvoice"), [invoice]) => match Bolt11Invoice::from_str(invoice) {
+                            Ok(inv) => payinvoice(&node, &inv).await,
                             Err(e) => println!("Error: Invalid invoice: {}", e),
-                        }
+                        },
+                        (Some("help"), _) => print_help(),
+                        (Some("exit"), _) => std::process::exit(0),
+                        _ => println!("Unknown command or incorrect arguments: {}", input),
                     }
-                    (Some("fromchainswap"), []) => {
-                        // Interactive prompt for swap creation
-                        let mut input = String::new();
-                        print!("Enter initiator pubkey: ");
-                        io::stdout().flush().unwrap();
-                        io::stdin().read_line(&mut input).unwrap();
-                        let initiator_pubkey = input.trim().to_string();
+                });
 
-                        input.clear();
-                        print!("Enter responder pubkey: ");
-                        io::stdout().flush().unwrap();
-                        io::stdin().read_line(&mut input).unwrap();
-                        let responder_pubkey = input.trim().to_string();
-
-                        input.clear();
-                        print!("Enter timelock (u64): ");
-                        io::stdout().flush().unwrap();
-                        io::stdin().read_line(&mut input).unwrap();
-                        let timelock = match input.trim().parse::<u64>() {
-                            Ok(t) => t,
-                            Err(_) => {
-                                println!("Invalid timelock");
-                                return;
-                            }
-                        };
-
-                        input.clear();
-                        print!("Enter amount (sats): ");
-                        io::stdout().flush().unwrap();
-                        io::stdin().read_line(&mut input).unwrap();
-                        let from_amount = match input.trim().parse::<u64>() {
-                            Ok(a) => a,
-                            Err(_) => {
-                                println!("Invalid amount");
-                                return;
-                            }
-                        };
-
-                        input.clear();
-                        print!("Enter expected received amount (sats): ");
-                        io::stdout().flush().unwrap();
-                        io::stdin().read_line(&mut input).unwrap();
-                        let to_amount = match input.trim().parse::<u64>() {
-                            Ok(a) => a,
-                            Err(_) => {
-                                println!("Invalid expected received amount");
-                                return;
-                            }
-                        };
-
-                        // htlc_type is always P2TR
-                        let htlc_type = HTLCType::P2tr2;
-                        initiate_onchain_to_lightning_swap(
-                            &node,
-                            &db_path,
-                            initiator_pubkey,
-                            responder_pubkey,
-                            timelock,
-                            from_amount,
-                            htlc_type,
-                            to_amount,
-                        ).await;
-                    }
-                    (Some("swapdb"), []) => {
-                        let mut input = String::new();
-                        print!("Type 'store' to store a swap or 'read' to read a swap: ");
-                        io::stdout().flush().unwrap();
-                        io::stdin().read_line(&mut input).unwrap();
-                        let action = input.trim().to_lowercase();
-
-                        if action == "store" {
-                            input.clear();
-                            print!("Enter initiator pubkey: ");
-                            io::stdout().flush().unwrap();
-                            io::stdin().read_line(&mut input).unwrap();
-                            let initiator_pubkey = input.trim().to_string();
-
-                            input.clear();
-                            print!("Enter responder pubkey: ");
-                            io::stdout().flush().unwrap();
-                            io::stdin().read_line(&mut input).unwrap();
-                            let responder_pubkey = input.trim().to_string();
-
-                            input.clear();
-                            print!("Enter timelock (u64): ");
-                            io::stdout().flush().unwrap();
-                            io::stdin().read_line(&mut input).unwrap();
-                            let timelock = match input.trim().parse::<u64>() {
-                                Ok(t) => t,
-                                Err(_) => {
-                                    println!("Invalid timelock");
-                                    return;
-                                }
-                            };
-
-                            input.clear();
-                            print!("Enter amount (sats): ");
-                            io::stdout().flush().unwrap();
-                            io::stdin().read_line(&mut input).unwrap();
-                            let from_amount = match input.trim().parse::<u64>() {
-                                Ok(a) => a,
-                                Err(_) => {
-                                    println!("Invalid amount");
-                                    return;
-                                }
-                            };
-
-                            input.clear();
-                            print!("Enter expected received amount (sats): ");
-                            io::stdout().flush().unwrap();
-                            io::stdin().read_line(&mut input).unwrap();
-                            let to_amount = match input.trim().parse::<u64>() {
-                                Ok(a) => a,
-                                Err(_) => {
-                                    println!("Invalid expected received amount");
-                                    return;
-                                }
-                            };
-
-                            input.clear();
-                            print!("Enter payment hash: ");
-                            io::stdout().flush().unwrap();
-                            io::stdin().read_line(&mut input).unwrap();
-                            let payment_hash = input.trim().to_string();
-
-                            let htlc_type = HTLCType::P2tr2;
-                            let db_path = db_path.clone();
-                            tokio::spawn(async move {
-                                store_swap_to_db(
-                                    &db_path,
-                                    initiator_pubkey,
-                                    responder_pubkey,
-                                    timelock,
-                                    from_amount,
-                                    htlc_type,
-                                    to_amount,
-                                    payment_hash,
-                                ).await;
-                            });
-                        } else if action == "read" {
-                            input.clear();
-                            print!("Enter swap id: ");
-                            io::stdout().flush().unwrap();
-                            io::stdin().read_line(&mut input).unwrap();
-                            let swap_id = input.trim().to_string();
-                            let db_path = db_path.clone();
-                            tokio::spawn(async move {
-                                read_swap_from_db(&db_path, &swap_id).await;
-                            });
-                        } else {
-                            println!("Unknown action: {}. Use 'store' or 'read'", action);
-                        }
-                    }
-                    (Some("redeemswap"), []) => {
-                        let mut input = String::new();
-                        print!("Enter swap id: ");
-                        io::stdout().flush().unwrap();
-                        io::stdin().read_line(&mut input).unwrap();
-                        let swap_id = input.trim().to_string();
-
-                        input.clear();
-                        print!("Enter BOLT11 invoice: ");
-                        io::stdout().flush().unwrap();
-                        io::stdin().read_line(&mut input).unwrap();
-                        let invoice_str = input.trim().to_string();
-
-                        match Bolt11Invoice::from_str(&invoice_str) {
-                            Ok(invoice) => {
-                                redeem_swap(&node, &htlc_config, &htlc_config.db_path, &swap_id, &invoice).await;
-                            }
-                            Err(e) => {
-                                println!("Invalid invoice: {}", e);
-                            }
-                        }
-                    }
-                    (Some("help"), _) => print_help(),
-                    (Some("exit"), _) => std::process::exit(0),
-                    _ => println!("Unknown command or incorrect arguments: {}", input),
+                if let Err(e) = task.await {
+                    println!("⚠️ Command execution failed: {:?}", e);
                 }
             }
             Err(e) => {
@@ -425,9 +224,6 @@ fn print_help() {
     println!("  paymentid_status <payment_id> - Check the status of a payment by ID");
     println!("  getholdinvoice <amount_sats> <payment_hash> - Generate a hold invoice");
     println!("  redeeminvoice <payment_hash> <preimage> <claimable_amount_msats> - Redeem a hold invoice");
-    println!("  fromchainswap - Initiate an on-chain to Lightning atomic swap interactively");
-    println!("  swapdb - Store a swap to the db or read a swap from the db interactively");
-    println!("  redeemswap - Redeem a swap by providing swap id and BOLT11 invoice");
     println!("  help - Display this help message");
     println!("  exit - Exit the CLI\n");
 }
