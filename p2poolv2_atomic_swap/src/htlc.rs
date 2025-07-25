@@ -45,6 +45,7 @@ pub fn redeem_htlc_address(
                 3,
                 network,
             )
+            .map_err(|e| Box::new(e) as Box<dyn Error>)
         }
         HTLCType::P2wsh2 => {
             // Placeholder for P2WSH2 address generation (to be implemented in p2wsh2.rs)
