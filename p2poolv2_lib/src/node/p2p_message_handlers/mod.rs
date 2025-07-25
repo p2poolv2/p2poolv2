@@ -131,11 +131,11 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
 mod tests {
     use super::*;
     use crate::node::SwarmSend;
+    use crate::shares::ShareBlockHash;
     #[mockall_double::double]
     use crate::shares::chain::actor::ChainHandle;
-    use crate::shares::ShareBlockHash;
     use crate::test_utils::simple_miner_workbase;
-    use crate::test_utils::{load_valid_workbases_userworkbases_and_shares, TestBlockBuilder};
+    use crate::test_utils::{TestBlockBuilder, load_valid_workbases_userworkbases_and_shares};
     use crate::utils::time_provider::TestTimeProvider;
     use crate::utils::time_provider::TimeProvider;
     use tokio::sync::mpsc;

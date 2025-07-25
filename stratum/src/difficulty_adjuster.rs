@@ -75,18 +75,12 @@ pub struct DifficultyAdjuster {
     pub pool_minimum_difficulty: u64,
     /// Pool maximum difficulty
     pub pool_maximum_difficulty: Option<u64>,
-    /// Network difficulty
-    pub network_difficulty: u64,
 }
 
 #[cfg_attr(test, automock)]
 pub trait DifficultyAdjusterTrait {
     /// Create a new DifficultyAdjuster with the given minimum difficulty
-    fn new(
-        pool_minimum_difficulty: u64,
-        pool_maximum_difficulty: Option<u64>,
-        network_difficulty: u64,
-    ) -> Self;
+    fn new(pool_minimum_difficulty: u64, pool_maximum_difficulty: Option<u64>) -> Self;
 
     /// Records a share submission and updates metrics
     ///
@@ -117,9 +111,6 @@ pub trait DifficultyAdjusterTrait {
     /// Reset the difficulty adjuster with a new minimum difficulty
     fn reset(&mut self, pool_minimum_difficulty: u64);
 
-    /// Set the network difficulty
-    fn set_network_difficulty(&mut self, network_difficulty: u64);
-
     /// Convert a u128 value to u64, saturating at u64::MAX if the value exceeds it.
     #[inline]
     fn saturated_to_u64(&self, value: u128) -> u64 {
@@ -132,11 +123,7 @@ pub trait DifficultyAdjusterTrait {
 }
 
 impl DifficultyAdjusterTrait for DifficultyAdjuster {
-    fn new(
-        pool_minimum_difficulty: u64,
-        pool_maximum_difficulty: Option<u64>,
-        network_difficulty: u64,
-    ) -> Self {
+    fn new(pool_minimum_difficulty: u64, pool_maximum_difficulty: Option<u64>) -> Self {
         Self {
             share_submission_difficulty_counter: 0,
             current_difficulty: pool_minimum_difficulty,
@@ -151,7 +138,6 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
             last_diff_change_job_id: None,
             pool_minimum_difficulty,
             pool_maximum_difficulty,
-            network_difficulty,
         }
     }
 
@@ -220,7 +206,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         if should_adjust {
             let new_diff = self.calculate_new_difficulty(suggested_difficulty);
 
-            info!(
+            debug!(
                 "Calculated new difficulty: {}, current difficulty: {}",
                 new_diff, self.current_difficulty
             );
@@ -280,7 +266,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         // Apply constraints to the calculated difficulty
         let constrained_diff = self.apply_difficulty_constraints(saturated, suggested_difficulty);
 
-        info!(
+        debug!(
             "Difficulty adjustment: dsps5={}, bias={}, adjusted_dsps={}, drr={}, optimal={}, constrained={}",
             self.difficulty_shares_per_second_5min_window, bias, difficulty_shares_per_second, difficulty_rate_ratio, optimal_diff, constrained_diff
         );
@@ -294,6 +280,15 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         calculated_diff: u64,
         suggested_difficulty: Option<u64>,
     ) -> u64 {
+        debug!(
+            "Applying difficulty constraints: calculated={}, pool_min={}, pool_max={}",
+            calculated_diff,
+            self.pool_minimum_difficulty,
+            match self.pool_maximum_difficulty {
+                Some(max) => max.to_string(),
+                None => "None".to_string(),
+            },
+        );
         // Maximum of pool minimum difficulty and calculated optimal
         let mut diff = calculated_diff.max(self.pool_minimum_difficulty);
 
@@ -306,9 +301,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         if self.pool_maximum_difficulty.is_some() {
             diff = diff.min(self.pool_maximum_difficulty.unwrap());
         }
-
-        // Minimum of diff and network difficulty
-        diff.min(self.network_difficulty)
+        diff
     }
 
     fn update_difficulty_shares_per_second_metric(
@@ -365,10 +358,6 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         self.difficulty_shares_per_second_7day_window = 0.0;
         self.last_diff_change_job_id = None;
     }
-
-    fn set_network_difficulty(&mut self, network_difficulty: u64) {
-        self.network_difficulty = network_difficulty;
-    }
 }
 
 #[cfg(test)]
@@ -379,8 +368,7 @@ mod tests {
     fn test_new_difficulty_adjuster() {
         let min_diff = 1000;
         let pool_max_diff = 100000;
-        let network_diff = 200000;
-        let adjuster = DifficultyAdjuster::new(min_diff, Some(pool_max_diff), network_diff);
+        let adjuster = DifficultyAdjuster::new(min_diff, Some(pool_max_diff));
 
         assert_eq!(adjuster.current_difficulty, min_diff);
         assert_eq!(adjuster.old_difficulty, min_diff);
@@ -398,7 +386,7 @@ mod tests {
     #[test]
     fn test_first_share_submission() {
         let min_diff = 1000;
-        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000), 200000);
+        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000));
 
         let (new_diff, is_first) = adjuster.record_share_submission(min_diff as u128, 1, None);
 
@@ -412,7 +400,7 @@ mod tests {
     #[test]
     fn test_difficulty_not_changed_before_minimum_shares() {
         let min_diff = 1000;
-        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000), 200000);
+        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000));
 
         // Submit first share to initialize
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
@@ -435,7 +423,7 @@ mod tests {
     #[test_log::test]
     fn test_difficulty_adjustment_after_minimum_time() {
         let min_diff = 1;
-        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000), 200000);
+        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000));
 
         // Submit first share to initialize
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
@@ -462,7 +450,7 @@ mod tests {
     #[test_log::test]
     fn test_difficulty_adjustment_after_enough_shares() {
         let min_diff = 1;
-        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000), 200000);
+        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000));
 
         // Submit first share to initialize
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
@@ -495,8 +483,7 @@ mod tests {
     fn test_difficulty_constraints() {
         let min_diff = 1000;
         let pool_max_diff = 100_000;
-        let network_diff = 500_000; // Higher than pool_max_diff to test constraints
-        let adjuster = DifficultyAdjuster::new(min_diff, Some(pool_max_diff), network_diff);
+        let adjuster = DifficultyAdjuster::new(min_diff, Some(pool_max_diff));
 
         // Test minimum constraint
         let calculated = 500; // Below pool minimum
@@ -508,14 +495,6 @@ mod tests {
         let constrained = adjuster.apply_difficulty_constraints(calculated, None);
         assert_eq!(constrained, pool_max_diff);
 
-        let network_diff = 50_000; // Lower than pool_max to test constraint
-        let adjuster = DifficultyAdjuster::new(min_diff, Some(pool_max_diff), network_diff);
-
-        // Test network constraint
-        let calculated = 75_000; // Above network but below pool max
-        let constrained = adjuster.apply_difficulty_constraints(calculated, None);
-        assert_eq!(constrained, network_diff);
-
         // Test cap with suggested difficulty
         let calculated = 500;
         let constrained = adjuster.apply_difficulty_constraints(calculated, Some(2000));
@@ -525,7 +504,7 @@ mod tests {
     #[test]
     fn test_adjust_dsps_bias_and_drr() {
         let min_diff = 1000;
-        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100_000), 200_000);
+        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100_000));
 
         // Submit first share to initialize
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
@@ -551,7 +530,7 @@ mod tests {
     #[test]
     fn test_no_change_within_drr_threshold() {
         let min_diff = 1000;
-        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000), 200000);
+        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000));
 
         // Submit first share to initialize
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
@@ -574,7 +553,7 @@ mod tests {
     #[test_log::test]
     fn test_time_bias_effect() {
         let min_diff = 1000;
-        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000), 200000);
+        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000));
 
         // Submit first share to initialize
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
@@ -604,7 +583,7 @@ mod tests {
     #[test]
     fn test_reset_adjuster() {
         let min_diff = 1000;
-        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000), 200000);
+        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000));
 
         // Make some changes to the adjuster state
         adjuster.record_share_submission(min_diff as u128, 1, None);

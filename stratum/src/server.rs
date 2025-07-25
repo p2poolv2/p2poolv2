@@ -167,7 +167,6 @@ where
     let session = &mut Session::<DifficultyAdjuster>::new(
         ctx.minimum_difficulty,
         ctx.maximum_difficulty,
-        ctx.maximum_difficulty.unwrap_or(ctx.minimum_difficulty),
         version_mask,
     );
 
@@ -185,7 +184,7 @@ where
                 if session.username.is_none() {
                     continue; // Ignore messages until the user has authorized
                 }
-                if let Err(e) = writer.write_all(format!("{}\n", message).as_bytes()).await {
+                if let Err(e) = writer.write_all(format!("{message}\n").as_bytes()).await {
                     error!("Failed to write to {}: {}", addr, e);
                     break;
                 }
@@ -196,7 +195,7 @@ where
             }
             // Read a line from the stream
             line = framed.next() => {
-                debug!("Read line {:?} from {}...", line, addr);
+                info!("Rx {} {:?}", addr, line);
                 match line {
                     Some(Ok(line)) => {
                         if line.is_empty() {
@@ -254,9 +253,9 @@ where
                         }
                     };
 
-                    info!("Sending to {}: {:?}", addr, response_json);
+                    info!("Tx {} {:?}", addr, response_json);
                     if let Err(e) = writer
-                        .write_all(format!("{}\n", response_json).as_bytes())
+                        .write_all(format!("{response_json}\n").as_bytes())
                         .await
                     {
                         return Err(Box::new(e));

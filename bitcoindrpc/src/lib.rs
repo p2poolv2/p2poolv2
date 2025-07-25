@@ -50,7 +50,7 @@ impl Error for BitcoindRpcError {
 impl fmt::Display for BitcoindRpcError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            BitcoindRpcError::Other(msg) => write!(f, "{}", msg),
+            BitcoindRpcError::Other(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -68,7 +68,7 @@ impl BitcoindRpcClient {
             "Authorization",
             format!(
                 "Basic {}",
-                STANDARD.encode(format!("{}:{}", username, password))
+                STANDARD.encode(format!("{username}:{password}"))
             )
             .parse()
             .unwrap(),
@@ -77,8 +77,7 @@ impl BitcoindRpcClient {
             Ok(client) => client,
             Err(e) => {
                 return Err(BitcoindRpcError::Other(format!(
-                    "Failed to create HTTP client: {}",
-                    e
+                    "Failed to create HTTP client: {e}"
                 )))
             }
         };
@@ -93,8 +92,7 @@ impl BitcoindRpcClient {
         match self.client.request(method, params).await {
             Ok(response) => Ok(response),
             Err(e) => Err(BitcoindRpcError::Other(format!(
-                "Failed to send RPC request: {}",
-                e
+                "Failed to send RPC request: {e}",
             ))),
         }
     }
@@ -136,8 +134,7 @@ impl BitcoindRpcClient {
                 Ok(result.to_string())
             }
             Err(e) => Err(BitcoindRpcError::Other(format!(
-                "Failed to get block template: {}",
-                e
+                "Failed to get block template: {e}"
             ))),
         }
     }
@@ -167,16 +164,14 @@ impl BitcoindRpcClient {
                     Ok(tx) => tx,
                     Err(e) => {
                         return Err(BitcoindRpcError::Other(format!(
-                            "Failed to decode raw transaction: {}",
-                            e
+                            "Failed to decode raw transaction: {e}"
                         )))
                     }
                 };
                 Ok(tx)
             }
             Err(e) => Err(BitcoindRpcError::Other(format!(
-                "Failed to decode raw transaction: {}",
-                e
+                "Failed to decode raw transaction: {e}",
             ))),
         }
     }
@@ -195,8 +190,7 @@ impl BitcoindRpcClient {
         {
             Ok(result) => Ok(result.to_string()),
             Err(e) => Err(BitcoindRpcError::Other(format!(
-                "Failed to submit block: {}",
-                e
+                "Failed to submit block: {e}"
             ))),
         }
     }

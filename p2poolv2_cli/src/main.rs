@@ -19,8 +19,8 @@ use p2poolv2_lib::cli_commands;
 // Now use the external crate with its name
 use clap::{Parser, Subcommand};
 use p2poolv2_lib::config::Config;
-use p2poolv2_lib::shares::chain::chain::Chain;
 use p2poolv2_lib::shares::ShareBlock;
+use p2poolv2_lib::shares::chain::chain::Chain;
 use std::error::Error;
 
 /// P2Pool v2 CLI utility

@@ -14,9 +14,9 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::node::messages::InventoryMessage;
 use crate::node::Message;
 use crate::node::SwarmSend;
+use crate::node::messages::InventoryMessage;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
@@ -85,9 +85,9 @@ mod tests {
     use crate::node::messages::{GetData, InventoryMessage};
     use crate::node::p2p_message_handlers::receivers::inventory::handle_inventory;
     use crate::node::{Message, SwarmSend};
+    use crate::shares::ShareBlockHash;
     #[mockall_double::double]
     use crate::shares::chain::actor::ChainHandle;
-    use crate::shares::ShareBlockHash;
     use mockall::predicate::*;
     use tokio::sync::mpsc;
 

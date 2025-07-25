@@ -14,10 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::node::SwarmSend;
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::handle_request;
-use crate::node::SwarmSend;
 use crate::service::p2p_service::RequestContext;
 use crate::utils::time_provider::SystemTimeProvider;
 

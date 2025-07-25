@@ -88,11 +88,11 @@ pub fn build_notify(
 
     let prevhash_byte_swapped =
         reverse_four_byte_chunks(&template.previousblockhash).map_err(|e| WorkError {
-            message: format!("Failed to reverse previous block hash: {}", e),
+            message: format!("Failed to reverse previous block hash: {e}"),
         })?;
 
     let params = NotifyParams {
-        job_id: Cow::Owned(format!("{:016x}", job_id)),
+        job_id: Cow::Owned(format!("{job_id:016x}")),
         prevhash: Cow::Owned(prevhash_byte_swapped),
         coinbase1: Cow::Owned(coinbase1),
         coinbase2: Cow::Owned(coinbase2),
@@ -346,7 +346,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_notify_from_ckpool_sample() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, None, 1, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, None, 0x1fffe000);
         let _tracker_handle = start_tracker_actor();
 
         let (mock_server, _bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
