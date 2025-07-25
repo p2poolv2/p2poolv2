@@ -88,11 +88,11 @@ pub fn build_notify(
 
     let prevhash_byte_swapped =
         reverse_four_byte_chunks(&template.previousblockhash).map_err(|e| WorkError {
-            message: format!("Failed to reverse previous block hash: {}", e),
+            message: format!("Failed to reverse previous block hash: {e}"),
         })?;
 
     let params = NotifyParams {
-        job_id: Cow::Owned(format!("{:016x}", job_id)),
+        job_id: Cow::Owned(format!("{job_id:016x}")),
         prevhash: Cow::Owned(prevhash_byte_swapped),
         coinbase1: Cow::Owned(coinbase1),
         coinbase2: Cow::Owned(coinbase2),

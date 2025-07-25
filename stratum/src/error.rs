@@ -32,12 +32,21 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+<<<<<<< HEAD
             Self::InvalidMethod(method) => write!(f, "Invalid stratum method: {}", method),
             Self::InvalidParams(msg) => write!(f, "Invalid parameters provided: {}", msg),
             Self::AuthorizationFailure(reason) => write!(f, "Authorization failed: {}", reason),
             Self::SubmitFailure(reason) => write!(f, "Submit failure: {}", reason),
             Self::SubscriptionFailure(reason) => write!(f, "Subscription failure: {}", reason),
             Self::IoError(err) => write!(f, "IO error: {}", err),
+=======
+            Self::InvalidMethod(method) => write!(f, "Invalid stratum method: {method}"),
+            Self::InvalidParams(msg) => write!(f, "Invalid parameters provided: {msg}"),
+            Self::AuthorizationFailure(reason) => write!(f, "Authorization failed: {reason}"),
+            Self::SubmitFailure(reason) => write!(f, "Submit failure: {reason}"),
+            Self::SubscriptionFailure(reason) => write!(f, "Subscription failure: {reason}"),
+            Self::IoError(err) => write!(f, "IO error: {err}"),
+>>>>>>> 40da376f3cae0f023f1bca4fbc820835f348172e
             Self::InsufficientWork => write!(f, "Insufficient work"),
         }
     }

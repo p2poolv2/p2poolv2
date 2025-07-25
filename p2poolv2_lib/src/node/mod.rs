@@ -1,6 +1,7 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
 // This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -27,6 +28,7 @@ use crate::node::p2p_message_handlers::senders::{send_blocks_inventory, send_get
 use crate::service::build_service;
 use crate::service::p2p_service::RequestContext;
 use crate::shares::ShareBlock;
+use crate::shares::ShareBlock;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
@@ -43,12 +45,14 @@ use libp2p::PeerId;
 use libp2p::SwarmBuilder;
 use libp2p::{
     Multiaddr, Swarm,
+    Multiaddr, Swarm,
     kad::{Event as KademliaEvent, QueryResult},
     swarm::SwarmEvent,
 };
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tower::{Service, ServiceExt, util::BoxService};
 use tower::{Service, ServiceExt, util::BoxService};
 use tracing::{debug, error, info, warn};
 
@@ -280,6 +284,9 @@ impl Node {
                 error!(
                     "Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}"
                 );
+                error!(
+                    "Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}"
+                );
                 Ok(())
             }
             SwarmEvent::Behaviour(event) => match event {
@@ -460,7 +467,6 @@ mod tests {
         CkPoolConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig, StratumConfig,
     };
     use crate::node::Node;
-    #[cfg_attr(test, mockall_double::double)]
     use crate::shares::chain::actor::ChainHandle;
     use bitcoindrpc::BitcoinRpcConfig;
     use futures::StreamExt;
@@ -517,16 +523,16 @@ mod tests {
                 solo_address: Some("tb1q9w4x5z5v5f5g5h5j5k5l5m5n5o5p5q5r5s5t5u".to_string()),
                 zmqpubhashblock: "tcp://127.0.0.1:28332".to_string(),
                 network: bitcoin::network::Network::Signet,
+                version_mask: None, // Add this field with an appropriate value
             },
             miner: MinerConfig {
                 pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                     .parse()
                     .unwrap(),
-            },
             logging: LoggingConfig {
                 level: "info".to_string(),
-                console: false,
                 file: Some("./p2pool.log".to_string()),
+            },
             },
         };
         config.network = network_config;

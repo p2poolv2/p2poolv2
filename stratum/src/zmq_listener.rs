@@ -48,15 +48,15 @@ impl ZmqListenerTrait for ZmqListener {
     fn start(&self, address: &str) -> Result<tokio::sync::mpsc::Receiver<()>, ZmqError> {
         let context = zmq::Context::new();
         let socket = context.socket(zmq::SUB).map_err(|e| ZmqError {
-            message: format!("Failed to create ZMQ socket: {:?}", e),
+            message: format!("Failed to create ZMQ socket: {e:?}"),
         })?;
         socket
             .set_subscribe(ZMQ_PUB_BLOCKHASH.as_bytes())
             .map_err(|e| ZmqError {
-                message: format!("Failed to set ZMQ subscription: {}", e),
+                message: format!("Failed to set ZMQ subscription: {e}"),
             })?;
         socket.connect(address).map_err(|e| ZmqError {
-            message: format!("Failed to connect ZMQ socket: {}", e),
+            message: format!("Failed to connect ZMQ socket: {e}"),
         })?;
 
         let (tx, rx) = tokio::sync::mpsc::channel::<()>(ZMQ_CHANNEL_SIZE);
@@ -97,7 +97,7 @@ mod tests {
         assert_eq!(format!("{}", err), "ZMQ Error: test error");
     }
 
-    #[test_log::test]
+    #[test]
     fn test_start_should_receive_message_when_zmq_socket_receieves_a_message() {
         let rt = Runtime::new().unwrap();
         let address = "tcp://127.0.0.1:28333";
