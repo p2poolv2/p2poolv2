@@ -14,19 +14,19 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-mod bitcoin;
 mod cli;
 mod configuration;
+mod swap;
 mod htlc;
 mod lightning_node;
-mod swap;
+mod bitcoin;
 
 use ldk_node::Builder;
 
 use ldk_node::bitcoin::Network;
 
 use cli::run_node_cli;
-use configuration::{parse_config, NodeConfig, HtlcConfig};
+use configuration::{parse_config, NodeConfig};
 use lightning_node::event_handler::handle_events;
 use std::sync::Arc;
 
@@ -82,7 +82,6 @@ async fn main() {
 
     let node = make_node(node_config.node).await;
     let node = Arc::new(node);
-    let htlc_config = node_config.htlc;
 
     // tokio runtime for spawning in background (event handler)
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -92,7 +91,7 @@ async fn main() {
         handle_events(&node_clone).await; // Ensure .await here
     });
 
-    run_node_cli(node.clone(),htlc_config).await;
+    run_node_cli(node.clone()).await;
 
     println!("Stopping the node...");
     node.stop().unwrap();
