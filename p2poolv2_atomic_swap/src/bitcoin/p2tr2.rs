@@ -8,11 +8,12 @@ use ldk_node::bitcoin::{
     opcodes,
     script::PushBytesBuf,
     secp256k1::Secp256k1,
-    taproot::{LeafVersion, TaprootBuilder, TaprootSpendInfo},
+    taproot::{LeafVersion, TaprootBuilder, TaprootBuilderError, TaprootSpendInfo},
     Address, Amount, KnownHrp, OutPoint, ScriptBuf, TapLeafHash, TapSighashType, Transaction, TxIn,
     TxOut, Txid, Witness, XOnlyPublicKey,
 };
-use std::error::Error;
+use log::{info, error};
+use thiserror::Error;
 use std::str::FromStr;
 
 // Well-recognized NUMS point from BIP-341 (SHA-256 of generator point's compressed public key)
@@ -21,10 +22,54 @@ const NUMS_POINT: &str = "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee
 // Default fee for the transaction, can be adjusted based on network conditions
 const DEFAULT_FEE: Amount = Amount::from_sat(200);
 
+#[derive(Error, Debug)]
+pub enum TaprootError {
+    #[error("Invalid HTLC type for P2TR address: {0}")]
+    InvalidHtlcType(String),
+    #[error("Timelock must be positive")]
+    InvalidTimelock,
+    #[error("Invalid NUMS point: {0}")]
+    InvalidNumsPoint(String),
+    #[error("Failed to build Taproot spend info")]
+    TaprootBuildError,
+    #[error("Invalid payment hash: {0}")]
+    InvalidPaymentHash(String),
+    #[error("Failed to create PushBytesBuf: {0}")]
+    PushBytesBufError(String),
+    #[error("Invalid responder pubkey: {0}")]
+    InvalidResponderPubkey(String),
+    #[error("Invalid initiator pubkey: {0}")]
+    InvalidInitiatorPubkey(String),
+    #[error("Failed to get control block")]
+    ControlBlockError,
+    #[error("Invalid preimage hex: {0}")]
+    InvalidPreimage(String),
+    #[error("Failed to compute sighash for input {index}: {error}")]
+    SighashError { index: usize, error: String },
+    #[error("Invalid Txid: {0}")]
+    InvalidTxid(String),
+    #[error("Invalid private key: {0}")]
+    InvalidPrivateKey(String),
+    #[error("Taproot builder error: {0}")]
+    TaprootBuilderError(String),
+}
+
+impl From<std::io::Error> for TaprootError {
+    fn from(e: std::io::Error) -> Self {
+        TaprootError::InvalidPrivateKey(e.to_string())
+    }
+}
+
+impl From<TaprootBuilderError> for TaprootError {
+    fn from(e: TaprootBuilderError) -> Self {
+        TaprootError::TaprootBuilderError(e.to_string())
+    }
+}
+
 pub fn generate_p2tr_address(
     swap: &Swap,
     network: KnownHrp,
-) -> Result<(Address, TaprootSpendInfo), Box<dyn Error>> {
+) -> Result<(Address, TaprootSpendInfo), TaprootError> {
     let secp = Secp256k1::new();
     let taproot_spend_info = get_spending_info(&swap.from_chain, &swap.payment_hash)?;
     let address = Address::p2tr(
@@ -33,6 +78,7 @@ pub fn generate_p2tr_address(
         taproot_spend_info.merkle_root(),
         network,
     );
+    info!("Generated P2TR address: {}", address);
     Ok((address, taproot_spend_info))
 }
 
@@ -44,8 +90,9 @@ pub fn redeem_taproot_htlc(
     transfer_to_address: &Address,
     fee_rate_per_vb: u64,
     network: KnownHrp,
-) -> Result<Transaction, Box<dyn Error>> {
+) -> Result<Transaction, TaprootError> {
     let secp = Secp256k1::new();
+    info!("Starting P2TR redeem for swap: {:?}", swap);
 
     // 1️⃣ Generate Taproot spend info (address + spend tree)
     let (htlc_address, spend_info) = generate_p2tr_address(swap, network)?;
@@ -56,10 +103,11 @@ pub fn redeem_taproot_htlc(
 
     let control_block = spend_info
         .control_block(&script_ver)
-        .ok_or("Failed to get control block")?;
+        .ok_or(TaprootError::ControlBlockError)?;
 
     // 3️⃣ Derive receiver's keypair
-    let keypair = derive_keypair(receiver_private_key)?;
+    let keypair = derive_keypair(receiver_private_key)
+        .map_err(|e| TaprootError::InvalidPrivateKey(e.to_string()))?;
 
     // 4️⃣ Prepare inputs, prevouts, and total input amount
     let mut inputs = Vec::new();
@@ -67,7 +115,7 @@ pub fn redeem_taproot_htlc(
     let mut total_amount = Amount::from_sat(0);
 
     for utxo in &utxos {
-        let prev_txid = Txid::from_str(&utxo.txid)?;
+        let prev_txid = Txid::from_str(&utxo.txid).map_err(|e| TaprootError::InvalidTxid(e.to_string()))?;
         let outpoint = OutPoint::new(prev_txid, utxo.vout);
         let input = build_input(outpoint, None);
         inputs.push(input);
@@ -98,7 +146,7 @@ pub fn redeem_taproot_htlc(
     // 8️⃣ Prepare shared data
     let leaf_hash = TapLeafHash::from_script(&redeem_script, LeafVersion::TapScript);
     let preimage_bytes = hex::decode(preimage)
-        .map_err(|e| format!("Invalid preimage hex: {}", e))?;
+        .map_err(|e| TaprootError::InvalidPreimage(e.to_string()))?;
 
     // 🔄 Sign each input individually and assign witness
     for i in 0..tx.input.len() {
@@ -109,7 +157,10 @@ pub fn redeem_taproot_htlc(
             leaf_hash,
             TapSighashType::Default,
         )
-        .map_err(|e| format!("Failed to compute sighash for input {}: {}", i, e))?;
+        .map_err(|e| TaprootError::SighashError {
+            index: i,
+            error: e.to_string(),
+        })?;
 
         let signature = sign_schnorr(&secp, &msg, &keypair);
 
@@ -122,9 +173,9 @@ pub fn redeem_taproot_htlc(
         tx.input[i].witness = witness;
     }
 
+    info!("Redeemed transaction: {:?}", tx);
     Ok(tx)
 }
-
 
 pub fn refund_taproot_htlc(
     swap: &Swap,
@@ -133,8 +184,9 @@ pub fn refund_taproot_htlc(
     refund_to_address: &Address,
     fee_rate_per_vb: u64,
     network: KnownHrp,
-) -> Result<Transaction, Box<dyn Error>> {
+) -> Result<Transaction, TaprootError> {
     let secp = Secp256k1::new();
+    info!("Starting P2TR refund for swap: {:?}", swap);
 
     // 1️⃣ Generate Taproot spend info
     let (htlc_address, spend_info) = generate_p2tr_address(swap, network)?;
@@ -146,10 +198,11 @@ pub fn refund_taproot_htlc(
 
     let control_block = spend_info
         .control_block(&script_ver)
-        .ok_or("Failed to get control block")?;
+        .ok_or(TaprootError::ControlBlockError)?;
 
     // 3️⃣ Derive sender's keypair
-    let keypair = derive_keypair(sender_private_key)?;
+    let keypair = derive_keypair(sender_private_key)
+        .map_err(|e| TaprootError::InvalidPrivateKey(e.to_string()))?;
 
     // 4️⃣ Prepare inputs, prevouts, total amount
     let mut inputs = Vec::new();
@@ -157,7 +210,7 @@ pub fn refund_taproot_htlc(
     let mut total_amount = Amount::from_sat(0);
 
     for utxo in utxos.iter() {
-        let prev_txid = Txid::from_str(&utxo.txid)?;
+        let prev_txid = Txid::from_str(&utxo.txid).map_err(|e| TaprootError::InvalidTxid(e.to_string()))?;
         let outpoint = OutPoint::new(prev_txid, utxo.vout);
         let input = build_input(outpoint, Some(swap.from_chain.timelock as u32)); // locktime for refund
         inputs.push(input);
@@ -201,7 +254,10 @@ pub fn refund_taproot_htlc(
             leaf_hash,
             TapSighashType::Default,
         )
-        .map_err(|e| format!("Failed to compute sighash for input {}: {}", i, e))?;
+        .map_err(|e| TaprootError::SighashError {
+            index: i,
+            error: e.to_string(),
+        })?;
 
         let signature = sign_schnorr(&secp, &msg, &keypair);
 
@@ -214,20 +270,21 @@ pub fn refund_taproot_htlc(
         tx.input[i].witness = witness;
     }
 
+    info!("Refunded transaction: {:?}", tx);
     Ok(tx)
 }
 
 fn get_spending_info(
     bitcoin: &Bitcoin,
     payment_hash: &String,
-) -> Result<TaprootSpendInfo, Box<dyn Error>> {
+) -> Result<TaprootSpendInfo, TaprootError> {
     if bitcoin.htlc_type != HTLCType::P2tr2 {
-        return Err("Invalid HTLC type for P2TR address".into());
+        return Err(TaprootError::InvalidHtlcType(format!("{:?}", bitcoin.htlc_type)));
     }
 
     // Validate timelock
     if bitcoin.timelock == 0 {
-        return Err("Timelock must be positive".into());
+        return Err(TaprootError::InvalidTimelock);
     }
 
     // Create redeem script: OP_SHA256 <hash> OP_EQUALVERIFY <responder_pubkey> OP_CHECKSIG
@@ -238,7 +295,7 @@ fn get_spending_info(
 
     // Use a NUMS point as the internal key
     let internal_key =
-        XOnlyPublicKey::from_str(NUMS_POINT).map_err(|e| format!("Invalid NUMS point: {}", e))?;
+        XOnlyPublicKey::from_str(NUMS_POINT).map_err(|e| TaprootError::InvalidNumsPoint(e.to_string()))?;
 
     // Build Taproot script tree with redeem and refund paths
     let taproot_builder = TaprootBuilder::new()
@@ -248,7 +305,7 @@ fn get_spending_info(
     let secp = Secp256k1::new();
     let taproot_spend_info = taproot_builder
         .finalize(&secp, internal_key)
-        .map_err(|e| format!("Failed to build Taproot spend info"))?;
+        .map_err(|_| TaprootError::TaprootBuildError)?;
 
     Ok(taproot_spend_info)
 }
@@ -256,13 +313,13 @@ fn get_spending_info(
 fn p2tr2_redeem_script(
     payment_hash: &String,
     responder_pubkey: &String,
-) -> Result<ScriptBuf, Box<dyn Error>> {
+) -> Result<ScriptBuf, TaprootError> {
     let payment_hash_bytes =
-        hex::decode(payment_hash).map_err(|e| format!("Invalid payment hash: {}", e))?;
+        hex::decode(payment_hash).map_err(|e| TaprootError::InvalidPaymentHash(e.to_string()))?;
     let paymenthash_buf = PushBytesBuf::try_from(payment_hash_bytes)
-        .map_err(|e| format!("Failed to create PushBytesBuf: {}", e))?;
+        .map_err(|e| TaprootError::PushBytesBufError(e.to_string()))?;
     let responder_pubkey = XOnlyPublicKey::from_str(responder_pubkey)
-        .map_err(|e| format!("Invalid responder pubkey: {}", e))?;
+        .map_err(|e| TaprootError::InvalidResponderPubkey(e.to_string()))?;
 
     let redeem_script = ScriptBuf::builder()
         .push_opcode(opcodes::all::OP_SHA256)
@@ -278,9 +335,9 @@ fn p2tr2_redeem_script(
 fn p2tr2_refund_script(
     timelock: u64,
     initiator_pubkey: &String,
-) -> Result<ScriptBuf, Box<dyn Error>> {
+) -> Result<ScriptBuf, TaprootError> {
     let initiator_pubkey = XOnlyPublicKey::from_str(initiator_pubkey)
-        .map_err(|e| format!("Invalid initiator pubkey: {}", e))?;
+        .map_err(|e| TaprootError::InvalidInitiatorPubkey(e.to_string()))?;
     let redeem_script = ScriptBuf::builder()
         .push_int(timelock as i64)
         .push_opcode(opcodes::all::OP_CSV)
@@ -312,10 +369,11 @@ mod tests {
     use crate::swap::{Bitcoin, HTLCType, Lightning, Swap};
     use ldk_node::bitcoin;
     use ldk_node::bitcoin::Network;
+    use log::info;
 
     #[test]
-    fn test_generate_p2tr_address() -> Result<(), Box<dyn Error>> {
-        println!("Testing P2TR2 address generation...");
+    fn test_generate_p2tr_address() -> Result<(), TaprootError> {
+        info!("Testing P2TR2 address generation...");
         let swap = Swap {
             payment_hash: "48eb4ce3939c3b70bde47cd38610fc9cb8e419498d6fd46d63e66638e7cd104e"
                 .to_string(),
@@ -333,21 +391,21 @@ mod tests {
                 amount: 500000,
             },
         };
-        println!("Swap details: {:?}", swap);
+        info!("Swap details: {:?}", swap);
         let network = KnownHrp::Testnets; // Use Testnet for testing
         let address = generate_p2tr_address(&swap, network)?;
         assert_eq!(
             address.0.to_string(),
             "tb1p9qg094ppmsx39cnl0sffgu4uhtggj9vy9ll4lq9nvjnn762t4jgsdygfae"
         );
-        println!("Generated P2TR2 address: {}", address.0);
+        info!("Generated P2TR2 address: {}", address.0);
         Ok(())
     }
 
     #[test]
     #[ignore]
-    fn test_redeem_taproot_htlc() -> Result<(), Box<dyn Error>> {
-        println!("Testing P2TR2 redeem ...");
+    fn test_redeem_taproot_htlc() -> Result<(), TaprootError> {
+        info!("Testing P2TR2 redeem ...");
         let swap = Swap {
             payment_hash: "48eb4ce3939c3b70bde47cd38610fc9cb8e419498d6fd46d63e66638e7cd104e"
                 .to_string(),
@@ -365,26 +423,29 @@ mod tests {
                 amount: 500000,
             },
         };
-        println!("Swap details: {:?}", swap);
+        info!("Swap details: {:?}", swap);
         let network = KnownHrp::Testnets; // Use Testnet for testing
         let to_address = Address::from_str("tb1qsa7xa5npxkwnjaafnenmy70ggwvsea4rmlkq0j")
             .unwrap()
             .require_network(Network::Signet)
             .unwrap();
+        let utxos = vec![Utxo {
+            txid: "7a1e40414520e2b53566627e7420a135fd0b4ab05183f3016ae41a2050ff382d".to_string(),
+            vout: 1,
+            value: 1000,
+            status: Default::default(),
+        }];
         let trx = redeem_taproot_htlc(
             &swap,
             "2a0353768872c7e5b6b9c164f1ca3d3a9d359af9931ffdabefba3416de962907",
             "c929c768be0902d5bb7ae6e38bdc6b3b24cefbe93650da91975756a09e408460",
-            Txid::from_str("7a1e40414520e2b53566627e7420a135fd0b4ab05183f3016ae41a2050ff382d")
-                .unwrap(),
-            1,
-            Amount::from_sat(1000),
+            utxos,
             &to_address,
             0,
             network,
         )?;
 
-        println!("Redeemed transaction: {:?}", trx);
+        info!("Redeemed transaction: {:?}", trx);
 
         let tx_hex = bitcoin::consensus::encode::serialize_hex(&trx);
 
@@ -394,8 +455,8 @@ mod tests {
 
     #[test]
     #[ignore]
-    fn test_refund_taproot_htlc() -> Result<(), Box<dyn Error>> {
-        println!("Testing P2TR2 refund ...");
+    fn test_refund_taproot_htlc() -> Result<(), TaprootError> {
+        info!("Testing P2TR2 refund ...");
         let swap = Swap {
             payment_hash: "b64a936fb0bf9898ef881907887b4e1104c81dbc84f8970b94e20e6596ba41b8"
                 .to_string(),
@@ -413,26 +474,28 @@ mod tests {
                 amount: 500000,
             },
         };
-        println!("Swap details: {:?}", swap);
+        info!("Swap details: {:?}", swap);
         let network = KnownHrp::Testnets; // Use Testnet for testing
         let to_address = Address::from_str("tb1qt0gnwxn5ejspy0tlpyw4pjyt3ydskmwptc5ecr")
             .unwrap()
             .require_network(Network::Signet)
             .unwrap();
+        let utxos = vec![Utxo {
+            txid: "3f0bcef29476ccd8d6f6c758b1cb6b87c99a238f549cea313da9f4f655b4d361".to_string(),
+            vout: 0,
+            value: 1000,
+            status: Default::default(),
+        }];
         let trx = refund_taproot_htlc(
             &swap,
             "8957096d6d79f8ba171bcce36eb0e6e6a6c02f17546180d849745988b2f5b0ee",
-            Txid::from_str("3f0bcef29476ccd8d6f6c758b1cb6b87c99a238f549cea313da9f4f655b4d361")
-                .unwrap(),
-            0,
-            Amount::from_sat(1000),
+            utxos,
             &to_address,
-            5,
             0,
             network,
         )?;
 
-        println!("Refunded transaction: {:?}", trx);
+        info!("Refunded transaction: {:?}", trx);
 
         let tx_hex = bitcoin::consensus::encode::serialize_hex(&trx);
 
