@@ -37,15 +37,14 @@ use crate::shares::chain::actor::ChainHandle;
 use crate::shares::receive_mining_message::start_receiving_mining_messages;
 use crate::utils::time_provider::SystemTimeProvider;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
+use libp2p::PeerId;
+use libp2p::SwarmBuilder;
 use libp2p::core::transport::Transport;
 use libp2p::identify;
 use libp2p::request_response::ResponseChannel;
 use libp2p::tcp::Config as TcpConfig;
-use libp2p::PeerId;
-use libp2p::SwarmBuilder;
 use libp2p::{
-    Multiaddr, Swarm,
-    Multiaddr, Swarm,
+    Multiaddr, Multiaddr, Swarm, Swarm,
     kad::{Event as KademliaEvent, QueryResult},
     swarm::SwarmEvent,
 };
@@ -529,10 +528,10 @@ mod tests {
                 pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                     .parse()
                     .unwrap(),
+            },
             logging: LoggingConfig {
                 level: "info".to_string(),
                 file: Some("./p2pool.log".to_string()),
-            },
             },
         };
         config.network = network_config;
