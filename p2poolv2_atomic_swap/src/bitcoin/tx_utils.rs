@@ -1,10 +1,11 @@
 use ldk_node::bitcoin;
+use ldk_node::bitcoin::key::Keypair;
+use ldk_node::bitcoin::secp256k1::{Message, Secp256k1, SecretKey};
+use ldk_node::bitcoin::sighash::{Prevouts, SighashCache};
 use ldk_node::bitcoin::{
     Address, Amount, OutPoint, ScriptBuf, Sequence, TapLeafHash, TapSighashType, Transaction, TxIn,
-    TxOut, Witness};
-use ldk_node::bitcoin::key::Keypair;
-use ldk_node::bitcoin::secp256k1::{Secp256k1, Message,SecretKey};
-use ldk_node::bitcoin::sighash::{SighashCache, Prevouts};
+    TxOut, Witness,
+};
 use std::io::Error;
 use std::str::FromStr;
 
@@ -25,7 +26,9 @@ pub fn build_input(prev_txid: OutPoint, sequence: Option<u32>) -> TxIn {
     TxIn {
         previous_output: prev_txid,
         script_sig: ScriptBuf::new(),
-        sequence: sequence.map_or(Sequence::ENABLE_RBF_NO_LOCKTIME, |s| Sequence::from_height(s as u16)),
+        sequence: sequence.map_or(Sequence::ENABLE_RBF_NO_LOCKTIME, |s| {
+            Sequence::from_height(s as u16)
+        }),
         witness: Witness::default(),
     }
 }
@@ -53,7 +56,8 @@ pub fn compute_taproot_sighash(
             &Prevouts::All(prevouts),
             leaf_hash,
             sighash_type,
-        ).expect("Failed to compute signature");
+        )
+        .expect("Failed to compute signature");
     Message::from_digest_slice(&sighash[..])
 }
 
@@ -63,7 +67,7 @@ pub fn sign_schnorr(
     msg: &Message,
     keypair: &Keypair,
 ) -> bitcoin::secp256k1::schnorr::Signature {
-   secp.sign_schnorr_no_aux_rand(&msg, keypair)
+    secp.sign_schnorr_no_aux_rand(&msg, keypair)
 }
 
 /// Derives a keypair from a private key string.
