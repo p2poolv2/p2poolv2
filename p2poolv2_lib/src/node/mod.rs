@@ -28,7 +28,6 @@ use crate::node::p2p_message_handlers::senders::{send_blocks_inventory, send_get
 use crate::service::build_service;
 use crate::service::p2p_service::RequestContext;
 use crate::shares::ShareBlock;
-use crate::shares::ShareBlock;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
@@ -44,14 +43,13 @@ use libp2p::identify;
 use libp2p::request_response::ResponseChannel;
 use libp2p::tcp::Config as TcpConfig;
 use libp2p::{
-    Multiaddr, Multiaddr, Swarm, Swarm,
+    Multiaddr, Swarm,
     kad::{Event as KademliaEvent, QueryResult},
     swarm::SwarmEvent,
 };
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tower::{Service, ServiceExt, util::BoxService};
 use tower::{Service, ServiceExt, util::BoxService};
 use tracing::{debug, error, info, warn};
 
@@ -466,9 +464,11 @@ mod tests {
         CkPoolConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig, StratumConfig,
     };
     use crate::node::Node;
-    use crate::shares::chain::actor::ChainHandle;
     use bitcoindrpc::BitcoinRpcConfig;
     use futures::StreamExt;
+    #[cfg(test)]
+    #[mockall_double::double]
+    use crate::shares::chain::actor::ChainHandle;
     use std::time::{Duration, Instant};
 
     #[tokio::test]
@@ -522,7 +522,7 @@ mod tests {
                 solo_address: Some("tb1q9w4x5z5v5f5g5h5j5k5l5m5n5o5p5q5r5s5t5u".to_string()),
                 zmqpubhashblock: "tcp://127.0.0.1:28332".to_string(),
                 network: bitcoin::network::Network::Signet,
-                version_mask: None, // Add this field with an appropriate value
+                version_mask:  0x1fffe000,
             },
             miner: MinerConfig {
                 pubkey: "020202020202020202020202020202020202020202020202020202020202020202"

@@ -97,7 +97,7 @@ mod tests {
         assert_eq!(format!("{}", err), "ZMQ Error: test error");
     }
 
-    #[test]
+    #[test_log::test]
     fn test_start_should_receive_message_when_zmq_socket_receieves_a_message() {
         let rt = Runtime::new().unwrap();
         let address = "tcp://127.0.0.1:28333";
