@@ -1,8 +1,8 @@
 use crate::bitcoin::p2tr2;
 
-use crate::configuration::HtlcConfig;
+
 use crate::swap::{HTLCType, Swap};
-use ldk_node::bitcoin::{Address, Amount, KnownHrp, Transaction, Txid};
+use ldk_node::bitcoin::{Address,  KnownHrp, Transaction};
 use std::error::Error;
 use crate::bitcoin::utils::Utxo;
 

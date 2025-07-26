@@ -9,7 +9,7 @@ use ldk_node::bitcoin::{
     script::PushBytesBuf,
     secp256k1::Secp256k1,
     taproot::{LeafVersion, TaprootBuilder, TaprootBuilderError, TaprootSpendInfo},
-    Address, Amount, KnownHrp, OutPoint, ScriptBuf, TapLeafHash, TapSighashType, Transaction, TxIn,
+    Address, Amount, KnownHrp, OutPoint, ScriptBuf, TapLeafHash, TapSighashType, Transaction, 
     TxOut, Txid, Witness, XOnlyPublicKey,
 };
 use log::{info, error};

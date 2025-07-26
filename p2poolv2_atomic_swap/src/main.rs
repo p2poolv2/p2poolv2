@@ -26,7 +26,7 @@ use ldk_node::Builder;
 use ldk_node::bitcoin::Network;
 
 use cli::run_node_cli;
-use configuration::{parse_config, NodeConfig, HtlcConfig};
+use configuration::{parse_config, NodeConfig};
 use lightning_node::event_handler::handle_events;
 use std::sync::Arc;
 

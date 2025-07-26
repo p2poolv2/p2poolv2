@@ -3,13 +3,9 @@ use crate::configuration::HtlcConfig;
 use crate::htlc::{generate_htlc_address, redeem_htlc_address};
 use crate::lightning_node::{getinvoice, onchaintransfer, payinvoice,getaddress};
 use crate::swap::{create_swap,retrieve_swap, Swap, HTLCType, Bitcoin, Lightning};
-use futures::future::err;
-use ldk_node::bitcoin::Txid;
-use ldk_node::lightning::blinded_path::payment;
 use ldk_node::lightning_invoice::Bolt11Invoice;
-use ldk_node::payment::{PaymentKind, PaymentStatus};
+use ldk_node::payment::{PaymentKind};
 use ldk_node::Node;
-use std::str::FromStr;
 use std::{thread, time::Duration};
 use crate::bitcoin::checks::filter_valid_htlc_utxos;
 use crate::lightning_node::checks::is_invoice_payable_simple;
@@ -147,7 +143,7 @@ pub async fn redeem_swap(
         min_swap_window as u64,
     );
 
-    if !invoice_payable {
+    if invoice_payable.is_err() {
         println!("Invoice is not payable: checks failed");
         return;
     }
