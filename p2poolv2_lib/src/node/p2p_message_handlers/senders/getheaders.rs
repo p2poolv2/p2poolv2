@@ -41,7 +41,7 @@ pub async fn send_getheaders<C: 'static>(
         .await
     {
         error!("Failed to send getheaders request: {}", e);
-        return Err(format!("Failed to send getheaders request: {}", e).into());
+        return Err(format!("Failed to send getheaders request: {e}").into());
     }
     Ok(())
 }

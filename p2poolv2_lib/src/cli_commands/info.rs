@@ -31,13 +31,13 @@ struct ChainInfo {
 /// Implementation of the info command
 pub fn execute(chain: Chain) -> Result<(), Box<dyn Error>> {
     // Get genesis block hash
-    let genesis_block_hash = chain.genesis_block_hash.map(|hash| format!("{:?}", hash));
+    let genesis_block_hash = chain.genesis_block_hash.map(|hash| format!("{hash:?}"));
 
     // Get chain tip height
     let chain_tip_height = chain.get_tip_height();
 
     // Get chain tip blockhash
-    let chain_tip_blockhash = chain.chain_tip.map(|hash| format!("{:?}", hash));
+    let chain_tip_blockhash = chain.chain_tip.map(|hash| format!("{hash:?}"));
 
     // Get total work (difficulty)
     let total_work = format!("{:?}", chain.total_difficulty);

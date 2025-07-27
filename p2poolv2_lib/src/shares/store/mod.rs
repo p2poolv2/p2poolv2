@@ -269,7 +269,7 @@ impl Store {
 
             // Store each input for the transaction
             for (i, input) in tx.input.iter().enumerate() {
-                let input_key = format!("{}:{}", txid, i);
+                let input_key = format!("{txid}:{i}");
                 let mut serialized = Vec::new();
                 ciborium::ser::into_writer(&input, &mut serialized).unwrap();
                 batch.put_cf::<&[u8], Vec<u8>>(inputs_cf, input_key.as_ref(), serialized);
@@ -277,7 +277,7 @@ impl Store {
 
             // Store each output for the transaction
             for (i, output) in tx.output.iter().enumerate() {
-                let output_key = format!("{}:{}", txid, i);
+                let output_key = format!("{txid}:{i}");
                 let mut serialized = Vec::new();
                 ciborium::ser::into_writer(&output, &mut serialized).unwrap();
                 batch.put_cf::<&[u8], Vec<u8>>(outputs_cf, output_key.as_ref(), serialized);
@@ -418,7 +418,7 @@ impl Store {
 
     /// Get a workbase from the store
     pub fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase> {
-        let workbase_key = format!("workbase:{}", workinfoid);
+        let workbase_key = format!("workbase:{workinfoid}");
         debug!("Getting workbase from store: {:?}", workbase_key);
         let workbase_cf = self.db.cf_handle("workbase").unwrap();
         let workbase = self
@@ -448,7 +448,7 @@ impl Store {
         let keys: Vec<(_, Vec<u8>)> = workinfoids
             .iter()
             .map(|id| {
-                let workbase_key = format!("workbase:{}", id);
+                let workbase_key = format!("workbase:{id}");
                 (workbase_cf, workbase_key.into_bytes())
             })
             .collect();
@@ -472,7 +472,7 @@ impl Store {
 
     /// Get a user workbase from the store
     pub fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase> {
-        let user_workbase_key = format!("user_workbase:{}", workinfoid);
+        let user_workbase_key = format!("user_workbase:{workinfoid}");
         debug!("Getting user workbase from store: {:?}", user_workbase_key);
         let user_workbase_cf = self.db.cf_handle("user_workbase").unwrap();
         let user_workbase = self
@@ -501,7 +501,7 @@ impl Store {
         let keys: Vec<(_, Vec<u8>)> = workinfoids
             .iter()
             .map(|id| {
-                let user_workbase_key = format!("user_workbase:{}", id);
+                let user_workbase_key = format!("user_workbase:{id}");
                 (user_workbase_cf, user_workbase_key.into_bytes())
             })
             .collect();
@@ -733,7 +733,7 @@ impl Store {
     pub fn get_tx(&self, txid: &bitcoin::Txid) -> Result<Transaction, Box<dyn Error>> {
         let tx_metadata = self
             .get_tx_metadata(txid)
-            .ok_or_else(|| format!("Transaction metadata not found for txid: {}", txid))?;
+            .ok_or_else(|| format!("Transaction metadata not found for txid: {txid}"))?;
 
         debug!("Transaction metadata: {:?}", tx_metadata);
 
@@ -743,7 +743,7 @@ impl Store {
         let mut outputs = Vec::new();
 
         for i in 0..tx_metadata.input_count {
-            let input_key = format!("{}:{}", txid, i);
+            let input_key = format!("{txid}:{i}");
             let input = self
                 .db
                 .get_cf::<&[u8]>(inputs_cf, input_key.as_ref())
@@ -752,14 +752,14 @@ impl Store {
             let input: bitcoin::TxIn = match ciborium::de::from_reader(input.as_slice()) {
                 Ok(input) => input,
                 Err(e) => {
-                    tracing::error!("Error deserializing input: {:?}", e);
+                    tracing::error!("Error deserializing input: {e:?}");
                     return Err(e.into());
                 }
             };
             inputs.push(input);
         }
         for i in 0..tx_metadata.output_count {
-            let output_key = format!("{}:{}", txid, i);
+            let output_key = format!("{txid}:{i}");
             let output = self
                 .db
                 .get_cf::<&[u8]>(outputs_cf, output_key.as_ref())
@@ -768,7 +768,7 @@ impl Store {
             let output: bitcoin::TxOut = match ciborium::de::from_reader(output.as_slice()) {
                 Ok(output) => output,
                 Err(e) => {
-                    tracing::error!("Error deserializing output: {:?}", e);
+                    tracing::error!("Error deserializing output: {e:?}");
                     return Err(e.into());
                 }
             };

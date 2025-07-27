@@ -52,7 +52,7 @@ pub fn build_coinbase_from_submission(
     debug!("enonce2: {}", enonce2);
     debug!("coinb2: {}", coinb2);
 
-    let complete_tx = format!("{}{}{}{}", coinb1, enonce1_hex, enonce2, coinb2);
+    let complete_tx = format!("{coinb1}{enonce1_hex}{enonce2}{coinb2}");
     debug!("Complete coinbase tx hex: {}", complete_tx);
 
     let tx_bytes = Vec::from_hex(&complete_tx).unwrap();

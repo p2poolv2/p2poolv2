@@ -100,23 +100,23 @@ impl MinerShare {
         user_workbase: &UserWorkbase,
     ) -> Result<bool, String> {
         let coinbase = builders::build_coinbase_from_share(user_workbase, self)
-            .map_err(|e| format!("Failed to build coinbase: {}", e))?;
+            .map_err(|e| format!("Failed to build coinbase: {e}"))?;
         let coinbase_txid = coinbase.compute_txid();
         let txids = workbase
             .txns
             .iter()
             .map(|tx| bitcoin::Txid::from_str(&tx.txid))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Failed to parse txid: {}", e))?;
+            .map_err(|e| format!("Failed to parse txid: {e}"))?;
         let mut all_txids = vec![coinbase_txid];
         all_txids.extend(&txids);
 
         let merkle_root = builders::compute_merkle_root_from_txids(&all_txids)
             .ok_or_else(|| "Failed to compute merkle root".to_string())?;
         let header = builders::build_bitcoin_header(workbase, self, merkle_root)
-            .map_err(|e| format!("Failed to build header: {}", e))?;
+            .map_err(|e| format!("Failed to build header: {e}"))?;
         let block = builders::build_bitcoin_block(workbase, user_workbase, self)
-            .map_err(|e| format!("Failed to build block: {}", e))?;
+            .map_err(|e| format!("Failed to build block: {e}"))?;
 
         let compact_target =
             bitcoin::pow::CompactTarget::from_unprefixed_hex(&user_workbase.params.nbit).unwrap();

@@ -23,7 +23,7 @@ use p2poolv2_lib::shares::ShareBlock;
 use p2poolv2_lib::shares::chain::actor::ChainHandle;
 use std::process::exit;
 use std::str::FromStr;
-use stratum::client_connections::spawn;
+use stratum::client_connections::start_connections_handler;
 use stratum::server::StratumServer;
 use stratum::work::gbt::start_gbt;
 use stratum::work::tracker::start_tracker_actor;
@@ -112,7 +112,7 @@ async fn main() -> Result<(), String> {
         }
     });
 
-    let connections_handle = spawn().await;
+    let connections_handle = start_connections_handler().await;
     let connections_cloned = connections_handle.clone();
 
     let output_address = Address::from_str(stratum_config.solo_address.clone().unwrap().as_str())

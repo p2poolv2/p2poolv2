@@ -32,7 +32,7 @@ async fn test_stratum_server_subscribe() {
 
     // Setup server - using Arc so we can access it for shutdown
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    let connections_handle = stratum::client_connections::spawn().await;
+    let connections_handle = stratum::client_connections::start_connections_handler().await;
     let (notify_tx, _notify_rx) = tokio::sync::mpsc::channel::<notify::NotifyCmd>(100);
 
     let template = std::fs::read_to_string(

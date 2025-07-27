@@ -61,7 +61,7 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
                 handle_share_block(share_block, ctx.chain_handle, &ctx.time_provider).await
             {
                 error!("Failed to add share: {}", e);
-                return Err(format!("Failed to add share: {}", e).into());
+                return Err(format!("Failed to add share: {e}").into());
             }
             Ok(())
         }
@@ -69,7 +69,7 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
             info!("Received workbase: {:?}", workbase);
             if let Err(e) = ctx.chain_handle.add_workbase(workbase.clone()).await {
                 error!("Failed to store workbase: {}", e);
-                return Err(format!("Error storing workbase: {}", e).into());
+                return Err(format!("Error storing workbase: {e}").into());
             }
             Ok(())
         }

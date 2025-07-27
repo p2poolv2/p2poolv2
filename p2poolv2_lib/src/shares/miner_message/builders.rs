@@ -36,7 +36,7 @@ pub fn build_coinbase_from_share(
     let enonce1 = &share.enonce1;
     let nonce2 = &share.nonce2;
 
-    let complete_tx = format!("{}{}{}{}", coinb1, enonce1, nonce2, coinb2);
+    let complete_tx = format!("{coinb1}{enonce1}{nonce2}{coinb2}");
 
     // Try to deserialize
     let tx_bytes = Vec::from_hex(&complete_tx).unwrap();
