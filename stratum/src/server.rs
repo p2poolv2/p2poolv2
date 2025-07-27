@@ -253,7 +253,7 @@ where
                         }
                     };
 
-                    info!("Tx {} {:?}", addr, response_json);
+                    info!("Tx {addr} {response_json:?}");
                     if let Err(e) = writer
                         .write_all(format!("{response_json}\n").as_bytes())
                         .await

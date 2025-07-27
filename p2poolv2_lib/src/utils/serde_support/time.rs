@@ -35,9 +35,8 @@ where
 
     // Parse hex string to u32
     let timestamp = u32::from_str_radix(&time_str, 16)
-        .map_err(|e| D::Error::custom(format!("Invalid time format: {}", e)))?;
+        .map_err(|e| D::Error::custom(format!("Invalid time format: {e}")))?;
 
     // Convert to Time
-    Time::from_consensus(timestamp)
-        .map_err(|e| D::Error::custom(format!("Invalid timestamp: {}", e)))
+    Time::from_consensus(timestamp).map_err(|e| D::Error::custom(format!("Invalid timestamp: {e}")))
 }

@@ -172,7 +172,7 @@ impl ClientConnections {
 }
 
 /// Spawn a new ClientConnections actor and return a handle to it
-pub async fn spawn() -> ClientConnectionsHandle {
+pub async fn start_connections_handler() -> ClientConnectionsHandle {
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<ClientConnectionCommand>(32);
     let handle = ClientConnectionsHandle { cmd_tx };
 
@@ -293,7 +293,7 @@ mod tests {
     #[tokio::test]
     async fn test_client_connections_handle() {
         // Spawn a new ClientConnections actor
-        let handle = spawn().await;
+        let handle = start_connections_handler().await;
 
         // Add two clients
         let addr1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);

@@ -43,13 +43,13 @@ pub async fn validate(
     time_provider: &impl TimeProvider,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     if let Err(e) = validate_timestamp(share, time_provider).await {
-        return Err(format!("Share timestamp validation failed: {}", e).into());
+        return Err(format!("Share timestamp validation failed: {e}").into());
     }
     if let Err(e) = validate_prev_share_blockhash(share, chain_handle).await {
-        return Err(format!("Share prev_share_blockhash validation failed: {}", e).into());
+        return Err(format!("Share prev_share_blockhash validation failed: {e}").into());
     }
     if let Err(e) = validate_uncles(share, chain_handle).await {
-        return Err(format!("Share uncles validation failed: {}", e).into());
+        return Err(format!("Share uncles validation failed: {e}").into());
     }
     let workbase = chain_handle
         .get_workbase(share.header.miner_share.workinfoid)
@@ -76,7 +76,7 @@ pub async fn validate(
         .miner_share
         .validate(&workbase.unwrap(), &userworkbase.unwrap())
     {
-        return Err(format!("Share validation failed: {}", e).into());
+        return Err(format!("Share validation failed: {e}").into());
     }
 
     Ok(())
@@ -91,8 +91,7 @@ pub async fn validate_prev_share_blockhash(
         Some(prev_share_blockhash) => {
             if chain_handle.get_share(prev_share_blockhash).await.is_none() {
                 return Err(format!(
-                    "Prev share blockhash {} not found in store",
-                    prev_share_blockhash
+                    "Prev share blockhash {prev_share_blockhash} not found in store"
                 )
                 .into());
             }
@@ -112,7 +111,7 @@ pub async fn validate_uncles(
     }
     for uncle in &share.header.uncles {
         if chain_handle.get_share(*uncle).await.is_none() {
-            return Err(format!("Uncle {} not found in store", uncle).into());
+            return Err(format!("Uncle {uncle} not found in store").into());
         }
     }
     Ok(())

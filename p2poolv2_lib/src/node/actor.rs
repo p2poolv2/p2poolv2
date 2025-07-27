@@ -142,10 +142,10 @@ impl NodeActor {
                             tracing::info!("Received SwarmSend::Inv message");
                         }
                         Some(SwarmSend::Disconnect(peer_id)) => {
-                            if let Err(e) = self.node.swarm.disconnect_peer_id(peer_id) {
-                                error!("Error disconnecting peer {}", peer_id);
+                            if let Err(_e) = self.node.swarm.disconnect_peer_id(peer_id) {
+                                error!("Error disconnecting peer {peer_id}");
                             } else {
-                                debug!("Disconnected peer: {}", peer_id);
+                                debug!("Disconnected peer: {peer_id}");
                             }
                         }
                         None => {

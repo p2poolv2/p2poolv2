@@ -62,13 +62,13 @@ pub async fn validate_bitcoin_block(
     let result: Result<serde_json::Value, _> = bitcoind.request("getblocktemplate", params).await;
 
     if let Err(e) = result {
-        return Err(format!("Bitcoin block validation failed: {}", e).into());
+        return Err(format!("Bitcoin block validation failed: {e}").into());
     }
 
     if let Ok(response) = result {
         Ok(response == "duplicate")
     } else {
-        Err(format!("Bitcoin block validation failed: {:?}", result).into())
+        Err(format!("Bitcoin block validation failed: {result:?}").into())
     }
 }
 

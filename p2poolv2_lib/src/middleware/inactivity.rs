@@ -14,6 +14,16 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+/// Middleware to track peer activity and disconnect inactive peers.
+///
+/// When applied, it starts a background task that runs every 30 seconds
+/// to check for inactive peers based on the last time they sent a request.
+///
+/// If a peer is inactive beyond the configured timeout, it is removed
+/// and a `SwarmSend::Disconnect(peer)` is sent via `swarm_tx`.
+///
+/// Peer activity is tracked by updating a `last_seen` timestamp
+/// on each request received from a peer.
 use std::clone::Clone;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -27,17 +37,6 @@ use tower::{Layer, Service};
 
 use crate::node::SwarmSend;
 use crate::service::p2p_service::RequestContext;
-
-/// Middleware to track peer activity and disconnect inactive peers.
-///
-/// When applied, it starts a background task that runs every 30 seconds
-/// to check for inactive peers based on the last time they sent a request.
-///
-/// If a peer is inactive beyond the configured timeout, it is removed
-/// and a `SwarmSend::Disconnect(peer)` is sent via `swarm_tx`.
-///
-/// Peer activity is tracked by updating a `last_seen` timestamp
-/// on each request received from a peer.
 
 /// Layer that injects the InactivityService middleware into the stack.
 pub struct InactivityLayer<C> {
