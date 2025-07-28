@@ -335,6 +335,7 @@ mod tests {
             rate_limit_window_secs: 1,
             max_requests_per_second: 1,
             peer_inactivity_timeout_secs: 30,
+            dial_timeout_secs: 30,
         };
 
         let peer_id = PeerId::random();
@@ -421,6 +422,7 @@ mod tests {
             rate_limit_window_secs: 1,
             max_requests_per_second: 1,
             peer_inactivity_timeout_secs: 30,
+            dial_timeout_secs: 30,
         };
 
         let peer_id = PeerId::random();

@@ -14,6 +14,7 @@ max_transaction_per_second = 100
 rate_limit_window_secs = 1
 max_requests_per_second = 1
 peer_inactivity_timeout_secs = 60
+dial_timeout_secs = 30
 
 [store]
 path = "./store.db"
