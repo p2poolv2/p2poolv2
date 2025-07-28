@@ -3,7 +3,7 @@ mod atomic_swap_functions;
 use crate::lightning_node;
 use crate::swap::HTLCType;
 
-use atomic_swap_functions::{initiate_onchain_to_lightning_swap, read_swap_from_db, redeem_swap, store_swap_to_db};
+use atomic_swap_functions::{initiate_onchain_to_lightning_swap, read_swap_from_db, redeem_swap, store_swap_to_db,refund_swap};
 
 use ldk_node::{
     bitcoin::{secp256k1::PublicKey, Address},
@@ -66,6 +66,7 @@ fn print_help() {
     println!("  fromchainswap - Initiate an on-chain to Lightning atomic swap interactively");
     println!("  swapdb - Store a swap to the db or read a swap from the db interactively");
     println!("  redeemswap - Redeem a swap by providing swap id and BOLT11 invoice");
+    println!("  refundswap - Refund a swap by providing swap id");
     println!("  help - Display this help message");
     println!("  exit - Exit the CLI\n");
 }
@@ -427,6 +428,16 @@ pub async fn run_node_cli(node: Arc<Node>, htlc_config: HtlcConfig) {
                             }
                             Err(e) => println!("Invalid invoice: {}", e),
                         }
+                    }
+                    (Some("refundswap"), []) => {
+                        let mut input = String::new();
+                        print!("Enter swap id: ");
+                        io::stdout().flush().unwrap();
+                        io::stdin().read_line(&mut input).unwrap();
+                        let swap_id = input.trim().to_string();
+
+                        refund_swap(&node, &htlc_config, &htlc_config.db_path, &swap_id).await;
+                        println!("Swap refunded successfully");
                     }
                     (Some("help"), _) => print_help(),
                     (Some("exit"), _) => std::process::exit(0),

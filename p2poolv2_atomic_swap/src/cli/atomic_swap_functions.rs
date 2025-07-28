@@ -1,6 +1,6 @@
 use crate::bitcoin::utils::{broadcast_trx, fetch_tip_block_height, fetch_utxos_for_address,};
 use crate::configuration::HtlcConfig;
-use crate::htlc::{generate_htlc_address, redeem_htlc_address};
+use crate::htlc::{generate_htlc_address, redeem_htlc_address, refund_htlc_address};
 use crate::lightning_node::{getinvoice, onchaintransfer, payinvoice,getaddress};
 use crate::swap::{create_swap,retrieve_swap, Swap, HTLCType, Bitcoin, Lightning};
 use futures::future::err;
@@ -11,7 +11,7 @@ use ldk_node::payment::{PaymentKind, PaymentStatus};
 use ldk_node::Node;
 use std::str::FromStr;
 use std::{thread, time::Duration};
-use crate::bitcoin::checks::filter_valid_htlc_utxos;
+use crate::bitcoin::checks::{filter_valid_htlc_utxos,filter_refundable_utxos};
 use crate::lightning_node::checks::is_invoice_payable_simple;
 
 
@@ -183,6 +183,54 @@ pub async fn redeem_swap(
     
 
     
+}
+
+pub async fn refund_swap(
+    node: &Node,
+    htlc_config: &HtlcConfig,
+    db_path: &str,
+    swap_id: &str,
+) {
+    let swap = retrieve_swap(db_path, swap_id)
+        .expect("Error fetching swap from db")
+        .expect("Swap ID not found in database");
+
+    println!("Loaded swap from db: {:?}", swap);
+
+    let htlc_address = generate_htlc_address(&swap).expect("Error generating HTLC address");
+
+    let utxos = fetch_utxos_for_address(&htlc_config.rpc_url, &htlc_address)
+        .await
+        .expect("Error fetching UTXOs");
+
+    let current_block_height = fetch_tip_block_height(&htlc_config.rpc_url)
+        .await
+        .expect("Error fetching current block height");
+
+    let filter_refundable_utxos = filter_refundable_utxos(
+        utxos.iter().collect(),
+        swap.from_chain.timelock as u32,
+        current_block_height,
+    );
+
+    if filter_refundable_utxos.is_empty() {
+        println!("No refundable UTXOs found");
+        return;
+    }
+
+    // Get a new address from the node (not used here, but could be for change)
+    let _funding_address = getaddress(node).await.expect("Error getting address");
+
+    // Refund the HTLC address
+    let refund_result = refund_htlc_address(&swap, &htlc_config.private_key, utxos, &_funding_address).expect("Error refunding HTLC address");
+
+    let tx_hex = ldk_node::bitcoin::consensus::encode::serialize_hex(&refund_result);
+    let result = broadcast_trx(&htlc_config.rpc_url, &tx_hex)
+        .await
+        .expect("Error broadcasting transaction");
+    println!("Refund transaction broadcasted successfully: {}", result);
+
+
 }
 
 

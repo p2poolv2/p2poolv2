@@ -54,3 +54,32 @@ pub fn redeem_htlc_address(
         }
     }
 }
+
+pub fn refund_htlc_address(
+    swap: &Swap,
+    sender_private_key: &str,
+    utxos: Vec<Utxo>,
+    transfer_to_address: &Address,
+) -> Result<Transaction, Box<dyn Error>> {
+    // need to removed
+    let network = KnownHrp::Testnets;
+    match swap.from_chain.htlc_type {
+        HTLCType::P2tr2 => {
+            // Call P2TR2 address generation from p2tr2.rs
+            p2tr2::refund_taproot_htlc(
+                swap,
+                sender_private_key,
+                utxos,
+                transfer_to_address,
+                3,
+                network,
+            )
+            .map_err(|e| Box::new(e) as Box<dyn Error>)
+        }
+        HTLCType::P2wsh2 => {
+            // Placeholder for P2WSH2 address generation (to be implemented in p2wsh2.rs)
+            Err("Need to implemet p2wsh2 atomic swap refund function".into())
+            // Future implementation: p2wsh2::generate_p2wsh_address(swap, network)
+        }
+    }
+}
