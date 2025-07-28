@@ -1,0 +1,116 @@
+= 🪵 Mining Log Dashboard
+
+A simple Flask-based web dashboard that parses `miners.log`, tracks mining clients by User-Agent, shows submission counts, and provides quick access to their logs.
+
+== 📁 Project Structure
+
+[source]
+----
+log_dashboard/
+├── app.py                  # Flask application entry
+├── parser.py               # Log parsing and log saving logic
+├── miners.log              # Your raw log file (input)
+├── logs/                   # Folder for per-agent saved logs (auto-created)
+├── static/
+│   └── style.css           # Basic UI styling
+└── templates/
+    └── index.html          # HTML dashboard template
+----
+
+== ✅ Features
+
+- 📄 Parses `miners.log` and identifies mining clients.
+- 📊 Displays User Agents, their statuses (`🟢 ACTIVE`, `🟡 UNKNOWN`), and number of submissions.
+- 🔍 Search/filter by User Agent.
+- 🌀 Manual refresh with a button.
+- 📁 Individual log files saved under `/logs/`.
+- 🌐 Clean minimal UI using pure CSS.
+
+== 🚀 Getting Started
+
+=== 1. Clone the Project
+
+[source,shell]
+----
+cd tools/log_dashboard
+----
+
+=== 2. Install Requirements
+
+[source,shell]
+----
+pip install flask
+----
+
+[NOTE]
+====
+Python 3.8+ is recommended
+====
+
+=== 3. Add Your Log File
+
+Place your `miners.log` file in the project root directory.
+
+=== 4. Update Config
+
+Edit `config-testnet4.toml`:
+
+[source,toml]
+----
+[logging]
+# For system run services you can specify a file path
+file = "/tools/log_dashboard/miners.log"
+
+# For container or local run it is recommended to use console output
+console = true
+level = "info"
+----
+
+=== 5. Run the Stratum
+
+[source,shell]
+----
+cargo run -p p2poolv2 -- --config=config-testnet4.toml
+----
+
+=== 6. Run the Dashboard
+
+[source,shell]
+----
+python app.py
+----
+
+Then open your browser and go to:
+
+http://127.0.0.1:5000
+
+== 🔎 How It Works
+
+- Parses log lines that contain JSON strings inside:
+  - `Some(Ok(...))` or
+  - `Tx ... { "method": "..." }`
+
+- Tracks:
+  - `mining.subscribe` to identify the User-Agent
+  - `mining.submit` to count submissions
+  - `result = true` to mark a User-Agent as `🟢 ACTIVE`
+
+- Saves each agent’s logs to `logs/<agent>.log`
+
+- Displays everything in a sortable, filterable table
+
+== 📌 Notes
+
+- Make sure the log file exists and is properly formatted.
+- The dashboard does *not auto-refresh*; use the "🔁 Refresh" button.
+- Logs are saved per User-Agent with safe filenames.
+
+== 🛠️ Troubleshooting
+
+*Dashboard says “⚠️ No user agents found”*
+
+→ Check if `miners.log` exists and contains valid structured log lines.
+
+*Refresh does nothing*
+
+→ Check for Flask errors in terminal. Logs must be well-formed.

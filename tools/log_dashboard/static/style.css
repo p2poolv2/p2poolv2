@@ -1,0 +1,188 @@
+ @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap');
+
+  body {
+    font-family: 'Roboto Mono', monospace;
+    background: #273447;
+    color: #c9d1d9;
+    margin: 0;
+    padding: 18px 24px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-size: 16px;
+  }
+
+  h2 {
+    font-weight: 700;
+    margin-bottom: 14px;
+    color: #58a6ff;
+    letter-spacing: 0.03em;
+  }
+
+  form {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  input[type="text"] {
+    padding: 9px 12px;
+    border-radius: 5px;
+    border: 1.5px solid #30363d;
+    background: #161b22;
+    color: #c9d1d9;
+    width: 220px;
+    font-size: 14px;
+    transition: border-color 0.3s ease;
+    outline-offset: 2px;
+  }
+  input[type="text"]:focus {
+    border-color: #238636;
+    outline: none;
+    background: #0d1117;
+  }
+
+  button, a.button-link {
+    font-weight: 600;
+    font-size: 14px;
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    transition: background-color 0.22s ease, box-shadow 0.22s ease, transform 0.12s ease;
+    box-shadow: 0 2px 5px rgba(35, 134, 54, 0.6);
+    background-color: #238636;
+    color: #f0f6fc;
+    user-select: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  button:hover, a.button-link:hover {
+    background-color: #2ea043;
+    box-shadow: 0 4px 8px rgba(35, 134, 54, 0.9);
+    transform: translateY(-1.5px);
+  }
+  button:active, a.button-link:active {
+    transform: translateY(0);
+  }
+  a.button-link {
+    background-color: transparent;
+    border: 1.5px solid #238636;
+    color: #58a6ff;
+    box-shadow: none;
+    padding: 6px 14px;
+  }
+  a.button-link:hover {
+    background-color: #238636;
+    color: #f0f6fc;
+    box-shadow: 0 3px 9px rgba(35, 134, 54, 0.8);
+  }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    max-width: 900px;
+    background: #161b22;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 6px 16px #0008;
+    font-size: 13px;
+  }
+
+  thead {
+    background: #21262d;
+  }
+
+  th, td {
+    text-align: left;
+    padding: 8px 14px;
+    border-bottom: 1px solid #30363d;
+  }
+
+  tbody tr:hover {
+    background: #21262d;
+  }
+
+  /* Smaller status dot and text styling */
+  .status {
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  .status::before {
+    content: "●";
+    font-size: 12px;
+    position: relative;
+    top: -1px;
+  }
+  .status.active::before {
+    color: #238636;
+  }
+  .status.unknown::before {
+    color: #daa038;
+  }
+
+  a {
+    color: #58a6ff;
+    text-decoration: none;
+    font-weight: 600;
+  }
+  a:hover, a:focus {
+    text-decoration: underline;
+    outline: none;
+  }
+
+  /* Responsive tweaks */
+  @media (max-width: 650px) {
+    body {
+      padding: 12px 14px;
+      font-size: 13px;
+    }
+    input[type="text"] {
+      width: 160px;
+    }
+    table, thead, tbody, th, td, tr {
+      display: block;
+    }
+    thead tr {
+      display: none;
+    }
+    tbody tr {
+      margin-bottom: 14px;
+      background: #21262d;
+      border-radius: 6px;
+      padding: 12px 10px;
+    }
+    tbody td {
+      padding-left: 50%;
+      position: relative;
+      border-bottom: none;
+    }
+    tbody td::before {
+      content: attr(data-label);
+      position: absolute;
+      left: 12px;
+      top: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 11px;
+      color: #8b949e;
+      white-space: nowrap;
+    }
+    form {
+      flex-direction: column;
+      gap: 8px;
+    }
+    button, a.button-link {
+      width: 100%;
+      text-align: center;
+      padding: 10px;
+      font-size: 14px;
+    }
+  }
