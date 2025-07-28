@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>🪵 Mining Log Dashboard</title>
+
+ <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<h2>🪵 Mining Log Dashboard</h2>
+
+<form method="get" aria-label="Filter user agents">
+    <input type="text" name="q" placeholder="Filter by user agent..." value="{{ query|default('') }}" autocomplete="off" />
+    <button type="submit" aria-label="Filter logs">Filter</button>
+    <a href="/" class="button-link" aria-label="Reset filter">Reset</a>
+</form>
+
+<form method="post" action="/refresh" aria-label="Refresh logs" style="margin-bottom: 20px;">
+    <button type="submit">🔁 Refresh</button>
+</form>
+
+{% if agents %}
+<table role="table" aria-label="User Agent mining status table">
+    <thead>
+        <tr>
+            <th scope="col">Status</th>
+            <th scope="col">User Agent</th>
+            <th scope="col">Submits</th>
+            <th scope="col">Log</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for ua, info in agents.items() %}
+        <tr>
+            <td class="status {% if info.status == '🟢 ACTIVE' %}active{% else %}unknown{% endif %}" data-label="Status" title="{{ info.status }}">
+              {{ info.status }}
+            </td>
+            <td data-label="User Agent">{{ ua }}</td>
+            <td data-label="Submits">{{ info.submits }}</td>
+            <td data-label="Log"><a href="/logs/{{ info.filename }}" target="_blank" rel="noopener">View</a></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p style="text-align:center; font-weight:600; color:#f2a365;">⚠️ No user agents found. Check logs.</p>
+{% endif %}
+
+<button id="toggleInstructions" 
+        style="margin: 20px auto; display: block;
+               background:#238636; color:#f0f6fc; border:none; 
+               border-radius:6px; padding:8px 16px; font-weight:600; cursor:pointer; 
+               box-shadow:0 3px 8px rgba(35,134,54,0.7); transition: background-color 0.3s ease;">
+  ❓ Instructions
+</button>
+
+<div id="instructions" 
+     style="display:none; max-width: 900px; margin: 0 auto 30px auto; 
+            background: #161b22; border-radius: 8px; padding: 20px; color: #c9d1d9; 
+            font-family: 'Roboto Mono', monospace; font-size: 14px; line-height: 1.5;">
+  <h3 style="color:#58a6ff; margin-top: 0; font-weight:700;">🪵 How to Use This Dashboard</h3>
+  <ul style="padding-left: 20px; margin-top: 10px; margin-bottom: 0;">
+    <li><strong>Status:</strong> <span style="color:#238636;">🟢 ACTIVE</span> means miner has successfully submitted shares; <span style="color:#daa038;">🟡 UNKNOWN</span> means still pending success.</li>
+    <li><strong>Filter:</strong> Use the search box to find miners by their user agent names or versions.</li>
+    <li><strong>Logs:</strong> Click "View" to see detailed mining activity logs (IP addresses are redacted for privacy).</li>
+    <li><strong>Refresh:</strong> Use the refresh button to reload the latest log data.</li>
+  </ul>
+</div>
+
+<script>
+  document.getElementById('toggleInstructions').addEventListener('click', function () {
+    const instr = document.getElementById('instructions');
+    if (instr.style.display === 'none' || instr.style.display === '') {
+      instr.style.display = 'block';
+      this.textContent = '🔽 Hide Instructions';
+    } else {
+      instr.style.display = 'none';
+      this.textContent = '❓ Instructions';
+    }
+  });
+</script>
+
+
+</body>
+</html>
