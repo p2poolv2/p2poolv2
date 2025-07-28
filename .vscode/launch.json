@@ -27,16 +27,40 @@
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=p2pool-v2",
-                    "--package=p2pool-v2"
+                    "--lib",
+                    "--package=${workspaceFolderBasename}"
                 ],
                 "filter": {
-                    "name": "p2pool-v2",
-                    "kind": "bin"
+                    "name": "${workspaceFolderBasename}",
+                    "kind": "lib"
                 }
             },
             "args": [],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "RUST_LOG": "debug"
+            }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug specific test",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "${selectedText}"
+                ],
+                "filter": {
+                    "name": "${workspaceFolderBasename}",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "RUST_LOG": "debug"
+            }
         }
     ]
 }
