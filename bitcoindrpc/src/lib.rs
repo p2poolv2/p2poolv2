@@ -125,18 +125,50 @@ impl BitcoindRpcClient {
             }
         };
         debug!("Requesting getblocktemplate with params: {:?}", params);
-        match self
-            .request::<serde_json::Value>("getblocktemplate", params)
-            .await
-        {
-            Ok(result) => {
-                debug!("Received getblocktemplate response: {}", result);
-                Ok(result.to_string())
+
+        // Configure retry parameters
+        const MAX_RETRIES: u32 = 5;
+        const INITIAL_BACKOFF_MS: u64 = 10;
+        const MAX_BACKOFF_MS: u64 = 160;
+
+        let mut attempt = 0;
+        let mut backoff_ms = INITIAL_BACKOFF_MS;
+        let mut last_error = None;
+
+        while attempt <= MAX_RETRIES {
+            match self
+                .request::<serde_json::Value>("getblocktemplate", params.clone())
+                .await
+            {
+                Ok(result) => {
+                    debug!("Received getblocktemplate response: {}", result);
+                    return Ok(result.to_string());
+                }
+                Err(e) => {
+                    attempt += 1;
+                    last_error = Some(e);
+
+                    if attempt > MAX_RETRIES {
+                        break;
+                    }
+
+                    debug!(
+                        "getblocktemplate attempt {} failed, retrying in {}ms",
+                        attempt, backoff_ms
+                    );
+
+                    // Sleep with exponential backoff
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+
+                    // Double the backoff for next attempt (capped at max)
+                    backoff_ms = std::cmp::min(backoff_ms * 2, MAX_BACKOFF_MS);
+                }
             }
-            Err(e) => Err(BitcoindRpcError::Other(format!(
-                "Failed to get block template: {e}"
-            ))),
         }
+
+        Err(last_error.unwrap_or_else(|| {
+            BitcoindRpcError::Other("Failed to get block template after all retries".to_string())
+        }))
     }
 
     /// Decode a raw transaction using bitcoind RPC
@@ -311,12 +343,12 @@ mod tests {
                 "jsonrpc": "2.0",
                 "result": {
                     "version": 536870912,
-                    "previousblockhash": "0000000000000000000b4d0b2e8e7e4e6b8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
+                    "previousblockhash": "0000000000000000000b4d0b2e8e7e4e6b8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
                     "transactions": [],
                     "coinbaseaux": {},
                     "coinbasevalue": 625000000,
                     "longpollid": "mockid",
-                    "target": "0000000000000000000b4d0b2e8e7e4e6b8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
+                    "target": "0000000000000000000b4d0b2e8e7e4e6b8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
                     "mintime": 1610000000,
                     "mutable": ["time", "transactions", "prevblock"],
                     "noncerange": "00000000ffffffff",
@@ -362,12 +394,12 @@ mod tests {
                 "jsonrpc": "2.0",
                 "result": {
                     "version": 536870912,
-                    "previousblockhash": "0000000000000000000b4d0b2e8e7e4e6b8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
+                    "previousblockhash": "0000000000000000000b4d0b2e8e7e4e6b8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
                     "transactions": [],
                     "coinbaseaux": {},
                     "coinbasevalue": 625000000,
                     "longpollid": "mockid",
-                    "target": "0000000000000000000b4d0b2e8e7e4e6b8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
+                    "target": "0000000000000000000b4d0b2e8e7e4e6b8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
                     "mintime": 1610000000,
                     "mutable": ["time", "transactions", "prevblock"],
                     "noncerange": "00000000ffffffff",
@@ -479,5 +511,73 @@ mod tests {
 
         let result = client.submit_block(&block).await.unwrap();
         assert_eq!(result, "null"); // Successful submission returns null
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_getblocktemplate_retry_logic() {
+        let mock_server = MockServer::start().await;
+        let auth_header = "Basic cDJwb29sOnAycG9vbA==";
+
+        // Mock 3 failed responses followed by a successful one
+        // First 3 calls fail
+        for i in 1..4 {
+            Mock::given(method("POST"))
+                .and(path("/"))
+                .and(header("Authorization", auth_header))
+                .and(body_json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "getblocktemplate",
+                    "params": [{
+                        "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+                        "rules": ["segwit"],
+                    }],
+                    "id": i
+                })))
+                .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "error": {
+                        "code": -1,
+                        "message": format!("Failed attempt {}", i + 1)
+                    },
+                    "id": i
+                })))
+                .expect(1) // Each mock should be called exactly once
+                .mount(&mock_server)
+                .await;
+        }
+
+        // Fourth call succeeds
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", auth_header))
+            .and(body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "getblocktemplate",
+                "params": [{
+                    "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+                    "rules": ["segwit"],
+                }],
+                "id": 4
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "result": {
+                    "version": 536870912,
+                    "height": 1000000,
+                    "previousblockhash": "0000000000000000000b4d0b2e8e7e4e6b8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
+                    "bits": "1a01f56e"
+                },
+                "id": 4
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client.getblocktemplate(bitcoin::Network::Bitcoin).await;
+
+        assert!(result.is_ok());
+        let result_value = serde_json::from_str::<serde_json::Value>(&result.unwrap()).unwrap();
+        assert_eq!(result_value.get("height").unwrap(), 1000000);
     }
 }
