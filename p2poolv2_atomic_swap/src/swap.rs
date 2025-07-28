@@ -1,7 +1,6 @@
 use ciborium;
 use rocksdb::{Options, DB};
 use serde::{Deserialize, Serialize};
-use std::error::Error;
 use std::io::Cursor;
 use log::{info, error};
 use thiserror::Error as ThisError;
@@ -133,5 +132,78 @@ pub fn retrieve_swap(db_path: &str, key: &str) -> Result<Option<Swap>, SwapError
             info!("No swap found for key: {}", key);
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+    use env_logger;
+
+    // Initialize a sample Swap for testing
+    fn create_test_swap() -> Swap {
+        Swap {
+            payment_hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
+            from_chain: Bitcoin {
+                initiator_pubkey: "02a18cc4eaf4287a1a926d45d0d7810410e587ade954e9040121b0652941ee3a9a".to_string(),
+                responder_pubkey: "03b18cc4eaf4287a1a926d45d0d7810410e587ade954e9040121b0652941ee3a9b".to_string(),
+                timelock: 1000,
+                amount: 10000,
+                htlc_type: HTLCType::P2tr2,
+            },
+            to_chain: Lightning {
+                timelock: 144,
+                amount: 9500,
+            },
+        }
+    }
+
+    #[test]
+    fn test_create_swap() {
+        // Initialize logger
+        let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).try_init();
+
+        // Create a temporary directory for RocksDB
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().to_str().expect("Failed to get temp dir path");
+
+        // Create a test swap
+        let swap = create_test_swap();
+
+        // Test creating a swap
+        let result = create_swap(&swap, db_path).expect("Failed to create swap");
+        assert_eq!(result, "swap_1", "Expected swap key to be 'swap_1'");
+
+        // Verify the swap can be retrieved
+        let retrieved = retrieve_swap(db_path, &result).expect("Failed to retrieve swap");
+        assert_eq!(retrieved, Some(swap.clone()), "Retrieved swap does not match");
+
+        // Test counter incrementation
+        let swap2 = create_test_swap();
+        let result2 = create_swap(&swap2, db_path).expect("Failed to create second swap");
+        assert_eq!(result2, "swap_2", "Expected second swap key to be 'swap_2'");
+    }
+
+    #[test]
+    fn test_retrieve_swap() {
+        // Initialize logger
+        let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).try_init();
+
+        // Create a temporary directory for RocksDB
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().to_str().expect("Failed to get temp dir path");
+
+        // Test retrieving a non-existent swap
+        let result = retrieve_swap(db_path, "swap_1").expect("Failed to retrieve swap");
+        assert_eq!(result, None, "Expected None for non-existent swap");
+
+        // Create a swap
+        let swap = create_test_swap();
+        let swap_key = create_swap(&swap, db_path).expect("Failed to create swap");
+
+        // Test retrieving the existing swap
+        let retrieved = retrieve_swap(db_path, &swap_key).expect("Failed to retrieve swap");
+        assert_eq!(retrieved, Some(swap), "Retrieved swap does not match");
     }
 }

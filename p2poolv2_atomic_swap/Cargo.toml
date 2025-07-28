@@ -22,3 +22,5 @@ env_logger = "0.10"
 [dev-dependencies]
 tempfile = "3.15.0"
 mockall = "0.12"
+mockito = "1"
+bitcoincore-rpc = "0.19.0"

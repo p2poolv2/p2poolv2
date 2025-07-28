@@ -6,7 +6,7 @@ use ldk_node::bitcoin::{
     Address, Amount, OutPoint, ScriptBuf, Sequence, TapLeafHash, TapSighashType, Transaction, TxIn,
     TxOut, Witness,
 };
-use log::{info, error};
+use log::{error, info};
 use thiserror::Error;
 use std::str::FromStr;
 
