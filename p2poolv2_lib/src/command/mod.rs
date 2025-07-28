@@ -37,14 +37,4 @@ pub enum Command {
     GetPeers(oneshot::Sender<Vec<libp2p::PeerId>>),
     /// Command to shutdown node
     Shutdown(oneshot::Sender<()>),
-    /// Command to add share to the chain
-    AddShare(
-        ShareBlock,
-        oneshot::Sender<Result<(), Box<dyn Error + Send + Sync>>>,
-    ),
-    /// Command to store workbase in the node's database
-    StoreWorkbase(
-        MinerWorkbase,
-        oneshot::Sender<Result<(), Box<dyn Error + Send + Sync>>>,
-    ),
 }

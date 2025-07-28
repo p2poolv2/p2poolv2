@@ -73,31 +73,6 @@ impl NodeHandle {
             Err(e) => Err(e.into()),
         }
     }
-
-    /// Add share to the chain
-    pub async fn add_share(&self, share: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx.send(Command::AddShare(share, tx)).await?;
-        match rx.await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    /// Store workbase in the node's database
-    pub async fn add_workbase(
-        &self,
-        workbase: MinerWorkbase,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::StoreWorkbase(workbase, tx))
-            .await?;
-        match rx.await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e.into()),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -114,8 +89,6 @@ mock! {
         pub async fn shutdown(&self) -> Result<(), Box<dyn Error>>;
         pub async fn send_gossip(&self, message: Message) -> Result<(), Box<dyn Error>>;
         pub async fn send_to_peer(&self, peer_id: libp2p::PeerId, message: Message) -> Result<(), Box<dyn Error>>;
-        pub async fn add_share(&self, share: ShareBlock) -> Result<(), Box<dyn Error>>;
-        pub async fn add_workbase(&self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error>>;
     }
 
     // Provide a clone implementation for NodeHandle mock double
@@ -206,24 +179,6 @@ impl NodeActor {
                             self.node.shutdown().unwrap();
                             tx.send(()).unwrap();
                             return;
-                        },
-                        Some(Command::AddShare(share, tx)) => {
-                            match self.node.chain_handle.add_share(share).await {
-                                Ok(_) => tx.send(Ok(())).unwrap(),
-                                Err(e) => {
-                                    error!("Error adding share to chain: {}", e);
-                                    tx.send(Err("Error adding share to chain".into())).unwrap()
-                                },
-                            };
-                        },
-                        Some(Command::StoreWorkbase(workbase, tx)) => {
-                            match self.node.chain_handle.add_workbase(workbase).await {
-                                Ok(_) => tx.send(Ok(())).unwrap(),
-                                Err(e) => {
-                                    error!("Error storing workbase: {}", e);
-                                    tx.send(Err("Error storing workbase".into())).unwrap()
-                                },
-                            };
                         },
                         None => {
                             info!("Stopping node actor on channel close");
