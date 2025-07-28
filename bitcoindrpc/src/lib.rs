@@ -166,9 +166,9 @@ impl BitcoindRpcClient {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            BitcoindRpcError::Other("Failed to get block template after all retries".to_string())
-        }))
+        Err(last_error.unwrap_or(BitcoindRpcError::Other(
+            "Failed to get block template after all retries".to_string(),
+        )))
     }
 
     /// Decode a raw transaction using bitcoind RPC
@@ -537,7 +537,7 @@ mod tests {
                     "jsonrpc": "2.0",
                     "error": {
                         "code": -1,
-                        "message": format!("Failed attempt {}", i + 1)
+                        "message": format!("Failed attempt {}", i)
                     },
                     "id": i
                 })))
