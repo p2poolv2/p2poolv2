@@ -86,7 +86,8 @@ mod tests {
         let invoice_str = "lntbs10u1p5g3f4cdq62qe9qmm0d3mrygzfdemx76trv5np4qtu70hpmszfyyhcw5xcpkgv90t5hkmrcvjmwwa63c4dzpx92mhw62pp5vxhp3yxe6fhaht22lka53al8gh6eshngq7vs4r28n7e8pthjflgqsp5sjtvyzzxxm0hc4w2ys3mw934d59hvnw0jma6g8yl9q0a8zv50z8q9qyysgqcqpcxqyz5vqrzjqwsce3827s585x5jd4zap4upqsgwtpada92wjpqpyxcx222pacaf5qehlcqq8eqqq5qqqqlgqqqqqqqqfqj04e0qw4k087z3l39z8l2g508lumkc4s8jyjzxxye4r6anze5clpkezfgsgltfwvracqwxf2qj7cwduyvdpkyfjehman5ssrfn295fcp889szc";
         let invoice = Bolt11Invoice::from_str(invoice_str).expect("Failed to parse invoice");
 
-        let expected_payment_hash = "61ae1890d9d26fdbad4afdbb48f7e745f5985e6807990a8d479fb270aef24fd0";
+        let expected_payment_hash =
+            "61ae1890d9d26fdbad4afdbb48f7e745f5985e6807990a8d479fb270aef24fd0";
         let min_required_amount_sat = 1000;
         let max_allowed_cltv_expiry = 24;
 
@@ -96,17 +97,21 @@ mod tests {
             min_required_amount_sat,
             &invoice,
             max_allowed_cltv_expiry,
-        );  
-        assert!(result.is_ok(), "Expected invoice to be payable, but got error: {:?}", result);
-
+        );
+        assert!(
+            result.is_ok(),
+            "Expected invoice to be payable, but got error: {:?}",
+            result
+        );
     }
     #[test]
-    fn test_is_inovice_payable_less_amount(){
-         let invoice_str = "lntbs10u1p5g3f4cdq62qe9qmm0d3mrygzfdemx76trv5np4qtu70hpmszfyyhcw5xcpkgv90t5hkmrcvjmwwa63c4dzpx92mhw62pp5vxhp3yxe6fhaht22lka53al8gh6eshngq7vs4r28n7e8pthjflgqsp5sjtvyzzxxm0hc4w2ys3mw934d59hvnw0jma6g8yl9q0a8zv50z8q9qyysgqcqpcxqyz5vqrzjqwsce3827s585x5jd4zap4upqsgwtpada92wjpqpyxcx222pacaf5qehlcqq8eqqq5qqqqlgqqqqqqqqfqj04e0qw4k087z3l39z8l2g508lumkc4s8jyjzxxye4r6anze5clpkezfgsgltfwvracqwxf2qj7cwduyvdpkyfjehman5ssrfn295fcp889szc";
+    fn test_is_inovice_payable_less_amount() {
+        let invoice_str = "lntbs10u1p5g3f4cdq62qe9qmm0d3mrygzfdemx76trv5np4qtu70hpmszfyyhcw5xcpkgv90t5hkmrcvjmwwa63c4dzpx92mhw62pp5vxhp3yxe6fhaht22lka53al8gh6eshngq7vs4r28n7e8pthjflgqsp5sjtvyzzxxm0hc4w2ys3mw934d59hvnw0jma6g8yl9q0a8zv50z8q9qyysgqcqpcxqyz5vqrzjqwsce3827s585x5jd4zap4upqsgwtpada92wjpqpyxcx222pacaf5qehlcqq8eqqq5qqqqlgqqqqqqqqfqj04e0qw4k087z3l39z8l2g508lumkc4s8jyjzxxye4r6anze5clpkezfgsgltfwvracqwxf2qj7cwduyvdpkyfjehman5ssrfn295fcp889szc";
         let invoice = Bolt11Invoice::from_str(invoice_str).expect("Failed to parse invoice");
 
-        let expected_payment_hash = "61ae1890d9d26fdbad4afdbb48f7e745f5985e6807990a8d479fb270aef24fd0";
-        let min_required_amount_sat = 2000;// Set to a value greater than the invoice amount
+        let expected_payment_hash =
+            "61ae1890d9d26fdbad4afdbb48f7e745f5985e6807990a8d479fb270aef24fd0";
+        let min_required_amount_sat = 2000; // Set to a value greater than the invoice amount
         let max_allowed_cltv_expiry = 24;
 
         // Test valid invoice
@@ -115,16 +120,20 @@ mod tests {
             min_required_amount_sat,
             &invoice,
             max_allowed_cltv_expiry,
-        );  
-        assert!(result.is_err(), "Expected invoice to be not payable, but got success: {:?}", result);
-        
+        );
+        assert!(
+            result.is_err(),
+            "Expected invoice to be not payable, but got success: {:?}",
+            result
+        );
     }
     #[test]
-    fn test_is_invoice_payable_higher_cltv_time(){
+    fn test_is_invoice_payable_higher_cltv_time() {
         let invoice_str = "lntbs10u1p5g3f4cdq62qe9qmm0d3mrygzfdemx76trv5np4qtu70hpmszfyyhcw5xcpkgv90t5hkmrcvjmwwa63c4dzpx92mhw62pp5vxhp3yxe6fhaht22lka53al8gh6eshngq7vs4r28n7e8pthjflgqsp5sjtvyzzxxm0hc4w2ys3mw934d59hvnw0jma6g8yl9q0a8zv50z8q9qyysgqcqpcxqyz5vqrzjqwsce3827s585x5jd4zap4upqsgwtpada92wjpqpyxcx222pacaf5qehlcqq8eqqq5qqqqlgqqqqqqqqfqj04e0qw4k087z3l39z8l2g508lumkc4s8jyjzxxye4r6anze5clpkezfgsgltfwvracqwxf2qj7cwduyvdpkyfjehman5ssrfn295fcp889szc";
         let invoice = Bolt11Invoice::from_str(invoice_str).expect("Failed to parse invoice");
 
-        let expected_payment_hash = "61ae1890d9d26fdbad4afdbb48f7e745f5985e6807990a8d479fb270aef24fd0";
+        let expected_payment_hash =
+            "61ae1890d9d26fdbad4afdbb48f7e745f5985e6807990a8d479fb270aef24fd0";
         let min_required_amount_sat = 1000;
         let max_allowed_cltv_expiry = 17; // Set to a value lower than the invoice's CLTV
 
@@ -134,18 +143,23 @@ mod tests {
             min_required_amount_sat,
             &invoice,
             max_allowed_cltv_expiry,
-        );  
-        assert!(result.is_err(), "Expected invoice to be not payable, but got success: {:?}", result);
+        );
+        assert!(
+            result.is_err(),
+            "Expected invoice to be not payable, but got success: {:?}",
+            result
+        );
     }
 
     #[test]
-    fn test_is_invoice_payable_wrong_hash(){
+    fn test_is_invoice_payable_wrong_hash() {
         let invoice_str = "lntbs10u1p5g3f4cdq62qe9qmm0d3mrygzfdemx76trv5np4qtu70hpmszfyyhcw5xcpkgv90t5hkmrcvjmwwa63c4dzpx92mhw62pp5vxhp3yxe6fhaht22lka53al8gh6eshngq7vs4r28n7e8pthjflgqsp5sjtvyzzxxm0hc4w2ys3mw934d59hvnw0jma6g8yl9q0a8zv50z8q9qyysgqcqpcxqyz5vqrzjqwsce3827s585x5jd4zap4upqsgwtpada92wjpqpyxcx222pacaf5qehlcqq8eqqq5qqqqlgqqqqqqqqfqj04e0qw4k087z3l39z8l2g508lumkc4s8jyjzxxye4r6anze5clpkezfgsgltfwvracqwxf2qj7cwduyvdpkyfjehman5ssrfn295fcp889szc";
         let invoice = Bolt11Invoice::from_str(invoice_str).expect("Failed to parse invoice");
 
-        let expected_payment_hash = "d7748c771dbaae23b575c83a1f22f4ed9b37675fee1fa6d4c9147af39aeffe20"; // Set to a wrong hash
+        let expected_payment_hash =
+            "d7748c771dbaae23b575c83a1f22f4ed9b37675fee1fa6d4c9147af39aeffe20"; // Set to a wrong hash
         let min_required_amount_sat = 1000;
-        
+
         let max_allowed_cltv_expiry = 24;
 
         // Test valid invoice
@@ -154,11 +168,11 @@ mod tests {
             min_required_amount_sat,
             &invoice,
             max_allowed_cltv_expiry,
-        );  
-        assert!(result.is_err(), "Expected invoice to be not payable, but got success: {:?}", result);
+        );
+        assert!(
+            result.is_err(),
+            "Expected invoice to be not payable, but got success: {:?}",
+            result
+        );
     }
-
 }
-
-
-

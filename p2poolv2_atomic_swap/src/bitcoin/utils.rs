@@ -430,11 +430,11 @@ mod tests {
         init_logger();
         let mut server = Server::new_async().await;
         let mock_fee_rate = RecommendedFeeRate {
-            fastestFee: 100,
-            halfHourFee: 50,
-            hourFee: 25,
-            economyFee: 10,
-            minimumFee: 1,
+            fastest_fee: 100,
+            half_hour_fee: 50,
+            hour_fee: 25,
+            economy_fee: 10,
+            minimum_fee: 1,
         };
         let mock_response = json!(mock_fee_rate).to_string();
 
@@ -449,11 +449,11 @@ mod tests {
         let result = fetch_recommended_fee_rate(&server.url()).await;
         assert_eq!(result.is_ok(), true, "Expected Ok, got {:?}", result);
         let fee_rate = result.unwrap();
-        assert_eq!(fee_rate.fastestFee, 100, "Unexpected fastestFee");
-        assert_eq!(fee_rate.halfHourFee, 50, "Unexpected halfHourFee");
-        assert_eq!(fee_rate.hourFee, 25, "Unexpected hourFee");
-        assert_eq!(fee_rate.economyFee, 10, "Unexpected economyFee");
-        assert_eq!(fee_rate.minimumFee, 1, "Unexpected minimumFee");
+        assert_eq!(fee_rate.fastest_fee, 100, "Unexpected fastest_fee");
+        assert_eq!(fee_rate.half_hour_fee, 50, "Unexpected half_hour_fee");
+        assert_eq!(fee_rate.hour_fee, 25, "Unexpected hour_fee");
+        assert_eq!(fee_rate.economy_fee, 10, "Unexpected economy_fee");
+        assert_eq!(fee_rate.minimum_fee, 1, "Unexpected minimum_fee");
         info!("Tested fetch_recommended_fee_rate success");
         mock.assert_async().await;
     }
