@@ -107,3 +107,63 @@ pub fn parse_config(file_path: &str) -> io::Result<AppConfig> {
     Ok(app_config)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn write_temp_config(contents: &str) -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "{}", contents).unwrap();
+        file
+    }
+
+    #[test]
+    fn test_parse_valid_config() {
+        let config_str = r#"
+[node]
+storage_dir_path = "/tmp/p2pool"
+network = "Testnet"
+listening_addresses = "127.0.0.1:3030"
+node_alias = "testnode"
+esplora_url = "http://localhost:3000"
+rgs_server_url = "http://localhost:4000"
+
+[htlc]
+db_path = "/tmp/htlc"
+private_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+rpc_url = "http://localhost:8332"
+confirmation_threshold = 1
+min_buffer_block_for_refund = 10
+"#;
+        let file = write_temp_config(config_str);
+        let result = parse_config(file.path().to_str().unwrap());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_invalid_private_key() {
+        let config_str = r#"
+[node]
+storage_dir_path = "/tmp/p2pool"
+network = "Testnet"
+listening_addresses = "127.0.0.1:3030"
+node_alias = "testnode"
+esplora_url = "http://localhost:3000"
+rgs_server_url = "http://localhost:4000"
+
+[htlc]
+db_path = "/tmp/htlc"
+private_key = "notavalidhexkey"
+rpc_url = "http://localhost:8332"
+confirmation_threshold = 1
+min_buffer_block_for_refund = 10
+"#;
+        let file = write_temp_config(config_str);
+        let result = parse_config(file.path().to_str().unwrap());
+        assert!(result.is_err());
+    }
+}
+
