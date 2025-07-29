@@ -3,8 +3,12 @@ mod atomic_swap_functions;
 use crate::lightning_node;
 use crate::swap::HTLCType;
 
-use atomic_swap_functions::{initiate_onchain_to_lightning_swap, read_swap_from_db, redeem_swap, store_swap_to_db,refund_swap};
+use atomic_swap_functions::{
+    initiate_onchain_to_lightning_swap, read_swap_from_db, redeem_swap, refund_swap,
+    store_swap_to_db,
+};
 
+use crate::configuration::HtlcConfig;
 use ldk_node::{
     bitcoin::{secp256k1::PublicKey, Address},
     lightning::ln::{channelmanager::PaymentId, msgs::SocketAddress},
@@ -12,7 +16,6 @@ use ldk_node::{
     lightning_types::payment::{PaymentHash, PaymentPreimage},
     Node, UserChannelId,
 };
-use crate::configuration::HtlcConfig;
 use lightning_node::{
     balance, closechannel, force_close_channel, getaddress, getholdinvoice, getinvoice,
     listallchannels, onchaintransfer, onchaintransfer_all, openchannel, payinvoice,
@@ -122,7 +125,9 @@ pub async fn run_node_cli(node: Arc<Node>, htlc_config: HtlcConfig) {
                         ) {
                             (Ok(id), Ok(net_addr), Ok(amount)) => {
                                 match openchannel(&node, id, net_addr, amount).await {
-                                    Ok(channel_id) => println!("Channel opened successfully: {:?}", channel_id),
+                                    Ok(channel_id) => {
+                                        println!("Channel opened successfully: {:?}", channel_id)
+                                    }
                                     Err(e) => println!("Error opening channel: {}", e),
                                 }
                             }
@@ -131,21 +136,17 @@ pub async fn run_node_cli(node: Arc<Node>, htlc_config: HtlcConfig) {
                             (_, _, Err(e)) => println!("Error: Invalid amount: {}", e),
                         }
                     }
-                    (Some("balance"), []) => {
-                        match balance(&node).await {
-                            Ok((onchain, lightning)) => {
-                                println!("On-Chain Balance: {} sats", onchain);
-                                println!("Lightning Balance: {} sats", lightning);
-                            }
-                            Err(e) => println!("Error getting balances: {}", e),
+                    (Some("balance"), []) => match balance(&node).await {
+                        Ok((onchain, lightning)) => {
+                            println!("On-Chain Balance: {} sats", onchain);
+                            println!("Lightning Balance: {} sats", lightning);
                         }
-                    }
-                    (Some("getaddress"), []) => {
-                        match getaddress(&node).await {
-                            Ok(addr) => println!("Address: {}", addr),
-                            Err(e) => println!("Error getting address: {}", e),
-                        }
-                    }
+                        Err(e) => println!("Error getting balances: {}", e),
+                    },
+                    (Some("getaddress"), []) => match getaddress(&node).await {
+                        Ok(addr) => println!("Address: {}", addr),
+                        Err(e) => println!("Error getting address: {}", e),
+                    },
                     (Some("listallchannels"), []) => {
                         match listallchannels(&node).await {
                             Ok(_) => {} // Output handled by listallchannels via println!
@@ -183,7 +184,14 @@ pub async fn run_node_cli(node: Arc<Node>, htlc_config: HtlcConfig) {
                         }
                         match (chan_id.parse::<u128>(), node_id.parse::<PublicKey>()) {
                             (Ok(id), Ok(counterparty)) => {
-                                match force_close_channel(&node, &UserChannelId(id), counterparty, reason).await {
+                                match force_close_channel(
+                                    &node,
+                                    &UserChannelId(id),
+                                    counterparty,
+                                    reason,
+                                )
+                                .await
+                                {
                                     Ok(_) => println!("Channel force-closed successfully"),
                                     Err(e) => println!("Error force-closing channel: {}", e),
                                 }
@@ -204,7 +212,9 @@ pub async fn run_node_cli(node: Arc<Node>, htlc_config: HtlcConfig) {
                             (Ok(amt), Ok(bytes)) if bytes.len() == 32 => {
                                 let amount_msats = amt * 1000;
                                 let secret_hash: [u8; 32] = bytes.try_into().unwrap();
-                                match getholdinvoice(&node, amount_msats, PaymentHash(secret_hash)).await {
+                                match getholdinvoice(&node, amount_msats, PaymentHash(secret_hash))
+                                    .await
+                                {
                                     Ok(invoice) => println!("Hold invoice: {}", invoice),
                                     Err(e) => println!("Error creating hold invoice: {}", e),
                                 }
@@ -248,15 +258,15 @@ pub async fn run_node_cli(node: Arc<Node>, htlc_config: HtlcConfig) {
                             (_, _, Err(e)) => println!("Error: Invalid amount: {}", e),
                         }
                     }
-                    (Some("payinvoice"), [invoice]) => {
-                        match Bolt11Invoice::from_str(invoice) {
-                            Ok(inv) => match payinvoice(&node, &inv).await {
-                                Ok(payment_id) => println!("Payment sent. Payment ID: {:?}", payment_id),
-                                Err(e) => println!("Payment failed: {}", e),
-                            },
-                            Err(e) => println!("Error: Invalid invoice: {}", e),
-                        }
-                    }
+                    (Some("payinvoice"), [invoice]) => match Bolt11Invoice::from_str(invoice) {
+                        Ok(inv) => match payinvoice(&node, &inv).await {
+                            Ok(payment_id) => {
+                                println!("Payment sent. Payment ID: {:?}", payment_id)
+                            }
+                            Err(e) => println!("Payment failed: {}", e),
+                        },
+                        Err(e) => println!("Error: Invalid invoice: {}", e),
+                    },
                     (Some("fromchainswap"), []) => {
                         // Interactive prompt for swap creation
                         let mut input = String::new();
@@ -423,7 +433,14 @@ pub async fn run_node_cli(node: Arc<Node>, htlc_config: HtlcConfig) {
 
                         match Bolt11Invoice::from_str(&invoice_str) {
                             Ok(invoice) => {
-                                redeem_swap(&node, &htlc_config, &htlc_config.db_path, &swap_id, &invoice).await;
+                                redeem_swap(
+                                    &node,
+                                    &htlc_config,
+                                    &htlc_config.db_path,
+                                    &swap_id,
+                                    &invoice,
+                                )
+                                .await;
                                 println!("Swap redeemed successfully");
                             }
                             Err(e) => println!("Invalid invoice: {}", e),

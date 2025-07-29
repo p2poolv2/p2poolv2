@@ -1,7 +1,7 @@
 use ldk_node::bitcoin::Address;
+use log::{error, info};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use log::{info, error};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -11,7 +11,10 @@ pub enum UtilsError {
     #[error("Failed to parse response: {0}")]
     ParseError(String),
     #[error("Broadcast failed with status {status}: {message}")]
-    BroadcastError { status: reqwest::StatusCode, message: String },
+    BroadcastError {
+        status: reqwest::StatusCode,
+        message: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -32,34 +35,33 @@ pub struct Utxo {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecommendedFeeRate {
-    pub fastestFee: u64,
-    pub halfHourFee: u64,
-    pub hourFee: u64,
-    pub economyFee: u64,
-    pub minimumFee: u64,
+    pub fastest_fee: u64,
+    pub half_hour_fee: u64,
+    pub hour_fee: u64,
+    pub economy_fee: u64,
+    pub minimum_fee: u64,
 }
 
-pub async fn fetch_utxos_for_address(rpc_url: &str, address: &Address) -> Result<Vec<Utxo>, UtilsError> {
+pub async fn fetch_utxos_for_address(
+    rpc_url: &str,
+    address: &Address,
+) -> Result<Vec<Utxo>, UtilsError> {
     let client = Client::new();
     let url = format!("{}/address/{}/utxo", rpc_url.trim_end_matches('/'), address);
     info!("Fetching UTXOs for address: {}", address);
 
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| {
-            error!("Failed to fetch UTXOs for address {}: {}", address, e);
-            UtilsError::HttpRequestError(e.to_string())
-        })?;
+    let response = client.get(&url).send().await.map_err(|e| {
+        error!("Failed to fetch UTXOs for address {}: {}", address, e);
+        UtilsError::HttpRequestError(e.to_string())
+    })?;
 
-    let utxos = response
-        .json::<Vec<Utxo>>()
-        .await
-        .map_err(|e| {
-            error!("Failed to parse UTXO response for address {}: {}", address, e);
-            UtilsError::ParseError(e.to_string())
-        })?;
+    let utxos = response.json::<Vec<Utxo>>().await.map_err(|e| {
+        error!(
+            "Failed to parse UTXO response for address {}: {}",
+            address, e
+        );
+        UtilsError::ParseError(e.to_string())
+    })?;
 
     info!("Fetched {} UTXOs for address {}", utxos.len(), address);
     Ok(utxos)
@@ -82,29 +84,26 @@ pub async fn broadcast_trx(rpc_url: &str, trx_raw_hex: &str) -> Result<String, U
         })?;
 
     if response.status().is_success() {
-        let txid = response
-            .text()
-            .await
-            .map_err(|e| {
-                error!("Failed to parse transaction ID: {}", e);
-                UtilsError::ParseError(e.to_string())
-            })?;
+        let txid = response.text().await.map_err(|e| {
+            error!("Failed to parse transaction ID: {}", e);
+            UtilsError::ParseError(e.to_string())
+        })?;
         let txid = txid.trim(); // Trim whitespace or newlines
         if txid.is_empty() || txid.len() != 64 || !txid.chars().all(|c| c.is_ascii_hexdigit()) {
             error!("Invalid transaction ID: '{}'", txid);
-            return Err(UtilsError::ParseError(format!("Invalid transaction ID: '{}'", txid)));
+            return Err(UtilsError::ParseError(format!(
+                "Invalid transaction ID: '{}'",
+                txid
+            )));
         }
         info!("Successfully broadcast transaction, txid: {}", txid);
         Ok(txid.to_string())
     } else {
         let status = response.status();
-        let error_message = response
-            .text()
-            .await
-            .map_err(|e| {
-                error!("Failed to parse broadcast error response: {}", e);
-                UtilsError::ParseError(e.to_string())
-            })?;
+        let error_message = response.text().await.map_err(|e| {
+            error!("Failed to parse broadcast error response: {}", e);
+            UtilsError::ParseError(e.to_string())
+        })?;
         error!("Broadcast failed with status {}: {}", status, error_message);
         Err(UtilsError::BroadcastError {
             status,
@@ -119,56 +118,39 @@ pub async fn fetch_tip_block_height(rpc_url: &str) -> Result<u32, UtilsError> {
     let url = format!("{}/blocks/tip/height", rpc_url.trim_end_matches('/'));
     info!("Fetching tip block height from: {}", url);
 
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| {
-            error!("Failed to fetch tip block height: {}", e);
-            UtilsError::HttpRequestError(e.to_string())
-        })?;
+    let response = client.get(&url).send().await.map_err(|e| {
+        error!("Failed to fetch tip block height: {}", e);
+        UtilsError::HttpRequestError(e.to_string())
+    })?;
 
-    let height_text = response
-        .text()
-        .await
-        .map_err(|e| {
-            error!("Failed to parse tip block height response: {}", e);
-            UtilsError::ParseError(e.to_string())
-        })?;
+    let height_text = response.text().await.map_err(|e| {
+        error!("Failed to parse tip block height response: {}", e);
+        UtilsError::ParseError(e.to_string())
+    })?;
 
-    let height = height_text
-        .trim()
-        .parse::<u32>()
-        .map_err(|e| {
-            error!("Failed to parse block height '{}': {}", height_text, e);
-            UtilsError::ParseError(e.to_string())
-        })?;
+    let height = height_text.trim().parse::<u32>().map_err(|e| {
+        error!("Failed to parse block height '{}': {}", height_text, e);
+        UtilsError::ParseError(e.to_string())
+    })?;
 
     info!("Fetched tip block height: {}", height);
     Ok(height)
 }
-
+#[allow(dead_code)]
 pub async fn fetch_recommended_fee_rate(base_url: &str) -> Result<RecommendedFeeRate, UtilsError> {
     let client = Client::new();
     let url = format!("{}/v1/fees/recommended", base_url.trim_end_matches('/'));
     info!("Fetching recommended fee rate from: {}", url);
 
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| {
-            error!("Failed to fetch recommended fee rate: {}", e);
-            UtilsError::HttpRequestError(e.to_string())
-        })?;
+    let response = client.get(&url).send().await.map_err(|e| {
+        error!("Failed to fetch recommended fee rate: {}", e);
+        UtilsError::HttpRequestError(e.to_string())
+    })?;
 
-    let fee_rate = response
-        .json::<RecommendedFeeRate>()
-        .await
-        .map_err(|e| {
-            error!("Failed to parse recommended fee rate response: {}", e);
-            UtilsError::ParseError(e.to_string())
-        })?;
+    let fee_rate = response.json::<RecommendedFeeRate>().await.map_err(|e| {
+        error!("Failed to parse recommended fee rate response: {}", e);
+        UtilsError::ParseError(e.to_string())
+    })?;
 
     info!("Fetched recommended fee rate: {:?}", fee_rate);
     Ok(fee_rate)
@@ -177,11 +159,11 @@ pub async fn fetch_recommended_fee_rate(base_url: &str) -> Result<RecommendedFee
 #[cfg(test)]
 mod tests {
     use super::*;
+    use env_logger;
     use ldk_node::bitcoin::{Address, Network};
+    use log::info;
     use mockito::{Matcher, Server};
     use serde_json::json;
-    use env_logger;
-    use log::info;
     use std::str::FromStr;
 
     // Helper to create a mock Utxo
@@ -193,7 +175,8 @@ mod tests {
             status: UtxoStatus {
                 confirmed: true,
                 block_height: 1234,
-                block_hash: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+                block_hash: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_string(),
                 block_time: 1234567890,
             },
         }
@@ -239,7 +222,10 @@ mod tests {
         assert_eq!(utxos.len(), 1, "Expected 1 UTXO");
         assert_eq!(utxos[0].txid, "00".repeat(32), "Unexpected txid");
         assert_eq!(utxos[0].value, 10000, "Unexpected value");
-        assert_eq!(utxos[0].status.block_height, 1234, "Unexpected block height");
+        assert_eq!(
+            utxos[0].status.block_height, 1234,
+            "Unexpected block height"
+        );
         info!("Tested fetch_utxos_for_address success");
         mock.assert_async().await;
     }
@@ -261,7 +247,8 @@ mod tests {
         let result = fetch_utxos_for_address(&server.url(), &address).await;
         assert!(
             matches!(result, Err(UtilsError::ParseError(_))),
-            "Expected ParseError, got {:?}", result
+            "Expected ParseError, got {:?}",
+            result
         );
         info!("Tested fetch_utxos_for_address parse error");
         mock.assert_async().await;
@@ -283,7 +270,8 @@ mod tests {
         let result = fetch_utxos_for_address(&server.url(), &address).await;
         assert!(
             matches!(result, Err(UtilsError::ParseError(_))),
-            "Expected ParseError, got {:?}", result
+            "Expected ParseError, got {:?}",
+            result
         );
         info!("Tested fetch_utxos_for_address HTTP error");
         mock.assert_async().await;
@@ -310,7 +298,9 @@ mod tests {
         assert_eq!(
             result.as_ref().unwrap(),
             txid,
-            "Expected txid {}, got {:?}", txid, result
+            "Expected txid {}, got {:?}",
+            txid,
+            result
         );
         info!("Tested broadcast_trx success");
         mock.assert_async().await;
@@ -336,7 +326,8 @@ mod tests {
                 result,
                 Err(UtilsError::BroadcastError { status, ref message }) if status == reqwest::StatusCode::BAD_REQUEST && message == "Invalid transaction"
             ),
-            "Expected BroadcastError, got {:?}", result
+            "Expected BroadcastError, got {:?}",
+            result
         );
         info!("Tested broadcast_trx broadcast error");
         mock.assert_async().await;
@@ -359,7 +350,8 @@ mod tests {
         let result = broadcast_trx(&server.url(), tx_raw_hex).await;
         assert!(
             matches!(result, Err(UtilsError::ParseError(_))),
-            "Expected ParseError, got {:?}", result
+            "Expected ParseError, got {:?}",
+            result
         );
         info!("Tested broadcast_trx parse error (empty)");
         mock.assert_async().await;
@@ -382,7 +374,8 @@ mod tests {
         let result = broadcast_trx(&server.url(), tx_raw_hex).await;
         assert!(
             matches!(result, Err(UtilsError::ParseError(_))),
-            "Expected ParseError, got {:?}", result
+            "Expected ParseError, got {:?}",
+            result
         );
         info!("Tested broadcast_trx parse error (invalid)");
         mock.assert_async().await;
@@ -404,7 +397,8 @@ mod tests {
         assert_eq!(
             *result.as_ref().unwrap(),
             1234,
-            "Expected height 1234, got {:?}", result
+            "Expected height 1234, got {:?}",
+            result
         );
         info!("Tested fetch_tip_block_height success");
         mock.assert_async().await;
@@ -424,7 +418,8 @@ mod tests {
         let result = fetch_tip_block_height(&server.url()).await;
         assert!(
             matches!(result, Err(UtilsError::ParseError(_))),
-            "Expected ParseError, got {:?}", result
+            "Expected ParseError, got {:?}",
+            result
         );
         info!("Tested fetch_tip_block_height parse error");
         mock.assert_async().await;
@@ -478,7 +473,8 @@ mod tests {
         let result = fetch_recommended_fee_rate(&server.url()).await;
         assert!(
             matches!(result, Err(UtilsError::ParseError(_))),
-            "Expected ParseError, got {:?}", result
+            "Expected ParseError, got {:?}",
+            result
         );
         info!("Tested fetch_recommended_fee_rate parse error");
         mock.assert_async().await;

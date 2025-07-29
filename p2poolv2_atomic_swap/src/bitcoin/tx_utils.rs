@@ -7,10 +7,8 @@ use ldk_node::bitcoin::{
     TxOut, Witness,
 };
 use log::{error, info};
-use thiserror::Error;
 use std::str::FromStr;
-
-pub const DEFAULT_FEE: Amount = Amount::from_sat(200); // Define as a constant
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum TxUtilsError {
@@ -28,7 +26,11 @@ pub fn build_transaction(inputs: Vec<TxIn>, outputs: Vec<TxOut>) -> Transaction 
         input: inputs,
         output: outputs,
     };
-    info!("Built transaction with {} inputs and {} outputs", tx.input.len(), tx.output.len());
+    info!(
+        "Built transaction with {} inputs and {} outputs",
+        tx.input.len(),
+        tx.output.len()
+    );
     tx
 }
 
@@ -53,7 +55,10 @@ pub fn build_output(value: Amount, address: &Address) -> TxOut {
         value,
         script_pubkey: address.script_pubkey(),
     };
-    info!("Created transaction output with value {} to address {}", value, address);
+    info!(
+        "Created transaction output with value {} to address {}",
+        value, address
+    );
     output
 }
 
@@ -74,15 +79,17 @@ pub fn compute_taproot_sighash(
             sighash_type,
         )
         .map_err(|e| {
-            error!("Failed to compute Taproot sighash for input {}: {}", input_index, e);
+            error!(
+                "Failed to compute Taproot sighash for input {}: {}",
+                input_index, e
+            );
             TxUtilsError::SighashComputationError(e.to_string())
         })?;
     info!("Computed Taproot sighash for input {}", input_index);
-    Message::from_digest_slice(&sighash[..])
-        .map_err(|e| {
-            error!("Failed to create message from sighash: {}", e);
-            TxUtilsError::SighashComputationError(e.to_string())
-        })
+    Message::from_digest_slice(&sighash[..]).map_err(|e| {
+        error!("Failed to create message from sighash: {}", e);
+        TxUtilsError::SighashComputationError(e.to_string())
+    })
 }
 
 /// Signs a Taproot sighash with a Schnorr signature.
@@ -98,11 +105,10 @@ pub fn sign_schnorr(
 
 /// Derives a keypair from a private key string.
 pub fn derive_keypair(private_key: &str) -> Result<Keypair, TxUtilsError> {
-    let secret_key = SecretKey::from_str(private_key)
-        .map_err(|e| {
-            error!("Invalid private key: {}", e);
-            TxUtilsError::InvalidPrivateKey(e.to_string())
-        })?;
+    let secret_key = SecretKey::from_str(private_key).map_err(|e| {
+        error!("Invalid private key: {}", e);
+        TxUtilsError::InvalidPrivateKey(e.to_string())
+    })?;
     let keypair = Keypair::from_secret_key(&Secp256k1::new(), &secret_key);
     info!("Derived keypair from private key");
     Ok(keypair)

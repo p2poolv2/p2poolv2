@@ -6,7 +6,7 @@ use ldk_node::{
     lightning::ln::msgs::SocketAddress,
 };
 use ldk_node::{Node, UserChannelId};
-use log::{info, error};
+use log::{error, info};
 use thiserror::Error;
 
 pub mod checks;
@@ -51,7 +51,10 @@ pub(crate) async fn onchaintransfer(
     destination_address: &Address,
     amount_sats: u64,
 ) -> Result<Txid, NodeError> {
-    info!("Sending on-chain transfer of {} sats to {}", amount_sats, destination_address);
+    info!(
+        "Sending on-chain transfer of {} sats to {}",
+        amount_sats, destination_address
+    );
     match node
         .onchain_payment()
         .send_to_address(destination_address, amount_sats, None)
@@ -68,7 +71,10 @@ pub(crate) async fn onchaintransfer(
 }
 
 /// Sends all available on-chain funds to a specified address.
-pub(crate) async fn onchaintransfer_all(node: &Node, destination: &Address) -> Result<Txid, NodeError> {
+pub(crate) async fn onchaintransfer_all(
+    node: &Node,
+    destination: &Address,
+) -> Result<Txid, NodeError> {
     info!("Sending all on-chain funds to {}", destination);
     match node
         .onchain_payment()
@@ -119,7 +125,10 @@ pub(crate) async fn balance(node: &Node) -> Result<(u64, u64), NodeError> {
         "Lightning Balance: {} sats",
         balances.total_lightning_balance_sats
     );
-    Ok((balances.total_onchain_balance_sats, balances.total_lightning_balance_sats))
+    Ok((
+        balances.total_onchain_balance_sats,
+        balances.total_lightning_balance_sats,
+    ))
 }
 
 /// Generates a new on-chain funding address.
@@ -185,7 +194,10 @@ pub(crate) async fn closechannel(
     channel_id: &UserChannelId,
     counterparty_node_id: PublicKey,
 ) -> Result<(), NodeError> {
-    info!("Closing channel with ID {:?} and counterparty {}", channel_id, counterparty_node_id);
+    info!(
+        "Closing channel with ID {:?} and counterparty {}",
+        channel_id, counterparty_node_id
+    );
     match node.close_channel(channel_id, counterparty_node_id) {
         Ok(_) => {
             info!("Channel closed successfully.");
@@ -210,7 +222,10 @@ pub(crate) async fn force_close_channel(
         .chars()
         .all(|c| c.is_alphanumeric() || c == '_' || c.is_lowercase() || c.is_uppercase())
     {
-        error!("Invalid reason format: '{}'. Must be snake_case or camelCase.", reason);
+        error!(
+            "Invalid reason format: '{}'. Must be snake_case or camelCase.",
+            reason
+        );
         return Err(NodeError::InvalidReasonFormat(
             "Reason must be in snake_case or camelCase format".to_string(),
         ));
@@ -237,17 +252,13 @@ pub(crate) async fn force_close_channel(
 }
 
 /// Generates a new Bolt11 invoice for a specified amount.
-pub(crate) async fn getinvoice(
-    node: &Node,
-    amount_msats: u64,
-) -> Result<Bolt11Invoice, NodeError> {
+pub(crate) async fn getinvoice(node: &Node, amount_msats: u64) -> Result<Bolt11Invoice, NodeError> {
     info!("Generating Bolt11 invoice for {} msats", amount_msats);
     let bolt11payment = node.bolt11_payment();
-    let description = Description::new(DEFAULT_INVOICE_DESCRIPTION.to_string())
-        .map_err(|e| {
-            error!("Failed to create invoice description: {}", e);
-            NodeError::DescriptionError(e.to_string())
-        })?;
+    let description = Description::new(DEFAULT_INVOICE_DESCRIPTION.to_string()).map_err(|e| {
+        error!("Failed to create invoice description: {}", e);
+        NodeError::DescriptionError(e.to_string())
+    })?;
     let description = Bolt11InvoiceDescription::Direct(description);
     match bolt11payment.receive(amount_msats, &description, DEFAULT_EXPIRY_SECS) {
         Ok(invoice) => {
@@ -267,13 +278,15 @@ pub(crate) async fn getholdinvoice(
     amount_msats: u64,
     payment_hash: PaymentHash,
 ) -> Result<Bolt11Invoice, NodeError> {
-    info!("Generating hold invoice for {} msats with payment hash {:?}", amount_msats, payment_hash);
+    info!(
+        "Generating hold invoice for {} msats with payment hash {:?}",
+        amount_msats, payment_hash
+    );
     let bolt11_payment = node.bolt11_payment();
-    let description = Description::new("Test invoice".to_string())
-        .map_err(|e| {
-            error!("Failed to create hold invoice description: {}", e);
-            NodeError::DescriptionError(e.to_string())
-        })?;
+    let description = Description::new("Test invoice".to_string()).map_err(|e| {
+        error!("Failed to create hold invoice description: {}", e);
+        NodeError::DescriptionError(e.to_string())
+    })?;
     let description = Bolt11InvoiceDescription::Direct(description);
     match bolt11_payment.receive_for_hash(
         amount_msats,

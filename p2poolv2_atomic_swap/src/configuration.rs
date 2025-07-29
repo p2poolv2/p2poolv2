@@ -166,4 +166,3 @@ min_buffer_block_for_refund = 10
         assert!(result.is_err());
     }
 }
-

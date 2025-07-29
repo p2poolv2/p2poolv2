@@ -1,5 +1,5 @@
 use crate::bitcoin::utils::Utxo;
-use log::{info, error};
+use log::{error, info};
 use thiserror::Error;
 
 /// Errors that can occur while validating HTLC UTXOs.
@@ -10,14 +10,22 @@ pub enum HtlcValidationError {
     #[error("UTXO has insufficient confirmations: {current} < {required}")]
     InsufficientConfirmations { current: u32, required: u32 },
     #[error("UTXO is outside the swap window: expired at {expiry_height}, current height {current_height}")]
-    SwapWindowExpired { expiry_height: u32, current_height: u32 },
+    SwapWindowExpired {
+        expiry_height: u32,
+        current_height: u32,
+    },
 }
 
 /// Errors that can occur while checking refundable UTXOs.
 #[derive(Error, Debug, PartialEq)]
 pub enum RefundValidationError {
-    #[error("UTXO is not yet refundable: refund at {refund_height}, current block {current_height}")]
-    NotYetRefundable { refund_height: u32, current_height: u32 },
+    #[error(
+        "UTXO is not yet refundable: refund at {refund_height}, current block {current_height}"
+    )]
+    NotYetRefundable {
+        refund_height: u32,
+        current_height: u32,
+    },
 }
 
 /// Checks if a UTXO is confirmed with required confirmations
@@ -170,7 +178,8 @@ mod tests {
             status: UtxoStatus {
                 confirmed,
                 block_height,
-                block_hash: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+                block_hash: "0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_string(),
                 block_time: 1234567890,
             },
         }
@@ -287,11 +296,11 @@ mod tests {
         let current_block_height = 100;
 
         let utxos = vec![
-            create_utxo(false, 95, 10000),  // Unconfirmed
-            create_utxo(true, 98, 15000),   // Insufficient confirmations
-            create_utxo(true, 88, 20000),   // Expired (88 + 10 - 2 = 96 <= 100)
-            create_utxo(true, 93, 25000),   // Valid (93 + 10 - 2 = 101 > 100)
-            create_utxo(true, 94, 30000),   // Valid (94 + 10 - 2 = 102 > 100)
+            create_utxo(false, 95, 10000), // Unconfirmed
+            create_utxo(true, 98, 15000),  // Insufficient confirmations
+            create_utxo(true, 88, 20000),  // Expired (88 + 10 - 2 = 96 <= 100)
+            create_utxo(true, 93, 25000),  // Valid (93 + 10 - 2 = 101 > 100)
+            create_utxo(true, 94, 30000),  // Valid (94 + 10 - 2 = 102 > 100)
         ];
 
         let (valid_utxos, min_swap_window, total_sats) = filter_valid_htlc_utxos(
@@ -327,15 +336,15 @@ mod tests {
             create_utxo(true, 85, 30000), // Refundable (85 + 10 = 95 <= 100)
         ];
 
-        let refundable_utxos = filter_refundable_utxos(
-            utxos.iter().collect(),
-            timelock,
-            current_block_height,
-        );
+        let refundable_utxos =
+            filter_refundable_utxos(utxos.iter().collect(), timelock, current_block_height);
 
         assert_eq!(refundable_utxos.len(), 2, "Expected 2 refundable UTXOs");
         assert_eq!(
-            refundable_utxos.iter().map(|u| u.value).collect::<Vec<u64>>(),
+            refundable_utxos
+                .iter()
+                .map(|u| u.value)
+                .collect::<Vec<u64>>(),
             vec![20000, 30000],
             "Expected refundable UTXO values"
         );

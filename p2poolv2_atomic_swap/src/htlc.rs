@@ -1,10 +1,9 @@
 use crate::bitcoin::p2tr2;
 
-
-use crate::swap::{HTLCType, Swap};
-use ldk_node::bitcoin::{Address,  KnownHrp, Transaction};
-use std::error::Error;
 use crate::bitcoin::utils::Utxo;
+use crate::swap::{HTLCType, Swap};
+use ldk_node::bitcoin::{Address, KnownHrp, Transaction};
+use std::error::Error;
 
 pub fn generate_htlc_address(swap: &Swap) -> Result<Address, Box<dyn Error>> {
     // need to removed
@@ -29,7 +28,6 @@ pub fn redeem_htlc_address(
     receiver_private_key: &str,
     utxos: Vec<Utxo>,
     transfer_to_address: &Address,
-    
 ) -> Result<Transaction, Box<dyn Error>> {
     // need to removed
     let network = KnownHrp::Testnets;
@@ -40,7 +38,7 @@ pub fn redeem_htlc_address(
                 swap,
                 preimage,
                 receiver_private_key,
-                utxos,            
+                utxos,
                 transfer_to_address,
                 3,
                 network,

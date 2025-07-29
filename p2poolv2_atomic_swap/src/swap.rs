@@ -1,8 +1,8 @@
 use ciborium;
+use log::{error, info};
 use rocksdb::{Options, DB};
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
-use log::{info, error};
 use thiserror::Error as ThisError;
 
 // Define the enum for HTLC types
@@ -54,7 +54,10 @@ pub fn create_swap(swap: &Swap, db_path: &str) -> Result<String, SwapError> {
     // Configure RocksDB options
     let mut options = Options::default();
     options.create_if_missing(true);
-    info!("Configuring RocksDB with create_if_missing=true for path: {}", db_path);
+    info!(
+        "Configuring RocksDB with create_if_missing=true for path: {}",
+        db_path
+    );
 
     // Open the database
     let db = DB::open(&options, db_path).map_err(|e| {
@@ -93,10 +96,11 @@ pub fn create_swap(swap: &Swap, db_path: &str) -> Result<String, SwapError> {
     })?;
 
     // Update the counter
-    db.put(counter_key, next_id.to_string().as_bytes()).map_err(|e| {
-        error!("Failed to update swap counter to {}: {}", next_id, e);
-        SwapError::DatabaseAccessError(e.to_string())
-    })?;
+    db.put(counter_key, next_id.to_string().as_bytes())
+        .map_err(|e| {
+            error!("Failed to update swap counter to {}: {}", next_id, e);
+            SwapError::DatabaseAccessError(e.to_string())
+        })?;
 
     info!("Created swap {}: {:?}", swap_key, swap);
 
@@ -107,7 +111,10 @@ pub fn retrieve_swap(db_path: &str, key: &str) -> Result<Option<Swap>, SwapError
     // Configure RocksDB options
     let mut options = Options::default();
     options.create_if_missing(true);
-    info!("Configuring RocksDB with create_if_missing=true for path: {}", db_path);
+    info!(
+        "Configuring RocksDB with create_if_missing=true for path: {}",
+        db_path
+    );
 
     // Open the database
     let db = DB::open(&options, db_path).map_err(|e| {
@@ -122,7 +129,11 @@ pub fn retrieve_swap(db_path: &str, key: &str) -> Result<Option<Swap>, SwapError
         SwapError::DatabaseAccessError(e.to_string())
     })? {
         Some(value) => {
-            info!("Found swap data for key {}, size: {} bytes", key, value.len());
+            info!(
+                "Found swap data for key {}, size: {} bytes",
+                key,
+                value.len()
+            );
             // Deserialize the CBOR data back to the object
             let deserialized: Swap = ciborium::from_reader(Cursor::new(value))?;
             info!("Deserialized swap: {:?}", deserialized);
@@ -138,16 +149,19 @@ pub fn retrieve_swap(db_path: &str, key: &str) -> Result<Option<Swap>, SwapError
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use env_logger;
+    use tempfile::TempDir;
 
     // Initialize a sample Swap for testing
     fn create_test_swap() -> Swap {
         Swap {
-            payment_hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
+            payment_hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+                .to_string(),
             from_chain: Bitcoin {
-                initiator_pubkey: "02a18cc4eaf4287a1a926d45d0d7810410e587ade954e9040121b0652941ee3a9a".to_string(),
-                responder_pubkey: "03b18cc4eaf4287a1a926d45d0d7810410e587ade954e9040121b0652941ee3a9b".to_string(),
+                initiator_pubkey:
+                    "02a18cc4eaf4287a1a926d45d0d7810410e587ade954e9040121b0652941ee3a9a".to_string(),
+                responder_pubkey:
+                    "03b18cc4eaf4287a1a926d45d0d7810410e587ade954e9040121b0652941ee3a9b".to_string(),
                 timelock: 1000,
                 amount: 10000,
                 htlc_type: HTLCType::P2tr2,
@@ -162,11 +176,15 @@ mod tests {
     #[test]
     fn test_create_swap() {
         // Initialize logger
-        let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).try_init();
+        let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+            .try_init();
 
         // Create a temporary directory for RocksDB
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let db_path = temp_dir.path().to_str().expect("Failed to get temp dir path");
+        let db_path = temp_dir
+            .path()
+            .to_str()
+            .expect("Failed to get temp dir path");
 
         // Create a test swap
         let swap = create_test_swap();
@@ -177,7 +195,11 @@ mod tests {
 
         // Verify the swap can be retrieved
         let retrieved = retrieve_swap(db_path, &result).expect("Failed to retrieve swap");
-        assert_eq!(retrieved, Some(swap.clone()), "Retrieved swap does not match");
+        assert_eq!(
+            retrieved,
+            Some(swap.clone()),
+            "Retrieved swap does not match"
+        );
 
         // Test counter incrementation
         let swap2 = create_test_swap();
@@ -188,11 +210,15 @@ mod tests {
     #[test]
     fn test_retrieve_swap() {
         // Initialize logger
-        let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).try_init();
+        let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+            .try_init();
 
         // Create a temporary directory for RocksDB
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let db_path = temp_dir.path().to_str().expect("Failed to get temp dir path");
+        let db_path = temp_dir
+            .path()
+            .to_str()
+            .expect("Failed to get temp dir path");
 
         // Test retrieving a non-existent swap
         let result = retrieve_swap(db_path, "swap_1").expect("Failed to retrieve swap");

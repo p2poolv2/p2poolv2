@@ -76,10 +76,9 @@ async fn make_node(node_config: NodeConfig) -> ldk_node::Node {
 
 #[tokio::main]
 async fn main() {
-
     // Initialize the logger
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-  
+
     let node_config = parse_config("config.toml").expect("Failed to parse configuration file");
 
     println!("Node configuration: {:?}", node_config);
@@ -96,7 +95,7 @@ async fn main() {
         handle_events(&node_clone).await; // Ensure .await here
     });
 
-    run_node_cli(node.clone(),htlc_config).await;
+    run_node_cli(node.clone(), htlc_config).await;
 
     println!("Stopping the node...");
     node.stop().unwrap();
