@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -748,11 +748,11 @@ mock! {
 mod tests {
     use super::*;
     use crate::shares::miner_message::Gbt;
+    use crate::test_utils::TestBlockBuilder;
+    use crate::test_utils::TestMinerWorkbaseBuilder;
     use crate::test_utils::genesis_for_testnet;
     use crate::test_utils::load_valid_workbases_userworkbases_and_shares;
     use crate::test_utils::random_hex_string;
-    use crate::test_utils::TestBlockBuilder;
-    use crate::test_utils::TestMinerWorkbaseBuilder;
     use rust_decimal_macros::dec;
     use tempfile::tempdir;
 

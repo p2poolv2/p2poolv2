@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -25,7 +25,7 @@ use crate::shares::handle_mining_message::handle_mining_message;
 use crate::shares::miner_message::CkPoolMessage;
 use crate::{
     node::SwarmSend,
-    shares::ckpool_socket::{create_zmq_socket, start_receiving_from_ckpool, CkPoolSocket},
+    shares::ckpool_socket::{CkPoolSocket, create_zmq_socket, start_receiving_from_ckpool},
 };
 use std::error::Error;
 use std::thread;

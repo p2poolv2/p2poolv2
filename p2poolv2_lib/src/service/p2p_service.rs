@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -22,9 +22,9 @@ use futures::Future;
 use tokio::sync::mpsc;
 use tower::Service;
 
+use crate::node::SwarmSend;
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::handle_request;
-use crate::node::SwarmSend;
 #[cfg_attr(test, mockall_double::double)]
 use crate::shares::chain::actor::ChainHandle;
 use crate::utils::time_provider::TimeProvider;
@@ -41,10 +41,18 @@ pub struct RequestContext<C, T> {
 
 /// The Tower service that processes inbound P2P requests.
 #[derive(Clone)]
-pub struct P2PService;
+pub struct P2PService<C> {
+    pub swarm_tx: mpsc::Sender<SwarmSend<C>>,
+}
+
+impl<C> P2PService<C> {
+    pub fn new(swarm_tx: mpsc::Sender<SwarmSend<C>>) -> Self {
+        Self { swarm_tx }
+    }
+}
 
 impl<C: 'static + Send + Sync, T: TimeProvider + Send + Sync + 'static>
-    Service<RequestContext<C, T>> for P2PService
+    Service<RequestContext<C, T>> for P2PService<C>
 {
     type Response = ();
     type Error = Box<dyn Error + Send + Sync>;

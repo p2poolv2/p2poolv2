@@ -12,6 +12,9 @@ max_miningshare_per_second = 100
 max_inventory_per_second = 100
 max_transaction_per_second = 100
 rate_limit_window_secs = 1
+max_requests_per_second = 1
+peer_inactivity_timeout_secs = 60
+dial_timeout_secs = 30
 
 [store]
 path = "./store.1.db"
@@ -21,7 +24,7 @@ host = "localhost"
 port = 8881
 
 [stratum]
-hostname = "localhost"
+hostname = "0.0.0.0"
 port = 13333
 start_difficulty = 1
 minimum_difficulty = 1
@@ -29,6 +32,8 @@ solo_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 zmqpubhashblock = "tcp://127.0.0.1:28332"
 # The network can be "main", "testnet4" or "signet"
 network = "signet"
+version_mask = "1fffe000"
+
 
 [miner]
 pubkey = "020202020202020202020202020202020202020202020202020202020202020202"

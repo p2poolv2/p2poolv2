@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -16,7 +16,7 @@
 
 use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
-use crate::messages::{Message, Request, Response};
+use crate::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
 use crate::session::{Session, EXTRANONCE2_SIZE};
 use serde_json::json;
 use tracing::debug;
@@ -27,26 +27,30 @@ use tracing::debug;
 /// The function accepts a mutable reference to a `Session` object, which informs the responses.
 /// The session is also updated in response to received messages, if required.
 pub async fn handle_subscribe<'a, D: DifficultyAdjusterTrait>(
-    message: Request<'a>,
+    message: SimpleRequest<'a>,
     session: &mut Session<D>,
-) -> Result<Message<'a>, Error> {
+    pool_min_difficulty: u64,
+) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.subscribe message");
     if session.subscribed {
         debug!("Client already subscribed. No response sent.");
         return Err(Error::SubscriptionFailure("Already subscribed".to_string()));
     }
     session.subscribed = true;
-    Ok(Message::Response(Response::new_ok(
-        message.id,
-        json!([
-            [
-                ["mining.notify", format!("{}1", session.id)], // we expect different ids in notify and set_difficulty, thus we suffix with 1 and 2
-                ["mining.set_difficulty", format!("{}2", session.id)],
-            ],
-            session.enonce1_hex,
-            EXTRANONCE2_SIZE,
-        ]),
-    )))
+    Ok(vec![
+        Message::Response(Response::new_ok(
+            message.id,
+            json!([
+                [
+                    ["mining.notify", format!("{}1", session.id)], // we expect different ids in notify and set_difficulty, thus we suffix with 1 and 2
+                    ["mining.set_difficulty", format!("{}2", session.id)],
+                ],
+                session.enonce1_hex,
+                EXTRANONCE2_SIZE,
+            ]),
+        )),
+        Message::SetDifficulty(SetDifficultyNotification::new(pool_min_difficulty)),
+    ])
 }
 
 #[cfg(test)]
@@ -59,25 +63,27 @@ mod tests {
     #[tokio::test]
     async fn test_handle_subscribe_success() {
         // Setup
-        let message = Request::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
-        let mut session = Session::<DifficultyAdjuster>::new(1, None, 2);
+        let message = SimpleRequest::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
+        let mut session = Session::<DifficultyAdjuster>::new(1, None, 0x1fffe000);
         session.subscribed = false;
 
         // Execute
-        let response = handle_subscribe(message, &mut session).await;
+        let response = handle_subscribe(message, &mut session, 1000).await;
 
         // Verify
         assert!(response.is_ok());
         let message = response.unwrap();
 
-        let response = match message {
-            Message::Response(response) => response,
+        let (subscribe_response, difficulty_notification) = match &message[..] {
+            [Message::Response(response), Message::SetDifficulty(difficulty_notification)] => {
+                (response, difficulty_notification)
+            }
             _ => panic!("Expected a Response message"),
         };
 
-        assert_eq!(response.id, Some(Id::Number(1)));
+        assert_eq!(subscribe_response.id, Some(Id::Number(1)));
         // Check the response.result is Some and is an array as expected
-        let result = response
+        let result = subscribe_response
             .result
             .as_ref()
             .expect("Expected result in response");
@@ -108,17 +114,27 @@ mod tests {
         // 3. Check extranonce2_size
         assert_eq!(arr[2], serde_json::json!(EXTRANONCE2_SIZE));
         assert!(session.subscribed);
+
+        // Check difficulty notification
+        assert_eq!(
+            difficulty_notification.method, "mining.set_difficulty",
+            "Expected method to be 'mining.set_difficulty'"
+        );
+        assert_eq!(
+            difficulty_notification.params[0], 1000,
+            "Expected difficulty notification to match pool minimum difficulty"
+        );
     }
 
     #[tokio::test]
     async fn test_handle_subscribe_already_subscribed() {
         // Setup
-        let message = Request::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
-        let mut session = Session::<DifficultyAdjuster>::new(2, None, 2);
+        let message = SimpleRequest::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
+        let mut session = Session::<DifficultyAdjuster>::new(2, None, 0x1fffe000);
         session.subscribed = true;
 
         // Execute
-        let response = handle_subscribe(message, &mut session).await;
+        let response = handle_subscribe(message, &mut session, 1000).await;
 
         // Verify
         assert!(response.is_err());

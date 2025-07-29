@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -80,8 +80,8 @@ mod tests {
     use bitcoindrpc::BitcoinRpcConfig;
     use rust_decimal_macros::dec;
     use wiremock::{
-        matchers::{body_json, header, method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{body_json, header, method, path},
     };
 
     #[tokio::test]

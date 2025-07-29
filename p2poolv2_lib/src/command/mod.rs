@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -15,8 +15,8 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::node::messages::Message;
-use crate::shares::miner_message::MinerWorkbase;
 use crate::shares::ShareBlock;
+use crate::shares::miner_message::MinerWorkbase;
 use std::error::Error;
 use tokio::sync::oneshot;
 
@@ -37,14 +37,4 @@ pub enum Command {
     GetPeers(oneshot::Sender<Vec<libp2p::PeerId>>),
     /// Command to shutdown node
     Shutdown(oneshot::Sender<()>),
-    /// Command to add share to the chain
-    AddShare(
-        ShareBlock,
-        oneshot::Sender<Result<(), Box<dyn Error + Send + Sync>>>,
-    ),
-    /// Command to store workbase in the node's database
-    StoreWorkbase(
-        MinerWorkbase,
-        oneshot::Sender<Result<(), Box<dyn Error + Send + Sync>>>,
-    ),
 }

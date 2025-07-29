@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -21,7 +21,7 @@ use std::fmt;
 #[derive(Debug)]
 pub enum Error {
     InvalidMethod(String),
-    InvalidParams,
+    InvalidParams(String),
     AuthorizationFailure(String),
     SubmitFailure(String),
     SubscriptionFailure(String),
@@ -32,12 +32,12 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidMethod(method) => write!(f, "Invalid stratum method: {}", method),
-            Self::InvalidParams => write!(f, "Invalid parameters provided"),
-            Self::AuthorizationFailure(reason) => write!(f, "Authorization failed {}", reason),
-            Self::SubmitFailure(reason) => write!(f, "Submit failure: {}", reason),
-            Self::SubscriptionFailure(reason) => write!(f, "Subscription failure: {}", reason),
-            Self::IoError(err) => write!(f, "IO error: {}", err),
+            Self::InvalidMethod(method) => write!(f, "Invalid stratum method: {method}"),
+            Self::InvalidParams(msg) => write!(f, "Invalid parameters provided: {msg}"),
+            Self::AuthorizationFailure(reason) => write!(f, "Authorization failed: {reason}"),
+            Self::SubmitFailure(reason) => write!(f, "Submit failure: {reason}"),
+            Self::SubscriptionFailure(reason) => write!(f, "Subscription failure: {reason}"),
+            Self::IoError(err) => write!(f, "IO error: {err}"),
             Self::InsufficientWork => write!(f, "Insufficient work"),
         }
     }

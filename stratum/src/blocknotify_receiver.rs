@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -32,10 +32,7 @@ fn main() -> std::io::Result<()> {
     let mut stream = match UnixStream::connect(socket_path) {
         Ok(stream) => stream,
         Err(_e) => {
-            println!(
-                "P2Pool server not running. No notification sent to {}",
-                socket_path
-            );
+            println!("P2Pool server not running. No notification sent to {socket_path}");
             return Ok(());
         }
     };
@@ -43,7 +40,7 @@ fn main() -> std::io::Result<()> {
     // Write a single byte to trigger the listener
     stream.write_all(b"blocknotify\n")?;
 
-    println!("Block notification sent to {}", socket_path);
+    println!("Block notification sent to {socket_path}");
     Ok(())
 }
 

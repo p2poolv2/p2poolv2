@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -34,6 +34,9 @@ pub struct NetworkConfig {
     pub max_inventory_per_second: u32,
     pub max_transaction_per_second: u32,
     pub rate_limit_window_secs: u64,
+    pub max_requests_per_second: u64,
+    pub peer_inactivity_timeout_secs: u64,
+    pub dial_timeout_secs: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -56,16 +59,9 @@ pub struct MinerConfig {
 pub struct LoggingConfig {
     /// Log to file if specified
     pub file: Option<String>,
-    /// Log to console if true (defaults to true)
-    #[serde(default = "default_console_logging")]
-    pub console: bool,
     /// Log level (defaults to "info")
     #[serde(default = "default_log_level")]
     pub level: String,
-}
-
-fn default_console_logging() -> bool {
-    true
 }
 
 fn default_log_level() -> String {
@@ -208,6 +204,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use temp_env::with_var;
 
     #[test]
     fn test_config_builder() {
@@ -281,16 +278,16 @@ mod tests {
 
     #[test]
     fn test_config_from_env_vars() {
-        // Set environment variable for bitcoin URL
-        std::env::set_var("P2POOL_BITCOINRPC_URL", "http://bitcoin-from-env:8332");
+        with_var(
+            "P2POOL_BITCOINRPC_URL",
+            Some("http://bitcoin-from-env:8332"),
+            || {
+                // Load config from file first
+                let config = Config::load("../config.toml").unwrap();
 
-        // Load config from file first
-        let config = Config::load("../config.toml").unwrap();
-
-        // Check that the environment variable overrides the config file value
-        assert_eq!(config.bitcoinrpc.url, "http://bitcoin-from-env:8332");
-
-        // Clean up environment variable after test
-        std::env::remove_var("P2POOL_BITCOINRPC_URL");
+                // Check that the environment variable overrides the config file value
+                assert_eq!(config.bitcoinrpc.url, "http://bitcoin-from-env:8332");
+            },
+        );
     }
 }

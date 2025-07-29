@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -88,11 +88,11 @@ pub fn build_notify(
 
     let prevhash_byte_swapped =
         reverse_four_byte_chunks(&template.previousblockhash).map_err(|e| WorkError {
-            message: format!("Failed to reverse previous block hash: {}", e),
+            message: format!("Failed to reverse previous block hash: {e}"),
         })?;
 
     let params = NotifyParams {
-        job_id: Cow::Owned(format!("{:016x}", job_id)),
+        job_id: Cow::Owned(format!("{job_id:016x}")),
         prevhash: Cow::Owned(prevhash_byte_swapped),
         coinbase1: Cow::Owned(coinbase1),
         coinbase2: Cow::Owned(coinbase2),
@@ -209,7 +209,7 @@ pub async fn start_notify(
 mod tests {
     use super::*;
     use crate::difficulty_adjuster::DifficultyAdjuster;
-    use crate::messages::{Request, Response};
+    use crate::messages::{Response, SimpleRequest};
     use crate::session::Session;
     use crate::work::coinbase::parse_address;
     use crate::work::tracker::start_tracker_actor;
@@ -346,7 +346,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_notify_from_ckpool_sample() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, None, 1);
+        let mut session = Session::<DifficultyAdjuster>::new(1, None, 0x1fffe000);
         let _tracker_handle = start_tracker_actor();
 
         let (mock_server, _bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
@@ -371,7 +371,7 @@ mod tests {
                 .join("../tests/test_data/validation/stratum/b/submit.json"),
         )
         .unwrap();
-        let _submit: Request = serde_json::from_str(&submit_str).unwrap();
+        let _submit: SimpleRequest = serde_json::from_str(&submit_str).unwrap();
 
         let authorize_response_str = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

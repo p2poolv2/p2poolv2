@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -14,9 +14,9 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::ShareBlockHash;
-use crate::shares::{store::Store, ShareBlock, ShareHeader};
+use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
+use crate::shares::{ShareBlock, ShareHeader, store::Store};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::{HashMap, HashSet};
@@ -407,9 +407,9 @@ impl Chain {
 #[cfg(test)]
 mod chain_tests {
     use super::*;
+    use crate::test_utils::TestBlockBuilder;
     use crate::test_utils::genesis_for_testnet;
     use crate::test_utils::random_hex_string;
-    use crate::test_utils::TestBlockBuilder;
     use std::collections::HashSet;
     use tempfile::tempdir;
 
@@ -849,7 +849,7 @@ mod chain_tests {
 
         let locator = chain.build_locator().unwrap();
         assert_eq!(locator.len(), 6); // Should return all blocks
-                                      // Verify blocks are in reverse order (tip to genesis)
+        // Verify blocks are in reverse order (tip to genesis)
         for i in 0..5 {
             assert_eq!(locator[i], blocks[4 - i].cached_blockhash.unwrap());
         }

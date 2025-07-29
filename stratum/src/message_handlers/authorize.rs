@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -16,7 +16,7 @@
 
 use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
-use crate::messages::{Message, Request, Response};
+use crate::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
 use crate::session::Session;
 use crate::work::notify::NotifyCmd;
 use tracing::debug;
@@ -33,11 +33,12 @@ use tracing::debug;
 /// TBH, this mining.authorize message is not needed at all. No server from ckpool to dataum to SRI is doing anything meaningful with it.
 /// Stratum servers also allow all workers to authrorize over the same connection.
 pub async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
-    message: Request<'a>,
+    message: SimpleRequest<'a>,
     session: &mut Session<D>,
     addr: std::net::SocketAddr,
     notify_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
-) -> Result<Message<'a>, Error> {
+    pool_min_difficulty: u64,
+) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.authorize message");
     if session.username.is_some() {
         debug!("Client already authorized. No response sent.");
@@ -52,10 +53,10 @@ pub async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             client_address: addr,
         })
         .await;
-    Ok(Message::Response(Response::new_ok(
-        message.id,
-        serde_json::json!(true),
-    )))
+    Ok(vec![
+        Message::Response(Response::new_ok(message.id, serde_json::json!(true))),
+        Message::SetDifficulty(SetDifficultyNotification::new(pool_min_difficulty)),
+    ])
 }
 
 #[cfg(test)]
@@ -68,8 +69,9 @@ mod tests {
     #[tokio::test]
     async fn test_handle_authorize_first_time() {
         // Setup
-        let mut session = Session::<DifficultyAdjuster>::new(1, None, 1);
-        let request = Request::new_authorize(12345, "worker1".to_string(), Some("x".to_string()));
+        let mut session = Session::<DifficultyAdjuster>::new(1, None, 0x1fffe000);
+        let request =
+            SimpleRequest::new_authorize(12345, "worker1".to_string(), Some("x".to_string()));
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(1);
 
         // Execute
@@ -78,20 +80,26 @@ mod tests {
             &mut session,
             SocketAddr::from(([127, 0, 0, 1], 8080)),
             notify_tx,
+            1000,
         )
         .await
         .unwrap();
 
-        let response = match message {
-            Message::Response(response) => response,
+        let (subscribe_response, difficulty_notification) = match &message[..] {
+            [Message::Response(response), Message::SetDifficulty(difficulty_notification)] => {
+                (response, difficulty_notification)
+            }
             _ => panic!("Expected a Response message"),
         };
 
         // Verify
-        assert_eq!(response.id, Some(Id::Number(12345)));
-        assert!(response.error.is_none());
-        assert!(response.result.is_some());
-        assert_eq!(response.result.unwrap(), true);
+        assert_eq!(subscribe_response.id, Some(Id::Number(12345)));
+        assert!(subscribe_response.error.is_none());
+        assert!(subscribe_response.result.is_some());
+        assert_eq!(
+            subscribe_response.result.as_ref().unwrap(),
+            &serde_json::Value::Bool(true)
+        );
         assert_eq!(session.username, Some("worker1".to_string()));
         assert_eq!(session.password, Some("x".to_string()));
 
@@ -100,15 +108,28 @@ mod tests {
             notify_cmd.is_ok(),
             "Notification should be sent to the client after authorization"
         );
+
+        // Check difficulty notification
+        assert_eq!(
+            difficulty_notification.method, "mining.set_difficulty",
+            "Expected method to be 'mining.set_difficulty'"
+        );
+        assert_eq!(
+            difficulty_notification.params[0], 1000,
+            "Expected difficulty notification to match pool minimum difficulty"
+        );
     }
 
     #[tokio::test]
     async fn test_handle_authorize_already_authorized() {
         // Setup
-        let mut session = Session::<DifficultyAdjuster>::new(1, None, 1);
+        let mut session = Session::<DifficultyAdjuster>::new(1, None, 0x1fffe000);
         session.username = Some("someusername".to_string());
-        let request =
-            Request::new_authorize(12345, "worker1".to_string(), Some("password".to_string()));
+        let request = SimpleRequest::new_authorize(
+            12345,
+            "worker1".to_string(),
+            Some("password".to_string()),
+        );
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(1);
 
         // Execute
@@ -117,6 +138,7 @@ mod tests {
             &mut session,
             SocketAddr::from(([127, 0, 0, 1], 8080)),
             notify_tx,
+            1000,
         )
         .await;
 

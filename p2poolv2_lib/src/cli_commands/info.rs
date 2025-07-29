@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -69,9 +69,9 @@ pub fn execute(chain: Chain) -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::execute;
+    use crate::shares::ShareBlock;
     use crate::shares::chain::chain::Chain;
     use crate::shares::store::Store;
-    use crate::shares::ShareBlock;
     use tempfile::tempdir;
 
     #[test]

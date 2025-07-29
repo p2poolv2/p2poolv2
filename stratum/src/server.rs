@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -113,10 +113,11 @@ impl StratumServer {
                                 maximum_difficulty: self.config.maximum_difficulty,
                                 network: self.config.network,
                             };
+                            let version_mask = self.config.version_mask;
                             // Spawn a new task for each connection
                             tokio::spawn(async move {
                                 // Handle the connection with graceful shutdown support
-                                let _ = handle_connection(buf_reader, writer, addr, message_rx, shutdown_rx, ctx).await;
+                                let _ = handle_connection(buf_reader, writer, addr, message_rx, shutdown_rx, version_mask, ctx).await;
                             });
                         }
                         Err(e) => {
@@ -151,6 +152,7 @@ async fn handle_connection<R, W>(
     addr: SocketAddr,
     mut message_rx: mpsc::Receiver<Arc<String>>,
     mut shutdown_rx: oneshot::Receiver<()>,
+    version_mask: i32,
     ctx: StratumContext,
 ) -> Result<(), Box<dyn std::error::Error + Send>>
 where
@@ -165,7 +167,7 @@ where
     let session = &mut Session::<DifficultyAdjuster>::new(
         ctx.minimum_difficulty,
         ctx.maximum_difficulty,
-        ctx.maximum_difficulty.unwrap_or(ctx.minimum_difficulty),
+        version_mask,
     );
 
     // Process each line as it arrives
@@ -182,7 +184,7 @@ where
                 if session.username.is_none() {
                     continue; // Ignore messages until the user has authorized
                 }
-                if let Err(e) = writer.write_all(format!("{}\n", message).as_bytes()).await {
+                if let Err(e) = writer.write_all(format!("{message}\n").as_bytes()).await {
                     error!("Failed to write to {}: {}", addr, e);
                     break;
                 }
@@ -193,7 +195,7 @@ where
             }
             // Read a line from the stream
             line = framed.next() => {
-                debug!("Read line {:?} from {}...", line, addr);
+                info!("Rx {} {:?}", addr, line);
                 match line {
                     Some(Ok(line)) => {
                         if line.is_empty() {
@@ -238,24 +240,26 @@ where
 {
     match serde_json::from_str::<Request>(line) {
         Ok(message) => {
-            let response = handle_message(message, session, addr, ctx).await;
+            let responses = handle_message(message, session, addr, ctx).await;
 
-            if let Ok(response) = response {
+            if let Ok(responses) = responses {
                 // Send the response back to the client
-                let response_json = match serde_json::to_string(&response) {
-                    Ok(json) => json,
-                    Err(e) => {
-                        error!("Failed to serialize response for {}: {}", addr, e);
+                for response in responses {
+                    let response_json = match serde_json::to_string(&response) {
+                        Ok(json) => json,
+                        Err(e) => {
+                            error!("Failed to serialize response for {}: {}", addr, e);
+                            return Err(Box::new(e));
+                        }
+                    };
+
+                    info!("Tx {} {:?}", addr, response_json);
+                    if let Err(e) = writer
+                        .write_all(format!("{response_json}\n").as_bytes())
+                        .await
+                    {
                         return Err(Box::new(e));
                     }
-                };
-
-                info!("Sending to {}: {:?}", addr, response_json);
-                if let Err(e) = writer
-                    .write_all(format!("{}\n", response_json).as_bytes())
-                    .await
-                {
-                    return Err(Box::new(e));
                 }
                 if let Err(e) = writer.flush().await {
                     Err(Box::new(e))
@@ -266,18 +270,22 @@ where
             } else {
                 error!(
                     "Error handling message from {}: {:?}. Closing connection.",
-                    addr, response
+                    addr, responses
                 );
-                Err(Box::new(response.unwrap_err()))
+                Err(Box::new(responses.unwrap_err()))
             }
         }
-        Err(e) => Err(Box::new(e)),
+        Err(e) => {
+            error!("Failed to parse message from {}: {}", addr, e);
+            Ok(())
+        }
     }
 }
 
 #[cfg(test)]
 mod stratum_server_tests {
     use super::*;
+    use crate::messages::SimpleRequest;
     use crate::work::tracker::start_tracker_actor;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -298,6 +306,7 @@ mod stratum_server_tests {
             solo_address: None,
             zmqpubhashblock: "tcp://127.0.0.1:28332".to_string(),
             network: bitcoin::network::Network::Regtest,
+            version_mask: 0x1fffe000,
         };
 
         let mut server = StratumServer::new(config, shutdown_rx, connections_handle).await;
@@ -333,7 +342,7 @@ mod stratum_server_tests {
     #[tokio::test]
     async fn test_handle_connection_with_new_subscription_check_response_is_valid() {
         // Mock data
-        let request = Request::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+        let request = SimpleRequest::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
         let input_string = serde_json::to_string(&request).unwrap() + "\n";
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
@@ -357,8 +366,16 @@ mod stratum_server_tests {
         };
 
         // Run the handler
-        let result =
-            handle_connection(reader, &mut writer, addr, message_rx, shutdown_rx, ctx).await;
+        let result = handle_connection(
+            reader,
+            &mut writer,
+            addr,
+            message_rx,
+            shutdown_rx,
+            0x1fffe000,
+            ctx,
+        )
+        .await;
 
         // Verify results
         assert!(
@@ -368,8 +385,9 @@ mod stratum_server_tests {
 
         // Check that response was written
         let response = String::from_utf8_lossy(&writer);
+        let responses: Vec<&str> = response.split('\n').filter(|s| !s.is_empty()).collect();
         let response_json: serde_json::Value =
-            serde_json::from_str(&response).expect("Response should be valid JSON");
+            serde_json::from_str(&responses[0]).expect("Response should be valid JSON");
         assert!(
             response_json.is_object(),
             "Response should be a JSON object"
@@ -403,6 +421,24 @@ mod stratum_server_tests {
         // enonce2 size
         assert_eq!(result_array[2], 8);
 
+        let set_difficulty_response = responses[1];
+        let set_difficulty_json: serde_json::Value = serde_json::from_str(set_difficulty_response)
+            .expect("Set difficulty response should be valid JSON");
+        assert!(
+            set_difficulty_json.is_object(),
+            "Set difficulty response should be a JSON object"
+        );
+        assert_eq!(
+            set_difficulty_json.get("method").unwrap(),
+            "mining.set_difficulty",
+            "Set difficulty response should have method 'mining.set_difficulty'"
+        );
+        assert_eq!(
+            set_difficulty_json.get("params").unwrap(),
+            &serde_json::json!([1]),
+            "Set difficulty response should have params [1]"
+        );
+
         assert!(response.ends_with("\n"),);
     }
 
@@ -431,12 +467,20 @@ mod stratum_server_tests {
         };
 
         // Run the handler
-        let result =
-            handle_connection(reader, &mut writer, addr, message_rx, shutdown_rx, ctx).await;
+        let result = handle_connection(
+            reader,
+            &mut writer,
+            addr,
+            message_rx,
+            shutdown_rx,
+            0x1fffe000,
+            ctx,
+        )
+        .await;
 
-        // Verify results
+        // Verify results - even with bad json, we do not return an error to close the connection
         assert!(
-            result.is_err(),
+            result.is_ok(),
             "handle_connection should handle invalid JSON gracefully"
         );
 
@@ -478,8 +522,16 @@ mod stratum_server_tests {
         };
 
         // Run the handler
-        let result =
-            handle_connection(input, &mut writer, addr, message_rx, shutdown_rx, ctx).await;
+        let result = handle_connection(
+            input,
+            &mut writer,
+            addr,
+            message_rx,
+            shutdown_rx,
+            0x1fffe000,
+            ctx,
+        )
+        .await;
 
         // Returns an error, so we can close the connection gracefully.
         assert!(
@@ -497,8 +549,10 @@ mod stratum_server_tests {
     #[tokio::test]
     async fn test_handle_connection_double_subscribe_closes_connection() {
         // Prepare two subscribe requests in a row
-        let request1 = Request::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
-        let request2 = Request::new_subscribe(2, "agent".to_string(), "1.0".to_string(), None);
+        let request1 =
+            SimpleRequest::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+        let request2 =
+            SimpleRequest::new_subscribe(2, "agent".to_string(), "1.0".to_string(), None);
         let input_string = format!(
             "{}\n{}\n",
             serde_json::to_string(&request1).unwrap(),
@@ -528,8 +582,16 @@ mod stratum_server_tests {
         };
 
         // Run the handler
-        let result =
-            super::handle_connection(reader, &mut writer, addr, message_rx, shutdown_rx, ctx).await;
+        let result = super::handle_connection(
+            reader,
+            &mut writer,
+            addr,
+            message_rx,
+            shutdown_rx,
+            0x1fffe000,
+            ctx,
+        )
+        .await;
 
         // Should return error, so we can close the connection gracefully.
         assert!(
@@ -540,11 +602,7 @@ mod stratum_server_tests {
         // Only one response should be written (for the first subscribe)
         let response = String::from_utf8_lossy(&writer);
         let responses: Vec<&str> = response.split('\n').filter(|s| !s.is_empty()).collect();
-        assert_eq!(
-            responses.len(),
-            1,
-            "Only one response should be sent before closing connection"
-        );
+        assert_eq!(responses.len(), 2);
 
         // The response should be a valid subscribe response
         let response_json: serde_json::Value =
@@ -571,10 +629,10 @@ mod stratum_server_tests {
 
         // Create input with subscribe and authorize messages
         let subscribe_message =
-            Request::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+            SimpleRequest::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
         let subscribe_str = serde_json::to_string(&subscribe_message).unwrap();
 
-        let authorize_message = Request::new_authorize(
+        let authorize_message = SimpleRequest::new_authorize(
             2,
             "test_user".to_string(),
             Some("test_password".to_string()),
@@ -607,9 +665,16 @@ mod stratum_server_tests {
         let handle = tokio::spawn(async move {
             // Wrap the mock reader with a BufReader to implement AsyncBufReadExt
             let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
-            let result =
-                handle_connection(buf_reader, &mut writer, addr, message_rx, shutdown_rx, ctx)
-                    .await;
+            let result = handle_connection(
+                buf_reader,
+                &mut writer,
+                addr,
+                message_rx,
+                shutdown_rx,
+                0x1fffe000,
+                ctx,
+            )
+            .await;
 
             assert!(
                 result.is_ok(),
@@ -647,7 +712,7 @@ mod stratum_server_tests {
         let responses: Vec<&str> = response_str.split('\n').filter(|s| !s.is_empty()).collect();
         assert_eq!(
             responses.len(),
-            3,
+            5,
             "Should have responses for subscribe, authorize and the test message."
         );
 
@@ -672,7 +737,7 @@ mod stratum_server_tests {
 
         // Create input with subscribe and authorize messages
         let subscribe_message =
-            Request::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+            SimpleRequest::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
         let subscribe_str = serde_json::to_string(&subscribe_message).unwrap();
 
         // Create mock IO objects
@@ -699,9 +764,16 @@ mod stratum_server_tests {
         let handle = tokio::spawn(async move {
             // Wrap the mock reader with a BufReader to implement AsyncBufReadExt
             let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
-            let result =
-                handle_connection(buf_reader, &mut writer, addr, message_rx, shutdown_rx, ctx)
-                    .await;
+            let result = handle_connection(
+                buf_reader,
+                &mut writer,
+                addr,
+                message_rx,
+                shutdown_rx,
+                0x1fffe000,
+                ctx,
+            )
+            .await;
 
             assert!(
                 result.is_ok(),
@@ -737,7 +809,7 @@ mod stratum_server_tests {
 
         // Verify responses were sent for subscribe and authorize
         let responses: Vec<&str> = response_str.split('\n').filter(|s| !s.is_empty()).collect();
-        assert_eq!(responses.len(), 1, "Should have responses for subscribe");
+        assert_eq!(responses.len(), 2, "Should have responses for subscribe");
 
         // Parse and verify each response
         let subscribe_response: serde_json::Value =

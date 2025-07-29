@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -20,11 +20,10 @@ use crate::node::messages::Message;
 use libp2p::connection_limits;
 use libp2p::request_response::ProtocolSupport;
 use libp2p::{
-    identify,
+    Multiaddr, PeerId, identify,
     identity::Keypair,
     kad::{self, store::MemoryStore},
     swarm::NetworkBehaviour,
-    Multiaddr, PeerId,
 };
 use request_response::P2PoolRequestResponseProtocol;
 use request_response::{RequestResponseBehaviour, RequestResponseEvent};

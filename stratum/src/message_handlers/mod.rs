@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -18,16 +18,21 @@ use std::net::SocketAddr;
 
 use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
-use crate::messages::{Message, Request};
+use crate::messages::{Message, Request, SimpleRequest};
 use crate::server::StratumContext;
 use crate::session::Session;
 use authorize::handle_authorize;
+use configure::handle_configure;
 use submit::handle_submit;
 use subscribe::handle_subscribe;
+use suggest_difficulty::handle_suggest_difficulty;
+use tracing::debug;
 
 pub mod authorize;
+pub mod configure;
 pub mod submit;
 pub mod subscribe;
+pub mod suggest_difficulty;
 
 /// Handle incoming Stratum messages
 /// This function processes the incoming Stratum messages and returns a response
@@ -42,10 +47,37 @@ pub(crate) async fn handle_message<'a, D: DifficultyAdjusterTrait>(
     session: &mut Session<D>,
     addr: SocketAddr,
     ctx: StratumContext,
-) -> Result<Message<'a>, Error> {
+) -> Result<Vec<Message<'a>>, Error> {
+    match message {
+        Request::MiningConfigureRequest(_) => handle_configure(message, session).await,
+        Request::SuggestDifficultyRequest(suggest_difficulty_request) => {
+            handle_suggest_difficulty(suggest_difficulty_request, session).await
+        }
+        Request::SimpleRequest(simple_request) => {
+            handle_simple_request(simple_request, session, addr, ctx).await
+        }
+    }
+}
+
+async fn handle_simple_request<'a, D: DifficultyAdjusterTrait>(
+    message: SimpleRequest<'a>,
+    session: &mut Session<D>,
+    addr: SocketAddr,
+    ctx: StratumContext,
+) -> Result<Vec<Message<'a>>, Error> {
+    debug!("Handling simple request: {}", message.method);
     match message.method.as_ref() {
-        "mining.subscribe" => handle_subscribe(message, session).await,
-        "mining.authorize" => handle_authorize(message, session, addr, ctx.notify_tx).await,
+        "mining.subscribe" => handle_subscribe(message, session, ctx.minimum_difficulty).await,
+        "mining.authorize" => {
+            handle_authorize(
+                message,
+                session,
+                addr,
+                ctx.notify_tx,
+                ctx.minimum_difficulty,
+            )
+            .await
+        }
         "mining.submit" => {
             handle_submit(
                 message,

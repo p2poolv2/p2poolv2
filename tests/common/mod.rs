@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -40,6 +40,9 @@ pub fn default_test_config() -> Config {
             max_inventory_per_second: 100,
             max_transaction_per_second: 100,
             rate_limit_window_secs: 1,
+            max_requests_per_second: 1,
+            peer_inactivity_timeout_secs: 60,
+            dial_timeout_secs: 30,
         },
         bitcoinrpc: BitcoinRpcConfig {
             url: "http://localhost:8332".to_string(),
@@ -62,6 +65,7 @@ pub fn default_test_config() -> Config {
             solo_address: Some("tb1q9w4x5z5v5f5g5h5j5k5l5m5n5o5p5q5r5s5t5u".to_string()),
             zmqpubhashblock: "tcp://127.0.0.1:28332".to_string(),
             network: bitcoin::network::Network::Signet,
+            version_mask: 0x1fffe000,
         },
         miner: MinerConfig {
             pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
@@ -70,7 +74,6 @@ pub fn default_test_config() -> Config {
         },
         logging: LoggingConfig {
             level: "info".to_string(),
-            console: false,
             file: Some("./p2pool.log".to_string()),
         },
     }

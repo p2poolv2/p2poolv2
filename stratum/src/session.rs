@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -40,6 +40,10 @@ pub struct Session<D: DifficultyAdjusterTrait> {
     pub password: Option<String>,
     /// Difficulty adjuster for the session
     pub difficulty_adjuster: D,
+    /// version_mask used in this session, defaults to one provided from config
+    pub version_mask: i32,
+    /// Difficulty suggested by the client
+    pub suggested_difficulty: Option<u64>,
 }
 
 impl<D: DifficultyAdjusterTrait> Session<D> {
@@ -47,7 +51,7 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
     pub fn new(
         minimum_difficulty: u64,
         maximum_difficulty: Option<u64>,
-        network_difficulty: u64,
+        version_mask: i32,
     ) -> Self {
         let id = Session::<D>::generate_id();
         let enonce1 = id.to_le();
@@ -58,7 +62,9 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
             subscribed: false,
             username: None,
             password: None,
-            difficulty_adjuster: D::new(minimum_difficulty, maximum_difficulty, network_difficulty),
+            difficulty_adjuster: D::new(minimum_difficulty, maximum_difficulty),
+            version_mask,
+            suggested_difficulty: None,
         }
     }
 
@@ -77,7 +83,7 @@ mod tests {
     #[test]
     fn test_new_session() {
         let min_difficulty = 1000;
-        let session = Session::<DifficultyAdjuster>::new(min_difficulty, Some(2000), 1500);
+        let session = Session::<DifficultyAdjuster>::new(min_difficulty, Some(2000), 0x1fffe000);
 
         assert_eq!(
             session.difficulty_adjuster.pool_minimum_difficulty,
@@ -125,7 +131,7 @@ mod tests {
     #[test]
     fn test_get_current_difficulty() {
         let min_difficulty = 2000;
-        let session = Session::<DifficultyAdjuster>::new(min_difficulty, Some(3000), 2500);
+        let session = Session::<DifficultyAdjuster>::new(min_difficulty, Some(3000), 0x1fffe000);
 
         assert_eq!(
             session.difficulty_adjuster.current_difficulty,

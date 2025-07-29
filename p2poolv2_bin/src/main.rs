@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -18,8 +18,8 @@ use bitcoin::Address;
 use clap::Parser;
 use p2poolv2_lib::config::{Config, LoggingConfig};
 use p2poolv2_lib::node::actor::NodeHandle;
-use p2poolv2_lib::shares::chain::actor::ChainHandle;
 use p2poolv2_lib::shares::ShareBlock;
+use p2poolv2_lib::shares::chain::actor::ChainHandle;
 use std::error::Error;
 use std::fs::File;
 use std::process::exit;
@@ -30,8 +30,8 @@ use stratum::work::gbt::start_gbt;
 use stratum::work::tracker::start_tracker_actor;
 use stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
 use tracing::error;
-use tracing::{debug, info};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Registry};
+use tracing::info;
+use tracing_subscriber::{EnvFilter, Registry, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Interval in seconds to poll for new block templates since the last blocknotify signal
 const GBT_POLL_INTERVAL: u64 = 60; // seconds
@@ -164,30 +164,25 @@ async fn main() -> Result<(), String> {
 
 /// Sets up logging according to the logging configuration
 fn setup_logging(logging_config: &LoggingConfig) -> Result<(), Box<dyn Error>> {
-    debug!("Setting up logging with config: {:?}", logging_config);
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&logging_config.level));
 
     let registry = Registry::default().with(filter);
 
     // Configure console logging if enabled
-    if logging_config.console {
-        let console_layer = fmt::layer().pretty();
-        // Initialize with console output
-        registry.with(console_layer).init();
-    } else if let Some(file_path) = &logging_config.file {
+    if let Some(file_path) = &logging_config.file {
+        info!("File logging is enabled, writing to: {}", file_path);
         // Create directory structure if it doesn't exist
         if let Some(parent) = std::path::Path::new(file_path).parent() {
             std::fs::create_dir_all(parent)?;
         }
-
         // Configure file logging if specified
         let file = File::create(file_path)?;
-        info!("Logging to file: {}", file_path);
         let file_layer = fmt::layer().with_writer(file).with_ansi(false);
 
         registry.with(file_layer).init();
     } else {
+        info!("No logging configuration provided, defaulting to console");
         // If neither console nor file is configured, default to console
         let console_layer = fmt::layer();
         registry.with(console_layer).init();

@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -18,14 +18,12 @@
 use crate::shares::transactions::coinbase::create_coinbase_transaction;
 #[cfg(test)]
 use crate::shares::{
+    ShareBlock, ShareBlockBuilder, ShareBlockHash, ShareHeader,
     miner_message::{
         CkPoolMessage, Gbt, MinerShare, MinerWorkbase, UserWorkbase, UserWorkbaseParams,
     },
-    ShareBlock, ShareBlockBuilder, ShareBlockHash, ShareHeader,
 };
 
-#[cfg(test)]
-use bitcoin::absolute::Time;
 #[cfg(test)]
 use bitcoin::BlockHash;
 #[cfg(test)]
@@ -34,6 +32,8 @@ use bitcoin::PublicKey;
 use bitcoin::Transaction;
 #[cfg(test)]
 use bitcoin::TxMerkleNode;
+#[cfg(test)]
+use bitcoin::absolute::Time;
 #[cfg(test)]
 use rand;
 use rust_decimal::Decimal;
@@ -89,7 +89,7 @@ pub fn simple_miner_workbase() -> MinerWorkbase {
 #[cfg(test)]
 /// Generate a random hex string of specified length (defaults to 64 characters)
 pub fn random_hex_string(length: usize, leading_zeroes: usize) -> String {
-    use rand::{thread_rng, Rng};
+    use rand::{Rng, thread_rng};
 
     let mut rng = thread_rng();
     let mut bytes = [0u8; 32];
@@ -114,8 +114,8 @@ pub fn test_coinbase_transaction() -> bitcoin::Transaction {
 }
 
 #[cfg(test)]
-pub fn load_valid_workbases_userworkbases_and_shares(
-) -> (Vec<MinerWorkbase>, Vec<UserWorkbase>, Vec<MinerShare>) {
+pub fn load_valid_workbases_userworkbases_and_shares()
+-> (Vec<MinerWorkbase>, Vec<UserWorkbase>, Vec<MinerShare>) {
     let workbases_str = include_str!("../../tests/test_data/validation/workbases.json");
     let shares_str = include_str!("../../tests/test_data/validation/shares.json");
     let userworkbases_str = include_str!("../../tests/test_data/validation/userworkbases.json");

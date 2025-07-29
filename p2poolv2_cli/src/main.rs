@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -19,8 +19,8 @@ use p2poolv2_lib::cli_commands;
 // Now use the external crate with its name
 use clap::{Parser, Subcommand};
 use p2poolv2_lib::config::Config;
-use p2poolv2_lib::shares::chain::chain::Chain;
 use p2poolv2_lib::shares::ShareBlock;
+use p2poolv2_lib::shares::chain::chain::Chain;
 use std::error::Error;
 
 /// P2Pool v2 CLI utility

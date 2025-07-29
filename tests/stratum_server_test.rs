@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -19,7 +19,7 @@ use std::net::SocketAddr;
 use std::str;
 use stratum::{
     self,
-    messages::{Request, Response},
+    messages::{Response, SimpleRequest},
     server::StratumServer,
     work::{notify, tracker::start_tracker_actor},
 };
@@ -56,6 +56,7 @@ async fn test_stratum_server_subscribe() {
         solo_address: None,
         zmqpubhashblock: "tcp://127.0.0.1:28332".to_string(),
         network: bitcoin::network::Network::Regtest,
+        version_mask: 0x1fffe000,
     };
 
     let mut server = StratumServer::new(config, shutdown_rx, connections_handle).await;
@@ -77,7 +78,8 @@ async fn test_stratum_server_subscribe() {
         }
     };
 
-    let subscribe_msg = Request::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+    let subscribe_msg =
+        SimpleRequest::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
     let subscribe_str =
         serde_json::to_string(&subscribe_msg).expect("Failed to serialize subscribe message");
     client
@@ -92,8 +94,10 @@ async fn test_stratum_server_subscribe() {
         .expect("Failed to read response");
     let response_str = str::from_utf8(&buffer[..bytes_read]).expect("Invalid UTF-8");
 
+    let responses: Vec<&str> = response_str.split('\n').filter(|s| !s.is_empty()).collect();
+
     let response_message: Response =
-        serde_json::from_str(response_str).expect("Failed to deserialize response as Response");
+        serde_json::from_str(&responses[0]).expect("Failed to deserialize response as Response");
 
     assert_eq!(
         response_message.id,

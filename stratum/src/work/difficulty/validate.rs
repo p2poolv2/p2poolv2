@@ -15,27 +15,29 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::error::Error;
-use crate::messages::Request;
+use crate::messages::SimpleRequest;
 use crate::work::gbt::BlockTemplate;
 use crate::work::tracker::JobDetails;
 use bitcoin::blockdata::block::{Block, Header};
 use bitcoin::consensus::Decodable;
 use std::str::FromStr;
-use tracing::{debug, error, info};
+use tracing::debug;
 
 /// parse all transactions from block template with data and txid
 fn decode_txids(blocktemplate: &BlockTemplate) -> Result<Vec<bitcoin::Txid>, Error> {
     blocktemplate
         .transactions
         .iter()
-        .map(|tx| bitcoin::Txid::from_str(&tx.txid).map_err(|_| Error::InvalidParams))
+        .map(|tx| {
+            bitcoin::Txid::from_str(&tx.txid).map_err(|_| Error::InvalidParams("Bad txid".into()))
+        })
         .collect()
 }
 
 /// Build coinbase from the submitted share and block template.
 pub fn build_coinbase_from_submission(
     job: &JobDetails,
-    submission: &Request<'_>,
+    submission: &SimpleRequest<'_>,
     enonce1_hex: &str,
 ) -> Result<bitcoin::Transaction, Error> {
     use hex::FromHex;
@@ -54,10 +56,30 @@ pub fn build_coinbase_from_submission(
     debug!("Complete coinbase tx hex: {}", complete_tx);
 
     let tx_bytes = Vec::from_hex(&complete_tx).unwrap();
-    bitcoin::Transaction::consensus_decode(&mut std::io::Cursor::new(tx_bytes)).map_err(|e| {
-        error!("Failed to decode coinbase transaction: {}", e);
-        Error::InvalidParams
-    })
+    bitcoin::Transaction::consensus_decode(&mut std::io::Cursor::new(tx_bytes))
+        .map_err(|_e| Error::InvalidParams("Failed to decode coinbase transaction".into()))
+}
+
+/// Applies version mask received with submission, if the version_bits is compatible with version_mask from session
+/// If params don't include version_bits, it returns the original header version
+fn apply_version_mask(
+    header_version: i32,
+    version_mask: i32,
+    params: &[String],
+) -> Result<i32, Error> {
+    if params.len() > 5 {
+        debug!("Applying version mask from params: {}", params[5]);
+        let bits = i32::from_be_bytes(
+            hex::decode(&params[5])
+                .map_err(|_| Error::InvalidParams("Failed to decode hex".into()))?
+                .as_slice()
+                .try_into()
+                .map_err(|_| Error::InvalidParams("Failed to decode hex".into()))?,
+        );
+        Ok((header_version & !version_mask) | (bits & version_mask))
+    } else {
+        Ok(header_version)
+    }
 }
 
 /// Validate the difficulty of a submitted share against the block template
@@ -68,21 +90,23 @@ pub fn build_coinbase_from_submission(
 /// Returns result with optional header if the PoW is met. Else returns an error.
 pub fn validate_submission_difficulty(
     job: &JobDetails,
-    submission: &Request<'_>,
+    submission: &SimpleRequest<'_>,
     enonce1_hex: &str,
+    version_mask: i32,
 ) -> Result<Block, Error> {
     let compact_target = bitcoin::CompactTarget::from_unprefixed_hex(&job.blocktemplate.bits)
-        .map_err(|_| Error::InvalidParams)?;
+        .map_err(|_| Error::InvalidParams("Failed to parse compact target".into()))?;
     let target = bitcoin::Target::from_compact(compact_target);
 
     // build coinbase from submission
     let coinbase = build_coinbase_from_submission(job, submission, enonce1_hex)
-        .map_err(|_| Error::InvalidParams)?;
+        .map_err(|_| Error::InvalidParams("Failed to build coinbase transaction".into()))?;
 
     debug!("Coinbase transaction: {:?}", coinbase);
 
     // decode txids for making merkle root
-    let txids = decode_txids(&job.blocktemplate).map_err(|_| Error::InvalidParams)?;
+    let txids = decode_txids(&job.blocktemplate)
+        .map_err(|_| Error::InvalidParams("Failed to decode txids".into()))?;
 
     let mut all_txids = vec![coinbase.compute_txid()];
     all_txids.extend(txids);
@@ -92,14 +116,16 @@ pub fn validate_submission_difficulty(
         .map(|h| h.into())
         .unwrap();
 
-    info!("Merkle root: {}", merkle_root);
+    debug!("Merkle root: {}", merkle_root);
 
-    let n_time =
-        u32::from_str_radix(&submission.params[3], 16).map_err(|_| Error::InvalidParams)?;
+    let n_time = u32::from_str_radix(&submission.params[3], 16)
+        .map_err(|_| Error::InvalidParams("Bad nTime".into()))?;
+
+    let version = apply_version_mask(job.blocktemplate.version, version_mask, &submission.params)?;
 
     // build the block header from the block template and submission
     let header = Header {
-        version: bitcoin::block::Version::from_consensus(job.blocktemplate.version),
+        version: bitcoin::block::Version::from_consensus(version),
         prev_blockhash: bitcoin::BlockHash::from_str(&job.blocktemplate.previousblockhash).unwrap(),
         merkle_root,
         time: n_time,
@@ -107,13 +133,12 @@ pub fn validate_submission_difficulty(
         nonce: u32::from_str_radix(&submission.params[4], 16).unwrap(),
     };
 
-    info!("Header hash : {}", header.block_hash().to_string());
-    // info!("Target      : {}", hex::encode(target));
+    debug!("Header hash : {}", header.block_hash().to_string());
 
     match header.validate_pow(target) {
-        Ok(_) => info!("Header meets the target"),
+        Ok(_) => debug!("Header meets the target"),
         Err(e) => {
-            info!("Header does not meet the target: {}", e);
+            debug!("Header does not meet the target: {}", e);
             return Err(Error::InsufficientWork);
         }
     }

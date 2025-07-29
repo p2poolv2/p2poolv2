@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -17,6 +17,7 @@
 pub mod cli_commands;
 pub mod command;
 pub mod config;
+pub mod middleware;
 pub mod node;
 pub mod service;
 pub mod shares;
@@ -24,3 +25,5 @@ pub mod utils;
 
 #[cfg(test)]
 pub mod test_utils;
+
+pub use service::build_service;

@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -278,8 +278,8 @@ impl StorageShareBlock {
 mod tests {
     use super::*;
     use crate::node::messages::Message;
-    use crate::test_utils::simple_miner_share;
     use crate::test_utils::TestBlockBuilder;
+    use crate::test_utils::simple_miner_share;
     use bitcoin::absolute::Time;
     use rust_decimal_macros::dec;
     use std::collections::HashSet;

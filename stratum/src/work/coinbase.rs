@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -43,13 +43,13 @@ pub struct OutputPair {
 #[allow(dead_code)]
 pub fn parse_address(address: &str, network: Network) -> Result<Address, WorkError> {
     let parsed_address = Address::from_str(address).map_err(|e| WorkError {
-        message: format!("Invalid address: {}", e),
+        message: format!("Invalid address: {e}"),
     })?;
 
     parsed_address
         .require_network(network)
         .map_err(|_| WorkError {
-            message: format!("Address does not match network: {}", network),
+            message: format!("Address does not match network: {network}"),
         })
 }
 
@@ -82,7 +82,7 @@ fn append_default_witness_commitment(
 ) -> Result<(), WorkError> {
     if let Some(default_witness_commitment) = default_witness_commitment {
         let commitment_bytes = hex::decode(&default_witness_commitment).map_err(|e| WorkError {
-            message: format!("Invalid witness commitment hex: {}", e),
+            message: format!("Invalid witness commitment hex: {e}"),
         })?;
         let commitment = ScriptBuf::from(commitment_bytes);
         outputs.push(TxOut {

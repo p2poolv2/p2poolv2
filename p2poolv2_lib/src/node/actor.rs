@@ -1,6 +1,6 @@
 // Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 //
-//  This file is part of P2Poolv2
+// This file is part of P2Poolv2
 //
 // P2Poolv2 is free software: you can redistribute it and/or modify it under
 // the terms of the GNU General Public License as published by the Free
@@ -18,13 +18,13 @@ use crate::command::Command;
 use crate::config::Config;
 use crate::node::Node;
 use crate::node::SwarmSend;
+use crate::shares::ShareBlock;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 #[cfg(not(test))]
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::miner_message::MinerWorkbase;
-use crate::shares::ShareBlock;
 use libp2p::futures::StreamExt;
 use std::error::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -73,31 +73,6 @@ impl NodeHandle {
             Err(e) => Err(e.into()),
         }
     }
-
-    /// Add share to the chain
-    pub async fn add_share(&self, share: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx.send(Command::AddShare(share, tx)).await?;
-        match rx.await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    /// Store workbase in the node's database
-    pub async fn add_workbase(
-        &self,
-        workbase: MinerWorkbase,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let (tx, rx) = oneshot::channel();
-        self.command_tx
-            .send(Command::StoreWorkbase(workbase, tx))
-            .await?;
-        match rx.await {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e.into()),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -114,8 +89,6 @@ mock! {
         pub async fn shutdown(&self) -> Result<(), Box<dyn Error>>;
         pub async fn send_gossip(&self, message: Message) -> Result<(), Box<dyn Error>>;
         pub async fn send_to_peer(&self, peer_id: libp2p::PeerId, message: Message) -> Result<(), Box<dyn Error>>;
-        pub async fn add_share(&self, share: ShareBlock) -> Result<(), Box<dyn Error>>;
-        pub async fn add_workbase(&self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error>>;
     }
 
     // Provide a clone implementation for NodeHandle mock double
@@ -168,6 +141,13 @@ impl NodeActor {
                             // Handle inventory message (optional logging or processing)
                             tracing::info!("Received SwarmSend::Inv message");
                         }
+                        Some(SwarmSend::Disconnect(peer_id)) => {
+                            if let Err(e) = self.node.swarm.disconnect_peer_id(peer_id) {
+                                error!("Error disconnecting peer {}", peer_id);
+                            } else {
+                                debug!("Disconnected peer: {}", peer_id);
+                            }
+                        }
                         None => {
                             info!("Stopping node actor on channel close");
                             self.stopping_tx.send(()).unwrap();
@@ -199,24 +179,6 @@ impl NodeActor {
                             self.node.shutdown().unwrap();
                             tx.send(()).unwrap();
                             return;
-                        },
-                        Some(Command::AddShare(share, tx)) => {
-                            match self.node.chain_handle.add_share(share).await {
-                                Ok(_) => tx.send(Ok(())).unwrap(),
-                                Err(e) => {
-                                    error!("Error adding share to chain: {}", e);
-                                    tx.send(Err("Error adding share to chain".into())).unwrap()
-                                },
-                            };
-                        },
-                        Some(Command::StoreWorkbase(workbase, tx)) => {
-                            match self.node.chain_handle.add_workbase(workbase).await {
-                                Ok(_) => tx.send(Ok(())).unwrap(),
-                                Err(e) => {
-                                    error!("Error storing workbase: {}", e);
-                                    tx.send(Err("Error storing workbase".into())).unwrap()
-                                },
-                            };
                         },
                         None => {
                             info!("Stopping node actor on channel close");
