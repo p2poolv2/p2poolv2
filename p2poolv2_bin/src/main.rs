@@ -16,12 +16,11 @@
 
 use bitcoin::Address;
 use clap::Parser;
-use p2poolv2_lib::config::{Config, LoggingConfig};
+use p2poolv2_lib::config::Config;
+use p2poolv2_lib::logging::setup_logging;
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::shares::ShareBlock;
 use p2poolv2_lib::shares::chain::actor::ChainHandle;
-use std::error::Error;
-use std::fs::File;
 use std::process::exit;
 use std::str::FromStr;
 use stratum::client_connections::spawn;
@@ -31,7 +30,6 @@ use stratum::work::tracker::start_tracker_actor;
 use stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
 use tracing::error;
 use tracing::info;
-use tracing_subscriber::{EnvFilter, Registry, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Interval in seconds to poll for new block templates since the last blocknotify signal
 const GBT_POLL_INTERVAL: u64 = 60; // seconds
@@ -56,15 +54,23 @@ async fn main() -> Result<(), String> {
     let config = Config::load(&args.config);
     if config.is_err() {
         let err = config.unwrap_err();
-        error!("Failed to load config: {}", err);
-        return Err(format!("Failed to load config: {}", err));
+        error!("Failed to load config: {err}");
+        return Err(format!("Failed to load config: {err}"));
     }
     let config = config.unwrap();
     // Configure logging based on config
-    if let Err(e) = setup_logging(&config.logging) {
-        error!("Failed to set up logging: {}", e);
-        return Err(format!("Failed to set up logging: {}", e));
-    }
+    let logging_result = setup_logging(&config.logging);
+    // hold guard to ensure logging is set up correctly
+    let _guard = match logging_result {
+        Ok(guard) => {
+            info!("Logging set up successfully");
+            guard
+        }
+        Err(e) => {
+            error!("Failed to set up logging: {e}");
+            return Err(format!("Failed to set up logging: {e}"));
+        }
+    };
 
     let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
     let chain_handle = ChainHandle::new(config.store.path.clone(), genesis);
@@ -85,7 +91,7 @@ async fn main() -> Result<(), String> {
     let zmq_trigger_rx = match ZmqListener.start(&stratum_config.zmqpubhashblock) {
         Ok(rx) => rx,
         Err(e) => {
-            error!("Failed to set up ZMQ publisher: {}", e);
+            error!("Failed to set up ZMQ publisher: {e}");
             return Err("Failed to set up ZMQ publisher".into());
         }
     };
@@ -101,7 +107,7 @@ async fn main() -> Result<(), String> {
         )
         .await
         {
-            tracing::error!("Failed to fetch block template. Shutting down. \n {}", e);
+            tracing::error!("Failed to fetch block template. Shutting down. \n {e}");
             exit(1);
         }
     });
@@ -155,39 +161,9 @@ async fn main() -> Result<(), String> {
             }
         }
         Err(e) => {
-            error!("Failed to start node: {}", e);
-            return Err(format!("Failed to start node: {}", e));
+            error!("Failed to start node: {e}");
+            return Err(format!("Failed to start node: {e}"));
         }
     }
-    Ok(())
-}
-
-/// Sets up logging according to the logging configuration
-fn setup_logging(logging_config: &LoggingConfig) -> Result<(), Box<dyn Error>> {
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&logging_config.level));
-
-    let registry = Registry::default().with(filter);
-
-    // Configure console logging if enabled
-    if let Some(file_path) = &logging_config.file {
-        info!("File logging is enabled, writing to: {}", file_path);
-        // Create directory structure if it doesn't exist
-        if let Some(parent) = std::path::Path::new(file_path).parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        // Configure file logging if specified
-        let file = File::create(file_path)?;
-        let file_layer = fmt::layer().with_writer(file).with_ansi(false);
-
-        registry.with(file_layer).init();
-    } else {
-        info!("No logging configuration provided, defaulting to console");
-        // If neither console nor file is configured, default to console
-        let console_layer = fmt::layer();
-        registry.with(console_layer).init();
-    }
-
-    info!("Logging initialized");
     Ok(())
 }
