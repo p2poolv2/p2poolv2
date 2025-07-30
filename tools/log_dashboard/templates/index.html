@@ -34,9 +34,6 @@ P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
     <a href="/" class="button-link" aria-label="Reset filter">Reset</a>
 </form>
 
-<form method="post" action="/refresh" aria-label="Refresh logs" style="margin-bottom: 20px;">
-    <button type="submit">🔁 Refresh</button>
-</form>
 
 {% if agents %}
 <table role="table" aria-label="User Agent mining status table">
@@ -56,7 +53,7 @@ P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
             </td>
             <td data-label="User Agent">{{ ua }}</td>
             <td data-label="Submits">{{ info.submits }}</td>
-            <td data-label="Log"><a href="/logs/{{ info.filename }}" target="_blank" rel="noopener">View</a></td>
+            <td data-label="Log"><a href="{{ url_for('serve_log', filename='agent_logs/' + info.filename) }}" target="_blank">View Log</a></td>
         </tr>
         {% endfor %}
     </tbody>
@@ -79,7 +76,9 @@ P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
             font-family: 'Roboto Mono', monospace; font-size: 14px; line-height: 1.5;">
   <h3 style="color:#58a6ff; margin-top: 0; font-weight:700;">🪵 How to Use This Dashboard</h3>
   <ul style="padding-left: 20px; margin-top: 10px; margin-bottom: 0;">
-    <li><strong>Status:</strong> <span style="color:#238636;">🟢 ACTIVE</span> means miner has successfully submitted shares; <span style="color:#daa038;">🟡 UNKNOWN</span> means still pending success.</li>
+    <li><strong>Status:</strong> <span style="color:#238636;">🟢 ACTIVE</span> means miner has successfully submitted shares; <span style="color:#daa038;">🟡 PENDING SUBMITS</span> means still pending success.</li>
+    <li><span style="color:#9c2929;">🔴 FAILED</span> means submission failed.</li>
+    <li><span style="color:#e2c389;">🔵 DISCONNECTED</span> means device disconnected.</li>
     <li><strong>Filter:</strong> Use the search box to find miners by their user agent names or versions.</li>
     <li><strong>Logs:</strong> Click "View" to see detailed mining activity logs (IP addresses are redacted for privacy).</li>
     <li><strong>Refresh:</strong> Use the refresh button to reload the latest log data.</li>
