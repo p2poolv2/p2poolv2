@@ -17,6 +17,7 @@
 pub mod cli_commands;
 pub mod command;
 pub mod config;
+pub mod logging;
 pub mod middleware;
 pub mod node;
 pub mod service;
