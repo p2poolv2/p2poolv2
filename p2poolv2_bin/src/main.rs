@@ -177,7 +177,8 @@ fn setup_logging(logging_config: &LoggingConfig) -> Result<(), Box<dyn Error>> {
             std::fs::create_dir_all(parent)?;
         }
         // Configure file logging if specified
-        let file = File::create(file_path)?;
+        let file = File::options().append(true).create(true).open(file_path)?;
+        // let file = File::create(file_path)?;
         let file_layer = fmt::layer().with_writer(file).with_ansi(false);
 
         registry.with(file_layer).init();
