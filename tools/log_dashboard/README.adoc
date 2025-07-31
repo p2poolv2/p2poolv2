@@ -59,7 +59,7 @@ Edit `config-testnet4.toml`:
 ----
 [logging]
 # For system run services you can specify a file path
-file = "/tools/log_dashboard/miners.log"
+file = "/tools/log_dashboard/logs"
 
 # For container or local run it is recommended to use console output
 console = true
