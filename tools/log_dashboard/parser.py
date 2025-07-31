@@ -23,6 +23,8 @@ import shutil
 from collections import defaultdict
 from datetime import datetime
 
+LAST_TS_FILE = "last_processed.txt"
+
 def strip_ip(line: str) -> str:
     return re.sub(r'\d{1,3}(?:\.\d{1,3}){3}:\d{2,5}', '<redacted>', line)
 
@@ -71,7 +73,20 @@ def atomic_write_stats(stats: dict, stats_path='stats.json'):
         shutil.copy2(stats_path, backup_path)
     os.replace(tmp_path, stats_path)
 
-def process_log_lines(lines: list, old_agents: dict) -> dict:
+def load_last_processed_time():
+    if os.path.exists(LAST_TS_FILE):
+        with open(LAST_TS_FILE, 'r') as f:
+            try:
+                return datetime.fromisoformat(f.read().strip())
+            except Exception:
+                pass
+    return datetime.min
+
+def save_last_processed_time(ts: datetime):
+    with open(LAST_TS_FILE, 'w') as f:
+        f.write(ts.isoformat())
+
+def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -> tuple[dict, datetime]:
     agents = defaultdict(lambda: {
         "submits": 0,
         "successes": 0,
@@ -87,9 +102,19 @@ def process_log_lines(lines: list, old_agents: dict) -> dict:
 
     ipport_to_ua = {}
     submitid_to_ua = {}
+    latest_ts = last_processed
 
     for line in lines:
         line = line.strip()
+        ts_match = re.search(r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})', line)
+        if not ts_match:
+            continue
+        line_ts = datetime.fromisoformat(ts_match.group(1))
+        if line_ts <= last_processed:
+            continue
+        if line_ts > latest_ts:
+            latest_ts = line_ts
+
         is_rx = "Rx" in line
         is_tx = "Tx" in line
 
@@ -187,7 +212,7 @@ def process_log_lines(lines: list, old_agents: dict) -> dict:
         else:
             info["status"] = "🟡 PENDING SUBMIT"
 
-    return agents
+    return agents, latest_ts
 
 def main():
     import argparse
@@ -204,13 +229,15 @@ def main():
 
     old_agents = load_existing_stats(args.outfile)
     lines = parse_all_logs(args.logdir, args.logpattern)
-    new_agents = process_log_lines(lines, old_agents)
+    last_processed = load_last_processed_time()
+    new_agents, latest_ts = process_log_lines(lines, old_agents, last_processed)
 
     for ua, info in old_agents.items():
         if ua not in new_agents:
             new_agents[ua] = info
 
     atomic_write_stats(new_agents, args.outfile)
+    save_last_processed_time(latest_ts)
 
     agent_logs_dir = os.path.join(args.logdir, "agent_logs")
     os.makedirs(agent_logs_dir, exist_ok=True)
