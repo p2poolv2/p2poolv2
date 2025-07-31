@@ -212,7 +212,7 @@ def main():
 
     atomic_write_stats(new_agents, args.outfile)
 
-    agent_logs_dir = os.path.join(args.logdir, "agent_logs")
+    agent_logs_dir = "agent_logs"
     os.makedirs(agent_logs_dir, exist_ok=True)
 
     for ua, info in new_agents.items():
