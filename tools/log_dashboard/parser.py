@@ -194,8 +194,8 @@ def main():
 
     parser = argparse.ArgumentParser(description="Update mining stats from logs.")
     parser.add_argument("-d", "--logdir", default="logs", help="Directory containing log files")
-    parser.add_argument("--logpattern", default="p2pool-*.log*", help="Log file glob pattern")
-    parser.add_argument("--outfile", default="stats.json", help="Output JSON filename")
+    parser.add_argument("-l", "--logpattern", default="p2pool-*.log*", help="Log file glob pattern")
+    parser.add_argument("-o", "--outfile", default="stats.json", help="Output JSON filename")
     args = parser.parse_args()
 
     if not os.path.isdir(args.logdir):
