@@ -48,7 +48,7 @@ def dashboard():
     return render_template("index.html", agents=agents, query=query)
 
 
-@app.route("/logs/<path:filename>")
+@app.route("/<path:filename>")
 def serve_log(filename):
     safe_dir = os.path.abspath(LOG_DIR)
     requested_file = os.path.abspath(os.path.join(safe_dir, filename))
