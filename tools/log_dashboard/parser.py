@@ -13,6 +13,7 @@
 # FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 # You should have received a copy of the GNU General Public License along with
 # P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+
 import os
 import re
 import json
@@ -233,17 +234,14 @@ def main():
         print(f"Error: Log directory '{args.logdir}' does not exist.")
         exit(1)
 
-    # Load old data
     old_agents = load_existing_stats(args.outfile)
 
-    # Read all log lines from files matching pattern
     lines = parse_all_logs(args.logdir, args.logpattern)
 
     last_processed = load_last_processed_time()
 
     new_agents, latest_ts = process_log_lines(lines, old_agents, last_processed)
 
-    # Keep agents from old data that were not seen this run
     for ua, info in old_agents.items():
         if ua not in new_agents:
             new_agents[ua] = info
@@ -251,9 +249,6 @@ def main():
     atomic_write_stats(new_agents, args.outfile)
     save_last_processed_time(latest_ts)
 
-    # --------------- 
-    # *** IMPORTANT: define the agent_logs_dir OUTSIDE the main logs directory ***
-    # Replace this path as you want; now it creates 'agent_logs' folder next to your script execution location
     agent_logs_dir = "agent_logs"
     os.makedirs(agent_logs_dir, exist_ok=True)
 
