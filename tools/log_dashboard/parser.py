@@ -219,8 +219,8 @@ def main():
 
     parser = argparse.ArgumentParser(description="Update mining stats from logs.")
     parser.add_argument("-d", "--logdir", default="logs", help="Directory containing log files")
-    parser.add_argument("--logpattern", default="p2pool-*.log*", help="Log file glob pattern")
-    parser.add_argument("--outfile", default="stats.json", help="Output JSON filename")
+    parser.add_argument("-l", "--logpattern", default="p2pool-*.log*", help="Log file glob pattern")
+    parser.add_argument("-o", "--outfile", default="stats.json", help="Output JSON filename")
     args = parser.parse_args()
 
     if not os.path.isdir(args.logdir):
@@ -239,7 +239,7 @@ def main():
     atomic_write_stats(new_agents, args.outfile)
     save_last_processed_time(latest_ts)
 
-    agent_logs_dir = os.path.join(args.logdir, "agent_logs")
+    agent_logs_dir = "agent_logs"
     os.makedirs(agent_logs_dir, exist_ok=True)
 
     for ua, info in new_agents.items():

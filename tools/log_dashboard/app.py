@@ -20,7 +20,7 @@ import json
 
 app = Flask(__name__)
 
-LOG_DIR = os.environ.get("LOG_DIR", "logs")
+LOG_DIR = os.environ.get("LOG_DIR", "agent_logs")
 STATS_FILE = os.environ.get("STATS_FILE", "stats.json")
 BACKUP_STATS_FILE = STATS_FILE + ".backup"
 

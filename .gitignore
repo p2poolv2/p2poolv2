@@ -2,3 +2,6 @@
 store*.db
 p2pool.log
 logs/*
+tools/log_dashboard/venv/
+tools/log_dashboard/stats.json*
+tools/log_dashboard/agent_logs/
