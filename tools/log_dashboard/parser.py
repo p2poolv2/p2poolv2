@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
 
 # This file is part of P2Poolv2
@@ -14,139 +15,215 @@
 # P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 import os
-import json
 import re
+import json
+import glob
+import gzip
+import shutil
 from collections import defaultdict
+from datetime import datetime
 
-LOG_FILE = "miners.log"
-LOG_DIR = "logs"
-os.makedirs(LOG_DIR, exist_ok=True)
-
-def strip_ip(line):
+def strip_ip(line: str) -> str:
     return re.sub(r'\d{1,3}(?:\.\d{1,3}){3}:\d{2,5}', '<redacted>', line)
 
-def parse_logs():
+def open_logfile(filepath: str):
+    if filepath.endswith('.gz'):
+        return gzip.open(filepath, 'rt', encoding='utf-8', errors='ignore')
+    return open(filepath, 'r', encoding='utf-8', errors='ignore')
+
+def sort_key(fname):
+    base = os.path.basename(fname)
+    m = re.search(r'p2pool-(\d{4}-\d{2}-\d{2})', base)
+    if m:
+        try:
+            return datetime.strptime(m.group(1), "%Y-%m-%d")
+        except ValueError:
+            pass
+    return datetime.min
+
+def parse_all_logs(log_dir: str, log_pattern="p2pool-*.log*") -> list:
+    files = [f for f in glob.glob(os.path.join(log_dir, log_pattern)) if os.path.isfile(f)]
+    files.sort(key=sort_key)
+    all_lines = []
+    for fname in files:
+        with open_logfile(fname) as f:
+            all_lines.extend(f.readlines())
+    return all_lines
+
+def load_existing_stats(stats_path: str) -> dict:
+    try:
+        with open(stats_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        backup_path = stats_path + ".backup"
+        try:
+            with open(backup_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+def atomic_write_stats(stats: dict, stats_path='stats.json'):
+    tmp_path = stats_path + '.new'
+    backup_path = stats_path + '.backup'
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        json.dump(stats, f, indent=2)
+    if os.path.exists(stats_path):
+        shutil.copy2(stats_path, backup_path)
+    os.replace(tmp_path, stats_path)
+
+def process_log_lines(lines: list, old_agents: dict) -> dict:
     agents = defaultdict(lambda: {
         "submits": 0,
-        "status": "🟡 UNKNOWN",
+        "successes": 0,
+        "failures": 0,
+        "status": "🟡 PENDING SUBMIT",
         "logs": [],
         "filename": "",
     })
+
+    for ua, info in old_agents.items():
+        agents[ua]["filename"] = info.get("filename", "")
+        agents[ua]["logs"] = info.get("logs", [])
+
     ipport_to_ua = {}
     submitid_to_ua = {}
 
-    try:
-        with open(LOG_FILE, "r", encoding="utf-8") as f:
-            lines = f.readlines()
+    for line in lines:
+        line = line.strip()
+        is_rx = "Rx" in line
+        is_tx = "Tx" in line
 
-        for line in lines:
-            line = line.strip()
+        ipp_match = re.search(r'(?:Rx|Tx)\s+([\d\.]+:\d+)', line)
+        ipport = ipp_match.group(1) if ipp_match else None
 
-            # Skip lines without JSON indicators or connections close messages
-            if "Some(Ok(" not in line and "Tx" not in line and "Connection closed by client" not in line:
-                continue
+        if re.search(r'New connection from:\s*([\d\.]+:\d+)', line):
+            continue
 
-            # Extract IP:port if present for mapping
-            ipp_match = re.search(r'(?:Rx|Tx)\s+([\d\.]+:\d+)', line)
-            ipport = ipp_match.group(1) if ipp_match else None
-
-            # Handle connection closed to cleanup tracking
-            if "Connection closed by client" in line and ipport:
-                print(f"[DEBUG] Connection closed, removing mapping for {ipport}")
-                ipport_to_ua.pop(ipport, None)
-                to_delete = [key for key in submitid_to_ua if key[0] == ipport]
-                for key in to_delete:
+        if "Connection closed by client" in line:
+            disc_match = re.search(r'Connection closed by client\s+([\d\.]+:\d+)', line)
+            if disc_match:
+                disc_ipport = disc_match.group(1)
+                ua = ipport_to_ua.get(disc_ipport)
+                if ua:
+                    agents[ua]["status"] = "🔵 DISCONNECTED"
+                    redacted = strip_ip(line)
+                    if redacted not in agents[ua]["logs"]:
+                        agents[ua]["logs"].append(redacted)
+                ipport_to_ua.pop(disc_ipport, None)
+                keys_to_remove = [key for key in submitid_to_ua if key[0] == disc_ipport]
+                for key in keys_to_remove:
                     submitid_to_ua.pop(key, None)
+            continue
+
+        someok_jsons = re.findall(r'Some\(Ok\("(\{.*?\})"\)\)', line)
+        to_parse_jsons = someok_jsons if someok_jsons else re.findall(r'\"(\{.*?\})\"', line)
+        if not to_parse_jsons:
+            continue
+
+        for raw_json in to_parse_jsons:
+            raw_json = raw_json.replace('\\"', '"')
+            try:
+                msg = json.loads(raw_json)
+            except json.JSONDecodeError:
                 continue
 
-            # Extract all JSON objects inside quoted strings:
-            someok_jsons = re.findall(r'Some\(Ok\("(\{.*?\})"\)\)', line)
-            if someok_jsons:
-                to_parse_jsons = someok_jsons
+            method = msg.get("method")
+            ua = None
+
+            if method == "mining.subscribe":
+                ua = msg["params"][0]
+                agents[ua]["filename"] = ua.replace("/", "_").replace(" ", "_") + ".log"
+                if ipport:
+                    ipport_to_ua[ipport] = ua
+                if ua not in agents:
+                    agents[ua]["submits"] = 0
+                redacted = strip_ip(line)
+                if redacted not in agents[ua]["logs"]:
+                    agents[ua]["logs"].append(redacted)
+
+            elif method == "mining.submit":
+                if ipport and ipport in ipport_to_ua:
+                    ua = ipport_to_ua[ipport]
+                    submit_id = msg.get("id")
+                    agents[ua]["submits"] += 1
+                    if submit_id is not None:
+                        submitid_to_ua[(ipport, submit_id)] = ua
+                    redacted = strip_ip(line)
+                    if redacted not in agents[ua]["logs"]:
+                        agents[ua]["logs"].append(redacted)
+
+            elif is_tx and "result" in msg:
+                tx_id = msg.get("id")
+                if ipport and tx_id is not None:
+                    ua = submitid_to_ua.get((ipport, tx_id))
+                    if ua:
+                        if msg["result"] is True:
+                            agents[ua]["successes"] += 1
+                        elif msg["result"] is False:
+                            agents[ua]["failures"] += 1
+
+                        redacted = strip_ip(line)
+                        if redacted not in agents[ua]["logs"]:
+                            agents[ua]["logs"].append(redacted)
+
+                        submitid_to_ua.pop((ipport, tx_id), None)
+
             else:
-                to_parse_jsons = re.findall(r'\"(\{.*?\})\"', line)
+                if ipport and ipport in ipport_to_ua:
+                    ua = ipport_to_ua[ipport]
+                    redacted = strip_ip(line)
+                    if redacted not in agents[ua]["logs"]:
+                        agents[ua]["logs"].append(redacted)
 
-            if not to_parse_jsons:
-                # No JSON found, skip
-                continue
-
-            for raw_json in to_parse_jsons:
-                raw_json = raw_json.replace('\\"', '"')
-                try:
-                    msg = json.loads(raw_json)
-                    method = msg.get("method")
-                    is_rx = "Some(Ok(" in line
-
-                    print(f"[DEBUG] Processing msg from line: {line}")
-                    print(f"[DEBUG] IP:port: {ipport}")
-                    print(f"[DEBUG] Method: {method}")
-
-                    # mining.subscribe: map IP:port -> UA
-                    if method == "mining.subscribe":
-                        ua = msg["params"][0]
-                        agents[ua]["filename"] = ua.replace("/", "_").replace(" ", "_") + ".log"
-                        if ipport:
-                            ipport_to_ua[ipport] = ua
-                            print(f"[DEBUG] Mapping {ipport} to UA {ua}")
-                        agents[ua]["logs"].append(strip_ip(line))
-
-                    # mining.submit: track submit id -> UA mapping per connection
-                    elif method == "mining.submit":
-                        submit_id = msg.get("id")
-                        if ipport and ipport in ipport_to_ua:
-                            ua = ipport_to_ua[ipport]
-                            agents[ua]["submits"] += 1
-                            if submit_id is not None:
-                                submitid_to_ua[(ipport, submit_id)] = ua
-                                print(f"[DEBUG] Added submit id {submit_id} for UA {ua} on {ipport}")
-                            agents[ua]["logs"].append(strip_ip(line))
-                        else:
-                            print(f"[DEBUG] mining.submit without known UA for IP:port {ipport}")
-
-                    # Tx response with result:true: check if matches a submit
-                    elif not is_rx and "result" in msg and msg["result"] is True:
-                        tx_id = msg.get("id")
-                        if ipport and tx_id is not None:
-                            ua = submitid_to_ua.get((ipport, tx_id))
-                            print(f"[DEBUG] Tx result=true with id={tx_id} associated UA={ua}")
-                            if ua:
-                                agents[ua]["status"] = "🟢 ACTIVE"
-                                agents[ua]["logs"].append(strip_ip(line))
-                                submitid_to_ua.pop((ipport, tx_id), None)  # Remove mapping after success
-                            else:
-                                print(f"[DEBUG] No matching UA found for Tx id={tx_id} at {ipport}")
-                        else:
-                            print(f"[DEBUG] Tx response missing id or ipport")
-
-                    # Append other lines if UA known
-                    else:
-                        if ipport and ipport in ipport_to_ua:
-                            ua = ipport_to_ua[ipport]
-                            agents[ua]["logs"].append(strip_ip(line))
-
-                    print("---")
-
-                except json.JSONDecodeError as e:
-                    print(f"[ERROR] JSON parse error: {e} at line: {line}")
-                    continue
-
-    except FileNotFoundError:
-        print("[ERROR] miners.log not found.")
-        return {}
+    for ua, info in agents.items():
+        if info["status"] == "🔵 DISCONNECTED":
+            continue
+        elif info["successes"] > 0:
+            info["status"] = "🟢 ACTIVE"
+        elif info["failures"] > 0:
+            info["status"] = "🔴 FAIL"
+        elif info["submits"] > 0:
+            info["status"] = "🟡 PENDING SUBMIT"
+        else:
+            info["status"] = "🟡 PENDING SUBMIT"
 
     return agents
 
-def save_agent_logs(agents):
-    for ua, info in agents.items():
-        if not info["filename"]:
-            continue
-        filepath = os.path.join(LOG_DIR, info["filename"])
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write("\n".join(info["logs"]))
+def main():
+    import argparse
 
-# Run if executed as main script
+    parser = argparse.ArgumentParser(description="Update mining stats from logs.")
+    parser.add_argument("-d", "--logdir", default="logs", help="Directory containing log files")
+    parser.add_argument("-l", "--logpattern", default="p2pool-*.log*", help="Log file glob pattern")
+    parser.add_argument("-o", "--outfile", default="stats.json", help="Output JSON filename")
+    args = parser.parse_args()
+
+    if not os.path.isdir(args.logdir):
+        print(f"Error: Log directory '{args.logdir}' does not exist.")
+        exit(1)
+
+    old_agents = load_existing_stats(args.outfile)
+    lines = parse_all_logs(args.logdir, args.logpattern)
+    new_agents = process_log_lines(lines, old_agents)
+
+    for ua, info in old_agents.items():
+        if ua not in new_agents:
+            new_agents[ua] = info
+
+    atomic_write_stats(new_agents, args.outfile)
+
+    agent_logs_dir = "agent_logs"
+    os.makedirs(agent_logs_dir, exist_ok=True)
+
+    for ua, info in new_agents.items():
+        fname = info.get("filename", "")
+        if not fname:
+            continue
+        safe_fname = fname.replace("/", "_").replace(" ", "_")
+        filepath = os.path.join(agent_logs_dir, safe_fname)
+        unique_logs = list(dict.fromkeys(info.get("logs", [])))
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write("\n".join(unique_logs))
+
 if __name__ == "__main__":
-    agents = parse_logs()
-    save_agent_logs(agents)
-    for ua, info in agents.items():
-        print(f"User Agent: {ua}, Status: {info['status']}, Submits: {info['submits']}")
+    main()

@@ -45,7 +45,7 @@ password = "p2pool"
 
 [logging]
 # Specify a file path for the log file, if no log file is specified, console logging will be used
-file = "./p2pool.log"
+file = "./logs/p2pool.log"
 level = "debug"
 
 [[tests]]

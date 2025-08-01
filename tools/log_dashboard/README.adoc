@@ -39,7 +39,9 @@ cd tools/log_dashboard
 
 [source,shell]
 ----
-pip install flask
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 ----
 
 [NOTE]
@@ -59,21 +61,28 @@ Edit `config-testnet4.toml`:
 ----
 [logging]
 # For system run services you can specify a file path
-file = "/tools/log_dashboard/miners.log"
+file = "/tools/log_dashboard/logs"
 
 # For container or local run it is recommended to use console output
 console = true
 level = "info"
 ----
 
-=== 5. Run the Stratum
+=== 5. Run Stratum Server
 
 [source,shell]
 ----
 cargo run -p p2poolv2 -- --config=config-testnet4.toml
 ----
 
-=== 6. Run the Dashboard
+=== 6. Process Logs
+
+[source,shell]
+----
+python parser.py --logdir=<path/to/pool/logs/dir> --logpattern="p2pool-*.log*" --outfile="stats.json"
+----
+
+=== 7. Run the Dashboard Web App
 
 [source,shell]
 ----
