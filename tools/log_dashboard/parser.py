@@ -13,7 +13,6 @@
 # FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 # You should have received a copy of the GNU General Public License along with
 # P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
-
 import os
 import re
 import json
@@ -96,9 +95,9 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
         "filename": "",
     })
 
+    # Preserve only filename from old_agents, DO NOT preload old logs to avoid mixed logs
     for ua, info in old_agents.items():
         agents[ua]["filename"] = info.get("filename", "")
-        agents[ua]["logs"] = info.get("logs", [])
 
     ipport_to_ua = {}
     submitid_to_ua = {}
@@ -109,7 +108,10 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
         ts_match = re.search(r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})', line)
         if not ts_match:
             continue
-        line_ts = datetime.fromisoformat(ts_match.group(1))
+        try:
+            line_ts = datetime.fromisoformat(ts_match.group(1))
+        except ValueError:
+            continue
         if line_ts <= last_processed:
             continue
         if line_ts > latest_ts:
@@ -156,7 +158,11 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
             ua = None
 
             if method == "mining.subscribe":
-                ua = msg["params"][0]
+                params = msg.get("params")
+                if not params or not isinstance(params, list) or len(params) == 0:
+                    # malformed mining.subscribe, skip
+                    continue
+                ua = params[0]
                 agents[ua]["filename"] = ua.replace("/", "_").replace(" ", "_") + ".log"
                 if ipport:
                     ipport_to_ua[ipport] = ua
@@ -219,19 +225,25 @@ def main():
 
     parser = argparse.ArgumentParser(description="Update mining stats from logs.")
     parser.add_argument("-d", "--logdir", default="logs", help="Directory containing log files")
-    parser.add_argument("-l", "--logpattern", default="p2pool-*.log*", help="Log file glob pattern")
-    parser.add_argument("-o", "--outfile", default="stats.json", help="Output JSON filename")
+    parser.add_argument("--logpattern", default="p2pool-*.log*", help="Log file glob pattern")
+    parser.add_argument("--outfile", default="stats.json", help="Output JSON filename")
     args = parser.parse_args()
 
     if not os.path.isdir(args.logdir):
         print(f"Error: Log directory '{args.logdir}' does not exist.")
         exit(1)
 
+    # Load old data
     old_agents = load_existing_stats(args.outfile)
+
+    # Read all log lines from files matching pattern
     lines = parse_all_logs(args.logdir, args.logpattern)
+
     last_processed = load_last_processed_time()
+
     new_agents, latest_ts = process_log_lines(lines, old_agents, last_processed)
 
+    # Keep agents from old data that were not seen this run
     for ua, info in old_agents.items():
         if ua not in new_agents:
             new_agents[ua] = info
@@ -239,6 +251,9 @@ def main():
     atomic_write_stats(new_agents, args.outfile)
     save_last_processed_time(latest_ts)
 
+    # --------------- 
+    # *** IMPORTANT: define the agent_logs_dir OUTSIDE the main logs directory ***
+    # Replace this path as you want; now it creates 'agent_logs' folder next to your script execution location
     agent_logs_dir = "agent_logs"
     os.makedirs(agent_logs_dir, exist_ok=True)
 
@@ -248,7 +263,7 @@ def main():
             continue
         safe_fname = fname.replace("/", "_").replace(" ", "_")
         filepath = os.path.join(agent_logs_dir, safe_fname)
-        unique_logs = list(dict.fromkeys(info.get("logs", [])))
+        unique_logs = list(dict.fromkeys(info.get("logs", [])))  # remove duplicates
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write("\n".join(unique_logs))
 
