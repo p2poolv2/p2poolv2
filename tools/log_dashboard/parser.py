@@ -20,8 +20,8 @@ import json
 import glob
 import gzip
 import shutil
-from collections import defaultdict
-from datetime import datetime
+from collections import defaultdict, deque
+from datetime import datetime, timezone
 
 LAST_TS_FILE = "last_processed.txt"
 
@@ -67,8 +67,20 @@ def load_existing_stats(stats_path: str) -> dict:
 def atomic_write_stats(stats: dict, stats_path='stats.json'):
     tmp_path = stats_path + '.new'
     backup_path = stats_path + '.backup'
+
+    # Convert sets and deques for json serialization
+    serializable_stats = {}
+    for ua, info in stats.items():
+        si = info.copy()
+        if isinstance(si.get("usernames"), (set,)):
+            si["usernames"] = list(si["usernames"])
+        if isinstance(si.get("last_session_logs"), (deque,)):
+            si["last_session_logs"] = list(si["last_session_logs"])
+        serializable_stats[ua] = si
+
     with open(tmp_path, 'w', encoding='utf-8') as f:
-        json.dump(stats, f, indent=2)
+        json.dump(serializable_stats, f, indent=2)
+
     if os.path.exists(stats_path):
         shutil.copy2(stats_path, backup_path)
     os.replace(tmp_path, stats_path)
@@ -87,26 +99,48 @@ def save_last_processed_time(ts: datetime):
         f.write(ts.isoformat())
 
 def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -> tuple[dict, datetime]:
+    # Agents data: Store usernames, status, filename, last session's last 25 log lines
     agents = defaultdict(lambda: {
         "submits": 0,
         "successes": 0,
         "failures": 0,
         "status": "🟡 PENDING SUBMIT",
-        "logs": [],
+        "last_session_logs": deque(maxlen=25),
         "filename": "",
+        "usernames": set(),
     })
 
-    # Preserve only filename from old_agents, DO NOT preload old logs to avoid mixed logs
+    # Restore old data if exists for agents
     for ua, info in old_agents.items():
         agents[ua]["filename"] = info.get("filename", "")
+        agents[ua]["submits"] = info.get("submits", 0)
+        agents[ua]["successes"] = info.get("successes", 0)
+        agents[ua]["failures"] = info.get("failures", 0)
+        agents[ua]["status"] = info.get("status", "🟡 PENDING SUBMIT")
+        if "usernames" in info:
+            agents[ua]["usernames"] = set(info["usernames"])
+        if "last_session_logs" in info:
+            agents[ua]["last_session_logs"] = deque(info["last_session_logs"], maxlen=25)
 
     ipport_to_ua = {}
     submitid_to_ua = {}
+
+    # Track sessions per ua: current session lines for each ua
+    session_lines = defaultdict(lambda: deque(maxlen=25))
+    # Track disconnected status per ua
+    disconnected_agents = set()
     latest_ts = last_processed
 
+    def finalize_session(ua):
+        if ua in session_lines:
+            agents[ua]["last_session_logs"] = session_lines[ua].copy()
+            session_lines[ua].clear()
+        disconnected_agents.add(ua)
+        agents[ua]["status"] = "🔵 DISCONNECTED"
+
     for line in lines:
-        line = line.strip()
-        ts_match = re.search(r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})', line)
+        line_strip = line.strip()
+        ts_match = re.match(r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})', line_strip)
         if not ts_match:
             continue
         try:
@@ -118,34 +152,42 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
         if line_ts > latest_ts:
             latest_ts = line_ts
 
-        is_rx = "Rx" in line
-        is_tx = "Tx" in line
+        is_rx = "Rx" in line_strip
+        is_tx = "Tx" in line_strip
 
-        ipp_match = re.search(r'(?:Rx|Tx)\s+([\d\.]+:\d+)', line)
+        ipp_match = re.search(r'(?:Rx|Tx)\s+([\d\.]+:\d+)', line_strip)
         ipport = ipp_match.group(1) if ipp_match else None
 
-        if re.search(r'New connection from:\s*([\d\.]+:\d+)', line):
+        # Detect new connection (start of new session)
+        new_conn_match = re.search(r'New connection from:\s*([\d\.]+:\d+)', line_strip)
+        if new_conn_match:
+            # This is a new connection - possibly assigned later to ua upon mining.subscribe
             continue
 
-        if "Connection closed by client" in line:
-            disc_match = re.search(r'Connection closed by client\s+([\d\.]+:\d+)', line)
+        # Detect disconnect event - finalize session
+        if "Connection closed by client" in line_strip:
+            disc_match = re.search(r'Connection closed by client\s+([\d\.]+:\d+)', line_strip)
             if disc_match:
                 disc_ipport = disc_match.group(1)
                 ua = ipport_to_ua.get(disc_ipport)
                 if ua:
-                    agents[ua]["status"] = "🔵 DISCONNECTED"
-                    redacted = strip_ip(line)
-                    if redacted not in agents[ua]["logs"]:
-                        agents[ua]["logs"].append(redacted)
+                    finalize_session(ua)
+                # Clean up mappings
                 ipport_to_ua.pop(disc_ipport, None)
                 keys_to_remove = [key for key in submitid_to_ua if key[0] == disc_ipport]
                 for key in keys_to_remove:
                     submitid_to_ua.pop(key, None)
             continue
 
-        someok_jsons = re.findall(r'Some\(Ok\("(\{.*?\})"\)\)', line)
-        to_parse_jsons = someok_jsons if someok_jsons else re.findall(r'\"(\{.*?\})\"', line)
+        # Find JSON messages within the line
+        someok_jsons = re.findall(r'Some\(Ok\("(\{.*?\})"\)\)', line_strip)
+        to_parse_jsons = someok_jsons if someok_jsons else re.findall(r'\"(\{.*?\})\"', line_strip)
         if not to_parse_jsons:
+            # For non-json, try associate log line to ua from ipport_to_ua
+            if ipport and ipport in ipport_to_ua:
+                ua = ipport_to_ua[ipport]
+                redacted = strip_ip(line_strip)
+                session_lines[ua].append(redacted)
             continue
 
         for raw_json in to_parse_jsons:
@@ -161,17 +203,18 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
             if method == "mining.subscribe":
                 params = msg.get("params")
                 if not params or not isinstance(params, list) or len(params) == 0:
-                    # malformed mining.subscribe, skip
                     continue
                 ua = params[0]
                 agents[ua]["filename"] = ua.replace("/", "_").replace(" ", "_") + ".log"
                 if ipport:
                     ipport_to_ua[ipport] = ua
-                if ua not in agents:
-                    agents[ua]["submits"] = 0
-                redacted = strip_ip(line)
-                if redacted not in agents[ua]["logs"]:
-                    agents[ua]["logs"].append(redacted)
+
+                # Reset session lines if reconnecting fresh session
+                session_lines[ua].clear()
+                disconnected_agents.discard(ua)
+                
+                redacted = strip_ip(line_strip)
+                session_lines[ua].append(redacted)
 
             elif method == "mining.submit":
                 if ipport and ipport in ipport_to_ua:
@@ -180,9 +223,21 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
                     agents[ua]["submits"] += 1
                     if submit_id is not None:
                         submitid_to_ua[(ipport, submit_id)] = ua
-                    redacted = strip_ip(line)
-                    if redacted not in agents[ua]["logs"]:
-                        agents[ua]["logs"].append(redacted)
+                    redacted = strip_ip(line_strip)
+                    session_lines[ua].append(redacted)
+                    params = msg.get("params", [])
+                    if len(params) > 0:
+                        workername = params[0]
+                        if workername:
+                            agents[ua]["usernames"].add(workername)
+
+            elif method == "mining.authorize":
+                params = msg.get("params", [])
+                if len(params) > 0 and ipport and ipport in ipport_to_ua:
+                    ua = ipport_to_ua[ipport]
+                    username = params[0]
+                    if username:
+                        agents[ua]["usernames"].add(username)
 
             elif is_tx and "result" in msg:
                 tx_id = msg.get("id")
@@ -194,22 +249,33 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
                         elif msg["result"] is False:
                             agents[ua]["failures"] += 1
 
-                        redacted = strip_ip(line)
-                        if redacted not in agents[ua]["logs"]:
-                            agents[ua]["logs"].append(redacted)
+                        redacted = strip_ip(line_strip)
+                        session_lines[ua].append(redacted)
 
                         submitid_to_ua.pop((ipport, tx_id), None)
 
             else:
+                # Fallback: assign line by ipport if available
                 if ipport and ipport in ipport_to_ua:
                     ua = ipport_to_ua[ipport]
-                    redacted = strip_ip(line)
-                    if redacted not in agents[ua]["logs"]:
-                        agents[ua]["logs"].append(redacted)
+                    redacted = strip_ip(line_strip)
+                    session_lines[ua].append(redacted)
 
+    # Finalize sessions for agents not disconnected yet (they have active sessions)
+    for ua in session_lines.keys():
+        if ua not in disconnected_agents:
+            agents[ua]["last_session_logs"] = session_lines[ua].copy()
+        else:
+            # Session already finalized at disconnection
+            pass
+
+    # Now update statuses; never demote an agent from green 🟢 ACTIVE
     for ua, info in agents.items():
         if info["status"] == "🔵 DISCONNECTED":
             continue
+        # If old agent was green, keep green
+        if old_agents.get(ua, {}).get("status") == "🟢 ACTIVE" or info.get("status") == "🟢 ACTIVE":
+            info["status"] = "🟢 ACTIVE"
         elif info["successes"] > 0:
             info["status"] = "🟢 ACTIVE"
         elif info["failures"] > 0:
@@ -235,32 +301,21 @@ def main():
         exit(1)
 
     old_agents = load_existing_stats(args.outfile)
-
     lines = parse_all_logs(args.logdir, args.logpattern)
-
     last_processed = load_last_processed_time()
 
     new_agents, latest_ts = process_log_lines(lines, old_agents, last_processed)
 
+    # Carry over any old agents not seen in new parsing (with their prior data)
     for ua, info in old_agents.items():
         if ua not in new_agents:
+            info["last_session_logs"] = deque(info.get("last_session_logs", []), maxlen=25)
+            info["usernames"] = set(info.get("usernames", []))
             new_agents[ua] = info
 
     atomic_write_stats(new_agents, args.outfile)
     save_last_processed_time(latest_ts)
 
-    agent_logs_dir = "agent_logs"
-    os.makedirs(agent_logs_dir, exist_ok=True)
-
-    for ua, info in new_agents.items():
-        fname = info.get("filename", "")
-        if not fname:
-            continue
-        safe_fname = fname.replace("/", "_").replace(" ", "_")
-        filepath = os.path.join(agent_logs_dir, safe_fname)
-        unique_logs = list(dict.fromkeys(info.get("logs", [])))  # remove duplicates
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write("\n".join(unique_logs))
-
 if __name__ == "__main__":
     main()
+

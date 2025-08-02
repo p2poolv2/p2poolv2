@@ -17,189 +17,182 @@ P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap');
 
-  body {
-    font-family: 'Roboto Mono', monospace;
-    background: #273447;
-    color: #c9d1d9;
-    margin: 0;
-    padding: 18px 24px;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    font-size: 16px;
-  }
+/* Base styles */
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+  background-color: #0d1117;
+  color: #c9d1d9;
+  margin: 20px;
+}
 
-  h2 {
-    font-weight: 700;
-    margin-bottom: 14px;
-    color: #58a6ff;
-    letter-spacing: 0.03em;
-  }
+h2 {
+  text-align: center;
+  margin-bottom: 16px;
+  color: #58a6ff;
+  font-size: 20px;
+}
 
+/* Form */
+form {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+form input[type="text"] {
+  padding: 6px 10px;
+  font-size: 13px;
+  width: 240px;
+  border-radius: 5px;
+  border: 1px solid #30363d;
+  background-color: #161b22;
+  color: #c9d1d9;
+}
+
+form button,
+.button-link {
+  padding: 6px 12px;
+  font-size: 13px;
+  margin-left: 8px;
+  border: none;
+  background-color: #238636;
+  color: #f0f6fc;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.button-link {
+  text-decoration: none;
+  display: inline-block;
+  background-color: #444c56;
+}
+
+/* Table */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 20px;
+  font-size: 13px;
+}
+
+table th,
+table td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid #30363d;
+}
+
+table th {
+  background-color: #161b22;
+  color: #f0f6fc;
+}
+
+table tr:nth-child(even) {
+  background-color: #161b22;
+}
+
+table tr:hover {
+  background-color: #21262d;
+}
+
+/* Status */
+.status.active {
+  color: #3fb950;
+  font-weight: bold;
+}
+
+.status.unknown {
+  color: #f2a365;
+  font-weight: bold;
+}
+
+/* Buttons */
+button,
+a.btn {
+  font-size: 13px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  background-color: #238636;
+  color: #fff;
+  border: none;
+  transition: background-color 0.3s ease;
+}
+
+a.btn-success {
+  background-color: #2ea043;
+  color: #fff;
+  text-decoration: none;
+  padding: 5px 10px;
+  display: inline-block;
+}
+
+button:hover,
+a.btn:hover {
+  background-color: #2c974b;
+}
+
+/* Instructions box */
+#instructions {
+  background-color: #161b22;
+  border: 1px solid #30363d;
+  padding: 16px;
+  font-size: 13px;
+  border-radius: 8px;
+  max-width: 900px;
+  margin: 0 auto 30px auto;
+  color: #c9d1d9;
+}
+
+#instructions h3 {
+  margin-top: 0;
+  font-size: 16px;
+  color: #58a6ff;
+}
+
+/* Session log pre block */
+pre {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  background-color: #0d1117;
+  border: 1px solid #30363d;
+  padding: 10px;
+  border-radius: 6px;
+  max-height: 300px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+/* Usernames modal */
+#usernamesModal {
+  background-color: #161b22;
+  color: #c9d1d9;
+  border-radius: 8px;
+  border: 1px solid #30363d;
+  padding: 16px;
+  font-size: 13px;
+}
+
+#usernamesModal h3 {
+  font-size: 15px;
+}
+
+/* Responsive */
+@media screen and (max-width: 768px) {
+  table,
   form {
-    display: flex;
-    gap: 10px;
-    margin-bottom: 14px;
-    flex-wrap: wrap;
-    justify-content: center;
-  }
-
-  input[type="text"] {
-    padding: 9px 12px;
-    border-radius: 5px;
-    border: 1.5px solid #30363d;
-    background: #161b22;
-    color: #c9d1d9;
-    width: 220px;
-    font-size: 14px;
-    transition: border-color 0.3s ease;
-    outline-offset: 2px;
-  }
-  input[type="text"]:focus {
-    border-color: #238636;
-    outline: none;
-    background: #0d1117;
-  }
-
-  button, a.button-link {
-    font-weight: 600;
-    font-size: 14px;
-    padding: 8px 16px;
-    border-radius: 6px;
-    border: none;
-    cursor: pointer;
-    transition: background-color 0.22s ease, box-shadow 0.22s ease, transform 0.12s ease;
-    box-shadow: 0 2px 5px rgba(35, 134, 54, 0.6);
-    background-color: #238636;
-    color: #f0f6fc;
-    user-select: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-  button:hover, a.button-link:hover {
-    background-color: #2ea043;
-    box-shadow: 0 4px 8px rgba(35, 134, 54, 0.9);
-    transform: translateY(-1.5px);
-  }
-  button:active, a.button-link:active {
-    transform: translateY(0);
-  }
-  a.button-link {
-    background-color: transparent;
-    border: 1.5px solid #238636;
-    color: #58a6ff;
-    box-shadow: none;
-    padding: 6px 14px;
-  }
-  a.button-link:hover {
-    background-color: #238636;
-    color: #f0f6fc;
-    box-shadow: 0 3px 9px rgba(35, 134, 54, 0.8);
-  }
-
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    max-width: 900px;
-    background: #161b22;
-    border-radius: 8px;
-    overflow: hidden;
-    box-shadow: 0 6px 16px #0008;
-    font-size: 13px;
-  }
-
-  thead {
-    background: #21262d;
-  }
-
-  th, td {
-    text-align: left;
-    padding: 8px 14px;
-    border-bottom: 1px solid #30363d;
-  }
-
-  tbody tr:hover {
-    background: #21262d;
-  }
-
-  /* Smaller status dot and text styling */
-  .status {
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    white-space: nowrap;
-  }
-  .status::before {
-    content: "●";
     font-size: 12px;
-    position: relative;
-    top: -1px;
-  }
-  .status.active::before {
-    color: #238636;
-  }
-  .status.unknown::before {
-    color: #daa038;
   }
 
-  a {
-    color: #58a6ff;
-    text-decoration: none;
-    font-weight: 600;
-  }
-  a:hover, a:focus {
-    text-decoration: underline;
-    outline: none;
+  form input[type="text"] {
+    width: 90%;
+    margin-bottom: 8px;
   }
 
-  /* Responsive tweaks */
-  @media (max-width: 650px) {
-    body {
-      padding: 12px 14px;
-      font-size: 13px;
-    }
-    input[type="text"] {
-      width: 160px;
-    }
-    table, thead, tbody, th, td, tr {
-      display: block;
-    }
-    thead tr {
-      display: none;
-    }
-    tbody tr {
-      margin-bottom: 14px;
-      background: #21262d;
-      border-radius: 6px;
-      padding: 12px 10px;
-    }
-    tbody td {
-      padding-left: 50%;
-      position: relative;
-      border-bottom: none;
-    }
-    tbody td::before {
-      content: attr(data-label);
-      position: absolute;
-      left: 12px;
-      top: 10px;
-      font-weight: 600;
-      text-transform: uppercase;
-      font-size: 11px;
-      color: #8b949e;
-      white-space: nowrap;
-    }
-    form {
-      flex-direction: column;
-      gap: 8px;
-    }
-    button, a.button-link {
-      width: 100%;
-      text-align: center;
-      padding: 10px;
-      font-size: 14px;
-    }
+  form button,
+  .button-link {
+    display: block;
+    margin: 8px auto;
   }
+}

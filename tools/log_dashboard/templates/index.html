@@ -17,26 +17,21 @@ P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>🪵 Mining Log Dashboard</title>
-
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css" />
 </head>
-
 <body>
 
   <h2>🪵 Mining Log Dashboard</h2>
 
   <form method="get" aria-label="Filter user agents">
-    <input type="text" name="q" placeholder="Filter by user agent..." value="{{ query|default('') }}"
-      autocomplete="off" />
+    <input type="text" name="q" placeholder="Filter by user agent..." value="{{ query|default('') }}" autocomplete="off" />
     <button type="submit" aria-label="Filter logs">Filter</button>
     <a href="/" class="button-link" aria-label="Reset filter">Reset</a>
   </form>
-
 
   {% if agents %}
   <table role="table" aria-label="User Agent mining status table">
@@ -45,19 +40,23 @@ P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
         <th scope="col">Status</th>
         <th scope="col">User Agent</th>
         <th scope="col">Submits</th>
-        <th scope="col">Log</th>
+        <th scope="col">Last Session Log</th>
+        <th scope="col">Usernames</th>
       </tr>
     </thead>
     <tbody>
       {% for ua, info in agents.items() %}
       <tr>
-        <td class="status {% if info.status == '🟢 ACTIVE' %}active{% else %}unknown{% endif %}" data-label="Status"
-          title="{{ info.status }}">
+        <td class="status {% if info.status == '🟢 ACTIVE' %}active{% else %}unknown{% endif %}" data-label="Status" title="{{ info.status }}">
           {{ info.status }}
         </td>
         <td data-label="User Agent">{{ ua }}</td>
         <td data-label="Submits">{{ info.submits }}</td>
-        <td data-label="Log"><a href="{{ url_for('serve_log', filename=info.filename) }}" target="_blank">View Log</a>
+        <td data-label="Last Session Log">
+          <a href="{{ url_for('download_last_session_log', ua=ua) }}" class="btn btn-success">Download Last Session Log</a>
+        </td>
+        <td data-label="Usernames">
+          <button class="usernames-button" data-ua="{{ ua|e }}">Usernames</button>
         </td>
       </tr>
       {% endfor %}
@@ -79,18 +78,24 @@ P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
             font-family: 'Roboto Mono', monospace; font-size: 14px; line-height: 1.5;">
     <h3 style="color:#58a6ff; margin-top: 0; font-weight:700;">🪵 How to Use This Dashboard</h3>
     <ul style="padding-left: 20px; margin-top: 10px; margin-bottom: 0;">
-      <li><strong>Status:</strong> <span style="color:#238636;">🟢 ACTIVE</span> means miner has successfully submitted
-        shares; <span style="color:#daa038;">🟡 PENDING SUBMITS</span> means still pending success.</li>
+      <li><strong>Status:</strong> <span style="color:#238636;">🟢 ACTIVE</span> means miner has successfully submitted shares; <span style="color:#daa038;">🟡 PENDING SUBMITS</span> means still pending success.</li>
       <li><span style="color:#9c2929;">🔴 FAILED</span> means submission failed.</li>
       <li><span style="color:#e2c389;">🔵 DISCONNECTED</span> means device disconnected.</li>
       <li><strong>Filter:</strong> Use the search box to find miners by their user agent names or versions.</li>
-      <li><strong>Logs:</strong> Click "View" to see detailed mining activity logs (IP addresses are redacted for
-        privacy).</li>
-      <li><strong>Refresh:</strong> Use the refresh button to reload the latest log data.</li>
+      <li><strong>Logs:</strong> Use "Download Last Session Log" to get logs as a file.</li>
     </ul>
   </div>
 
+  <!-- Usernames Modal -->
+  <div id="usernamesModal"
+    style="display:none; position: fixed; top:20%; left:30%; width:40%; background:#fff; border:1px solid #000; padding:20px; z-index:1000; max-height:60vh; overflow-y:auto;">
+    <h3>Usernames for <span id="modalUserAgent"></span></h3>
+    <ul id="usernamesList"></ul>
+    <button id="closeUsernamesModal" style="margin-top:10px;">Close</button>
+  </div>
+
   <script>
+    // Toggle instructions panel
     document.getElementById('toggleInstructions').addEventListener('click', function () {
       const instr = document.getElementById('instructions');
       if (instr.style.display === 'none' || instr.style.display === '') {
@@ -101,9 +106,40 @@ P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
         this.textContent = '❓ Instructions';
       }
     });
+
+    // Show/hide usernames modal
+    document.querySelectorAll('.usernames-button').forEach(button => {
+      button.addEventListener('click', () => {
+        const ua = button.dataset.ua;
+        fetch(`/api/agent_usernames/${encodeURIComponent(ua)}`)
+          .then(resp => resp.json())
+          .then(usernames => {
+            document.getElementById('modalUserAgent').textContent = ua;
+            const ul = document.getElementById('usernamesList');
+            ul.innerHTML = '';
+
+            if (usernames.length === 0) {
+              ul.innerHTML = '<li>No usernames found</li>';
+            } else {
+              usernames.forEach(name => {
+                const li = document.createElement('li');
+                li.textContent = name;
+                ul.appendChild(li);
+              });
+            }
+
+            document.getElementById('usernamesModal').style.display = 'block';
+          })
+          .catch(err => {
+            alert('Error loading usernames: ' + err.message);
+          });
+      });
+    });
+
+    document.getElementById('closeUsernamesModal').addEventListener('click', () => {
+      document.getElementById('usernamesModal').style.display = 'none';
+    });
   </script>
 
-
 </body>
-
 </html>
