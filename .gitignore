@@ -5,3 +5,4 @@ logs/*
 tools/log_dashboard/venv/
 tools/log_dashboard/stats.json*
 tools/log_dashboard/agent_logs/
+tools/log_dashboard/last_processed.txt
