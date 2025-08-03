@@ -33,19 +33,21 @@ def open_logfile(filepath: str):
         return gzip.open(filepath, 'rt', encoding='utf-8', errors='ignore')
     return open(filepath, 'r', encoding='utf-8', errors='ignore')
 
-def sort_key(fname):
-    base = os.path.basename(fname)
-    m = re.search(r'p2pool-(\d{4}-\d{2}-\d{2})', base)
-    if m:
-        try:
-            return datetime.strptime(m.group(1), "%Y-%m-%d")
-        except ValueError:
-            pass
-    return datetime.min
+def parse_all_logs(log_dir: str, log_pattern) -> list:
+    def sort_key(fname):
+        base = os.path.basename(fname)
+        regexp = f"{log_pattern}.(\\d{{4}}-\\d{{2}}-\\d{{2}})"
+        m = re.search(regexp, base)
+        if m:
+            try:
+                return datetime.strptime(m.group(1), "%Y-%m-%d")
+            except ValueError:
+                pass
+        return datetime.min
 
-def parse_all_logs(log_dir: str, log_pattern="p2pool-*.log*") -> list:
-    files = [f for f in glob.glob(os.path.join(log_dir, log_pattern)) if os.path.isfile(f)]
+    files = [f for f in glob.glob(os.path.join(log_dir, log_pattern + "*")) if os.path.isfile(f)]
     files.sort(key=sort_key)
+    print(f"Processing files: {files}")
     all_lines = []
     for fname in files:
         with open_logfile(fname) as f:
