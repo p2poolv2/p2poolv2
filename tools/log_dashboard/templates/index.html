@@ -17,129 +17,163 @@ P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>🪵 Mining Log Dashboard</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
+
 <body>
+  <div class="container">
+    <div class="row">
+      <div class="col-12">
+        <h2>Testing Rust Stratum Server</h2>
+      </div>
+    </div>
 
-  <h2>🪵 Mining Log Dashboard</h2>
+    <div class="row">
+      <div class="col-12">
+        <div class="card">
+          <p class="text-center">Our goal is to validate Hydrapool Stratum Server with various hardware and firmware
+            implementations of Stratum
+            Client.</p>
+        </div>
+      </div>
+    </div>
 
-  <form method="get" aria-label="Filter user agents">
-    <input type="text" name="q" placeholder="Filter by user agent..." value="{{ query|default('') }}" autocomplete="off" />
-    <button type="submit" aria-label="Filter logs">Filter</button>
-    <a href="/" class="button-link" aria-label="Reset filter">Reset</a>
-  </form>
+    <!-- <div class="row">
+      <div class="col-12">
+        <form method="get" aria-label="Filter user agents">
+          <input type="text" name="q" placeholder="Filter by user agent..." value="{{ query|default('') }}"
+            autocomplete="off" />
+          <button type="submit" aria-label="Filter logs">Filter</button>
+          <a href="/" class="button-link" aria-label="Reset filter">Reset</a>
+        </form>
+      </div>
+    </div> -->
 
-  {% if agents %}
-  <table role="table" aria-label="User Agent mining status table">
-    <thead>
-      <tr>
-        <th scope="col">Status</th>
-        <th scope="col">User Agent</th>
-        <th scope="col">Submits</th>
-        <th scope="col">Last Session Log</th>
-        <th scope="col">Usernames</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for ua, info in agents.items() %}
-      <tr>
-        <td class="status {% if info.status == '🟢 ACTIVE' %}active{% else %}unknown{% endif %}" data-label="Status" title="{{ info.status }}">
-          {{ info.status }}
-        </td>
-        <td data-label="User Agent">{{ ua }}</td>
-        <td data-label="Submits">{{ info.submits }}</td>
-        <td data-label="Last Session Log">
-          <a href="{{ url_for('download_last_session_log', ua=ua) }}" class="btn btn-success">Download Last Session Log</a>
-        </td>
-        <td data-label="Usernames">
-          <button class="usernames-button" data-ua="{{ ua|e }}">Usernames</button>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p style="text-align:center; font-weight:600; color:#f2a365;">⚠️ No user agents found. Check logs.</p>
-  {% endif %}
+    <div class="row">
+      <div class="col-12">
+        {% if agents %}
+        <div class="card">
+          <table role="table" aria-label="User Agent mining status table">
+            <thead>
+              <tr>
+                <th scope="col">Status</th>
+                <th scope="col">User Agent</th>
+                <th scope="col">Submits</th>
+                <th scope="col">Last Session Log</th>
+                <th scope="col">Usernames</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for ua, info in agents.items() %}
+              <tr>
+                <td data-label="Status" title="{{ info.status }}">
+                  {{ info.status }}
+                </td>
+                <td data-label="User Agent">{{ ua }}</td>
+                <td data-label="Submits">{{ info.submits }}</td>
+                <td data-label="Testers">
+                  {% if info.usernames|length > 0 %}
+                  <div class="username-list">
+                    {% for username in info.usernames %}
+                    <span class="username-badge" title="{{ username }}">{{ username[:24] + '...' if username|length > 16
+                      else username }}</span>{% if not loop.last %}<br>{% endif %}
+                    {% endfor %}
+                  </div>
+                  {% else %}
+                  <span class="text-muted">None</span>
+                  {% endif %}
+                </td>
+                <td data-label="Last Session Log">
+                  <a href="{{ url_for('download_last_session_log', ua=ua) }}" class="btn btn-success"
+                    title="Download Last Session Log">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
+                      viewBox="0 0 16 16" aria-hidden="true">
+                      <path
+                        d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z" />
+                      <path
+                        d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z" />
+                    </svg>
+                  </a>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="card">
+          <p class="text-center text-warning" style="font-weight:600;">⚠️ No user agents found. Check logs.</p>
+        </div>
+        {% endif %}
+      </div>
+    </div>
 
-  <button id="toggleInstructions" style="margin: 20px auto; display: block;
-               background:#238636; color:#f0f6fc; border:none; 
-               border-radius:6px; padding:8px 16px; font-weight:600; cursor:pointer; 
-               box-shadow:0 3px 8px rgba(35,134,54,0.7); transition: background-color 0.3s ease;">
-    ❓ Instructions
-  </button>
+    <div class="row">
+      <div class="col-12">
+        <div id="instructions">
+          <div>
+            <span class="text-success">
+              🟢 PASS</span> miner has successfully submitted blocks
+          </div>
+          <div>
+            <span style="color:#daa038;">🟡 PENDING SUBMITS</span> waiting for successful block submissions
+          </div>
+          <div>
+            <span style="color:#9c2929;">🔴 FAILED</span> block submission failed
+          </div>
+          <div>
+            <span style="color:#e2c389;">🔵 DISCONNECTED</span> device disconnected without submitting shares
+          </div>
+        </div>
+      </div>
 
-  <div id="instructions" style="display:none; max-width: 900px; margin: 0 auto 30px auto; 
-            background: #161b22; border-radius: 8px; padding: 20px; color: #c9d1d9; 
-            font-family: 'Roboto Mono', monospace; font-size: 14px; line-height: 1.5;">
-    <h3 style="color:#58a6ff; margin-top: 0; font-weight:700;">🪵 How to Use This Dashboard</h3>
-    <ul style="padding-left: 20px; margin-top: 10px; margin-bottom: 0;">
-      <li><strong>Status:</strong> <span style="color:#238636;">🟢 ACTIVE</span> means miner has successfully submitted shares; <span style="color:#daa038;">🟡 PENDING SUBMITS</span> means still pending success.</li>
-      <li><span style="color:#9c2929;">🔴 FAILED</span> means submission failed.</li>
-      <li><span style="color:#e2c389;">🔵 DISCONNECTED</span> means device disconnected.</li>
-      <li><strong>Filter:</strong> Use the search box to find miners by their user agent names or versions.</li>
-      <li><strong>Logs:</strong> Use "Download Last Session Log" to get logs as a file.</li>
-    </ul>
-  </div>
+      <!-- Usernames Modal -->
+      <div id="usernamesModal"
+        style="display:none; position: fixed; top:50%; left:50%; transform: translate(-50%, -50%); width:90%; max-width:500px; z-index:1000; max-height:80vh; overflow-y:auto;">
+        <h3>Usernames for <span id="modalUserAgent"></span></h3>
+        <ul id="usernamesList"></ul>
+        <button id="closeUsernamesModal">Close</button>
+      </div>
 
-  <!-- Usernames Modal -->
-  <div id="usernamesModal"
-    style="display:none; position: fixed; top:20%; left:30%; width:40%; background:#fff; border:1px solid #000; padding:20px; z-index:1000; max-height:60vh; overflow-y:auto;">
-    <h3>Usernames for <span id="modalUserAgent"></span></h3>
-    <ul id="usernamesList"></ul>
-    <button id="closeUsernamesModal" style="margin-top:10px;">Close</button>
-  </div>
+      <script>
+        document.getElementById('closeUsernamesModal').addEventListener('click', () => {
+          document.getElementById('usernamesModal').style.display = 'none';
+        });
 
-  <script>
-    // Toggle instructions panel
-    document.getElementById('toggleInstructions').addEventListener('click', function () {
-      const instr = document.getElementById('instructions');
-      if (instr.style.display === 'none' || instr.style.display === '') {
-        instr.style.display = 'block';
-        this.textContent = '🔽 Hide Instructions';
-      } else {
-        instr.style.display = 'none';
-        this.textContent = '❓ Instructions';
-      }
-    });
+        // Close modal when clicking outside
+        window.addEventListener('click', (event) => {
+          const modal = document.getElementById('usernamesModal');
+          if (event.target === modal) {
+            modal.style.display = 'none';
+          }
+        });
 
-    // Show/hide usernames modal
-    document.querySelectorAll('.usernames-button').forEach(button => {
-      button.addEventListener('click', () => {
-        const ua = button.dataset.ua;
-        fetch(`/api/agent_usernames/${encodeURIComponent(ua)}`)
-          .then(resp => resp.json())
-          .then(usernames => {
-            document.getElementById('modalUserAgent').textContent = ua;
-            const ul = document.getElementById('usernamesList');
-            ul.innerHTML = '';
+        // Handle responsive behavior for tables
+        function handleResponsiveTable() {
+          const width = window.innerWidth;
+          const tables = document.querySelectorAll('table');
 
-            if (usernames.length === 0) {
-              ul.innerHTML = '<li>No usernames found</li>';
-            } else {
-              usernames.forEach(name => {
-                const li = document.createElement('li');
-                li.textContent = name;
-                ul.appendChild(li);
-              });
-            }
+          if (width < 992) {
+            tables.forEach(table => {
+              table.classList.add('responsive');
+            });
+          } else {
+            tables.forEach(table => {
+              table.classList.remove('responsive');
+            });
+          }
+        }
 
-            document.getElementById('usernamesModal').style.display = 'block';
-          })
-          .catch(err => {
-            alert('Error loading usernames: ' + err.message);
-          });
-      });
-    });
-
-    document.getElementById('closeUsernamesModal').addEventListener('click', () => {
-      document.getElementById('usernamesModal').style.display = 'none';
-    });
-  </script>
+        // Run on page load and on resize
+        handleResponsiveTable();
+        window.addEventListener('resize', handleResponsiveTable);
+      </script>
 
 </body>
+
 </html>

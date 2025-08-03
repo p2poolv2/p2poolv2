@@ -274,10 +274,10 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
         if info["status"] == "🔵 DISCONNECTED":
             continue
         # If old agent was green, keep green
-        if old_agents.get(ua, {}).get("status") == "🟢 ACTIVE" or info.get("status") == "🟢 ACTIVE":
-            info["status"] = "🟢 ACTIVE"
+        if old_agents.get(ua, {}).get("status") == "🟢 PASS" or info.get("status") == "🟢 PASS":
+            info["status"] = "🟢 PASS"
         elif info["successes"] > 0:
-            info["status"] = "🟢 ACTIVE"
+            info["status"] = "🟢 PASS"
         elif info["failures"] > 0:
             info["status"] = "🔴 FAIL"
         elif info["submits"] > 0:
