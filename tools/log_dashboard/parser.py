@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 LAST_TS_FILE = "last_processed.txt"
 
 def strip_ip(line: str) -> str:
-    return re.sub(r'\d{1,3}(?:\.\d{1,3}){3}:\d{2,5}', '<redacted>', line)
+    return re.sub(r'\d{1,3}(?:\.\d{1,3}){3}:\d{2,5}', '<hidden>', line)
 
 def open_logfile(filepath: str):
     if filepath.endswith('.gz'):
@@ -186,8 +186,8 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
             # For non-json, try associate log line to ua from ipport_to_ua
             if ipport and ipport in ipport_to_ua:
                 ua = ipport_to_ua[ipport]
-                redacted = strip_ip(line_strip)
-                session_lines[ua].append(redacted)
+                hidden = strip_ip(line_strip)
+                session_lines[ua].append(hidden)
             continue
 
         for raw_json in to_parse_jsons:
@@ -213,8 +213,8 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
                 session_lines[ua].clear()
                 disconnected_agents.discard(ua)
                 
-                redacted = strip_ip(line_strip)
-                session_lines[ua].append(redacted)
+                hidden = strip_ip(line_strip)
+                session_lines[ua].append(hidden)
 
             elif method == "mining.submit":
                 if ipport and ipport in ipport_to_ua:
@@ -223,8 +223,8 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
                     agents[ua]["submits"] += 1
                     if submit_id is not None:
                         submitid_to_ua[(ipport, submit_id)] = ua
-                    redacted = strip_ip(line_strip)
-                    session_lines[ua].append(redacted)
+                    hidden = strip_ip(line_strip)
+                    session_lines[ua].append(hidden)
                     params = msg.get("params", [])
                     if len(params) > 0:
                         workername = params[0]
@@ -249,8 +249,8 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
                         elif msg["result"] is False:
                             agents[ua]["failures"] += 1
 
-                        redacted = strip_ip(line_strip)
-                        session_lines[ua].append(redacted)
+                        hidden = strip_ip(line_strip)
+                        session_lines[ua].append(hidden)
 
                         submitid_to_ua.pop((ipport, tx_id), None)
 
@@ -258,8 +258,8 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
                 # Fallback: assign line by ipport if available
                 if ipport and ipport in ipport_to_ua:
                     ua = ipport_to_ua[ipport]
-                    redacted = strip_ip(line_strip)
-                    session_lines[ua].append(redacted)
+                    hidden = strip_ip(line_strip)
+                    session_lines[ua].append(hidden)
 
     # Finalize sessions for agents not disconnected yet (they have active sessions)
     for ua in session_lines.keys():
