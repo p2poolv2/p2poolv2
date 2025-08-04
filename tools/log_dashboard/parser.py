@@ -131,7 +131,6 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
     session_lines = defaultdict(lambda: deque(maxlen=25))
     # Track disconnected status per ua
     disconnected_agents = set()
-    latest_ts = last_processed
 
     def finalize_session(ua):
         if ua in session_lines:
@@ -149,10 +148,7 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
             line_ts = datetime.fromisoformat(ts_match.group(1))
         except ValueError:
             continue
-        if line_ts <= last_processed:
-            continue
-        if line_ts > latest_ts:
-            latest_ts = line_ts
+        latest_ts = line_ts
 
         is_rx = "Rx" in line_strip
         is_tx = "Tx" in line_strip
@@ -219,6 +215,9 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
                 session_lines[ua].append(hidden)
 
             elif method == "mining.submit":
+                # Skip submit lines if already processed
+                if line_ts <= last_processed:
+                    continue
                 if ipport and ipport in ipport_to_ua:
                     ua = ipport_to_ua[ipport]
                     submit_id = msg.get("id")
@@ -242,6 +241,9 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
                         agents[ua]["usernames"].add(username)
 
             elif is_tx and "result" in msg:
+                # Skip result lines if already processed
+                if line_ts <= last_processed:
+                    continue
                 tx_id = msg.get("id")
                 if ipport and tx_id is not None:
                     ua = submitid_to_ua.get((ipport, tx_id))
