@@ -1,5 +1,5 @@
 codecov:
-  require_ci_to_pass: yes
+  require_ci_to_pass: true
 
 coverage:
   status:
@@ -9,3 +9,9 @@ coverage:
     patch:
       default:
         informational: true
+
+ignore:
+  - tools/log_dashboard/
+  - load_tests
+  - docs
+  - docker
