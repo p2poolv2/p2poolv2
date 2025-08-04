@@ -145,48 +145,7 @@ P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
           </div>
         </div>
       </div>
-
-      <!-- Usernames Modal -->
-      <div id="usernamesModal"
-        style="display:none; position: fixed; top:50%; left:50%; transform: translate(-50%, -50%); width:90%; max-width:500px; z-index:1000; max-height:80vh; overflow-y:auto;">
-        <h3>Usernames for <span id="modalUserAgent"></span></h3>
-        <ul id="usernamesList"></ul>
-        <button id="closeUsernamesModal">Close</button>
-      </div>
-
-      <script>
-        document.getElementById('closeUsernamesModal').addEventListener('click', () => {
-          document.getElementById('usernamesModal').style.display = 'none';
-        });
-
-        // Close modal when clicking outside
-        window.addEventListener('click', (event) => {
-          const modal = document.getElementById('usernamesModal');
-          if (event.target === modal) {
-            modal.style.display = 'none';
-          }
-        });
-
-        // Handle responsive behavior for tables
-        function handleResponsiveTable() {
-          const width = window.innerWidth;
-          const tables = document.querySelectorAll('table');
-
-          if (width < 992) {
-            tables.forEach(table => {
-              table.classList.add('responsive');
-            });
-          } else {
-            tables.forEach(table => {
-              table.classList.remove('responsive');
-            });
-          }
-        }
-
-        // Run on page load and on resize
-        handleResponsiveTable();
-        window.addEventListener('resize', handleResponsiveTable);
-      </script>
+    </div>
 
 </body>
 
