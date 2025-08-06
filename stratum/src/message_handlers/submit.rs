@@ -18,13 +18,16 @@ use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
 use crate::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
 use crate::session::Session;
+use crate::share_block::emit_share_block;
 use crate::work::difficulty::validate::validate_submission_difficulty;
 use crate::work::tracker::{JobId, TrackerHandle};
 use bitcoin::blockdata::block::Block;
 use bitcoin::hashes::Hash;
+use bitcoin::p2p::message_compact_blocks::CmpctBlock;
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use serde_json::json;
 use std::time::SystemTime;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 /// Handle the "mining.submit" message
@@ -47,6 +50,7 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     session: &mut Session<D>,
     tracker_handle: TrackerHandle,
     bitcoinrpc_config: BitcoinRpcConfig,
+    shares_tx: mpsc::Sender<CmpctBlock>,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.submit message");
     if message.params.len() < 4 {
@@ -88,6 +92,15 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
 
     // Submit block asap, do difficulty adjustment after submission
     submit_block(&block, bitcoinrpc_config).await;
+
+    // Emit the share block to the tx channel
+    if let Err(e) = emit_share_block(&block, session.version_mask as u32, shares_tx) {
+        error!("Failed to emit share block: {}", e);
+        return Ok(vec![Message::Response(Response::new_ok(
+            message.id,
+            json!(false),
+        ))]);
+    }
 
     // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet
     let truediff = get_true_difficulty(&block.block_hash());
@@ -219,9 +232,16 @@ mod handle_submit_tests {
             )
             .await;
 
-        let message = handle_submit(submit, &mut session, tracker_handle, bitcoinrpc_config)
-            .await
-            .unwrap();
+        let (shares_tx, shares_rx) = mpsc::channel(10);
+        let message = handle_submit(
+            submit,
+            &mut session,
+            tracker_handle,
+            bitcoinrpc_config,
+            shares_tx,
+        )
+        .await
+        .unwrap();
 
         let response = match &message[..] {
             [Message::Response(response)] => response,
@@ -290,9 +310,16 @@ mod handle_submit_tests {
             )
             .await;
 
-        let response = handle_submit(submit, &mut session, tracker_handle, bitcoinrpc_config)
-            .await
-            .unwrap();
+        let (shares_tx, shares_rx) = mpsc::channel(10);
+        let response = handle_submit(
+            submit,
+            &mut session,
+            tracker_handle,
+            bitcoinrpc_config,
+            shares_tx,
+        )
+        .await
+        .unwrap();
 
         let response = match &response[..] {
             [Message::Response(response)] => response,
@@ -361,9 +388,16 @@ mod handle_submit_tests {
             )
             .await;
 
-        let response = handle_submit(submit, &mut session, tracker_handle, bitcoinrpc_config)
-            .await
-            .unwrap();
+        let (shares_tx, shares_rx) = mpsc::channel(10);
+        let response = handle_submit(
+            submit,
+            &mut session,
+            tracker_handle,
+            bitcoinrpc_config,
+            shares_tx,
+        )
+        .await
+        .unwrap();
 
         let response = match &response[..] {
             [Message::Response(response)] => response,
@@ -444,9 +478,16 @@ mod handle_submit_tests {
             )
             .await;
 
-        let message = handle_submit(submit, &mut session, tracker_handle, bitcoinrpc_config)
-            .await
-            .unwrap();
+        let (shares_tx, shares_rx) = mpsc::channel(10);
+        let message = handle_submit(
+            submit,
+            &mut session,
+            tracker_handle,
+            bitcoinrpc_config,
+            shares_tx,
+        )
+        .await
+        .unwrap();
 
         match &message[..] {
             [Message::SetDifficulty(SetDifficultyNotification { method: _, params })] => {
@@ -491,9 +532,16 @@ mod handle_submit_tests {
             u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
         session.enonce1_hex = enonce1.to_string();
 
-        let message = handle_submit(submit, &mut session, tracker_handle, bitcoinrpc_config)
-            .await
-            .unwrap();
+        let (shares_tx, shares_rx) = mpsc::channel(10);
+        let message = handle_submit(
+            submit,
+            &mut session,
+            tracker_handle,
+            bitcoinrpc_config,
+            shares_tx,
+        )
+        .await
+        .unwrap();
 
         let response = match &message[..] {
             [Message::Response(response)] => response,
