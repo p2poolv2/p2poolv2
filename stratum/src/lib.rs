@@ -22,6 +22,7 @@ pub mod message_handlers;
 pub mod messages;
 pub mod server;
 pub mod session;
+pub mod share_block;
 pub mod util;
 pub mod work;
 pub mod zmq_listener;
