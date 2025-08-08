@@ -103,9 +103,23 @@ fn compute_merkle_branches(input_txids: Vec<sha256d::Hash>) -> Vec<sha256d::Hash
 /// Parse the received JSON into a BlockTemplate struct and return it.
 #[allow(dead_code)]
 async fn get_block_template(
-    bitcoind: Arc<BitcoindRpcClient>,
+    bitcoin_config: &BitcoinRpcConfig,
     network: bitcoin::Network,
 ) -> Result<BlockTemplate, Box<dyn std::error::Error + Send + Sync>> {
+    let bitcoind: BitcoindRpcClient = match BitcoindRpcClient::new(
+        &bitcoin_config.url,
+        &bitcoin_config.username,
+        &bitcoin_config.password,
+    ) {
+        Ok(bitcoind) => bitcoind,
+        Err(e) => {
+            info!("Failed to connect to bitcoind: {}", e);
+            return Err(Box::new(WorkError {
+                message: format!("Failed to connect to bitcoind: {e}"),
+            }));
+        }
+    };
+
     match bitcoind.getblocktemplate(network).await {
         Ok(blocktemplate_json) => {
             match serde_json::from_str::<BlockTemplate>(blocktemplate_json.as_str()) {
@@ -126,28 +140,14 @@ async fn get_block_template(
 /// Listen to blocknotify signal from bitcoind.
 /// Otherwise, poll for new block templates every poll_interval seconds.
 pub async fn start_gbt(
-    bitcoin_config: &BitcoinRpcConfig,
+    bitcoin_config: BitcoinRpcConfig,
     result_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
     socket_path: &str,
     poll_interval: u64,
     network: bitcoin::Network,
     mut zmq_trigger_rx: tokio::sync::mpsc::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let bitcoind: Arc<BitcoindRpcClient> = match BitcoindRpcClient::new(
-        &bitcoin_config.url,
-        &bitcoin_config.username,
-        &bitcoin_config.password,
-    ) {
-        Ok(bitcoind) => Arc::new(bitcoind),
-        Err(e) => {
-            info!("Failed to connect to bitcoind: {}", e);
-            return Err(Box::new(WorkError {
-                message: format!("Failed to connect to bitcoind: {e}"),
-            }));
-        }
-    };
-
-    let template = match get_block_template(bitcoind.clone(), network).await {
+    let template = match get_block_template(&bitcoin_config, network).await {
         Ok(template) => template,
         Err(e) => {
             info!("Error getting block template: {}", e);
@@ -200,7 +200,7 @@ pub async fn start_gbt(
                 _ = interval.tick() => {
                     // Only poll if it's been a while since our last blocknotify
                     if last_request_at.elapsed().as_secs() >= poll_interval {
-                        match get_block_template(bitcoind.clone(), network).await {
+                        match get_block_template(&bitcoin_config, network).await {
                             Ok(template) => {
                                 debug!("Polled block template: {:?}", template);
                                 if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
@@ -218,7 +218,7 @@ pub async fn start_gbt(
                     match result {
                         Ok(_) => {
                             debug!("Received blocknotify signal");
-                            match get_block_template(bitcoind.clone(), network).await {
+                            match get_block_template(&bitcoin_config, network).await {
                                 Ok(template) => {
                                     debug!("Block template from notification: {:?}", template);
                                     if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
@@ -240,7 +240,7 @@ pub async fn start_gbt(
                     match result {
                         Some(_) => {
                             debug!("Received ZMQ block notification");
-                            match get_block_template(bitcoind.clone(), network).await {
+                            match get_block_template(&bitcoin_config, network).await {
                                 Ok(template) => {
                                     debug!("Block template from ZMQ: {:?}", template);
                                     if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
@@ -286,14 +286,7 @@ mod gbt_load_tests {
         }]);
         mock_method(&mock_server, "getblocktemplate", params, template).await;
 
-        let rpc = BitcoindRpcClient::new(
-            &bitcoinrpc_config.url,
-            &bitcoinrpc_config.username,
-            &bitcoinrpc_config.password,
-        )
-        .unwrap();
-
-        let result = get_block_template(Arc::new(rpc), bitcoin::Network::Signet).await;
+        let result = get_block_template(&bitcoinrpc_config, bitcoin::Network::Signet).await;
 
         assert!(result.is_ok());
         let template = result.unwrap();
@@ -469,7 +462,7 @@ mod gbt_server_tests {
 
         // Start GBT server
         let result = start_gbt(
-            &bitcoinrpc_config,
+            bitcoinrpc_config,
             template_tx,
             socket_path,
             60,
@@ -524,7 +517,7 @@ mod gbt_server_tests {
 
         // Start GBT server
         let result = start_gbt(
-            &bitcoinrpc_config,
+            bitcoinrpc_config,
             template_tx,
             socket_path,
             1,
@@ -576,7 +569,7 @@ mod gbt_server_tests {
 
         // Start GBT server
         let result = start_gbt(
-            &bitcoinrpc_config,
+            bitcoinrpc_config,
             template_tx,
             socket_path,
             60,
