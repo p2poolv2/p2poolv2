@@ -98,7 +98,7 @@ async fn main() -> Result<(), String> {
 
     tokio::spawn(async move {
         if let Err(e) = start_gbt(
-            &bitcoinrpc_config_cloned,
+            bitcoinrpc_config_cloned,
             notify_tx_for_gbt,
             SOCKET_PATH,
             GBT_POLL_INTERVAL,
