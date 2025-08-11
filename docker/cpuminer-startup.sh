@@ -49,4 +49,4 @@ fi
 echo "Height reached: $height"
 
 # Start minerd
-exec /cpuminer/minerd --algo=sha256d --url=stratum+tcp://ckpool:3333 --user=$ADDR --pass=x --debug
+exec /cpuminer/minerd --algo=sha256d --url=stratum+tcp://ckpool:3333 --user=$ADDR --pass=x --debug -l 7

@@ -180,10 +180,10 @@ where
             }
             // receive a message on the channel used by server to send_to_all
             Some(message) = message_rx.recv() => {
-                debug!("Received message from channel: {}", message);
                 if session.username.is_none() {
                     continue; // Ignore messages until the user has authorized
                 }
+                info!("Tx {addr} {message:?}");
                 if let Err(e) = writer.write_all(format!("{message}\n").as_bytes()).await {
                     error!("Failed to write to {}: {}", addr, e);
                     break;
