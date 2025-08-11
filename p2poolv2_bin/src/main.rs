@@ -32,7 +32,7 @@ use tracing::error;
 use tracing::info;
 
 /// Interval in seconds to poll for new block templates since the last blocknotify signal
-const GBT_POLL_INTERVAL: u64 = 60; // seconds
+const GBT_POLL_INTERVAL: u64 = 5; // seconds
 
 /// Path to the Unix socket for receiving blocknotify signals from bitcoind
 pub const SOCKET_PATH: &str = "/tmp/p2pool_blocknotify.sock";
