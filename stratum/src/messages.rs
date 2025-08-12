@@ -162,9 +162,8 @@ pub struct MiningConfigureParams<'a> {
 pub struct Response<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>, // Should match the id from the request
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none", borrow)]
+    #[serde(borrow)]
     pub error: Option<Error<'a>>,
 }
 
