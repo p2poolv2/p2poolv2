@@ -11,7 +11,7 @@ services:
       - "28332:28332" # ZMQ port is always the same
     environment:
       - NETWORK=${NETWORK:-signet}
-    command: bitcoind -conf=/etc/bitcoin/bitcoin-${NETWORK:-signet}.conf -datadir=/data-${NETWORK:-signet}
+    command: bitcoind -conf=/etc/bitcoin/bitcoin-${NETWORK:-signet}.conf -datadir=/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "nc", "-z", "0.0.0.0", "${BTC_P2P_PORT:-38333}"]
