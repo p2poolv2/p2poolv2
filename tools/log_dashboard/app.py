@@ -97,12 +97,32 @@ def download_last_session_log(ua):
 def index():
     stats = load_stats_json()
     query = request.args.get("q", "").strip().lower()
+    
+    # Filter agents if query exists
     if query:
         agents = {ua: info for ua, info in stats.items() if query in ua.lower()}
     else:
         agents = stats
-
-    return render_template("index.html", agents=agents, query=query)
+    
+    # Define a sorting key function
+    def sort_key(item):
+        ua, info = item
+        # Status priority: PASS (🟢) = 1, PENDING (🟡) = 2, FAIL (🔴) = 3
+        status = info.get("status", "")
+        if "🟢" in status:  # PASS
+            status_priority = 1
+        elif "🟡" in status:  # PENDING
+            status_priority = 2
+        else:  # FAIL
+            status_priority = 3
+        
+        # Sort by status, then by submits (descending), then by name
+        return (status_priority, -info.get("submits", 0), ua)
+    
+    # Sort the agents
+    sorted_agents = dict(sorted(agents.items(), key=sort_key))
+    
+    return render_template("index.html", agents=sorted_agents, query=query)
 
 
 if __name__ == "__main__":
