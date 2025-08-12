@@ -102,7 +102,7 @@ pub struct SimpleRequest<'a> {
     #[serde(borrow)]
     pub method: Cow<'a, str>,
     #[serde(borrow, default)]
-    pub params: Cow<'a, Vec<String>>,
+    pub params: Cow<'a, Vec<Option<String>>>,
 }
 
 /// Suggested difficulty request uses a vector of integers of size one as params
@@ -271,10 +271,10 @@ impl SimpleRequest<'_> {
         extra_nonce: Option<String>,
     ) -> Self {
         let user_agent_param = user_agent + "/" + &version;
-        let mut params = vec![(user_agent_param)];
+        let mut params = vec![(Some(user_agent_param))];
         if extra_nonce.is_some() {
             let extra_nonce = extra_nonce.unwrap();
-            params.push(extra_nonce);
+            params.push(Some(extra_nonce));
         }
         SimpleRequest {
             id: Some(Id::Number(id)),
@@ -287,9 +287,9 @@ impl SimpleRequest<'_> {
     /// If no id is provided, it defaults to None
     /// The username and password are passed as parameters
     pub fn new_authorize(id: u64, username: String, password: Option<String>) -> Self {
-        let mut params = vec![(username)];
+        let mut params = vec![(Some(username))];
         if let Some(password) = password {
-            params.push(password);
+            params.push(Some(password));
         }
         SimpleRequest {
             id: Some(Id::Number(id)),
@@ -308,7 +308,13 @@ impl SimpleRequest<'_> {
         n_time: String,
         nonce: String,
     ) -> Self {
-        let params = vec![username, job_id, extra_nonce2, n_time, nonce];
+        let params = vec![
+            Some(username),
+            Some(job_id),
+            Some(extra_nonce2),
+            Some(n_time),
+            Some(nonce),
+        ];
         SimpleRequest {
             id: Some(Id::Number(id)),
             method: Cow::Owned("mining.submit".to_string()),
@@ -432,6 +438,36 @@ mod tests {
             serialized_message,
             r#"{"id":42,"method":"mining.subscribe","params":["agent/1.0","extra_nonce"]}"#
         );
+    }
+
+    #[test]
+    fn test_new_subscribe_from_luxminer() {
+        let message = serde_json::from_str::<Request>(
+            r#"{"id":2,"method":"mining.subscribe","params":["Antminer S19k Pro|LUXminer 2025.7.10.152155-6e13fb74|BHB56903|Unknown|Unknown|",null,"test.hydrapool.org:3333",null]}"#,
+        ).unwrap();
+        let request = match message {
+            Request::SimpleRequest(req) => req,
+            _ => panic!("Expected SimpleRequest"),
+        };
+
+        assert_eq!(request.id, Some(Id::Number(2)), "Expected id to be 2");
+
+        assert_eq!(
+            request.method,
+            Cow::Borrowed("mining.subscribe"),
+            "Expected method to be 'mining.subscribe'"
+        );
+
+        assert_eq!(
+            request.params[0],
+            Some(
+                "Antminer S19k Pro|LUXminer 2025.7.10.152155-6e13fb74|BHB56903|Unknown|Unknown|"
+                    .into()
+            )
+        );
+        assert_eq!(request.params[1], None);
+        assert_eq!(request.params[2], Some("test.hydrapool.org:3333".into()));
+        assert_eq!(request.params[3], None);
     }
 
     #[test]
