@@ -27,16 +27,20 @@ RUN git clone --depth 1 --branch v7.10.2 https://github.com/facebook/rocksdb.git
 
 # Create and set working directory
 RUN mkdir -p /p2pool
-COPY src/ /p2pool/src
-COPY Cargo.lock /p2pool
-COPY Cargo.toml /p2pool
-COPY config.toml /p2pool
+COPY stratum/ /p2pool/stratum
+COPY bitcoindrpc/ /p2pool/bitcoindrpc
+COPY p2poolv2_cli/ /p2pool/p2poolv2_cli
+COPY p2poolv2_bin/ /p2pool/p2poolv2_bin
+COPY p2poolv2_lib/ /p2pool/p2poolv2_lib
+COPY Cargo.lock /p2pool/Cargo.lock
+COPY Cargo.toml /p2pool/Cargo.toml
+COPY config.toml /p2pool/config.toml
 ENV RUST_LOG=info
 
 WORKDIR /p2pool
 
 # Build p2poolv2 and p2poolv2_cli
-RUN cargo build --lib --bins --release
+RUN cargo build --workspace
 
 ENTRYPOINT [ ]
 CMD [] 
