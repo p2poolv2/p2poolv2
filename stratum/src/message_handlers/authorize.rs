@@ -46,8 +46,8 @@ pub async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             "Already authorized".to_string(),
         ));
     }
-    session.username = Some(message.params[0].clone());
-    session.password = Some(message.params[1].clone());
+    session.username = message.params[0].clone();
+    session.password = message.params[1].clone();
     let _ = notify_tx
         .send(NotifyCmd::SendToClient {
             client_address: addr,

@@ -44,13 +44,10 @@ pub fn build_coinbase_from_submission(
 
     let coinb1 = &job.coinbase1;
     let coinb2 = &job.coinbase2;
-    let enonce2 = &submission.params[2];
+    let enonce2 = &submission.params[2].as_ref().unwrap();
 
     // Add detailed logging to debug the issue
     debug!("Building coinbase with coinb1: {}", coinb1);
-    debug!("enonce1: {}", enonce1_hex);
-    debug!("enonce2: {}", enonce2);
-    debug!("coinb2: {}", coinb2);
 
     let complete_tx = format!("{coinb1}{enonce1_hex}{enonce2}{coinb2}");
     debug!("Complete coinbase tx hex: {}", complete_tx);
@@ -65,12 +62,12 @@ pub fn build_coinbase_from_submission(
 fn apply_version_mask(
     header_version: i32,
     version_mask: i32,
-    params: &[String],
+    params: &[Option<String>],
 ) -> Result<i32, Error> {
     if params.len() > 5 {
-        debug!("Applying version mask from params: {}", params[5]);
+        debug!("Applying version mask from params: {:?}", params[5]);
         let bits = i32::from_be_bytes(
-            hex::decode(&params[5])
+            hex::decode(&params[5].as_ref().unwrap())
                 .map_err(|_| Error::InvalidParams("Failed to decode hex".into()))?
                 .as_slice()
                 .try_into()
@@ -118,7 +115,7 @@ pub fn validate_submission_difficulty(
 
     debug!("Merkle root: {}", merkle_root);
 
-    let n_time = u32::from_str_radix(&submission.params[3], 16)
+    let n_time = u32::from_str_radix(submission.params[3].as_ref().unwrap(), 16)
         .map_err(|_| Error::InvalidParams("Bad nTime".into()))?;
 
     let version = apply_version_mask(job.blocktemplate.version, version_mask, &submission.params)?;
@@ -130,7 +127,7 @@ pub fn validate_submission_difficulty(
         merkle_root,
         time: n_time,
         bits: bitcoin::pow::CompactTarget::from_unprefixed_hex(&job.blocktemplate.bits).unwrap(),
-        nonce: u32::from_str_radix(&submission.params[4], 16).unwrap(),
+        nonce: u32::from_str_radix(submission.params[4].as_ref().unwrap(), 16).unwrap(),
     };
 
     debug!("Header hash : {}", header.block_hash().to_string());

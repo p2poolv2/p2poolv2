@@ -52,8 +52,10 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         return Err(Error::InvalidParams("Missing parameters".into()));
     }
 
-    let job_id = u64::from_str_radix(&message.params[1], 16)
-        .map_err(|_| Error::InvalidParams("Invalid job_id".into()))?;
+    let id = message.params[1].as_ref().unwrap();
+
+    let job_id =
+        u64::from_str_radix(id, 16).map_err(|_| Error::InvalidParams("Invalid job_id".into()))?;
 
     let job = match tracker_handle.get_job(JobId(job_id)).await {
         Ok(Some(job)) => job,
@@ -469,7 +471,7 @@ mod handle_submit_tests {
 
         // Overwrite job_id param to an unknown value (e.g., "deadbeef")
         if submit.params.len() > 1 {
-            submit.params.to_mut()[1] = "deadbeef".to_string();
+            submit.params.to_mut()[1] = Some("deadbeef".to_string());
         }
 
         // Set enonce1 from authorize_response
