@@ -67,16 +67,9 @@ async fn handle_simple_request<'a, D: DifficultyAdjusterTrait>(
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling simple request: {}", message.method);
     match message.method.as_ref() {
-        "mining.subscribe" => handle_subscribe(message, session, ctx.minimum_difficulty).await,
+        "mining.subscribe" => handle_subscribe(message, session, ctx.start_difficulty).await,
         "mining.authorize" => {
-            handle_authorize(
-                message,
-                session,
-                addr,
-                ctx.notify_tx,
-                ctx.minimum_difficulty,
-            )
-            .await
+            handle_authorize(message, session, addr, ctx.notify_tx, ctx.start_difficulty).await
         }
         "mining.submit" => {
             handle_submit(

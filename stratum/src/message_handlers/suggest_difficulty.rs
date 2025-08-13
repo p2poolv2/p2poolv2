@@ -33,7 +33,7 @@ pub async fn handle_suggest_difficulty<'a, D: DifficultyAdjusterTrait>(
         Some(param) => {
             let difficulty = session
                 .difficulty_adjuster
-                .apply_difficulty_constraints(*param, None);
+                .apply_difficulty_constraints(*param, Some(*param));
             session.suggested_difficulty = Some(difficulty);
             debug!("Suggested difficulty set to {}", difficulty);
             Ok(vec![Message::SetDifficulty(

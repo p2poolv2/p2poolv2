@@ -26,8 +26,8 @@ port = 8881
 [stratum]
 hostname = "0.0.0.0"
 port = 3333
-start_difficulty = 1000
-minimum_difficulty = 1000
+start_difficulty = 10000
+minimum_difficulty = 100
 solo_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 zmqpubhashblock = "tcp://127.0.0.1:28332"
 # The network can be "main", "testnet4" or "signet"

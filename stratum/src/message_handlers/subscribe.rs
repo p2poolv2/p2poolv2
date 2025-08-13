@@ -29,7 +29,7 @@ use tracing::debug;
 pub async fn handle_subscribe<'a, D: DifficultyAdjusterTrait>(
     message: SimpleRequest<'a>,
     session: &mut Session<D>,
-    pool_min_difficulty: u64,
+    start_difficulty: u64,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.subscribe message");
     if session.subscribed {
@@ -49,7 +49,7 @@ pub async fn handle_subscribe<'a, D: DifficultyAdjusterTrait>(
                 EXTRANONCE2_SIZE,
             ]),
         )),
-        Message::SetDifficulty(SetDifficultyNotification::new(pool_min_difficulty)),
+        Message::SetDifficulty(SetDifficultyNotification::new(start_difficulty)),
     ])
 }
 
