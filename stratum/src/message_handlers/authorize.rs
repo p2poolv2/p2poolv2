@@ -37,7 +37,7 @@ pub async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
     session: &mut Session<D>,
     addr: std::net::SocketAddr,
     notify_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
-    pool_min_difficulty: u64,
+    start_difficulty: u64,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.authorize message");
     if session.username.is_some() {
@@ -55,7 +55,7 @@ pub async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
         .await;
     Ok(vec![
         Message::Response(Response::new_ok(message.id, serde_json::json!(true))),
-        Message::SetDifficulty(SetDifficultyNotification::new(pool_min_difficulty)),
+        Message::SetDifficulty(SetDifficultyNotification::new(start_difficulty)),
     ])
 }
 

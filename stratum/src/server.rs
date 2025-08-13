@@ -109,6 +109,7 @@ impl StratumServer {
                                 notify_tx: notify_tx.clone(),
                                 tracker_handle: tracker_handle.clone(),
                                 bitcoinrpc_config: bitcoinrpc_config.clone(),
+                                start_difficulty: self.config.start_difficulty,
                                 minimum_difficulty: self.config.minimum_difficulty,
                                 maximum_difficulty: self.config.maximum_difficulty,
                                 network: self.config.network,
@@ -138,6 +139,7 @@ pub(crate) struct StratumContext {
     pub notify_tx: mpsc::Sender<NotifyCmd>,
     pub tracker_handle: TrackerHandle,
     pub bitcoinrpc_config: BitcoinRpcConfig,
+    pub start_difficulty: u64,
     pub minimum_difficulty: u64,
     pub maximum_difficulty: Option<u64>,
     pub network: bitcoin::network::Network,
@@ -360,6 +362,7 @@ mod stratum_server_tests {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,
@@ -435,8 +438,8 @@ mod stratum_server_tests {
         );
         assert_eq!(
             set_difficulty_json.get("params").unwrap(),
-            &serde_json::json!([1]),
-            "Set difficulty response should have params [1]"
+            &serde_json::json!([10000]),
+            "Set difficulty response should have params [10000]"
         );
 
         assert!(response.ends_with("\n"),);
@@ -461,6 +464,7 @@ mod stratum_server_tests {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,
@@ -516,6 +520,7 @@ mod stratum_server_tests {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,
@@ -576,6 +581,7 @@ mod stratum_server_tests {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,
@@ -656,6 +662,7 @@ mod stratum_server_tests {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,
@@ -755,6 +762,7 @@ mod stratum_server_tests {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             network: bitcoin::network::Network::Regtest,

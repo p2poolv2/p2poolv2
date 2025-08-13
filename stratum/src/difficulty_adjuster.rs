@@ -603,4 +603,35 @@ mod tests {
         assert!(adjuster.first_share_timestamp.is_none());
         assert!(adjuster.last_difficulty_change_timestamp.is_none());
     }
+
+    #[test]
+    fn test_update_difficulty_shares_per_second_metric() {
+        let min_diff = 1000;
+        let mut adjuster = DifficultyAdjuster::new(min_diff, None);
+        
+        // Set the last difficulty change timestamp to a known value
+        let past_time = SystemTime::now() - Duration::from_secs(60); // 1 minute ago
+        adjuster.last_difficulty_change_timestamp = Some(past_time);
+        
+        // Initial value is zero
+        assert_eq!(adjuster.difficulty_shares_per_second_5min_window, 0.0);
+        
+        // Apply a difficulty share of 2000
+        adjuster.update_difficulty_shares_per_second_metric(2000, 5.0, 300.0);
+        
+        // Calculate expected value:
+        // elapsed_time = 60 seconds
+        // fprop = 1 - (1 / e^(60/300)) ≈ 0.181
+        // dsps = (0 + (2000 * 0.181 / 60)) / (1 + 0.181) ≈ 5.09
+        
+        // Allow for some floating point variance
+        assert!(adjuster.difficulty_shares_per_second_5min_window > 5.0);
+        assert!(adjuster.difficulty_shares_per_second_5min_window < 5.2);
+        
+        // Apply another share to see exponential decay behavior
+        adjuster.update_difficulty_shares_per_second_metric(3000, 5.0, 300.0);
+        
+        // The value should increase due to the higher difficulty share
+        assert!(adjuster.difficulty_shares_per_second_5min_window > 7.0);
+    }
 }
