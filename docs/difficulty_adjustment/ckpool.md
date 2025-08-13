@@ -79,8 +79,8 @@ The system targets a specific difficulty rate ratio (DRR):
 
 - Optimal ratio is approximately 0.3 (shares every ~3.33 seconds)
 - System uses hysteresis: only adjusts if DRR < 0.15 or DRR > 0.4
-- Target difficulty is calculated as: $optimal\_diff = dsps \times 3.33$ (for standard clients)
-- For clients with minimum difficulty specified: $optimal\_diff = dsps \times 2.4$. We will ignore this in our first implementation.
+- Target difficulty is calculated as: $optimal\_{diff} = dsps \times 3.33$ (for standard clients)
+- For clients with minimum difficulty specified: $optimal\_{diff} = dsps \times 2.4$. We will ignore this in our first implementation.
 
 ## Difficulty Constraint Logic
 
