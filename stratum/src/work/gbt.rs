@@ -135,6 +135,19 @@ async fn get_block_template(
     }
 }
 
+/// Print the current network difficulty
+/// Called from start_gbt when it is first invoked
+async fn print_start_network_diff(bitcoin_config: &BitcoinRpcConfig) {
+    let bitcoind = BitcoindRpcClient::new(
+        &bitcoin_config.url,
+        &bitcoin_config.username,
+        &bitcoin_config.password,
+    )
+    .unwrap();
+    let difficulty = bitcoind.get_difficulty().await.unwrap();
+    info!("Bitcoin network difficulty: {}", difficulty);
+}
+
 /// Start a task to fetch block templates from bitcoind
 ///
 /// Listen to blocknotify signal from bitcoind.
@@ -147,6 +160,8 @@ pub async fn start_gbt(
     network: bitcoin::Network,
     mut zmq_trigger_rx: tokio::sync::mpsc::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    print_start_network_diff(&bitcoin_config).await;
+
     let template = match get_block_template(&bitcoin_config, network).await {
         Ok(template) => template,
         Err(e) => {
