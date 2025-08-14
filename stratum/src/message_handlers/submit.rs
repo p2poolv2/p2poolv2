@@ -21,6 +21,7 @@ use crate::session::Session;
 use crate::work::difficulty::validate::validate_submission_difficulty;
 use crate::work::tracker::{JobId, TrackerHandle};
 use bitcoin::blockdata::block::Block;
+use bitcoin::hashes::Hash;
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use serde_json::json;
 use tracing::{debug, error, info};
@@ -45,7 +46,6 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     session: &mut Session<D>,
     tracker_handle: TrackerHandle,
     bitcoinrpc_config: BitcoinRpcConfig,
-    network: bitcoin::Network,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.submit message");
     if message.params.len() < 4 {
@@ -88,8 +88,12 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     // Submit block asap, do difficulty adjustment after submission
     submit_block(&block, bitcoinrpc_config).await;
 
+    // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet
+    let truediff = get_true_difficulty(&block.block_hash());
+    debug!("True difficulty: {}", truediff);
+
     let (new_difficulty, _is_first_share) = session.difficulty_adjuster.record_share_submission(
-        block.header.difficulty(network),
+        truediff,
         job_id,
         session.suggested_difficulty,
     );
@@ -130,6 +134,15 @@ pub async fn submit_block(block: &Block, bitcoinrpc_config: BitcoinRpcConfig) {
     }
 }
 
+/// Use bitcoin mainnet max attainable target to convert the hash into difficulty
+/// This global difficulty to used to track difficult adjustment by the pool, independent of the chain that is being mined.
+fn get_true_difficulty(hash: &bitcoin::BlockHash) -> u128 {
+    let mut bytes = hash.to_byte_array();
+    bytes.reverse();
+    let diff = u128::from_str_radix(&hex::encode(&bytes[..16]), 16).unwrap();
+    (0xFFFF_u128 << (208 - 128)) / diff
+}
+
 #[cfg(test)]
 mod handle_submit_tests {
     use super::*;
@@ -139,8 +152,18 @@ mod handle_submit_tests {
     use crate::session::Session;
     use crate::work::gbt::BlockTemplate;
     use crate::work::tracker::start_tracker_actor;
+    use bitcoin::BlockHash;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use std::sync::Arc;
+
+    #[test_log::test]
+    fn test_true_difficulty() {
+        let hash = "000000000007f7453abd3f11338c165bf4876c086979630ed6f35ddbe59125a9"
+            .parse::<BlockHash>()
+            .unwrap();
+        let difficulty = get_true_difficulty(&hash);
+        assert_eq!(difficulty, 8226);
+    }
 
     #[test_log::test(tokio::test)]
     async fn test_handle_submit_meets_difficulty_should_submit() {
@@ -194,15 +217,9 @@ mod handle_submit_tests {
             )
             .await;
 
-        let message = handle_submit(
-            submit,
-            &mut session,
-            tracker_handle,
-            bitcoinrpc_config,
-            bitcoin::network::Network::Regtest,
-        )
-        .await
-        .unwrap();
+        let message = handle_submit(submit, &mut session, tracker_handle, bitcoinrpc_config)
+            .await
+            .unwrap();
 
         let response = match &message[..] {
             [Message::Response(response)] => response,
@@ -271,15 +288,9 @@ mod handle_submit_tests {
             )
             .await;
 
-        let response = handle_submit(
-            submit,
-            &mut session,
-            tracker_handle,
-            bitcoinrpc_config,
-            bitcoin::network::Network::Regtest,
-        )
-        .await
-        .unwrap();
+        let response = handle_submit(submit, &mut session, tracker_handle, bitcoinrpc_config)
+            .await
+            .unwrap();
 
         let response = match &response[..] {
             [Message::Response(response)] => response,
@@ -348,15 +359,9 @@ mod handle_submit_tests {
             )
             .await;
 
-        let response = handle_submit(
-            submit,
-            &mut session,
-            tracker_handle,
-            bitcoinrpc_config,
-            bitcoin::network::Network::Regtest,
-        )
-        .await
-        .unwrap();
+        let response = handle_submit(submit, &mut session, tracker_handle, bitcoinrpc_config)
+            .await
+            .unwrap();
 
         let response = match &response[..] {
             [Message::Response(response)] => response,
@@ -434,15 +439,9 @@ mod handle_submit_tests {
             )
             .await;
 
-        let message = handle_submit(
-            submit,
-            &mut session,
-            tracker_handle,
-            bitcoinrpc_config,
-            bitcoin::network::Network::Regtest,
-        )
-        .await
-        .unwrap();
+        let message = handle_submit(submit, &mut session, tracker_handle, bitcoinrpc_config)
+            .await
+            .unwrap();
 
         match &message[..] {
             [Message::SetDifficulty(SetDifficultyNotification { method: _, params })] => {
@@ -487,15 +486,9 @@ mod handle_submit_tests {
             u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
         session.enonce1_hex = enonce1.to_string();
 
-        let message = handle_submit(
-            submit,
-            &mut session,
-            tracker_handle,
-            bitcoinrpc_config,
-            bitcoin::network::Network::Regtest,
-        )
-        .await
-        .unwrap();
+        let message = handle_submit(submit, &mut session, tracker_handle, bitcoinrpc_config)
+            .await
+            .unwrap();
 
         let response = match &message[..] {
             [Message::Response(response)] => response,

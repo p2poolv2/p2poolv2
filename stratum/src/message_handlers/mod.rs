@@ -72,14 +72,7 @@ async fn handle_simple_request<'a, D: DifficultyAdjusterTrait>(
             handle_authorize(message, session, addr, ctx.notify_tx, ctx.start_difficulty).await
         }
         "mining.submit" => {
-            handle_submit(
-                message,
-                session,
-                ctx.tracker_handle,
-                ctx.bitcoinrpc_config,
-                ctx.network,
-            )
-            .await
+            handle_submit(message, session, ctx.tracker_handle, ctx.bitcoinrpc_config).await
         }
         method => Err(Error::InvalidMethod(method.to_string())),
     }
