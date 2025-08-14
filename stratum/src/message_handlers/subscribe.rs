@@ -37,6 +37,9 @@ pub async fn handle_subscribe<'a, D: DifficultyAdjusterTrait>(
         return Err(Error::SubscriptionFailure("Already subscribed".to_string()));
     }
     session.subscribed = true;
+    session
+        .difficulty_adjuster
+        .set_current_difficulty(start_difficulty);
     Ok(vec![
         Message::Response(Response::new_ok(
             message.id,
@@ -64,7 +67,7 @@ mod tests {
     async fn test_handle_subscribe_success() {
         // Setup
         let message = SimpleRequest::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
-        let mut session = Session::<DifficultyAdjuster>::new(1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         session.subscribed = false;
 
         // Execute
@@ -130,7 +133,7 @@ mod tests {
     async fn test_handle_subscribe_already_subscribed() {
         // Setup
         let message = SimpleRequest::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
-        let mut session = Session::<DifficultyAdjuster>::new(2, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(2, 2, None, 0x1fffe000);
         session.subscribed = true;
 
         // Execute

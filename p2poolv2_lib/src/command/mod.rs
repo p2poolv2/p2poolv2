@@ -15,8 +15,6 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::node::messages::Message;
-use crate::shares::ShareBlock;
-use crate::shares::miner_message::MinerWorkbase;
 use std::error::Error;
 use tokio::sync::oneshot;
 

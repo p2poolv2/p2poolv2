@@ -80,7 +80,11 @@ pub struct DifficultyAdjuster {
 #[cfg_attr(test, automock)]
 pub trait DifficultyAdjusterTrait {
     /// Create a new DifficultyAdjuster with the given minimum difficulty
-    fn new(pool_minimum_difficulty: u64, pool_maximum_difficulty: Option<u64>) -> Self;
+    fn new(
+        start_difficulty: u64,
+        pool_minimum_difficulty: u64,
+        pool_maximum_difficulty: Option<u64>,
+    ) -> Self;
 
     /// Records a share submission and updates metrics
     ///
@@ -117,14 +121,20 @@ pub trait DifficultyAdjusterTrait {
             value as u64
         }
     }
+
+    fn set_current_difficulty(&mut self, difficulty: u64) {}
 }
 
 impl DifficultyAdjusterTrait for DifficultyAdjuster {
-    fn new(pool_minimum_difficulty: u64, pool_maximum_difficulty: Option<u64>) -> Self {
+    fn new(
+        start_difficulty: u64,
+        pool_minimum_difficulty: u64,
+        pool_maximum_difficulty: Option<u64>,
+    ) -> Self {
         Self {
             share_submission_difficulty_counter: 0,
-            current_difficulty: pool_minimum_difficulty,
-            old_difficulty: pool_minimum_difficulty,
+            current_difficulty: start_difficulty,
+            old_difficulty: start_difficulty,
             first_share_timestamp: None,
             last_difficulty_change_timestamp: None,
             difficulty_shares_per_second_1min_window: 0.0,
@@ -334,14 +344,22 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
             1.0 // Default to 1 second if no last difficulty change time
         };
 
+        debug!("elapsed_time={}", elapsed_time);
+
         // Calculate fprop = 1 - (1 / e^(elapsed_time/interval))
         let fprop = 1.0 - (1.0 / (elapsed_time / interval).exp());
+
+        debug!("fprop={}", fprop);
 
         // Update dsps using the formula:
         // f_new = (f_old + (diff_share * fprop / elapsed_time)) / (1 + fprop)
         *dsps = (*dsps + (diff_share as f64 * fprop / elapsed_time)) / (1.0 + fprop);
 
         debug!("Updated dsps={}", *dsps);
+    }
+
+    fn set_current_difficulty(&mut self, difficulty: u64) {
+        self.current_difficulty = difficulty;
     }
 }
 
@@ -353,10 +371,11 @@ mod tests {
     fn test_new_difficulty_adjuster() {
         let min_diff = 1000;
         let pool_max_diff = 100000;
-        let adjuster = DifficultyAdjuster::new(min_diff, Some(pool_max_diff));
+        let start_difficulty = 100;
+        let adjuster = DifficultyAdjuster::new(start_difficulty, min_diff, Some(pool_max_diff));
 
-        assert_eq!(adjuster.current_difficulty, min_diff);
-        assert_eq!(adjuster.old_difficulty, min_diff);
+        assert_eq!(adjuster.current_difficulty, start_difficulty);
+        assert_eq!(adjuster.old_difficulty, start_difficulty);
         assert_eq!(adjuster.share_submission_difficulty_counter, 0);
         assert_eq!(adjuster.difficulty_shares_per_second_1min_window, 0.0);
         assert_eq!(adjuster.difficulty_shares_per_second_5min_window, 0.0);
@@ -371,7 +390,7 @@ mod tests {
     #[test]
     fn test_first_share_submission() {
         let min_diff = 1000;
-        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000));
+        let mut adjuster = DifficultyAdjuster::new(100, min_diff, Some(100000));
 
         let (new_diff, is_first) = adjuster.record_share_submission(min_diff as u128, 1, None);
 
@@ -385,7 +404,8 @@ mod tests {
     #[test]
     fn test_difficulty_not_changed_before_minimum_shares() {
         let min_diff = 1000;
-        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000));
+        let start_difficulty = 100;
+        let mut adjuster = DifficultyAdjuster::new(start_difficulty, min_diff, Some(100000));
 
         // Submit first share to initialize
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
@@ -402,13 +422,14 @@ mod tests {
             adjuster.share_submission_difficulty_counter,
             MIN_SHARES_BEFORE_ADJUST - 1
         );
-        assert_eq!(adjuster.current_difficulty, min_diff);
+        assert_eq!(adjuster.current_difficulty, start_difficulty);
     }
 
     #[test_log::test]
     fn test_difficulty_adjustment_after_minimum_time() {
         let min_diff = 1;
-        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000));
+        let start_difficulty = 100;
+        let mut adjuster = DifficultyAdjuster::new(start_difficulty, min_diff, Some(100000));
 
         // Submit first share to initialize
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
@@ -428,14 +449,14 @@ mod tests {
         assert!(new_diff.is_some());
         assert!(new_diff.unwrap() > min_diff);
         assert_eq!(adjuster.current_difficulty, new_diff.unwrap());
-        assert_eq!(adjuster.old_difficulty, min_diff);
+        assert_eq!(adjuster.old_difficulty, start_difficulty);
         assert_eq!(adjuster.share_submission_difficulty_counter, 0); // Counter should be reset
     }
 
     #[test_log::test]
     fn test_difficulty_adjustment_after_enough_shares() {
         let min_diff = 1;
-        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000));
+        let mut adjuster = DifficultyAdjuster::new(100, min_diff, Some(100000));
 
         // Submit first share to initialize
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
@@ -468,7 +489,7 @@ mod tests {
     fn test_difficulty_constraints() {
         let min_diff = 1000;
         let pool_max_diff = 100_000;
-        let adjuster = DifficultyAdjuster::new(min_diff, Some(pool_max_diff));
+        let adjuster = DifficultyAdjuster::new(100, min_diff, Some(pool_max_diff));
 
         // Test minimum constraint
         let calculated = 500; // Below pool minimum
@@ -489,7 +510,7 @@ mod tests {
     #[test]
     fn test_adjust_dsps_bias_and_drr() {
         let min_diff = 1000;
-        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100_000));
+        let mut adjuster = DifficultyAdjuster::new(100, min_diff, Some(100_000));
 
         // Submit first share to initialize
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
@@ -515,7 +536,7 @@ mod tests {
     #[test]
     fn test_no_change_within_drr_threshold() {
         let min_diff = 1000;
-        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000));
+        let mut adjuster = DifficultyAdjuster::new(100, min_diff, Some(100000));
 
         // Submit first share to initialize
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
@@ -538,7 +559,7 @@ mod tests {
     #[test_log::test]
     fn test_time_bias_effect() {
         let min_diff = 1000;
-        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000));
+        let mut adjuster = DifficultyAdjuster::new(100, min_diff, Some(100000));
 
         // Submit first share to initialize
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
@@ -568,7 +589,7 @@ mod tests {
     #[test]
     fn test_update_difficulty_shares_per_second_metric() {
         let min_diff = 1000;
-        let mut adjuster = DifficultyAdjuster::new(min_diff, None);
+        let mut adjuster = DifficultyAdjuster::new(100, min_diff, None);
 
         // Set the last difficulty change timestamp to a known value
         let past_time = SystemTime::now() - Duration::from_secs(60); // 1 minute ago

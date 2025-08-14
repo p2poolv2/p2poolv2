@@ -49,6 +49,7 @@ pub struct Session<D: DifficultyAdjusterTrait> {
 impl<D: DifficultyAdjusterTrait> Session<D> {
     /// Creates a new session with the given minimum difficulty.
     pub fn new(
+        start_difficulty: u64,
         minimum_difficulty: u64,
         maximum_difficulty: Option<u64>,
         version_mask: i32,
@@ -62,7 +63,7 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
             subscribed: false,
             username: None,
             password: None,
-            difficulty_adjuster: D::new(minimum_difficulty, maximum_difficulty),
+            difficulty_adjuster: D::new(start_difficulty, minimum_difficulty, maximum_difficulty),
             version_mask,
             suggested_difficulty: None,
         }
@@ -83,7 +84,13 @@ mod tests {
     #[test]
     fn test_new_session() {
         let min_difficulty = 1000;
-        let session = Session::<DifficultyAdjuster>::new(min_difficulty, Some(2000), 0x1fffe000);
+        let start_difficulty = 100;
+        let session = Session::<DifficultyAdjuster>::new(
+            start_difficulty,
+            min_difficulty,
+            Some(2000),
+            0x1fffe000,
+        );
 
         assert_eq!(
             session.difficulty_adjuster.pool_minimum_difficulty,
@@ -91,7 +98,7 @@ mod tests {
         );
         assert_eq!(
             session.difficulty_adjuster.current_difficulty,
-            min_difficulty
+            start_difficulty
         );
         assert_ne!(session.id, "");
 
@@ -130,12 +137,8 @@ mod tests {
 
     #[test]
     fn test_get_current_difficulty() {
-        let min_difficulty = 2000;
-        let session = Session::<DifficultyAdjuster>::new(min_difficulty, Some(3000), 0x1fffe000);
+        let session = Session::<DifficultyAdjuster>::new(100, 2000, Some(3000), 0x1fffe000);
 
-        assert_eq!(
-            session.difficulty_adjuster.current_difficulty,
-            min_difficulty
-        );
+        assert_eq!(session.difficulty_adjuster.current_difficulty, 100);
     }
 }

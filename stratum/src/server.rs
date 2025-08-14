@@ -167,6 +167,7 @@ where
 
     let mut framed = FramedRead::new(reader, LinesCodec::new_with_max_length(MAX_LINE_LENGTH));
     let session = &mut Session::<DifficultyAdjuster>::new(
+        ctx.start_difficulty,
         ctx.minimum_difficulty,
         ctx.maximum_difficulty,
         version_mask,
