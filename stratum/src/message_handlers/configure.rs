@@ -72,7 +72,7 @@ mod mining_configure_response_tests {
             None,
         );
 
-        let session = Session::<DifficultyAdjuster>::new(1, Some(1000), 0x1fffe000);
+        let session = Session::<DifficultyAdjuster>::new(1, 1, Some(1000), 0x1fffe000);
 
         let result = handle_configure(message, &session).await;
         assert!(result.is_ok());
