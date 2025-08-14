@@ -108,9 +108,6 @@ pub trait DifficultyAdjusterTrait {
     fn apply_difficulty_constraints(&self, new_diff: u64, suggested_difficulty: Option<u64>)
         -> u64;
 
-    /// Reset the difficulty adjuster with a new minimum difficulty
-    fn reset(&mut self, pool_minimum_difficulty: u64);
-
     /// Convert a u128 value to u64, saturating at u64::MAX if the value exceeds it.
     #[inline]
     fn saturated_to_u64(&self, value: u128) -> u64 {
@@ -343,20 +340,8 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         // Update dsps using the formula:
         // f_new = (f_old + (diff_share * fprop / elapsed_time)) / (1 + fprop)
         *dsps = (*dsps + (diff_share as f64 * fprop / elapsed_time)) / (1.0 + fprop);
-    }
 
-    fn reset(&mut self, pool_minimum_difficulty: u64) {
-        self.share_submission_difficulty_counter = 0;
-        self.current_difficulty = pool_minimum_difficulty;
-        self.old_difficulty = pool_minimum_difficulty;
-        self.first_share_timestamp = None;
-        self.last_difficulty_change_timestamp = None;
-        self.difficulty_shares_per_second_1min_window = 0.0;
-        self.difficulty_shares_per_second_5min_window = 0.0;
-        self.difficulty_shares_per_second_1hour_window = 0.0;
-        self.difficulty_shares_per_second_24hour_window = 0.0;
-        self.difficulty_shares_per_second_7day_window = 0.0;
-        self.last_diff_change_job_id = None;
+        debug!("Updated dsps={}", *dsps);
     }
 }
 
@@ -581,56 +566,32 @@ mod tests {
     }
 
     #[test]
-    fn test_reset_adjuster() {
-        let min_diff = 1000;
-        let mut adjuster = DifficultyAdjuster::new(min_diff, Some(100000));
-
-        // Make some changes to the adjuster state
-        adjuster.record_share_submission(min_diff as u128, 1, None);
-        adjuster.difficulty_shares_per_second_5min_window = 500.0;
-        adjuster.current_difficulty = 2000;
-        adjuster.old_difficulty = 1500;
-
-        // Reset the adjuster
-        adjuster.reset(min_diff);
-
-        // Verify reset state
-        assert_eq!(adjuster.current_difficulty, min_diff);
-        assert_eq!(adjuster.old_difficulty, min_diff);
-        assert_eq!(adjuster.share_submission_difficulty_counter, 0);
-        assert_eq!(adjuster.difficulty_shares_per_second_1min_window, 0.0);
-        assert_eq!(adjuster.difficulty_shares_per_second_5min_window, 0.0);
-        assert!(adjuster.first_share_timestamp.is_none());
-        assert!(adjuster.last_difficulty_change_timestamp.is_none());
-    }
-
-    #[test]
     fn test_update_difficulty_shares_per_second_metric() {
         let min_diff = 1000;
         let mut adjuster = DifficultyAdjuster::new(min_diff, None);
-        
+
         // Set the last difficulty change timestamp to a known value
         let past_time = SystemTime::now() - Duration::from_secs(60); // 1 minute ago
         adjuster.last_difficulty_change_timestamp = Some(past_time);
-        
+
         // Initial value is zero
         assert_eq!(adjuster.difficulty_shares_per_second_5min_window, 0.0);
-        
+
         // Apply a difficulty share of 2000
         adjuster.update_difficulty_shares_per_second_metric(2000, 5.0, 300.0);
-        
+
         // Calculate expected value:
         // elapsed_time = 60 seconds
         // fprop = 1 - (1 / e^(60/300)) ≈ 0.181
         // dsps = (0 + (2000 * 0.181 / 60)) / (1 + 0.181) ≈ 5.09
-        
+
         // Allow for some floating point variance
         assert!(adjuster.difficulty_shares_per_second_5min_window > 5.0);
         assert!(adjuster.difficulty_shares_per_second_5min_window < 5.2);
-        
+
         // Apply another share to see exponential decay behavior
         adjuster.update_difficulty_shares_per_second_metric(3000, 5.0, 300.0);
-        
+
         // The value should increase due to the higher difficulty share
         assert!(adjuster.difficulty_shares_per_second_5min_window > 7.0);
     }

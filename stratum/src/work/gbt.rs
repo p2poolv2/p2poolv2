@@ -469,6 +469,13 @@ mod gbt_server_tests {
             "rules": ["segwit", "signet"],
         }]);
         mock_method(&mock_server, "getblocktemplate", params, template).await;
+        mock_method(
+            &mock_server,
+            "getdifficulty",
+            serde_json::json!([]),
+            "1".into(),
+        )
+        .await;
 
         let (_zmq_trigger_tx, zmq_trigger_rx) = mpsc::channel(1);
 
@@ -524,6 +531,13 @@ mod gbt_server_tests {
             "rules": ["segwit", "signet"],
         }]);
         mock_method(&mock_server, "getblocktemplate", params, template).await;
+        mock_method(
+            &mock_server,
+            "getdifficulty",
+            serde_json::json!([]),
+            "1".into(),
+        )
+        .await;
 
         let (_zmq_trigger_tx, zmq_trigger_rx) = mpsc::channel(1);
 
@@ -576,6 +590,13 @@ mod gbt_server_tests {
             "rules": ["segwit", "signet"],
         }]);
         mock_method(&mock_server, "getblocktemplate", params, template).await;
+        mock_method(
+            &mock_server,
+            "getdifficulty",
+            serde_json::json!([]),
+            "1".into(),
+        )
+        .await;
 
         let (zmq_trigger_tx, zmq_trigger_rx) = mpsc::channel(1);
 
