@@ -23,13 +23,23 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Calculate the time difference since the first share submission.
-/// Set floor to 0.001
+/// Set floor to 0.001 as used by CKPool.
 pub(crate) fn sane_time_diff(first_share_timestamp: Option<SystemTime>) -> f64 {
     SystemTime::now()
         .duration_since(first_share_timestamp.unwrap())
         .unwrap_or_else(|_| Duration::from_secs(0))
         .as_secs_f64()
         .max(0.001)
+}
+
+/// Calculate time bias based on CKPool's algorithm.
+/// Returns a value between 0 and 1, using an exponential decay.
+pub(crate) fn time_bias(time_difference: f64, period: f64) -> f64 {
+    let mut exp_power = time_difference / period;
+    if exp_power > 36.0 {
+        exp_power = 36.0;
+    }
+    1.0 - 1.0 / exp_power.exp()
 }
 
 #[cfg(test)]
@@ -60,5 +70,41 @@ mod tests {
         // This test might need to be updated based on intended behavior with None
         let result = std::panic::catch_unwind(|| sane_time_diff(None));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_time_bias_zero() {
+        // When time_difference is 0, exp_power is 0, result should be 0
+        let bias = time_bias(0.0, 1.0);
+        assert_eq!(bias, 0.0);
+    }
+
+    #[test]
+    fn test_time_bias_small_value() {
+        // With small time_difference relative to period
+        let bias = time_bias(0.1, 1.0);
+        assert!(bias > 0.0 && bias < 0.1); // Small bias
+    }
+
+    #[test]
+    fn test_time_bias_equal_to_period() {
+        // When time_difference equals period
+        let bias = time_bias(1.0, 1.0);
+        assert!(bias > 0.6 && bias < 0.7); // Should be around 0.632 (1 - 1/e)
+    }
+
+    #[test]
+    fn test_time_bias_large_value() {
+        // With large time_difference relative to period
+        let bias = time_bias(10.0, 1.0);
+        assert!(bias > 0.99 && bias < 1.0); // Close to 1.0 but not exactly 1.0
+    }
+
+    #[test]
+    fn test_time_bias_max_exp_power() {
+        // Test the cap of exp_power at 36.0
+        let bias = time_bias(100.0, 1.0); // This would make exp_power > 36
+        let expected_max = 1.0 - 1.0 / 36.0_f64.exp();
+        assert!((bias - expected_max).abs() < 1e-10);
     }
 }
