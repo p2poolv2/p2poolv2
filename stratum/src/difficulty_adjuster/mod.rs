@@ -243,7 +243,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
     fn calculate_new_difficulty(&self, suggested_difficulty: Option<u64>) -> u64 {
         let time_since_first_share = calc::sane_time_diff(self.first_share_timestamp);
 
-        let bias = 1.0 - (1.0 / (time_since_first_share / BIAS_TIME_CONSTANT).exp());
+        let bias = calc::time_bias(time_since_first_share, BIAS_TIME_CONSTANT);
 
         // Adjust dsps for bias
         let difficulty_shares_per_second = self.difficulty_shares_per_second_5min_window / bias;
