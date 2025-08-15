@@ -20,6 +20,8 @@
 //! CKPool documentation. It tracks the client's share rate and dynamically
 //! adjusts the difficulty to maintain an optimal share submission frequency.
 
+mod calc;
+
 #[cfg(test)]
 use mockall::automock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -239,11 +241,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
     }
 
     fn calculate_new_difficulty(&self, suggested_difficulty: Option<u64>) -> u64 {
-        // Calculate the bias factor, which increases as time since first share increases
-        let time_since_first_share = SystemTime::now()
-            .duration_since(self.first_share_timestamp.unwrap())
-            .unwrap_or_else(|_| Duration::from_secs(0))
-            .as_secs_f64();
+        let time_since_first_share = calc::sane_time_diff(self.first_share_timestamp);
 
         let bias = 1.0 - (1.0 / (time_since_first_share / BIAS_TIME_CONSTANT).exp());
 
