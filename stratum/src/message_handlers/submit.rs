@@ -24,6 +24,7 @@ use bitcoin::blockdata::block::Block;
 use bitcoin::hashes::Hash;
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use serde_json::json;
+use std::time::SystemTime;
 use tracing::{debug, error, info};
 
 /// Handle the "mining.submit" message
@@ -96,6 +97,7 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         truediff,
         job_id,
         session.suggested_difficulty,
+        SystemTime::now(),
     );
 
     if let Some(difficulty) = new_difficulty {
@@ -382,8 +384,11 @@ mod handle_submit_tests {
         let ctx = MockDifficultyAdjusterTrait::new_context();
         ctx.expect().returning(|_, _, _| {
             let mut mock = MockDifficultyAdjusterTrait::default();
-            mock.expect_record_share_submission()
-                .returning(|_difficulty, _job_id, _suggested_difficulty| (Some(12345), false));
+            mock.expect_record_share_submission().returning(
+                |_difficulty, _job_id, _suggested_difficulty, _current_timestamp| {
+                    (Some(12345), false)
+                },
+            );
             mock
         });
 
