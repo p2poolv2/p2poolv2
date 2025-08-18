@@ -105,7 +105,7 @@ pub trait DifficultyAdjusterTrait {
     /// Update the difficulty shares per second metric for a given time window
     fn update_difficulty_shares_per_second_metric(
         &mut self,
-        share_diff: u128,
+        difficulty: u64,
         time_window_seconds: f64,
         window_duration_seconds: f64,
     );
@@ -124,7 +124,7 @@ pub trait DifficultyAdjusterTrait {
         }
     }
 
-    fn set_current_difficulty(&mut self, difficulty: u64) {}
+    fn set_current_difficulty(&mut self, difficulty: u64);
 }
 
 impl DifficultyAdjusterTrait for DifficultyAdjuster {
@@ -195,12 +195,12 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
             time_since_last_difficulty_change
         );
 
-        // Update the DSPS (Difficulty Shares Per Second) metrics
-        self.update_difficulty_shares_per_second_metric(share_diff, 1.0, 60.0); // 1 minute window
-        self.update_difficulty_shares_per_second_metric(share_diff, 5.0, 300.0); // 5 minute window
-        self.update_difficulty_shares_per_second_metric(share_diff, 60.0, 3600.0); // 1 hour window
-        self.update_difficulty_shares_per_second_metric(share_diff, 1440.0, 86400.0); // 24 hour window
-        self.update_difficulty_shares_per_second_metric(share_diff, 10080.0, 604800.0); // 7 day window
+        // Update the DSPS (Difficulty Shares Per Second) metrics using current difficulty
+        self.update_difficulty_shares_per_second_metric(self.current_difficulty, 1.0, 60.0); // 1 minute window
+        self.update_difficulty_shares_per_second_metric(self.current_difficulty, 5.0, 300.0); // 5 minute window
+        self.update_difficulty_shares_per_second_metric(self.current_difficulty, 60.0, 3600.0); // 1 hour window
+        self.update_difficulty_shares_per_second_metric(self.current_difficulty, 1440.0, 86400.0); // 24 hour window
+        self.update_difficulty_shares_per_second_metric(self.current_difficulty, 10080.0, 604800.0); // 7 day window
 
         // Check if we should adjust difficulty
         let should_adjust = (self.share_submission_difficulty_counter >= MIN_SHARES_BEFORE_ADJUST
@@ -311,7 +311,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
 
     fn update_difficulty_shares_per_second_metric(
         &mut self,
-        diff_share: u128,
+        difficulty: u64,
         which_dsps: f64,
         interval: f64,
     ) {
@@ -351,7 +351,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
 
         // Update dsps using the formula:
         // f_new = (f_old + (diff_share * fprop / elapsed_time)) / (1 + fprop)
-        *dsps = (*dsps + (diff_share as f64 * fprop / elapsed_time)) / (1.0 + fprop);
+        *dsps = (*dsps + (difficulty as f64 * fprop / elapsed_time)) / (1.0 + fprop);
 
         debug!("Updated dsps={}", *dsps);
     }
@@ -454,7 +454,7 @@ mod tests {
     #[test_log::test]
     fn test_difficulty_adjustment_after_enough_shares() {
         let min_diff = 1;
-        let mut adjuster = DifficultyAdjuster::new(100, min_diff, Some(100000));
+        let mut adjuster = DifficultyAdjuster::new(1, min_diff, Some(100000));
 
         // Submit first share to initialize
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None);
