@@ -24,9 +24,12 @@ use std::time::{Duration, SystemTime};
 
 /// Calculate the time difference since the first share submission.
 /// Set floor to 0.001 as used by CKPool.
-pub(crate) fn sane_time_diff(first_share_timestamp: Option<SystemTime>) -> f64 {
-    SystemTime::now()
-        .duration_since(first_share_timestamp.unwrap())
+pub(crate) fn sane_time_diff(current_timestamp: SystemTime, other: Option<SystemTime>) -> f64 {
+    if other.is_none() {
+        return 0.0;
+    }
+    current_timestamp
+        .duration_since(other.unwrap())
         .unwrap_or_else(|_| Duration::from_secs(0))
         .as_secs_f64()
         .max(0.001)
@@ -51,7 +54,7 @@ mod tests {
     fn test_sane_time_diff_with_valid_time() {
         let first_share_timestamp = SystemTime::now();
         sleep(Duration::from_millis(10)); // Sleep for 10ms
-        let diff = sane_time_diff(Some(first_share_timestamp));
+        let diff = sane_time_diff(SystemTime::now(), Some(first_share_timestamp));
         assert!(diff > 0.0);
         assert!(diff < 1.0); // Should be a small value around 0.01 seconds
     }
@@ -60,7 +63,7 @@ mod tests {
     fn test_sane_time_diff_returns_minimum() {
         // Test with a future time which would result in negative duration
         let future_time = SystemTime::now() + Duration::from_secs(10);
-        let diff = sane_time_diff(Some(future_time));
+        let diff = sane_time_diff(SystemTime::now(), Some(future_time));
         assert_eq!(diff, 0.001); // Should return the minimum floor value
     }
 
@@ -68,8 +71,8 @@ mod tests {
     fn test_sane_time_diff_with_none() {
         // This should panic if called with None, but we're testing the behavior
         // This test might need to be updated based on intended behavior with None
-        let result = std::panic::catch_unwind(|| sane_time_diff(None));
-        assert!(result.is_err());
+        let result = std::panic::catch_unwind(|| sane_time_diff(SystemTime::now(), None));
+        assert_eq!(result.unwrap(), 0.0);
     }
 
     #[test]
