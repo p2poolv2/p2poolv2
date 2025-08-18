@@ -13,6 +13,10 @@ test package="":
 		RUST_LOG={{LOG_LEVEL}} cargo nextest run -p {{package}}
 	fi
 
+debug-test package="" testname="":
+	#!/usr/bin/env sh
+	RUST_LOG=debug cargo test -p {{package}} {{testname}} -- --no-capture
+
 cov:
 	cargo llvm-cov --lcov
 
