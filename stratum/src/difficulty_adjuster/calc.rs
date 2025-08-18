@@ -20,7 +20,7 @@
 //! CKPool documentation. It tracks the client's share rate and dynamically
 //! adjusts the difficulty to maintain an optimal share submission frequency.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 /// Calculate the time difference since the first share submission.
 /// Set floor to 0.001 as used by CKPool.
