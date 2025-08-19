@@ -201,11 +201,8 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         );
 
         // Calculate time elapsed since last difficulty change
-        let time_since_last_difficulty_change = current_timestamp
-            .duration_since(self.last_difficulty_change_timestamp.unwrap())
-            .unwrap_or_else(|_| Duration::from_secs(0))
-            .as_secs_f64();
-
+        let time_since_last_difficulty_change =
+            sane_time_diff(current_timestamp, self.last_difficulty_change_timestamp);
         debug!(
             "Time since last difficulty change: {:.2} seconds",
             time_since_last_difficulty_change
