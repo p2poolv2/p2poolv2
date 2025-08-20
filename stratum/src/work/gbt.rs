@@ -217,7 +217,6 @@ pub async fn start_gbt(
                     if last_request_at.elapsed().as_secs() >= poll_interval {
                         match get_block_template(&bitcoin_config, network).await {
                             Ok(template) => {
-                                debug!("Polled block template: {:?}", template);
                                 if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
                                     info!("Failed to send block template to channel");
                                 }
@@ -235,7 +234,6 @@ pub async fn start_gbt(
                             debug!("Received blocknotify signal");
                             match get_block_template(&bitcoin_config, network).await {
                                 Ok(template) => {
-                                    debug!("Block template from notification: {:?}", template);
                                     if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
                                         info!("Failed to send block template to channel");
                                     }
@@ -257,7 +255,6 @@ pub async fn start_gbt(
                             debug!("Received ZMQ block notification");
                             match get_block_template(&bitcoin_config, network).await {
                                 Ok(template) => {
-                                    debug!("Block template from ZMQ: {:?}", template);
                                     if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
                                         info!("Failed to send block template to channel");
                                     }
