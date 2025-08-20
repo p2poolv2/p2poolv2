@@ -141,7 +141,6 @@ impl BitcoindRpcClient {
                 .await
             {
                 Ok(result) => {
-                    debug!("Received getblocktemplate response: {}", result);
                     return Ok(result.to_string());
                 }
                 Err(e) => {
