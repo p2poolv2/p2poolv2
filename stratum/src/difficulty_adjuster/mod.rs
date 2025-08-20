@@ -24,7 +24,7 @@ mod calc;
 
 #[cfg(test)]
 use mockall::automock;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 use tracing::{debug, info};
 
 use crate::difficulty_adjuster::calc::sane_time_diff;
@@ -119,8 +119,8 @@ pub trait DifficultyAdjusterTrait {
     /// Update the difficulty shares per second metric for a given time window
     fn update_difficulty_shares_per_second_metric(
         &mut self,
-        time_window_seconds: f64,
-        window_duration_seconds: f64,
+        which_dsps: Dsps,
+        interval: u64,
         current_timestamp: SystemTime,
     );
 
@@ -139,6 +139,14 @@ pub trait DifficultyAdjusterTrait {
     }
 
     fn set_current_difficulty(&mut self, difficulty: u64);
+}
+
+pub enum Dsps {
+    OneMinute,
+    FiveMinutes,
+    OneHour,
+    OneDay,
+    OneWeek,
 }
 
 impl DifficultyAdjusterTrait for DifficultyAdjuster {
@@ -190,10 +198,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         self.share_submission_difficulty_counter += 1;
 
         // Calculate time elapsed since the first share
-        let time_since_first_share = current_timestamp
-            .duration_since(self.first_share_timestamp.unwrap())
-            .unwrap_or_else(|_| Duration::from_secs(0))
-            .as_secs_f64();
+        let time_since_first_share = sane_time_diff(current_timestamp, self.first_share_timestamp);
 
         debug!(
             "Time since first share: {:.2} seconds",
@@ -209,11 +214,11 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         );
 
         // Update the DSPS (Difficulty Shares Per Second) metrics using current difficulty
-        self.update_difficulty_shares_per_second_metric(1.0, 60.0, current_timestamp); // 1 minute window
-        self.update_difficulty_shares_per_second_metric(5.0, 300.0, current_timestamp); // 5 minute window
-        self.update_difficulty_shares_per_second_metric(60.0, 3600.0, current_timestamp); // 1 hour window
-        self.update_difficulty_shares_per_second_metric(1440.0, 86400.0, current_timestamp); // 24 hour window
-        self.update_difficulty_shares_per_second_metric(10080.0, 604800.0, current_timestamp); // 7 day window
+        // self.update_difficulty_shares_per_second_metric(Dsps::OneMinute, 60.0, current_timestamp); // 1 minute window
+        self.update_difficulty_shares_per_second_metric(Dsps::FiveMinutes, 300, current_timestamp); // 5 minute window
+                                                                                                    // self.update_difficulty_shares_per_second_metric(Dsps::OneHour, 3600, current_timestamp); // 1 hour window
+                                                                                                    // self.update_difficulty_shares_per_second_metric(Dsps::OneDay, 86400, current_timestamp); // 24 hour window
+                                                                                                    // self.update_difficulty_shares_per_second_metric(Dsps::OneWeek, 604800, current_timestamp); // 7 day window
 
         // Check if we should adjust difficulty
         let should_adjust = (self.share_submission_difficulty_counter >= MIN_SHARES_BEFORE_ADJUST
@@ -329,52 +334,47 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
     /// Return true if decay occurred, false otherwise.
     fn update_difficulty_shares_per_second_metric(
         &mut self,
-        which_dsps: f64,
-        interval: f64,
+        which_dsps: Dsps,
+        interval: u64,
         current_timestamp: SystemTime,
     ) {
-        debug!("Last decay timestamp: {:?}", self.last_decay_timestamp);
+        debug!(
+            "Since last decay: {:?}",
+            sane_time_diff(current_timestamp, self.last_decay_timestamp)
+        );
         if sane_time_diff(current_timestamp, self.last_decay_timestamp) < MIN_DECAY_INTERVAL {
+            if self.last_decay_timestamp.is_none() {
+                self.last_decay_timestamp = Some(current_timestamp);
+            }
             self.unaccounted_shares += self.current_difficulty;
             debug!("Skipping update, last decay was too recent.");
             return;
         }
 
         let difficulty = self.current_difficulty + self.unaccounted_shares;
+        debug!(
+            "Total difficulty unaccounted for: {} = current_difficulty {} + unaccounted_shares {}",
+            difficulty, self.current_difficulty, self.unaccounted_shares
+        );
         self.unaccounted_shares = 0; // Reset unaccounted shares after applying
 
         // Get the appropriate dsps field
-        let dsps = match which_dsps as u32 {
-            1 => &mut self.difficulty_shares_per_second_1min_window,
-            5 => &mut self.difficulty_shares_per_second_5min_window,
-            60 => &mut self.difficulty_shares_per_second_1hour_window,
-            1440 => &mut self.difficulty_shares_per_second_24hour_window,
-            10080 => &mut self.difficulty_shares_per_second_7day_window,
-            _ => return,
+        let dsps = match which_dsps {
+            Dsps::OneMinute => &mut self.difficulty_shares_per_second_1min_window,
+            Dsps::FiveMinutes => &mut self.difficulty_shares_per_second_5min_window,
+            Dsps::OneHour => &mut self.difficulty_shares_per_second_1hour_window,
+            Dsps::OneDay => &mut self.difficulty_shares_per_second_24hour_window,
+            Dsps::OneWeek => &mut self.difficulty_shares_per_second_7day_window,
         };
 
         // Use the decay_time algorithm
-        let elapsed_time = if self.last_difficulty_change_timestamp.is_some() {
-            current_timestamp
-                .duration_since(self.last_difficulty_change_timestamp.unwrap())
-                .unwrap_or_else(|_| Duration::from_secs(0))
-                .as_secs_f64()
+        let elapsed_time = if self.last_decay_timestamp.is_some() {
+            sane_time_diff(current_timestamp, self.last_decay_timestamp)
         } else {
-            1.0 // Default to 1 second if no last difficulty change time
+            1.0 // Default to 1 second if no last decay time
         };
 
-        debug!("elapsed_time={}", elapsed_time);
-
-        // Calculate fprop = 1 - (1 / e^(elapsed_time/interval))
-        let fprop = 1.0 - (1.0 / (elapsed_time / interval).exp());
-
-        debug!("fprop={}", fprop);
-
-        // Update dsps using the formula:
-        // f_new = (f_old + (diff_share * fprop / elapsed_time)) / (1 + fprop)
-        *dsps = (*dsps + (difficulty as f64 * fprop / elapsed_time)) / (1.0 + fprop);
-
-        debug!("Updated dsps={}", *dsps);
+        *dsps = calc::decay_time(*dsps, difficulty, elapsed_time, interval);
     }
 
     /// Set current difficulty
@@ -386,6 +386,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn test_new_difficulty_adjuster() {
@@ -480,33 +481,120 @@ mod tests {
         assert_eq!(adjuster.current_difficulty, new_diff.unwrap());
         assert_eq!(adjuster.old_difficulty, start_difficulty);
         assert_eq!(adjuster.share_submission_difficulty_counter, 0); // Counter should be reset
+        assert_eq!(adjuster.difficulty_shares_per_second_5min_window, 0.5); // Dsps is not updated
+    }
+
+    #[test_log::test]
+    fn test_difficulty_adjustment_with_enough_time_delay_to_trigger_adjustment() {
+        let min_diff = 1;
+        let start_difficulty = 100;
+        let mut adjuster = DifficultyAdjuster::new(start_difficulty, min_diff, Some(100000));
+        let current_timestamp = SystemTime::now();
+
+        // Submit first share
+        let _ = adjuster.record_share_submission(min_diff as u128, 1, None, current_timestamp);
+
+        for i in 0..24 {
+            // Submit 24 shares with 10 seconds interval
+            let (new_diff, _) = adjuster.record_share_submission(
+                min_diff as u128,
+                (i + 2) as u64,
+                None,
+                current_timestamp + Duration::from_secs(i * 10 as u64),
+            );
+            match new_diff {
+                Some(diff) => {
+                    assert!(diff < start_difficulty); // Should not change yet
+                }
+                None => {}
+            }
+        }
+        assert_eq!(adjuster.share_submission_difficulty_counter, 24);
+        assert_eq!(adjuster.current_difficulty, start_difficulty); // not adjustment yet
+        assert!(adjuster.difficulty_shares_per_second_5min_window > 0.48);
+        assert!(adjuster.difficulty_shares_per_second_5min_window < 0.49);
+
+        // Submit a share that should trigger adjustment
+        let (new_diff, _) = adjuster.record_share_submission(
+            min_diff as u128,
+            30,
+            None,
+            current_timestamp + Duration::from_secs(260),
+        );
+
+        // We expect difficulty to increase because dsps5/bias is higher than the target DRR
+        assert!(new_diff.is_some());
+        assert!(new_diff.unwrap() > min_diff);
+        assert_eq!(adjuster.current_difficulty, 3);
+        assert_eq!(adjuster.share_submission_difficulty_counter, 0); // Counter should be reset
+    }
+
+    #[test_log::test]
+    fn test_difficulty_adjustment_with_enough_time_delay_to_trigger_adjustment_start_from_100_000()
+    {
+        let min_diff = 1;
+        let start_difficulty = 100_000;
+        let mut adjuster = DifficultyAdjuster::new(start_difficulty, min_diff, Some(100000));
+        let current_timestamp = SystemTime::now();
+
+        // Submit first share
+        let _ = adjuster.record_share_submission(min_diff as u128, 1, None, current_timestamp);
+
+        for i in 0..24 {
+            // Submit 24 shares with 10 seconds interval
+            let (new_diff, _) = adjuster.record_share_submission(
+                min_diff as u128,
+                (i + 2) as u64,
+                None,
+                current_timestamp + Duration::from_secs(i * 10 as u64),
+            );
+            match new_diff {
+                Some(diff) => {
+                    assert!(diff < start_difficulty); // Should not change yet
+                }
+                None => {}
+            }
+        }
+        assert_eq!(adjuster.share_submission_difficulty_counter, 24);
+        assert_eq!(adjuster.current_difficulty, start_difficulty); // not adjustment yet
+        assert!(adjuster.difficulty_shares_per_second_5min_window > 487.0);
+        assert!(adjuster.difficulty_shares_per_second_5min_window < 488.0);
+
+        // Submit a share that should trigger adjustment
+        let (new_diff, _) = adjuster.record_share_submission(
+            min_diff as u128,
+            30,
+            None,
+            current_timestamp + Duration::from_secs(260),
+        );
+
+        // We expect difficulty to increase because dsps5/bias is higher than the target DRR
+        assert!(new_diff.is_some());
+        assert!(new_diff.unwrap() > min_diff);
+        assert_eq!(adjuster.current_difficulty, 2588);
+        assert_eq!(adjuster.share_submission_difficulty_counter, 0); // Counter should be reset
     }
 
     #[test_log::test]
     fn test_difficulty_adjustment_after_enough_shares() {
         let min_diff = 1;
-        let mut adjuster = DifficultyAdjuster::new(1, min_diff, Some(100000));
+        let mut adjuster = DifficultyAdjuster::new(1000, min_diff, Some(100000));
         let current_timestamp = SystemTime::now();
 
         // Submit first share to initialize
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None, current_timestamp);
 
-        // Force the timestamps to be old enough
-        let past_time = SystemTime::now() - Duration::from_secs(31); // Just over 30 seconds
-        adjuster.first_share_timestamp = Some(past_time);
-        adjuster.last_difficulty_change_timestamp = Some(past_time);
-
         // Simulate a miner with low performance
         adjuster.difficulty_shares_per_second_5min_window = 100.0; // This should increase the difficulty
 
         // Submit enough shares to trigger adjustment
-        for i in 0..MIN_SHARES_BEFORE_ADJUST {
-            if i < MIN_SHARES_BEFORE_ADJUST - 1 {
+        for i in 1..MIN_SHARES_BEFORE_ADJUST as u64 {
+            if i < MIN_SHARES_BEFORE_ADJUST as u64 {
                 let (new_diff, _) = adjuster.record_share_submission(
                     min_diff as u128,
                     (i + 2) as u64,
                     None,
-                    current_timestamp + Duration::from_secs(i as u64),
+                    current_timestamp + Duration::from_secs(i * 1 as u64),
                 );
                 assert!(new_diff.is_none());
             } else {
@@ -515,7 +603,7 @@ mod tests {
                     min_diff as u128,
                     (i + 2) as u64,
                     None,
-                    current_timestamp + Duration::from_secs(i as u64),
+                    current_timestamp + Duration::from_secs(i * 1 as u64),
                 );
                 assert!(new_diff.is_some());
                 assert_eq!(new_diff.unwrap(), 1156);
@@ -643,7 +731,11 @@ mod tests {
 
         // Apply a difficulty share of 2000
         adjuster.current_difficulty = 2000;
-        adjuster.update_difficulty_shares_per_second_metric(5.0, 300.0, current_timestamp);
+        adjuster.update_difficulty_shares_per_second_metric(
+            Dsps::FiveMinutes,
+            300,
+            current_timestamp,
+        );
 
         // Calculate expected value:
         // elapsed_time = 60 seconds
@@ -656,7 +748,11 @@ mod tests {
 
         // Apply another share to see exponential decay behavior
         adjuster.current_difficulty = 3000;
-        adjuster.update_difficulty_shares_per_second_metric(5.0, 300.0, current_timestamp);
+        adjuster.update_difficulty_shares_per_second_metric(
+            Dsps::FiveMinutes,
+            300,
+            current_timestamp,
+        );
 
         // The value should increase due to the higher difficulty share
         assert!(adjuster.difficulty_shares_per_second_5min_window > 7.0);
@@ -680,7 +776,11 @@ mod tests {
 
         // Apply a difficulty share of 2000
         adjuster.current_difficulty = 2000;
-        adjuster.update_difficulty_shares_per_second_metric(5.0, 300.0, current_timestamp);
+        adjuster.update_difficulty_shares_per_second_metric(
+            Dsps::FiveMinutes,
+            300,
+            current_timestamp,
+        );
 
         assert_eq!(
             adjuster.difficulty_shares_per_second_5min_window,
