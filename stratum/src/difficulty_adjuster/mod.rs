@@ -787,4 +787,18 @@ mod tests {
             initial_value
         );
     }
+
+    #[test]
+    fn test_calculate_difficulty_with_known_values() {
+        let mut adjuster = DifficultyAdjuster::new(100000, 1, None);
+        let current_timestamp = SystemTime::now();
+
+        let time_since_first_share = 244.37;
+        adjuster.difficulty_shares_per_second_5min_window = 73.313515;
+        adjuster.current_difficulty = 1000;
+        adjuster.last_decay_timestamp = Some(current_timestamp - Duration::from_millis(244370));
+        let new_difficulty = adjuster.calculate_new_difficulty(None, time_since_first_share);
+
+        assert_eq!(new_difficulty, 439);
+    }
 }
