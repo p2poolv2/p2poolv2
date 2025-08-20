@@ -351,6 +351,10 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
             return;
         }
 
+        let elapsed_time = sane_time_diff(current_timestamp, self.last_decay_timestamp).min(1.0);
+
+        self.last_decay_timestamp = Some(current_timestamp);
+
         let difficulty = self.current_difficulty + self.unaccounted_shares;
         debug!(
             "Total difficulty unaccounted for: {} = current_difficulty {} + unaccounted_shares {}",
@@ -365,13 +369,6 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
             Dsps::OneHour => &mut self.difficulty_shares_per_second_1hour_window,
             Dsps::OneDay => &mut self.difficulty_shares_per_second_24hour_window,
             Dsps::OneWeek => &mut self.difficulty_shares_per_second_7day_window,
-        };
-
-        // Use the decay_time algorithm
-        let elapsed_time = if self.last_decay_timestamp.is_some() {
-            sane_time_diff(current_timestamp, self.last_decay_timestamp)
-        } else {
-            1.0 // Default to 1 second if no last decay time
         };
 
         *dsps = calc::decay_time(*dsps, difficulty, elapsed_time, interval);
@@ -511,8 +508,16 @@ mod tests {
         }
         assert_eq!(adjuster.share_submission_difficulty_counter, 24);
         assert_eq!(adjuster.current_difficulty, start_difficulty); // not adjustment yet
-        assert!(adjuster.difficulty_shares_per_second_5min_window > 0.48);
-        assert!(adjuster.difficulty_shares_per_second_5min_window < 0.49);
+        assert!(
+            adjuster.difficulty_shares_per_second_5min_window > 7.664,
+            "DSPS 5min was {}",
+            adjuster.difficulty_shares_per_second_5min_window
+        );
+        assert!(
+            adjuster.difficulty_shares_per_second_5min_window < 7.665,
+            "DSPS 5 min was {}",
+            adjuster.difficulty_shares_per_second_5min_window
+        );
 
         // Submit a share that should trigger adjustment
         let (new_diff, _) = adjuster.record_share_submission(
@@ -525,7 +530,7 @@ mod tests {
         // We expect difficulty to increase because dsps5/bias is higher than the target DRR
         assert!(new_diff.is_some());
         assert!(new_diff.unwrap() > min_diff);
-        assert_eq!(adjuster.current_difficulty, 3);
+        assert_eq!(adjuster.current_difficulty, 46);
         assert_eq!(adjuster.share_submission_difficulty_counter, 0); // Counter should be reset
     }
 
@@ -557,8 +562,8 @@ mod tests {
         }
         assert_eq!(adjuster.share_submission_difficulty_counter, 24);
         assert_eq!(adjuster.current_difficulty, start_difficulty); // not adjustment yet
-        assert!(adjuster.difficulty_shares_per_second_5min_window > 487.0);
-        assert!(adjuster.difficulty_shares_per_second_5min_window < 488.0);
+        assert!(adjuster.difficulty_shares_per_second_5min_window > 7664.8);
+        assert!(adjuster.difficulty_shares_per_second_5min_window < 7664.9);
 
         // Submit a share that should trigger adjustment
         let (new_diff, _) = adjuster.record_share_submission(
@@ -571,7 +576,7 @@ mod tests {
         // We expect difficulty to increase because dsps5/bias is higher than the target DRR
         assert!(new_diff.is_some());
         assert!(new_diff.unwrap() > min_diff);
-        assert_eq!(adjuster.current_difficulty, 2588);
+        assert_eq!(adjuster.current_difficulty, 45839);
         assert_eq!(adjuster.share_submission_difficulty_counter, 0); // Counter should be reset
     }
 
@@ -743,10 +748,18 @@ mod tests {
         // dsps = (0 + (2000 * 0.181 / 60)) / (1 + 0.181) ≈ 5.09
 
         // Allow for some floating point variance
-        assert!(adjuster.difficulty_shares_per_second_5min_window > 5.0);
-        assert!(adjuster.difficulty_shares_per_second_5min_window < 5.2);
+        assert!(
+            adjuster.difficulty_shares_per_second_5min_window > 6.633,
+            "DSPS 5 min was {}",
+            adjuster.difficulty_shares_per_second_5min_window
+        );
+        assert!(
+            adjuster.difficulty_shares_per_second_5min_window < 6.634,
+            "DSPS 5 min was {}",
+            adjuster.difficulty_shares_per_second_5min_window
+        );
 
-        // Apply another share to see exponential decay behavior
+        // Record another share with bumped up higher difficulty
         adjuster.current_difficulty = 3000;
         adjuster.update_difficulty_shares_per_second_metric(
             Dsps::FiveMinutes,
@@ -755,7 +768,11 @@ mod tests {
         );
 
         // The value should increase due to the higher difficulty share
-        assert!(adjuster.difficulty_shares_per_second_5min_window > 7.0);
+        assert!(
+            adjuster.difficulty_shares_per_second_5min_window > 6.633,
+            "DSPS 5 min was {}",
+            adjuster.difficulty_shares_per_second_5min_window
+        );
     }
 
     #[test]
