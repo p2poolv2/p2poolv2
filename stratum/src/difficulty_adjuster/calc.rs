@@ -48,24 +48,13 @@ pub(crate) fn time_bias(time_difference: f64, period: f64) -> f64 {
 pub(crate) fn decay_time(dsps: f64, difficulty: u64, elapsed_time: f64, interval: u64) -> f64 {
     // Calculate fprop = 1 - (1 / e^(elapsed_time/interval))
     let mut dexp = elapsed_time / interval as f64;
-    debug!("Decay exponent before cap: {}", dexp);
     dexp = dexp.min(36.0); // Cap at 36.0 to prevent overflow
-    debug!("Decay exponent after cap: {}", dexp);
 
     let fprop = 1.0 - (1.0 / dexp.exp());
-    debug!("fprop = {}", fprop);
     let ftotal = 1.0 + fprop;
-    debug!("ftotal = {}", ftotal);
 
     let mut new_dsps = dsps + (difficulty as f64 / elapsed_time * fprop);
-    debug!("New dsps before normalization: {}", new_dsps);
     new_dsps /= ftotal;
-    debug!("New dsps after normalization: {}", new_dsps);
-
-    debug!(
-        "Elapsed time = {}, updated dsps = {}",
-        elapsed_time, new_dsps
-    );
     new_dsps
 }
 
