@@ -21,6 +21,7 @@ use stratum::{
     self,
     messages::{Response, SimpleRequest},
     server::StratumServer,
+    share_block,
     work::{notify, tracker::start_tracker_actor},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -59,7 +60,10 @@ async fn test_stratum_server_subscribe() {
         version_mask: 0x1fffe000,
     };
 
-    let mut server = StratumServer::new(config, shutdown_rx, connections_handle).await;
+    let (share_block_tx, _share_block_rx) = tokio::sync::mpsc::channel(10);
+
+    let mut server =
+        StratumServer::new(config, shutdown_rx, connections_handle, share_block_tx).await;
 
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let tracker_handle = start_tracker_actor();
@@ -74,7 +78,7 @@ async fn test_stratum_server_subscribe() {
     let mut client = match TcpStream::connect(addr).await {
         Ok(stream) => stream,
         Err(e) => {
-            panic!("Failed to connect to server: {}", e);
+            panic!("Failed to connect to server: {e}");
         }
     };
 
@@ -97,7 +101,7 @@ async fn test_stratum_server_subscribe() {
     let responses: Vec<&str> = response_str.split('\n').filter(|s| !s.is_empty()).collect();
 
     let response_message: Response =
-        serde_json::from_str(&responses[0]).expect("Failed to deserialize response as Response");
+        serde_json::from_str(responses[0]).expect("Failed to deserialize response as Response");
 
     assert_eq!(
         response_message.id,

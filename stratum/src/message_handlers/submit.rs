@@ -18,7 +18,7 @@ use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
 use crate::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
 use crate::session::Session;
-use crate::share_block::emit_share_block;
+use crate::share_block::send_share_block;
 use crate::work::difficulty::validate::validate_submission_difficulty;
 use crate::work::tracker::{JobId, TrackerHandle};
 use bitcoin::blockdata::block::Block;
@@ -94,7 +94,7 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     submit_block(&block, bitcoinrpc_config).await;
 
     // Emit the share block to the tx channel
-    if let Err(e) = emit_share_block(&block, session.version_mask as u32, shares_tx) {
+    if let Err(e) = send_share_block(&block, shares_tx) {
         error!("Failed to emit share block: {}", e);
         return Ok(vec![Message::Response(Response::new_ok(
             message.id,
@@ -257,7 +257,7 @@ mod handle_submit_tests {
         mock_server.verify().await;
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_handle_submit_a_meets_difficulty_should_submit() {
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         let tracker_handle = start_tracker_actor();
