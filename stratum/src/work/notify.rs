@@ -116,6 +116,7 @@ pub enum NotifyCmd {
         /// The address of the client to notify, if None, notify all clients.
         /// The latest template is used for the notify, so there is not template here.
         client_address: SocketAddr,
+        clean_jobs: bool,
     },
 }
 
@@ -163,7 +164,10 @@ pub async fn start_notify(
                     };
                 connections.send_to_all(Arc::new(notify_str)).await;
             }
-            NotifyCmd::SendToClient { client_address } => {
+            NotifyCmd::SendToClient {
+                client_address,
+                clean_jobs,
+            } => {
                 if latest_template.is_none() {
                     debug!(
                         "No latest template available to send to client: {}",
@@ -178,7 +182,7 @@ pub async fn start_notify(
                     latest_template.as_ref().unwrap(),
                     output_distribution,
                     job_id,
-                    false, // clean_jobs is false for individual client notifications
+                    clean_jobs,
                 ) {
                     Ok(notify) => {
                         tracker_handle
@@ -335,6 +339,7 @@ mod tests {
         notify_tx
             .send(NotifyCmd::SendToClient {
                 client_address: SocketAddr::from(([127, 0, 0, 1], 8080)), // dummy client address, mock client connections won't use this.
+                clean_jobs: false,
             })
             .await
             .expect("Failed to send template to client");
