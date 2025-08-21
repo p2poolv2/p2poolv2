@@ -25,7 +25,6 @@ use crate::difficulty_adjuster::{DifficultyAdjuster, DifficultyAdjusterTrait};
 use crate::message_handlers::handle_message;
 use crate::messages::Request;
 use crate::session::Session;
-use crate::share_block;
 use crate::work::notify::NotifyCmd;
 use crate::work::tracker::TrackerHandle;
 use bitcoin::p2p::message_compact_blocks::CmpctBlock;
@@ -117,7 +116,6 @@ impl StratumServer {
                                 start_difficulty: self.config.start_difficulty,
                                 minimum_difficulty: self.config.minimum_difficulty,
                                 maximum_difficulty: self.config.maximum_difficulty,
-                                network: self.config.network,
                                 shares_tx: self.shares_tx.clone(),
                             };
                             let version_mask = self.config.version_mask;
@@ -148,7 +146,6 @@ pub(crate) struct StratumContext {
     pub start_difficulty: u64,
     pub minimum_difficulty: u64,
     pub maximum_difficulty: Option<u64>,
-    pub network: bitcoin::network::Network,
     pub shares_tx: mpsc::Sender<CmpctBlock>,
 }
 
@@ -377,7 +374,6 @@ mod stratum_server_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            network: bitcoin::network::Network::Regtest,
             shares_tx,
         };
 
@@ -481,7 +477,6 @@ mod stratum_server_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            network: bitcoin::network::Network::Regtest,
             shares_tx,
         };
 
@@ -539,7 +534,6 @@ mod stratum_server_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            network: bitcoin::network::Network::Regtest,
             shares_tx,
         };
 
@@ -602,7 +596,6 @@ mod stratum_server_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            network: bitcoin::network::Network::Regtest,
             shares_tx,
         };
 
@@ -685,7 +678,6 @@ mod stratum_server_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            network: bitcoin::network::Network::Regtest,
             shares_tx,
         };
 
@@ -787,7 +779,6 @@ mod stratum_server_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            network: bitcoin::network::Network::Regtest,
             shares_tx,
         };
 
