@@ -232,7 +232,7 @@ mod handle_submit_tests {
             )
             .await;
 
-        let (shares_tx, shares_rx) = mpsc::channel(10);
+        let (shares_tx, _shares_rx) = mpsc::channel(10);
         let message = handle_submit(
             submit,
             &mut session,
@@ -310,7 +310,7 @@ mod handle_submit_tests {
             )
             .await;
 
-        let (shares_tx, shares_rx) = mpsc::channel(10);
+        let (shares_tx, _shares_rx) = mpsc::channel(10);
         let response = handle_submit(
             submit,
             &mut session,
@@ -388,7 +388,7 @@ mod handle_submit_tests {
             )
             .await;
 
-        let (shares_tx, shares_rx) = mpsc::channel(10);
+        let (shares_tx, _shares_rx) = mpsc::channel(10);
         let response = handle_submit(
             submit,
             &mut session,
@@ -478,7 +478,7 @@ mod handle_submit_tests {
             )
             .await;
 
-        let (shares_tx, shares_rx) = mpsc::channel(10);
+        let (shares_tx, _shares_rx) = mpsc::channel(10);
         let message = handle_submit(
             submit,
             &mut session,
@@ -532,7 +532,7 @@ mod handle_submit_tests {
             u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
         session.enonce1_hex = enonce1.to_string();
 
-        let (shares_tx, shares_rx) = mpsc::channel(10);
+        let (shares_tx, _shares_rx) = mpsc::channel(10);
         let message = handle_submit(
             submit,
             &mut session,

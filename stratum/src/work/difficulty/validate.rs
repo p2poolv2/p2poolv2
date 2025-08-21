@@ -67,7 +67,7 @@ fn apply_version_mask(
     if params.len() > 5 {
         debug!("Applying version mask from params: {:?}", params[5]);
         let bits = i32::from_be_bytes(
-            hex::decode(&params[5].as_ref().unwrap())
+            hex::decode(params[5].as_ref().unwrap())
                 .map_err(|_| Error::InvalidParams("Failed to decode hex".into()))?
                 .as_slice()
                 .try_into()
