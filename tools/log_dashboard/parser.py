@@ -132,12 +132,50 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
     # Track disconnected status per ua
     disconnected_agents = set()
 
+    # Limits for notify and submit retention per session
+    MAX_NOTIFY_PER_SESSION = 3
+    MAX_SUBMIT_PER_SESSION = 3
+
+    # Counters per session
+    session_notify_count = defaultdict(int)
+    session_submit_count = defaultdict(int)
+
+    KEY_METHODS = {
+        "mining.configure",
+        "mining.subscribe",
+        "mining.authorize",
+        "mining.suggest_difficulty",
+        "mining.set_difficulty",
+    }
+
+    def should_retain(method, ua):
+        if method in KEY_METHODS:
+            return True
+        elif method == "mining.notify":
+            if session_notify_count[ua] < MAX_NOTIFY_PER_SESSION:
+                session_notify_count[ua] += 1
+                return True
+            else:
+                return False
+        elif method == "mining.submit":
+            if session_submit_count[ua] < MAX_SUBMIT_PER_SESSION:
+                session_submit_count[ua] += 1
+                return True
+            else:
+                return False
+        return False  # Drop all others by default
+
     def finalize_session(ua):
         if ua in session_lines:
             agents[ua]["last_session_logs"] = session_lines[ua].copy()
             session_lines[ua].clear()
+            # Reset per-session counters on finalize to avoid bleed over
+            session_notify_count[ua] = 0
+            session_submit_count[ua] = 0
         disconnected_agents.add(ua)
         agents[ua]["status"] = "🔵 DISCONNECTED"
+
+    latest_ts = last_processed
 
     for line in lines:
         line_strip = line.strip()
@@ -184,8 +222,8 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
             # For non-json, try associate log line to ua from ipport_to_ua
             if ipport and ipport in ipport_to_ua:
                 ua = ipport_to_ua[ipport]
-                hidden = strip_ip(line_strip)
-                session_lines[ua].append(hidden)
+                # We have no method info here, so we skip non-json lines from retention
+                # (optional: we can keep these if needed, but here dropping to avoid flooding)
             continue
 
         for raw_json in to_parse_jsons:
@@ -207,12 +245,15 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
                 if ipport:
                     ipport_to_ua[ipport] = ua
 
-                # Reset session lines if reconnecting fresh session
+                # Reset session lines and counters if reconnecting fresh session
                 session_lines[ua].clear()
+                session_notify_count[ua] = 0
+                session_submit_count[ua] = 0
                 disconnected_agents.discard(ua)
-                
-                hidden = strip_ip(line_strip)
-                session_lines[ua].append(hidden)
+
+                if should_retain(method, ua):
+                    hidden = strip_ip(line_strip)
+                    session_lines[ua].append(hidden)
 
             elif method == "mining.submit":
                 # Skip submit lines if already processed
@@ -224,8 +265,9 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
                     agents[ua]["submits"] += 1
                     if submit_id is not None:
                         submitid_to_ua[(ipport, submit_id)] = ua
-                    hidden = strip_ip(line_strip)
-                    session_lines[ua].append(hidden)
+                    if should_retain(method, ua):
+                        hidden = strip_ip(line_strip)
+                        session_lines[ua].append(hidden)
                     params = msg.get("params", [])
                     if len(params) > 0:
                         workername = params[0]
@@ -239,6 +281,31 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
                     username = params[0]
                     if username:
                         agents[ua]["usernames"].add(username)
+                if should_retain(method, ua):
+                    hidden = strip_ip(line_strip)
+                    session_lines[ua].append(hidden)
+
+            elif method == "mining.configure":
+                # mining.configure handling - treat same as other key messages
+                if ipport and ipport in ipport_to_ua:
+                    ua = ipport_to_ua[ipport]
+                    if should_retain(method, ua):
+                        hidden = strip_ip(line_strip)
+                        session_lines[ua].append(hidden)
+
+            elif method == "mining.suggest_difficulty":
+                if ipport and ipport in ipport_to_ua:
+                    ua = ipport_to_ua[ipport]
+                    if should_retain(method, ua):
+                        hidden = strip_ip(line_strip)
+                        session_lines[ua].append(hidden)
+
+            elif method == "mining.set_difficulty":
+                if ipport and ipport in ipport_to_ua:
+                    ua = ipport_to_ua[ipport]
+                    if should_retain(method, ua):
+                        hidden = strip_ip(line_strip)
+                        session_lines[ua].append(hidden)
 
             elif is_tx and "result" in msg:
                 # Skip result lines if already processed
@@ -253,17 +320,21 @@ def process_log_lines(lines: list, old_agents: dict, last_processed: datetime) -
                         elif msg["result"] is False:
                             agents[ua]["failures"] += 1
 
+                        # Usually these have no method field, skipping retention here
+                        submitid_to_ua.pop((ipport, tx_id), None)
+
+            elif method == "mining.notify":
+                # For notify messages, assign if possible and filter
+                if ipport and ipport in ipport_to_ua:
+                    ua = ipport_to_ua[ipport]
+                    if should_retain(method, ua):
                         hidden = strip_ip(line_strip)
                         session_lines[ua].append(hidden)
 
-                        submitid_to_ua.pop((ipport, tx_id), None)
-
             else:
-                # Fallback: assign line by ipport if available
-                if ipport and ipport in ipport_to_ua:
-                    ua = ipport_to_ua[ipport]
-                    hidden = strip_ip(line_strip)
-                    session_lines[ua].append(hidden)
+                # Fallback: assign line by ipport if available, but no retain because no method match
+                # So ignore to avoid flood
+                pass
 
     # Finalize sessions for agents not disconnected yet (they have active sessions)
     for ua in session_lines.keys():
