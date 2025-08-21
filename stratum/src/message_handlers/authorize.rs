@@ -54,6 +54,7 @@ pub async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
     let _ = notify_tx
         .send(NotifyCmd::SendToClient {
             client_address: addr,
+            clean_jobs: true,
         })
         .await;
     Ok(vec![
@@ -121,6 +122,17 @@ mod tests {
             difficulty_notification.params[0], 1000,
             "Expected difficulty notification to match pool minimum difficulty"
         );
+
+        match notify_cmd.unwrap() {
+            NotifyCmd::SendToClient {
+                client_address,
+                clean_jobs,
+            } => {
+                assert_eq!(client_address, SocketAddr::from(([127, 0, 0, 1], 8080)));
+                assert!(clean_jobs, "Expected clean_jobs to be true");
+            }
+            _ => panic!("Expected NotifyCmd::SendToClient"),
+        };
     }
 
     #[tokio::test]
