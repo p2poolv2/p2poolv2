@@ -14,10 +14,12 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use tracing::{debug, info};
+use tracing::info;
+
+const BLOCK_HASH_SIZE: usize = 32;
 
 #[allow(dead_code)]
-const ZMQ_PUB_BLOCKHASH: &str = "hashblock"; // all messages
+const ZMQ_PUB_BLOCKHASH: &str = "hashblock"; // blockhash messages only
 #[allow(dead_code)]
 const ZMQ_CHANNEL_SIZE: usize = 1;
 
@@ -70,7 +72,7 @@ impl ZmqListenerTrait for ZmqListener {
             loop {
                 match socket.recv_multipart(0) {
                     Ok(parts) => {
-                        if parts.len() != 3 || parts[1].len() != 32 {
+                        if parts.len() != 3 || parts[1].len() != BLOCK_HASH_SIZE {
                             continue; // Skip empty messages
                         }
                         if let Err(e) = rt.block_on(tx.send(())) {
