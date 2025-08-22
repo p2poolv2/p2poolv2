@@ -207,24 +207,20 @@ pub async fn start_gbt(
     };
 
     tokio::spawn(async move {
-        let mut last_request_at = std::time::Instant::now();
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(poll_interval));
 
         loop {
             tokio::select! {
                 _ = interval.tick() => {
                     // Only poll if it's been a while since our last blocknotify
-                    if last_request_at.elapsed().as_secs() >= poll_interval {
-                        match get_block_template(&bitcoin_config, network).await {
-                            Ok(template) => {
-                                if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
-                                    info!("Failed to send block template to channel");
-                                }
-                                last_request_at = std::time::Instant::now();
+                    match get_block_template(&bitcoin_config, network).await {
+                        Ok(template) => {
+                            if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
+                                info!("Failed to send block template to channel");
                             }
-                            Err(e) => {
-                                info!("Error polling block template: {}", e);
-                            }
+                        }
+                        Err(e) => {
+                            info!("Error polling block template: {}", e);
                         }
                     }
                 }
@@ -237,7 +233,6 @@ pub async fn start_gbt(
                                     if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
                                         info!("Failed to send block template to channel");
                                     }
-                                    last_request_at = std::time::Instant::now();
                                 }
                                 Err(e) => {
                                     info!("Error getting block template after notification: {}", e);
@@ -258,7 +253,7 @@ pub async fn start_gbt(
                                     if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
                                         info!("Failed to send block template to channel");
                                     }
-                                    last_request_at = std::time::Instant::now();
+                                    interval.reset();
                                 }
                                 Err(e) => {
                                     info!("Error getting block template after ZMQ notification: {}", e);
