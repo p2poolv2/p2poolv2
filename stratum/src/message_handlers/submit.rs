@@ -93,15 +93,6 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     // Submit block asap, do difficulty adjustment after submission
     submit_block(&block, bitcoinrpc_config).await;
 
-    // Emit the share block to the tx channel
-    if let Err(e) = send_share_block(&block, shares_tx) {
-        error!("Failed to emit share block: {}", e);
-        return Ok(vec![Message::Response(Response::new_ok(
-            message.id,
-            json!(false),
-        ))]);
-    }
-
     // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet
     let truediff = get_true_difficulty(&block.block_hash());
     debug!("True difficulty: {}", truediff);

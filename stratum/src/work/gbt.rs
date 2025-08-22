@@ -212,7 +212,6 @@ pub async fn start_gbt(
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    // Only poll if it's been a while since our last blocknotify
                     match get_block_template(&bitcoin_config, network).await {
                         Ok(template) => {
                             if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
