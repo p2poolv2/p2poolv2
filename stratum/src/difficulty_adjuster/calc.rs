@@ -21,7 +21,6 @@
 //! adjusts the difficulty to maintain an optimal share submission frequency.
 
 use std::time::{Duration, SystemTime};
-use tracing::debug;
 
 /// Calculate the time difference since the first share submission.
 /// Set floor to 0.001 as used by CKPool.
