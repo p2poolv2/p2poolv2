@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use tracing::info;
+use tracing::{debug, info};
 
 #[allow(dead_code)]
 const ZMQ_PUB_BLOCKHASH: &str = "hashblock"; // all messages
@@ -60,14 +60,20 @@ impl ZmqListenerTrait for ZmqListener {
         })?;
 
         let (tx, rx) = tokio::sync::mpsc::channel::<()>(ZMQ_CHANNEL_SIZE);
-        tokio::spawn(async move {
+        std::thread::spawn(move || {
+            // Create a dedicated runtime for this thread
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create Tokio runtime in ZMQ listener thread");
+
             loop {
-                match socket.recv_msg(0) {
-                    Ok(msg) => {
-                        if msg.is_empty() {
+                match socket.recv_multipart(0) {
+                    Ok(parts) => {
+                        if parts.len() != 3 || parts[1].len() != 32 {
                             continue; // Skip empty messages
                         }
-                        if let Err(e) = tx.send(()).await {
+                        if let Err(e) = rt.block_on(tx.send(())) {
                             info!("Failed to send ZMQ message: {}", e);
                             break; // Exit if the channel is closed
                         }
@@ -83,11 +89,12 @@ impl ZmqListenerTrait for ZmqListener {
 }
 
 #[cfg(test)]
-mod tests {
+mod zmq_tests {
     use super::*;
     use std::thread;
     use std::time::Duration;
     use tokio::runtime::Runtime;
+    use zmq;
 
     #[test]
     fn test_zmq_error_display() {
@@ -102,12 +109,11 @@ mod tests {
         let rt = Runtime::new().unwrap();
         let address = "tcp://127.0.0.1:28333";
         let topic = ZMQ_PUB_BLOCKHASH;
-        let message = b"blockhashdata";
 
         // Use a latch to ensure the publisher is ready
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
 
-        let _ = thread::spawn(move || {
+        let publisher_thread = thread::spawn(move || {
             let ctx = zmq::Context::new();
             let publisher = ctx.socket(zmq::PUB).unwrap();
             publisher.bind(&address).unwrap();
@@ -118,10 +124,18 @@ mod tests {
             // Give the subscriber time to connect
             thread::sleep(Duration::from_millis(300));
 
-            // Send the message
-            let mut msg = topic.as_bytes().to_vec();
-            msg.extend_from_slice(message);
-            publisher.send(msg, 0).unwrap();
+            // Send a multipart message compatible with recv_multipart
+            let hash = [
+                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+                0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
+                0x1d, 0x1e, 0x1f, 0x20,
+            ];
+            let seq = [0x01, 0x02, 0x03, 0x04];
+
+            // Send the multipart message
+            publisher
+                .send_multipart(&[topic.as_bytes(), &hash[..], &seq[..]], 0)
+                .unwrap();
 
             // Keep the socket alive for a bit
             thread::sleep(Duration::from_millis(100));
@@ -146,6 +160,8 @@ mod tests {
                 Err(_) => panic!("Timeout waiting for ZMQ message"),
             }
         });
+        publisher_thread.join().unwrap();
+
         assert!(received, "Message should have been received");
         rt.shutdown_background();
     }
