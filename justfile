@@ -51,3 +51,6 @@ check:
 # just cli --store-path ./store.db info
 cli *args:
 	cargo run -p p2poolv2_cli -- {{args}}
+
+fmt:
+	cargo fmt --all
