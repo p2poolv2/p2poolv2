@@ -18,7 +18,6 @@ use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
 use crate::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
 use crate::session::Session;
-use crate::share_block::send_share_block;
 use crate::work::difficulty::validate::validate_submission_difficulty;
 use crate::work::tracker::{JobId, TrackerHandle};
 use bitcoin::blockdata::block::Block;
@@ -50,7 +49,7 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     session: &mut Session<D>,
     tracker_handle: TrackerHandle,
     bitcoinrpc_config: BitcoinRpcConfig,
-    shares_tx: mpsc::Sender<CmpctBlock>,
+    _shares_tx: mpsc::Sender<CmpctBlock>,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.submit message");
     if message.params.len() < 4 {
