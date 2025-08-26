@@ -63,7 +63,7 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             )))
         }
     };
-    session.username = Some(username.clone());
+    session.username = Some(username);
     session.btcaddress = Some(parsed_username.0);
     session.workername = parsed_username.1;
     session.password = message.params[1].clone();
