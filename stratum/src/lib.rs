@@ -24,5 +24,6 @@ pub mod server;
 pub mod session;
 pub mod share_block;
 pub mod util;
+mod validate_username;
 pub mod work;
 pub mod zmq_listener;
