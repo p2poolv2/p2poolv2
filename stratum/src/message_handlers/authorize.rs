@@ -55,7 +55,6 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             ))
         }
     };
-    session.username = Some(username.clone());
     let parsed_username = match validate_username::validate(username.as_str(), ctx.network) {
         Ok(validated) => validated,
         Err(e) => {
@@ -64,6 +63,7 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             )))
         }
     };
+    session.username = Some(username.clone());
     session.btcaddress = Some(parsed_username.0);
     session.workername = parsed_username.1;
     session.password = message.params[1].clone();
@@ -225,6 +225,70 @@ mod tests {
         assert!(
             notify_cmd.is_err(),
             "No notification should be sent when already authorized"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_authorize_invalid_username() {
+        // Setup
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let request = SimpleRequest::new_authorize(
+            12345,
+            "invalid_address_format".to_string(),
+            Some("x".to_string()),
+        );
+        let (notify_tx, _notify_rx) = mpsc::channel(1);
+        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let tracker_handle = start_tracker_actor();
+
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle,
+            bitcoinrpc_config,
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
+            shares_tx,
+            network: bitcoin::network::Network::Testnet,
+        };
+
+        // Execute
+        let result = handle_authorize(
+            request,
+            &mut session,
+            SocketAddr::from(([127, 0, 0, 1], 8080)),
+            ctx,
+        )
+        .await;
+
+        // Verify
+        assert!(result.is_err(), "Should fail with invalid username");
+        if let Err(Error::AuthorizationFailure(msg)) = result {
+            assert!(
+                msg.contains("Invalid username"),
+                "Expected error message to mention invalid username"
+            );
+        } else {
+            panic!("Expected AuthorizationFailure error");
+        }
+
+        // Session should not be updated
+        assert!(
+            session.username.is_none(),
+            "Username should not be set for invalid address"
+        );
+        assert!(
+            session.btcaddress.is_none(),
+            "BTC address should not be set for invalid address"
+        );
+        assert!(
+            session.workername.is_none(),
+            "Worker name should not be set for invalid address"
+        );
+        assert!(
+            session.password.is_none(),
+            "Password should not be set for invalid address"
         );
     }
 }
