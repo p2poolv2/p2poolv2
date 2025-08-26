@@ -316,7 +316,7 @@ mod stratum_server_tests {
             version_mask: 0x1fffe000,
         };
 
-        let (shares_tx, shares_rx) = tokio::sync::mpsc::channel::<CmpctBlock>(10);
+        let (shares_tx, _shares_rx) = tokio::sync::mpsc::channel::<CmpctBlock>(10);
 
         let mut server =
             StratumServer::new(config, shutdown_rx, connections_handle, shares_tx).await;
@@ -399,7 +399,7 @@ mod stratum_server_tests {
         let response = String::from_utf8_lossy(&writer);
         let responses: Vec<&str> = response.split('\n').filter(|s| !s.is_empty()).collect();
         let response_json: serde_json::Value =
-            serde_json::from_str(&responses[0]).expect("Response should be valid JSON");
+            serde_json::from_str(responses[0]).expect("Response should be valid JSON");
         assert!(
             response_json.is_object(),
             "Response should be a JSON object"
@@ -659,8 +659,8 @@ mod stratum_server_tests {
 
         // Create mock IO objects
         let mut mock_reader = tokio_test::io::Builder::new()
-            .read(format!("{}\n", subscribe_str).as_bytes())
-            .read(format!("{}\n", authorize_str).as_bytes())
+            .read(format!("{subscribe_str}\n").as_bytes())
+            .read(format!("{authorize_str}\n").as_bytes())
             .wait(std::time::Duration::from_millis(10_000)) // Wait for 10 seconds before continuing
             .build();
 
@@ -762,7 +762,7 @@ mod stratum_server_tests {
 
         // Create mock IO objects
         let mut mock_reader = tokio_test::io::Builder::new()
-            .read(format!("{}\n", subscribe_str).as_bytes())
+            .read(format!("{subscribe_str}\n").as_bytes())
             .wait(std::time::Duration::from_millis(10_000)) // Wait for 10 seconds before continuing
             .build();
 

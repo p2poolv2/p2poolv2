@@ -18,13 +18,11 @@ use crate::command::Command;
 use crate::config::Config;
 use crate::node::Node;
 use crate::node::SwarmSend;
-use crate::shares::ShareBlock;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 #[cfg(not(test))]
 use crate::shares::chain::actor::ChainHandle;
-use crate::shares::miner_message::MinerWorkbase;
 use libp2p::futures::StreamExt;
 use std::error::Error;
 use tokio::sync::{mpsc, oneshot};
