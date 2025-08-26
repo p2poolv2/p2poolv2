@@ -68,9 +68,7 @@ async fn handle_simple_request<'a, D: DifficultyAdjusterTrait>(
     debug!("Handling simple request: {}", message.method);
     match message.method.as_ref() {
         "mining.subscribe" => handle_subscribe(message, session, ctx.start_difficulty).await,
-        "mining.authorize" => {
-            handle_authorize(message, session, addr, ctx.notify_tx, ctx.start_difficulty).await
-        }
+        "mining.authorize" => handle_authorize(message, session, addr, ctx).await,
         "mining.submit" => {
             handle_submit(
                 message,

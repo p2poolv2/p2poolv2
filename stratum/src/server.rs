@@ -117,6 +117,7 @@ impl StratumServer {
                                 minimum_difficulty: self.config.minimum_difficulty,
                                 maximum_difficulty: self.config.maximum_difficulty,
                                 shares_tx: self.shares_tx.clone(),
+                                network: self.config.network,
                             };
                             let version_mask = self.config.version_mask;
                             // Spawn a new task for each connection
@@ -147,6 +148,7 @@ pub(crate) struct StratumContext {
     pub minimum_difficulty: u64,
     pub maximum_difficulty: Option<u64>,
     pub shares_tx: mpsc::Sender<CmpctBlock>,
+    pub network: bitcoin::network::Network,
 }
 
 /// Handles a single connection to the Stratum server.
@@ -375,6 +377,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             shares_tx,
+            network: bitcoin::network::Network::Regtest,
         };
 
         // Run the handler
@@ -478,6 +481,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             shares_tx,
+            network: bitcoin::network::Network::Regtest,
         };
 
         // Run the handler
@@ -535,6 +539,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             shares_tx,
+            network: bitcoin::network::Network::Regtest,
         };
 
         // Run the handler
@@ -597,6 +602,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             shares_tx,
+            network: bitcoin::network::Network::Regtest,
         };
 
         // Run the handler
@@ -635,7 +641,7 @@ mod stratum_server_tests {
         );
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_handle_connection_should_include_responses_after_authorization() {
         // Create message channel and shutdown channel
         let (message_tx, message_rx) = mpsc::channel(10);
@@ -652,7 +658,7 @@ mod stratum_server_tests {
 
         let authorize_message = SimpleRequest::new_authorize(
             2,
-            "test_user".to_string(),
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
             Some("test_password".to_string()),
         );
         let authorize_str = serde_json::to_string(&authorize_message).unwrap();
@@ -679,6 +685,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             shares_tx,
+            network: bitcoin::network::Network::Testnet,
         };
 
         // Spawn the handler in a separate task
@@ -780,6 +787,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             shares_tx,
+            network: bitcoin::network::Network::Regtest,
         };
 
         // Spawn the handler in a separate task

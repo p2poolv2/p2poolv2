@@ -36,6 +36,10 @@ pub struct Session<D: DifficultyAdjusterTrait> {
     pub subscribed: bool,
     /// Optional username of the miner, supplied by the miner, we just store it in session
     pub username: Option<String>,
+    /// bitcoin address used as user identifier
+    pub btcaddress: Option<bitcoin::Address<bitcoin::address::NetworkChecked>>,
+    /// Worker name for the mining device
+    pub workername: Option<String>,
     /// Optional password of the miner, supplied by the miner, we just store it in session
     pub password: Option<String>,
     /// Difficulty adjuster for the session
@@ -62,6 +66,8 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
             enonce1_hex: hex::encode(enonce1.to_le_bytes()),
             subscribed: false,
             username: None,
+            workername: None,
+            btcaddress: None,
             password: None,
             difficulty_adjuster: D::new(start_difficulty, minimum_difficulty, maximum_difficulty),
             version_mask,

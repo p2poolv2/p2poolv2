@@ -17,7 +17,9 @@
 use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
 use crate::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
+use crate::server::StratumContext;
 use crate::session::Session;
+use crate::validate_username;
 use crate::work::notify::NotifyCmd;
 use tracing::debug;
 
@@ -32,12 +34,11 @@ use tracing::debug;
 ///
 /// TBH, this mining.authorize message is not needed at all. No server from ckpool to dataum to SRI is doing anything meaningful with it.
 /// Stratum servers also allow all workers to authrorize over the same connection.
-pub async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
+pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
     message: SimpleRequest<'a>,
     session: &mut Session<D>,
     addr: std::net::SocketAddr,
-    notify_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
-    start_difficulty: u64,
+    ctx: StratumContext,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.authorize message");
     if session.username.is_some() {
@@ -46,12 +47,31 @@ pub async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             "Already authorized".to_string(),
         ));
     }
-    session.username = message.params[0].clone();
+    let username = match message.params[0].clone() {
+        Some(name) => name,
+        None => {
+            return Err(Error::AuthorizationFailure(
+                "Username parameter missing".to_string(),
+            ))
+        }
+    };
+    session.username = Some(username.clone());
+    let parsed_username = match validate_username::validate(username.as_str(), ctx.network) {
+        Ok(validated) => validated,
+        Err(e) => {
+            return Err(Error::AuthorizationFailure(format!(
+                "Invalid username: {e}",
+            )))
+        }
+    };
+    session.btcaddress = Some(parsed_username.0);
+    session.workername = parsed_username.1;
     session.password = message.params[1].clone();
     session
         .difficulty_adjuster
-        .set_current_difficulty(start_difficulty);
-    let _ = notify_tx
+        .set_current_difficulty(ctx.start_difficulty);
+    let _ = ctx
+        .notify_tx
         .send(NotifyCmd::SendToClient {
             client_address: addr,
             clean_jobs: true,
@@ -59,7 +79,7 @@ pub async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
         .await;
     Ok(vec![
         Message::Response(Response::new_ok(message.id, serde_json::json!(true))),
-        Message::SetDifficulty(SetDifficultyNotification::new(start_difficulty)),
+        Message::SetDifficulty(SetDifficultyNotification::new(ctx.start_difficulty)),
     ])
 }
 
@@ -68,23 +88,43 @@ mod tests {
     use super::*;
     use crate::difficulty_adjuster::DifficultyAdjuster;
     use crate::messages::Id;
+    use crate::server::StratumContext;
+    use crate::work::tracker::start_tracker_actor;
+    use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
     use std::net::SocketAddr;
+    use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn test_handle_authorize_first_time() {
         // Setup
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
-        let request =
-            SimpleRequest::new_authorize(12345, "worker1".to_string(), Some("x".to_string()));
-        let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(1);
+        let request = SimpleRequest::new_authorize(
+            12345,
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
+            Some("x".to_string()),
+        );
+        let (notify_tx, mut notify_rx) = mpsc::channel(1);
+        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let tracker_handle = start_tracker_actor();
+
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle,
+            bitcoinrpc_config,
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
+            shares_tx,
+            network: bitcoin::network::Network::Testnet,
+        };
 
         // Execute
         let message = handle_authorize(
             request,
             &mut session,
             SocketAddr::from(([127, 0, 0, 1], 8080)),
-            notify_tx,
-            1000,
+            ctx,
         )
         .await
         .unwrap();
@@ -104,7 +144,10 @@ mod tests {
             subscribe_response.result.as_ref().unwrap(),
             &serde_json::Value::Bool(true)
         );
-        assert_eq!(session.username, Some("worker1".to_string()));
+        assert_eq!(
+            session.username,
+            Some("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string())
+        );
         assert_eq!(session.password, Some("x".to_string()));
 
         let notify_cmd = notify_rx.try_recv();
@@ -139,27 +182,43 @@ mod tests {
     async fn test_handle_authorize_already_authorized() {
         // Setup
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
-        session.username = Some("someusername".to_string());
+        session.username = Some("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string());
         let request = SimpleRequest::new_authorize(
             12345,
             "worker1".to_string(),
             Some("password".to_string()),
         );
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(1);
+        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let tracker_handle = start_tracker_actor();
+
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle,
+            bitcoinrpc_config,
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
+            shares_tx,
+            network: bitcoin::network::Network::Testnet,
+        };
 
         // Execute
         let message = handle_authorize(
             request,
             &mut session,
             SocketAddr::from(([127, 0, 0, 1], 8080)),
-            notify_tx,
-            1000,
+            ctx,
         )
         .await;
 
         // Verify
         assert!(message.is_err());
-        assert_eq!(session.username, Some("someusername".to_string()));
+        assert_eq!(
+            session.username,
+            Some("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string())
+        );
         assert!(session.password.is_none());
 
         let notify_cmd = notify_rx.try_recv();
