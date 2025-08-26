@@ -16,12 +16,14 @@
 
 use bitcoin::{address::NetworkChecked, Address};
 
+const MAX_WORKER_NAME_LENGTH: usize = 32;
+
 #[derive(Debug, thiserror::Error)]
 pub enum UsernameValidationError {
     #[error("Invalid Bitcoin address: {0}")]
     InvalidAddress(String),
-    #[error("Worker name too long (max 32 characters)")]
-    WorkerNameTooLong,
+    #[error("Worker name too long (max {0} characters)")]
+    WorkerNameTooLong(usize),
 }
 
 /// Validates a stratum username in the format <btcaddress>.<workername>
@@ -60,8 +62,10 @@ pub fn validate(
         let worker = parts[1].to_string();
 
         // Check worker name length
-        if worker.len() > 32 {
-            return Err(UsernameValidationError::WorkerNameTooLong);
+        if worker.len() > MAX_WORKER_NAME_LENGTH {
+            return Err(UsernameValidationError::WorkerNameTooLong(
+                MAX_WORKER_NAME_LENGTH,
+            ));
         }
 
         Some(worker)
@@ -131,7 +135,7 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            UsernameValidationError::WorkerNameTooLong
+            UsernameValidationError::WorkerNameTooLong(MAX_WORKER_NAME_LENGTH)
         ));
     }
 
