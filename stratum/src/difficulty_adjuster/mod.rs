@@ -857,7 +857,7 @@ mod tests {
         // Initial value is zero
         assert_eq!(adjuster.difficulty_shares_per_second_5min_window, 0.0);
 
-        let initial_value = adjuster.difficulty_shares_per_second_5min_window;
+        let _initial_value = adjuster.difficulty_shares_per_second_5min_window;
 
         let elapsed_time = adjuster.update_last_decay_timestamp(current_timestamp);
 
