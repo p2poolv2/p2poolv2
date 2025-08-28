@@ -123,7 +123,9 @@ impl StratumServer {
                             // Spawn a new task for each connection
                             tokio::spawn(async move {
                                 // Handle the connection with graceful shutdown support
-                                let _ = handle_connection(buf_reader, writer, addr, message_rx, shutdown_rx, version_mask, ctx).await;
+                                if handle_connection(buf_reader, writer, addr, message_rx, shutdown_rx, version_mask, ctx).await.is_err() {
+                                        error!("Error occurred while handling connection {addr}. Closing connection.");
+                                }
                             });
                         }
                         Err(e) => {

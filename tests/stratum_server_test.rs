@@ -21,7 +21,6 @@ use stratum::{
     self,
     messages::{Response, SimpleRequest},
     server::StratumServer,
-    share_block,
     work::{notify, tracker::start_tracker_actor},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

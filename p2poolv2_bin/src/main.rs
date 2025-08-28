@@ -38,6 +38,9 @@ const GBT_POLL_INTERVAL: u64 = 10; // seconds
 /// Path to the Unix socket for receiving blocknotify signals from bitcoind
 pub const SOCKET_PATH: &str = "/tmp/p2pool_blocknotify.sock";
 
+/// Maximum number of pending shares from all clients connected to stratum server
+const STRATUM_SHARES_BUFFER_SIZE: usize = 100;
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -134,7 +137,8 @@ async fn main() -> Result<(), String> {
         .await;
     });
 
-    let (shares_tx, shares_rx) = tokio::sync::mpsc::channel::<CmpctBlock>(10);
+    let (shares_tx, _shares_rx) =
+        tokio::sync::mpsc::channel::<CmpctBlock>(STRATUM_SHARES_BUFFER_SIZE);
 
     tokio::spawn(async move {
         let mut stratum_server = StratumServer::new(

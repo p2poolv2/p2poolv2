@@ -18,6 +18,7 @@ use crate::error::Error;
 use bitcoin::secp256k1::rand::{self, RngCore};
 use bitcoin::{bip152::HeaderAndShortIds, p2p::message_compact_blocks::CmpctBlock, Block};
 use tokio::sync::mpsc;
+use tracing::warn;
 
 /// Use compact block version 2 to support segwit
 const COMPACT_BLOCK_VERSION: u32 = 2;
@@ -40,16 +41,23 @@ fn create_compact_block_from_share(block: &Block) -> Result<CmpctBlock, Error> {
 }
 
 /// Send a compact block message to the shares tx channel
-pub fn send_share_block(
+/// Returning error here will shut down the connection to the client
+pub async fn send_share_block(
     share_block: &Block,
     shares_tx: mpsc::Sender<CmpctBlock>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match create_compact_block_from_share(share_block) {
-        Ok(message) => {
-            shares_tx.try_send(message)?;
-            Ok(())
+        Ok(message) => match shares_tx.send(message).await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                warn!("Error sending compact block to shares channel: {e}");
+                Err(Box::new(e))
+            }
+        },
+        Err(e) => {
+            warn!("Error creating compact block from share block: {e}");
+            Err(Box::new(e))
         }
-        Err(e) => Err(Box::new(e)),
     }
 }
 
@@ -82,16 +90,17 @@ mod send_share_block_tests {
         }
     }
 
-    #[test]
-    fn test_send_share_block() {
+    #[tokio::test]
+    async fn test_send_share_block() {
         let block = build_test_block();
 
         let (shares_tx, mut shares_rx) = mpsc::channel(1);
-        let result = send_share_block(&block, shares_tx);
+        let result = send_share_block(&block, shares_tx).await;
 
         assert!(result.is_ok());
         let received_block = shares_rx
-            .blocking_recv()
+            .recv()
+            .await
             .expect("Failed to receive compact block");
         assert!(received_block.compact_block.header == block.header);
     }

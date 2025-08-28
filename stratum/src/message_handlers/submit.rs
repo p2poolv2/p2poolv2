@@ -18,6 +18,7 @@ use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
 use crate::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
 use crate::session::Session;
+use crate::share_block::send_share_block;
 use crate::work::difficulty::validate::validate_submission_difficulty;
 use crate::work::tracker::{JobId, TrackerHandle};
 use bitcoin::blockdata::block::Block;
@@ -49,7 +50,7 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     session: &mut Session<D>,
     tracker_handle: TrackerHandle,
     bitcoinrpc_config: BitcoinRpcConfig,
-    _shares_tx: mpsc::Sender<CmpctBlock>,
+    shares_tx: mpsc::Sender<CmpctBlock>,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.submit message");
     if message.params.len() < 4 {
@@ -91,6 +92,15 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
 
     // Submit block asap, do difficulty adjustment after submission
     submit_block(&block, bitcoinrpc_config).await;
+
+    match send_share_block(&block, shares_tx).await {
+        Ok(_) => {
+            debug!("Share block sent successfully");
+        }
+        Err(e) => {
+            error!("Failed to send share block: {}", e);
+        }
+    }
 
     // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet
     let truediff = get_true_difficulty(&block.block_hash());

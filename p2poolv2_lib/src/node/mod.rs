@@ -540,8 +540,6 @@ mod tests {
             .expect_clone()
             .returning(|| ChainHandle::default());
 
-        let start = Instant::now();
-
         let mut node = Node::new(&config, chain_handle).expect("Node initialization failed");
 
         //  Initiate the dial manually!
