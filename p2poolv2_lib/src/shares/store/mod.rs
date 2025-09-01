@@ -79,6 +79,10 @@ impl Store {
         let user_workbase_cf =
             ColumnFamilyDescriptor::new("user_workbase", RocksDbOptions::default());
 
+        let pplns_user_cf = ColumnFamilyDescriptor::new("pplns_user", RocksDbOptions::default());
+        let pplns_job_cf = ColumnFamilyDescriptor::new("pplns_job", RocksDbOptions::default());
+        let pplns_share_cf = ColumnFamilyDescriptor::new("pplns_share", RocksDbOptions::default());
+
         let cfs = vec![
             block_cf,
             block_txids_cf,
@@ -89,6 +93,9 @@ impl Store {
             user_workbase_cf,
             block_index_cf,
             block_height_cf,
+            pplns_job_cf,
+            pplns_share_cf,
+            pplns_user_cf,
         ];
 
         // for the db too, we use default options for now
