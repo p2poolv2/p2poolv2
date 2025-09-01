@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::shares::chain::chain::Chain;
+use crate::shares::chain::chain_store::ChainStore;
 use serde::Serialize;
 use std::error::Error;
 
@@ -29,7 +29,7 @@ struct ChainInfo {
 }
 
 /// Implementation of the info command
-pub fn execute(chain: Chain) -> Result<(), Box<dyn Error>> {
+pub fn execute(chain: ChainStore) -> Result<(), Box<dyn Error>> {
     // Get genesis block hash
     let genesis_block_hash = chain.genesis_block_hash.map(|hash| format!("{hash:?}"));
 
@@ -70,7 +70,7 @@ pub fn execute(chain: Chain) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::execute;
     use crate::shares::ShareBlock;
-    use crate::shares::chain::chain::Chain;
+    use crate::shares::chain::chain_store::ChainStore;
     use crate::shares::store::Store;
     use tempfile::tempdir;
 
@@ -79,7 +79,7 @@ mod tests {
         // Create a temporary directory for the store
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let chain = Chain::new(
+        let chain = ChainStore::new(
             store,
             ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
         );

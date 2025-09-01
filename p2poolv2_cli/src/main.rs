@@ -20,7 +20,7 @@ use p2poolv2_lib::cli_commands;
 use clap::{Parser, Subcommand};
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::shares::ShareBlock;
-use p2poolv2_lib::shares::chain::chain::Chain;
+use p2poolv2_lib::shares::chain::chain_store::ChainStore;
 use std::error::Error;
 
 /// P2Pool v2 CLI utility
@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Check if store path is provided and handle it
     let store = cli_commands::store::open_store(config.store.path.clone())?;
     let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
-    let chain = Chain::new(store, genesis);
+    let chain = ChainStore::new(store, genesis);
 
     // Handle command if provided
     match &cli.command {

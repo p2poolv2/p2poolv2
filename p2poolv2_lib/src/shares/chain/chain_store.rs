@@ -28,7 +28,7 @@ const MIN_CONFIRMATION_DEPTH: usize = 100;
 
 /// A datastructure representing the main share chain
 /// The share chain reorgs when a share is found that has a higher total PoW than the current tip
-pub struct Chain {
+pub struct ChainStore {
     /// RocksDB store used by the chain
     pub store: Store,
     /// Genesis block, set once when first share is added
@@ -42,7 +42,7 @@ pub struct Chain {
 }
 
 #[allow(dead_code)]
-impl Chain {
+impl ChainStore {
     /// Create a new chain and load data from the store
     /// This will read the entire chain and set the cached metadata
     /// Add the genesis block to the chain if it is not already present
@@ -418,7 +418,7 @@ mod chain_tests {
     fn test_chain_add_shares() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let mut chain = Chain::new(store, genesis_for_testnet());
+        let mut chain = ChainStore::new(store, genesis_for_testnet());
 
         // Create initial share (1)
         let share1 = TestBlockBuilder::new()
@@ -593,7 +593,7 @@ mod chain_tests {
     fn test_confirmations() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let mut chain = Chain::new(store, genesis_for_testnet());
+        let mut chain = ChainStore::new(store, genesis_for_testnet());
 
         // Create initial chain of MIN_CONFIRMATION_DEPTH + 1 blocks
         let mut prev_hash = None;
@@ -636,7 +636,7 @@ mod chain_tests {
 
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let mut chain = Chain::new(store, genesis_for_testnet());
+        let mut chain = ChainStore::new(store, genesis_for_testnet());
 
         // Load test data from JSON file
         let test_data = fs::read_to_string("../tests/test_data/single_node_simple.json")
@@ -667,7 +667,7 @@ mod chain_tests {
     fn test_get_depth() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let mut chain = Chain::new(store, genesis_for_testnet());
+        let mut chain = ChainStore::new(store, genesis_for_testnet());
 
         // Test when chain is empty (no chain tip)
         let random_hash = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".into();
@@ -716,7 +716,7 @@ mod chain_tests {
     fn test_get_headers_for_locator() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let mut chain = Chain::new(store, genesis_for_testnet());
+        let mut chain = ChainStore::new(store, genesis_for_testnet());
 
         // Create a chain of 5 shares
         let share1 = TestBlockBuilder::new()
@@ -821,7 +821,7 @@ mod chain_tests {
     fn test_build_locator_with_less_than_10_blocks() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let mut chain = Chain::new(store, genesis_for_testnet());
+        let mut chain = ChainStore::new(store, genesis_for_testnet());
 
         let mut blocks: Vec<ShareBlock> = Vec::new();
 
@@ -859,7 +859,7 @@ mod chain_tests {
     fn test_build_locator_with_more_than_10_blocks() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let mut chain = Chain::new(store, genesis_for_testnet());
+        let mut chain = ChainStore::new(store, genesis_for_testnet());
 
         let mut blocks: Vec<ShareBlock> = Vec::new();
         for i in 1..=25 {
