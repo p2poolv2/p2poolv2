@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use super::chain::Chain;
+use super::chain_store::ChainStore;
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::store::Store;
 use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader};
@@ -81,13 +81,13 @@ pub enum ChainResponse {
 }
 
 pub struct ChainActor {
-    chain: Chain,
+    chain: ChainStore,
     receiver: mpsc::Receiver<(ChainMessage, mpsc::Sender<ChainResponse>)>,
 }
 
 impl ChainActor {
     pub fn new(
-        chain: Chain,
+        chain: ChainStore,
         receiver: mpsc::Receiver<(ChainMessage, mpsc::Sender<ChainResponse>)>,
     ) -> Self {
         Self { chain, receiver }
@@ -318,7 +318,7 @@ impl ChainHandle {
         tracing::info!("Creating ChainHandle with store_path: {}", store_path);
         let (sender, receiver) = mpsc::channel(1);
         let store = Store::new(store_path, false).unwrap();
-        let chain = Chain::new(store, genesis_block);
+        let chain = ChainStore::new(store, genesis_block);
         let mut chain_actor = ChainActor::new(chain, receiver);
         tokio::spawn(async move { chain_actor.run().await });
         Self { sender }
@@ -1354,7 +1354,7 @@ mod tests {
         assert_eq!(chain_handle.get_tip_height().await, Some(3));
 
         let read_only_store = Store::new(store_path, true).unwrap();
-        let read_only_chain = Chain::new(read_only_store, genesis_for_testnet());
+        let read_only_chain = ChainStore::new(read_only_store, genesis_for_testnet());
 
         // Check if tip height returns the correct height
         let tip_height = read_only_chain.get_tip_height();
