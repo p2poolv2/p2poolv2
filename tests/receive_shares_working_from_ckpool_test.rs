@@ -23,6 +23,7 @@ use p2poolv2_lib::shares::miner_message::CkPoolMessage;
 use p2poolv2_lib::shares::ShareBlock;
 use std::fs;
 use std::time::Duration;
+use stratum::share_block::StratumShare;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -41,9 +42,10 @@ async fn test_single_node_with_zmq_feed_of_workbases_only() {
         temp_dir.path().to_str().unwrap().to_string(),
         ShareBlock::build_genesis_for_network(config.stratum.network),
     );
+    let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<StratumShare>(10);
 
     // Start the node
-    let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone())
+    let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone(), shares_rx)
         .await
         .expect("Failed to create node");
 
@@ -112,9 +114,10 @@ async fn test_single_node_with_zmq_feed_of_shares_only() {
         temp_dir.path().to_str().unwrap().to_string(),
         ShareBlock::build_genesis_for_network(config.stratum.network),
     );
+    let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<StratumShare>(10);
 
     // Start the node
-    let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone())
+    let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone(), shares_rx)
         .await
         .expect("Failed to create node");
 
@@ -203,9 +206,10 @@ async fn test_single_node_with_shares_and_workbases() {
         temp_dir.path().to_str().unwrap().to_string(),
         ShareBlock::build_genesis_for_network(config.stratum.network),
     );
+    let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<StratumShare>(10);
 
     // Start the node
-    let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone())
+    let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone(), shares_rx)
         .await
         .expect("Failed to create node");
 

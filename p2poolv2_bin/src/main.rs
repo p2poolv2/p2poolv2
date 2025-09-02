@@ -15,7 +15,6 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use bitcoin::Address;
-use bitcoin::p2p::message_compact_blocks::CmpctBlock;
 use clap::Parser;
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::logging::setup_logging;
@@ -26,6 +25,7 @@ use std::process::exit;
 use std::str::FromStr;
 use stratum::client_connections::start_connections_handler;
 use stratum::server::StratumServer;
+use stratum::share_block::StratumShare;
 use stratum::work::gbt::start_gbt;
 use stratum::work::tracker::start_tracker_actor;
 use stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
@@ -137,8 +137,7 @@ async fn main() -> Result<(), String> {
         .await;
     });
 
-    let (shares_tx, _shares_rx) =
-        tokio::sync::mpsc::channel::<CmpctBlock>(STRATUM_SHARES_BUFFER_SIZE);
+    let (shares_tx, shares_rx) = tokio::sync::mpsc::channel::<StratumShare>(10);
 
     tokio::spawn(async move {
         let mut stratum_server = StratumServer::new(
@@ -158,7 +157,7 @@ async fn main() -> Result<(), String> {
         info!("Stratum server stopped");
     });
 
-    match NodeHandle::new(config, chain_handle).await {
+    match NodeHandle::new(config, chain_handle, shares_rx).await {
         Ok((_node_handle, stopping_rx)) => {
             info!("Node started");
             if (stopping_rx.await).is_ok() {

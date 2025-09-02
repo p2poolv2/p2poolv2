@@ -63,6 +63,7 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             )))
         }
     };
+
     session.username = Some(username);
     session.btcaddress = Some(parsed_username.0);
     session.workername = parsed_username.1;
@@ -147,6 +148,10 @@ mod tests {
         assert_eq!(
             session.username,
             Some("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string())
+        );
+        assert_eq!(
+            session.btcaddress.unwrap(),
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
         );
         assert_eq!(session.password, Some("x".to_string()));
 

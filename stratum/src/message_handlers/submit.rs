@@ -18,12 +18,11 @@ use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
 use crate::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
 use crate::session::Session;
-use crate::share_block::send_share_block;
+use crate::share_block::StratumShare;
 use crate::work::difficulty::validate::validate_submission_difficulty;
 use crate::work::tracker::{JobId, TrackerHandle};
 use bitcoin::blockdata::block::Block;
 use bitcoin::hashes::Hash;
-use bitcoin::p2p::message_compact_blocks::CmpctBlock;
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use serde_json::json;
 use std::time::SystemTime;
@@ -50,7 +49,7 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     session: &mut Session<D>,
     tracker_handle: TrackerHandle,
     bitcoinrpc_config: BitcoinRpcConfig,
-    shares_tx: mpsc::Sender<CmpctBlock>,
+    shares_tx: mpsc::Sender<StratumShare>,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.submit message");
     if message.params.len() < 4 {
@@ -73,34 +72,37 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         }
     };
 
+    // version mask from the session - we ignore different version mask sent in a submit message
+    let version_mask = session.version_mask;
+
     // Validate the difficulty of the submitted share
-    let block = match validate_submission_difficulty(
-        &job,
-        &message,
-        &session.enonce1_hex,
-        session.version_mask,
-    ) {
-        Ok(block) => block,
-        Err(e) => {
-            info!("Share validation failed: {}", e);
-            return Ok(vec![Message::Response(Response::new_ok(
-                message.id,
-                json!(false),
-            ))]);
-        }
-    };
+    let block =
+        match validate_submission_difficulty(&job, &message, &session.enonce1_hex, version_mask) {
+            Ok(block) => block,
+            Err(e) => {
+                info!("Share validation failed: {}", e);
+                return Ok(vec![Message::Response(Response::new_ok(
+                    message.id,
+                    json!(false),
+                ))]);
+            }
+        };
 
     // Submit block asap, do difficulty adjustment after submission
     submit_block(&block, bitcoinrpc_config).await;
 
-    match send_share_block(&block, shares_tx).await {
-        Ok(_) => {
-            debug!("Share block sent successfully");
-        }
-        Err(e) => {
-            error!("Failed to send share block: {}", e);
-        }
-    }
+    let stratum_share = StratumShare::new(
+        job_id,
+        session.btcaddress.as_ref().unwrap(),
+        message.params[4].as_ref().unwrap(),
+        message.params[2].as_ref().unwrap(),
+        message.params[3].as_ref().unwrap(),
+        version_mask,
+    );
+    shares_tx
+        .send(stratum_share)
+        .await
+        .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;
 
     // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet
     let truediff = get_true_difficulty(&block.block_hash());
@@ -171,7 +173,7 @@ mod handle_submit_tests {
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use std::sync::Arc;
 
-    #[test_log::test]
+    #[test]
     fn test_true_difficulty() {
         let hash = "000000000007f7453abd3f11338c165bf4876c086979630ed6f35ddbe59125a9"
             .parse::<BlockHash>()
@@ -180,7 +182,7 @@ mod handle_submit_tests {
         assert_eq!(difficulty, 8226);
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_handle_submit_meets_difficulty_should_submit() {
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         let tracker_handle = start_tracker_actor();
@@ -220,6 +222,7 @@ mod handle_submit_tests {
         session.enonce1 =
             u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
         session.enonce1_hex = enonce1.to_string();
+        session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
 
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
@@ -232,7 +235,7 @@ mod handle_submit_tests {
             )
             .await;
 
-        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let (shares_tx, mut shares_rx) = mpsc::channel(10);
         let message = handle_submit(
             submit,
             &mut session,
@@ -253,11 +256,21 @@ mod handle_submit_tests {
         // The response should indicate that the share met required difficulty
         assert_eq!(response.result, Some(json!(true)));
 
+        let share = shares_rx.try_recv().unwrap();
+        assert_eq!(share.username, session.btcaddress.unwrap());
+        assert_eq!(
+            share.job_id,
+            u64::from_str_radix("18468e1f5fa5cbaa", 16).unwrap()
+        );
+        assert_eq!(share.extranonce2, 0);
+        assert_eq!(share.ntime, u32::from_str_radix("67b6f938", 16).unwrap());
+        assert_eq!(share.nonce, u32::from_str_radix("f15f1590", 16).unwrap());
+
         // Verify that the block was not submitted to the mock server
         mock_server.verify().await;
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_handle_submit_a_meets_difficulty_should_submit() {
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         let tracker_handle = start_tracker_actor();
@@ -298,6 +311,7 @@ mod handle_submit_tests {
         session.enonce1 =
             u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
         session.enonce1_hex = enonce1.to_string();
+        session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
 
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
@@ -310,7 +324,7 @@ mod handle_submit_tests {
             )
             .await;
 
-        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let (shares_tx, mut shares_rx) = mpsc::channel(10);
         let response = handle_submit(
             submit,
             &mut session,
@@ -333,9 +347,15 @@ mod handle_submit_tests {
 
         // Verify that the block was not submitted to the mock server
         mock_server.verify().await;
+
+        let stratum_share = shares_rx.recv().await.unwrap();
+        assert_eq!(stratum_share.job_id, job_id.0);
+        assert_eq!(stratum_share.extranonce2, 0);
+        assert_eq!(stratum_share.ntime, 0x6849afec);
+        assert_eq!(stratum_share.nonce, 0xe33674f1);
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_handle_submit_with_version_rolling_meets_difficulty_should_submit() {
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         let tracker_handle = start_tracker_actor();
@@ -376,6 +396,7 @@ mod handle_submit_tests {
         session.enonce1 =
             u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
         session.enonce1_hex = enonce1.to_string();
+        session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
 
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
@@ -466,6 +487,7 @@ mod handle_submit_tests {
         session.enonce1 =
             u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
         session.enonce1_hex = enonce1.to_string();
+        session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
 
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
@@ -531,6 +553,7 @@ mod handle_submit_tests {
         session.enonce1 =
             u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
         session.enonce1_hex = enonce1.to_string();
+        session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
 
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let message = handle_submit(

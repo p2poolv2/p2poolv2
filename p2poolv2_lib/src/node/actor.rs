@@ -23,6 +23,7 @@ use crate::node::SwarmSend;
 use crate::shares::chain::actor::ChainHandle;
 #[cfg(not(test))]
 use crate::shares::chain::actor::ChainHandle;
+use crate::shares::handle_stratum_shares::handle_stratum_shares;
 use libp2p::futures::StreamExt;
 use std::error::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -42,12 +43,18 @@ impl NodeHandle {
     pub async fn new(
         config: Config,
         chain_handle: ChainHandle,
+        shares_rx: tokio::sync::mpsc::Receiver<stratum::share_block::StratumShare>,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
-        let (node_actor, stopping_rx) = NodeActor::new(config, chain_handle, command_rx).unwrap();
+        let (node_actor, stopping_rx) =
+            NodeActor::new(config, chain_handle.clone(), command_rx).unwrap();
 
         tokio::spawn(async move {
             node_actor.run().await;
+        });
+
+        tokio::spawn(async move {
+            handle_stratum_shares(shares_rx, chain_handle).await;
         });
         Ok((Self { command_tx }, stopping_rx))
     }
