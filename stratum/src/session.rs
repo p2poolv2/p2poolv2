@@ -37,7 +37,7 @@ pub struct Session<D: DifficultyAdjusterTrait> {
     /// Optional username of the miner, supplied by the miner, we just store it in session
     pub username: Option<String>,
     /// bitcoin address used as user identifier
-    pub btcaddress: Option<bitcoin::Address<bitcoin::address::NetworkChecked>>,
+    pub btcaddress: Option<String>,
     /// Worker name for the mining device
     pub workername: Option<String>,
     /// Optional password of the miner, supplied by the miner, we just store it in session

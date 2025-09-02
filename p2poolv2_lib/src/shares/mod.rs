@@ -18,6 +18,7 @@ pub mod chain;
 pub mod ckpool_socket;
 pub mod genesis;
 pub mod handle_mining_message;
+pub mod handle_stratum_shares;
 pub mod miner_message;
 pub mod receive_mining_message;
 pub mod store;

@@ -14,8 +14,6 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use bitcoin::{address::NetworkChecked, Address};
-
 const MAX_WORKER_NAME_LENGTH: usize = 32;
 
 #[derive(Debug, thiserror::Error)]
@@ -40,7 +38,7 @@ pub enum UsernameValidationError {
 pub fn validate(
     username: &str,
     network: bitcoin::Network,
-) -> Result<(Address<NetworkChecked>, Option<String>), UsernameValidationError> {
+) -> Result<(String, Option<String>), UsernameValidationError> {
     // Split by the first dot
     let parts: Vec<&str> = username.splitn(2, '.').collect();
 
@@ -73,7 +71,7 @@ pub fn validate(
         None
     };
 
-    Ok((checked_address, worker_name))
+    Ok((checked_address.to_string(), worker_name))
 }
 
 #[cfg(test)]

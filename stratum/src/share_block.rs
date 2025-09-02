@@ -17,11 +17,52 @@
 use crate::error::Error;
 use bitcoin::secp256k1::rand::{self, RngCore};
 use bitcoin::{bip152::HeaderAndShortIds, p2p::message_compact_blocks::CmpctBlock, Block};
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::warn;
 
 /// Use compact block version 2 to support segwit
 const COMPACT_BLOCK_VERSION: u32 = 2;
+
+/// Struct that is serialized into share store.
+/// This is not used for stratum communication, but is stored in the db for share accounting.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StratumShare {
+    /// A job id to track this job and used to find the shares for it later
+    pub job_id: u64,
+    /// Username for finding user
+    pub username: String,
+    /// nonce saved as u32 converted from string
+    pub nonce: u32,
+    /// extranonce2 saved as u32 converted from string
+    pub extranonce2: u32,
+    /// ntime saved as u32 converted from string
+    pub ntime: u32,
+    /// version mask from the session - we ignore different version mask sent in a submit message
+    pub version_mask: i32,
+}
+
+impl StratumShare {
+    /// Create a new StratumShare instance.
+    /// This is called after the block has been validated, therefore we trust that the parsing of integers will not fail.
+    pub fn new(
+        job_id: u64,
+        username: &str,
+        nonce: &str,
+        extranonce2: &str,
+        ntime: &str,
+        version_mask: i32,
+    ) -> Self {
+        StratumShare {
+            job_id,
+            username: username.to_string(),
+            nonce: u32::from_str_radix(nonce, 16).unwrap(), // will always succeed, see StratumShare::new
+            extranonce2: u32::from_str_radix(extranonce2, 16).unwrap(), // will always succeed, see StratumShare::new
+            ntime: u32::from_str_radix(ntime, 16).unwrap(), // will always succeed, see StratumShare::new
+            version_mask,
+        }
+    }
+}
 
 /// Create a compact block from a given block
 /// Does not prefill any transactions. Coinbase is always prefilled by default.
@@ -41,8 +82,7 @@ fn create_compact_block_from_share(block: &Block) -> Result<CmpctBlock, Error> {
 }
 
 /// Send a compact block message to the shares tx channel
-/// Returning error here will shut down the connection to the client
-pub async fn send_share_block(
+pub fn send_share_compact_block(
     share_block: &Block,
     shares_tx: mpsc::Sender<CmpctBlock>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -95,7 +135,7 @@ mod send_share_block_tests {
         let block = build_test_block();
 
         let (shares_tx, mut shares_rx) = mpsc::channel(1);
-        let result = send_share_block(&block, shares_tx).await;
+        let result = send_share_compact_block(&block, shares_tx);
 
         assert!(result.is_ok());
         let received_block = shares_rx
