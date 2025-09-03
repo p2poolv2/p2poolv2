@@ -4387,6 +4387,7 @@ dependencies = [
  "base64 0.22.1",
  "bitcoin",
  "bitcoindrpc",
+ "ciborium",
  "config",
  "futures",
  "hex",

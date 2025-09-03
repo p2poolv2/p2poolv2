@@ -14,14 +14,16 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-const MAX_WORKER_NAME_LENGTH: usize = 32;
+/// Max username includes the dot and the worker name
+/// btcaddress.workername, with btcaddress at 34 bytes, we get 30 character worker name
+const MAX_USERNAME_LENGTH: usize = 64;
 
 #[derive(Debug, thiserror::Error)]
 pub enum UsernameValidationError {
     #[error("Invalid Bitcoin address: {0}")]
     InvalidAddress(String),
     #[error("Worker name too long (max {0} characters)")]
-    WorkerNameTooLong(usize),
+    UserNameTooLong(usize),
 }
 
 /// Validates a stratum username in the format <btcaddress>.<workername>
@@ -38,40 +40,35 @@ pub enum UsernameValidationError {
 pub fn validate(
     username: &str,
     network: bitcoin::Network,
-) -> Result<(String, Option<String>), UsernameValidationError> {
+) -> Result<(&str, Option<&str>), UsernameValidationError> {
+    if username.len() > MAX_USERNAME_LENGTH {
+        return Err(UsernameValidationError::UserNameTooLong(
+            MAX_USERNAME_LENGTH,
+        ));
+    }
+
     // Split by the first dot
     let parts: Vec<&str> = username.splitn(2, '.').collect();
 
     // Parse the Bitcoin address
-    let address_str = parts[0];
-    let address = address_str.parse::<bitcoin::Address<_>>().map_err(|e| {
+    let address_part = parts[0];
+    let address = address_part.parse::<bitcoin::Address<_>>().map_err(|e| {
         UsernameValidationError::InvalidAddress(format!("Failed to parse address: {e}"))
     })?;
 
-    // Verify the network
-    let checked_address = address.require_network(network).map_err(|_| {
+    // Verify the network, return error on failure
+    address.require_network(network).map_err(|_| {
         UsernameValidationError::InvalidAddress(format!(
             "Expected an address for network {network}",
         ))
     })?;
 
     // Extract worker name if present
-    let worker_name = if parts.len() > 1 {
-        let worker = parts[1].to_string();
-
-        // Check worker name length
-        if worker.len() > MAX_WORKER_NAME_LENGTH {
-            return Err(UsernameValidationError::WorkerNameTooLong(
-                MAX_WORKER_NAME_LENGTH,
-            ));
-        }
-
-        Some(worker)
+    if parts.len() > 1 {
+        Ok((address_part, Some(parts[1])))
     } else {
-        None
-    };
-
-    Ok((checked_address.to_string(), worker_name))
+        Ok((address_part, None))
+    }
 }
 
 #[cfg(test)]
@@ -95,11 +92,8 @@ mod tests {
         let result = validate(testnet_address, Network::Testnet);
         assert!(result.is_ok());
         let (address, worker_name) = result.unwrap();
-        assert_eq!(
-            address.to_string(),
-            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
-        );
-        assert_eq!(worker_name, Some("worker1".to_string()));
+        assert_eq!(address, "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx");
+        assert_eq!(worker_name, Some("worker1"));
     }
 
     #[test]
@@ -128,19 +122,19 @@ mod tests {
     #[test]
     fn test_worker_name_too_long() {
         let mainnet_address = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
-        let long_worker = format!("{}.{}", mainnet_address, "a".repeat(33));
+        let long_worker = format!("{}.{}", mainnet_address, "a".repeat(31));
         let result = validate(&long_worker, Network::Bitcoin);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            UsernameValidationError::WorkerNameTooLong(MAX_WORKER_NAME_LENGTH)
+            UsernameValidationError::UserNameTooLong(MAX_USERNAME_LENGTH)
         ));
     }
 
     #[test]
     fn test_worker_name_max_length() {
         let mainnet_address = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
-        let max_worker = format!("{}.{}", mainnet_address, "a".repeat(32));
+        let max_worker = format!("{}.{}", mainnet_address, "a".repeat(29));
         let result = validate(&max_worker, Network::Bitcoin);
         assert!(result.is_ok());
     }
@@ -153,6 +147,6 @@ mod tests {
         assert!(result.is_ok());
         let (address, worker_name) = result.unwrap();
         assert_eq!(address.to_string(), mainnet_address);
-        assert_eq!(worker_name, Some("worker.with.dots".to_string()));
+        assert_eq!(worker_name, Some("worker.with.dots"));
     }
 }

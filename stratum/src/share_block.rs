@@ -16,6 +16,7 @@
 
 use crate::error::Error;
 use bitcoin::secp256k1::rand::{self, RngCore};
+use bitcoin::BlockHash;
 use bitcoin::{bip152::HeaderAndShortIds, p2p::message_compact_blocks::CmpctBlock, Block};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -24,10 +25,53 @@ use tracing::warn;
 /// Use compact block version 2 to support segwit
 const COMPACT_BLOCK_VERSION: u32 = 2;
 
+/// Type alias for bitcoin block hash, so we can depend on type to catch potential errors
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug, Hash, Copy)]
+pub struct PplnsShareBlockHash(BlockHash);
+
+impl From<&str> for PplnsShareBlockHash {
+    fn from(s: &str) -> PplnsShareBlockHash {
+        PplnsShareBlockHash(s.parse().expect("Invalid pplns share block hash string"))
+    }
+}
+
+impl std::fmt::Display for PplnsShareBlockHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl PartialEq<PplnsShareBlockHash> for &str {
+    fn eq(&self, other: &PplnsShareBlockHash) -> bool {
+        self.parse::<BlockHash>().unwrap() == other.0
+    }
+}
+
+impl PartialEq<&str> for PplnsShareBlockHash {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == other.parse().unwrap()
+    }
+}
+
+impl PartialEq<PplnsShareBlockHash> for &PplnsShareBlockHash {
+    fn eq(&self, other: &PplnsShareBlockHash) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for PplnsShareBlockHash {}
+
+impl AsRef<[u8]> for PplnsShareBlockHash {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
 /// Struct that is serialized into share store.
 /// This is not used for stratum communication, but is stored in the db for share accounting.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct StratumShare {
+/// With max limit of username at 64 bytes, total 24+64 bytes = 88 bytes
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PplnsShare {
     /// A job id to track this job and used to find the shares for it later
     pub job_id: u64,
     /// Username for finding user
@@ -42,7 +86,7 @@ pub struct StratumShare {
     pub version_mask: i32,
 }
 
-impl StratumShare {
+impl PplnsShare {
     /// Create a new StratumShare instance.
     /// This is called after the block has been validated, therefore we trust that the parsing of integers will not fail.
     pub fn new(
@@ -53,7 +97,7 @@ impl StratumShare {
         ntime: &str,
         version_mask: i32,
     ) -> Self {
-        StratumShare {
+        PplnsShare {
             job_id,
             username: username.to_string(),
             nonce: u32::from_str_radix(nonce, 16).unwrap(), // will always succeed, see StratumShare::new
@@ -61,6 +105,15 @@ impl StratumShare {
             ntime: u32::from_str_radix(ntime, 16).unwrap(), // will always succeed, see StratumShare::new
             version_mask,
         }
+    }
+
+    /// Serialize the pplns share and take a double sha256 hash for it
+    /// The result is used to identify the share uniquely and store it in store
+    pub fn hash_and_serialize(&self) -> Result<(PplnsShareBlockHash, Vec<u8>), Error> {
+        let mut serialized = Vec::new();
+        ciborium::ser::into_writer(&self, &mut serialized).unwrap();
+        let hash = PplnsShareBlockHash(bitcoin::hashes::Hash::hash(&serialized));
+        Ok((hash, serialized))
     }
 }
 

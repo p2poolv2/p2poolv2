@@ -55,7 +55,7 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             ))
         }
     };
-    let parsed_username = match validate_username::validate(username.as_str(), ctx.network) {
+    let parsed_username = match validate_username::validate(&username, ctx.network) {
         Ok(validated) => validated,
         Err(e) => {
             return Err(Error::AuthorizationFailure(format!(
@@ -64,9 +64,9 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
         }
     };
 
-    session.username = Some(username);
-    session.btcaddress = Some(parsed_username.0);
-    session.workername = parsed_username.1;
+    session.username = Some(message.params[0].clone().unwrap());
+    session.btcaddress = Some(parsed_username.0.to_string());
+    session.workername = parsed_username.1.map(|s| s.to_string());
     session.password = message.params[1].clone();
     session
         .difficulty_adjuster

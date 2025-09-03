@@ -22,6 +22,7 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
+use stratum::share_block::PplnsShare;
 use tokio::sync::mpsc;
 use tracing::{debug, error};
 
@@ -32,6 +33,7 @@ pub enum ChainMessage {
     Reorg(ShareBlock, Decimal),
     IsConfirmed(ShareBlock),
     AddShare(ShareBlock),
+    AddPplnsShare(PplnsShare),
     StoreWorkbase(MinerWorkbase),
     StoreUserWorkbase(UserWorkbase),
     GetWorkbase(u64),
@@ -61,6 +63,7 @@ pub enum ChainResponse {
     ReorgResult(Result<(), Box<dyn Error + Send + Sync>>),
     IsConfirmedResult(bool),
     AddShareResult(Result<(), Box<dyn Error + Send + Sync>>),
+    AddPplnsShareResult(Result<(), Box<dyn Error + Send + Sync>>),
     StoreWorkbaseResult(Result<(), Box<dyn Error + Send + Sync>>),
     StoreUserWorkbaseResult(Result<(), Box<dyn Error + Send + Sync>>),
     GetWorkbaseResult(Option<MinerWorkbase>),
@@ -81,16 +84,19 @@ pub enum ChainResponse {
 }
 
 pub struct ChainActor {
-    chain: ChainStore,
+    chain_store: ChainStore,
     receiver: mpsc::Receiver<(ChainMessage, mpsc::Sender<ChainResponse>)>,
 }
 
 impl ChainActor {
     pub fn new(
-        chain: ChainStore,
+        chain_store: ChainStore,
         receiver: mpsc::Receiver<(ChainMessage, mpsc::Sender<ChainResponse>)>,
     ) -> Self {
-        Self { chain, receiver }
+        Self {
+            chain_store,
+            receiver,
+        }
     }
 
     pub async fn run(&mut self) {
@@ -98,14 +104,14 @@ impl ChainActor {
             debug!("Chain actor received message: {:?}", msg);
             match msg {
                 ChainMessage::GetTips => {
-                    let tips = self.chain.tips.clone();
+                    let tips = self.chain_store.tips.clone();
                     if let Err(e) = response_sender.send(ChainResponse::Tips(tips)).await {
                         error!("Failed to send chain response: {}", e);
                     }
                 }
                 ChainMessage::Reorg(share_block, total_difficulty_upto_prev_share_blockhash) => {
                     let result = self
-                        .chain
+                        .chain_store
                         .reorg(share_block, total_difficulty_upto_prev_share_blockhash);
                     if let Err(e) = response_sender
                         .send(ChainResponse::ReorgResult(result))
@@ -115,7 +121,7 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::IsConfirmed(share_block) => {
-                    let result = self.chain.is_confirmed(share_block);
+                    let result = self.chain_store.is_confirmed(share_block);
                     if let Err(e) = response_sender
                         .send(ChainResponse::IsConfirmedResult(result))
                         .await
@@ -124,7 +130,7 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::AddShare(share_block) => {
-                    let result = self.chain.add_share(share_block);
+                    let result = self.chain_store.add_share(share_block);
                     if let Err(e) = response_sender
                         .send(ChainResponse::AddShareResult(result))
                         .await
@@ -132,8 +138,17 @@ impl ChainActor {
                         error!("Failed to send add_share response: {}", e);
                     }
                 }
+                ChainMessage::AddPplnsShare(pplns_share) => {
+                    let result = self.chain_store.add_pplns_share(pplns_share);
+                    if let Err(e) = response_sender
+                        .send(ChainResponse::AddPplnsShareResult(result))
+                        .await
+                    {
+                        error!("Failed to send add_pplns_share response: {}", e);
+                    }
+                }
                 ChainMessage::StoreWorkbase(workbase) => {
-                    let result = self.chain.add_workbase(workbase);
+                    let result = self.chain_store.add_workbase(workbase);
                     if let Err(e) = response_sender
                         .send(ChainResponse::StoreWorkbaseResult(result))
                         .await
@@ -142,7 +157,7 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::GetWorkbase(workinfoid) => {
-                    let result = self.chain.get_workbase(workinfoid);
+                    let result = self.chain_store.get_workbase(workinfoid);
                     if let Err(e) = response_sender
                         .send(ChainResponse::GetWorkbaseResult(result))
                         .await
@@ -151,7 +166,7 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::GetWorkbases(workinfoids) => {
-                    let result = self.chain.get_workbases(&workinfoids);
+                    let result = self.chain_store.get_workbases(&workinfoids);
                     if let Err(e) = response_sender
                         .send(ChainResponse::GetWorkbasesResult(result))
                         .await
@@ -160,7 +175,7 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::GetShare(share_hash) => {
-                    let result: Option<ShareBlock> = self.chain.get_share(&share_hash);
+                    let result: Option<ShareBlock> = self.chain_store.get_share(&share_hash);
                     if let Err(e) = response_sender
                         .send(ChainResponse::GetShareResult(result))
                         .await
@@ -169,7 +184,7 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::GetSharesAtHeight(height) => {
-                    let result = self.chain.get_shares_at_height(height);
+                    let result = self.chain_store.get_shares_at_height(height);
                     if let Err(e) = response_sender
                         .send(ChainResponse::GetSharesAtHeightResult(result))
                         .await
@@ -178,7 +193,7 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::GetShareHeaders(share_hashes) => {
-                    let result = self.chain.get_share_headers(&share_hashes);
+                    let result = self.chain_store.get_share_headers(&share_hashes);
                     if let Err(e) = response_sender
                         .send(ChainResponse::GetShareHeadersResult(result))
                         .await
@@ -187,7 +202,7 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::GetTotalDifficulty => {
-                    let result = self.chain.get_total_difficulty();
+                    let result = self.chain_store.get_total_difficulty();
                     if let Err(e) = response_sender
                         .send(ChainResponse::TotalDifficulty(result))
                         .await
@@ -196,13 +211,13 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::GetChainTip => {
-                    let result = self.chain.chain_tip;
+                    let result = self.chain_store.chain_tip;
                     if let Err(e) = response_sender.send(ChainResponse::ChainTip(result)).await {
                         error!("Failed to send get_chain_tip response: {}", e);
                     }
                 }
                 ChainMessage::GetChainTipAndUncles => {
-                    let (chain_tip, uncles) = self.chain.get_chain_tip_and_uncles();
+                    let (chain_tip, uncles) = self.chain_store.get_chain_tip_and_uncles();
                     if let Err(e) = response_sender
                         .send(ChainResponse::ChainTipAndUncles(chain_tip, uncles))
                         .await
@@ -211,13 +226,13 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::GetDepth(blockhash) => {
-                    let result = self.chain.get_depth(&blockhash);
+                    let result = self.chain_store.get_depth(&blockhash);
                     if let Err(e) = response_sender.send(ChainResponse::Depth(result)).await {
                         error!("Failed to send get_depth response: {}", e);
                     }
                 }
                 ChainMessage::StoreUserWorkbase(user_workbase) => {
-                    let result = self.chain.add_user_workbase(user_workbase);
+                    let result = self.chain_store.add_user_workbase(user_workbase);
                     if let Err(e) = response_sender
                         .send(ChainResponse::StoreUserWorkbaseResult(result))
                         .await
@@ -226,7 +241,7 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::GetUserWorkbase(workinfoid) => {
-                    let result = self.chain.get_user_workbase(workinfoid);
+                    let result = self.chain_store.get_user_workbase(workinfoid);
                     if let Err(e) = response_sender
                         .send(ChainResponse::GetUserWorkbaseResult(result))
                         .await
@@ -235,7 +250,7 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::GetUserWorkbases(workinfoids) => {
-                    let result = self.chain.get_user_workbases(&workinfoids);
+                    let result = self.chain_store.get_user_workbases(&workinfoids);
                     if let Err(e) = response_sender
                         .send(ChainResponse::GetUserWorkbasesResult(result))
                         .await
@@ -244,9 +259,11 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::GetHeadersForLocator(block_hashes, stop_block_hash, limit) => {
-                    let result =
-                        self.chain
-                            .get_headers_for_locator(&block_hashes, &stop_block_hash, limit);
+                    let result = self.chain_store.get_headers_for_locator(
+                        &block_hashes,
+                        &stop_block_hash,
+                        limit,
+                    );
                     if let Err(e) = response_sender
                         .send(ChainResponse::GetHeadersForLocatorResult(result))
                         .await
@@ -259,7 +276,7 @@ impl ChainActor {
                     stop_block_hash,
                     max_blockhashes,
                 ) => {
-                    let result = self.chain.get_blockhashes_for_locator(
+                    let result = self.chain_store.get_blockhashes_for_locator(
                         &locator,
                         &stop_block_hash,
                         max_blockhashes,
@@ -272,7 +289,7 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::BuildLocator => {
-                    let result = self.chain.build_locator();
+                    let result = self.chain_store.build_locator();
                     let result = match result {
                         Ok(locator) => locator,
                         Err(e) => {
@@ -288,7 +305,7 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::GetMissingBlockhashes(blockhashes) => {
-                    let result = self.chain.get_missing_blockhashes(&blockhashes);
+                    let result = self.chain_store.get_missing_blockhashes(&blockhashes);
                     if let Err(e) = response_sender
                         .send(ChainResponse::GetMissingBlockhashesResult(result))
                         .await
@@ -297,7 +314,7 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::GetTipHeight => {
-                    let result = self.chain.get_tip_height();
+                    let result = self.chain_store.get_tip_height();
                     if let Err(e) = response_sender.send(ChainResponse::TipHeight(result)).await {
                         error!("Failed to send get_tip_height response: {}", e);
                     }
@@ -402,6 +419,26 @@ impl ChainHandle {
         match response_receiver.recv().await {
             Some(ChainResponse::AddShareResult(result)) => result,
             _ => Err("Failed to receive add_share result".into()),
+        }
+    }
+
+    pub async fn add_pplns_share(
+        &self,
+        pplns_share: PplnsShare,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let (response_sender, mut response_receiver) = mpsc::channel(1);
+        if let Err(e) = self
+            .sender
+            .send((ChainMessage::AddPplnsShare(pplns_share), response_sender))
+            .await
+        {
+            error!("Failed to send AddPplnsShare message: {}", e);
+            return Err(e.into());
+        }
+
+        match response_receiver.recv().await {
+            Some(ChainResponse::AddPplnsShareResult(result)) => result,
+            _ => Err("Failed to receive add_pplns_share result".into()),
         }
     }
 
@@ -719,6 +756,7 @@ mock! {
         pub async fn reorg(&self, share_block: ShareBlock, total_difficulty_upto_prev_share_blockhash: Decimal) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn is_confirmed(&self, share_block: ShareBlock) -> Result<bool, Box<dyn Error + Send + Sync>>;
         pub async fn add_share(&self, share_block: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>>;
+        pub async fn add_pplns_share(&self, pplns_share: PplnsShare) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn add_workbase(&self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase>;
         pub async fn get_chain_tip(&self) -> Option<ShareBlockHash>;

@@ -43,7 +43,7 @@ impl NodeHandle {
     pub async fn new(
         config: Config,
         chain_handle: ChainHandle,
-        shares_rx: tokio::sync::mpsc::Receiver<stratum::share_block::StratumShare>,
+        shares_rx: tokio::sync::mpsc::Receiver<stratum::share_block::PplnsShare>,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
         let (node_actor, stopping_rx) =

@@ -25,7 +25,7 @@ use crate::difficulty_adjuster::{DifficultyAdjuster, DifficultyAdjusterTrait};
 use crate::message_handlers::handle_message;
 use crate::messages::Request;
 use crate::session::Session;
-use crate::share_block::StratumShare;
+use crate::share_block::PplnsShare;
 use crate::work::notify::NotifyCmd;
 use crate::work::tracker::TrackerHandle;
 use bitcoindrpc::BitcoinRpcConfig;
@@ -44,7 +44,7 @@ pub struct StratumServer {
     pub config: StratumConfig,
     shutdown_rx: oneshot::Receiver<()>,
     connections_handle: ClientConnectionsHandle,
-    shares_tx: mpsc::Sender<StratumShare>,
+    shares_tx: mpsc::Sender<PplnsShare>,
 }
 
 impl StratumServer {
@@ -53,7 +53,7 @@ impl StratumServer {
         config: StratumConfig,
         shutdown_rx: oneshot::Receiver<()>,
         connections_handle: ClientConnectionsHandle,
-        share_block_tx: mpsc::Sender<StratumShare>,
+        share_block_tx: mpsc::Sender<PplnsShare>,
     ) -> Self {
         Self {
             config,
@@ -149,7 +149,7 @@ pub(crate) struct StratumContext {
     pub start_difficulty: u64,
     pub minimum_difficulty: u64,
     pub maximum_difficulty: Option<u64>,
-    pub shares_tx: mpsc::Sender<StratumShare>,
+    pub shares_tx: mpsc::Sender<PplnsShare>,
     pub network: bitcoin::network::Network,
 }
 
@@ -320,7 +320,7 @@ mod stratum_server_tests {
             version_mask: 0x1fffe000,
         };
 
-        let (shares_tx, _shares_rx) = tokio::sync::mpsc::channel::<StratumShare>(10);
+        let (shares_tx, _shares_rx) = tokio::sync::mpsc::channel::<PplnsShare>(10);
 
         let mut server =
             StratumServer::new(config, shutdown_rx, connections_handle, shares_tx).await;
