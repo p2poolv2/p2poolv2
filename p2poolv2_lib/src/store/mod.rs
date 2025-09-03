@@ -78,9 +78,7 @@ impl Store {
         let user_workbase_cf =
             ColumnFamilyDescriptor::new("user_workbase", RocksDbOptions::default());
 
-        let pplns_user_cf = ColumnFamilyDescriptor::new("pplns_user", RocksDbOptions::default());
-        let pplns_job_cf = ColumnFamilyDescriptor::new("pplns_job", RocksDbOptions::default());
-        let pplns_share_cf = ColumnFamilyDescriptor::new("pplns_share", RocksDbOptions::default());
+        let user_share_cf = ColumnFamilyDescriptor::new("share", RocksDbOptions::default());
 
         let cfs = vec![
             block_cf,
@@ -92,9 +90,7 @@ impl Store {
             user_workbase_cf,
             block_index_cf,
             block_height_cf,
-            pplns_job_cf,
-            pplns_share_cf,
-            pplns_user_cf,
+            user_share_cf,
         ];
 
         // for the db too, we use default options for now
@@ -160,7 +156,7 @@ impl Store {
         &mut self,
         pplns_share: PplnsShare,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let pplns_share_cf = self.db.cf_handle("pplns_share").unwrap();
+        let pplns_share_cf = self.db.cf_handle("share").unwrap();
         let (hash, serialized) = pplns_share.hash_and_serialize()?;
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -173,7 +169,7 @@ impl Store {
 
     // Get PPLNS shares, no filter yet
     pub fn get_pplns_shares(&mut self) -> Result<Vec<PplnsShare>, Box<dyn Error + Send + Sync>> {
-        let pplns_share_cf = self.db.cf_handle("pplns_share").unwrap();
+        let pplns_share_cf = self.db.cf_handle("share").unwrap();
         let mut iter = self
             .db
             .iterator_cf(pplns_share_cf, rocksdb::IteratorMode::End);
@@ -2315,7 +2311,7 @@ mod tests {
         );
 
         // Verify it was stored correctly by checking database directly
-        let pplns_share_cf = store.db.cf_handle("pplns_share").unwrap();
+        let pplns_share_cf = store.db.cf_handle("share").unwrap();
         let (hash, _) = pplns_share.hash_and_serialize().unwrap();
 
         let stored_data = store.get_pplns_shares().unwrap();
