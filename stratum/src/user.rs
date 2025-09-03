@@ -1,0 +1,100 @@
+// Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
+//
+// This file is part of P2Poolv2
+//
+// P2Poolv2 is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free
+// Software Foundation, either version 3 of the License, or (at your option)
+// any later version.
+//
+// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
+// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along with
+// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+
+use bitcoin::hashes::{sha256, Hash};
+use serde::{Deserialize, Serialize};
+
+/// User record, captures username, id, and hashrate stats
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct User {
+    /// Unique identifier for the user, a hash of the user's username
+    #[serde(skip)]
+    pub id: [u8; 32],
+    /// Bitcoin address
+    #[serde(skip)]
+    pub btcaddress: String,
+    /// Timestamp of the last share submitted by the user, time since epoch in ms
+    pub last_share_at: u64,
+    /// Difficulty share per second 1min window
+    pub difficulty_share_per_second_1min: u64,
+    /// Difficulty share per second 5min window
+    pub difficulty_share_per_second_5min: u64,
+    /// Difficulty share per second 1h window
+    pub difficulty_share_per_second_1h: u64,
+    /// Difficulty share per second 24h window
+    pub difficulty_share_per_second_24h: u64,
+    /// Difficulty share per second 7d window
+    pub difficulty_share_per_second_7d: u64,
+    /// Valid share submissions
+    pub shares_valid: u64,
+    /// Stale share submissions
+    pub shares_stale: u64,
+}
+
+impl User {
+    /// Create a new user record for a new signing up user.
+    ///
+    /// A user with a given bitcoin address will always have the same id and
+    /// therefore we'll be able to load the historical shares from the data store.
+    ///
+    /// On server restarts the stats will be forgotten in the new process, even though the stats views can load the last stats from disk.
+    pub fn new(btcaddress: String) -> Self {
+        let hash: [u8; 32] = generate_user_id(&btcaddress);
+        User {
+            id: hash,
+            btcaddress,
+            last_share_at: 0,
+            difficulty_share_per_second_1min: 0,
+            difficulty_share_per_second_5min: 0,
+            difficulty_share_per_second_1h: 0,
+            difficulty_share_per_second_24h: 0,
+            difficulty_share_per_second_7d: 0,
+            shares_valid: 0,
+            shares_stale: 0,
+        }
+    }
+}
+
+/// Generate an id for the a given Bitcoin address to be used as user id.
+pub fn generate_user_id(btcaddress: &str) -> [u8; 32] {
+    sha256::Hash::hash(btcaddress.as_bytes()).to_byte_array()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_user_creation() {
+        let btc_address = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string();
+        let user = User::new(btc_address.clone());
+
+        // Verify the ID is calculated correctly
+        let expected_id = sha256::Hash::hash(btc_address.as_bytes()).to_byte_array();
+        assert_eq!(user.id, expected_id);
+
+        // Verify the address is stored correctly
+        assert_eq!(user.btcaddress, btc_address);
+
+        // Verify default values
+        assert_eq!(user.last_share_at, 0);
+        assert_eq!(user.difficulty_share_per_second_1min, 0);
+        assert_eq!(user.difficulty_share_per_second_5min, 0);
+        assert_eq!(user.difficulty_share_per_second_1h, 0);
+        assert_eq!(user.difficulty_share_per_second_24h, 0);
+        assert_eq!(user.difficulty_share_per_second_7d, 0);
+    }
+}
