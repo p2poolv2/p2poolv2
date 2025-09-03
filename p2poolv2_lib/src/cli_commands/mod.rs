@@ -18,7 +18,7 @@ pub mod info;
 
 // Re-export the shared store functionality
 pub mod store {
-    use crate::shares::store::Store;
+    use crate::store::Store;
     use std::error::Error;
 
     /// Open a store from the given path

@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+pub mod accounting;
 pub mod chain;
 pub mod ckpool_socket;
 pub mod genesis;
@@ -21,7 +22,6 @@ pub mod handle_mining_message;
 pub mod handle_stratum_shares;
 pub mod miner_message;
 pub mod receive_mining_message;
-pub mod store;
 pub mod transactions;
 pub mod validation;
 
