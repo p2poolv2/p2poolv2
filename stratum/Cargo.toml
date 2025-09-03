@@ -23,7 +23,7 @@ tokio-util = { workspace = true }
 tokio-stream = { workspace = true }
 bitcoindrpc = { path = '../bitcoindrpc', features = ["test-utils"] }
 zmq = { workspace = true }
-
+ciborium = { workspace = true }
 
 [dev-dependencies]
 test-log = { version = "0.2.17", features = ["trace"] }

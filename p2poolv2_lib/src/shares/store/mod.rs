@@ -23,6 +23,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
+use stratum::share_block::PplnsShare;
 use tracing::debug;
 
 use super::ShareBlockHash;
@@ -153,6 +154,37 @@ impl Store {
 
         // Write the entire batch atomically
         self.db.write(batch).unwrap();
+    }
+
+    /// Add PPLNS Share to pplns_share_cf
+    /// The key is "timestamp:username:share_hash" where timestamp is microseconds since epoch
+    pub fn add_pplns_share(
+        &mut self,
+        pplns_share: PplnsShare,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let pplns_share_cf = self.db.cf_handle("pplns_share").unwrap();
+        let (hash, serialized) = pplns_share.hash_and_serialize()?;
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros();
+        let key = format!("{}:{}:{}", timestamp, pplns_share.username, hash);
+        self.db.put_cf(pplns_share_cf, key, serialized)?;
+        Ok(())
+    }
+
+    // Get PPLNS shares, no filter yet
+    pub fn get_pplns_shares(&mut self) -> Result<Vec<PplnsShare>, Box<dyn Error + Send + Sync>> {
+        let pplns_share_cf = self.db.cf_handle("pplns_share").unwrap();
+        let mut iter = self
+            .db
+            .iterator_cf(pplns_share_cf, rocksdb::IteratorMode::End);
+        let mut shares = Vec::new();
+        while let Some(Ok((key, value))) = iter.next() {
+            let share: PplnsShare = ciborium::de::from_reader(&value[..]).unwrap();
+            shares.push(share);
+        }
+        Ok(shares)
     }
 
     /// Iterate over the store from provided start blockhash
@@ -1029,8 +1061,11 @@ impl Store {
 mod tests {
     use super::*;
     use crate::test_utils::{TestBlockBuilder, TestMinerWorkbaseBuilder, TestUserWorkbaseBuilder};
+    use bitcoin::consensus::encode::deserialize;
     use rust_decimal_macros::dec;
     use std::collections::HashSet;
+    use std::str::FromStr;
+    use stratum::share_block::PplnsShare;
     use tempfile::tempdir;
 
     #[test_log::test(test)]
@@ -1371,8 +1406,7 @@ mod tests {
 
     #[test]
     fn test_store_retrieve_txids_by_blockhash_index() {
-        use tempfile::TempDir;
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create test transactions
@@ -1432,8 +1466,7 @@ mod tests {
 
     #[test]
     fn test_store_share_block_with_transactions_should_retreive_txs() {
-        use tempfile::TempDir;
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = tempfile::TempDir::new().unwrap();
         let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create test transactions
@@ -2258,5 +2291,39 @@ mod tests {
             "6d600f568f665af26301fcafa53326454b9db355ff5d87f9863a956300000000"
         );
         assert_eq!(workbase2.workinfoid, 2000);
+    }
+
+    #[test]
+    fn test_add_pplns_share() {
+        let temp_dir = tempdir().unwrap();
+        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create a PPLNS share
+        let pplns_share = PplnsShare {
+            job_id: 12345,
+            username: "test_user".to_string(),
+            nonce: 0,
+            extranonce2: 1,
+            ntime: 12345,
+            version_mask: 1010,
+        };
+
+        // Add the PPLNS share to the store
+        let result = store.add_pplns_share(pplns_share.clone());
+        assert!(
+            result.is_ok(),
+            "Failed to add PPLNS share: {:?}",
+            result.err()
+        );
+
+        // Verify it was stored correctly by checking database directly
+        let pplns_share_cf = store.db.cf_handle("pplns_share").unwrap();
+        let (hash, _) = pplns_share.hash_and_serialize().unwrap();
+
+        let stored_data = store.get_pplns_shares().unwrap();
+        assert!(
+            !stored_data.is_empty(),
+            "PPLNS share data not found in database"
+        );
     }
 }

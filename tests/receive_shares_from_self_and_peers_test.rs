@@ -27,7 +27,7 @@ use p2poolv2_lib::shares::ShareBlock;
 use p2poolv2_lib::utils::time_provider::{SystemTimeProvider, TestTimeProvider, TimeProvider};
 use std::fs;
 use std::time::{Duration, SystemTime};
-use stratum::share_block::StratumShare;
+use stratum::share_block::PplnsShare;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
 
@@ -47,7 +47,7 @@ async fn receive_shares_and_workbases_from_self_and_peers() {
         temp_dir.path().to_str().unwrap().to_string(),
         ShareBlock::build_genesis_for_network(config.stratum.network),
     );
-    let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<StratumShare>(10);
+    let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<PplnsShare>(10);
 
     // Start the node
     let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone(), shares_rx)
@@ -196,7 +196,7 @@ async fn test_rate_limiting() {
         temp_dir.path().to_str().unwrap().to_string(),
         ShareBlock::build_genesis_for_network(config.stratum.network),
     );
-    let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<StratumShare>(10);
+    let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<PplnsShare>(10);
 
     let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone(), shares_rx)
         .await
