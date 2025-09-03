@@ -29,19 +29,19 @@ pub struct User {
     /// Timestamp of the last share submitted by the user, time since epoch in ms
     pub last_share_at: u64,
     /// Difficulty share per second 1min window
-    pub difficulty_share_per_second_1min: u64,
+    pub share_per_second_1min: u32,
     /// Difficulty share per second 5min window
-    pub difficulty_share_per_second_5min: u64,
+    pub share_per_second_5min: u32,
     /// Difficulty share per second 1h window
-    pub difficulty_share_per_second_1h: u64,
+    pub share_per_second_1h: u32,
     /// Difficulty share per second 24h window
-    pub difficulty_share_per_second_24h: u64,
+    pub share_per_second_24h: u32,
     /// Difficulty share per second 7d window
-    pub difficulty_share_per_second_7d: u64,
+    pub share_per_second_7d: u32,
     /// Valid share submissions
-    pub shares_valid: u64,
+    pub shares_valid: u32,
     /// Stale share submissions
-    pub shares_stale: u64,
+    pub shares_stale: u32,
 }
 
 impl User {
@@ -57,11 +57,11 @@ impl User {
             id: hash,
             btcaddress,
             last_share_at: 0,
-            difficulty_share_per_second_1min: 0,
-            difficulty_share_per_second_5min: 0,
-            difficulty_share_per_second_1h: 0,
-            difficulty_share_per_second_24h: 0,
-            difficulty_share_per_second_7d: 0,
+            share_per_second_1min: 0,
+            share_per_second_5min: 0,
+            share_per_second_1h: 0,
+            share_per_second_24h: 0,
+            share_per_second_7d: 0,
             shares_valid: 0,
             shares_stale: 0,
         }
@@ -91,10 +91,10 @@ mod tests {
 
         // Verify default values
         assert_eq!(user.last_share_at, 0);
-        assert_eq!(user.difficulty_share_per_second_1min, 0);
-        assert_eq!(user.difficulty_share_per_second_5min, 0);
-        assert_eq!(user.difficulty_share_per_second_1h, 0);
-        assert_eq!(user.difficulty_share_per_second_24h, 0);
-        assert_eq!(user.difficulty_share_per_second_7d, 0);
+        assert_eq!(user.share_per_second_1min, 0);
+        assert_eq!(user.share_per_second_5min, 0);
+        assert_eq!(user.share_per_second_1h, 0);
+        assert_eq!(user.share_per_second_24h, 0);
+        assert_eq!(user.share_per_second_7d, 0);
     }
 }

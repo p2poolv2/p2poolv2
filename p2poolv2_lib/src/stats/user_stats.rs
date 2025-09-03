@@ -49,6 +49,7 @@ pub fn load_user_stats(btcaddress: String, log_dir: &str) -> std::io::Result<Use
     user_stats.btcaddress = btcaddress;
     Ok(user_stats)
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
