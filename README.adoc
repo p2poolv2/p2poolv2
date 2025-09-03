@@ -38,10 +38,6 @@ Remember, all docker commands are run from the docker directory.
 
 `docker compose up bitcoind`
 
-=== Start ckpool-solo
-
-`docker compose up ckpool`
-
 === Start p2pool-v2
 
 `docker compose up p2pool`
@@ -66,14 +62,6 @@ and we do not support masochistic setups. You are on your own.
 
 . Setup bitcoind
 .. Use `docker/bitcoin-signet.conf` as your bitcoin.conf
-. Point your miners to ckpool-solo
-.. Use `docker/ckpool-solo.json` as your ckpool.json
 . Setup p2pool-v2
 .. Use src/config.toml as starting point for your config.toml
-. Point your miners to p2pool-v2
-
-== Architecture
-
-A high level overview of the components used and the interaction between them is shown below.
-
-image::docs/p2pool-setup.png[P2Pool V2 Architecture]
+. Point your miners to localhost:3333
