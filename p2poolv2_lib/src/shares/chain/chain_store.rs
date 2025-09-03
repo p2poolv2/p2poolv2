@@ -16,7 +16,8 @@
 
 use crate::shares::ShareBlockHash;
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
-use crate::shares::{ShareBlock, ShareHeader, store::Store};
+use crate::shares::{ShareBlock, ShareHeader};
+use crate::store::Store;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::{HashMap, HashSet};

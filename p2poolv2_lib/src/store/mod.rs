@@ -16,7 +16,7 @@
 
 use crate::node::messages::Message;
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
-use crate::shares::{ShareBlock, ShareHeader, StorageShareBlock};
+use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader, StorageShareBlock};
 use bitcoin::Transaction;
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
 use rust_decimal::Decimal;
@@ -25,8 +25,6 @@ use std::collections::HashMap;
 use std::error::Error;
 use stratum::share_block::PplnsShare;
 use tracing::debug;
-
-use super::ShareBlockHash;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TxMetadata {

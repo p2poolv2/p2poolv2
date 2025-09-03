@@ -71,7 +71,7 @@ mod tests {
     use super::execute;
     use crate::shares::ShareBlock;
     use crate::shares::chain::chain_store::ChainStore;
-    use crate::shares::store::Store;
+    use crate::store::Store;
     use tempfile::tempdir;
 
     #[test]

@@ -22,6 +22,7 @@ pub mod middleware;
 pub mod node;
 pub mod service;
 pub mod shares;
+pub mod store;
 pub mod utils;
 
 #[cfg(test)]
