@@ -135,7 +135,7 @@ fn create_compact_block_from_share(block: &Block) -> Result<CmpctBlock, Error> {
 }
 
 /// Send a compact block message to the shares tx channel
-pub fn send_share_compact_block(
+pub async fn send_share_compact_block(
     share_block: &Block,
     shares_tx: mpsc::Sender<CmpctBlock>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -188,7 +188,7 @@ mod send_share_block_tests {
         let block = build_test_block();
 
         let (shares_tx, mut shares_rx) = mpsc::channel(1);
-        let result = send_share_compact_block(&block, shares_tx);
+        let result = send_share_compact_block(&block, shares_tx).await;
 
         assert!(result.is_ok());
         let received_block = shares_rx
