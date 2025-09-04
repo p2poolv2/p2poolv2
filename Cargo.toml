@@ -61,6 +61,7 @@ tokio-util = "0.7.15"
 tokio-stream = "0.1.17"
 p2poolv2_lib = { path = "p2poolv2_lib" }
 stratum = { path = "stratum" }
+p2poolv2_accounting = { path = "p2poolv2_accounting" }
 
 # This package declaration is required to make the top-level directory buildable
 # even though we're using a workspace structure
@@ -75,6 +76,7 @@ publish = false
 p2poolv2_lib = { path = "p2poolv2_lib" }
 stratum = { path = "stratum" }
 bitcoindrpc = { path = "bitcoindrpc", features = ["test-utils"] }
+p2poolv2_accounting = { path = "p2poolv2_accounting" }
 
 # Repeat dev dependencies for use integration tests
 [dev-dependencies]

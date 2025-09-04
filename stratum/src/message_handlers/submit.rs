@@ -18,12 +18,12 @@ use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
 use crate::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
 use crate::session::Session;
-use crate::share_block::PplnsShare;
 use crate::work::difficulty::validate::validate_submission_difficulty;
 use crate::work::tracker::{JobId, TrackerHandle};
 use bitcoin::blockdata::block::Block;
 use bitcoin::hashes::Hash;
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
+use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use serde_json::json;
 use std::time::SystemTime;
 use tokio::sync::mpsc;
@@ -49,7 +49,7 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     session: &mut Session<D>,
     tracker_handle: TrackerHandle,
     bitcoinrpc_config: BitcoinRpcConfig,
-    shares_tx: mpsc::Sender<PplnsShare>,
+    shares_tx: mpsc::Sender<SimplePplnsShare>,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.submit message");
     if message.params.len() < 4 {
@@ -91,14 +91,11 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     // Submit block asap, do difficulty adjustment after submission
     submit_block(&block, bitcoinrpc_config).await;
 
-    let stratum_share = PplnsShare::new(
-        job_id,
-        session.btcaddress.as_ref().unwrap(),
-        message.params[4].as_ref().unwrap(),
-        message.params[2].as_ref().unwrap(),
-        message.params[3].as_ref().unwrap(),
-        version_mask,
+    let stratum_share = SimplePplnsShare::new(
+        session.difficulty_adjuster.get_current_difficulty(),
+        session.btcaddress.clone().unwrap(),
     );
+
     shares_tx
         .send(stratum_share)
         .await
@@ -115,16 +112,16 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         SystemTime::now(),
     );
 
-    if let Some(difficulty) = new_difficulty {
-        return Ok(vec![Message::SetDifficulty(
-            SetDifficultyNotification::new(difficulty),
-        )]);
+    match new_difficulty {
+        Some(difficulty) => Ok(vec![
+            Message::Response(Response::new_ok(message.id, json!(true))),
+            Message::SetDifficulty(SetDifficultyNotification::new(difficulty)),
+        ]),
+        None => Ok(vec![Message::Response(Response::new_ok(
+            message.id,
+            json!(true),
+        ))]),
     }
-
-    Ok(vec![Message::Response(Response::new_ok(
-        message.id,
-        json!(true),
-    ))])
 }
 
 /// Submit block to bitcoind
@@ -171,6 +168,7 @@ mod handle_submit_tests {
     use crate::work::tracker::start_tracker_actor;
     use bitcoin::BlockHash;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
+    use p2poolv2_accounting::AccountingShare;
     use std::sync::Arc;
 
     #[test]
@@ -257,14 +255,7 @@ mod handle_submit_tests {
         assert_eq!(response.result, Some(json!(true)));
 
         let share = shares_rx.try_recv().unwrap();
-        assert_eq!(share.username, session.btcaddress.unwrap());
-        assert_eq!(
-            share.job_id,
-            u64::from_str_radix("18468e1f5fa5cbaa", 16).unwrap()
-        );
-        assert_eq!(share.extranonce2, 0);
-        assert_eq!(share.ntime, u32::from_str_radix("67b6f938", 16).unwrap());
-        assert_eq!(share.nonce, u32::from_str_radix("f15f1590", 16).unwrap());
+        assert_eq!(share.get_miner_btcaddress(), session.btcaddress.unwrap());
 
         // Verify that the block was not submitted to the mock server
         mock_server.verify().await;
@@ -349,10 +340,10 @@ mod handle_submit_tests {
         mock_server.verify().await;
 
         let stratum_share = shares_rx.recv().await.unwrap();
-        assert_eq!(stratum_share.job_id, job_id.0);
-        assert_eq!(stratum_share.extranonce2, 0);
-        assert_eq!(stratum_share.ntime, 0x6849afec);
-        assert_eq!(stratum_share.nonce, 0xe33674f1);
+        assert_eq!(
+            stratum_share.get_miner_btcaddress(),
+            session.btcaddress.unwrap()
+        );
     }
 
     #[tokio::test]
@@ -444,6 +435,7 @@ mod handle_submit_tests {
                     (Some(12345), false)
                 },
             );
+            mock.expect_get_current_difficulty().returning(|| 1u64);
             mock
         });
 
@@ -512,7 +504,9 @@ mod handle_submit_tests {
         .unwrap();
 
         match &message[..] {
-            [Message::SetDifficulty(SetDifficultyNotification { method: _, params })] => {
+            [Message::Response(Response { id, result, error }), Message::SetDifficulty(SetDifficultyNotification { method: _, params })] =>
+            {
+                assert_eq!(result, &Some(json!(true)));
                 assert_eq!(params[0], 12345);
             }
             _ => panic!("Expected SetDifficultyNotification message"),

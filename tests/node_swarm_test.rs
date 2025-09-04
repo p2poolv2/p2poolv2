@@ -15,12 +15,11 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 mod common;
-
+use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use p2poolv2_lib::{
     node::actor::NodeHandle,
     shares::{chain::actor::ChainHandle, ShareBlock},
 };
-use stratum::share_block::PplnsShare;
 
 use std::time::Duration;
 use tempfile::tempdir;
@@ -70,9 +69,9 @@ async fn test_three_nodes_connectivity() {
         ShareBlock::build_genesis_for_network(config3.stratum.network),
     );
 
-    let (_shares_tx_1, shares_rx_1) = tokio::sync::mpsc::channel::<PplnsShare>(10);
-    let (_shares_tx_2, shares_rx_2) = tokio::sync::mpsc::channel::<PplnsShare>(10);
-    let (_shares_tx_3, shares_rx_3) = tokio::sync::mpsc::channel::<PplnsShare>(10);
+    let (_shares_tx_1, shares_rx_1) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
+    let (_shares_tx_2, shares_rx_2) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
+    let (_shares_tx_3, shares_rx_3) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
 
     // Start three nodes
     let (node1_handle, _stop_rx1) = NodeHandle::new(config1, chain_handle1, shares_rx_1)

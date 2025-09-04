@@ -19,16 +19,22 @@
 use crate::shares::chain::actor::ChainHandle;
 #[cfg(not(test))]
 use crate::shares::chain::actor::ChainHandle;
+use crate::stats::metrics::PoolMetricsWithGuard;
+use p2poolv2_accounting::{AccountingShare, simple_pplns::SimplePplnsShare};
 use tracing::info;
 
 /// Save share to database for persistence in case we need to recover from a crash
 /// Shares are saved with a TTL for 1 week or when we reach accumulated work required for 5 blocks at current difficulty.
 pub async fn handle_stratum_shares(
-    mut shares_rx: tokio::sync::mpsc::Receiver<stratum::share_block::PplnsShare>,
+    mut shares_rx: tokio::sync::mpsc::Receiver<SimplePplnsShare>,
     chain_handle: ChainHandle,
+    metrics: PoolMetricsWithGuard,
 ) {
     while let Some(share) = shares_rx.recv().await {
         info!("Received share: {:?}", share);
+
+        let mut metrics_guard = metrics.write().await;
+        metrics_guard.record_share_accepted(share.get_difficulty());
         let _ = chain_handle.add_pplns_share(share).await;
     }
     info!("Shares channel closed, stopping share handler.");

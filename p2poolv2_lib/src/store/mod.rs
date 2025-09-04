@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use p2poolv2_accounting::AccountingShare;
+use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use crate::node::messages::Message;
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader, StorageShareBlock};
@@ -23,7 +25,6 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
-use stratum::share_block::PplnsShare;
 use tracing::debug;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -154,7 +155,7 @@ impl Store {
     /// The key is "timestamp:username:share_hash" where timestamp is microseconds since epoch
     pub fn add_pplns_share(
         &mut self,
-        pplns_share: PplnsShare,
+        pplns_share: SimplePplnsShare,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pplns_share_cf = self.db.cf_handle("share").unwrap();
         let (hash, serialized) = pplns_share.hash_and_serialize()?;
@@ -162,20 +163,27 @@ impl Store {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_micros();
-        let key = format!("{}:{}:{}", timestamp, pplns_share.username, hash);
+        let key = format!(
+            "{}:{}:{}",
+            timestamp,
+            pplns_share.get_miner_btcaddress(),
+            hash
+        );
         self.db.put_cf(pplns_share_cf, key, serialized)?;
         Ok(())
     }
 
     // Get PPLNS shares, no filter yet
-    pub fn get_pplns_shares(&mut self) -> Result<Vec<PplnsShare>, Box<dyn Error + Send + Sync>> {
+    pub fn get_pplns_shares(
+        &mut self,
+    ) -> Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>> {
         let pplns_share_cf = self.db.cf_handle("share").unwrap();
         let mut iter = self
             .db
             .iterator_cf(pplns_share_cf, rocksdb::IteratorMode::End);
         let mut shares = Vec::new();
         while let Some(Ok((key, value))) = iter.next() {
-            let share: PplnsShare = ciborium::de::from_reader(&value[..]).unwrap();
+            let share: SimplePplnsShare = ciborium::de::from_reader(&value[..]).unwrap();
             shares.push(share);
         }
         Ok(shares)
@@ -1059,7 +1067,6 @@ mod tests {
     use rust_decimal_macros::dec;
     use std::collections::HashSet;
     use std::str::FromStr;
-    use stratum::share_block::PplnsShare;
     use tempfile::tempdir;
 
     #[test_log::test(test)]
@@ -2293,13 +2300,9 @@ mod tests {
         let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create a PPLNS share
-        let pplns_share = PplnsShare {
-            job_id: 12345,
-            username: "test_user".to_string(),
-            nonce: 0,
-            extranonce2: 1,
-            ntime: 12345,
-            version_mask: 1010,
+        let pplns_share = SimplePplnsShare {
+            miner_btcaddress: "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string(),
+            difficulty: 1,
         };
 
         // Add the PPLNS share to the store
