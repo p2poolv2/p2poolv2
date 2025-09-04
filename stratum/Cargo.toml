@@ -22,6 +22,7 @@ base64 = { workspace = true }
 tokio-util = { workspace = true }
 tokio-stream = { workspace = true }
 bitcoindrpc = { path = '../bitcoindrpc', features = ["test-utils"] }
+p2poolv2_accounting = { path = '../p2poolv2_accounting' }
 zmq = { workspace = true }
 ciborium = { workspace = true }
 

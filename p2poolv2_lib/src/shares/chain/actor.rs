@@ -18,11 +18,11 @@ use super::chain_store::ChainStore;
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader};
 use crate::store::Store;
+use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
-use stratum::share_block::PplnsShare;
 use tokio::sync::mpsc;
 use tracing::{debug, error};
 
@@ -33,7 +33,7 @@ pub enum ChainMessage {
     Reorg(ShareBlock, Decimal),
     IsConfirmed(ShareBlock),
     AddShare(ShareBlock),
-    AddPplnsShare(PplnsShare),
+    AddPplnsShare(SimplePplnsShare),
     StoreWorkbase(MinerWorkbase),
     StoreUserWorkbase(UserWorkbase),
     GetWorkbase(u64),
@@ -424,7 +424,7 @@ impl ChainHandle {
 
     pub async fn add_pplns_share(
         &self,
-        pplns_share: PplnsShare,
+        pplns_share: SimplePplnsShare,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (response_sender, mut response_receiver) = mpsc::channel(1);
         if let Err(e) = self
@@ -756,7 +756,7 @@ mock! {
         pub async fn reorg(&self, share_block: ShareBlock, total_difficulty_upto_prev_share_blockhash: Decimal) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn is_confirmed(&self, share_block: ShareBlock) -> Result<bool, Box<dyn Error + Send + Sync>>;
         pub async fn add_share(&self, share_block: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>>;
-        pub async fn add_pplns_share(&self, pplns_share: PplnsShare) -> Result<(), Box<dyn Error + Send + Sync>>;
+        pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn add_workbase(&self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase>;
         pub async fn get_chain_tip(&self) -> Option<ShareBlockHash>;

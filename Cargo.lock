@@ -3149,6 +3149,7 @@ dependencies = [
  "bitcoin",
  "bitcoindrpc",
  "libp2p",
+ "p2poolv2_accounting",
  "p2poolv2_lib",
  "serde",
  "serde_json",
@@ -3169,9 +3170,24 @@ dependencies = [
  "config",
  "mockall",
  "mockall_double",
+ "p2poolv2_accounting",
  "p2poolv2_lib",
  "serde",
  "stratum",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "p2poolv2_accounting"
+version = "0.1.0"
+dependencies = [
+ "bitcoin",
+ "ciborium",
+ "clap",
+ "config",
+ "serde",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -3206,6 +3222,7 @@ dependencies = [
  "libp2p",
  "mockall",
  "mockall_double",
+ "p2poolv2_accounting",
  "rand 0.8.5",
  "rocksdb",
  "rust_decimal",
@@ -4393,6 +4410,7 @@ dependencies = [
  "hex",
  "mockall",
  "mockall_double",
+ "p2poolv2_accounting",
  "rand 0.8.5",
  "rust_decimal",
  "rust_decimal_macros",

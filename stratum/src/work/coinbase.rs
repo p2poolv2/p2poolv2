@@ -24,6 +24,7 @@ use bitcoin::network::Network;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::{Sequence, Transaction, TxIn, TxOut, Version};
 use bitcoin::{Address, Amount};
+use p2poolv2_accounting::OutputPair;
 use std::str::FromStr;
 
 #[allow(dead_code)]
@@ -31,13 +32,6 @@ const EXTRANONCE_SEPARATOR: [u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE] =
     [1u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE];
 
 const POOL_SIGNATURE: [u8; 8] = *b"P2Poolv2";
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct OutputPair {
-    pub address: Address,
-    pub amount: Amount,
-}
 
 // Parse Address from a string provided by the miner
 #[allow(dead_code)]

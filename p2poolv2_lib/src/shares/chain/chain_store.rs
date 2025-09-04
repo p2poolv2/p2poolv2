@@ -18,11 +18,11 @@ use crate::shares::ShareBlockHash;
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{ShareBlock, ShareHeader};
 use crate::store::Store;
+use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
-use stratum::share_block::PplnsShare;
 use tracing::{debug, error, info};
 
 /// The minimum number of shares that must be on the chain for a share to be considered confirmed
@@ -158,7 +158,7 @@ impl ChainStore {
     /// There is no need to maintain the share chain here, the share is simply added to pplns share column family
     pub fn add_pplns_share(
         &mut self,
-        pplns_share: PplnsShare,
+        pplns_share: SimplePplnsShare,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.store.add_pplns_share(pplns_share)
     }

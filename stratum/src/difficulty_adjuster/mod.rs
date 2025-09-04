@@ -151,6 +151,8 @@ pub trait DifficultyAdjusterTrait {
     }
 
     fn set_current_difficulty(&mut self, difficulty: u64);
+
+    fn get_current_difficulty(&self) -> u64;
 }
 
 pub enum Dsps {
@@ -432,6 +434,11 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
     /// Set current difficulty
     fn set_current_difficulty(&mut self, difficulty: u64) {
         self.current_difficulty = difficulty;
+    }
+
+    /// Get current difficulty
+    fn get_current_difficulty(&self) -> u64 {
+        self.current_difficulty
     }
 }
 

@@ -25,10 +25,10 @@ use crate::difficulty_adjuster::{DifficultyAdjuster, DifficultyAdjusterTrait};
 use crate::message_handlers::handle_message;
 use crate::messages::Request;
 use crate::session::Session;
-use crate::share_block::PplnsShare;
 use crate::work::notify::NotifyCmd;
 use crate::work::tracker::TrackerHandle;
 use bitcoindrpc::BitcoinRpcConfig;
+use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -44,7 +44,7 @@ pub struct StratumServer {
     pub config: StratumConfig,
     shutdown_rx: oneshot::Receiver<()>,
     connections_handle: ClientConnectionsHandle,
-    shares_tx: mpsc::Sender<PplnsShare>,
+    shares_tx: mpsc::Sender<SimplePplnsShare>,
 }
 
 impl StratumServer {
@@ -53,7 +53,7 @@ impl StratumServer {
         config: StratumConfig,
         shutdown_rx: oneshot::Receiver<()>,
         connections_handle: ClientConnectionsHandle,
-        share_block_tx: mpsc::Sender<PplnsShare>,
+        share_block_tx: mpsc::Sender<SimplePplnsShare>,
     ) -> Self {
         Self {
             config,
@@ -149,7 +149,7 @@ pub(crate) struct StratumContext {
     pub start_difficulty: u64,
     pub minimum_difficulty: u64,
     pub maximum_difficulty: Option<u64>,
-    pub shares_tx: mpsc::Sender<PplnsShare>,
+    pub shares_tx: mpsc::Sender<SimplePplnsShare>,
     pub network: bitcoin::network::Network,
 }
 
@@ -320,7 +320,7 @@ mod stratum_server_tests {
             version_mask: 0x1fffe000,
         };
 
-        let (shares_tx, _shares_rx) = tokio::sync::mpsc::channel::<PplnsShare>(10);
+        let (shares_tx, _shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
 
         let mut server =
             StratumServer::new(config, shutdown_rx, connections_handle, shares_tx).await;

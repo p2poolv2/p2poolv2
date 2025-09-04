@@ -16,6 +16,7 @@
 
 use bitcoin::Address;
 use clap::Parser;
+use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::logging::setup_logging;
 use p2poolv2_lib::node::actor::NodeHandle;
@@ -25,7 +26,6 @@ use std::process::exit;
 use std::str::FromStr;
 use stratum::client_connections::start_connections_handler;
 use stratum::server::StratumServer;
-use stratum::share_block::PplnsShare;
 use stratum::work::gbt::start_gbt;
 use stratum::work::tracker::start_tracker_actor;
 use stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
@@ -137,7 +137,7 @@ async fn main() -> Result<(), String> {
         .await;
     });
 
-    let (shares_tx, shares_rx) = tokio::sync::mpsc::channel::<PplnsShare>(10);
+    let (shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
 
     tokio::spawn(async move {
         let mut stratum_server = StratumServer::new(

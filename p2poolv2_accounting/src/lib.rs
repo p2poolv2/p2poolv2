@@ -14,21 +14,26 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use stratum::work::coinbase::OutputPair;
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct OutputPair {
+    pub address: bitcoin::Address,
+    pub amount: bitcoin::Amount,
+}
 
 /// Trait for accounting shares in the system.
 /// Different mining strategies will implement this trait differently.
-trait AccountingShare {
-    /// Get the work done to mine the share.
-    fn get_work(&self) -> bitcoin::Work;
+pub trait AccountingShare {
+    /// Get the difficulty done to mine the share.
+    fn get_difficulty(&self) -> u64;
 
     /// Get btcaddress for the miner who is to be rewarded for the share.
-    fn get_miner_btcaddress(&self) -> bitcoin::Address;
+    fn get_miner_btcaddress(&self) -> String;
 }
 
 /// Account trait for share accounting.
 /// We provide implementations of a simple PPLNS accounting strategy.
-trait Accounting<T>
+pub trait Accounting<T>
 where
     T: AccountingShare,
 {
@@ -36,11 +41,11 @@ where
     fn add_share(&mut self, value: T);
 
     /// Get payout distribution as per the accounting engine's logic
-    /// The shares collected should add up to total_work.
-    fn get_payout_distribution(&self, total_work: bitcoin::Work) -> Vec<OutputPair>;
+    /// The shares collected should add up to total_difficulty.
+    fn get_payout_distribution(&self, total_difficulty: u64) -> Vec<OutputPair>;
 
-    /// Get shares for the given amount of work.
-    fn get_shares_for_work(&self, total_work: bitcoin::Work) -> Vec<&T>;
+    /// Get shares for the given amount of difficulty.
+    fn get_shares_for_difficulty(&self, total_difficulty: u64) -> Vec<&T>;
 }
 
 pub mod simple_pplns;
