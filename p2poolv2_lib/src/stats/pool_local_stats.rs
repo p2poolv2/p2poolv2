@@ -22,33 +22,53 @@ use std::path::Path;
 const POOL_STATS_DIR: &str = "pool";
 
 /// Pool's local node stats, used by node operator and users to monitor their mining performance
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// The serde format conforms to the ckpool/solostats
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PoolLocalStats {
     // Runtime statistics
     pub runtime: u64,
-    pub last_update: u64,
-    pub users_count: u64,
-    pub workers_count: u64,
-    pub idle_count: u64,
-    pub disconnected_count: u64,
+    pub lastupdate: u64,
+    #[serde(rename = "Users")]
+    pub users: u32,
+    #[serde(rename = "Workers")]
+    pub workers: u32,
+    #[serde(rename = "Idle")]
+    pub idle: u32,
+    #[serde(rename = "Disconnected")]
+    pub disconnected: u32,
 
     // Hashrate statistics
+    #[serde(rename = "Hashrate1m")]
     pub hashrate_1m: u32,
+    #[serde(rename = "Hashrate5m")]
     pub hashrate_5m: u32,
+    #[serde(rename = "Hashrate15m")]
     pub hashrate_15m: u32,
+    #[serde(rename = "Hashrate1hr")]
     pub hashrate_1hr: u32,
+    #[serde(rename = "Hashrate6hr")]
     pub hashrate_6hr: u32,
+    #[serde(rename = "Hashrate1d")]
     pub hashrate_1d: u32,
+    #[serde(rename = "Hashrate7d")]
     pub hashrate_7d: u32,
 
     // Share statistics
+    #[serde(rename = "diff")]
     pub difficulty: u64,
-    pub accepted_shares: u32,
-    pub rejected_shares: u32,
-    pub best_share: u32,
+    #[serde(rename = "accepted")]
+    pub accepted_shares: u64,
+    #[serde(rename = "rejected")]
+    pub rejected_shares: u64,
+    #[serde(rename = "bestshare")]
+    pub best_share: u64,
+    #[serde(rename = "SPS1m")]
     pub shares_per_second_1m: u32,
+    #[serde(rename = "SPS5m")]
     pub shares_per_second_5m: u32,
+    #[serde(rename = "SPS15m")]
     pub shares_per_second_15m: u32,
+    #[serde(rename = "SPS1h")]
     pub shares_per_second_1h: u32,
 }
 
@@ -97,11 +117,11 @@ mod tests {
         // Create test stats
         let pool_stats = PoolLocalStats {
             runtime: 3600,
-            last_update: 1234567890,
-            users_count: 10,
-            workers_count: 15,
-            idle_count: 2,
-            disconnected_count: 3,
+            lastupdate: 1234567890,
+            users: 10,
+            workers: 15,
+            idle: 2,
+            disconnected: 3,
             hashrate_1m: 1000,
             hashrate_5m: 1200,
             hashrate_15m: 1100,
@@ -153,11 +173,11 @@ mod tests {
 
         let pool_stats = PoolLocalStats {
             runtime: 3600,
-            last_update: 1234567890,
-            users_count: 10,
-            workers_count: 15,
-            idle_count: 2,
-            disconnected_count: 3,
+            lastupdate: 1234567890,
+            users: 10,
+            workers: 15,
+            idle: 2,
+            disconnected: 3,
             hashrate_1m: 1000,
             hashrate_5m: 1200,
             hashrate_15m: 1100,
