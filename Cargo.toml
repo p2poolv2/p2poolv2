@@ -4,7 +4,7 @@ members = [
     "bitcoindrpc",
     "p2poolv2_lib",
     "p2poolv2_bin",
-    "p2poolv2_cli",
+    "p2poolv2_cli", "p2poolv2_atomic_swap",
 ]
 resolver = "2"
 

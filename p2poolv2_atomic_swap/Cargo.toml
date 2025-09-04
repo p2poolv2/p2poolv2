@@ -1,0 +1,26 @@
+[package]
+name = "p2poolv2_atomic_swap"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.83"
+
+[dependencies]
+ldk-node = "0.5.0"
+tokio = { workspace = true , features = ["full"]}
+config = {workspace = true}
+serde = {workspace = true, features = ["derive"] }
+futures = { workspace = true }
+hex = {workspace = true}
+rocksdb = {workspace = true}
+serde_json = {workspace = true}
+ciborium = {workspace = true}
+thiserror = {workspace = true}
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+log = "0.4"
+env_logger = "0.10"
+
+[dev-dependencies]
+tempfile = "3.15.0"
+mockall = "0.12"
+mockito = "1"
+bitcoincore-rpc = "0.19.0"
