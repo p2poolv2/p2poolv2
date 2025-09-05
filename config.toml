@@ -47,6 +47,8 @@ password = "p2pool"
 # Specify a file path for the log file, if no log file is specified, console logging will be used
 # file = "./logs/p2pool.log"
 level = "debug"
+# Pool, user and worker stats are dumped for consumption by stats tools
+stats_dir = "./logs/stats"
 
 [[tests]]
 name = "integration"

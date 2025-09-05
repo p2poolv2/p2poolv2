@@ -62,10 +62,17 @@ pub struct LoggingConfig {
     /// Log level (defaults to "info")
     #[serde(default = "default_log_level")]
     pub level: String,
+    /// Directory for stats
+    #[serde(default = "default_stats_dir")]
+    pub stats_dir: String,
 }
 
 fn default_log_level() -> String {
     "info".to_string()
+}
+
+fn default_stats_dir() -> String {
+    "./logs/stats".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -199,6 +206,11 @@ impl Config {
         self.stratum.network = network;
         self
     }
+
+    pub fn with_stats_dir(mut self, stats_dir: String) -> Self {
+        self.logging.stats_dir = stats_dir;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -236,7 +248,8 @@ mod tests {
             .with_bitcoinrpc_url("http://localhost:8332".to_string())
             .with_bitcoinrpc_username("testuser".to_string())
             .with_bitcoinrpc_password("testpass".to_string())
-            .with_bitcoin_network(bitcoin::Network::Signet);
+            .with_bitcoin_network(bitcoin::Network::Signet)
+            .with_stats_dir("./logs/stats".to_string());
 
         assert_eq!(config.network.listen_address, "127.0.0.1:8080");
         assert_eq!(
@@ -274,6 +287,7 @@ mod tests {
         assert_eq!(config.network.max_established_incoming, 50);
         assert_eq!(config.network.max_established_outgoing, 50);
         assert_eq!(config.network.max_established_per_peer, 1);
+        assert_eq!(config.logging.stats_dir, "./logs/stats");
     }
 
     #[test]

@@ -14,12 +14,12 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use p2poolv2_accounting::AccountingShare;
-use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use crate::node::messages::Message;
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader, StorageShareBlock};
 use bitcoin::Transaction;
+use p2poolv2_accounting::AccountingShare;
+use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -182,7 +182,7 @@ impl Store {
             .db
             .iterator_cf(pplns_share_cf, rocksdb::IteratorMode::End);
         let mut shares = Vec::new();
-        while let Some(Ok((key, value))) = iter.next() {
+        while let Some(Ok((_key, value))) = iter.next() {
             let share: SimplePplnsShare = ciborium::de::from_reader(&value[..]).unwrap();
             shares.push(share);
         }
@@ -1063,10 +1063,8 @@ impl Store {
 mod tests {
     use super::*;
     use crate::test_utils::{TestBlockBuilder, TestMinerWorkbaseBuilder, TestUserWorkbaseBuilder};
-    use bitcoin::consensus::encode::deserialize;
     use rust_decimal_macros::dec;
     use std::collections::HashSet;
-    use std::str::FromStr;
     use tempfile::tempdir;
 
     #[test_log::test(test)]
@@ -2312,10 +2310,6 @@ mod tests {
             "Failed to add PPLNS share: {:?}",
             result.err()
         );
-
-        // Verify it was stored correctly by checking database directly
-        let pplns_share_cf = store.db.cf_handle("share").unwrap();
-        let (hash, _) = pplns_share.hash_and_serialize().unwrap();
 
         let stored_data = store.get_pplns_shares().unwrap();
         assert!(

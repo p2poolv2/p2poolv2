@@ -109,7 +109,8 @@ mod tests {
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
-        let metrics = metrics::build_metrics();
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -120,7 +121,7 @@ mod tests {
             maximum_difficulty: Some(2),
             shares_tx,
             network: bitcoin::network::Network::Testnet,
-            metrics,
+            metrics: metrics_handle,
         };
 
         // Execute
@@ -200,7 +201,8 @@ mod tests {
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
-        let metrics = metrics::build_metrics();
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -211,7 +213,7 @@ mod tests {
             maximum_difficulty: Some(2),
             shares_tx,
             network: bitcoin::network::Network::Testnet,
-            metrics,
+            metrics: metrics_handle,
         };
 
         // Execute
@@ -251,7 +253,8 @@ mod tests {
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
-        let metrics = metrics::build_metrics();
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -262,7 +265,7 @@ mod tests {
             maximum_difficulty: Some(2),
             shares_tx,
             network: bitcoin::network::Network::Testnet,
-            metrics,
+            metrics: metrics_handle,
         };
 
         // Execute

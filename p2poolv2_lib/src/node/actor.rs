@@ -26,7 +26,7 @@ use crate::shares::chain::actor::ChainHandle;
 use crate::shares::handle_stratum_shares::handle_stratum_shares;
 use libp2p::futures::StreamExt;
 use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
-use p2poolv2_accounting::stats::metrics::PoolMetricsWithGuard;
+use p2poolv2_accounting::stats::metrics::MetricsHandle;
 use std::error::Error;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info};
@@ -46,7 +46,7 @@ impl NodeHandle {
         config: Config,
         chain_handle: ChainHandle,
         shares_rx: tokio::sync::mpsc::Receiver<SimplePplnsShare>,
-        metrics: PoolMetricsWithGuard,
+        metrics: MetricsHandle,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
         let (node_actor, stopping_rx) =
