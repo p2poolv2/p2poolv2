@@ -55,7 +55,6 @@ impl StratumServer {
         shutdown_rx: oneshot::Receiver<()>,
         connections_handle: ClientConnectionsHandle,
         share_block_tx: mpsc::Sender<SimplePplnsShare>,
-        metrics: metrics::PoolMetricsWithGuard,
     ) -> Self {
         Self {
             config,
@@ -72,6 +71,7 @@ impl StratumServer {
         notify_tx: mpsc::Sender<NotifyCmd>,
         tracker_handle: TrackerHandle,
         bitcoinrpc_config: BitcoinRpcConfig,
+        metrics: metrics::PoolMetricsWithGuard,
     ) -> Result<(), Box<dyn std::error::Error + Send>> {
         info!(
             "Starting Stratum server at {}:{}",
@@ -120,6 +120,7 @@ impl StratumServer {
                                 maximum_difficulty: self.config.maximum_difficulty,
                                 shares_tx: self.shares_tx.clone(),
                                 network: self.config.network,
+                                metrics: metrics.clone(),
                             };
                             let version_mask = self.config.version_mask;
                             // Spawn a new task for each connection
@@ -153,6 +154,7 @@ pub(crate) struct StratumContext {
     pub maximum_difficulty: Option<u64>,
     pub shares_tx: mpsc::Sender<SimplePplnsShare>,
     pub network: bitcoin::network::Network,
+    pub metrics: metrics::PoolMetricsWithGuard,
 }
 
 /// Handles a single connection to the Stratum server.
@@ -183,6 +185,7 @@ where
         version_mask,
     );
 
+    ctx.metrics.write().await.increment_connection_count();
     // Process each line as it arrives
     loop {
         tokio::select! {
@@ -237,6 +240,7 @@ where
             }
         }
     }
+    ctx.metrics.write().await.decrement_connection_count();
     Ok(())
 }
 
@@ -326,7 +330,7 @@ mod stratum_server_tests {
         let metrics = metrics::build_metrics();
 
         let mut server =
-            StratumServer::new(config, shutdown_rx, connections_handle, shares_tx, metrics).await;
+            StratumServer::new(config, shutdown_rx, connections_handle, shares_tx).await;
 
         // Verify the server was created with the correct parameters
         assert_eq!(server.config.port, 12345);
@@ -339,7 +343,13 @@ mod stratum_server_tests {
         let server_handle = tokio::spawn(async move {
             // We'll ignore errors here since we'll forcibly shut down the server
             let _ = server
-                .start(Some(ready_tx), notify_tx, tracker_handle, bitcoinrpc_config)
+                .start(
+                    Some(ready_tx),
+                    notify_tx,
+                    tracker_handle,
+                    bitcoinrpc_config,
+                    metrics,
+                )
                 .await;
         });
 
@@ -373,11 +383,13 @@ mod stratum_server_tests {
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
         let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let metrics = metrics::build_metrics();
 
         let ctx = StratumContext {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            metrics,
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
@@ -477,11 +489,13 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let metrics = metrics::build_metrics();
 
         let ctx = StratumContext {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            metrics,
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
@@ -535,6 +549,7 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let metrics = metrics::build_metrics();
 
         let ctx = StratumContext {
             notify_tx,
@@ -544,6 +559,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             shares_tx,
+            metrics,
             network: bitcoin::network::Network::Regtest,
         };
 
@@ -598,6 +614,7 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let metrics = metrics::build_metrics();
 
         let ctx = StratumContext {
             notify_tx,
@@ -608,6 +625,7 @@ mod stratum_server_tests {
             maximum_difficulty: Some(2),
             shares_tx,
             network: bitcoin::network::Network::Regtest,
+            metrics,
         };
 
         // Run the handler
@@ -681,6 +699,7 @@ mod stratum_server_tests {
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
         let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let metrics = metrics::build_metrics();
 
         let ctx = StratumContext {
             notify_tx,
@@ -691,6 +710,7 @@ mod stratum_server_tests {
             maximum_difficulty: Some(2),
             shares_tx,
             network: bitcoin::network::Network::Testnet,
+            metrics,
         };
 
         // Spawn the handler in a separate task
@@ -783,6 +803,7 @@ mod stratum_server_tests {
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
         let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let metrics = metrics::build_metrics();
 
         let ctx = StratumContext {
             notify_tx,
@@ -793,6 +814,7 @@ mod stratum_server_tests {
             maximum_difficulty: Some(2),
             shares_tx,
             network: bitcoin::network::Network::Regtest,
+            metrics,
         };
 
         // Spawn the handler in a separate task

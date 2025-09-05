@@ -149,12 +149,17 @@ async fn main() -> Result<(), String> {
             stratum_shutdown_rx,
             connections_handle.clone(),
             shares_tx,
-            metrics_cloned,
         )
         .await;
         info!("Starting Stratum server...");
         let result = stratum_server
-            .start(None, notify_tx, tracker_handle, bitcoinrpc_config)
+            .start(
+                None,
+                notify_tx,
+                tracker_handle,
+                bitcoinrpc_config,
+                metrics_cloned,
+            )
             .await;
         if result.is_err() {
             error!("Failed to start Stratum server: {}", result.unwrap_err());

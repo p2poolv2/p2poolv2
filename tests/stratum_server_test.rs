@@ -63,21 +63,21 @@ async fn test_stratum_server_subscribe() {
     let (share_block_tx, _share_block_rx) = tokio::sync::mpsc::channel(10);
     let metrics = metrics::build_metrics();
 
-    let mut server = StratumServer::new(
-        config,
-        shutdown_rx,
-        connections_handle,
-        share_block_tx,
-        metrics,
-    )
-    .await;
+    let mut server =
+        StratumServer::new(config, shutdown_rx, connections_handle, share_block_tx).await;
 
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let tracker_handle = start_tracker_actor();
 
     tokio::spawn(async move {
         let _result = server
-            .start(Some(ready_tx), notify_tx, tracker_handle, bitcoinrpc_config)
+            .start(
+                Some(ready_tx),
+                notify_tx,
+                tracker_handle,
+                bitcoinrpc_config,
+                metrics,
+            )
             .await;
     });
     ready_rx.await.expect("Server failed to start");

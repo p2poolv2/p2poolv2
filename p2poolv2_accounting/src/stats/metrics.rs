@@ -118,6 +118,13 @@ impl PoolMetrics {
         self.num_workers += 1;
     }
 
+    /// Decrement connection counts
+    pub fn decrement_connection_count(&mut self) {
+        if self.num_workers > 0 {
+            self.num_workers -= 1;
+        }
+    }
+
     /// Mark connection idle
     pub fn mark_connection_idle(&mut self) {
         self.num_idle_users += 1;
