@@ -29,8 +29,6 @@ pub struct PoolMetrics {
     pub num_workers: u32,
     /// Number of idle users
     pub num_idle_users: u32,
-    /// Number of disconnected users
-    pub num_disconnected_users: u32,
     /// Tracks the number of shares since last stats update
     pub unaccounted_shares: u64,
     /// Tracks the total difficulty since last stats update
@@ -60,7 +58,6 @@ impl Default for PoolMetrics {
             num_users: 0,
             num_workers: 0,
             num_idle_users: 0,
-            num_disconnected_users: 0,
             last_share_at: None,
             start_time: std::time::Instant::now(),
             highest_share_difficulty: 0,
@@ -103,6 +100,29 @@ impl PoolMetrics {
         self.total_rejected += 1;
     }
 
+    /// Increment user count
+    /// Does not update connection counts, call the increment_connection_count function for that
+    pub fn increment_user_count(&mut self) {
+        self.num_users += 1;
+    }
+
+    /// Decrement user count
+    pub fn decrement_user_count(&mut self) {
+        if self.num_users > 0 {
+            self.num_users -= 1;
+        }
+    }
+
+    /// Increment connection counts
+    pub fn increment_connection_count(&mut self) {
+        self.num_workers += 1;
+    }
+
+    /// Mark connection idle
+    pub fn mark_connection_idle(&mut self) {
+        self.num_idle_users += 1;
+    }
+
     /// Commit metrics
     /// Export current metrics as json, returning the serialized json
     /// Reset the metrics to start again
@@ -130,7 +150,6 @@ impl PoolMetrics {
             users: self.num_users,
             workers: self.num_workers,
             idle: self.num_idle_users,
-            disconnected: self.num_disconnected_users,
             hashrate_1m,
             hashrate_5m,
             hashrate_15m,
@@ -205,7 +224,6 @@ mod tests {
         assert_eq!(metrics.unaccounted_difficulty, 0);
         assert_eq!(metrics.unaccounted_rejected, 0);
         assert_eq!(metrics.num_users, 0);
-        assert_eq!(metrics.num_disconnected_users, 0);
         assert_eq!(metrics.num_idle_users, 0);
         assert_eq!(metrics.num_workers, 0);
         assert!(metrics.last_share_at.is_none());
@@ -220,7 +238,6 @@ mod tests {
         metrics.unaccounted_rejected = 5;
         metrics.num_users = 3;
         metrics.num_idle_users = 1;
-        metrics.num_disconnected_users = 2;
         metrics.num_workers = 5;
         metrics.last_share_at = Some(SystemTime::now());
         metrics.highest_share_difficulty = 500;
@@ -232,7 +249,6 @@ mod tests {
         assert_eq!(metrics.unaccounted_rejected, 0);
         assert_eq!(metrics.num_users, 3);
         assert_eq!(metrics.num_idle_users, 1);
-        assert_eq!(metrics.num_disconnected_users, 2);
         assert_eq!(metrics.num_workers, 5);
         assert!(metrics.last_share_at.is_some());
         assert_eq!(metrics.highest_share_difficulty, 500);
