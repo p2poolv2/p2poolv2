@@ -76,6 +76,7 @@ async fn handle_simple_request<'a, D: DifficultyAdjusterTrait>(
                 ctx.tracker_handle,
                 ctx.bitcoinrpc_config,
                 ctx.shares_tx,
+                ctx.metrics.clone(),
             )
             .await
         }

@@ -24,6 +24,7 @@ use bitcoin::blockdata::block::Block;
 use bitcoin::hashes::Hash;
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
+use p2poolv2_accounting::stats::metrics;
 use serde_json::json;
 use std::time::SystemTime;
 use tokio::sync::mpsc;
@@ -50,6 +51,7 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     tracker_handle: TrackerHandle,
     bitcoinrpc_config: BitcoinRpcConfig,
     shares_tx: mpsc::Sender<SimplePplnsShare>,
+    metrics: metrics::PoolMetricsWithGuard,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.submit message");
     if message.params.len() < 4 {
@@ -81,6 +83,7 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
             Ok(block) => block,
             Err(e) => {
                 info!("Share validation failed: {}", e);
+                metrics.write().await.record_share_rejected();
                 return Ok(vec![Message::Response(Response::new_ok(
                     message.id,
                     json!(false),
@@ -104,6 +107,11 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet
     let truediff = get_true_difficulty(&block.block_hash());
     debug!("True difficulty: {}", truediff);
+
+    metrics
+        .write()
+        .await
+        .record_share_accepted(session.difficulty_adjuster.get_current_difficulty());
 
     let (new_difficulty, _is_first_share) = session.difficulty_adjuster.record_share_submission(
         truediff,
@@ -234,12 +242,15 @@ mod handle_submit_tests {
             .await;
 
         let (shares_tx, mut shares_rx) = mpsc::channel(10);
+        let metrics = metrics::build_metrics();
+
         let message = handle_submit(
             submit,
             &mut session,
             tracker_handle,
             bitcoinrpc_config,
             shares_tx,
+            metrics.clone(),
         )
         .await
         .unwrap();
@@ -259,6 +270,8 @@ mod handle_submit_tests {
 
         // Verify that the block was not submitted to the mock server
         mock_server.verify().await;
+
+        assert_eq!(metrics.read().await.total_accepted, 1);
     }
 
     #[tokio::test]
@@ -316,12 +329,15 @@ mod handle_submit_tests {
             .await;
 
         let (shares_tx, mut shares_rx) = mpsc::channel(10);
+        let metrics = metrics::build_metrics();
+
         let response = handle_submit(
             submit,
             &mut session,
             tracker_handle,
             bitcoinrpc_config,
             shares_tx,
+            metrics.clone(),
         )
         .await
         .unwrap();
@@ -344,6 +360,8 @@ mod handle_submit_tests {
             stratum_share.get_miner_btcaddress(),
             session.btcaddress.unwrap()
         );
+
+        assert_eq!(metrics.read().await.total_accepted, 1);
     }
 
     #[tokio::test]
@@ -401,12 +419,15 @@ mod handle_submit_tests {
             .await;
 
         let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let metrics = metrics::build_metrics();
+
         let response = handle_submit(
             submit,
             &mut session,
             tracker_handle,
             bitcoinrpc_config,
             shares_tx,
+            metrics.clone(),
         )
         .await
         .unwrap();
@@ -423,6 +444,8 @@ mod handle_submit_tests {
 
         // Verify that the block was not submitted to the mock server
         mock_server.verify().await;
+
+        assert_eq!(metrics.read().await.total_accepted, 1);
     }
 
     #[tokio::test]
@@ -493,12 +516,15 @@ mod handle_submit_tests {
             .await;
 
         let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let metrics = metrics::build_metrics();
+
         let message = handle_submit(
             submit,
             &mut session,
             tracker_handle,
             bitcoinrpc_config,
             shares_tx,
+            metrics,
         )
         .await
         .unwrap();
@@ -550,12 +576,15 @@ mod handle_submit_tests {
         session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
 
         let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let metrics = metrics::build_metrics();
+
         let message = handle_submit(
             submit,
             &mut session,
             tracker_handle,
             bitcoinrpc_config,
             shares_tx,
+            metrics,
         )
         .await
         .unwrap();

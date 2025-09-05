@@ -57,7 +57,7 @@ impl NodeHandle {
         });
 
         tokio::spawn(async move {
-            handle_stratum_shares(shares_rx, chain_handle, metrics.clone()).await;
+            handle_stratum_shares(shares_rx, chain_handle, metrics).await;
         });
         Ok((Self { command_tx }, stopping_rx))
     }

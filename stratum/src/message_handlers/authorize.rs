@@ -92,6 +92,7 @@ mod tests {
     use crate::server::StratumContext;
     use crate::work::tracker::start_tracker_actor;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
+    use p2poolv2_accounting::stats::metrics;
     use std::net::SocketAddr;
     use tokio::sync::mpsc;
 
@@ -108,6 +109,7 @@ mod tests {
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
+        let metrics = metrics::build_metrics();
 
         let ctx = StratumContext {
             notify_tx,
@@ -118,6 +120,7 @@ mod tests {
             maximum_difficulty: Some(2),
             shares_tx,
             network: bitcoin::network::Network::Testnet,
+            metrics,
         };
 
         // Execute
@@ -197,6 +200,7 @@ mod tests {
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
+        let metrics = metrics::build_metrics();
 
         let ctx = StratumContext {
             notify_tx,
@@ -207,6 +211,7 @@ mod tests {
             maximum_difficulty: Some(2),
             shares_tx,
             network: bitcoin::network::Network::Testnet,
+            metrics,
         };
 
         // Execute
@@ -246,6 +251,7 @@ mod tests {
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
+        let metrics = metrics::build_metrics();
 
         let ctx = StratumContext {
             notify_tx,
@@ -256,6 +262,7 @@ mod tests {
             maximum_difficulty: Some(2),
             shares_tx,
             network: bitcoin::network::Network::Testnet,
+            metrics,
         };
 
         // Execute
