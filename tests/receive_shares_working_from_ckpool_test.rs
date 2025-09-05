@@ -43,13 +43,18 @@ async fn test_single_node_with_zmq_feed_of_workbases_only() {
         ShareBlock::build_genesis_for_network(config.stratum.network),
     );
     let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
-    let metrics = metrics::build_metrics();
+    let stats_dir = tempfile::tempdir().unwrap();
+    let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
 
     // Start the node
-    let (node_handle, _stop_rx) =
-        NodeHandle::new(config.clone(), chain_handle.clone(), shares_rx, metrics)
-            .await
-            .expect("Failed to create node");
+    let (node_handle, _stop_rx) = NodeHandle::new(
+        config.clone(),
+        chain_handle.clone(),
+        shares_rx,
+        metrics_handle,
+    )
+    .await
+    .expect("Failed to create node");
 
     // Load test data from JSON file
     let test_data = fs::read_to_string("tests/test_data/workbases_only.json")
@@ -117,13 +122,18 @@ async fn test_single_node_with_zmq_feed_of_shares_only() {
         ShareBlock::build_genesis_for_network(config.stratum.network),
     );
     let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
-    let metrics = metrics::build_metrics();
+    let stats_dir = tempfile::tempdir().unwrap();
+    let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
 
     // Start the node
-    let (node_handle, _stop_rx) =
-        NodeHandle::new(config.clone(), chain_handle.clone(), shares_rx, metrics)
-            .await
-            .expect("Failed to create node");
+    let (node_handle, _stop_rx) = NodeHandle::new(
+        config.clone(),
+        chain_handle.clone(),
+        shares_rx,
+        metrics_handle,
+    )
+    .await
+    .expect("Failed to create node");
 
     // Load test data from JSON file
     let test_data = fs::read_to_string("tests/test_data/shares_only.json")
@@ -211,13 +221,18 @@ async fn test_single_node_with_shares_and_workbases() {
         ShareBlock::build_genesis_for_network(config.stratum.network),
     );
     let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
-    let metrics = metrics::build_metrics();
+    let stats_dir = tempfile::tempdir().unwrap();
+    let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
 
     // Start the node
-    let (node_handle, _stop_rx) =
-        NodeHandle::new(config.clone(), chain_handle.clone(), shares_rx, metrics)
-            .await
-            .expect("Failed to create node");
+    let (node_handle, _stop_rx) = NodeHandle::new(
+        config.clone(),
+        chain_handle.clone(),
+        shares_rx,
+        metrics_handle,
+    )
+    .await
+    .expect("Failed to create node");
 
     // Load test data from JSON file
     let test_data = fs::read_to_string("tests/test_data/single_node_simple.json")

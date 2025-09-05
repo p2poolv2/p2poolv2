@@ -140,8 +140,8 @@ async fn main() -> Result<(), String> {
 
     let (shares_tx, shares_rx) =
         tokio::sync::mpsc::channel::<SimplePplnsShare>(STRATUM_SHARES_BUFFER_SIZE);
-    let metrics = metrics::build_metrics();
-    let metrics_cloned = metrics.clone();
+    let metrics_handle = metrics::build_metrics(config.logging.stats_dir.as_str()).await;
+    let metrics_cloned = metrics_handle.clone();
 
     tokio::spawn(async move {
         let mut stratum_server = StratumServer::new(
@@ -167,7 +167,7 @@ async fn main() -> Result<(), String> {
         info!("Stratum server stopped");
     });
 
-    match NodeHandle::new(config, chain_handle, shares_rx, metrics).await {
+    match NodeHandle::new(config, chain_handle, shares_rx, metrics_handle).await {
         Ok((_node_handle, stopping_rx)) => {
             info!("Node started");
             if (stopping_rx.await).is_ok() {

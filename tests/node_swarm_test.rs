@@ -72,9 +72,13 @@ async fn test_three_nodes_connectivity() {
     let (_shares_tx_1, shares_rx_1) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
     let (_shares_tx_2, shares_rx_2) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
     let (_shares_tx_3, shares_rx_3) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
-    let metrics1 = metrics::build_metrics();
-    let metrics2 = metrics::build_metrics();
-    let metrics3 = metrics::build_metrics();
+
+    let stats_dir1 = tempfile::tempdir().unwrap();
+    let stats_dir2 = tempfile::tempdir().unwrap();
+    let stats_dir3 = tempfile::tempdir().unwrap();
+    let metrics1 = metrics::build_metrics(stats_dir1.path().to_str().unwrap()).await;
+    let metrics2 = metrics::build_metrics(stats_dir2.path().to_str().unwrap()).await;
+    let metrics3 = metrics::build_metrics(stats_dir3.path().to_str().unwrap()).await;
 
     // Start three nodes
     let (node1_handle, _stop_rx1) = NodeHandle::new(config1, chain_handle1, shares_rx_1, metrics1)

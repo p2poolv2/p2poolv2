@@ -531,6 +531,7 @@ mod tests {
             logging: LoggingConfig {
                 level: "info".to_string(),
                 file: Some("./p2pool.log".to_string()),
+                stats_dir: "./logs/stats".to_string(),
             },
         };
         config.network = network_config;
@@ -550,7 +551,7 @@ mod tests {
             .expect("Dial failed to start");
 
         let start = Instant::now();
-        let mut timeout = tokio::time::sleep(Duration::from_secs(5));
+        let timeout = tokio::time::sleep(Duration::from_secs(5));
         tokio::pin!(timeout);
 
         loop {

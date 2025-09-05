@@ -71,7 +71,7 @@ impl StratumServer {
         notify_tx: mpsc::Sender<NotifyCmd>,
         tracker_handle: TrackerHandle,
         bitcoinrpc_config: BitcoinRpcConfig,
-        metrics: metrics::PoolMetricsWithGuard,
+        metrics: metrics::MetricsHandle,
     ) -> Result<(), Box<dyn std::error::Error + Send>> {
         info!(
             "Starting Stratum server at {}:{}",
@@ -154,7 +154,7 @@ pub(crate) struct StratumContext {
     pub maximum_difficulty: Option<u64>,
     pub shares_tx: mpsc::Sender<SimplePplnsShare>,
     pub network: bitcoin::network::Network,
-    pub metrics: metrics::PoolMetricsWithGuard,
+    pub metrics: metrics::MetricsHandle,
 }
 
 /// Handles a single connection to the Stratum server.
@@ -185,7 +185,7 @@ where
         version_mask,
     );
 
-    ctx.metrics.write().await.increment_connection_count();
+    let _ = ctx.metrics.increment_connection_count().await;
     // Process each line as it arrives
     loop {
         tokio::select! {
@@ -240,7 +240,7 @@ where
             }
         }
     }
-    ctx.metrics.write().await.decrement_connection_count();
+    let _ = ctx.metrics.decrement_connection_count().await;
     Ok(())
 }
 
@@ -327,7 +327,8 @@ mod stratum_server_tests {
         };
 
         let (shares_tx, _shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
-        let metrics = metrics::build_metrics();
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
 
         let mut server =
             StratumServer::new(config, shutdown_rx, connections_handle, shares_tx).await;
@@ -348,7 +349,7 @@ mod stratum_server_tests {
                     notify_tx,
                     tracker_handle,
                     bitcoinrpc_config,
-                    metrics,
+                    metrics_handle,
                 )
                 .await;
         });
@@ -383,13 +384,14 @@ mod stratum_server_tests {
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
         let (shares_tx, _shares_rx) = mpsc::channel(10);
-        let metrics = metrics::build_metrics();
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
 
         let ctx = StratumContext {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
-            metrics,
+            metrics: metrics_handle,
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
@@ -489,13 +491,14 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (shares_tx, _shares_rx) = mpsc::channel(10);
-        let metrics = metrics::build_metrics();
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
 
         let ctx = StratumContext {
             notify_tx,
             tracker_handle,
             bitcoinrpc_config,
-            metrics,
+            metrics: metrics_handle,
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
@@ -549,7 +552,8 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (shares_tx, _shares_rx) = mpsc::channel(10);
-        let metrics = metrics::build_metrics();
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -559,7 +563,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             shares_tx,
-            metrics,
+            metrics: metrics_handle,
             network: bitcoin::network::Network::Regtest,
         };
 
@@ -614,7 +618,8 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (shares_tx, _shares_rx) = mpsc::channel(10);
-        let metrics = metrics::build_metrics();
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -625,7 +630,7 @@ mod stratum_server_tests {
             maximum_difficulty: Some(2),
             shares_tx,
             network: bitcoin::network::Network::Regtest,
-            metrics,
+            metrics: metrics_handle,
         };
 
         // Run the handler
@@ -699,7 +704,8 @@ mod stratum_server_tests {
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
         let (shares_tx, _shares_rx) = mpsc::channel(10);
-        let metrics = metrics::build_metrics();
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -710,7 +716,7 @@ mod stratum_server_tests {
             maximum_difficulty: Some(2),
             shares_tx,
             network: bitcoin::network::Network::Testnet,
-            metrics,
+            metrics: metrics_handle,
         };
 
         // Spawn the handler in a separate task
@@ -803,7 +809,8 @@ mod stratum_server_tests {
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
         let (shares_tx, _shares_rx) = mpsc::channel(10);
-        let metrics = metrics::build_metrics();
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -814,7 +821,7 @@ mod stratum_server_tests {
             maximum_difficulty: Some(2),
             shares_tx,
             network: bitcoin::network::Network::Regtest,
-            metrics,
+            metrics: metrics_handle,
         };
 
         // Spawn the handler in a separate task

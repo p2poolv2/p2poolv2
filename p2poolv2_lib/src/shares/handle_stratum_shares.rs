@@ -19,7 +19,7 @@
 use crate::shares::chain::actor::ChainHandle;
 #[cfg(not(test))]
 use crate::shares::chain::actor::ChainHandle;
-use p2poolv2_accounting::stats::metrics::PoolMetricsWithGuard;
+use p2poolv2_accounting::stats::metrics::MetricsHandle;
 use p2poolv2_accounting::{AccountingShare, simple_pplns::SimplePplnsShare};
 use tracing::info;
 
@@ -28,13 +28,12 @@ use tracing::info;
 pub async fn handle_stratum_shares(
     mut shares_rx: tokio::sync::mpsc::Receiver<SimplePplnsShare>,
     chain_handle: ChainHandle,
-    metrics: PoolMetricsWithGuard,
+    metrics: MetricsHandle,
 ) {
     while let Some(share) = shares_rx.recv().await {
         info!("Received share: {:?}", share);
 
-        let mut metrics_guard = metrics.write().await;
-        metrics_guard.record_share_accepted(share.get_difficulty());
+        let _ = metrics.record_share_accepted(share.get_difficulty()).await;
         let _ = chain_handle.add_pplns_share(share).await;
     }
     info!("Shares channel closed, stopping share handler.");

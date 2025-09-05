@@ -48,13 +48,18 @@ async fn receive_shares_and_workbases_from_self_and_peers() {
         ShareBlock::build_genesis_for_network(config.stratum.network),
     );
     let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
-    let metrics = metrics::build_metrics();
+    let stats_dir = tempfile::tempdir().unwrap();
+    let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
 
     // Start the node
-    let (node_handle, _stop_rx) =
-        NodeHandle::new(config.clone(), chain_handle.clone(), shares_rx, metrics)
-            .await
-            .expect("Failed to create node");
+    let (node_handle, _stop_rx) = NodeHandle::new(
+        config.clone(),
+        chain_handle.clone(),
+        shares_rx,
+        metrics_handle,
+    )
+    .await
+    .expect("Failed to create node");
 
     let ckpool_data = fs::read_to_string("tests/test_data/self_shares_and_workbases.json")
         .expect("Failed to read CKPool test data file");
@@ -199,12 +204,17 @@ async fn test_rate_limiting() {
         ShareBlock::build_genesis_for_network(config.stratum.network),
     );
     let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
-    let metrics = metrics::build_metrics();
+    let stats_dir = tempfile::tempdir().unwrap();
+    let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
 
-    let (node_handle, _stop_rx) =
-        NodeHandle::new(config.clone(), chain_handle.clone(), shares_rx, metrics)
-            .await
-            .expect("Failed to create node");
+    let (node_handle, _stop_rx) = NodeHandle::new(
+        config.clone(),
+        chain_handle.clone(),
+        shares_rx,
+        metrics_handle,
+    )
+    .await
+    .expect("Failed to create node");
 
     let peer_id = libp2p::PeerId::random();
     let (swarm_tx, mut _swarm_rx) = mpsc::channel(100);

@@ -14,14 +14,14 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use std::sync::Arc;
-use std::time::SystemTime;
-use tokio::sync::RwLock;
-
 use crate::stats::pool_local_stats::{PoolLocalStats, load_pool_local_stats};
+use std::time::SystemTime;
+use tokio::sync::{mpsc, oneshot};
+
+const METRICS_MESSAGE_BUFFER_SIZE: usize = 100;
 
 /// Represents the metrics for the P2Poolv2 pool, we derive the stats every five minutes from this
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PoolMetrics {
     /// Number of users
     pub num_users: u32,
@@ -77,105 +77,10 @@ impl PoolMetrics {
     }
 
     /// Reset metrics to their default values using default
-    pub fn reset(&mut self) {
+    fn reset(&mut self) {
         self.unaccounted_shares = 0;
         self.unaccounted_rejected = 0;
         self.unaccounted_difficulty = 0;
-    }
-
-    /// Update metrics from accepted share
-    pub fn record_share_accepted(&mut self, difficulty: u64) {
-        self.unaccounted_shares += 1;
-        self.total_accepted += 1;
-        self.unaccounted_difficulty += difficulty;
-        self.last_share_at = Some(SystemTime::now());
-        if self.highest_share_difficulty < difficulty {
-            self.highest_share_difficulty = difficulty;
-        }
-    }
-
-    /// Update metrics from rejected share
-    pub fn record_share_rejected(&mut self) {
-        self.unaccounted_rejected += 1;
-        self.total_rejected += 1;
-    }
-
-    /// Increment user count
-    /// Does not update connection counts, call the increment_connection_count function for that
-    pub fn increment_user_count(&mut self) {
-        self.num_users += 1;
-    }
-
-    /// Decrement user count
-    pub fn decrement_user_count(&mut self) {
-        if self.num_users > 0 {
-            self.num_users -= 1;
-        }
-    }
-
-    /// Increment connection counts
-    pub fn increment_connection_count(&mut self) {
-        self.num_workers += 1;
-    }
-
-    /// Decrement connection counts
-    pub fn decrement_connection_count(&mut self) {
-        if self.num_workers > 0 {
-            self.num_workers -= 1;
-        }
-    }
-
-    /// Mark connection idle
-    pub fn mark_connection_idle(&mut self) {
-        self.num_idle_users += 1;
-    }
-
-    /// Commit metrics
-    /// Export current metrics as json, returning the serialized json
-    /// Reset the metrics to start again
-    pub fn commit(&mut self) -> String {
-        let lastupdate = match self.last_share_at {
-            Some(time) => time
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-            None => 0,
-        };
-        let (sps1m, sps5m, sps15m, sps1h) = self.compute_share_per_second_metrics();
-        let (
-            hashrate_1m,
-            hashrate_5m,
-            hashrate_15m,
-            hashrate_1hr,
-            hashrate_6hr,
-            hashrate_1d,
-            hashrate_7d,
-        ) = self.compute_hashrate_metrics();
-        let pool_local_stats = PoolLocalStats {
-            runtime: self.start_time.elapsed().as_secs(),
-            lastupdate,
-            users: self.num_users,
-            workers: self.num_workers,
-            idle: self.num_idle_users,
-            hashrate_1m,
-            hashrate_5m,
-            hashrate_15m,
-            hashrate_1hr,
-            hashrate_6hr,
-            hashrate_1d,
-            hashrate_7d,
-            difficulty: 0,
-            accepted_shares: self.total_accepted,
-            rejected_shares: self.total_rejected,
-            best_share: self.highest_share_difficulty,
-            shares_per_second_1m: sps1m,
-            shares_per_second_5m: sps5m,
-            shares_per_second_15m: sps15m,
-            shares_per_second_1h: sps1h,
-        };
-
-        self.reset();
-        serde_json::to_string(&pool_local_stats).unwrap()
     }
 
     /// Compute share per seconds for the various windows
@@ -212,17 +117,362 @@ impl PoolMetrics {
     }
 }
 
-pub type PoolMetricsWithGuard = Arc<RwLock<PoolMetrics>>;
+/// Messages that can be sent to the MetricsActor
+#[derive(Debug)]
+pub enum MetricsMessage {
+    RecordShareAccepted {
+        difficulty: u64,
+        response: oneshot::Sender<()>,
+    },
+    RecordShareRejected {
+        response: oneshot::Sender<()>,
+    },
+    IncrementUserCount {
+        response: oneshot::Sender<()>,
+    },
+    DecrementUserCount {
+        response: oneshot::Sender<()>,
+    },
+    IncrementConnectionCount {
+        response: oneshot::Sender<()>,
+    },
+    DecrementConnectionCount {
+        response: oneshot::Sender<()>,
+    },
+    MarkUserIdle {
+        response: oneshot::Sender<()>,
+    },
+    MarkUserActive {
+        response: oneshot::Sender<()>,
+    },
+    Commit {
+        response: oneshot::Sender<String>,
+    },
+    GetMetrics {
+        response: oneshot::Sender<PoolMetrics>,
+    },
+}
 
-/// Construct a new pool metrics with rw lock and arc wrappers
-pub fn build_metrics() -> PoolMetricsWithGuard {
-    Arc::new(RwLock::new(PoolMetrics::default()))
+/// The actor that manages pool metrics state
+pub struct MetricsActor {
+    metrics: PoolMetrics,
+    receiver: mpsc::Receiver<MetricsMessage>,
+}
+
+impl MetricsActor {
+    /// Create a new metrics actor with default metrics
+    pub fn new(receiver: mpsc::Receiver<MetricsMessage>) -> Self {
+        Self {
+            metrics: PoolMetrics::default(),
+            receiver,
+        }
+    }
+
+    /// Create a metrics actor with metrics loaded from the given log directory
+    pub fn with_existing_metrics(log_dir: &str, receiver: mpsc::Receiver<MetricsMessage>) -> Self {
+        Self {
+            metrics: PoolMetrics::load_existing(log_dir),
+            receiver,
+        }
+    }
+
+    /// Start the actor's message handling loop
+    pub async fn run(mut self) {
+        while let Some(msg) = self.receiver.recv().await {
+            self.handle_message(msg).await;
+        }
+    }
+
+    async fn handle_message(&mut self, msg: MetricsMessage) {
+        match msg {
+            MetricsMessage::RecordShareAccepted {
+                difficulty,
+                response,
+            } => {
+                self.record_share_accepted(difficulty);
+                let _ = response.send(());
+            }
+            MetricsMessage::RecordShareRejected { response } => {
+                self.record_share_rejected();
+                let _ = response.send(());
+            }
+            MetricsMessage::IncrementUserCount { response } => {
+                self.increment_user_count();
+                let _ = response.send(());
+            }
+            MetricsMessage::DecrementUserCount { response } => {
+                self.decrement_user_count();
+                let _ = response.send(());
+            }
+            MetricsMessage::IncrementConnectionCount { response } => {
+                self.increment_connection_count();
+                let _ = response.send(());
+            }
+            MetricsMessage::DecrementConnectionCount { response } => {
+                self.decrement_connection_count();
+                let _ = response.send(());
+            }
+            MetricsMessage::MarkUserIdle { response } => {
+                self.mark_user_idle();
+                let _ = response.send(());
+            }
+            MetricsMessage::MarkUserActive { response } => {
+                self.mark_user_active();
+                let _ = response.send(());
+            }
+            MetricsMessage::Commit { response } => {
+                let result = self.commit();
+                let _ = response.send(result);
+            }
+            MetricsMessage::GetMetrics { response } => {
+                let _ = response.send(self.metrics.clone());
+            }
+        }
+    }
+
+    /// Update metrics from accepted share
+    fn record_share_accepted(&mut self, difficulty: u64) {
+        self.metrics.unaccounted_shares += 1;
+        self.metrics.total_accepted += 1;
+        self.metrics.unaccounted_difficulty += difficulty;
+        self.metrics.last_share_at = Some(SystemTime::now());
+        if self.metrics.highest_share_difficulty < difficulty {
+            self.metrics.highest_share_difficulty = difficulty;
+        }
+    }
+
+    /// Update metrics from rejected share
+    fn record_share_rejected(&mut self) {
+        self.metrics.unaccounted_rejected += 1;
+        self.metrics.total_rejected += 1;
+    }
+
+    /// Increment user count
+    fn increment_user_count(&mut self) {
+        self.metrics.num_users += 1;
+    }
+
+    /// Decrement user count
+    fn decrement_user_count(&mut self) {
+        if self.metrics.num_users > 0 {
+            self.metrics.num_users -= 1;
+        }
+    }
+
+    /// Increment connection counts
+    fn increment_connection_count(&mut self) {
+        self.metrics.num_workers += 1;
+    }
+
+    /// Decrement connection counts
+    fn decrement_connection_count(&mut self) {
+        if self.metrics.num_workers > 0 {
+            self.metrics.num_workers -= 1;
+        }
+    }
+
+    /// Mark user idle
+    fn mark_user_idle(&mut self) {
+        self.metrics.num_idle_users += 1;
+    }
+
+    /// Mark user not idle
+    fn mark_user_active(&mut self) {
+        if self.metrics.num_idle_users > 0 {
+            self.metrics.num_idle_users -= 1;
+        }
+    }
+
+    /// Commit metrics
+    /// Export current metrics as json, returning the serialized json
+    /// Reset the metrics to start again
+    fn commit(&mut self) -> String {
+        let lastupdate = match self.metrics.last_share_at {
+            Some(time) => time
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            None => 0,
+        };
+        let (sps1m, sps5m, sps15m, sps1h) = self.metrics.compute_share_per_second_metrics();
+        let (
+            hashrate_1m,
+            hashrate_5m,
+            hashrate_15m,
+            hashrate_1hr,
+            hashrate_6hr,
+            hashrate_1d,
+            hashrate_7d,
+        ) = self.metrics.compute_hashrate_metrics();
+        let pool_local_stats = PoolLocalStats {
+            runtime: self.metrics.start_time.elapsed().as_secs(),
+            lastupdate,
+            users: self.metrics.num_users,
+            workers: self.metrics.num_workers,
+            idle: self.metrics.num_idle_users,
+            hashrate_1m,
+            hashrate_5m,
+            hashrate_15m,
+            hashrate_1hr,
+            hashrate_6hr,
+            hashrate_1d,
+            hashrate_7d,
+            difficulty: 0,
+            accepted_shares: self.metrics.total_accepted,
+            rejected_shares: self.metrics.total_rejected,
+            best_share: self.metrics.highest_share_difficulty,
+            shares_per_second_1m: sps1m,
+            shares_per_second_5m: sps5m,
+            shares_per_second_15m: sps15m,
+            shares_per_second_1h: sps1h,
+        };
+
+        self.metrics.reset();
+        serde_json::to_string(&pool_local_stats).unwrap()
+    }
+}
+
+/// A handle to interact with the MetricsActor
+#[derive(Clone)]
+pub struct MetricsHandle {
+    sender: mpsc::Sender<MetricsMessage>,
+}
+
+impl MetricsHandle {
+    /// Record an accepted share with the given difficulty
+    pub async fn record_share_accepted(
+        &self,
+        difficulty: u64,
+    ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(MetricsMessage::RecordShareAccepted {
+                difficulty,
+                response: response_tx,
+            })
+            .await
+            .expect("Metrics actor has been dropped");
+        response_rx.await
+    }
+
+    /// Record a rejected share
+    pub async fn record_share_rejected(
+        &self,
+    ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(MetricsMessage::RecordShareRejected {
+                response: response_tx,
+            })
+            .await
+            .expect("Metrics actor has been dropped");
+        response_rx.await
+    }
+
+    /// Increment user count
+    pub async fn increment_user_count(&self) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(MetricsMessage::IncrementUserCount {
+                response: response_tx,
+            })
+            .await
+            .expect("Metrics actor has been dropped");
+        response_rx.await
+    }
+
+    /// Decrement user count
+    pub async fn decrement_user_count(&self) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(MetricsMessage::DecrementUserCount {
+                response: response_tx,
+            })
+            .await
+            .expect("Metrics actor has been dropped");
+        response_rx.await
+    }
+
+    /// Increment connection count
+    pub async fn increment_connection_count(
+        &self,
+    ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(MetricsMessage::IncrementConnectionCount {
+                response: response_tx,
+            })
+            .await
+            .expect("Metrics actor has been dropped");
+        response_rx.await
+    }
+
+    /// Decrement connection count
+    pub async fn decrement_connection_count(
+        &self,
+    ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(MetricsMessage::DecrementConnectionCount {
+                response: response_tx,
+            })
+            .await
+            .expect("Metrics actor has been dropped");
+        response_rx.await
+    }
+
+    /// Mark a connection as idle
+    pub async fn mark_connection_idle(&self) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(MetricsMessage::MarkUserIdle {
+                response: response_tx,
+            })
+            .await
+            .expect("Metrics actor has been dropped");
+        response_rx.await
+    }
+
+    /// Commit metrics and get JSON result
+    pub async fn commit(&self) -> Result<String, tokio::sync::oneshot::error::RecvError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(MetricsMessage::Commit {
+                response: response_tx,
+            })
+            .await
+            .expect("Metrics actor has been dropped");
+        response_rx.await
+    }
+
+    /// Get current metrics
+    pub async fn get_metrics(&self) -> PoolMetrics {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(MetricsMessage::GetMetrics {
+                response: response_tx,
+            })
+            .await
+            .expect("Metrics actor has been dropped");
+        response_rx.await.expect("Metrics actor has been dropped")
+    }
+}
+
+/// Construct a new metrics actor with existing metrics and return its handle
+pub async fn build_metrics(log_dir: &str) -> MetricsHandle {
+    let (sender, receiver) = mpsc::channel(METRICS_MESSAGE_BUFFER_SIZE);
+    let actor = MetricsActor::with_existing_metrics(log_dir, receiver);
+    let handle = MetricsHandle { sender };
+    tokio::spawn(async move {
+        actor.run().await;
+    });
+    handle
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant, SystemTime};
+    use std::time::SystemTime;
 
     #[test]
     fn test_pool_metrics_default() {
@@ -261,73 +511,61 @@ mod tests {
         assert_eq!(metrics.highest_share_difficulty, 500);
     }
 
-    #[test]
-    fn test_build_metrics() {
-        let metrics = build_metrics();
-        let metrics_guard = metrics.try_read().unwrap();
-        assert_eq!(metrics_guard.unaccounted_shares, 0);
-        assert_eq!(metrics_guard.unaccounted_difficulty, 0);
-        assert_eq!(metrics_guard.unaccounted_rejected, 0);
-    }
+    #[tokio::test]
+    async fn test_record_share_accepted() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let handle = build_metrics(log_dir.path().to_str().unwrap()).await;
+        let _ = handle.record_share_accepted(100).await;
 
-    #[test]
-    fn test_record_share_accepted() {
-        let mut metrics = PoolMetrics::default();
-        metrics.record_share_accepted(100);
+        let metrics = handle.get_metrics().await;
         assert_eq!(metrics.unaccounted_shares, 1);
         assert_eq!(metrics.unaccounted_difficulty, 100);
         assert!(metrics.last_share_at.is_some());
         assert_eq!(metrics.highest_share_difficulty, 100);
 
         // Test that highest difficulty is updated correctly
-        metrics.record_share_accepted(50);
+        let _ = handle.record_share_accepted(50).await;
+        let metrics = handle.get_metrics().await;
         assert_eq!(metrics.unaccounted_shares, 2);
         assert_eq!(metrics.unaccounted_difficulty, 150);
         assert_eq!(metrics.highest_share_difficulty, 100);
 
-        metrics.record_share_accepted(200);
+        let _ = handle.record_share_accepted(200).await;
+        let metrics = handle.get_metrics().await;
         assert_eq!(metrics.unaccounted_shares, 3);
         assert_eq!(metrics.unaccounted_difficulty, 350);
         assert_eq!(metrics.highest_share_difficulty, 200);
     }
 
-    #[test]
-    fn test_record_share_rejected() {
-        let mut metrics = PoolMetrics::default();
-        metrics.record_share_rejected();
+    #[tokio::test]
+    async fn test_record_share_rejected() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let handle = build_metrics(log_dir.path().to_str().unwrap()).await;
+        let _ = handle.record_share_rejected().await;
+        let metrics = handle.get_metrics().await;
         assert_eq!(metrics.unaccounted_rejected, 1);
-        metrics.record_share_rejected();
+
+        let _ = handle.record_share_rejected().await;
+        let metrics = handle.get_metrics().await;
         assert_eq!(metrics.unaccounted_rejected, 2);
     }
 
-    #[test]
-    fn test_commit() {
-        let mut metrics = PoolMetrics::default();
+    #[tokio::test]
+    async fn test_metrics_commit() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let handle = build_metrics(log_dir.path().to_str().unwrap()).await;
 
-        // Set up a known start time for testing
-        let start_time = Instant::now()
-            .checked_sub(Duration::from_secs(3600))
-            .unwrap();
-        metrics.start_time = start_time;
+        let _ = handle.record_share_accepted(100).await;
+        let _ = handle.record_share_accepted(200).await;
+        let _ = handle.record_share_rejected().await;
 
-        metrics.record_share_accepted(100);
-        metrics.record_share_accepted(200);
-        metrics.record_share_rejected();
-
-        let json_str = metrics.commit();
-        let json: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-
-        // Check runtime is approximately 1 hour (3600 seconds)
-        let runtime = json["runtime"].as_u64().unwrap();
-        assert!(
-            runtime >= 3595 && runtime <= 3605,
-            "Runtime is not close to 3600: {}",
-            runtime
-        );
+        let json_str = handle.commit().await;
+        let json: serde_json::Value = serde_json::from_str(&json_str.unwrap()).unwrap();
 
         // Check that lastupdate exists and is a recent timestamp
         assert!(json["lastupdate"].as_u64().is_some());
 
+        let metrics = handle.get_metrics().await;
         // After commit, the metrics should be reset
         assert_eq!(metrics.unaccounted_shares, 0);
         assert_eq!(metrics.unaccounted_difficulty, 0);
