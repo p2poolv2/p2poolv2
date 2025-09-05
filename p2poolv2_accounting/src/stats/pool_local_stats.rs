@@ -34,8 +34,6 @@ pub struct PoolLocalStats {
     pub workers: u32,
     #[serde(rename = "Idle")]
     pub idle: u32,
-    #[serde(rename = "Disconnected")]
-    pub disconnected: u32,
 
     // Hashrate statistics
     #[serde(rename = "Hashrate1m")]
@@ -121,7 +119,6 @@ mod tests {
             users: 10,
             workers: 15,
             idle: 2,
-            disconnected: 3,
             hashrate_1m: 1000,
             hashrate_5m: 1200,
             hashrate_15m: 1100,
@@ -177,7 +174,6 @@ mod tests {
             users: 10,
             workers: 15,
             idle: 2,
-            disconnected: 3,
             hashrate_1m: 1000,
             hashrate_5m: 1200,
             hashrate_15m: 1100,
