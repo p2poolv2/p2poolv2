@@ -17,6 +17,7 @@
 use bitcoin::Address;
 use clap::Parser;
 use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
+use p2poolv2_accounting::stats::metrics;
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::logging::setup_logging;
 use p2poolv2_lib::node::actor::NodeHandle;
@@ -137,7 +138,10 @@ async fn main() -> Result<(), String> {
         .await;
     });
 
-    let (shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
+    let (shares_tx, shares_rx) =
+        tokio::sync::mpsc::channel::<SimplePplnsShare>(STRATUM_SHARES_BUFFER_SIZE);
+    let metrics = metrics::build_metrics();
+    let metrics_cloned = metrics.clone();
 
     tokio::spawn(async move {
         let mut stratum_server = StratumServer::new(
@@ -145,6 +149,7 @@ async fn main() -> Result<(), String> {
             stratum_shutdown_rx,
             connections_handle.clone(),
             shares_tx,
+            metrics_cloned,
         )
         .await;
         info!("Starting Stratum server...");
@@ -157,7 +162,7 @@ async fn main() -> Result<(), String> {
         info!("Stratum server stopped");
     });
 
-    match NodeHandle::new(config, chain_handle, shares_rx).await {
+    match NodeHandle::new(config, chain_handle, shares_rx, metrics).await {
         Ok((_node_handle, stopping_rx)) => {
             info!("Node started");
             if (stopping_rx.await).is_ok() {

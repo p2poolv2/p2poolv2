@@ -22,7 +22,6 @@ pub mod middleware;
 pub mod node;
 pub mod service;
 pub mod shares;
-pub mod stats;
 pub mod store;
 pub mod utils;
 

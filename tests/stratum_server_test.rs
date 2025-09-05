@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use bitcoindrpc::test_utils::{mock_method, setup_mock_bitcoin_rpc};
+use p2poolv2_accounting::stats::metrics;
 use std::net::SocketAddr;
 use std::str;
 use stratum::{
@@ -60,9 +61,16 @@ async fn test_stratum_server_subscribe() {
     };
 
     let (share_block_tx, _share_block_rx) = tokio::sync::mpsc::channel(10);
+    let metrics = metrics::build_metrics();
 
-    let mut server =
-        StratumServer::new(config, shutdown_rx, connections_handle, share_block_tx).await;
+    let mut server = StratumServer::new(
+        config,
+        shutdown_rx,
+        connections_handle,
+        share_block_tx,
+        metrics,
+    )
+    .await;
 
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let tracker_handle = start_tracker_actor();

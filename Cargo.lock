@@ -3188,6 +3188,8 @@ dependencies = [
  "clap",
  "config",
  "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

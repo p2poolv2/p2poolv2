@@ -14,10 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::user::{User, generate_user_id};
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-use stratum::user::{User, generate_user_id};
 
 const USER_STATS_DIR: &str = "user_stats";
 

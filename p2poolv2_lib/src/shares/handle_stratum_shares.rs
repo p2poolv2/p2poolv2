@@ -19,7 +19,7 @@
 use crate::shares::chain::actor::ChainHandle;
 #[cfg(not(test))]
 use crate::shares::chain::actor::ChainHandle;
-use crate::stats::metrics::PoolMetricsWithGuard;
+use p2poolv2_accounting::stats::metrics::PoolMetricsWithGuard;
 use p2poolv2_accounting::{AccountingShare, simple_pplns::SimplePplnsShare};
 use tracing::info;
 

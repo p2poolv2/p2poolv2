@@ -29,6 +29,7 @@ use crate::work::notify::NotifyCmd;
 use crate::work::tracker::TrackerHandle;
 use bitcoindrpc::BitcoinRpcConfig;
 use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
+use p2poolv2_accounting::stats::metrics;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -54,6 +55,7 @@ impl StratumServer {
         shutdown_rx: oneshot::Receiver<()>,
         connections_handle: ClientConnectionsHandle,
         share_block_tx: mpsc::Sender<SimplePplnsShare>,
+        metrics: metrics::PoolMetricsWithGuard,
     ) -> Self {
         Self {
             config,
@@ -321,9 +323,10 @@ mod stratum_server_tests {
         };
 
         let (shares_tx, _shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
+        let metrics = metrics::build_metrics();
 
         let mut server =
-            StratumServer::new(config, shutdown_rx, connections_handle, shares_tx).await;
+            StratumServer::new(config, shutdown_rx, connections_handle, shares_tx, metrics).await;
 
         // Verify the server was created with the correct parameters
         assert_eq!(server.config.port, 12345);
