@@ -14,7 +14,6 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use crate::command::Command;
 use crate::config::Config;
 use crate::node::Node;
@@ -25,8 +24,9 @@ use crate::shares::chain::actor::ChainHandle;
 #[cfg(not(test))]
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::handle_stratum_shares::handle_stratum_shares;
-use crate::stats::metrics;
 use libp2p::futures::StreamExt;
+use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
+use p2poolv2_accounting::stats::metrics::PoolMetricsWithGuard;
 use std::error::Error;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info};
@@ -46,6 +46,7 @@ impl NodeHandle {
         config: Config,
         chain_handle: ChainHandle,
         shares_rx: tokio::sync::mpsc::Receiver<SimplePplnsShare>,
+        metrics: PoolMetricsWithGuard,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
         let (node_actor, stopping_rx) =
@@ -54,8 +55,6 @@ impl NodeHandle {
         tokio::spawn(async move {
             node_actor.run().await;
         });
-
-        let metrics = metrics::build_metrics();
 
         tokio::spawn(async move {
             handle_stratum_shares(shares_rx, chain_handle, metrics.clone()).await;

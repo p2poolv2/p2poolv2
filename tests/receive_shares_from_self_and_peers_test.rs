@@ -17,7 +17,7 @@
 mod common;
 
 use common::{default_test_config, simple_miner_workbase};
-use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
+use p2poolv2_accounting::{simple_pplns::SimplePplnsShare, stats::metrics};
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::node::messages::Message;
 use p2poolv2_lib::node::p2p_message_handlers::handle_request;
@@ -48,11 +48,13 @@ async fn receive_shares_and_workbases_from_self_and_peers() {
         ShareBlock::build_genesis_for_network(config.stratum.network),
     );
     let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
+    let metrics = metrics::build_metrics();
 
     // Start the node
-    let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone(), shares_rx)
-        .await
-        .expect("Failed to create node");
+    let (node_handle, _stop_rx) =
+        NodeHandle::new(config.clone(), chain_handle.clone(), shares_rx, metrics)
+            .await
+            .expect("Failed to create node");
 
     let ckpool_data = fs::read_to_string("tests/test_data/self_shares_and_workbases.json")
         .expect("Failed to read CKPool test data file");
@@ -197,10 +199,12 @@ async fn test_rate_limiting() {
         ShareBlock::build_genesis_for_network(config.stratum.network),
     );
     let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
+    let metrics = metrics::build_metrics();
 
-    let (node_handle, _stop_rx) = NodeHandle::new(config.clone(), chain_handle.clone(), shares_rx)
-        .await
-        .expect("Failed to create node");
+    let (node_handle, _stop_rx) =
+        NodeHandle::new(config.clone(), chain_handle.clone(), shares_rx, metrics)
+            .await
+            .expect("Failed to create node");
 
     let peer_id = libp2p::PeerId::random();
     let (swarm_tx, mut _swarm_rx) = mpsc::channel(100);
