@@ -185,7 +185,7 @@ where
         version_mask,
     );
 
-    let _ = ctx.metrics.increment_connection_count().await;
+    let _ = ctx.metrics.increment_worker_count().await;
     // Process each line as it arrives
     loop {
         tokio::select! {
@@ -240,7 +240,7 @@ where
             }
         }
     }
-    let _ = ctx.metrics.decrement_connection_count().await;
+    let _ = ctx.metrics.decrement_worker_count().await;
     Ok(())
 }
 

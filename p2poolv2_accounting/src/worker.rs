@@ -14,23 +14,18 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::worker::Worker;
 use bitcoin::hashes::{Hash, sha256};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
-const INITIAL_WORKER_MAP_CAPACITY: usize = 10;
-
-/// User record, captures username, id, and hashrate stats
+/// Worker record, captures username, id, and hashrate stats
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct User {
+pub struct Worker {
     /// Unique identifier for the user, a hash of the user's username
     #[serde(skip)]
     pub id: [u8; 32],
-    /// Bitcoin address
-    #[serde(skip)]
-    pub btcaddress: String,
-    /// Timestamp of the last share submitted by the user, time since epoch in ms
+    /// Worker name as provided by the user
+    pub workername: String,
+    /// Timestamp of the last share submitted by the worker, time since epoch in ms
     pub last_share_at: u64,
     /// Difficulty share per second 1min window
     pub share_per_second_1min: u32,
@@ -46,22 +41,15 @@ pub struct User {
     pub shares_valid: u32,
     /// Stale share submissions
     pub shares_stale: u32,
-    /// Workers
-    pub workers: HashMap<String, Worker>,
 }
 
-impl User {
-    /// Create a new user record for a new signing up user.
-    ///
-    /// A user with a given bitcoin address will always have the same id and
-    /// therefore we'll be able to load the historical shares from the data store.
-    ///
-    /// On server restarts the stats will be forgotten in the new process, even though the stats views can load the last stats from disk.
-    pub fn new(btcaddress: String) -> Self {
-        let hash: [u8; 32] = generate_user_id(&btcaddress);
-        User {
+impl Worker {
+    /// Create a new worker record for a new signing up worker.
+    pub fn new(username: String, workername: String) -> Self {
+        let hash: [u8; 32] = generate_worker_id(&username, &workername);
+        Worker {
             id: hash,
-            btcaddress,
+            workername,
             last_share_at: 0,
             share_per_second_1min: 0,
             share_per_second_5min: 0,
@@ -70,14 +58,13 @@ impl User {
             share_per_second_7d: 0,
             shares_valid: 0,
             shares_stale: 0,
-            workers: HashMap::with_capacity(INITIAL_WORKER_MAP_CAPACITY),
         }
     }
 }
 
 /// Generate an id for the a given Bitcoin address to be used as user id.
-pub fn generate_user_id(btcaddress: &str) -> [u8; 32] {
-    sha256::Hash::hash(btcaddress.as_bytes()).to_byte_array()
+pub fn generate_worker_id(username: &str, workername: &str) -> [u8; 32] {
+    sha256::Hash::hash(format!("{username}:{workername}").as_bytes()).to_byte_array()
 }
 
 #[cfg(test)]
@@ -85,25 +72,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_user_creation() {
-        let btc_address = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string();
-        let user = User::new(btc_address.clone());
+    fn test_worker_creation() {
+        let worker = Worker::new("user1".to_string(), "worker1".to_string());
 
         // Verify the ID is calculated correctly
-        let expected_id = sha256::Hash::hash(btc_address.as_bytes()).to_byte_array();
-        assert_eq!(user.id, expected_id);
-
-        // Verify the address is stored correctly
-        assert_eq!(user.btcaddress, btc_address);
+        let expected_id = sha256::Hash::hash(format!("user1:worker1").as_bytes()).to_byte_array();
+        assert_eq!(worker.id, expected_id);
 
         // Verify default values
-        assert_eq!(user.last_share_at, 0);
-        assert_eq!(user.share_per_second_1min, 0);
-        assert_eq!(user.share_per_second_5min, 0);
-        assert_eq!(user.share_per_second_1h, 0);
-        assert_eq!(user.share_per_second_24h, 0);
-        assert_eq!(user.share_per_second_7d, 0);
-        assert!(user.workers.capacity() >= INITIAL_WORKER_MAP_CAPACITY);
-        assert_eq!(user.workers.len(), 0);
+        assert_eq!(worker.last_share_at, 0);
+        assert_eq!(worker.share_per_second_1min, 0);
+        assert_eq!(worker.share_per_second_5min, 0);
+        assert_eq!(worker.share_per_second_1h, 0);
+        assert_eq!(worker.share_per_second_24h, 0);
+        assert_eq!(worker.share_per_second_7d, 0);
+        assert_eq!(worker.shares_valid, 0);
+        assert_eq!(worker.shares_stale, 0);
     }
 }

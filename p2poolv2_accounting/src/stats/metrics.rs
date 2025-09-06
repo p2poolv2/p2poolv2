@@ -15,14 +15,18 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::stats::pool_local_stats::{PoolLocalStats, load_pool_local_stats};
+use std::collections::HashMap;
 use std::time::SystemTime;
 use tokio::sync::{mpsc, oneshot};
 
 const METRICS_MESSAGE_BUFFER_SIZE: usize = 100;
+const INITIAL_USER_MAP_CAPACITY: usize = 1000;
 
 /// Represents the metrics for the P2Poolv2 pool, we derive the stats every five minutes from this
 #[derive(Debug, Clone)]
 pub struct PoolMetrics {
+    /// Username to worker mapping
+    pub user_workers: HashMap<String, u32>,
     /// Number of users
     pub num_users: u32,
     /// Number of workers
@@ -50,6 +54,7 @@ pub struct PoolMetrics {
 impl Default for PoolMetrics {
     fn default() -> Self {
         Self {
+            user_workers: HashMap::with_capacity(INITIAL_USER_MAP_CAPACITY),
             unaccounted_shares: 0,
             unaccounted_difficulty: 0,
             unaccounted_rejected: 0,
@@ -127,16 +132,10 @@ pub enum MetricsMessage {
     RecordShareRejected {
         response: oneshot::Sender<()>,
     },
-    IncrementUserCount {
+    IncrementWorkerCount {
         response: oneshot::Sender<()>,
     },
-    DecrementUserCount {
-        response: oneshot::Sender<()>,
-    },
-    IncrementConnectionCount {
-        response: oneshot::Sender<()>,
-    },
-    DecrementConnectionCount {
+    DecrementWorkerCount {
         response: oneshot::Sender<()>,
     },
     MarkUserIdle {
@@ -196,20 +195,12 @@ impl MetricsActor {
                 self.record_share_rejected();
                 let _ = response.send(());
             }
-            MetricsMessage::IncrementUserCount { response } => {
-                self.increment_user_count();
+            MetricsMessage::IncrementWorkerCount { response } => {
+                self.increment_worker_count();
                 let _ = response.send(());
             }
-            MetricsMessage::DecrementUserCount { response } => {
-                self.decrement_user_count();
-                let _ = response.send(());
-            }
-            MetricsMessage::IncrementConnectionCount { response } => {
-                self.increment_connection_count();
-                let _ = response.send(());
-            }
-            MetricsMessage::DecrementConnectionCount { response } => {
-                self.decrement_connection_count();
+            MetricsMessage::DecrementWorkerCount { response } => {
+                self.decrement_worker_count();
                 let _ = response.send(());
             }
             MetricsMessage::MarkUserIdle { response } => {
@@ -247,25 +238,13 @@ impl MetricsActor {
         self.metrics.total_rejected += 1;
     }
 
-    /// Increment user count
-    fn increment_user_count(&mut self) {
-        self.metrics.num_users += 1;
-    }
-
-    /// Decrement user count
-    fn decrement_user_count(&mut self) {
-        if self.metrics.num_users > 0 {
-            self.metrics.num_users -= 1;
-        }
-    }
-
-    /// Increment connection counts
-    fn increment_connection_count(&mut self) {
+    /// Increment worker counts
+    fn increment_worker_count(&mut self) {
         self.metrics.num_workers += 1;
     }
 
-    /// Decrement connection counts
-    fn decrement_connection_count(&mut self) {
+    /// Decrement worker counts
+    fn decrement_worker_count(&mut self) {
         if self.metrics.num_workers > 0 {
             self.metrics.num_workers -= 1;
         }
@@ -351,7 +330,7 @@ impl MetricsHandle {
                 response: response_tx,
             })
             .await
-            .expect("Metrics actor has been dropped");
+            .expect("Error recording share");
         response_rx.await
     }
 
@@ -365,71 +344,47 @@ impl MetricsHandle {
                 response: response_tx,
             })
             .await
-            .expect("Metrics actor has been dropped");
+            .expect("Error recording share");
         response_rx.await
     }
 
-    /// Increment user count
-    pub async fn increment_user_count(&self) -> Result<(), tokio::sync::oneshot::error::RecvError> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.sender
-            .send(MetricsMessage::IncrementUserCount {
-                response: response_tx,
-            })
-            .await
-            .expect("Metrics actor has been dropped");
-        response_rx.await
-    }
-
-    /// Decrement user count
-    pub async fn decrement_user_count(&self) -> Result<(), tokio::sync::oneshot::error::RecvError> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.sender
-            .send(MetricsMessage::DecrementUserCount {
-                response: response_tx,
-            })
-            .await
-            .expect("Metrics actor has been dropped");
-        response_rx.await
-    }
-
-    /// Increment connection count
-    pub async fn increment_connection_count(
+    /// Increment worker count
+    pub async fn increment_worker_count(
         &self,
     ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.sender
-            .send(MetricsMessage::IncrementConnectionCount {
+            .send(MetricsMessage::IncrementWorkerCount {
                 response: response_tx,
             })
             .await
-            .expect("Metrics actor has been dropped");
+            .expect("Error incrementing worker count");
         response_rx.await
     }
 
-    /// Decrement connection count
-    pub async fn decrement_connection_count(
+    /// Decrement worker count
+    pub async fn decrement_worker_count(
         &self,
     ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.sender
-            .send(MetricsMessage::DecrementConnectionCount {
+            .send(MetricsMessage::DecrementWorkerCount {
                 response: response_tx,
             })
             .await
-            .expect("Metrics actor has been dropped");
+            .expect("Error decrementing worker count");
         response_rx.await
     }
 
-    /// Mark a connection as idle
-    pub async fn mark_connection_idle(&self) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+    /// Mark a user as idle
+    pub async fn mark_user_idle(&self) -> Result<(), tokio::sync::oneshot::error::RecvError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.sender
             .send(MetricsMessage::MarkUserIdle {
                 response: response_tx,
             })
             .await
-            .expect("Metrics actor has been dropped");
+            .expect("Error marking user idle");
         response_rx.await
     }
 
@@ -441,7 +396,7 @@ impl MetricsHandle {
                 response: response_tx,
             })
             .await
-            .expect("Metrics actor has been dropped");
+            .expect("Error committing metrics");
         response_rx.await
     }
 
@@ -453,8 +408,8 @@ impl MetricsHandle {
                 response: response_tx,
             })
             .await
-            .expect("Metrics actor has been dropped");
-        response_rx.await.expect("Metrics actor has been dropped")
+            .expect("Error getting metrics");
+        response_rx.await.expect("Error getting metrics")
     }
 }
 
