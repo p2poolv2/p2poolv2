@@ -16,6 +16,7 @@
 
 pub mod stats;
 pub mod user;
+pub mod worker;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]

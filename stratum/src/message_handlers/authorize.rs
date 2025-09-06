@@ -30,10 +30,7 @@ use tracing::debug;
 /// The session is also updated in response to received messages, if required.
 ///
 /// Some broken implementations of the Stratum protocol send the "mining.authorize" message before "mining.subscribe".
-/// We supoprt this by not checking if the session is subscribed before authorizing.
-///
-/// TBH, this mining.authorize message is not needed at all. No server from ckpool to dataum to SRI is doing anything meaningful with it.
-/// Stratum servers also allow all workers to authrorize over the same connection.
+/// We support this by not checking if the session is subscribed before authorizing.
 pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
     message: SimpleRequest<'a>,
     session: &mut Session<D>,

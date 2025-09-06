@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::user::{User, generate_user_id};
+use crate::user::User;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -45,7 +45,6 @@ pub fn load_user_stats(btcaddress: String, log_dir: &str) -> std::io::Result<Use
     let file = File::open(&path).map_err(|_| std::io::Error::other("File open failed"))?;
     let mut user_stats: User = serde_json::from_reader(file)
         .map_err(|_| std::io::Error::other("JSON deserialization failed"))?;
-    user_stats.id = generate_user_id(&btcaddress);
     user_stats.btcaddress = btcaddress;
     Ok(user_stats)
 }
