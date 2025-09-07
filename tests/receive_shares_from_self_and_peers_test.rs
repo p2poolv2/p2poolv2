@@ -49,7 +49,8 @@ async fn receive_shares_and_workbases_from_self_and_peers() {
     );
     let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
     let stats_dir = tempfile::tempdir().unwrap();
-    let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
+    let metrics_handle =
+        metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
 
     // Start the node
     let (node_handle, _stop_rx) = NodeHandle::new(
@@ -205,7 +206,8 @@ async fn test_rate_limiting() {
     );
     let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
     let stats_dir = tempfile::tempdir().unwrap();
-    let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
+    let metrics_handle =
+        metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
 
     let (node_handle, _stop_rx) = NodeHandle::new(
         config.clone(),

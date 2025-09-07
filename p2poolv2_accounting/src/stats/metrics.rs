@@ -14,7 +14,9 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::stats::pool_local_stats::{PoolLocalStats, load_pool_local_stats};
+use crate::stats::pool_local_stats::{load_pool_local_stats, PoolLocalStats};
+use crate::stats::user::User;
+use crate::stats::worker::Worker;
 use std::collections::HashMap;
 use std::time::SystemTime;
 use tokio::sync::{mpsc, oneshot};
@@ -49,6 +51,8 @@ pub struct PoolMetrics {
     pub start_time: std::time::Instant,
     /// Highest difficulty share
     pub highest_share_difficulty: u64,
+    /// Users in the pool
+    pub users: HashMap<String, User>,
 }
 
 impl Default for PoolMetrics {
@@ -66,14 +70,15 @@ impl Default for PoolMetrics {
             last_share_at: None,
             start_time: std::time::Instant::now(),
             highest_share_difficulty: 0,
+            users: HashMap::with_capacity(INITIAL_USER_MAP_CAPACITY),
         }
     }
 }
 
 impl PoolMetrics {
     /// Load existing metrics from file or build new default
-    pub fn load_existing(log_dir: &str) -> Self {
-        let pool_stats = load_pool_local_stats(log_dir).unwrap_or_default();
+    pub fn load_existing(log_dir: String) -> Self {
+        let pool_stats = load_pool_local_stats(&log_dir).unwrap_or_default();
         PoolMetrics {
             total_accepted: pool_stats.accepted_shares,
             total_rejected: pool_stats.rejected_shares,
@@ -133,6 +138,8 @@ pub enum MetricsMessage {
         response: oneshot::Sender<()>,
     },
     IncrementWorkerCount {
+        btcaddress: String,
+        workername: String,
         response: oneshot::Sender<()>,
     },
     DecrementWorkerCount {
@@ -168,7 +175,10 @@ impl MetricsActor {
     }
 
     /// Create a metrics actor with metrics loaded from the given log directory
-    pub fn with_existing_metrics(log_dir: &str, receiver: mpsc::Receiver<MetricsMessage>) -> Self {
+    pub fn with_existing_metrics(
+        log_dir: String,
+        receiver: mpsc::Receiver<MetricsMessage>,
+    ) -> Self {
         Self {
             metrics: PoolMetrics::load_existing(log_dir),
             receiver,
@@ -195,8 +205,12 @@ impl MetricsActor {
                 self.record_share_rejected();
                 let _ = response.send(());
             }
-            MetricsMessage::IncrementWorkerCount { response } => {
-                self.increment_worker_count();
+            MetricsMessage::IncrementWorkerCount {
+                btcaddress,
+                workername,
+                response,
+            } => {
+                self.increment_worker_count(btcaddress, workername);
                 let _ = response.send(());
             }
             MetricsMessage::DecrementWorkerCount { response } => {
@@ -239,8 +253,17 @@ impl MetricsActor {
     }
 
     /// Increment worker counts
-    fn increment_worker_count(&mut self) {
+    fn increment_worker_count(&mut self, btcaddress: String, workername: String) {
         self.metrics.num_workers += 1;
+        self.metrics
+            .users
+            .entry(btcaddress.clone())
+            .or_insert_with(|| {
+                let mut user = User::new(&btcaddress);
+                let worker = Worker::new(&btcaddress, &workername);
+                user.workers.insert(workername, worker);
+                user
+            });
     }
 
     /// Decrement worker counts
@@ -351,11 +374,15 @@ impl MetricsHandle {
     /// Increment worker count
     pub async fn increment_worker_count(
         &self,
+        btcaddress: &str,
+        workername: &str,
     ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.sender
             .send(MetricsMessage::IncrementWorkerCount {
                 response: response_tx,
+                btcaddress: btcaddress.to_string(),
+                workername: workername.to_string(),
             })
             .await
             .expect("Error incrementing worker count");
@@ -414,14 +441,13 @@ impl MetricsHandle {
 }
 
 /// Construct a new metrics actor with existing metrics and return its handle
-pub async fn build_metrics(log_dir: &str) -> MetricsHandle {
+pub async fn build_metrics(log_dir: String) -> MetricsHandle {
     let (sender, receiver) = mpsc::channel(METRICS_MESSAGE_BUFFER_SIZE);
     let actor = MetricsActor::with_existing_metrics(log_dir, receiver);
-    let handle = MetricsHandle { sender };
     tokio::spawn(async move {
         actor.run().await;
     });
-    handle
+    MetricsHandle { sender }
 }
 
 #[cfg(test)]
@@ -469,7 +495,7 @@ mod tests {
     #[tokio::test]
     async fn test_record_share_accepted() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = build_metrics(log_dir.path().to_str().unwrap()).await;
+        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
         let _ = handle.record_share_accepted(100).await;
 
         let metrics = handle.get_metrics().await;
@@ -495,7 +521,7 @@ mod tests {
     #[tokio::test]
     async fn test_record_share_rejected() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = build_metrics(log_dir.path().to_str().unwrap()).await;
+        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
         let _ = handle.record_share_rejected().await;
         let metrics = handle.get_metrics().await;
         assert_eq!(metrics.unaccounted_rejected, 1);
@@ -508,7 +534,7 @@ mod tests {
     #[tokio::test]
     async fn test_metrics_commit() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = build_metrics(log_dir.path().to_str().unwrap()).await;
+        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
 
         let _ = handle.record_share_accepted(100).await;
         let _ = handle.record_share_accepted(200).await;

@@ -62,7 +62,8 @@ async fn test_stratum_server_subscribe() {
 
     let (share_block_tx, _share_block_rx) = tokio::sync::mpsc::channel(10);
     let stats_dir = tempfile::tempdir().unwrap();
-    let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
+    let metrics_handle =
+        metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
 
     let mut server =
         StratumServer::new(config, shutdown_rx, connections_handle, share_block_tx).await;

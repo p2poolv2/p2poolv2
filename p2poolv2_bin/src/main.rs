@@ -21,8 +21,8 @@ use p2poolv2_accounting::stats::metrics;
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::logging::setup_logging;
 use p2poolv2_lib::node::actor::NodeHandle;
-use p2poolv2_lib::shares::ShareBlock;
 use p2poolv2_lib::shares::chain::actor::ChainHandle;
+use p2poolv2_lib::shares::ShareBlock;
 use std::process::exit;
 use std::str::FromStr;
 use stratum::client_connections::start_connections_handler;
@@ -140,7 +140,7 @@ async fn main() -> Result<(), String> {
 
     let (shares_tx, shares_rx) =
         tokio::sync::mpsc::channel::<SimplePplnsShare>(STRATUM_SHARES_BUFFER_SIZE);
-    let metrics_handle = metrics::build_metrics(config.logging.stats_dir.as_str()).await;
+    let metrics_handle = metrics::build_metrics(config.logging.stats_dir.clone()).await;
     let metrics_cloned = metrics_handle.clone();
 
     tokio::spawn(async move {
