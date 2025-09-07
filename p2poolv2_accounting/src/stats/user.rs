@@ -14,7 +14,20 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::worker::Worker;
+//! User management and statistics for P2Poolv2.
+//!
+//! This module provides functionality for tracking users and their mining statistics.
+//! It includes mechanisms for:
+//!
+//! - Creating and managing user records
+//! - Tracking user hashrate across various time windows
+//! - Managing user workers
+//! - Generating unique user IDs from Bitcoin addresses
+//!
+//! User statistics are maintained in memory during runtime and are persisted
+//! to disk every 5 minutes.
+
+use crate::stats::worker::Worker;
 use bitcoin::hashes::{Hash, sha256};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

@@ -15,8 +15,6 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod stats;
-pub mod user;
-pub mod worker;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]

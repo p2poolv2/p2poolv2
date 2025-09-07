@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::user::User;
+use crate::stats::user::User;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
