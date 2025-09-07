@@ -28,7 +28,7 @@
 //! to disk every 5 minutes.
 
 use crate::stats::worker::Worker;
-use bitcoin::hashes::{Hash, sha256};
+use bitcoin::hashes::{sha256, Hash};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -40,9 +40,6 @@ pub struct User {
     /// Unique identifier for the user, a hash of the user's username
     #[serde(skip)]
     pub id: [u8; 32],
-    /// Bitcoin address
-    #[serde(skip)]
-    pub btcaddress: String,
     /// Timestamp of the last share submitted by the user, time since epoch in ms
     pub last_share_at: u64,
     /// Difficulty share per second 1min window
@@ -59,7 +56,7 @@ pub struct User {
     pub shares_valid: u32,
     /// Stale share submissions
     pub shares_stale: u32,
-    /// Workers
+    /// Workers for the user
     pub workers: HashMap<String, Worker>,
 }
 
@@ -70,11 +67,10 @@ impl User {
     /// therefore we'll be able to load the historical shares from the data store.
     ///
     /// On server restarts the stats will be forgotten in the new process, even though the stats views can load the last stats from disk.
-    pub fn new(btcaddress: String) -> Self {
-        let hash: [u8; 32] = generate_user_id(&btcaddress);
+    pub fn new(btcaddress: &str) -> Self {
+        let hash: [u8; 32] = generate_user_id(btcaddress);
         User {
             id: hash,
-            btcaddress,
             last_share_at: 0,
             share_per_second_1min: 0,
             share_per_second_5min: 0,
@@ -99,15 +95,12 @@ mod tests {
 
     #[test]
     fn test_user_creation() {
-        let btc_address = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string();
-        let user = User::new(btc_address.clone());
+        let btc_address = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
+        let user = User::new(btc_address);
 
         // Verify the ID is calculated correctly
         let expected_id = sha256::Hash::hash(btc_address.as_bytes()).to_byte_array();
         assert_eq!(user.id, expected_id);
-
-        // Verify the address is stored correctly
-        assert_eq!(user.btcaddress, btc_address);
 
         // Verify default values
         assert_eq!(user.last_share_at, 0);

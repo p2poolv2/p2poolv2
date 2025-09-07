@@ -22,10 +22,10 @@ use std::path::Path;
 const USER_STATS_DIR: &str = "user_stats";
 
 /// Save user stats to log dir
-pub fn save_user_stats(user: &User, log_dir: &str) -> std::io::Result<()> {
-    let path = Path::new(log_dir)
+pub fn save_user_stats(btcaddress: &str, user: &User, log_dir: String) -> std::io::Result<()> {
+    let path = Path::new(&log_dir)
         .join(USER_STATS_DIR)
-        .join(format!("{}.json", user.btcaddress));
+        .join(format!("{btcaddress}.json"));
     let serialized = serde_json::to_string_pretty(user)
         .map_err(|_| std::io::Error::other("JSON serialization failed"))?;
 
@@ -38,14 +38,13 @@ pub fn save_user_stats(user: &User, log_dir: &str) -> std::io::Result<()> {
 }
 
 /// Load user stats from log dir
-pub fn load_user_stats(btcaddress: String, log_dir: &str) -> std::io::Result<User> {
+pub fn load_user_stats(btcaddress: &str, log_dir: &str) -> std::io::Result<User> {
     let path = Path::new(log_dir)
         .join(USER_STATS_DIR)
         .join(format!("{btcaddress}.json"));
     let file = File::open(&path).map_err(|_| std::io::Error::other("File open failed"))?;
-    let mut user_stats: User = serde_json::from_reader(file)
+    let user_stats: User = serde_json::from_reader(file)
         .map_err(|_| std::io::Error::other("JSON deserialization failed"))?;
-    user_stats.btcaddress = btcaddress;
     Ok(user_stats)
 }
 
@@ -66,18 +65,17 @@ mod tests {
         fs::create_dir_all(&stats_dir).unwrap();
 
         // Create a test user
-        let mut user = User::new("test_address".to_string());
+        let mut user = User::new("test_address");
         user.shares_valid = 10;
         user.shares_stale = 2;
 
         // Save the user stats
-        save_user_stats(&user, log_dir).unwrap();
+        save_user_stats("test_address", &user, log_dir.to_string()).unwrap();
 
         // Load the user stats
-        let loaded_user = load_user_stats("test_address".to_string(), log_dir).unwrap();
+        let loaded_user = load_user_stats("test_address", log_dir).unwrap();
 
         // Verify that the loaded user matches the original
-        assert_eq!(loaded_user.btcaddress, user.btcaddress);
         assert_eq!(loaded_user.shares_valid, user.shares_valid);
         assert_eq!(loaded_user.shares_stale, user.shares_stale);
     }
@@ -93,7 +91,7 @@ mod tests {
         fs::create_dir_all(&stats_dir).unwrap();
 
         // Try to load stats for a user that doesn't exist
-        let result = load_user_stats("nonexistent_address".to_string(), log_dir);
+        let result = load_user_stats("nonexistent_address", log_dir);
 
         // Verify that the operation failed
         assert!(result.is_err());

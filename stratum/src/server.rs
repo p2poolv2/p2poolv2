@@ -185,7 +185,6 @@ where
         version_mask,
     );
 
-    let _ = ctx.metrics.increment_worker_count().await;
     // Process each line as it arrives
     loop {
         tokio::select! {
@@ -240,7 +239,6 @@ where
             }
         }
     }
-    let _ = ctx.metrics.decrement_worker_count().await;
     Ok(())
 }
 
@@ -328,7 +326,8 @@ mod stratum_server_tests {
 
         let (shares_tx, _shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
+        let metrics_handle =
+            metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
 
         let mut server =
             StratumServer::new(config, shutdown_rx, connections_handle, shares_tx).await;
@@ -385,7 +384,8 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
+        let metrics_handle =
+            metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -492,7 +492,8 @@ mod stratum_server_tests {
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
+        let metrics_handle =
+            metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -553,7 +554,8 @@ mod stratum_server_tests {
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
+        let metrics_handle =
+            metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -619,7 +621,8 @@ mod stratum_server_tests {
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
+        let metrics_handle =
+            metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -705,7 +708,8 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
+        let metrics_handle =
+            metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -810,7 +814,8 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
+        let metrics_handle =
+            metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
 
         let ctx = StratumContext {
             notify_tx,

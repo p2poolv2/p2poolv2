@@ -107,7 +107,8 @@ mod tests {
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
+        let metrics_handle =
+            metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -199,7 +200,8 @@ mod tests {
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
+        let metrics_handle =
+            metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -251,7 +253,8 @@ mod tests {
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
+        let metrics_handle =
+            metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
 
         let ctx = StratumContext {
             notify_tx,

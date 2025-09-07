@@ -44,7 +44,8 @@ async fn test_single_node_with_zmq_feed_of_workbases_only() {
     );
     let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
     let stats_dir = tempfile::tempdir().unwrap();
-    let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
+    let metrics_handle =
+        metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
 
     // Start the node
     let (node_handle, _stop_rx) = NodeHandle::new(
@@ -123,7 +124,8 @@ async fn test_single_node_with_zmq_feed_of_shares_only() {
     );
     let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
     let stats_dir = tempfile::tempdir().unwrap();
-    let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
+    let metrics_handle =
+        metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
 
     // Start the node
     let (node_handle, _stop_rx) = NodeHandle::new(
@@ -222,7 +224,8 @@ async fn test_single_node_with_shares_and_workbases() {
     );
     let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
     let stats_dir = tempfile::tempdir().unwrap();
-    let metrics_handle = metrics::build_metrics(stats_dir.path().to_str().unwrap()).await;
+    let metrics_handle =
+        metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
 
     // Start the node
     let (node_handle, _stop_rx) = NodeHandle::new(
