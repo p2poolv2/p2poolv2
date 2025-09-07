@@ -14,6 +14,18 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+//! Worker statistics management for P2Pool accounting
+//!
+//! This module provides functionality for tracking and managing worker statistics
+//! in the P2Pool mining ecosystem. It handles:
+//!
+//! - Worker identification through unique IDs derived from usernames and worker names
+//! - Hash rate tracking across multiple time windows
+//! - Share submission statistics including valid and stale shares
+//!
+//! Worker records serve as the basis for tracking individual miner performance
+//! and calculating rewards distribution using the accounting modules.
+
 use bitcoin::hashes::{Hash, sha256};
 use serde::{Deserialize, Serialize};
 

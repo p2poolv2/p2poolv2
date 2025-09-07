@@ -16,4 +16,6 @@
 
 pub mod metrics;
 pub mod pool_local_stats;
+pub mod user;
 pub mod user_stats;
+pub mod worker;
