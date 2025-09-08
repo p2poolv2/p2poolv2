@@ -65,6 +65,15 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
     session.btcaddress = Some(parsed_username.0.to_string());
     session.workername = parsed_username.1.map(|s| s.to_string());
     session.password = message.params[1].clone();
+
+    let _ = ctx
+        .metrics
+        .increment_worker_count(
+            session.username.as_ref().unwrap(),
+            session.workername.clone().unwrap_or("".to_string()),
+        )
+        .await;
+
     session
         .difficulty_adjuster
         .set_current_difficulty(ctx.start_difficulty);

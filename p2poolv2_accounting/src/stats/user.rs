@@ -56,7 +56,7 @@ pub struct User {
     pub shares_valid: u32,
     /// Stale share submissions
     pub shares_stale: u32,
-    /// Workers for the user
+    /// Workers for the user, we maintain list of disconnected workers for persistent stats
     pub workers: HashMap<String, Worker>,
 }
 

@@ -239,6 +239,13 @@ where
             }
         }
     }
+    let _ = ctx
+        .metrics
+        .decrement_worker_count(
+            session.btcaddress.clone(),
+            session.workername.clone().unwrap_or_default(),
+        )
+        .await;
     Ok(())
 }
 
