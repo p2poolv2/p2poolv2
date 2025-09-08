@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::stats::pool_local_stats::{load_pool_local_stats, PoolLocalStats};
+use crate::stats::pool_local_stats::{PoolLocalStats, load_pool_local_stats};
 use crate::stats::user::User;
 use crate::stats::worker::Worker;
 use std::collections::HashMap;
@@ -143,6 +143,8 @@ pub enum MetricsMessage {
         response: oneshot::Sender<()>,
     },
     DecrementWorkerCount {
+        btcaddress: Option<String>,
+        workername: String,
         response: oneshot::Sender<()>,
     },
     MarkUserIdle {
@@ -213,8 +215,12 @@ impl MetricsActor {
                 self.increment_worker_count(btcaddress, workername);
                 let _ = response.send(());
             }
-            MetricsMessage::DecrementWorkerCount { response } => {
-                self.decrement_worker_count();
+            MetricsMessage::DecrementWorkerCount {
+                btcaddress,
+                workername,
+                response,
+            } => {
+                self.decrement_worker_count(btcaddress, workername);
                 let _ = response.send(());
             }
             MetricsMessage::MarkUserIdle { response } => {
@@ -252,7 +258,7 @@ impl MetricsActor {
         self.metrics.total_rejected += 1;
     }
 
-    /// Increment worker counts
+    /// Increment worker counts - called after worker has authorised successfully.
     fn increment_worker_count(&mut self, btcaddress: String, workername: String) {
         self.metrics.num_workers += 1;
         self.metrics
@@ -266,10 +272,18 @@ impl MetricsActor {
             });
     }
 
-    /// Decrement worker counts
-    fn decrement_worker_count(&mut self) {
-        if self.metrics.num_workers > 0 {
-            self.metrics.num_workers -= 1;
+    /// Decrement pool wide worker counts, if worker found as authorised. Unauthorised workers are not counted.
+    /// Also marks Worker inactive, if found.
+    fn decrement_worker_count(&mut self, btcaddress: Option<String>, workername: String) {
+        if let Some(btcaddress) = btcaddress {
+            if self.metrics.num_workers > 0 {
+                self.metrics.num_workers -= 1;
+            }
+            if let Some(user) = self.metrics.users.get_mut(&btcaddress) {
+                if let Some(worker) = user.workers.get_mut(&workername) {
+                    worker.active = false;
+                }
+            }
         }
     }
 
@@ -375,14 +389,14 @@ impl MetricsHandle {
     pub async fn increment_worker_count(
         &self,
         btcaddress: &str,
-        workername: &str,
+        workername: String,
     ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.sender
             .send(MetricsMessage::IncrementWorkerCount {
                 response: response_tx,
                 btcaddress: btcaddress.to_string(),
-                workername: workername.to_string(),
+                workername,
             })
             .await
             .expect("Error incrementing worker count");
@@ -392,10 +406,14 @@ impl MetricsHandle {
     /// Decrement worker count
     pub async fn decrement_worker_count(
         &self,
+        btcaddress: Option<String>,
+        workername: String,
     ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.sender
             .send(MetricsMessage::DecrementWorkerCount {
+                btcaddress,
+                workername,
                 response: response_tx,
             })
             .await
@@ -412,6 +430,18 @@ impl MetricsHandle {
             })
             .await
             .expect("Error marking user idle");
+        response_rx.await
+    }
+
+    /// Mark a user as active
+    pub async fn mark_user_active(&self) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(MetricsMessage::MarkUserActive {
+                response: response_tx,
+            })
+            .await
+            .expect("Error marking user active");
         response_rx.await
     }
 
@@ -552,5 +582,139 @@ mod tests {
         assert_eq!(metrics.unaccounted_difficulty, 0);
         assert_eq!(metrics.unaccounted_rejected, 0);
         assert_eq!(metrics.highest_share_difficulty, 200);
+    }
+
+    #[tokio::test]
+    async fn test_increment_worker_count() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
+
+        let btcaddress = "user1";
+        let workername = "workerA".to_string();
+
+        let _ = handle
+            .increment_worker_count(btcaddress, workername.clone())
+            .await;
+        let metrics = handle.get_metrics().await;
+
+        assert_eq!(metrics.num_workers, 1);
+        assert!(metrics.users.contains_key(btcaddress));
+        let user = metrics.users.get(btcaddress).unwrap();
+        assert!(user.workers.contains_key(&workername));
+        assert!(user.workers.get(&workername).unwrap().active);
+    }
+
+    #[tokio::test]
+    async fn test_decrement_worker_count() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
+
+        let btcaddress = "user2";
+        let workername = "workerB".to_string();
+
+        // Increment first
+        let _ = handle
+            .increment_worker_count(btcaddress, workername.clone())
+            .await;
+        let metrics = handle.get_metrics().await;
+        assert_eq!(metrics.num_workers, 1);
+
+        // Decrement
+        let _ = handle
+            .decrement_worker_count(Some(btcaddress.to_string()), workername.clone())
+            .await;
+        let metrics = handle.get_metrics().await;
+        assert_eq!(metrics.num_workers, 0);
+
+        // Worker should be marked inactive
+        let user = metrics.users.get(btcaddress).unwrap();
+        assert!(!user.workers.get(&workername).unwrap().active);
+
+        // Decrement again, num_workers should not go below zero
+        let _ = handle
+            .decrement_worker_count(Some(btcaddress.to_string()), workername.clone())
+            .await;
+        let metrics = handle.get_metrics().await;
+        assert_eq!(metrics.num_workers, 0);
+    }
+
+    #[tokio::test]
+    async fn test_decrement_worker_count_none_btcaddress() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
+
+        let btcaddress = "user3";
+        let workername = "workerC".to_string();
+
+        // Increment first
+        let _ = handle
+            .increment_worker_count(btcaddress, workername.clone())
+            .await;
+        let metrics = handle.get_metrics().await;
+        assert_eq!(metrics.num_workers, 1);
+
+        // Decrement with None btcaddress, should not change num_workers or worker state
+        let _ = handle
+            .decrement_worker_count(None, workername.clone())
+            .await;
+        let metrics = handle.get_metrics().await;
+        assert_eq!(metrics.num_workers, 1);
+
+        // Worker should still be active
+        let user = metrics.users.get(btcaddress).unwrap();
+        assert!(user.workers.get(&workername).unwrap().active);
+    }
+
+    #[tokio::test]
+    async fn test_mark_user_idle_and_active() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
+
+        // Initially idle users should be 0
+        let metrics = handle.get_metrics().await;
+        assert_eq!(metrics.num_idle_users, 0);
+
+        // Mark user idle
+        let _ = handle.mark_user_idle().await;
+        let metrics = handle.get_metrics().await;
+        assert_eq!(metrics.num_idle_users, 1);
+
+        // Mark user active (should decrement inc and then dec idle count)
+        let _ = handle.mark_user_idle().await;
+        let _ = handle.mark_user_active().await;
+        let metrics = handle.get_metrics().await;
+        assert_eq!(metrics.num_idle_users, 1);
+
+        // Mark user active again (should increment to 2)
+        let _ = handle.mark_user_idle().await;
+        let metrics = handle.get_metrics().await;
+        assert_eq!(metrics.num_idle_users, 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_metrics_consistency() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
+
+        let _ = handle.record_share_accepted(123).await;
+        let _ = handle.record_share_rejected().await;
+        let _ = handle
+            .increment_worker_count("user4", "workerD".to_string())
+            .await;
+
+        let metrics = handle.get_metrics().await;
+        assert_eq!(metrics.unaccounted_shares, 1);
+        assert_eq!(metrics.unaccounted_difficulty, 123);
+        assert_eq!(metrics.unaccounted_rejected, 1);
+        assert_eq!(metrics.num_workers, 1);
+        assert!(metrics.users.contains_key("user4"));
+        assert!(
+            metrics
+                .users
+                .get("user4")
+                .unwrap()
+                .workers
+                .contains_key("workerD")
+        );
     }
 }

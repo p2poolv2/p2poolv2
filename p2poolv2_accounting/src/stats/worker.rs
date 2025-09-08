@@ -51,6 +51,8 @@ pub struct Worker {
     pub shares_valid: u32,
     /// Stale share submissions
     pub shares_stale: u32,
+    /// Active state
+    pub active: bool,
 }
 
 impl Worker {
@@ -67,6 +69,7 @@ impl Worker {
             share_per_second_7d: 0,
             shares_valid: 0,
             shares_stale: 0,
+            active: true,
         }
     }
 }
