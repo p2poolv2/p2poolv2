@@ -2299,7 +2299,8 @@ mod tests {
 
         // Create a PPLNS share
         let pplns_share = SimplePplnsShare {
-            miner_btcaddress: "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string(),
+            btcaddress: "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string(),
+            workername: "".to_string(),
             difficulty: 1,
         };
 

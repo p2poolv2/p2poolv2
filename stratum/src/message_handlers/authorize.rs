@@ -69,8 +69,8 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
     let _ = ctx
         .metrics
         .increment_worker_count(
-            session.username.as_ref().unwrap(),
-            session.workername.clone().unwrap_or("".to_string()),
+            session.btcaddress.clone().unwrap_or_default(),
+            session.workername.clone().unwrap_or_default(),
         )
         .await;
 

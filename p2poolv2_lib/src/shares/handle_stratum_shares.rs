@@ -33,7 +33,7 @@ pub async fn handle_stratum_shares(
     while let Some(share) = shares_rx.recv().await {
         info!("Received share: {:?}", share);
 
-        let _ = metrics.record_share_accepted(share.get_difficulty()).await;
+        let _ = metrics.record_share_accepted(share.clone()).await;
         let _ = chain_handle.add_pplns_share(share).await;
     }
     info!("Shares channel closed, stopping share handler.");

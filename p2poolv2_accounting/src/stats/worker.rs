@@ -26,7 +26,7 @@
 //! Worker records serve as the basis for tracking individual miner performance
 //! and calculating rewards distribution using the accounting modules.
 
-use bitcoin::hashes::{sha256, Hash};
+use bitcoin::hashes::{Hash, sha256};
 use serde::{Deserialize, Serialize};
 
 /// Worker record, captures username, id, and hashrate stats
@@ -49,10 +49,12 @@ pub struct Worker {
     pub share_per_second_7d: u32,
     /// Valid share submissions
     pub shares_valid: u32,
-    /// Stale share submissions
-    pub shares_stale: u32,
     /// Active state
     pub active: bool,
+    /// Best share in this instance of the server
+    pub best_share: u64,
+    /// Best ever share, loaded from disk on startup
+    pub best_share_ever: Option<u64>,
 }
 
 impl Worker {
@@ -68,8 +70,25 @@ impl Worker {
             share_per_second_24h: 0,
             share_per_second_7d: 0,
             shares_valid: 0,
-            shares_stale: 0,
             active: true,
+            best_share: 0,
+            best_share_ever: None,
+        }
+    }
+
+    /// Record a share submission for the worker, updating stats accordingly.
+    pub fn record_share(&mut self, difficulty: u64, unix_timestamp: u64) {
+        self.last_share_at = unix_timestamp;
+        self.shares_valid += 1;
+        if difficulty > self.best_share {
+            self.best_share = difficulty;
+        }
+        if let Some(best_ever) = self.best_share_ever {
+            if difficulty > best_ever {
+                self.best_share_ever = Some(difficulty);
+            }
+        } else {
+            self.best_share_ever = Some(difficulty);
         }
     }
 }
@@ -99,6 +118,51 @@ mod tests {
         assert_eq!(worker.share_per_second_24h, 0);
         assert_eq!(worker.share_per_second_7d, 0);
         assert_eq!(worker.shares_valid, 0);
-        assert_eq!(worker.shares_stale, 0);
+    }
+
+    #[test]
+    fn test_record_share_updates_stats() {
+        let mut worker = Worker::new("user2", "worker2");
+        let timestamp = 1_650_000_000_000;
+        let difficulty = 1000;
+
+        // Initial state
+        assert_eq!(worker.last_share_at, 0);
+        assert_eq!(worker.shares_valid, 0);
+        assert_eq!(worker.best_share, 0);
+        assert_eq!(worker.best_share_ever, None);
+
+        // First share
+        worker.record_share(difficulty, timestamp);
+        assert_eq!(worker.last_share_at, timestamp);
+        assert_eq!(worker.shares_valid, 1);
+        assert_eq!(worker.best_share, difficulty);
+        assert_eq!(worker.best_share_ever, Some(difficulty));
+
+        /// New best share
+        worker.record_share(2000, timestamp + 1000);
+        assert_eq!(worker.last_share_at, timestamp + 1000);
+        assert_eq!(worker.shares_valid, 2);
+        assert_eq!(worker.best_share, 2000);
+        assert_eq!(worker.best_share_ever, Some(2000));
+
+        // Submit a lower difficulty share, best_share and best_share_ever should not change
+        worker.record_share(500, timestamp + 2000);
+        assert_eq!(worker.last_share_at, timestamp + 2000);
+        assert_eq!(worker.shares_valid, 3);
+        assert_eq!(worker.best_share, 2000);
+        assert_eq!(worker.best_share_ever, Some(2000));
+    }
+
+    #[test]
+    fn test_generate_worker_id_consistency() {
+        let id1 = generate_worker_id("alice", "workerA");
+        let id2 = generate_worker_id("alice", "workerA");
+        let id3 = generate_worker_id("alice", "workerB");
+        let id4 = generate_worker_id("bob", "workerA");
+
+        assert_eq!(id1, id2);
+        assert_ne!(id1, id3);
+        assert_ne!(id1, id4);
     }
 }

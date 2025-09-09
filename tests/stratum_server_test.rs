@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use bitcoindrpc::test_utils::{mock_method, setup_mock_bitcoin_rpc};
-use p2poolv2_accounting::stats::{self, metrics};
+use p2poolv2_accounting::stats::metrics;
 use std::net::SocketAddr;
 use std::str;
 use stratum::{
