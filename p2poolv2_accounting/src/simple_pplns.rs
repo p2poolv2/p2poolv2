@@ -30,14 +30,16 @@ pub struct SimplePplns<T> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimplePplnsShare {
     pub difficulty: u64,
-    pub miner_btcaddress: String,
+    pub btcaddress: String,
+    pub workername: String,
 }
 
 impl SimplePplnsShare {
-    pub fn new(difficulty: u64, miner_btcaddress: String) -> Self {
+    pub fn new(difficulty: u64, btcaddress: String, workername: String) -> Self {
         SimplePplnsShare {
             difficulty,
-            miner_btcaddress,
+            btcaddress,
+            workername,
         }
     }
 
@@ -99,7 +101,7 @@ impl AccountingShare for SimplePplnsShare {
     }
 
     fn get_miner_btcaddress(&self) -> String {
-        self.miner_btcaddress.clone()
+        self.btcaddress.clone()
     }
 }
 

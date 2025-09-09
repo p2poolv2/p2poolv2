@@ -96,11 +96,12 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
 
     let stratum_share = SimplePplnsShare::new(
         session.difficulty_adjuster.get_current_difficulty(),
-        session.btcaddress.clone().unwrap(),
+        session.btcaddress.clone().unwrap_or_default(),
+        session.workername.clone().unwrap_or_default(),
     );
 
     shares_tx
-        .send(stratum_share)
+        .send(stratum_share.clone())
         .await
         .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;
 
@@ -108,9 +109,7 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     let truediff = get_true_difficulty(&block.block_hash());
     debug!("True difficulty: {}", truediff);
 
-    let _ = metrics
-        .record_share_accepted(session.difficulty_adjuster.get_current_difficulty())
-        .await;
+    let _ = metrics.record_share_accepted(stratum_share).await;
 
     let (new_difficulty, _is_first_share) = session.difficulty_adjuster.record_share_submission(
         truediff,

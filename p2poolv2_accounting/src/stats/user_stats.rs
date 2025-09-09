@@ -67,7 +67,6 @@ mod tests {
         // Create a test user
         let mut user = User::new("test_address");
         user.shares_valid = 10;
-        user.shares_stale = 2;
 
         // Save the user stats
         save_user_stats("test_address", &user, log_dir.to_string()).unwrap();
@@ -77,7 +76,6 @@ mod tests {
 
         // Verify that the loaded user matches the original
         assert_eq!(loaded_user.shares_valid, user.shares_valid);
-        assert_eq!(loaded_user.shares_stale, user.shares_stale);
     }
 
     #[test]
