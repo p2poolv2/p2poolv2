@@ -33,9 +33,9 @@ cargo run --release -p mock-bitcoind
 ==== P2Poolv2 Stratum Server
 
 ```bash
-cd p2pool-v2
+cd p2poolv2
 cargo build --workspace --release
-./target/release/p2pool-v2 --config=config-testnet4.toml
+./target/release/p2poolv2 --config=config-testnet4.toml
 ```
 
 ==== CKPool Stratum Server

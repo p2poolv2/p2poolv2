@@ -4,15 +4,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'p2pool-v2'",
+            "name": "Debug executable 'p2poolv2'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=p2pool-v2",
-                    "--package=p2pool-v2"
+                    "--bin=p2poolv2",
+                    "--package=p2poolv2"
                 ],
                 "filter": {
-                    "name": "p2pool-v2",
+                    "name": "p2poolv2",
                     "kind": "bin"
                 }
             },

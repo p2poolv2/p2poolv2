@@ -43,44 +43,16 @@ services:
         max-size: "100m"
         max-file: "3"
 
-  ckpool:
-    build:
-      context: .
-      dockerfile: Dockerfile.ckpool-solo
-    ports:
-      - "3333:3333"
-      - "8881:8881"
-    depends_on:
-      bitcoind:
-        condition: service_healthy
-    restart: unless-stopped
-    command: /ckpool/src/ckpool --btcsolo --config=/ckpool-solo-${NETWORK:-signet}.json --log-shares --loglevel=7
-    healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "3333"]
-      interval: 5s
-      timeout: 3s
-      retries: 3
-      start_period: 10s
-    networks:
-      - p2pool_network
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "3"
-
   p2pool: &p2pool-base
     build:
       context: ..
       dockerfile: docker/Dockerfile.p2pool
     depends_on:
       - bitcoind
-      - ckpool
     environment:
       - P2POOL_BITCOIN_NETWORK=${NETWORK:-signet}
       - P2POOL_BITCOIN_URL=bitcoind:${BTC_RPC_PORT:-38332}
       - P2POOL_STORE_PATH=/data/${NETWORK:-signet}
-      - P2POOL_CKPOOL_HOST=ckpool
       - RUST_LOG=info
     command: /p2pool/target/release/p2poolv2 --config=/p2pool/config.toml
     volumes:

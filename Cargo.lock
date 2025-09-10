@@ -3143,7 +3143,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
 
 [[package]]
-name = "p2pool-v2"
+name = "p2poolv2"
 version = "0.1.0"
 dependencies = [
  "bitcoin",
@@ -3158,25 +3158,6 @@ dependencies = [
  "tokio",
  "tracing",
  "zmq",
-]
-
-[[package]]
-name = "p2poolv2"
-version = "0.1.0"
-dependencies = [
- "bitcoin",
- "bitcoindrpc",
- "clap",
- "config",
- "mockall",
- "mockall_double",
- "p2poolv2_accounting",
- "p2poolv2_lib",
- "serde",
- "stratum",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -3246,6 +3227,25 @@ dependencies = [
  "void",
  "wiremock",
  "zmq",
+]
+
+[[package]]
+name = "p2poolv2_node"
+version = "0.1.0"
+dependencies = [
+ "bitcoin",
+ "bitcoindrpc",
+ "clap",
+ "config",
+ "mockall",
+ "mockall_double",
+ "p2poolv2_accounting",
+ "p2poolv2_lib",
+ "serde",
+ "stratum",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

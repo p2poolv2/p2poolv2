@@ -1,11 +1,11 @@
-image:https://github.com/pool2win/p2pool-v2/actions/workflows/rust.yml/badge.svg[Rust CI, link=https://github.com/pool2win/p2pool-v2/actions/workflows/rust.yml]
-image:https://codecov.io/gh/pool2win/p2pool-v2/graph/badge.svg?token=Xeu4GFdASS[Codecov, link=https://codecov.io/gh/pool2win/p2pool-v2]
+image:https://github.com/p2poolv2/p2poolv2/actions/workflows/rust.yml/badge.svg[Rust CI, link=https://github.com/p2poolv2/p2poolv2/actions/workflows/rust.yml]
+image:https://codecov.io/gh/p2poolv2/p2poolv2/graph/badge.svg?token=Xeu4GFdASS[Codecov, link=https://codecov.io/gh/p2poolv2/p2poolv2]
 
 We chat on https://matrix.to/#/#p2poolv2:matrix.org[Matrix].
 
-We use https://github.com/pool2win/p2pool-v2/wiki[github wiki] for most design documents and tools for developers.
+We use https://github.com/p2poolv2/p2poolv2/wiki[github wiki] for most design documents and tools for developers.
 
-See detailed https://github.com/pool2win/p2pool-v2/wiki/Developer-Setup-Notes[Developer Setup Notes] on the wiki.
+See detailed https://github.com/p2poolv2/p2poolv2/wiki/Developer-Setup-Notes[Developer Setup Notes] on the wiki.
 
 == P2Pool V2
 
@@ -38,7 +38,7 @@ Remember, all docker commands are run from the docker directory.
 
 `docker compose up bitcoind`
 
-=== Start p2pool-v2
+=== Start p2poolv2
 
 `docker compose up p2pool`
 
@@ -53,7 +53,7 @@ for IDEs supporting devcontainers and github codespaces.
 
 === MSRV and Edition
 
-MSRV 1.88 with 2024 edition is required to build p2pool-v2.
+MSRV 1.88 with 2024 edition is required to build p2poolv2.
 
 == Masochistic Setup
 
@@ -62,6 +62,6 @@ and we do not support masochistic setups. You are on your own.
 
 . Setup bitcoind
 .. Use `docker/bitcoin-signet.conf` as your bitcoin.conf
-. Setup p2pool-v2
+. Setup p2poolv2
 .. Use src/config.toml as starting point for your config.toml
 . Point your miners to localhost:3333
