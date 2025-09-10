@@ -271,7 +271,7 @@ mod handle_submit_tests {
         // Verify that the block was not submitted to the mock server
         mock_server.verify().await;
 
-        assert_eq!(metrics_handle.get_metrics().await.total_accepted, 1);
+        assert_eq!(metrics_handle.get_metrics().await.accepted, 1);
     }
 
     #[tokio::test]
@@ -363,7 +363,7 @@ mod handle_submit_tests {
             session.btcaddress.unwrap()
         );
 
-        assert_eq!(metrics_handle.get_metrics().await.total_accepted, 1);
+        assert_eq!(metrics_handle.get_metrics().await.accepted, 1);
     }
 
     #[tokio::test]
@@ -449,7 +449,7 @@ mod handle_submit_tests {
         // Verify that the block was not submitted to the mock server
         mock_server.verify().await;
 
-        assert_eq!(metrics_handle.get_metrics().await.total_accepted, 1);
+        assert_eq!(metrics_handle.get_metrics().await.accepted, 1);
     }
 
     #[tokio::test]

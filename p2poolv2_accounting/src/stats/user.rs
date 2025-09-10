@@ -35,7 +35,7 @@ use std::collections::HashMap;
 const INITIAL_WORKER_MAP_CAPACITY: usize = 10;
 
 /// User record, captures username, id, and hashrate stats
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct User {
     /// Unique identifier for the user, a hash of the user's username
     #[serde(skip)]

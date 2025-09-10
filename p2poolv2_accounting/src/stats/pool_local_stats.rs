@@ -14,68 +14,20 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
+use crate::stats::metrics::PoolMetrics;
+
 const POOL_STATS_DIR: &str = "pool";
 
-/// Pool's local node stats, used by node operator and users to monitor their mining performance
-/// The serde format conforms to the ckpool/solostats
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct PoolLocalStats {
-    // Runtime statistics
-    pub runtime: u64,
-    pub lastupdate: u64,
-    #[serde(rename = "Users")]
-    pub users: u32,
-    #[serde(rename = "Workers")]
-    pub workers: u32,
-    #[serde(rename = "Idle")]
-    pub idle: u32,
-
-    // Hashrate statistics
-    #[serde(rename = "Hashrate1m")]
-    pub hashrate_1m: u32,
-    #[serde(rename = "Hashrate5m")]
-    pub hashrate_5m: u32,
-    #[serde(rename = "Hashrate15m")]
-    pub hashrate_15m: u32,
-    #[serde(rename = "Hashrate1hr")]
-    pub hashrate_1hr: u32,
-    #[serde(rename = "Hashrate6hr")]
-    pub hashrate_6hr: u32,
-    #[serde(rename = "Hashrate1d")]
-    pub hashrate_1d: u32,
-    #[serde(rename = "Hashrate7d")]
-    pub hashrate_7d: u32,
-
-    // Share statistics
-    #[serde(rename = "diff")]
-    pub difficulty: u64,
-    #[serde(rename = "accepted")]
-    pub accepted_shares: u64,
-    #[serde(rename = "rejected")]
-    pub rejected_shares: u64,
-    #[serde(rename = "bestshare")]
-    pub best_share: u64,
-    #[serde(rename = "SPS1m")]
-    pub shares_per_second_1m: u32,
-    #[serde(rename = "SPS5m")]
-    pub shares_per_second_5m: u32,
-    #[serde(rename = "SPS15m")]
-    pub shares_per_second_15m: u32,
-    #[serde(rename = "SPS1h")]
-    pub shares_per_second_1h: u32,
-}
-
 /// Save pool stats to log dir
-pub fn save_pool_local_stats(pool_stats: &PoolLocalStats, log_dir: &str) -> std::io::Result<()> {
+pub fn save_pool_local_stats(pool_metrics: &PoolMetrics, log_dir: &str) -> std::io::Result<()> {
     let path = Path::new(log_dir)
         .join(POOL_STATS_DIR)
         .join("pool_stats.json");
-    let serialized = serde_json::to_string_pretty(pool_stats)
+    let serialized = serde_json::to_string_pretty(pool_metrics)
         .map_err(|_| std::io::Error::other("JSON serialization failed"))?;
 
     if !serialized.is_empty() {
@@ -87,19 +39,20 @@ pub fn save_pool_local_stats(pool_stats: &PoolLocalStats, log_dir: &str) -> std:
 }
 
 /// Load pool stats from log dir
-pub fn load_pool_local_stats(log_dir: &str) -> Result<PoolLocalStats, std::io::Error> {
+pub fn load_pool_local_stats(log_dir: &str) -> Result<PoolMetrics, std::io::Error> {
     let path = Path::new(log_dir)
         .join(POOL_STATS_DIR)
         .join("pool_stats.json");
     let file = File::open(&path).map_err(|_| std::io::Error::other("File open failed"))?;
-    let pool_stats: PoolLocalStats = serde_json::from_reader(file)
+    let pool_metrics: PoolMetrics = serde_json::from_reader(file)
         .map_err(|_| std::io::Error::other("JSON deserialization failed"))?;
-    Ok(pool_stats)
+    Ok(pool_metrics)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::fs;
     use tempfile::tempdir;
 
@@ -113,12 +66,19 @@ mod tests {
         fs::create_dir_all(&stats_dir).unwrap();
 
         // Create test stats
-        let pool_stats = PoolLocalStats {
-            runtime: 3600,
-            lastupdate: 1234567890,
-            users: 10,
-            workers: 15,
-            idle: 2,
+        let pool_stats = PoolMetrics {
+            start_time: 1234567890,
+            lastupdate: Some(1234567890),
+            num_users: 10,
+            num_workers: 15,
+            num_idle_users: 2,
+            unaccounted_shares: 0,
+            unaccounted_difficulty: 0,
+            unaccounted_rejected: 0,
+            accepted: 0,
+            rejected: 0,
+            bestshare: 0,
+            users: HashMap::with_capacity(100),
             hashrate_1m: 1000,
             hashrate_5m: 1200,
             hashrate_15m: 1100,
@@ -127,9 +87,6 @@ mod tests {
             hashrate_1d: 980,
             hashrate_7d: 950,
             difficulty: 500000,
-            accepted_shares: 120,
-            rejected_shares: 5,
-            best_share: 400000,
             shares_per_second_1m: 2,
             shares_per_second_5m: 2,
             shares_per_second_15m: 2,
@@ -168,12 +125,19 @@ mod tests {
             .unwrap()
             .to_string();
 
-        let pool_stats = PoolLocalStats {
-            runtime: 3600,
-            lastupdate: 1234567890,
-            users: 10,
-            workers: 15,
-            idle: 2,
+        let pool_stats = PoolMetrics {
+            start_time: 1234567890,
+            lastupdate: Some(1234567890),
+            num_users: 10,
+            num_workers: 15,
+            num_idle_users: 2,
+            unaccounted_shares: 0,
+            unaccounted_difficulty: 0,
+            unaccounted_rejected: 0,
+            accepted: 0,
+            rejected: 0,
+            bestshare: 0,
+            users: HashMap::with_capacity(100),
             hashrate_1m: 1000,
             hashrate_5m: 1200,
             hashrate_15m: 1100,
@@ -182,9 +146,6 @@ mod tests {
             hashrate_1d: 980,
             hashrate_7d: 950,
             difficulty: 500000,
-            accepted_shares: 120,
-            rejected_shares: 5,
-            best_share: 400000,
             shares_per_second_1m: 2,
             shares_per_second_5m: 2,
             shares_per_second_15m: 2,
