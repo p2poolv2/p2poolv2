@@ -30,7 +30,7 @@ RUN mkdir -p /p2pool
 COPY stratum/ /p2pool/stratum
 COPY bitcoindrpc/ /p2pool/bitcoindrpc
 COPY p2poolv2_cli/ /p2pool/p2poolv2_cli
-COPY p2poolv2_bin/ /p2pool/p2poolv2_bin
+COPY p2poolv2_node/ /p2pool/p2poolv2_node
 COPY p2poolv2_lib/ /p2pool/p2poolv2_lib
 COPY Cargo.lock /p2pool/Cargo.lock
 COPY Cargo.toml /p2pool/Cargo.toml

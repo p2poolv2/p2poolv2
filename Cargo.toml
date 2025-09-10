@@ -3,7 +3,7 @@ members = [
     "stratum",
     "bitcoindrpc",
     "p2poolv2_lib",
-    "p2poolv2_bin",
+    "p2poolv2_node",
     "p2poolv2_cli",
 ]
 resolver = "2"
@@ -66,7 +66,7 @@ p2poolv2_accounting = { path = "p2poolv2_accounting" }
 # This package declaration is required to make the top-level directory buildable
 # even though we're using a workspace structure
 [package]
-name = "p2pool-v2"
+name = "p2poolv2"
 version = "0.1.0"
 edition = "2021"
 publish = false

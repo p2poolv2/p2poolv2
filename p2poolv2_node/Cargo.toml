@@ -1,5 +1,5 @@
 [package]
-name = "p2poolv2"
+name = "p2poolv2_node"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
