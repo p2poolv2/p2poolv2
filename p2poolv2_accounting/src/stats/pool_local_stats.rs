@@ -23,16 +23,20 @@ use crate::stats::metrics::PoolMetrics;
 const POOL_STATS_DIR: &str = "pool";
 
 /// Save pool stats to log dir
+/// Use fs::rename to ensure atomic write
 pub fn save_pool_local_stats(pool_metrics: &PoolMetrics, log_dir: &str) -> std::io::Result<()> {
-    let path = Path::new(log_dir)
-        .join(POOL_STATS_DIR)
-        .join("pool_stats.json");
+    let stats_dir = Path::new(log_dir).join(POOL_STATS_DIR);
+    let path = stats_dir.join("pool_stats.json");
+    let tmp_path = stats_dir.join("pool_stats.json.tmp");
+
     let serialized = serde_json::to_string_pretty(pool_metrics)
         .map_err(|_| std::io::Error::other("JSON serialization failed"))?;
 
     if !serialized.is_empty() {
-        let mut file = File::create(&path)?;
+        let mut file = File::create(&tmp_path)?;
         file.write_all(serialized.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&tmp_path, &path)?;
     }
 
     Ok(())
