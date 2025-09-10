@@ -30,7 +30,7 @@ use bitcoin::hashes::{Hash, sha256};
 use serde::{Deserialize, Serialize};
 
 /// Worker record, captures username, id, and hashrate stats
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Worker {
     /// Unique identifier for the user, a hash of the user's username
     #[serde(skip)]
