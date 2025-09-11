@@ -14,14 +14,15 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::simple_pplns::SimplePplnsShare;
 use crate::stats::pool_local_stats::load_pool_local_stats;
 use crate::stats::user::User;
 use crate::stats::worker::Worker;
+use crate::{simple_pplns::SimplePplnsShare, stats::pool_local_stats};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
 use tokio::sync::{mpsc, oneshot};
+use tracing::error;
 
 const METRICS_MESSAGE_BUFFER_SIZE: usize = 100;
 pub const INITIAL_USER_MAP_CAPACITY: usize = 1000;
@@ -106,8 +107,8 @@ impl Default for PoolMetrics {
 
 impl PoolMetrics {
     /// Load existing metrics from file or build new default
-    pub fn load_existing(log_dir: String) -> Self {
-        let pool_stats = load_pool_local_stats(&log_dir).unwrap_or_default();
+    pub fn load_existing(log_dir: &str) -> Self {
+        let pool_stats = load_pool_local_stats(log_dir).unwrap_or_default();
         PoolMetrics {
             accepted: pool_stats.accepted,
             rejected: pool_stats.rejected,
@@ -197,10 +198,7 @@ impl MetricsActor {
     }
 
     /// Create a metrics actor with metrics loaded from the given log directory
-    pub fn with_existing_metrics(
-        log_dir: String,
-        receiver: mpsc::Receiver<MetricsMessage>,
-    ) -> Self {
+    pub fn with_existing_metrics(log_dir: &str, receiver: mpsc::Receiver<MetricsMessage>) -> Self {
         Self {
             metrics: PoolMetrics::load_existing(log_dir),
             receiver,
@@ -466,13 +464,21 @@ impl MetricsHandle {
 }
 
 /// Construct a new metrics actor with existing metrics and return its handle
-pub async fn build_metrics(log_dir: String) -> MetricsHandle {
+pub async fn start_metrics(log_dir: String) -> Result<MetricsHandle, std::io::Error> {
     let (sender, receiver) = mpsc::channel(METRICS_MESSAGE_BUFFER_SIZE);
-    let actor = MetricsActor::with_existing_metrics(log_dir, receiver);
+    let actor = MetricsActor::with_existing_metrics(&log_dir, receiver);
     tokio::spawn(async move {
         actor.run().await;
     });
-    MetricsHandle { sender }
+    let handle = MetricsHandle { sender };
+    match pool_local_stats::start_stats_saver(handle.clone(), 5, log_dir.to_string()).await {
+        Ok(_) => {}
+        Err(e) => {
+            error!("Failed to start stats saver: {e}");
+            return Err(std::io::Error::other("Failed to start stats saver"));
+        }
+    }
+    Ok(handle)
 }
 
 #[cfg(test)]
@@ -519,7 +525,9 @@ mod tests {
     #[tokio::test]
     async fn test_record_share_accepted() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
         let _ = handle
             .record_share_accepted(SimplePplnsShare {
                 difficulty: 100,
@@ -563,7 +571,9 @@ mod tests {
     #[tokio::test]
     async fn test_record_share_rejected() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
         let _ = handle.record_share_rejected().await;
         let metrics = handle.get_metrics().await;
         assert_eq!(metrics.unaccounted_rejected, 1);
@@ -576,7 +586,9 @@ mod tests {
     #[tokio::test]
     async fn test_metrics_commit() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let _ = handle
             .record_share_accepted(SimplePplnsShare {
@@ -611,7 +623,9 @@ mod tests {
     #[tokio::test]
     async fn test_increment_worker_count() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let btcaddress = "user1";
         let workername = "workerA".to_string();
@@ -631,7 +645,9 @@ mod tests {
     #[tokio::test]
     async fn test_decrement_worker_count() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let btcaddress = "user2";
         let workername = "workerB".to_string();
@@ -665,7 +681,9 @@ mod tests {
     #[tokio::test]
     async fn test_decrement_worker_count_none_btcaddress() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let btcaddress = "user3";
         let workername = "workerC".to_string();
@@ -692,7 +710,9 @@ mod tests {
     #[tokio::test]
     async fn test_mark_user_idle_and_active() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         // Initially idle users should be 0
         let metrics = handle.get_metrics().await;
@@ -718,7 +738,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_metrics_consistency() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let _ = handle
             .record_share_accepted(SimplePplnsShare {
@@ -738,20 +760,20 @@ mod tests {
         assert_eq!(metrics.unaccounted_rejected, 1);
         assert_eq!(metrics.num_workers, 1);
         assert!(metrics.users.contains_key("user4"));
-        assert!(
-            metrics
-                .users
-                .get("user4")
-                .unwrap()
-                .workers
-                .contains_key("workerD")
-        );
+        assert!(metrics
+            .users
+            .get("user4")
+            .unwrap()
+            .workers
+            .contains_key("workerD"));
     }
 
     #[tokio::test]
     async fn test_record_share_updates_user_stats() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let btcaddress = "userY".to_string();
         let workername = "workerY".to_string();
@@ -782,7 +804,9 @@ mod tests {
     #[tokio::test]
     async fn test_record_share_multiple_users_and_workers() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = build_metrics(log_dir.path().to_str().unwrap().to_string()).await;
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let _ = handle
             .increment_worker_count("userA".to_string(), "workerA1".to_string())
