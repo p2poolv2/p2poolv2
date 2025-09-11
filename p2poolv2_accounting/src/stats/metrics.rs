@@ -760,12 +760,14 @@ mod tests {
         assert_eq!(metrics.unaccounted_rejected, 1);
         assert_eq!(metrics.num_workers, 1);
         assert!(metrics.users.contains_key("user4"));
-        assert!(metrics
-            .users
-            .get("user4")
-            .unwrap()
-            .workers
-            .contains_key("workerD"));
+        assert!(
+            metrics
+                .users
+                .get("user4")
+                .unwrap()
+                .workers
+                .contains_key("workerD")
+        );
     }
 
     #[tokio::test]
