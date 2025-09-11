@@ -76,9 +76,15 @@ async fn test_three_nodes_connectivity() {
     let stats_dir1 = tempfile::tempdir().unwrap();
     let stats_dir2 = tempfile::tempdir().unwrap();
     let stats_dir3 = tempfile::tempdir().unwrap();
-    let metrics1 = metrics::build_metrics(stats_dir1.path().to_str().unwrap().to_string()).await;
-    let metrics2 = metrics::build_metrics(stats_dir2.path().to_str().unwrap().to_string()).await;
-    let metrics3 = metrics::build_metrics(stats_dir3.path().to_str().unwrap().to_string()).await;
+    let metrics1 = metrics::start_metrics(stats_dir1.path().to_str().unwrap().to_string())
+        .await
+        .unwrap();
+    let metrics2 = metrics::start_metrics(stats_dir2.path().to_str().unwrap().to_string())
+        .await
+        .unwrap();
+    let metrics3 = metrics::start_metrics(stats_dir3.path().to_str().unwrap().to_string())
+        .await
+        .unwrap();
 
     // Start three nodes
     let (node1_handle, _stop_rx1) = NodeHandle::new(config1, chain_handle1, shares_rx_1, metrics1)

@@ -241,8 +241,9 @@ mod handle_submit_tests {
 
         let (shares_tx, mut shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle =
-            metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let message = handle_submit(
             submit,
@@ -330,8 +331,9 @@ mod handle_submit_tests {
 
         let (shares_tx, mut shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle =
-            metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let response = handle_submit(
             submit,
@@ -422,8 +424,9 @@ mod handle_submit_tests {
 
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle =
-            metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let response = handle_submit(
             submit,
@@ -521,8 +524,9 @@ mod handle_submit_tests {
 
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle =
-            metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let message = handle_submit(
             submit,
@@ -583,8 +587,9 @@ mod handle_submit_tests {
 
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle =
-            metrics::build_metrics(stats_dir.path().to_str().unwrap().to_string()).await;
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let message = handle_submit(
             submit,

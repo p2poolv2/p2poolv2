@@ -14,11 +14,12 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use std::fs::File;
+use crate::stats::metrics::MetricsHandle;
+use crate::stats::metrics::PoolMetrics;
+use std::fs::{create_dir_all, File};
 use std::io::Write;
 use std::path::Path;
-
-use crate::stats::metrics::PoolMetrics;
+use tracing::error;
 
 const POOL_STATS_DIR: &str = "pool";
 
@@ -26,6 +27,10 @@ const POOL_STATS_DIR: &str = "pool";
 /// Use fs::rename to ensure atomic write
 pub fn save_pool_local_stats(pool_metrics: &PoolMetrics, log_dir: &str) -> std::io::Result<()> {
     let stats_dir = Path::new(log_dir).join(POOL_STATS_DIR);
+    if let Err(e) = create_dir_all(&stats_dir) {
+        error!("Error creating directory {e}");
+        return Err(std::io::Error::other("Error creating directory"));
+    }
     let path = stats_dir.join("pool_stats.json");
     let tmp_path = stats_dir.join("pool_stats.json.tmp");
 
@@ -51,6 +56,29 @@ pub fn load_pool_local_stats(log_dir: &str) -> Result<PoolMetrics, std::io::Erro
     let pool_metrics: PoolMetrics = serde_json::from_reader(file)
         .map_err(|_| std::io::Error::other("JSON deserialization failed"))?;
     Ok(pool_metrics)
+}
+
+/// Start a background task to periodically save pool local stats
+/// to the specified log directory.
+/// The stats are saved every `save_interval_secs` seconds.
+pub async fn start_stats_saver(
+    metrics_handle: MetricsHandle,
+    save_interval_secs: u64,
+    log_dir: String,
+) -> Result<(), std::io::Error> {
+    tokio::spawn(async move {
+        let mut interval =
+            tokio::time::interval(tokio::time::Duration::from_secs(save_interval_secs));
+        loop {
+            interval.tick().await;
+            let metrics = metrics_handle.get_metrics().await;
+
+            if let Err(e) = save_pool_local_stats(&metrics, &log_dir) {
+                error!("Failed to save pool local stats: {}", e);
+            }
+        }
+    });
+    Ok(())
 }
 
 #[cfg(test)]
@@ -120,7 +148,7 @@ mod tests {
     }
 
     #[test]
-    fn test_save_to_nonexistent_directory() {
+    fn test_save_to_nonexistent_directory_should_create_directory_and_proceed() {
         let temp_dir = tempdir().unwrap();
         let log_dir = temp_dir
             .path()
@@ -158,6 +186,6 @@ mod tests {
 
         // Save should fail because directory doesn't exist
         let save_result = save_pool_local_stats(&pool_stats, &log_dir);
-        assert!(save_result.is_err());
+        assert!(save_result.is_ok());
     }
 }
