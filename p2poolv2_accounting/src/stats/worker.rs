@@ -32,9 +32,6 @@ use serde::{Deserialize, Serialize};
 /// Worker record, captures username, id, and hashrate stats
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Worker {
-    /// Unique identifier for the user, a hash of the user's username
-    #[serde(skip)]
-    pub id: [u8; 32],
     /// Timestamp of the last share submitted by the worker, time since epoch in ms
     pub last_share_at: u64,
     /// Difficulty share per second 1min window
@@ -62,7 +59,6 @@ impl Worker {
     pub fn new(username: &str, workername: &str) -> Self {
         let hash: [u8; 32] = generate_worker_id(username, workername);
         Worker {
-            id: hash,
             last_share_at: 0,
             share_per_second_1min: 0,
             share_per_second_5min: 0,
@@ -105,10 +101,6 @@ mod tests {
     #[test]
     fn test_worker_creation() {
         let worker = Worker::new("user1", "worker1");
-
-        // Verify the ID is calculated correctly
-        let expected_id = sha256::Hash::hash("user1:worker1".as_bytes()).to_byte_array();
-        assert_eq!(worker.id, expected_id);
 
         // Verify default values
         assert_eq!(worker.last_share_at, 0);
