@@ -5,6 +5,8 @@ We chat on https://matrix.to/#/#p2poolv2:matrix.org[Matrix].
 
 We use https://github.com/p2poolv2/p2poolv2/wiki[github wiki] for most design documents and tools for developers.
 
+We are tracking progress using our https://github.com/orgs/p2poolv2/projects/1[Github project: Reboot P2Pool].
+
 See detailed https://github.com/p2poolv2/p2poolv2/wiki/Developer-Setup-Notes[Developer Setup Notes] on the wiki.
 
 == P2Pool V2
