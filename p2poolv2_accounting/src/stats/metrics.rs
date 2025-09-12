@@ -112,6 +112,7 @@ impl PoolMetrics {
         PoolMetrics {
             accepted: pool_stats.accepted,
             rejected: pool_stats.rejected,
+            users: pool_stats.users,
             ..Default::default()
         }
     }
@@ -483,6 +484,8 @@ pub async fn start_metrics(log_dir: String) -> Result<MetricsHandle, std::io::Er
 
 #[cfg(test)]
 mod tests {
+    use crate::stats::pool_local_stats::save_pool_local_stats;
+
     use super::*;
 
     #[test]
@@ -768,6 +771,13 @@ mod tests {
                 .workers
                 .contains_key("workerD")
         );
+
+        // save and reload metrics to verify persistence
+        let _ = save_pool_local_stats(&metrics, log_dir.path().to_str().unwrap());
+        let reloaded = PoolMetrics::load_existing(log_dir.path().to_str().unwrap());
+        assert_eq!(reloaded.accepted, metrics.accepted);
+        assert_eq!(reloaded.rejected, metrics.rejected);
+        assert_eq!(reloaded.users, metrics.users);
     }
 
     #[tokio::test]

@@ -37,9 +37,6 @@ const INITIAL_WORKER_MAP_CAPACITY: usize = 10;
 /// User record, captures username, id, and hashrate stats
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct User {
-    /// Unique identifier for the user, a hash of the user's username
-    #[serde(skip)]
-    pub id: [u8; 32],
     /// Timestamp of the last share submitted by the user, time since epoch in ms
     pub last_share_at: u64,
     /// Difficulty share per second 1min window
@@ -70,9 +67,7 @@ impl User {
     ///
     /// On server restarts the stats will be forgotten in the new process, even though the stats views can load the last stats from disk.
     pub fn new(btcaddress: &str) -> Self {
-        let hash: [u8; 32] = generate_user_id(btcaddress);
         User {
-            id: hash,
             last_share_at: 0,
             share_per_second_1min: 0,
             share_per_second_5min: 0,
@@ -137,10 +132,6 @@ mod tests {
     fn test_user_creation() {
         let btc_address = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
         let user = User::new(btc_address);
-
-        // Verify the ID is calculated correctly
-        let expected_id = sha256::Hash::hash(btc_address.as_bytes()).to_byte_array();
-        assert_eq!(user.id, expected_id);
 
         // Verify default values
         assert_eq!(user.last_share_at, 0);
