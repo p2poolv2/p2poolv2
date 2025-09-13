@@ -56,8 +56,7 @@ pub struct Worker {
 
 impl Worker {
     /// Create a new worker record for a new signing up worker.
-    pub fn new(username: &str, workername: &str) -> Self {
-        let hash: [u8; 32] = generate_worker_id(username, workername);
+    pub fn new() -> Self {
         Worker {
             last_share_at: 0,
             share_per_second_1min: 0,
@@ -89,18 +88,13 @@ impl Worker {
     }
 }
 
-/// Generate an id for the a given Bitcoin address to be used as user id.
-pub fn generate_worker_id(username: &str, workername: &str) -> [u8; 32] {
-    sha256::Hash::hash(format!("{username}:{workername}").as_bytes()).to_byte_array()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_worker_creation() {
-        let worker = Worker::new("user1", "worker1");
+        let worker = Worker::new();
 
         // Verify default values
         assert_eq!(worker.last_share_at, 0);
@@ -114,7 +108,7 @@ mod tests {
 
     #[test]
     fn test_record_share_updates_stats() {
-        let mut worker = Worker::new("user2", "worker2");
+        let mut worker = Worker::new();
         let timestamp = 1_650_000_000_000;
         let difficulty = 1000;
 
@@ -144,17 +138,5 @@ mod tests {
         assert_eq!(worker.shares_valid, 3);
         assert_eq!(worker.best_share, 2000);
         assert_eq!(worker.best_share_ever, Some(2000));
-    }
-
-    #[test]
-    fn test_generate_worker_id_consistency() {
-        let id1 = generate_worker_id("alice", "workerA");
-        let id2 = generate_worker_id("alice", "workerA");
-        let id3 = generate_worker_id("alice", "workerB");
-        let id4 = generate_worker_id("bob", "workerA");
-
-        assert_eq!(id1, id2);
-        assert_ne!(id1, id3);
-        assert_ne!(id1, id4);
     }
 }
