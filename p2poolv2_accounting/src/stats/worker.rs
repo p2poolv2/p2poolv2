@@ -26,7 +26,6 @@
 //! Worker records serve as the basis for tracking individual miner performance
 //! and calculating rewards distribution using the accounting modules.
 
-use bitcoin::hashes::{Hash, sha256};
 use serde::{Deserialize, Serialize};
 
 /// Worker record, captures username, id, and hashrate stats
@@ -54,10 +53,9 @@ pub struct Worker {
     pub best_share_ever: Option<u64>,
 }
 
-impl Worker {
-    /// Create a new worker record for a new signing up worker.
-    pub fn new() -> Self {
-        Worker {
+impl Default for Worker {
+    fn default() -> Self {
+        Self {
             last_share_at: 0,
             share_per_second_1min: 0,
             share_per_second_5min: 0,
@@ -69,6 +67,13 @@ impl Worker {
             best_share: 0,
             best_share_ever: None,
         }
+    }
+}
+
+impl Worker {
+    /// Create a new worker record for a new signing up worker.
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Record a share submission for the worker, updating stats accordingly.
