@@ -59,14 +59,8 @@ pub struct User {
     pub best_share_ever: Option<u64>,
 }
 
-impl User {
-    /// Create a new user record for a new signing up user.
-    ///
-    /// A user with a given bitcoin address will always have the same id and
-    /// therefore we'll be able to load the historical shares from the data store.
-    ///
-    /// On server restarts the stats will be forgotten in the new process, even though the stats views can load the last stats from disk.
-    pub fn new() -> Self {
+impl Default for User {
+    fn default() -> Self {
         User {
             last_share_at: 0,
             share_per_second_1min: 0,
@@ -79,6 +73,18 @@ impl User {
             best_share: 0,
             best_share_ever: None,
         }
+    }
+}
+
+impl User {
+    /// Create a new user record for a new signing up user.
+    ///
+    /// A user with a given bitcoin address will always have the same id and
+    /// therefore we'll be able to load the historical shares from the data store.
+    ///
+    /// On server restarts the stats will be forgotten in the new process, even though the stats views can load the last stats from disk.
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Get a mutable reference to a worker by name, if it exists.
