@@ -63,7 +63,7 @@ mod mining_configure_response_tests {
         messages::{Id, Message, MiningConfigure},
     };
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_handle_configure_valid_request() {
         let message = MiningConfigure::new_version_rolling_configure(
             1,

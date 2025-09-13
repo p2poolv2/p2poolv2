@@ -322,7 +322,7 @@ mod tests {
         assert_eq!(difficulty, 1234.56);
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_getblocktemplate_mainnet() {
         let mock_server = MockServer::start().await;
 
@@ -512,7 +512,7 @@ mod tests {
         assert_eq!(result, "null"); // Successful submission returns null
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_getblocktemplate_retry_logic() {
         let mock_server = MockServer::start().await;
         let auth_header = "Basic cDJwb29sOnAycG9vbA==";

@@ -800,7 +800,7 @@ mod stratum_server_tests {
         );
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_handle_connection_should_not_include_responses_before_authorization() {
         // Create message channel and shutdown channel
         let (message_tx, message_rx) = mpsc::channel(10);

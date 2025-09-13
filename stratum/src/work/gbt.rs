@@ -277,7 +277,7 @@ mod gbt_load_tests {
     use bitcoin::hex::FromHex;
     use bitcoindrpc::test_utils::{mock_method, setup_mock_bitcoin_rpc};
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_get_block_template() {
         let template = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
