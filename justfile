@@ -13,9 +13,11 @@ test package="":
 		RUST_LOG={{LOG_LEVEL}} cargo nextest run -p {{package}}
 	fi
 
+# Run a specific test in a package with debug logging and no output capture
+# Usage: just debug-test [package] [testname]
 debug-test package="" testname="":
 	#!/usr/bin/env sh
-	RUST_LOG=debug cargo test -p {{package}} {{testname}} -- --no-capture
+	RUST_LOG=debug cargo test --package {{package}} -- {{testname}} --show-output --no-capture
 
 cov:
 	cargo llvm-cov --lcov
