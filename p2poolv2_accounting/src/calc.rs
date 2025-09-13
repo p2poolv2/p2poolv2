@@ -24,7 +24,7 @@ use std::time::{Duration, SystemTime};
 
 /// Calculate the time difference since the first share submission.
 /// Set floor to 0.001 as used by CKPool.
-pub(crate) fn sane_time_diff(current_timestamp: SystemTime, other: Option<SystemTime>) -> f64 {
+pub fn sane_time_diff(current_timestamp: SystemTime, other: Option<SystemTime>) -> f64 {
     if other.is_none() {
         return 0.0;
     }
@@ -37,14 +37,14 @@ pub(crate) fn sane_time_diff(current_timestamp: SystemTime, other: Option<System
 
 /// Calculate time bias based on CKPool's algorithm.
 /// Returns a value between 0 and 1, using an exponential decay.
-pub(crate) fn time_bias(time_difference: f64, period: f64) -> f64 {
+pub fn time_bias(time_difference: f64, period: f64) -> f64 {
     let exp_power = (time_difference / period).min(36.0);
     1.0 - 1.0 / exp_power.exp()
 }
 
 /// Apply time decay to difficulty per share based elapsed time since last change,
 /// the interval we are decaying for and the incoming new difficulty value
-pub(crate) fn decay_time(dsps: f64, difficulty: u64, elapsed_time: f64, interval: u64) -> f64 {
+pub fn decay_time(dsps: f64, difficulty: u64, elapsed_time: f64, interval: u64) -> f64 {
     // Calculate fprop = 1 - (1 / e^(elapsed_time/interval))
     let mut dexp = elapsed_time / interval as f64;
     dexp = dexp.min(36.0); // Cap at 36.0 to prevent overflow

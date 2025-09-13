@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+pub mod calc;
+pub mod simple_pplns;
 pub mod stats;
 
 #[allow(dead_code)]
@@ -49,5 +51,3 @@ where
     /// Get shares for the given amount of difficulty.
     fn get_shares_for_difficulty(&self, total_difficulty: u64) -> Vec<&T>;
 }
-
-pub mod simple_pplns;

@@ -20,14 +20,11 @@
 //! CKPool documentation. It tracks the client's share rate and dynamically
 //! adjusts the difficulty to maintain an optimal share submission frequency.
 
-mod calc;
-
 #[cfg(test)]
 use mockall::automock;
+use p2poolv2_accounting::calc::{decay_time, sane_time_diff, time_bias};
 use std::time::SystemTime;
 use tracing::{debug, info};
-
-use crate::difficulty_adjuster::calc::sane_time_diff;
 
 /// The target Difficulty Rate Ratio (DRR) for standard clients
 /// This aims for about 1 share every 3.33 seconds
@@ -312,7 +309,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
         suggested_difficulty: Option<u64>,
         time_since_first_share: f64,
     ) -> u64 {
-        let bias = calc::time_bias(time_since_first_share, BIAS_TIME_CONSTANT);
+        let bias = time_bias(time_since_first_share, BIAS_TIME_CONSTANT);
 
         // Adjust dsps for bias
         let difficulty_shares_per_second = self.difficulty_shares_per_second_5min_window / bias;
@@ -428,7 +425,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
             Dsps::OneWeek => &mut self.difficulty_shares_per_second_7day_window,
         };
 
-        *dsps = calc::decay_time(*dsps, difficulty, elapsed_time, interval);
+        *dsps = decay_time(*dsps, difficulty, elapsed_time, interval);
     }
 
     /// Set current difficulty
