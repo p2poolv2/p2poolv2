@@ -424,7 +424,7 @@ mod chain_tests {
     use std::collections::HashSet;
     use tempfile::tempdir;
 
-    #[test_log::test(test)]
+    #[test]
     /// Setup a test chain with 3 shares on the main chain, where shares 2 and 3 have two uncles each
     fn test_chain_add_shares() {
         let temp_dir = tempdir().unwrap();

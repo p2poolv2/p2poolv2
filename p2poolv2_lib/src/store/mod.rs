@@ -1067,7 +1067,7 @@ mod tests {
     use std::collections::HashSet;
     use tempfile::tempdir;
 
-    #[test_log::test(test)]
+    #[test]
     fn test_chain_with_uncles() {
         let temp_dir = tempdir().unwrap();
         let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
@@ -1942,7 +1942,7 @@ mod tests {
         );
     }
 
-    #[test_log::test(test)]
+    #[test]
     fn test_get_headers_for_block_locator_stop_block_not_found() {
         let temp_dir = tempdir().unwrap();
         let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
@@ -2019,7 +2019,7 @@ mod tests {
         assert_eq!(result[1], blocks[2].cached_blockhash.unwrap());
     }
 
-    #[test_log::test(test)]
+    #[test]
     fn test_block_status_operations() {
         let temp_dir = tempdir().unwrap();
         let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();

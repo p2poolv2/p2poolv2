@@ -595,7 +595,7 @@ mod tests {
         assert_eq!(metrics.unaccounted_rejected, 2);
     }
 
-    #[test_log::test(tokio::test)]
+    #[tokio::test]
     async fn test_metrics_commit() {
         let log_dir = tempfile::tempdir().unwrap();
         let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
