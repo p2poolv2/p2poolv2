@@ -276,7 +276,7 @@ impl MetricsActor {
             self.metrics.bestshare = difficulty;
         }
         if let Some(user) = self.metrics.users.get_mut(&btcaddress) {
-            user.record_share(&btcaddress, &workername, difficulty, current_unix_timestamp);
+            user.record_share(&workername, difficulty, current_unix_timestamp);
         }
     }
 
@@ -293,8 +293,8 @@ impl MetricsActor {
             .users
             .entry(btcaddress.clone())
             .or_insert_with(|| {
-                let mut user = User::new(&btcaddress);
-                let worker = Worker::new(&btcaddress, &workername);
+                let mut user = User::new();
+                let worker = Worker::new();
                 user.workers.insert(workername, worker);
                 user
             });

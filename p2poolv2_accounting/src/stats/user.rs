@@ -66,7 +66,7 @@ impl User {
     /// therefore we'll be able to load the historical shares from the data store.
     ///
     /// On server restarts the stats will be forgotten in the new process, even though the stats views can load the last stats from disk.
-    pub fn new(btcaddress: &str) -> Self {
+    pub fn new() -> Self {
         User {
             last_share_at: 0,
             share_per_second_1min: 0,
@@ -87,13 +87,7 @@ impl User {
     }
 
     /// Record a share submission for the user, updating stats accordingly.
-    pub fn record_share(
-        &mut self,
-        btcaddress: &str,
-        workername: &str,
-        difficulty: u64,
-        current_time_stamp: u64,
-    ) {
+    pub fn record_share(&mut self, workername: &str, difficulty: u64, current_time_stamp: u64) {
         self.last_share_at = current_time_stamp;
         self.shares_valid += 1;
         if difficulty > self.best_share {
@@ -107,15 +101,15 @@ impl User {
             self.best_share_ever = Some(difficulty);
         }
 
-        let worker = self.get_or_add_worker(btcaddress, workername);
+        let worker = self.get_or_add_worker(workername);
         worker.record_share(difficulty, current_time_stamp);
     }
 
     /// Get a mutable reference to a worker by name, adding it if it doesn't exist.
-    pub fn get_or_add_worker(&mut self, btcaddress: &str, workername: &str) -> &mut Worker {
+    pub fn get_or_add_worker(&mut self, workername: &str) -> &mut Worker {
         self.workers
             .entry(workername.to_string())
-            .or_insert_with(|| Worker::new(btcaddress, workername))
+            .or_insert_with(|| Worker::new())
     }
 }
 
@@ -130,8 +124,7 @@ mod tests {
 
     #[test]
     fn test_user_creation() {
-        let btc_address = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
-        let user = User::new(btc_address);
+        let user = User::new();
 
         // Verify default values
         assert_eq!(user.last_share_at, 0);
@@ -146,9 +139,8 @@ mod tests {
 
     #[test]
     fn test_record_share_updates_stats_and_worker() {
-        let btc_address = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
         let worker_name = "worker1";
-        let mut user = User::new(btc_address);
+        let mut user = User::new();
 
         // Initial state
         assert_eq!(user.shares_valid, 0);
@@ -159,7 +151,7 @@ mod tests {
         // Record a share
         let difficulty = 1000;
         let timestamp = 1234567890;
-        user.record_share(btc_address, worker_name, difficulty, timestamp);
+        user.record_share(worker_name, difficulty, timestamp);
 
         // User stats updated
         assert_eq!(user.shares_valid, 1);
@@ -176,7 +168,7 @@ mod tests {
         assert_eq!(worker.best_share_ever, Some(difficulty));
 
         // Record a lower difficulty share
-        user.record_share(btc_address, worker_name, 500, timestamp + 1);
+        user.record_share(worker_name, 500, timestamp + 1);
         assert_eq!(user.shares_valid, 2);
         assert_eq!(user.best_share, difficulty); // unchanged
         assert_eq!(user.best_share_ever, Some(difficulty));
@@ -185,7 +177,7 @@ mod tests {
         assert_eq!(worker.best_share, difficulty);
 
         // Record a higher difficulty share
-        user.record_share(btc_address, worker_name, 2000, timestamp + 2);
+        user.record_share(worker_name, 2000, timestamp + 2);
         assert_eq!(user.shares_valid, 3);
         assert_eq!(user.best_share, 2000);
         assert_eq!(user.best_share_ever, Some(2000));
@@ -197,10 +189,10 @@ mod tests {
     #[test]
     fn test_multiple_workers() {
         let btc_address = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
-        let mut user = User::new(btc_address);
+        let mut user = User::new();
 
-        user.record_share(btc_address, "worker1", 100, 1);
-        user.record_share(btc_address, "worker2", 200, 2);
+        user.record_share("worker1", 100, 1);
+        user.record_share("worker2", 200, 2);
 
         assert_eq!(user.workers.len(), 2);
 
@@ -216,13 +208,13 @@ mod tests {
     #[test]
     fn test_get_worker_mut_and_get_or_add_worker() {
         let btc_address = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
-        let mut user = User::new(btc_address);
+        let mut user = User::new();
 
         // Should not exist yet
         assert!(user.get_worker_mut("worker1").is_none());
 
         // Add worker
-        let worker = user.get_or_add_worker(btc_address, "worker1");
+        let worker = user.get_or_add_worker("worker1");
         assert_eq!(worker.shares_valid, 0);
 
         // Now should exist
