@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::stats::computed::ComputedStats;
 use crate::stats::pool_local_stats::load_pool_local_stats;
 use crate::stats::user::User;
 use crate::stats::worker::Worker;
@@ -57,18 +58,11 @@ pub struct PoolMetrics {
     pub bestshare: u64,
     /// User metrics
     pub users: HashMap<String, User>,
-    pub hashrate_1m: u32,
-    pub hashrate_5m: u32,
-    pub hashrate_15m: u32,
-    pub hashrate_1hr: u32,
-    pub hashrate_6hr: u32,
-    pub hashrate_1d: u32,
-    pub hashrate_7d: u32,
-    pub difficulty: u32,
-    pub shares_per_second_1m: u32,
-    pub shares_per_second_5m: u32,
-    pub shares_per_second_15m: u32,
-    pub shares_per_second_1h: u32,
+    /// Current pool difficulty
+    pub difficulty: u64,
+    /// Computed stats holding hashrate and share rate metrics
+    #[serde(flatten)]
+    pub computed: ComputedStats,
 }
 
 impl Default for PoolMetrics {
@@ -89,18 +83,20 @@ impl Default for PoolMetrics {
                 .as_secs(),
             bestshare: 0,
             users: HashMap::with_capacity(INITIAL_USER_MAP_CAPACITY),
-            hashrate_1m: 0,
-            hashrate_5m: 0,
-            hashrate_15m: 0,
-            hashrate_1hr: 0,
-            hashrate_6hr: 0,
-            hashrate_1d: 0,
-            hashrate_7d: 0,
             difficulty: 0,
-            shares_per_second_1m: 0,
-            shares_per_second_5m: 0,
-            shares_per_second_15m: 0,
-            shares_per_second_1h: 0,
+            computed: ComputedStats {
+                hashrate_1m: 0,
+                hashrate_5m: 0,
+                hashrate_15m: 0,
+                hashrate_1hr: 0,
+                hashrate_6hr: 0,
+                hashrate_1d: 0,
+                hashrate_7d: 0,
+                shares_per_second_1m: 0,
+                shares_per_second_5m: 0,
+                shares_per_second_15m: 0,
+                shares_per_second_1h: 0,
+            },
         }
     }
 }
@@ -122,28 +118,6 @@ impl PoolMetrics {
         self.unaccounted_shares = 0;
         self.unaccounted_rejected = 0;
         self.unaccounted_difficulty = 0;
-    }
-
-    /// Compute hashrate for various windows based on the shares received
-    /// Decay the hashrate using the exponential decay from calc::decay_time
-    fn set_hashrate_metrics(&self) -> (u32, u32, u32, u32, u32, u32, u32) {
-        let hashrate_1m = (self.unaccounted_difficulty as f64 / 60.0) as u32;
-        let hashrate_5m = (self.unaccounted_difficulty as f64 / 300.0) as u32;
-        let hashrate_15m = (self.unaccounted_difficulty as f64 / 900.0) as u32;
-        let hashrate_1hr = (self.unaccounted_difficulty as f64 / 3600.0) as u32;
-        let hashrate_6hr = (self.unaccounted_difficulty as f64 / 21600.0) as u32;
-        let hashrate_1d = (self.unaccounted_difficulty as f64 / 86400.0) as u32;
-        let hashrate_7d = (self.unaccounted_difficulty as f64 / 604800.0) as u32;
-        // TODO - apply decay_time and then set to self
-        (
-            hashrate_1m,
-            hashrate_5m,
-            hashrate_15m,
-            hashrate_1hr,
-            hashrate_6hr,
-            hashrate_1d,
-            hashrate_7d,
-        )
     }
 }
 
@@ -180,6 +154,10 @@ pub enum MetricsMessage {
     },
     GetMetrics {
         response: oneshot::Sender<PoolMetrics>,
+    },
+    SetLastUpdate {
+        lastupdate: u64,
+        response: oneshot::Sender<()>,
     },
 }
 
@@ -259,6 +237,13 @@ impl MetricsActor {
             MetricsMessage::GetMetrics { response } => {
                 let _ = response.send(self.metrics.clone());
             }
+            MetricsMessage::SetLastUpdate {
+                lastupdate,
+                response,
+            } => {
+                self.metrics.lastupdate = Some(lastupdate);
+                let _ = response.send(());
+            }
         }
     }
 
@@ -331,11 +316,19 @@ impl MetricsActor {
     /// Export current metrics as json, returning the serialized json
     /// Reset the metrics to start again
     fn commit(&mut self) -> String {
-        self.metrics.set_hashrate_metrics();
+        tracing::debug!("Committing metrics: {:?}", self.metrics);
+        self.metrics
+            .computed
+            .set_hashrate_metrics(self.metrics.lastupdate, self.metrics.unaccounted_difficulty);
 
         let serialized = serde_json::to_string(&self.metrics).unwrap();
         self.metrics.reset();
         serialized
+    }
+
+    /// Set last update time. Largely used for testing.
+    fn set_last_update(&mut self, lastupdate: u64) {
+        self.metrics.lastupdate = Some(lastupdate);
     }
 }
 
@@ -462,6 +455,22 @@ impl MetricsHandle {
             .expect("Error getting metrics");
         response_rx.await.expect("Error getting metrics")
     }
+
+    /// Set last update time. Largely used for testing.
+    pub async fn set_last_update(
+        &self,
+        lastupdate: u64,
+    ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(MetricsMessage::SetLastUpdate {
+                lastupdate,
+                response: response_tx,
+            })
+            .await
+            .expect("Error setting last update");
+        response_rx.await
+    }
 }
 
 /// Construct a new metrics actor with existing metrics and return its handle
@@ -586,7 +595,7 @@ mod tests {
         assert_eq!(metrics.unaccounted_rejected, 2);
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_metrics_commit() {
         let log_dir = tempfile::tempdir().unwrap();
         let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
@@ -609,6 +618,11 @@ mod tests {
             .await;
         let _ = handle.record_share_rejected().await;
 
+        let current_unix_timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = handle.set_last_update(current_unix_timestamp - 1).await;
         let json_str = handle.commit().await;
         let json: serde_json::Value = serde_json::from_str(&json_str.unwrap()).unwrap();
 
@@ -621,6 +635,7 @@ mod tests {
         assert_eq!(metrics.unaccounted_difficulty, 0);
         assert_eq!(metrics.unaccounted_rejected, 0);
         assert_eq!(metrics.bestshare, 200);
+        assert_eq!(metrics.computed.hashrate_1m, 349176447); // (200 + 100) / 60 * 2^32, decayed for 1 second
     }
 
     #[tokio::test]
