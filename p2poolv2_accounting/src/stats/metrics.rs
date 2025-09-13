@@ -293,8 +293,8 @@ impl MetricsActor {
             .users
             .entry(btcaddress.clone())
             .or_insert_with(|| {
-                let mut user = User::new();
-                let worker = Worker::new();
+                let mut user = User::default();
+                let worker = Worker::default();
                 user.workers.insert(workername, worker);
                 user
             });

@@ -65,7 +65,7 @@ mod tests {
         fs::create_dir_all(&stats_dir).unwrap();
 
         // Create a test user
-        let mut user = User::new();
+        let mut user = User::default();
         user.shares_valid = 10;
 
         // Save the user stats
