@@ -77,16 +77,6 @@ impl Default for User {
 }
 
 impl User {
-    /// Create a new user record for a new signing up user.
-    ///
-    /// A user with a given bitcoin address will always have the same id and
-    /// therefore we'll be able to load the historical shares from the data store.
-    ///
-    /// On server restarts the stats will be forgotten in the new process, even though the stats views can load the last stats from disk.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Get a mutable reference to a worker by name, if it exists.
     pub fn get_worker_mut(&mut self, workername: &str) -> Option<&mut Worker> {
         self.workers.get_mut(workername)
@@ -115,7 +105,7 @@ impl User {
     pub fn get_or_add_worker(&mut self, workername: &str) -> &mut Worker {
         self.workers
             .entry(workername.to_string())
-            .or_insert_with(|| Worker::new())
+            .or_insert_with(|| Worker::default())
     }
 }
 
@@ -130,7 +120,7 @@ mod tests {
 
     #[test]
     fn test_user_creation() {
-        let user = User::new();
+        let user = User::default();
 
         // Verify default values
         assert_eq!(user.last_share_at, 0);
@@ -146,7 +136,7 @@ mod tests {
     #[test]
     fn test_record_share_updates_stats_and_worker() {
         let worker_name = "worker1";
-        let mut user = User::new();
+        let mut user = User::default();
 
         // Initial state
         assert_eq!(user.shares_valid, 0);
@@ -195,7 +185,7 @@ mod tests {
     #[test]
     fn test_multiple_workers() {
         let btc_address = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
-        let mut user = User::new();
+        let mut user = User::default();
 
         user.record_share("worker1", 100, 1);
         user.record_share("worker2", 200, 2);
@@ -214,7 +204,7 @@ mod tests {
     #[test]
     fn test_get_worker_mut_and_get_or_add_worker() {
         let btc_address = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
-        let mut user = User::new();
+        let mut user = User::default();
 
         // Should not exist yet
         assert!(user.get_worker_mut("worker1").is_none());

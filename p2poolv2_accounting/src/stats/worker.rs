@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn test_worker_creation() {
-        let worker = Worker::new();
+        let worker = Worker::default();
 
         // Verify default values
         assert_eq!(worker.last_share_at, 0);
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn test_record_share_updates_stats() {
-        let mut worker = Worker::new();
+        let mut worker = Worker::default();
         let timestamp = 1_650_000_000_000;
         let difficulty = 1000;
 
