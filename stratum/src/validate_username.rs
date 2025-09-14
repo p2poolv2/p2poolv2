@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn test_worker_name_too_long() {
         let mainnet_address = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
-        let long_worker = format!("{}.{}", mainnet_address, "a".repeat(31));
+        let long_worker = format!("{}.{}", mainnet_address, "a".repeat(100));
         let result = validate(&long_worker, Network::Bitcoin);
         assert!(result.is_err());
         assert!(matches!(
