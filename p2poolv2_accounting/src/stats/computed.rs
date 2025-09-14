@@ -23,7 +23,7 @@ const HASHES_PER_SHARE: u64 = 2_u64.pow(32);
 
 /// Struct to hold computed statistics like hashrate over various time windows
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ComputedStats {
+pub struct ComputedHashrate {
     /// Hashrate in H/s over the last 1 minute
     pub hashrate_1m: u64,
     /// Hashrate in H/s over the last 5 minutes
@@ -38,17 +38,9 @@ pub struct ComputedStats {
     pub hashrate_1d: u64,
     /// Hashrate in H/s over the last 7 days
     pub hashrate_7d: u64,
-    /// Shares per second over the last 1 minute
-    pub shares_per_second_1m: u64,
-    /// Shares per second over the last 5 minutes
-    pub shares_per_second_5m: u64,
-    /// Shares per second over the last 15 minutes
-    pub shares_per_second_15m: u64,
-    /// Shares per second over the last 1 hour
-    pub shares_per_second_1h: u64,
 }
 
-impl ComputedStats {
+impl ComputedHashrate {
     /// Compute hashrate for various windows based on the shares received
     /// Decay the hashrate using the exponential decay from calc::decay_time.
     /// The decay is since the last update
@@ -61,7 +53,6 @@ impl ComputedStats {
         } else {
             0
         };
-        debug!("Time since last update: {}", time_since_last_update);
         if time_since_last_update == 0 {
             return;
         }
@@ -108,9 +99,25 @@ impl ComputedStats {
             604800,
         );
     }
+}
 
+/// Computed share rate. Right now used only for the pool.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+
+pub struct ComputedShareRate {
+    /// Shares per second over the last 1 minute
+    pub shares_per_second_1m: u64,
+    /// Shares per second over the last 5 minutes
+    pub shares_per_second_5m: u64,
+    /// Shares per second over the last 15 minutes
+    pub shares_per_second_15m: u64,
+    /// Shares per second over the last 1 hour
+    pub shares_per_second_1h: u64,
+}
+
+impl ComputedShareRate {
     /// Compute the share rate metrics, decaying it since the last update
-    fn set_share_rate_metrics(&mut self, lastupdate: Option<u64>, unaccounted_shares: u64) {
+    pub fn set_share_rate_metrics(&mut self, lastupdate: Option<u64>, unaccounted_shares: u64) {
         let time_since_last_update = if let Some(lastupdate) = lastupdate {
             calc::sane_time_diff(
                 SystemTime::now(),
@@ -157,19 +164,13 @@ pub fn calculate_metric_with_decay(
     secs_since_last_update: u64,
     interval: u64,
 ) -> u64 {
-    debug!(
-        "Calculating metric with decay: current_metric={}, unaccounted_metric={}, secs_since_last_update={}, interval={}",
-        current_metric, unaccounted_metric, secs_since_last_update, interval
-    );
     if secs_since_last_update == 0 {
         return 0;
     }
-    let result = calc::decay_time(
+    calc::decay_time(
         current_metric as f64,
         unaccounted_metric / interval,
         secs_since_last_update as f64,
         interval,
-    ) as u64;
-    debug!("Calculated metric: {}", result);
-    result
+    ) as u64
 }

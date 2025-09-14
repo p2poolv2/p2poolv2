@@ -14,10 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::stats::computed::ComputedStats;
+use crate::stats::computed::{ComputedHashrate, ComputedShareRate};
 use crate::stats::pool_local_stats::load_pool_local_stats;
 use crate::stats::user::User;
-use crate::stats::worker::Worker;
+use crate::stats::worker::{self, Worker};
 use crate::{simple_pplns::SimplePplnsShare, stats::pool_local_stats};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -60,9 +60,12 @@ pub struct PoolMetrics {
     pub users: HashMap<String, User>,
     /// Current pool difficulty
     pub difficulty: u64,
-    /// Computed stats holding hashrate and share rate metrics
+    /// Hashrate computed from unaccounted difficulty
     #[serde(flatten)]
-    pub computed: ComputedStats,
+    pub computed_hashrate: ComputedHashrate,
+    /// Shares per second computed from unaccounted shares
+    #[serde(flatten)]
+    pub computed_share_rate: ComputedShareRate,
 }
 
 impl Default for PoolMetrics {
@@ -84,19 +87,8 @@ impl Default for PoolMetrics {
             bestshare: 0,
             users: HashMap::with_capacity(INITIAL_USER_MAP_CAPACITY),
             difficulty: 0,
-            computed: ComputedStats {
-                hashrate_1m: 0,
-                hashrate_5m: 0,
-                hashrate_15m: 0,
-                hashrate_1hr: 0,
-                hashrate_6hr: 0,
-                hashrate_1d: 0,
-                hashrate_7d: 0,
-                shares_per_second_1m: 0,
-                shares_per_second_5m: 0,
-                shares_per_second_15m: 0,
-                shares_per_second_1h: 0,
-            },
+            computed_hashrate: ComputedHashrate::default(),
+            computed_share_rate: ComputedShareRate::default(),
         }
     }
 }
@@ -118,6 +110,12 @@ impl PoolMetrics {
         self.unaccounted_shares = 0;
         self.unaccounted_rejected = 0;
         self.unaccounted_difficulty = 0;
+        for (_, user) in self.users.iter_mut() {
+            user.reset();
+            for (_, worker) in user.workers.iter_mut() {
+                worker.reset();
+            }
+        }
     }
 }
 
@@ -241,7 +239,7 @@ impl MetricsActor {
                 lastupdate,
                 response,
             } => {
-                self.metrics.lastupdate = Some(lastupdate);
+                self.set_last_update(lastupdate);
                 let _ = response.send(());
             }
         }
@@ -316,19 +314,42 @@ impl MetricsActor {
     /// Export current metrics as json, returning the serialized json
     /// Reset the metrics to start again
     fn commit(&mut self) -> String {
-        tracing::debug!("Committing metrics: {:?}", self.metrics);
         self.metrics
-            .computed
+            .computed_hashrate
             .set_hashrate_metrics(self.metrics.lastupdate, self.metrics.unaccounted_difficulty);
+
+        self.metrics
+            .computed_share_rate
+            .set_share_rate_metrics(self.metrics.lastupdate, self.metrics.unaccounted_shares);
+        self.commit_users();
 
         let serialized = serde_json::to_string(&self.metrics).unwrap();
         self.metrics.reset();
         serialized
     }
 
+    fn commit_users(&mut self) {
+        for (_btcaddress, user) in self.metrics.users.iter_mut() {
+            user.computed_hash_rate
+                .set_hashrate_metrics(Some(user.last_share_at), user.unaccounted_difficulty);
+            for (_workername, worker) in user.workers.iter_mut() {
+                worker.computed_hash_rate.set_hashrate_metrics(
+                    Some(worker.last_share_at),
+                    worker.unaccounted_difficulty,
+                );
+            }
+        }
+    }
+
     /// Set last update time. Largely used for testing.
     fn set_last_update(&mut self, lastupdate: u64) {
         self.metrics.lastupdate = Some(lastupdate);
+        for (_btcaddress, user) in self.metrics.users.iter_mut() {
+            user.last_share_at = lastupdate;
+            for (_workername, worker) in user.workers.iter_mut() {
+                worker.last_share_at = lastupdate;
+            }
+        }
     }
 }
 
@@ -603,6 +624,10 @@ mod tests {
             .unwrap();
 
         let _ = handle
+            .increment_worker_count("user1".to_string(), "worker1".to_string())
+            .await;
+
+        let _ = handle
             .record_share_accepted(SimplePplnsShare {
                 difficulty: 100,
                 btcaddress: "user1".to_string(),
@@ -623,19 +648,28 @@ mod tests {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let _ = handle.set_last_update(current_unix_timestamp - 1).await;
+
         let json_str = handle.commit().await;
         let json: serde_json::Value = serde_json::from_str(&json_str.unwrap()).unwrap();
 
         // Check that lastupdate exists and is a recent timestamp
         assert!(json["lastupdate"].as_u64().is_some());
 
-        let metrics = handle.get_metrics().await;
+        let mut metrics = handle.get_metrics().await;
         // After commit, the metrics should be reset
         assert_eq!(metrics.unaccounted_shares, 0);
         assert_eq!(metrics.unaccounted_difficulty, 0);
         assert_eq!(metrics.unaccounted_rejected, 0);
         assert_eq!(metrics.bestshare, 200);
-        assert_eq!(metrics.computed.hashrate_1m, 349176447); // (200 + 100) / 60 * 2^32, decayed for 1 second
+        assert_eq!(metrics.computed_hashrate.hashrate_1m, 349176447); // (200 + 100) / 60 * 2^32, decayed for 1 second
+
+        let mut user1_metrics = metrics.users.get_mut("user1").unwrap();
+        assert_eq!(user1_metrics.unaccounted_difficulty, 0);
+        assert_eq!(user1_metrics.computed_hash_rate.hashrate_1m, 349176447);
+
+        let mut worker1_metrics = user1_metrics.get_worker_mut("worker1").unwrap();
+        assert_eq!(worker1_metrics.unaccounted_difficulty, 0);
+        assert_eq!(worker1_metrics.computed_hash_rate.hashrate_1m, 349176447);
     }
 
     #[tokio::test]
