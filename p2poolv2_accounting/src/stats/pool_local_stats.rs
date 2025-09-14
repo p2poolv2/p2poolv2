@@ -71,10 +71,16 @@ pub async fn start_stats_saver(
             tokio::time::interval(tokio::time::Duration::from_secs(save_interval_secs));
         loop {
             interval.tick().await;
-            let metrics = metrics_handle.get_metrics().await;
-
-            if let Err(e) = save_pool_local_stats(&metrics, &log_dir) {
-                error!("Failed to save pool local stats: {}", e);
+            match metrics_handle.commit().await {
+                Ok(_) => {
+                    let metrics = metrics_handle.get_metrics().await;
+                    if let Err(e) = save_pool_local_stats(&metrics, &log_dir) {
+                        error!("Failed to save pool local stats: {}", e);
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to commit metrics before saving: {}", e);
+                }
             }
         }
     });
