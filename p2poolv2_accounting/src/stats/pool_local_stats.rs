@@ -84,7 +84,7 @@ pub async fn start_stats_saver(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stats::computed::ComputedStats;
+    use crate::stats::computed::{ComputedHashrate, ComputedShareRate};
     use std::collections::HashMap;
     use std::fs;
     use tempfile::tempdir;
@@ -113,7 +113,7 @@ mod tests {
             bestshare: 0,
             users: HashMap::with_capacity(100),
             difficulty: 500000,
-            computed: ComputedStats {
+            computed_hashrate: ComputedHashrate {
                 hashrate_1m: 1000,
                 hashrate_5m: 1200,
                 hashrate_15m: 1100,
@@ -121,11 +121,8 @@ mod tests {
                 hashrate_6hr: 1020,
                 hashrate_1d: 980,
                 hashrate_7d: 950,
-                shares_per_second_1m: 2,
-                shares_per_second_5m: 2,
-                shares_per_second_15m: 2,
-                shares_per_second_1h: 1,
             },
+            computed_share_rate: ComputedShareRate::default(),
         };
 
         // Save stats
@@ -174,7 +171,7 @@ mod tests {
             bestshare: 0,
             users: HashMap::with_capacity(100),
             difficulty: 500000,
-            computed: ComputedStats {
+            computed_hashrate: ComputedHashrate {
                 hashrate_1m: 1000,
                 hashrate_5m: 1200,
                 hashrate_15m: 1100,
@@ -182,11 +179,8 @@ mod tests {
                 hashrate_6hr: 1020,
                 hashrate_1d: 980,
                 hashrate_7d: 950,
-                shares_per_second_1m: 2,
-                shares_per_second_5m: 2,
-                shares_per_second_15m: 2,
-                shares_per_second_1h: 1,
             },
+            computed_share_rate: ComputedShareRate::default(),
         };
 
         // Save should fail because directory doesn't exist

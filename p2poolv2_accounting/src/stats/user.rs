@@ -27,6 +27,7 @@
 //! User statistics are maintained in memory during runtime and are persisted
 //! to disk every 5 minutes.
 
+use crate::stats::computed::ComputedHashrate;
 use crate::stats::worker::Worker;
 use bitcoin::hashes::{Hash, sha256};
 use serde::{Deserialize, Serialize};
@@ -39,16 +40,6 @@ const INITIAL_WORKER_MAP_CAPACITY: usize = 10;
 pub struct User {
     /// Timestamp of the last share submitted by the user, time since epoch in ms
     pub last_share_at: u64,
-    /// Difficulty share per second 1min window
-    pub share_per_second_1min: u32,
-    /// Difficulty share per second 5min window
-    pub share_per_second_5min: u32,
-    /// Difficulty share per second 1h window
-    pub share_per_second_1h: u32,
-    /// Difficulty share per second 24h window
-    pub share_per_second_24h: u32,
-    /// Difficulty share per second 7d window
-    pub share_per_second_7d: u32,
     /// Valid share submissions
     pub shares_valid: u32,
     /// Workers for the user, we maintain list of disconnected workers for persistent stats
@@ -57,21 +48,24 @@ pub struct User {
     pub best_share: u64,
     /// Best ever share, loaded from disk on startup
     pub best_share_ever: Option<u64>,
+    /// Unaccounted for difficulty
+    #[serde(skip)]
+    pub unaccounted_difficulty: u64,
+    /// Computed stats holding hashrate and share rate metrics
+    #[serde(flatten)]
+    pub computed_hash_rate: ComputedHashrate,
 }
 
 impl Default for User {
     fn default() -> Self {
         User {
             last_share_at: 0,
-            share_per_second_1min: 0,
-            share_per_second_5min: 0,
-            share_per_second_1h: 0,
-            share_per_second_24h: 0,
-            share_per_second_7d: 0,
             shares_valid: 0,
             workers: HashMap::with_capacity(INITIAL_WORKER_MAP_CAPACITY),
             best_share: 0,
             best_share_ever: None,
+            computed_hash_rate: ComputedHashrate::default(),
+            unaccounted_difficulty: 0,
         }
     }
 }
@@ -86,6 +80,7 @@ impl User {
     pub fn record_share(&mut self, workername: &str, difficulty: u64, current_time_stamp: u64) {
         self.last_share_at = current_time_stamp;
         self.shares_valid += 1;
+        self.unaccounted_difficulty += difficulty;
         if difficulty > self.best_share {
             self.best_share = difficulty;
         }
@@ -103,9 +98,11 @@ impl User {
 
     /// Get a mutable reference to a worker by name, adding it if it doesn't exist.
     pub fn get_or_add_worker(&mut self, workername: &str) -> &mut Worker {
-        self.workers
-            .entry(workername.to_string())
-            .or_insert_with(|| Worker::default())
+        self.workers.entry(workername.to_string()).or_default()
+    }
+
+    pub fn reset(&mut self) {
+        self.unaccounted_difficulty = 0;
     }
 }
 
@@ -124,11 +121,11 @@ mod tests {
 
         // Verify default values
         assert_eq!(user.last_share_at, 0);
-        assert_eq!(user.share_per_second_1min, 0);
-        assert_eq!(user.share_per_second_5min, 0);
-        assert_eq!(user.share_per_second_1h, 0);
-        assert_eq!(user.share_per_second_24h, 0);
-        assert_eq!(user.share_per_second_7d, 0);
+        assert_eq!(user.computed_hash_rate.hashrate_1m, 0);
+        assert_eq!(user.computed_hash_rate.hashrate_5m, 0);
+        assert_eq!(user.computed_hash_rate.hashrate_1hr, 0);
+        assert_eq!(user.computed_hash_rate.hashrate_6hr, 0);
+        assert_eq!(user.computed_hash_rate.hashrate_1d, 0);
         assert!(user.workers.capacity() >= INITIAL_WORKER_MAP_CAPACITY);
         assert_eq!(user.workers.len(), 0);
     }

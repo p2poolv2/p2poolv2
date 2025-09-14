@@ -26,6 +26,7 @@
 //! Worker records serve as the basis for tracking individual miner performance
 //! and calculating rewards distribution using the accounting modules.
 
+use crate::stats::computed::ComputedHashrate;
 use serde::{Deserialize, Serialize};
 
 /// Worker record, captures username, id, and hashrate stats
@@ -33,16 +34,6 @@ use serde::{Deserialize, Serialize};
 pub struct Worker {
     /// Timestamp of the last share submitted by the worker, time since epoch in ms
     pub last_share_at: u64,
-    /// Difficulty share per second 1min window
-    pub share_per_second_1min: u32,
-    /// Difficulty share per second 5min window
-    pub share_per_second_5min: u32,
-    /// Difficulty share per second 1h window
-    pub share_per_second_1h: u32,
-    /// Difficulty share per second 24h window
-    pub share_per_second_24h: u32,
-    /// Difficulty share per second 7d window
-    pub share_per_second_7d: u32,
     /// Valid share submissions
     pub shares_valid: u32,
     /// Active state
@@ -51,21 +42,24 @@ pub struct Worker {
     pub best_share: u64,
     /// Best ever share, loaded from disk on startup
     pub best_share_ever: Option<u64>,
+    /// Unaccounted for difficulty
+    #[serde(skip)]
+    pub unaccounted_difficulty: u64,
+    /// Computed stats holding hashrate and share rate metrics
+    #[serde(flatten)]
+    pub computed_hash_rate: ComputedHashrate,
 }
 
 impl Default for Worker {
     fn default() -> Self {
         Self {
             last_share_at: 0,
-            share_per_second_1min: 0,
-            share_per_second_5min: 0,
-            share_per_second_1h: 0,
-            share_per_second_24h: 0,
-            share_per_second_7d: 0,
             shares_valid: 0,
             active: true,
             best_share: 0,
             best_share_ever: None,
+            computed_hash_rate: ComputedHashrate::default(),
+            unaccounted_difficulty: 0,
         }
     }
 }
@@ -80,6 +74,7 @@ impl Worker {
     pub fn record_share(&mut self, difficulty: u64, unix_timestamp: u64) {
         self.last_share_at = unix_timestamp;
         self.shares_valid += 1;
+        self.unaccounted_difficulty += difficulty;
         if difficulty > self.best_share {
             self.best_share = difficulty;
         }
@@ -90,6 +85,10 @@ impl Worker {
         } else {
             self.best_share_ever = Some(difficulty);
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.unaccounted_difficulty = 0;
     }
 }
 
@@ -103,11 +102,11 @@ mod tests {
 
         // Verify default values
         assert_eq!(worker.last_share_at, 0);
-        assert_eq!(worker.share_per_second_1min, 0);
-        assert_eq!(worker.share_per_second_5min, 0);
-        assert_eq!(worker.share_per_second_1h, 0);
-        assert_eq!(worker.share_per_second_24h, 0);
-        assert_eq!(worker.share_per_second_7d, 0);
+        assert_eq!(worker.computed_hash_rate.hashrate_1m, 0);
+        assert_eq!(worker.computed_hash_rate.hashrate_5m, 0);
+        assert_eq!(worker.computed_hash_rate.hashrate_1hr, 0);
+        assert_eq!(worker.computed_hash_rate.hashrate_6hr, 0);
+        assert_eq!(worker.computed_hash_rate.hashrate_1d, 0);
         assert_eq!(worker.shares_valid, 0);
     }
 
