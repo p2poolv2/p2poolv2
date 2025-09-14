@@ -15,8 +15,8 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 /// Max username includes the dot and the worker name
-/// btcaddress.workername, with btcaddress at 34 bytes, we get 30 character worker name
-const MAX_USERNAME_LENGTH: usize = 64;
+/// btcaddress.workername, with btcaddress max at 62 bytes, we get 38 character worker name
+const MAX_USERNAME_LENGTH: usize = 100;
 
 #[derive(Debug, thiserror::Error)]
 pub enum UsernameValidationError {
