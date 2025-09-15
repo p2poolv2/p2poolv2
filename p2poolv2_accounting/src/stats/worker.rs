@@ -30,7 +30,7 @@ use crate::stats::computed::ComputedHashrate;
 use serde::{Deserialize, Serialize};
 
 /// Worker record, captures username, id, and hashrate stats
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Worker {
     /// Timestamp of the last share submitted by the worker, time since epoch in ms
     pub last_share_at: u64,

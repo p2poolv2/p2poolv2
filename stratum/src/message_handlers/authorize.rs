@@ -66,13 +66,19 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
     session.workername = parsed_username.1.map(|s| s.to_string());
     session.password = message.params[1].clone();
 
-    let _ = ctx
+    match ctx
         .metrics
         .increment_worker_count(
             session.btcaddress.clone().unwrap_or_default(),
             session.workername.clone().unwrap_or_default(),
         )
-        .await;
+        .await
+    {
+        Ok(_) => {}
+        Err(e) => {
+            tracing::error!("Failed to send increment worker count message: {}", e);
+        }
+    };
 
     session
         .difficulty_adjuster

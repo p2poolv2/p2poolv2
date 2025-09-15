@@ -36,7 +36,7 @@ use std::collections::HashMap;
 const INITIAL_WORKER_MAP_CAPACITY: usize = 10;
 
 /// User record, captures username, id, and hashrate stats
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct User {
     /// Timestamp of the last share submitted by the user, time since epoch in ms
     pub last_share_at: u64,
