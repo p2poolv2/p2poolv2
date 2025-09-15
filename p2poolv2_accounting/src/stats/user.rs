@@ -52,7 +52,6 @@ pub struct User {
     #[serde(skip)]
     pub unaccounted_difficulty: u64,
     /// Computed stats holding hashrate and share rate metrics
-    #[serde(flatten)]
     pub computed_hash_rate: ComputedHashrate,
 }
 

@@ -18,8 +18,6 @@ use crate::calc::{self, decay_time};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
-const HASHES_PER_SHARE: u64 = 2_u64.pow(32);
-
 /// Struct to hold computed statistics like hashrate over various time windows
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ComputedHashrate {
