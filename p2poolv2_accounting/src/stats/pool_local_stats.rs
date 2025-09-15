@@ -48,14 +48,27 @@ pub fn save_pool_local_stats(pool_metrics: &PoolMetrics, log_dir: &str) -> std::
 }
 
 /// Load pool stats from log dir
+/// Returns default PoolMetrics if the file doesn't exist
+/// or returns error for other failure cases
 pub fn load_pool_local_stats(log_dir: &str) -> Result<PoolMetrics, std::io::Error> {
     let path = Path::new(log_dir)
         .join(POOL_STATS_DIR)
         .join("pool_stats.json");
-    let file = File::open(&path).map_err(|_| std::io::Error::other("File open failed"))?;
-    let pool_metrics: PoolMetrics = serde_json::from_reader(file)
-        .map_err(|_| std::io::Error::other("JSON deserialization failed"))?;
-    Ok(pool_metrics)
+
+    if !path.exists() {
+        return Ok(PoolMetrics::default());
+    }
+
+    let file_content =
+        std::fs::read_to_string(&path).map_err(|_| std::io::Error::other("File read failed"))?;
+
+    match serde_json::from_str(&file_content) {
+        Ok(pool_metrics) => Ok(pool_metrics),
+        Err(e) => {
+            tracing::error!("Error deserializing pool stats: {e}");
+            Err(std::io::Error::other("JSON deserialization failed"))
+        }
+    }
 }
 
 /// Start a background task to periodically save pool local stats
@@ -95,10 +108,11 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
-    #[test]
+    #[test_log::test]
     fn test_pool_local_stats_save_load() {
         let temp_dir = tempdir().unwrap();
         let log_dir = temp_dir.path().to_str().unwrap();
+        println!("Temporary log directory: {}", log_dir);
 
         // Create stats directory
         let stats_dir = Path::new(log_dir).join(POOL_STATS_DIR);
@@ -150,7 +164,8 @@ mod tests {
 
         // Try to load without creating file
         let result = load_pool_local_stats(log_dir);
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), PoolMetrics::default());
     }
 
     #[test]

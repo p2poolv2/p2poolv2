@@ -14,10 +14,11 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::stats::computed::time_since;
 use crate::stats::computed::{ComputedHashrate, ComputedShareRate};
 use crate::stats::pool_local_stats::load_pool_local_stats;
 use crate::stats::user::User;
-use crate::stats::worker::{self, Worker};
+use crate::stats::worker::Worker;
 use crate::{simple_pplns::SimplePplnsShare, stats::pool_local_stats};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -27,9 +28,10 @@ use tracing::error;
 
 const METRICS_MESSAGE_BUFFER_SIZE: usize = 100;
 pub const INITIAL_USER_MAP_CAPACITY: usize = 1000;
+const METRICS_SAVE_INTERVAL: u64 = 5;
 
 /// Represents the metrics for the P2Poolv2 pool, we derive the stats every five minutes from this
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PoolMetrics {
     /// Start time in unix timestamp
     pub start_time: u64,
@@ -61,10 +63,8 @@ pub struct PoolMetrics {
     /// Current pool difficulty
     pub difficulty: u64,
     /// Hashrate computed from unaccounted difficulty
-    #[serde(flatten)]
     pub computed_hashrate: ComputedHashrate,
     /// Shares per second computed from unaccounted shares
-    #[serde(flatten)]
     pub computed_share_rate: ComputedShareRate,
 }
 
@@ -95,14 +95,14 @@ impl Default for PoolMetrics {
 
 impl PoolMetrics {
     /// Load existing metrics from file or build new default
-    pub fn load_existing(log_dir: &str) -> Self {
-        let pool_stats = load_pool_local_stats(log_dir).unwrap_or_default();
-        PoolMetrics {
+    pub fn load_existing(log_dir: &str) -> Result<Self, std::io::Error> {
+        let pool_stats = load_pool_local_stats(log_dir)?;
+        Ok(PoolMetrics {
             accepted: pool_stats.accepted,
             rejected: pool_stats.rejected,
             users: pool_stats.users,
             ..Default::default()
-        }
+        })
     }
 
     /// Reset metrics to their default values using default
@@ -175,11 +175,12 @@ impl MetricsActor {
     }
 
     /// Create a metrics actor with metrics loaded from the given log directory
-    pub fn with_existing_metrics(log_dir: &str, receiver: mpsc::Receiver<MetricsMessage>) -> Self {
-        Self {
-            metrics: PoolMetrics::load_existing(log_dir),
-            receiver,
-        }
+    pub fn with_existing_metrics(
+        log_dir: &str,
+        receiver: mpsc::Receiver<MetricsMessage>,
+    ) -> Result<Self, std::io::Error> {
+        let metrics = PoolMetrics::load_existing(log_dir)?;
+        Ok(Self { metrics, receiver })
     }
 
     /// Start the actor's message handling loop
@@ -314,13 +315,16 @@ impl MetricsActor {
     /// Export current metrics as json, returning the serialized json
     /// Reset the metrics to start again
     fn commit(&mut self) -> String {
-        self.metrics
-            .computed_hashrate
-            .set_hashrate_metrics(self.metrics.lastupdate, self.metrics.unaccounted_difficulty);
+        self.metrics.computed_hashrate.set_hashrate_metrics(
+            time_since(self.metrics.lastupdate),
+            self.metrics.unaccounted_difficulty,
+        );
 
-        self.metrics
-            .computed_share_rate
-            .set_share_rate_metrics(self.metrics.lastupdate, self.metrics.unaccounted_shares);
+        self.metrics.computed_share_rate.set_share_rate_metrics(
+            time_since(self.metrics.lastupdate),
+            self.metrics.unaccounted_shares,
+        );
+
         self.commit_users();
 
         let serialized = serde_json::to_string(&self.metrics).unwrap();
@@ -330,11 +334,13 @@ impl MetricsActor {
 
     fn commit_users(&mut self) {
         for (_btcaddress, user) in self.metrics.users.iter_mut() {
-            user.computed_hash_rate
-                .set_hashrate_metrics(Some(user.last_share_at), user.unaccounted_difficulty);
+            user.computed_hash_rate.set_hashrate_metrics(
+                time_since(Some(user.last_share_at)),
+                user.unaccounted_difficulty,
+            );
             for (_workername, worker) in user.workers.iter_mut() {
                 worker.computed_hash_rate.set_hashrate_metrics(
-                    Some(worker.last_share_at),
+                    time_since(Some(worker.last_share_at)),
                     worker.unaccounted_difficulty,
                 );
             }
@@ -497,12 +503,18 @@ impl MetricsHandle {
 /// Construct a new metrics actor with existing metrics and return its handle
 pub async fn start_metrics(log_dir: String) -> Result<MetricsHandle, std::io::Error> {
     let (sender, receiver) = mpsc::channel(METRICS_MESSAGE_BUFFER_SIZE);
-    let actor = MetricsActor::with_existing_metrics(&log_dir, receiver);
+    let actor = MetricsActor::with_existing_metrics(&log_dir, receiver)?;
     tokio::spawn(async move {
         actor.run().await;
     });
     let handle = MetricsHandle { sender };
-    match pool_local_stats::start_stats_saver(handle.clone(), 5, log_dir.to_string()).await {
+    match pool_local_stats::start_stats_saver(
+        handle.clone(),
+        METRICS_SAVE_INTERVAL,
+        log_dir.to_string(),
+    )
+    .await
+    {
         Ok(_) => {}
         Err(e) => {
             error!("Failed to start stats saver: {e}");
@@ -616,7 +628,7 @@ mod tests {
         assert_eq!(metrics.unaccounted_rejected, 2);
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_metrics_commit() {
         let log_dir = tempfile::tempdir().unwrap();
         let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
@@ -629,14 +641,14 @@ mod tests {
 
         let _ = handle
             .record_share_accepted(SimplePplnsShare {
-                difficulty: 100,
+                difficulty: 1000,
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
             })
             .await;
         let _ = handle
             .record_share_accepted(SimplePplnsShare {
-                difficulty: 200,
+                difficulty: 2000,
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
             })
@@ -647,7 +659,7 @@ mod tests {
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let _ = handle.set_last_update(current_unix_timestamp - 1).await;
+        let _ = handle.set_last_update(current_unix_timestamp - 60).await;
 
         let json_str = handle.commit().await;
         let json: serde_json::Value = serde_json::from_str(&json_str.unwrap()).unwrap();
@@ -660,16 +672,16 @@ mod tests {
         assert_eq!(metrics.unaccounted_shares, 0);
         assert_eq!(metrics.unaccounted_difficulty, 0);
         assert_eq!(metrics.unaccounted_rejected, 0);
-        assert_eq!(metrics.bestshare, 200);
-        assert_eq!(metrics.computed_hashrate.hashrate_1m, 349176447); // (200 + 100) / 60 * 2^32, decayed for 1 second
+        assert_eq!(metrics.bestshare, 2000);
+        assert_eq!(metrics.computed_hashrate.hashrate_1m, 19);
 
-        let mut user1_metrics = metrics.users.get_mut("user1").unwrap();
+        let user1_metrics = metrics.users.get_mut("user1").unwrap();
         assert_eq!(user1_metrics.unaccounted_difficulty, 0);
-        assert_eq!(user1_metrics.computed_hash_rate.hashrate_1m, 349176447);
+        assert_eq!(user1_metrics.computed_hash_rate.hashrate_1m, 19);
 
-        let mut worker1_metrics = user1_metrics.get_worker_mut("worker1").unwrap();
+        let worker1_metrics = user1_metrics.get_worker_mut("worker1").unwrap();
         assert_eq!(worker1_metrics.unaccounted_difficulty, 0);
-        assert_eq!(worker1_metrics.computed_hash_rate.hashrate_1m, 349176447);
+        assert_eq!(worker1_metrics.computed_hash_rate.hashrate_1m, 19);
     }
 
     #[tokio::test]
@@ -787,7 +799,7 @@ mod tests {
         assert_eq!(metrics.num_idle_users, 2);
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_get_metrics_consistency() {
         let log_dir = tempfile::tempdir().unwrap();
         let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
@@ -820,10 +832,14 @@ mod tests {
                 .workers
                 .contains_key("workerD")
         );
+        assert_eq!(metrics.accepted, 1);
+        assert_eq!(metrics.rejected, 1);
 
         // save and reload metrics to verify persistence
+        println!("Saving metrics: {:?}", metrics);
         let _ = save_pool_local_stats(&metrics, log_dir.path().to_str().unwrap());
-        let reloaded = PoolMetrics::load_existing(log_dir.path().to_str().unwrap());
+        let reloaded = PoolMetrics::load_existing(log_dir.path().to_str().unwrap()).unwrap();
+        println!("Reloaded metrics: {:?}", reloaded);
         assert_eq!(reloaded.accepted, metrics.accepted);
         assert_eq!(reloaded.rejected, metrics.rejected);
         assert_eq!(reloaded.users, metrics.users);
