@@ -58,6 +58,8 @@ services:
     volumes:
       - p2pool_data:/data
     restart: unless-stopped
+    ports:
+      - "3333:3333"
     networks:
       - p2pool_network
     logging:
