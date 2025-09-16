@@ -112,7 +112,6 @@ mod tests {
     fn test_pool_local_stats_save_load() {
         let temp_dir = tempdir().unwrap();
         let log_dir = temp_dir.path().to_str().unwrap();
-        println!("Temporary log directory: {}", log_dir);
 
         // Create stats directory
         let stats_dir = Path::new(log_dir).join(POOL_STATS_DIR);
