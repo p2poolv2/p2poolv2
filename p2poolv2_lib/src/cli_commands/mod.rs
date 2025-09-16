@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod info;
+pub mod chain_info;
 
 // Re-export the shared store functionality
 pub mod store {

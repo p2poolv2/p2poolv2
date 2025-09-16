@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Handle command if provided
     match &cli.command {
         Some(Commands::Info) => {
-            cli_commands::info::execute(chain)?;
+            cli_commands::chain_info::execute(chain)?;
         }
         None => {
             println!("No command specified. Use --help for usage information.");
