@@ -836,10 +836,8 @@ mod tests {
         assert_eq!(metrics.rejected, 1);
 
         // save and reload metrics to verify persistence
-        println!("Saving metrics: {:?}", metrics);
         let _ = save_pool_local_stats(&metrics, log_dir.path().to_str().unwrap());
         let reloaded = PoolMetrics::load_existing(log_dir.path().to_str().unwrap()).unwrap();
-        println!("Reloaded metrics: {:?}", reloaded);
         assert_eq!(reloaded.accepted, metrics.accepted);
         assert_eq!(reloaded.rejected, metrics.rejected);
         assert_eq!(reloaded.users, metrics.users);
