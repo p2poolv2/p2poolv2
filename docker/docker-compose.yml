@@ -54,7 +54,7 @@ services:
       - P2POOL_BITCOIN_URL=bitcoind:${BTC_RPC_PORT:-38332}
       - P2POOL_STORE_PATH=/data/${NETWORK:-signet}
       - RUST_LOG=info
-    command: /p2pool/target/release/p2poolv2 --config=/p2pool/config.toml
+    command: /p2pool/target/debug/p2poolv2 --config=/p2pool/config.toml
     volumes:
       - p2pool_data:/data
     restart: unless-stopped
