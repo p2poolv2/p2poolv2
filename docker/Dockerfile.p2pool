@@ -1,5 +1,5 @@
 # Build stage
-FROM rust:1.83-slim-bullseye
+FROM rust:1.88-slim-bullseye
 
 # Install required build dependencies
 RUN apt-get update && apt-get install -y \
@@ -32,12 +32,20 @@ COPY bitcoindrpc/ /p2pool/bitcoindrpc
 COPY p2poolv2_cli/ /p2pool/p2poolv2_cli
 COPY p2poolv2_node/ /p2pool/p2poolv2_node
 COPY p2poolv2_lib/ /p2pool/p2poolv2_lib
+COPY p2poolv2_accounting/ /p2pool/p2poolv2_accounting
+
 COPY Cargo.lock /p2pool/Cargo.lock
 COPY Cargo.toml /p2pool/Cargo.toml
+
 COPY config.toml /p2pool/config.toml
+
 ENV RUST_LOG=info
 
 WORKDIR /p2pool
+
+# Create a minimal source file for the root package. We need a root package in local dev as we have integration tests there.
+# Here we need a dummy root package to satisfy Cargo workspace requirements.
+RUN mkdir -p /p2pool/src && echo '// Empty library file\npub fn dummy() {}\n' > /p2pool/src/lib.rs
 
 # Build p2poolv2 and p2poolv2_cli
 RUN cargo build --workspace
