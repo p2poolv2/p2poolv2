@@ -65,5 +65,5 @@ and we do not support masochistic setups. You are on your own.
 . Setup bitcoind
 .. Use `docker/bitcoin-signet.conf` as your bitcoin.conf
 . Setup p2poolv2
-.. Use src/config.toml as starting point for your config.toml
-. Point your miners to localhost:3333
+.. Use `src/config.toml` as starting point for your own `config.toml`
+. Point your miners to `localhost:3333`
