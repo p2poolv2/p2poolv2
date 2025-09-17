@@ -32,6 +32,7 @@ tracing-appender = { workspace = true }
 bitcoindrpc = { path = '../bitcoindrpc' }
 stratum = { path = '../stratum' }
 p2poolv2_accounting = { path = '../p2poolv2_accounting' }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.15.0"

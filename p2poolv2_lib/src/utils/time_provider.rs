@@ -62,6 +62,13 @@ impl TimeProvider for TestTimeProvider {
     }
 }
 
+/// Formats a Unix timestamp into a human-readable string
+pub fn format_timestamp(timestamp: u64) -> String {
+    chrono::DateTime::from_timestamp(timestamp as i64, 0)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|| "Invalid timestamp".to_string())
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -99,5 +106,29 @@ mod test {
         let after = provider.now();
         // Time should still progress normally
         assert!(after >= before);
+    }
+
+    #[test]
+    fn test_format_timestamp_valid() {
+        // Test with a known timestamp: Jan 1, 2024 00:00:00 UTC
+        let timestamp = 1704067200;
+        let formatted = format_timestamp(timestamp);
+        assert_eq!(formatted, "2024-01-01 00:00:00 UTC");
+    }
+
+    #[test]
+    fn test_format_timestamp_epoch() {
+        // Test with Unix epoch (Jan 1, 1970 00:00:00 UTC)
+        let timestamp = 0;
+        let formatted = format_timestamp(timestamp);
+        assert_eq!(formatted, "1970-01-01 00:00:00 UTC");
+    }
+
+    #[test]
+    fn test_format_timestamp_recent() {
+        // Test with a more recent timestamp: Dec 31, 2024 23:59:59 UTC
+        let timestamp = 1735689599;
+        let formatted = format_timestamp(timestamp);
+        assert_eq!(formatted, "2024-12-31 23:59:59 UTC");
     }
 }

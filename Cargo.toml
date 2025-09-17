@@ -58,6 +58,7 @@ bitcoin = { version = "0.32.5", features = ["serde", "rand"] }
 jsonrpsee = { version = "0.24", features = ["http-client", "client"] }
 base64 = "0.22.1"
 void = "1.0.2"
+chrono = { version = "0.4", features = ["serde"] }
 tokio-util = "0.7.15"
 tokio-stream = "0.1.17"
 p2poolv2_lib = { path = "p2poolv2_lib" }
