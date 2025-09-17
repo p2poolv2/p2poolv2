@@ -32,14 +32,16 @@ pub struct SimplePplnsShare {
     pub difficulty: u64,
     pub btcaddress: String,
     pub workername: String,
+    pub timestamp: u64,
 }
 
 impl SimplePplnsShare {
-    pub fn new(difficulty: u64, btcaddress: String, workername: String) -> Self {
+    pub fn new(difficulty: u64, btcaddress: String, workername: String, timestamp: u64) -> Self {
         SimplePplnsShare {
             difficulty,
             btcaddress,
             workername,
+            timestamp,
         }
     }
 
