@@ -40,6 +40,18 @@ struct Cli {
 enum Commands {
     /// List information about the store
     Info,
+    /// Get PPLNS shares with optional filtering
+    PplnsShares {
+        /// Maximum number of shares to return
+        #[arg(short, long, default_value = "100")]
+        limit: usize,
+        /// Start time (unix timestamp in seconds) to filter shares
+        #[arg(short, long)]
+        start_time: Option<u64>,
+        /// End time (unix timestamp in seconds) to filter shares
+        #[arg(short, long)]
+        end_time: Option<u64>,
+    },
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -58,6 +70,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     match &cli.command {
         Some(Commands::Info) => {
             cli_commands::chain_info::execute(chain)?;
+        }
+        Some(Commands::PplnsShares {
+            limit,
+            start_time,
+            end_time,
+        }) => {
+            cli_commands::pplns_shares::execute(chain, *limit, *start_time, *end_time)?;
         }
         None => {
             println!("No command specified. Use --help for usage information.");

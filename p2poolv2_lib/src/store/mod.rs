@@ -27,6 +27,8 @@ use std::collections::HashMap;
 use std::error::Error;
 use tracing::debug;
 
+mod pplns_shares;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TxMetadata {
     txid: bitcoin::Txid,
@@ -159,10 +161,7 @@ impl Store {
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pplns_share_cf = self.db.cf_handle("share").unwrap();
         let (hash, serialized) = pplns_share.hash_and_serialize()?;
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_micros();
+        let timestamp = pplns_share.timestamp as u128 * 1_000_000; // Convert seconds to microseconds
         let key = format!(
             "{}:{}:{}",
             timestamp,
@@ -177,16 +176,7 @@ impl Store {
     pub fn get_pplns_shares(
         &mut self,
     ) -> Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>> {
-        let pplns_share_cf = self.db.cf_handle("share").unwrap();
-        let mut iter = self
-            .db
-            .iterator_cf(pplns_share_cf, rocksdb::IteratorMode::End);
-        let mut shares = Vec::new();
-        while let Some(Ok((_key, value))) = iter.next() {
-            let share: SimplePplnsShare = ciborium::de::from_reader(&value[..]).unwrap();
-            shares.push(share);
-        }
-        Ok(shares)
+        self.get_pplns_shares_filtered(usize::MAX, None, None)
     }
 
     /// Iterate over the store from provided start blockhash
@@ -2298,11 +2288,12 @@ mod tests {
         let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create a PPLNS share
-        let pplns_share = SimplePplnsShare {
-            btcaddress: "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string(),
-            workername: "".to_string(),
-            difficulty: 1,
-        };
+        let pplns_share = SimplePplnsShare::new(
+            1,
+            "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string(),
+            "".to_string(),
+            1000,
+        );
 
         // Add the PPLNS share to the store
         let result = store.add_pplns_share(pplns_share.clone());

@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod chain_info;
+pub mod pplns_shares;
 
 // Re-export the shared store functionality
 pub mod store {
