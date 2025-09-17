@@ -81,6 +81,21 @@ impl NodeHandle {
             Err(e) => Err(e.into()),
         }
     }
+
+    /// Get PPLNS shares with filtering
+    pub async fn get_pplns_shares(
+        &self,
+        query: crate::command::GetPplnsShareQuery,
+    ) -> Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::GetPplnsShares(query, tx))
+            .await?;
+        match rx.await {
+            Ok(result) => result,
+            Err(e) => Err(e.into()),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -188,6 +203,11 @@ impl NodeActor {
                             tx.send(()).unwrap();
                             return;
                         },
+                        Some(Command::GetPplnsShares(query, tx)) => {
+                            info!("Received GetPplnsShares command with limit: {}", query.limit);
+                            let result = self.node.handle_get_pplns_shares(query);
+                            let _ = tx.send(result);
+                        },
                         None => {
                             info!("Stopping node actor on channel close");
                             self.stopping_tx.send(()).unwrap();
@@ -197,5 +217,98 @@ impl NodeActor {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::GetPplnsShareQuery;
+    use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
+    use tokio::sync::{mpsc, oneshot};
+
+    #[tokio::test]
+    async fn test_node_handle_get_pplns_shares_sends_correct_command() {
+        let (command_tx, mut command_rx) = mpsc::channel(32);
+        let node_handle = NodeHandle { command_tx };
+
+        let query = GetPplnsShareQuery {
+            limit: 42,
+            start_time: Some(1000),
+            end_time: Some(2000),
+        };
+
+        // Spawn the get_pplns_shares call in a separate task
+        let query_clone = query.clone();
+        let handle = tokio::spawn(async move { node_handle.get_pplns_shares(query_clone).await });
+
+        // Verify the correct command was sent
+        if let Some(Command::GetPplnsShares(received_query, tx)) = command_rx.recv().await {
+            assert_eq!(received_query.limit, query.limit);
+            assert_eq!(received_query.start_time, query.start_time);
+            assert_eq!(received_query.end_time, query.end_time);
+
+            // Send back a test response
+            let test_shares = vec![SimplePplnsShare::new(
+                100,
+                "addr1".to_string(),
+                "worker1".to_string(),
+                1500,
+            )];
+            let _ = tx.send(Ok(test_shares));
+        } else {
+            panic!("Expected GetPplnsShares command");
+        }
+
+        // Verify the result is returned correctly
+        let result = handle.await.unwrap();
+        assert!(result.is_ok());
+        let shares = result.unwrap();
+        assert_eq!(shares.len(), 1);
+        assert_eq!(shares[0].timestamp, 1500);
+    }
+
+    #[tokio::test]
+    async fn test_node_handle_get_pplns_shares_handles_error_response() {
+        let (command_tx, mut command_rx) = mpsc::channel(32);
+        let node_handle = NodeHandle { command_tx };
+
+        let query = GetPplnsShareQuery {
+            limit: 10,
+            start_time: None,
+            end_time: None,
+        };
+
+        // Spawn the get_pplns_shares call in a separate task
+        let handle = tokio::spawn(async move { node_handle.get_pplns_shares(query).await });
+
+        // Verify the command was sent and respond with error
+        if let Some(Command::GetPplnsShares(_, tx)) = command_rx.recv().await {
+            let _ = tx.send(Err("Test error".into()));
+        } else {
+            panic!("Expected GetPplnsShares command");
+        }
+
+        // Verify the error is propagated
+        let result = handle.await.unwrap();
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_node_handle_get_pplns_shares_channel_send_error() {
+        // Create a channel with buffer size 0 and close the receiver
+        let (command_tx, command_rx) = mpsc::channel(1);
+        drop(command_rx); // Close the receiver to cause send error
+
+        let node_handle = NodeHandle { command_tx };
+
+        let query = GetPplnsShareQuery {
+            limit: 10,
+            start_time: None,
+            end_time: None,
+        };
+
+        let result = node_handle.get_pplns_shares(query).await;
+        assert!(result.is_err());
     }
 }

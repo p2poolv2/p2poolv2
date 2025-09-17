@@ -18,6 +18,17 @@ use crate::node::messages::Message;
 use std::error::Error;
 use tokio::sync::oneshot;
 
+/// Struct for queruying the PPLNS shares from the node
+#[derive(Debug, Clone)]
+pub struct GetPplnsShareQuery {
+    /// Maximum number of shares to return
+    pub limit: usize,
+    /// Optional start time (unix timestamp in seconds) to filter shares
+    pub start_time: Option<u64>,
+    /// Optional end time (unix timestamp in seconds) to filter shares
+    pub end_time: Option<u64>,
+}
+
 /// Commands for communication between node handle and actor
 /// We allow large enum variants because we want to avoid heap allocations for these frequently used messages
 /// We know that the size difference is large, and we are willing to accept it
@@ -35,4 +46,9 @@ pub enum Command {
     GetPeers(oneshot::Sender<Vec<libp2p::PeerId>>),
     /// Command to shutdown node
     Shutdown(oneshot::Sender<()>),
+    /// Get PPLNS shares from the node with optional filtering
+    GetPplnsShares(
+        GetPplnsShareQuery,
+        oneshot::Sender<Result<Vec<p2poolv2_accounting::simple_pplns::SimplePplnsShare>, Box<dyn std::error::Error + Send + Sync>>>,
+    ),
 }

@@ -34,6 +34,12 @@ pub enum ChainMessage {
     IsConfirmed(ShareBlock),
     AddShare(ShareBlock),
     AddPplnsShare(SimplePplnsShare),
+    GetPplnsShares(
+        usize,
+        Option<u64>,
+        Option<u64>,
+        tokio::sync::oneshot::Sender<Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>>>,
+    ),
     StoreWorkbase(MinerWorkbase),
     StoreUserWorkbase(UserWorkbase),
     GetWorkbase(u64),
@@ -145,6 +151,12 @@ impl ChainActor {
                         .await
                     {
                         error!("Failed to send add_pplns_share response: {}", e);
+                    }
+                }
+                ChainMessage::GetPplnsShares(limit, start_time, end_time, response_tx) => {
+                    let result = self.chain_store.get_pplns_shares_filtered(limit, start_time, end_time);
+                    if let Err(e) = response_tx.send(result) {
+                        error!("Failed to send get_pplns_shares response: {:?}", e);
                     }
                 }
                 ChainMessage::StoreWorkbase(workbase) => {
@@ -458,6 +470,27 @@ impl ChainHandle {
         }
     }
 
+    pub async fn get_pplns_shares_filtered(
+        &self,
+        limit: usize,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+    ) -> Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>> {
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        if let Err(e) = self
+            .sender
+            .send((ChainMessage::GetPplnsShares(limit, start_time, end_time, response_tx), mpsc::channel(1).0))
+            .await
+        {
+            error!("Failed to send GetPplnsShares message: {}", e);
+            return Err(e.into());
+        }
+        match response_rx.await {
+            Ok(result) => result,
+            Err(e) => Err(e.into()),
+        }
+    }
+
     pub async fn get_shares_at_height(&self, height: u32) -> HashMap<ShareBlockHash, ShareBlock> {
         let (response_sender, mut response_receiver) = mpsc::channel(1);
         if let Err(e) = self
@@ -766,6 +799,7 @@ mock! {
         pub async fn add_user_workbase(&self, user_workbase: UserWorkbase) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase>;
         pub async fn get_share(&self, share_hash: ShareBlockHash) -> Option<ShareBlock>;
+        pub async fn get_pplns_shares_filtered(&self, limit: usize, start_time: Option<u64>, end_time: Option<u64>) -> Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>>;
         pub async fn get_shares_at_height(&self, height: u32) -> HashMap<ShareBlockHash, ShareBlock>;
         pub async fn get_share_headers(&self, share_hashes: Vec<ShareBlockHash>) -> Vec<ShareHeader>;
         pub async fn get_headers_for_locator(&self, block_hashes: Vec<ShareBlockHash>, stop_block_hash: ShareBlockHash, max_headers: usize) -> Vec<ShareHeader>;
@@ -1403,5 +1437,121 @@ mod tests {
 
         let total_difficulty = read_only_chain.get_total_difficulty();
         assert_eq!(total_difficulty, dec!(4.0));
+    }
+
+    #[tokio::test]
+    async fn test_get_pplns_shares_filtered_empty() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
+
+        // Test with empty store
+        let result = chain_handle.get_pplns_shares_filtered(10, None, None).await;
+        assert!(result.is_ok());
+        let shares = result.unwrap();
+        assert_eq!(shares.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_pplns_shares_filtered_with_shares() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
+
+        // Add some PPLNS shares
+        let share1 = SimplePplnsShare::new(100, "addr1".to_string(), "worker1".to_string(), 1000);
+        let share2 = SimplePplnsShare::new(200, "addr2".to_string(), "worker2".to_string(), 2000);
+        let share3 = SimplePplnsShare::new(300, "addr3".to_string(), "worker3".to_string(), 3000);
+
+        chain_handle.add_pplns_share(share1.clone()).await.unwrap();
+        chain_handle.add_pplns_share(share2.clone()).await.unwrap();
+        chain_handle.add_pplns_share(share3.clone()).await.unwrap();
+
+        // Test getting all shares
+        let result = chain_handle.get_pplns_shares_filtered(10, None, None).await;
+        assert!(result.is_ok());
+        let shares = result.unwrap();
+        assert_eq!(shares.len(), 3);
+
+        // Verify shares are returned in correct order (most recent first)
+        assert_eq!(shares[0].timestamp, 3000);
+        assert_eq!(shares[1].timestamp, 2000);
+        assert_eq!(shares[2].timestamp, 1000);
+    }
+
+    #[tokio::test]
+    async fn test_get_pplns_shares_filtered_with_limit() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
+
+        // Add some PPLNS shares
+        let share1 = SimplePplnsShare::new(100, "addr1".to_string(), "worker1".to_string(), 1000);
+        let share2 = SimplePplnsShare::new(200, "addr2".to_string(), "worker2".to_string(), 2000);
+        let share3 = SimplePplnsShare::new(300, "addr3".to_string(), "worker3".to_string(), 3000);
+
+        chain_handle.add_pplns_share(share1).await.unwrap();
+        chain_handle.add_pplns_share(share2).await.unwrap();
+        chain_handle.add_pplns_share(share3).await.unwrap();
+
+        // Test with limit
+        let result = chain_handle.get_pplns_shares_filtered(2, None, None).await;
+        assert!(result.is_ok());
+        let shares = result.unwrap();
+        assert_eq!(shares.len(), 2);
+
+        // Should return the 2 most recent shares
+        assert_eq!(shares[0].timestamp, 3000);
+        assert_eq!(shares[1].timestamp, 2000);
+    }
+
+    #[tokio::test]
+    async fn test_get_pplns_shares_filtered_with_time_range() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
+
+        // Add some PPLNS shares with different timestamps
+        let share1 = SimplePplnsShare::new(100, "addr1".to_string(), "worker1".to_string(), 1000);
+        let share2 = SimplePplnsShare::new(200, "addr2".to_string(), "worker2".to_string(), 2000);
+        let share3 = SimplePplnsShare::new(300, "addr3".to_string(), "worker3".to_string(), 3000);
+        let share4 = SimplePplnsShare::new(400, "addr4".to_string(), "worker4".to_string(), 4000);
+
+        chain_handle.add_pplns_share(share1).await.unwrap();
+        chain_handle.add_pplns_share(share2).await.unwrap();
+        chain_handle.add_pplns_share(share3).await.unwrap();
+        chain_handle.add_pplns_share(share4).await.unwrap();
+
+        // Test with start_time filter
+        let result = chain_handle.get_pplns_shares_filtered(10, Some(2500), None).await;
+        assert!(result.is_ok());
+        let shares = result.unwrap();
+        assert_eq!(shares.len(), 2); // Should include shares with timestamp >= 2500
+        assert_eq!(shares[0].timestamp, 4000);
+        assert_eq!(shares[1].timestamp, 3000);
+
+        // Test with end_time filter
+        let result = chain_handle.get_pplns_shares_filtered(10, None, Some(2500)).await;
+        assert!(result.is_ok());
+        let shares = result.unwrap();
+        assert_eq!(shares.len(), 2); // Should include shares with timestamp <= 2500
+        assert_eq!(shares[0].timestamp, 2000);
+        assert_eq!(shares[1].timestamp, 1000);
+
+        // Test with both start_time and end_time
+        let result = chain_handle.get_pplns_shares_filtered(10, Some(1500), Some(3500)).await;
+        assert!(result.is_ok());
+        let shares = result.unwrap();
+        assert_eq!(shares.len(), 2); // Should include shares between 1500 and 3500
+        assert_eq!(shares[0].timestamp, 3000);
+        assert_eq!(shares[1].timestamp, 2000);
     }
 }
