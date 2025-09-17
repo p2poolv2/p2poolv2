@@ -19,9 +19,9 @@ mod common;
 use common::default_test_config;
 use p2poolv2_accounting::{simple_pplns::SimplePplnsShare, stats::metrics};
 use p2poolv2_lib::node::actor::NodeHandle;
+use p2poolv2_lib::shares::ShareBlock;
 use p2poolv2_lib::shares::chain::actor::ChainHandle;
 use p2poolv2_lib::shares::miner_message::CkPoolMessage;
-use p2poolv2_lib::shares::ShareBlock;
 use std::fs;
 use std::time::Duration;
 use tempfile::tempdir;
@@ -179,14 +179,18 @@ async fn test_single_node_with_zmq_feed_of_shares_only() {
     let share_2 = shares.values().next().unwrap();
 
     // Verify the node received and processed the data
-    assert!(chain_handle
-        .get_share(share_1.cached_blockhash.unwrap())
-        .await
-        .is_some());
-    assert!(chain_handle
-        .get_share(share_2.cached_blockhash.unwrap())
-        .await
-        .is_some());
+    assert!(
+        chain_handle
+            .get_share(share_1.cached_blockhash.unwrap())
+            .await
+            .is_some()
+    );
+    assert!(
+        chain_handle
+            .get_share(share_2.cached_blockhash.unwrap())
+            .await
+            .is_some()
+    );
 
     assert_eq!(chain_handle.get_chain_tip().await, share_2.cached_blockhash);
     let share_at_tip = chain_handle
@@ -276,10 +280,12 @@ async fn test_single_node_with_shares_and_workbases() {
     let mined_share = mined_shares.values().next().unwrap();
 
     // Verify the node received and processed the data
-    assert!(chain_handle
-        .get_share(mined_share.cached_blockhash.unwrap())
-        .await
-        .is_some());
+    assert!(
+        chain_handle
+            .get_share(mined_share.cached_blockhash.unwrap())
+            .await
+            .is_some()
+    );
 
     let workbase = chain_handle
         .get_workbase(7460801854683742211)

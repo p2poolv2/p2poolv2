@@ -16,7 +16,7 @@
 
 use crate::work::error::WorkError;
 use crate::work::notify::NotifyCmd;
-use bitcoin::hashes::{sha256d, Hash};
+use bitcoin::hashes::{Hash, sha256d};
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

@@ -16,7 +16,7 @@
 
 use crate::error::Error;
 use bitcoin::secp256k1::rand::{self, RngCore};
-use bitcoin::{bip152::HeaderAndShortIds, p2p::message_compact_blocks::CmpctBlock, Block};
+use bitcoin::{Block, bip152::HeaderAndShortIds, p2p::message_compact_blocks::CmpctBlock};
 use tokio::sync::mpsc;
 use tracing::warn;
 

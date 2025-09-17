@@ -17,9 +17,9 @@
 use crate::BitcoinRpcConfig;
 use base64::Engine;
 #[cfg(any(test, feature = "test-utils"))]
-use wiremock::matchers::{body_json, header, method, path};
-#[cfg(any(test, feature = "test-utils"))]
 use wiremock::MockServer;
+#[cfg(any(test, feature = "test-utils"))]
+use wiremock::matchers::{body_json, header, method, path};
 #[cfg(any(test, feature = "test-utils"))]
 use wiremock::{Mock, ResponseTemplate};
 

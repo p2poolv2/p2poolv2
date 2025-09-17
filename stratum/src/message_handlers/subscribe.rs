@@ -17,7 +17,7 @@
 use crate::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::error::Error;
 use crate::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
-use crate::session::{Session, EXTRANONCE2_SIZE};
+use crate::session::{EXTRANONCE2_SIZE, Session};
 use serde_json::json;
 use tracing::debug;
 
@@ -78,9 +78,10 @@ mod tests {
         let message = response.unwrap();
 
         let (subscribe_response, difficulty_notification) = match &message[..] {
-            [Message::Response(response), Message::SetDifficulty(difficulty_notification)] => {
-                (response, difficulty_notification)
-            }
+            [
+                Message::Response(response),
+                Message::SetDifficulty(difficulty_notification),
+            ] => (response, difficulty_notification),
             _ => panic!("Expected a Response message"),
         };
 

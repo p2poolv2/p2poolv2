@@ -21,7 +21,7 @@ use std::borrow::Cow;
 use std::vec;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// JSON-RPC ID can be a number, string, or null.
 #[derive(Debug, Clone, Serialize, Deserialize)]

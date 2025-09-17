@@ -154,7 +154,9 @@ impl ChainActor {
                     }
                 }
                 ChainMessage::GetPplnsShares(limit, start_time, end_time, response_tx) => {
-                    let result = self.chain_store.get_pplns_shares_filtered(limit, start_time, end_time);
+                    let result = self
+                        .chain_store
+                        .get_pplns_shares_filtered(limit, start_time, end_time);
                     if let Err(e) = response_tx.send(result) {
                         error!("Failed to send get_pplns_shares response: {:?}", e);
                     }
@@ -479,7 +481,10 @@ impl ChainHandle {
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         if let Err(e) = self
             .sender
-            .send((ChainMessage::GetPplnsShares(limit, start_time, end_time, response_tx), mpsc::channel(1).0))
+            .send((
+                ChainMessage::GetPplnsShares(limit, start_time, end_time, response_tx),
+                mpsc::channel(1).0,
+            ))
             .await
         {
             error!("Failed to send GetPplnsShares message: {}", e);
@@ -1531,7 +1536,9 @@ mod tests {
         chain_handle.add_pplns_share(share4).await.unwrap();
 
         // Test with start_time filter
-        let result = chain_handle.get_pplns_shares_filtered(10, Some(2500), None).await;
+        let result = chain_handle
+            .get_pplns_shares_filtered(10, Some(2500), None)
+            .await;
         assert!(result.is_ok());
         let shares = result.unwrap();
         assert_eq!(shares.len(), 2); // Should include shares with timestamp >= 2500
@@ -1539,7 +1546,9 @@ mod tests {
         assert_eq!(shares[1].timestamp, 3000);
 
         // Test with end_time filter
-        let result = chain_handle.get_pplns_shares_filtered(10, None, Some(2500)).await;
+        let result = chain_handle
+            .get_pplns_shares_filtered(10, None, Some(2500))
+            .await;
         assert!(result.is_ok());
         let shares = result.unwrap();
         assert_eq!(shares.len(), 2); // Should include shares with timestamp <= 2500
@@ -1547,7 +1556,9 @@ mod tests {
         assert_eq!(shares[1].timestamp, 1000);
 
         // Test with both start_time and end_time
-        let result = chain_handle.get_pplns_shares_filtered(10, Some(1500), Some(3500)).await;
+        let result = chain_handle
+            .get_pplns_shares_filtered(10, Some(1500), Some(3500))
+            .await;
         assert!(result.is_ok());
         let shares = result.unwrap();
         assert_eq!(shares.len(), 2); // Should include shares between 1500 and 3500

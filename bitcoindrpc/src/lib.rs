@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use bitcoin::consensus::encode::serialize_hex;
 use jsonrpsee::core::client::ClientT;
 use jsonrpsee::http_client::{HeaderMap, HttpClient, HttpClientBuilder};
@@ -78,7 +78,7 @@ impl BitcoindRpcClient {
             Err(e) => {
                 return Err(BitcoindRpcError::Other(format!(
                     "Failed to create HTTP client: {e}"
-                )))
+                )));
             }
         };
         Ok(Self { client })
@@ -196,7 +196,7 @@ impl BitcoindRpcClient {
                     Err(e) => {
                         return Err(BitcoindRpcError::Other(format!(
                             "Failed to decode raw transaction: {e}"
-                        )))
+                        )));
                     }
                 };
                 Ok(tx)
@@ -232,8 +232,8 @@ mod tests {
     use super::*;
     use bitcoin::CompactTarget;
     use wiremock::{
-        matchers::{body_json, header, method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{body_json, header, method, path},
     };
 
     #[tokio::test]
