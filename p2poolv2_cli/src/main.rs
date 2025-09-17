@@ -45,10 +45,10 @@ enum Commands {
         /// Maximum number of shares to return
         #[arg(short, long, default_value = "100")]
         limit: usize,
-        /// Start time (unix timestamp in seconds) to filter shares
+        /// Start time (unix timestamp in seconds) to filter shares, optional
         #[arg(short, long)]
         start_time: Option<u64>,
-        /// End time (unix timestamp in seconds) to filter shares
+        /// End time (unix timestamp in seconds) to filter shares, optional
         #[arg(short, long)]
         end_time: Option<u64>,
     },
