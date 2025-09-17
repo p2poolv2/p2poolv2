@@ -94,10 +94,15 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     // Submit block asap, do difficulty adjustment after submission
     submit_block(&block, bitcoinrpc_config).await;
 
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let stratum_share = SimplePplnsShare::new(
         session.difficulty_adjuster.get_current_difficulty(),
         session.btcaddress.clone().unwrap_or_default(),
         session.workername.clone().unwrap_or_default(),
+        timestamp,
     );
 
     shares_tx
