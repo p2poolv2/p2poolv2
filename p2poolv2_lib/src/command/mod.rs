@@ -49,6 +49,11 @@ pub enum Command {
     /// Get PPLNS shares from the node with optional filtering
     GetPplnsShares(
         GetPplnsShareQuery,
-        oneshot::Sender<Result<Vec<p2poolv2_accounting::simple_pplns::SimplePplnsShare>, Box<dyn std::error::Error + Send + Sync>>>,
+        oneshot::Sender<
+            Result<
+                Vec<p2poolv2_accounting::simple_pplns::SimplePplnsShare>,
+                Box<dyn std::error::Error + Send + Sync>,
+            >,
+        >,
     ),
 }

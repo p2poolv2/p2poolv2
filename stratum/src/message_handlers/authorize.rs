@@ -49,7 +49,7 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
         None => {
             return Err(Error::AuthorizationFailure(
                 "Username parameter missing".to_string(),
-            ))
+            ));
         }
     };
     let parsed_username = match validate_username::validate(&username, ctx.network) {
@@ -57,7 +57,7 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
         Err(e) => {
             return Err(Error::AuthorizationFailure(format!(
                 "Invalid username: {e}",
-            )))
+            )));
         }
     };
 
@@ -149,9 +149,10 @@ mod tests {
         .unwrap();
 
         let (subscribe_response, difficulty_notification) = match &message[..] {
-            [Message::Response(response), Message::SetDifficulty(difficulty_notification)] => {
-                (response, difficulty_notification)
-            }
+            [
+                Message::Response(response),
+                Message::SetDifficulty(difficulty_notification),
+            ] => (response, difficulty_notification),
             _ => panic!("Expected a Response message"),
         };
 

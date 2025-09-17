@@ -26,30 +26,30 @@ use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::senders::{send_blocks_inventory, send_getheaders};
 use crate::service::build_service;
 use crate::service::p2p_service::RequestContext;
+use crate::shares::ShareBlock;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::actor::ChainHandle;
 #[cfg(not(test))]
 use crate::shares::chain::actor::ChainHandle;
 use crate::shares::receive_mining_message::start_receiving_mining_messages;
-use crate::shares::ShareBlock;
 use crate::utils::time_provider::SystemTimeProvider;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
+use libp2p::PeerId;
+use libp2p::SwarmBuilder;
 use libp2p::core::transport::Transport;
 use libp2p::identify;
 use libp2p::request_response::ResponseChannel;
 use libp2p::tcp::Config as TcpConfig;
-use libp2p::PeerId;
-use libp2p::SwarmBuilder;
 use libp2p::{
+    Multiaddr, Swarm,
     kad::{Event as KademliaEvent, QueryResult},
     swarm::SwarmEvent,
-    Multiaddr, Swarm,
 };
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tower::{util::BoxService, Service, ServiceExt};
+use tower::{Service, ServiceExt, util::BoxService};
 use tracing::{debug, error, info, warn};
 
 pub struct SwarmResponseChannel<T> {

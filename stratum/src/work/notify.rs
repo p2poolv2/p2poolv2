@@ -16,14 +16,14 @@
 
 use super::coinbase::{build_coinbase_transaction, split_coinbase};
 use super::error::WorkError;
-use super::gbt::{build_merkle_branches_for_template, BlockTemplate};
+use super::gbt::{BlockTemplate, build_merkle_branches_for_template};
 use super::tracker::{JobId, TrackerHandle};
 use crate::messages::{Notify, NotifyParams};
 use crate::util::reverse_four_byte_chunks;
 use crate::util::to_be_hex;
+use bitcoin::Address;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::Version;
-use bitcoin::Address;
 use p2poolv2_accounting::OutputPair;
 use std::borrow::Cow;
 use std::net::SocketAddr;

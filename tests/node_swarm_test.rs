@@ -18,7 +18,7 @@ mod common;
 use p2poolv2_accounting::{simple_pplns::SimplePplnsShare, stats::metrics};
 use p2poolv2_lib::{
     node::actor::NodeHandle,
-    shares::{chain::actor::ChainHandle, ShareBlock},
+    shares::{ShareBlock, chain::actor::ChainHandle},
 };
 
 use std::time::Duration;

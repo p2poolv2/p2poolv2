@@ -29,7 +29,9 @@ impl Store {
         let pplns_share_cf = self.db.cf_handle("share").unwrap();
 
         // Use a simple approach with End iterator and filtering
-        let mut iter = self.db.iterator_cf(pplns_share_cf, rocksdb::IteratorMode::End);
+        let mut iter = self
+            .db
+            .iterator_cf(pplns_share_cf, rocksdb::IteratorMode::End);
         let mut shares = Vec::new();
         let mut count = 0;
 
@@ -70,7 +72,6 @@ fn filter_share_by_time(key: &[u8], start_time: Option<u64>, end_time: Option<u6
 
     Some(())
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -116,7 +117,9 @@ mod tests {
         }
 
         // Test time filtering
-        let result = store.get_pplns_shares_filtered(10, Some(1500), Some(2500)).unwrap();
+        let result = store
+            .get_pplns_shares_filtered(10, Some(1500), Some(2500))
+            .unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].timestamp, 2000);
     }

@@ -19,7 +19,7 @@ use crate::work::error::WorkError;
 use bitcoin::absolute::LockTime;
 use bitcoin::blockdata::script::{Builder, ScriptBuf};
 use bitcoin::consensus::serialize;
-use bitcoin::hashes::{sha256d, Hash};
+use bitcoin::hashes::{Hash, sha256d};
 use bitcoin::network::Network;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::{Sequence, Transaction, TxIn, TxOut, Version};
@@ -162,7 +162,7 @@ pub fn split_coinbase(coinbase: &Transaction) -> Result<(String, String), WorkEr
         None => {
             return Err(WorkError {
                 message: "Invalid coinbase transaction".to_string(),
-            })
+            });
         }
     };
 
@@ -200,11 +200,13 @@ mod tests {
         let addr = "not_a_valid_address";
         let result = parse_address(addr, Network::Bitcoin);
         assert!(result.is_err());
-        assert!(result
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("Invalid address"));
+        assert!(
+            result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("Invalid address")
+        );
     }
 
     #[test]
@@ -257,9 +259,11 @@ mod tests {
         // Check coinbase script contains height
         assert!(script_bytes.contains(&(height as u8)));
         // Check coinbase script contains extranonce separator
-        assert!(script_bytes
-            .windows(EXTRANONCE1_SIZE + EXTRANONCE2_SIZE)
-            .any(|w| w == EXTRANONCE_SEPARATOR));
+        assert!(
+            script_bytes
+                .windows(EXTRANONCE1_SIZE + EXTRANONCE2_SIZE)
+                .any(|w| w == EXTRANONCE_SEPARATOR)
+        );
 
         // Check output
         assert_eq!(coinbase.output.len(), 1);

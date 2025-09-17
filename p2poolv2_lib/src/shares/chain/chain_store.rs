@@ -169,7 +169,8 @@ impl ChainStore {
         start_time: Option<u64>,
         end_time: Option<u64>,
     ) -> Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>> {
-        self.store.get_pplns_shares_filtered(limit, start_time, end_time)
+        self.store
+            .get_pplns_shares_filtered(limit, start_time, end_time)
     }
 
     /// Get height for the previous blockhash

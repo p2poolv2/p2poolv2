@@ -135,7 +135,7 @@ pub trait DifficultyAdjusterTrait {
 
     /// Update the DSPS (Difficulty Shares Per Second) metrics using exponential decay
     fn apply_difficulty_constraints(&self, new_diff: u64, suggested_difficulty: Option<u64>)
-        -> u64;
+    -> u64;
 
     /// Convert a u128 value to u64, saturating at u64::MAX if the value exceeds it.
     #[inline]
@@ -339,7 +339,12 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
 
         debug!(
             "Difficulty adjustment: dsps5={}, bias={}, adjusted_dsps={}, drr={}, optimal={}, constrained={}",
-            self.difficulty_shares_per_second_5min_window, bias, difficulty_shares_per_second, difficulty_rate_ratio, optimal_diff, constrained_diff
+            self.difficulty_shares_per_second_5min_window,
+            bias,
+            difficulty_shares_per_second,
+            difficulty_rate_ratio,
+            optimal_diff,
+            constrained_diff
         );
 
         constrained_diff

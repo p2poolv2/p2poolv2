@@ -545,8 +545,10 @@ mod handle_submit_tests {
         .unwrap();
 
         match &message[..] {
-            [Message::Response(Response { id, result, error }), Message::SetDifficulty(SetDifficultyNotification { method: _, params })] =>
-            {
+            [
+                Message::Response(Response { id, result, error }),
+                Message::SetDifficulty(SetDifficultyNotification { method: _, params }),
+            ] => {
                 assert_eq!(result, &Some(json!(true)));
                 assert_eq!(params[0], 12345);
             }
