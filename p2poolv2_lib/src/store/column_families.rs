@@ -1,0 +1,73 @@
+// Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
+//
+// This file is part of P2Poolv2
+//
+// P2Poolv2 is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free
+// Software Foundation, either version 3 of the License, or (at your option)
+// any later version.
+//
+// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
+// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along with
+// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+
+/// Column families strings defined in one place for type safety
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ColumnFamily {
+    Block,
+    BlockTxids,
+    Inputs,
+    Outputs,
+    Tx,
+    Workbase,
+    UserWorkbase,
+    BlockIndex,
+    BlockHeight,
+    Share,
+}
+
+impl ColumnFamily {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ColumnFamily::Block => "block",
+            ColumnFamily::BlockTxids => "block_txids",
+            ColumnFamily::Inputs => "inputs",
+            ColumnFamily::Outputs => "outputs",
+            ColumnFamily::Tx => "tx",
+            ColumnFamily::Workbase => "workbase",
+            ColumnFamily::UserWorkbase => "user_workbase",
+            ColumnFamily::BlockIndex => "block_index",
+            ColumnFamily::BlockHeight => "block_height",
+            ColumnFamily::Share => "share",
+        }
+    }
+}
+
+impl std::ops::Deref for ColumnFamily {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for ColumnFamily {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl Into<&'static str> for ColumnFamily {
+    fn into(self) -> &'static str {
+        self.as_str()
+    }
+}
+
+impl Into<String> for ColumnFamily {
+    fn into(self) -> String {
+        self.as_str().to_string()
+    }
+}
