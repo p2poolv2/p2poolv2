@@ -45,6 +45,16 @@ pub fn time_bias(time_difference: f64, period: f64) -> f64 {
 /// Apply time decay to difficulty per share based elapsed time since last change,
 /// the interval we are decaying for and the incoming new difficulty value
 pub fn decay_time(dsps: f64, difficulty: u64, elapsed_time: f64, interval: u64) -> f64 {
+    // Handle edge cases that could cause NaN or Infinity
+    if elapsed_time <= 0.0 || !elapsed_time.is_finite() {
+        return dsps; // Return the current value unchanged for invalid elapsed_time
+    }
+
+    // Handle NaN or infinite inputs
+    if !dsps.is_finite() {
+        return 0.0; // Reset to 0 for invalid dsps values
+    }
+
     // Calculate fprop = 1 - (1 / e^(elapsed_time/interval))
     let mut dexp = elapsed_time / interval as f64;
     dexp = dexp.min(36.0); // Cap at 36.0 to prevent overflow
@@ -54,6 +64,12 @@ pub fn decay_time(dsps: f64, difficulty: u64, elapsed_time: f64, interval: u64) 
 
     let mut new_dsps = dsps + (difficulty as f64 / elapsed_time * fprop);
     new_dsps /= ftotal;
+
+    // Final safety check to ensure we don't return NaN or Infinity
+    if !new_dsps.is_finite() {
+        return dsps; // Return original value if calculation resulted in invalid number
+    }
+
     new_dsps
 }
 
@@ -151,5 +167,45 @@ mod tests {
             "Expected new dsps to be approximately 12.992719, got {}",
             new_dsps
         );
+    }
+
+    #[test]
+    fn test_decay_time_handles_zero_elapsed_time() {
+        // Test that zero elapsed time doesn't cause NaN
+        let dsps = 1.0;
+        let result = decay_time(dsps, 100, 0.0, 60);
+        assert_eq!(
+            result, dsps,
+            "Should return original dsps when elapsed_time is 0"
+        );
+        assert!(result.is_finite(), "Result should be finite");
+    }
+
+    #[test]
+    fn test_decay_time_handles_negative_elapsed_time() {
+        // Test that negative elapsed time doesn't cause issues
+        let dsps = 1.0;
+        let result = decay_time(dsps, 100, -1.0, 60);
+        assert_eq!(
+            result, dsps,
+            "Should return original dsps when elapsed_time is negative"
+        );
+        assert!(result.is_finite(), "Result should be finite");
+    }
+
+    #[test]
+    fn test_decay_time_handles_nan_input() {
+        // Test that NaN input gets handled gracefully
+        let result = decay_time(f64::NAN, 100, 60.0, 60);
+        assert_eq!(result, 0.0, "Should return 0.0 when dsps is NaN");
+        assert!(result.is_finite(), "Result should be finite");
+    }
+
+    #[test]
+    fn test_decay_time_handles_infinite_input() {
+        // Test that infinite input gets handled gracefully
+        let result = decay_time(f64::INFINITY, 100, 60.0, 60);
+        assert_eq!(result, 0.0, "Should return 0.0 when dsps is infinite");
+        assert!(result.is_finite(), "Result should be finite");
     }
 }
