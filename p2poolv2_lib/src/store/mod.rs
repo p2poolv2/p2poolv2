@@ -19,7 +19,6 @@ use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader, StorageShareBlock};
 use crate::store::column_families::ColumnFamily;
 use bitcoin::Transaction;
-use p2poolv2_accounting::AccountingShare;
 use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
 use rust_decimal::Decimal;
@@ -170,12 +169,7 @@ impl Store {
         let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
         let (hash, serialized) = pplns_share.hash_and_serialize()?;
         let timestamp = pplns_share.timestamp as u128 * 1_000_000; // Convert seconds to microseconds
-        let key = format!(
-            "{}:{}:{}",
-            timestamp,
-            pplns_share.get_miner_btcaddress(),
-            hash
-        );
+        let key = format!("{}:{}:{}", timestamp, pplns_share.btcaddress, hash);
         self.db.put_cf(pplns_share_cf, key, serialized)?;
         Ok(())
     }
