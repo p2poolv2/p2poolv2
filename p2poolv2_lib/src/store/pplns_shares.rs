@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use super::Store;
+use super::{Store, column_families::ColumnFamily};
 use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use std::error::Error;
 
@@ -26,7 +26,7 @@ impl Store {
         start_time: Option<u64>,
         end_time: Option<u64>,
     ) -> Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>> {
-        let pplns_share_cf = self.db.cf_handle("share").unwrap();
+        let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
 
         // Use a simple approach with End iterator and filtering
         let mut iter = self

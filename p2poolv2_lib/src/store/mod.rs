@@ -17,6 +17,7 @@
 use crate::node::messages::Message;
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader, StorageShareBlock};
+use crate::store::column_families::ColumnFamily;
 use bitcoin::Transaction;
 use p2poolv2_accounting::AccountingShare;
 use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
@@ -27,6 +28,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use tracing::debug;
 
+pub mod column_families;
 mod pplns_shares;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -69,19 +71,25 @@ impl Store {
     /// Create a new share store
     pub fn new(path: String, read_only: bool) -> Result<Self, Box<dyn Error>> {
         // for now we use default options for all column families, we can tweak this later based on performance testing
-        let block_cf = ColumnFamilyDescriptor::new("block", RocksDbOptions::default());
-        let block_txids_cf = ColumnFamilyDescriptor::new("block_txids", RocksDbOptions::default());
-        let inputs_cf = ColumnFamilyDescriptor::new("inputs", RocksDbOptions::default());
-        let outputs_cf = ColumnFamilyDescriptor::new("outputs", RocksDbOptions::default());
-        let tx_cf = ColumnFamilyDescriptor::new("tx", RocksDbOptions::default());
-        let workbase_cf = ColumnFamilyDescriptor::new("workbase", RocksDbOptions::default());
-        let block_index_cf = ColumnFamilyDescriptor::new("block_index", RocksDbOptions::default());
+        let block_cf = ColumnFamilyDescriptor::new(ColumnFamily::Block, RocksDbOptions::default());
+        let block_txids_cf =
+            ColumnFamilyDescriptor::new(ColumnFamily::BlockTxids, RocksDbOptions::default());
+        let inputs_cf =
+            ColumnFamilyDescriptor::new(ColumnFamily::Inputs, RocksDbOptions::default());
+        let outputs_cf =
+            ColumnFamilyDescriptor::new(ColumnFamily::Outputs, RocksDbOptions::default());
+        let tx_cf = ColumnFamilyDescriptor::new(ColumnFamily::Tx, RocksDbOptions::default());
+        let workbase_cf =
+            ColumnFamilyDescriptor::new(ColumnFamily::Workbase, RocksDbOptions::default());
+        let block_index_cf =
+            ColumnFamilyDescriptor::new(ColumnFamily::BlockIndex, RocksDbOptions::default());
         let block_height_cf =
-            ColumnFamilyDescriptor::new("block_height", RocksDbOptions::default());
+            ColumnFamilyDescriptor::new(ColumnFamily::BlockHeight, RocksDbOptions::default());
         let user_workbase_cf =
-            ColumnFamilyDescriptor::new("user_workbase", RocksDbOptions::default());
+            ColumnFamilyDescriptor::new(ColumnFamily::UserWorkbase, RocksDbOptions::default());
 
-        let user_share_cf = ColumnFamilyDescriptor::new("share", RocksDbOptions::default());
+        let user_share_cf =
+            ColumnFamilyDescriptor::new(ColumnFamily::Share, RocksDbOptions::default());
 
         let cfs = vec![
             block_cf,
@@ -142,7 +150,7 @@ impl Store {
 
         // Add the share block itself
         let storage_share_block: StorageShareBlock = share.into();
-        let block_cf = self.db.cf_handle("block").unwrap();
+        let block_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
         batch.put_cf::<&[u8], Vec<u8>>(
             block_cf,
             blockhash.as_ref(),
@@ -159,7 +167,7 @@ impl Store {
         &mut self,
         pplns_share: SimplePplnsShare,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let pplns_share_cf = self.db.cf_handle("share").unwrap();
+        let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
         let (hash, serialized) = pplns_share.hash_and_serialize()?;
         let timestamp = pplns_share.timestamp as u128 * 1_000_000; // Convert seconds to microseconds
         let key = format!(
@@ -222,7 +230,7 @@ impl Store {
     /// These are tracked in a separate index in rocksdb as relations from
     /// blockhash -> next blockhashes
     fn get_children_blockhashes(&self, blockhash: &ShareBlockHash) -> Vec<ShareBlockHash> {
-        let block_index_cf = self.db.cf_handle("block_index").unwrap();
+        let block_index_cf = self.db.cf_handle(&ColumnFamily::BlockIndex).unwrap();
         let mut blockhash_bytes = blockhash.as_ref().to_vec();
         blockhash_bytes.extend_from_slice(b"_bi");
 
@@ -253,7 +261,7 @@ impl Store {
 
         let prev_blockhash = prev_blockhash.unwrap();
 
-        let block_index_cf = self.db.cf_handle("block_index").unwrap();
+        let block_index_cf = self.db.cf_handle(&ColumnFamily::BlockIndex).unwrap();
         let mut prev_blockhash_bytes = prev_blockhash.as_ref().to_vec();
         prev_blockhash_bytes.extend_from_slice(b"_bi");
 
@@ -290,8 +298,8 @@ impl Store {
         transactions: &[Transaction],
         batch: &mut rocksdb::WriteBatch,
     ) -> Vec<TxMetadata> {
-        let inputs_cf = self.db.cf_handle("inputs").unwrap();
-        let outputs_cf = self.db.cf_handle("outputs").unwrap();
+        let inputs_cf = self.db.cf_handle(&ColumnFamily::Inputs).unwrap();
+        let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
         let mut txs_metadata = Vec::new();
         for tx in transactions {
             let txid = tx.compute_txid();
@@ -333,7 +341,7 @@ impl Store {
             spent_by: None,
         };
 
-        let tx_cf = self.db.cf_handle("tx").unwrap();
+        let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
         let mut tx_metadata_serialized = Vec::new();
         ciborium::ser::into_writer(&tx_metadata, &mut tx_metadata_serialized).unwrap();
         batch.put_cf::<&[u8], Vec<u8>>(tx_cf, txid.as_ref(), tx_metadata_serialized);
@@ -353,7 +361,7 @@ impl Store {
 
         let mut serialized_txids = Vec::new();
         ciborium::ser::into_writer(&txids, &mut serialized_txids).unwrap();
-        let block_txids_cf = self.db.cf_handle("block_txids").unwrap();
+        let block_txids_cf = self.db.cf_handle(&ColumnFamily::BlockTxids).unwrap();
         batch.put_cf::<&[u8], Vec<u8>>(block_txids_cf, blockhash_bytes.as_ref(), serialized_txids);
     }
 
@@ -363,7 +371,7 @@ impl Store {
         let mut blockhash_bytes = blockhash.as_ref().to_vec();
         blockhash_bytes.extend_from_slice(b"_txids");
 
-        let block_txids_cf = self.db.cf_handle("block_txids").unwrap();
+        let block_txids_cf = self.db.cf_handle(&ColumnFamily::BlockTxids).unwrap();
         match self
             .db
             .get_cf::<&[u8]>(block_txids_cf, blockhash_bytes.as_ref())
@@ -381,7 +389,7 @@ impl Store {
     pub fn add_workbase(&mut self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error>> {
         let workbase_key = format!("workbase:{}", workbase.workinfoid);
         debug!("Adding workbase to store: {:?}", workbase_key);
-        let workbase_cf = self.db.cf_handle("workbase").unwrap();
+        let workbase_cf = self.db.cf_handle(&ColumnFamily::Workbase).unwrap();
         self.db
             .put_cf(
                 workbase_cf,
@@ -396,7 +404,7 @@ impl Store {
     pub fn add_user_workbase(&mut self, user_workbase: UserWorkbase) -> Result<(), Box<dyn Error>> {
         let user_workbase_key = format!("user_workbase:{}", user_workbase.workinfoid);
         debug!("Adding user workbase to store: {:?}", user_workbase_key);
-        let user_workbase_cf = self.db.cf_handle("user_workbase").unwrap();
+        let user_workbase_cf = self.db.cf_handle(&ColumnFamily::UserWorkbase).unwrap();
         self.db
             .put_cf(
                 user_workbase_cf,
@@ -417,7 +425,7 @@ impl Store {
         txid: &bitcoin::Txid,
         spent_by: Option<bitcoin::Txid>,
     ) -> Result<(), Box<dyn Error>> {
-        let tx_cf = self.db.cf_handle("tx").unwrap();
+        let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
         let tx_metadata = self.db.get_cf::<&[u8]>(tx_cf, txid.as_ref()).unwrap();
         if tx_metadata.is_none() {
             return Err("Transaction not found".into());
@@ -436,7 +444,7 @@ impl Store {
 
     /// Get the validation status of a transaction from the store
     pub fn get_tx_metadata(&self, txid: &bitcoin::Txid) -> Option<TxMetadata> {
-        let tx_cf = self.db.cf_handle("tx").unwrap();
+        let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
         let tx_metadata = self.db.get_cf::<&[u8]>(tx_cf, txid.as_ref()).unwrap();
         if let Some(tx_metadata) = tx_metadata {
             let tx_metadata: TxMetadata =
@@ -451,7 +459,7 @@ impl Store {
     pub fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase> {
         let workbase_key = format!("workbase:{workinfoid}");
         debug!("Getting workbase from store: {:?}", workbase_key);
-        let workbase_cf = self.db.cf_handle("workbase").unwrap();
+        let workbase_cf = self.db.cf_handle(&ColumnFamily::Workbase).unwrap();
         let workbase = self
             .db
             .get_cf::<&[u8]>(workbase_cf, workbase_key.as_bytes())
@@ -474,7 +482,7 @@ impl Store {
     /// Get multiple workbases from the store given a set of workinfoids
     pub fn get_workbases(&self, workinfoids: &[u64]) -> Vec<MinerWorkbase> {
         debug!("Getting multiple workbases from store: {:?}", workinfoids);
-        let workbase_cf = self.db.cf_handle("workbase").unwrap();
+        let workbase_cf = self.db.cf_handle(&ColumnFamily::Workbase).unwrap();
 
         let keys: Vec<(_, Vec<u8>)> = workinfoids
             .iter()
@@ -505,7 +513,7 @@ impl Store {
     pub fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase> {
         let user_workbase_key = format!("user_workbase:{workinfoid}");
         debug!("Getting user workbase from store: {:?}", user_workbase_key);
-        let user_workbase_cf = self.db.cf_handle("user_workbase").unwrap();
+        let user_workbase_cf = self.db.cf_handle(&ColumnFamily::UserWorkbase).unwrap();
         let user_workbase = self
             .db
             .get_cf::<&[u8]>(user_workbase_cf, user_workbase_key.as_bytes())
@@ -527,7 +535,7 @@ impl Store {
             "Getting user workbases from store for workinfoids: {:?}",
             workinfoids
         );
-        let user_workbase_cf = self.db.cf_handle("user_workbase").unwrap();
+        let user_workbase_cf = self.db.cf_handle(&ColumnFamily::UserWorkbase).unwrap();
 
         let keys: Vec<(_, Vec<u8>)> = workinfoids
             .iter()
@@ -557,7 +565,7 @@ impl Store {
     /// Get a share from the store
     pub fn get_share(&self, blockhash: &ShareBlockHash) -> Option<ShareBlock> {
         debug!("Getting share from store: {:?}", blockhash);
-        let share_cf = self.db.cf_handle("block").unwrap();
+        let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
         let share = match self.db.get_cf::<&[u8]>(share_cf, blockhash.as_ref()) {
             Ok(Some(share)) => share,
             Ok(None) | Err(_) => return None,
@@ -574,7 +582,7 @@ impl Store {
     /// Get a share headers matching the vector of blockhashes
     pub fn get_share_headers(&self, blockhashes: &[ShareBlockHash]) -> Vec<ShareHeader> {
         debug!("Getting share headers from store: {:?}", blockhashes);
-        let share_cf = self.db.cf_handle("block").unwrap();
+        let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
         let keys = blockhashes
             .iter()
             .map(|h| (share_cf, h.as_ref()))
@@ -599,7 +607,7 @@ impl Store {
 
     // Find the first blockhash that exists by checking key existence
     fn get_first_existing_blockhash(&self, locator: &[ShareBlockHash]) -> Option<ShareBlockHash> {
-        let block_cf = self.db.cf_handle("block").unwrap();
+        let block_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
         for blockhash in locator {
             if self.db.key_may_exist_cf(block_cf, blockhash.as_ref()) {
                 return Some(*blockhash);
@@ -708,7 +716,7 @@ impl Store {
         blockhashes: &[ShareBlockHash],
     ) -> HashMap<ShareBlockHash, ShareBlock> {
         debug!("Getting shares from store: {:?}", blockhashes);
-        let share_cf = self.db.cf_handle("block").unwrap();
+        let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
         let keys = blockhashes
             .iter()
             .map(|h| (share_cf, h.as_ref()))
@@ -768,8 +776,8 @@ impl Store {
 
         debug!("Transaction metadata: {:?}", tx_metadata);
 
-        let inputs_cf = self.db.cf_handle("inputs").unwrap();
-        let outputs_cf = self.db.cf_handle("outputs").unwrap();
+        let inputs_cf = self.db.cf_handle(&ColumnFamily::Inputs).unwrap();
+        let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
         let mut inputs = Vec::new();
         let mut outputs = Vec::new();
 
@@ -876,7 +884,7 @@ impl Store {
         height: u32,
         batch: &mut rocksdb::WriteBatch,
     ) {
-        let column_family = self.db.cf_handle("block_height").unwrap();
+        let column_family = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         // Convert height to big-endian bytes - this is our key
         let height_bytes = height.to_be_bytes();
 
@@ -904,7 +912,7 @@ impl Store {
 
     /// Get the blockhashes for a specific height
     pub fn get_blockhashes_for_height(&self, height: u32) -> Vec<ShareBlockHash> {
-        let column_family = self.db.cf_handle("block_height").unwrap();
+        let column_family = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let height_bytes = height.to_be_bytes();
         match self
             .db
@@ -925,7 +933,7 @@ impl Store {
 
     /// Get the block metadata for a blockhash
     pub fn get_block_metadata(&self, blockhash: &ShareBlockHash) -> Option<BlockMetadata> {
-        let block_metadata_cf = self.db.cf_handle("block").unwrap();
+        let block_metadata_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
 
         let mut metadata_key = blockhash.as_ref().to_vec();
         metadata_key.extend_from_slice(b"_md");
@@ -951,7 +959,7 @@ impl Store {
     /// Check which blockhashes from the provided list are missing from the store
     /// Returns a vector of blockhashes that are not present in the store
     pub fn get_missing_blockhashes(&self, blockhashes: &[ShareBlockHash]) -> Vec<ShareBlockHash> {
-        let block_cf = self.db.cf_handle("block").unwrap();
+        let block_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
         blockhashes
             .iter()
             .filter(|&hash| !self.db.key_may_exist_cf(block_cf, hash.as_ref()))
@@ -966,7 +974,7 @@ impl Store {
         metadata: &BlockMetadata,
         batch: Option<&mut rocksdb::WriteBatch>,
     ) -> Result<(), Box<dyn Error>> {
-        let block_metadata_cf = self.db.cf_handle("block").unwrap();
+        let block_metadata_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
 
         let mut metadata_key = blockhash.as_ref().to_vec();
         metadata_key.extend_from_slice(b"_md");
