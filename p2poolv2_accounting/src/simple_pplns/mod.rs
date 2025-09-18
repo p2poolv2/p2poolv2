@@ -14,24 +14,11 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use super::OutputPair;
 use bitcoin::BlockHash;
 use ciborium;
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-pub struct SimplePplnsAccounting<T> {
-    /// PPLNS window is the number of blocks the total work for the PPLNS window should stretch to.
-    window_size: usize,
-
-    /// Shares submitted by miners and possibly received from peers.
-    shares: Vec<T>,
-
-    /// Step size in seconds for batch querying shares from storage.
-    /// This determines how far back in time to query in each batch.
-    /// Default: 86400 seconds (1 day) for typical pool configurations.
-    step_size_seconds: u64,
-}
+pub mod payout;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimplePplnsShare {
