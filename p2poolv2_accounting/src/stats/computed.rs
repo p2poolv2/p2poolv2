@@ -146,3 +146,95 @@ impl ComputedShareRate {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_computed_share_rate_serde_default() {
+        let default_share_rate = ComputedShareRate::default();
+
+        let json_str =
+            serde_json::to_string(&default_share_rate).expect("Failed to serialize to JSON");
+
+        let deserialized_json: ComputedShareRate =
+            serde_json::from_str(&json_str).expect("Failed to deserialize from JSON");
+        assert_eq!(default_share_rate, deserialized_json);
+    }
+
+    #[test]
+    fn test_computed_share_rate_serde_with_values() {
+        let share_rate = ComputedShareRate {
+            shares_per_second_1m: 1.5,
+            shares_per_second_5m: 2.0,
+            shares_per_second_15m: 1.8,
+            shares_per_second_1h: 1.2,
+        };
+
+        let json_str = serde_json::to_string(&share_rate).expect("Failed to serialize to JSON");
+
+        let deserialized_json: ComputedShareRate =
+            serde_json::from_str(&json_str).expect("Failed to deserialize from JSON");
+        assert_eq!(share_rate, deserialized_json);
+    }
+
+    #[test]
+    fn test_computed_share_rate_set_metrics() {
+        let mut share_rate = ComputedShareRate::default();
+
+        // Test that we can update metrics normally
+        share_rate.set_share_rate_metrics(60, 100); // 60 seconds, 100 shares
+
+        // Verify that values have been updated from default
+        assert!(share_rate.shares_per_second_1m > 0.0);
+        assert!(share_rate.shares_per_second_5m > 0.0);
+        assert!(share_rate.shares_per_second_15m > 0.0);
+        assert!(share_rate.shares_per_second_1h > 0.0);
+
+        // Test serialization after updating
+        let json_str =
+            serde_json::to_string(&share_rate).expect("Failed to serialize updated share_rate");
+
+        let deserialized: ComputedShareRate =
+            serde_json::from_str(&json_str).expect("Failed to deserialize updated share_rate");
+        assert_eq!(share_rate, deserialized);
+
+        // Test that the problematic case (elapsed_time = 0)
+        let mut problematic_share_rate = ComputedShareRate::default();
+        problematic_share_rate.set_share_rate_metrics(0, 100); // This used to cause NaN
+
+        // Verify that no NaN values are present
+        assert!(problematic_share_rate.shares_per_second_1m.is_finite());
+        assert!(problematic_share_rate.shares_per_second_5m.is_finite());
+        assert!(problematic_share_rate.shares_per_second_15m.is_finite());
+        assert!(problematic_share_rate.shares_per_second_1h.is_finite());
+
+        // Test that it can be serialized and deserialized successfully
+        let problematic_json = serde_json::to_string(&problematic_share_rate)
+            .expect("Failed to serialize problematic case");
+
+        let deserialized_problematic: ComputedShareRate = serde_json::from_str(&problematic_json)
+            .expect("Failed to deserialize problematic case");
+        assert_eq!(problematic_share_rate, deserialized_problematic);
+
+        // Verify the JSON doesn't contain null values
+        assert!(
+            !problematic_json.contains("null"),
+            "JSON should not contain null values"
+        );
+    }
+
+    #[test]
+    fn test_computed_hashrate_serde() {
+        // Also test ComputedHashrate to ensure consistency
+        let default_hashrate = ComputedHashrate::default();
+
+        let json_str =
+            serde_json::to_string(&default_hashrate).expect("Failed to serialize ComputedHashrate");
+
+        let deserialized: ComputedHashrate =
+            serde_json::from_str(&json_str).expect("Failed to deserialize ComputedHashrate");
+        assert_eq!(default_hashrate, deserialized);
+    }
+}

@@ -128,7 +128,7 @@ mod tests {
         assert_eq!(worker.best_share, difficulty);
         assert_eq!(worker.best_share_ever, Some(difficulty));
 
-        /// New best share
+        // New best share
         worker.record_share(2000, timestamp + 1000);
         assert_eq!(worker.last_share_at, timestamp + 1000);
         assert_eq!(worker.shares_valid, 2);
