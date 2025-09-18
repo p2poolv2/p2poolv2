@@ -179,7 +179,6 @@ mod handle_submit_tests {
     use crate::work::tracker::start_tracker_actor;
     use bitcoin::BlockHash;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
-    use p2poolv2_accounting::AccountingShare;
     use std::sync::Arc;
 
     #[test]

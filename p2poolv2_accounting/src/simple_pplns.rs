@@ -14,17 +14,23 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use super::{Accounting, AccountingShare, OutputPair};
+use super::OutputPair;
 use bitcoin::BlockHash;
 use ciborium;
 use serde::{Deserialize, Serialize};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-pub struct SimplePplns<T> {
+pub struct SimplePplnsAccounting<T> {
     /// PPLNS window is the number of blocks the total work for the PPLNS window should stretch to.
     window_size: usize,
 
     /// Shares submitted by miners and possibly received from peers.
     shares: Vec<T>,
+
+    /// Step size in seconds for batch querying shares from storage.
+    /// This determines how far back in time to query in each batch.
+    /// Default: 86400 seconds (1 day) for typical pool configurations.
+    step_size_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,7 +61,7 @@ impl SimplePplnsShare {
     }
 }
 
-/// Type alias for bitcoin block hash, so we can depend on type to catch potential errors
+/// Type alias for bitcoin block hash, so we can depend on types to catch potential errors
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug, Hash, Copy)]
 pub struct PplnsShareBlockHash(BlockHash);
 
@@ -94,34 +100,5 @@ impl Eq for PplnsShareBlockHash {}
 impl AsRef<[u8]> for PplnsShareBlockHash {
     fn as_ref(&self) -> &[u8] {
         self.0.as_ref()
-    }
-}
-
-impl AccountingShare for SimplePplnsShare {
-    fn get_difficulty(&self) -> u64 {
-        self.difficulty
-    }
-
-    fn get_miner_btcaddress(&self) -> String {
-        self.btcaddress.clone()
-    }
-}
-
-impl<T> Accounting<T> for SimplePplns<T>
-where
-    T: AccountingShare,
-{
-    fn add_share(&mut self, value: T) {
-        self.shares.push(value);
-    }
-
-    fn get_payout_distribution(&self, total_difficulty: u64) -> Vec<OutputPair> {
-        // Implementation of payout distribution logic
-        vec![]
-    }
-
-    fn get_shares_for_difficulty(&self, total_difficulty: u64) -> Vec<&T> {
-        // Implementation to get shares for the given amount of aggregated difficulty
-        vec![]
     }
 }
