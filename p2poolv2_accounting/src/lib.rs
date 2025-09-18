@@ -48,6 +48,6 @@ where
     /// The shares collected should add up to total_difficulty.
     fn get_payout_distribution(&self, total_difficulty: u64) -> Vec<OutputPair>;
 
-    /// Get shares for the given amount of difficulty.
+    /// Get shares for from now back to total up to the given difficulty.
     fn get_shares_for_difficulty(&self, total_difficulty: u64) -> Vec<&T>;
 }

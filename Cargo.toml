@@ -70,7 +70,7 @@ p2poolv2_accounting = { path = "p2poolv2_accounting" }
 [package]
 name = "p2poolv2"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 publish = false
 
 # Repeat dependencies for use in integration tests

@@ -78,7 +78,7 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
     /// Generates a random session ID.
     fn generate_id() -> u32 {
         let mut rng = rand::thread_rng();
-        rng.gen::<u32>()
+        rng.r#gen::<u32>()
     }
 }
 
