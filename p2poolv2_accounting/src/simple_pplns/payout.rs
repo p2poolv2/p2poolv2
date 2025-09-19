@@ -173,18 +173,44 @@ mod tests {
         let payout = Payout::new(100, 86400);
 
         // Get current time and create recent timestamps (within last hour)
-        let current_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
         // Create shares with total difficulty of 1000
         let shares = vec![
-            SimplePplnsShare::new(400, "addr1".to_string(), "worker1".to_string(), (current_time - 1800) * 1_000_000), // 30 min ago
-            SimplePplnsShare::new(300, "addr2".to_string(), "worker2".to_string(), (current_time - 2400) * 1_000_000), // 40 min ago
-            SimplePplnsShare::new(200, "addr3".to_string(), "worker3".to_string(), (current_time - 3000) * 1_000_000), // 50 min ago
-            SimplePplnsShare::new(100, "addr4".to_string(), "worker4".to_string(), (current_time - 3600) * 1_000_000), // 60 min ago
+            SimplePplnsShare::new(
+                400,
+                "addr1".to_string(),
+                "worker1".to_string(),
+                (current_time - 1800) * 1_000_000,
+            ), // 30 min ago
+            SimplePplnsShare::new(
+                300,
+                "addr2".to_string(),
+                "worker2".to_string(),
+                (current_time - 2400) * 1_000_000,
+            ), // 40 min ago
+            SimplePplnsShare::new(
+                200,
+                "addr3".to_string(),
+                "worker3".to_string(),
+                (current_time - 3000) * 1_000_000,
+            ), // 50 min ago
+            SimplePplnsShare::new(
+                100,
+                "addr4".to_string(),
+                "worker4".to_string(),
+                (current_time - 3600) * 1_000_000,
+            ), // 60 min ago
         ];
 
         let provider = MockPplnsShareProvider::new(shares);
-        let result = payout.get_shares_for_difficulty(&provider, 1000).await.unwrap();
+        let result = payout
+            .get_shares_for_difficulty(&provider, 1000)
+            .await
+            .unwrap();
 
         // Should return all shares since total difficulty is exactly 1000
         assert_eq!(result.len(), 4);
@@ -203,17 +229,43 @@ mod tests {
     #[tokio::test]
     async fn test_get_shares_for_difficulty_partial_match() {
         let payout = Payout::new(100, 86400);
-        let current_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
         let shares = vec![
-            SimplePplnsShare::new(400, "addr1".to_string(), "worker1".to_string(), (current_time - 1800) * 1_000_000),
-            SimplePplnsShare::new(300, "addr2".to_string(), "worker2".to_string(), (current_time - 2400) * 1_000_000),
-            SimplePplnsShare::new(200, "addr3".to_string(), "worker3".to_string(), (current_time - 3000) * 1_000_000),
-            SimplePplnsShare::new(100, "addr4".to_string(), "worker4".to_string(), (current_time - 3600) * 1_000_000),
+            SimplePplnsShare::new(
+                400,
+                "addr1".to_string(),
+                "worker1".to_string(),
+                (current_time - 1800) * 1_000_000,
+            ),
+            SimplePplnsShare::new(
+                300,
+                "addr2".to_string(),
+                "worker2".to_string(),
+                (current_time - 2400) * 1_000_000,
+            ),
+            SimplePplnsShare::new(
+                200,
+                "addr3".to_string(),
+                "worker3".to_string(),
+                (current_time - 3000) * 1_000_000,
+            ),
+            SimplePplnsShare::new(
+                100,
+                "addr4".to_string(),
+                "worker4".to_string(),
+                (current_time - 3600) * 1_000_000,
+            ),
         ];
 
         let provider = MockPplnsShareProvider::new(shares);
-        let result = payout.get_shares_for_difficulty(&provider, 750).await.unwrap();
+        let result = payout
+            .get_shares_for_difficulty(&provider, 750)
+            .await
+            .unwrap();
 
         // Should return first 3 shares (400 + 300 + 200 = 900, which exceeds 750)
         assert_eq!(result.len(), 3);
@@ -228,15 +280,31 @@ mod tests {
     #[tokio::test]
     async fn test_get_shares_for_difficulty_insufficient_shares() {
         let payout = Payout::new(100, 86400);
-        let current_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
         let shares = vec![
-            SimplePplnsShare::new(100, "addr1".to_string(), "worker1".to_string(), (current_time - 1800) * 1_000_000),
-            SimplePplnsShare::new(200, "addr2".to_string(), "worker2".to_string(), (current_time - 2400) * 1_000_000),
+            SimplePplnsShare::new(
+                100,
+                "addr1".to_string(),
+                "worker1".to_string(),
+                (current_time - 1800) * 1_000_000,
+            ),
+            SimplePplnsShare::new(
+                200,
+                "addr2".to_string(),
+                "worker2".to_string(),
+                (current_time - 2400) * 1_000_000,
+            ),
         ];
 
         let provider = MockPplnsShareProvider::new(shares);
-        let result = payout.get_shares_for_difficulty(&provider, 500).await.unwrap();
+        let result = payout
+            .get_shares_for_difficulty(&provider, 500)
+            .await
+            .unwrap();
 
         // Should return all available shares even though total difficulty (300) < target (500)
         assert_eq!(result.len(), 2);
@@ -250,7 +318,10 @@ mod tests {
         let payout = Payout::new(100, 86400);
         let provider = MockPplnsShareProvider::new(vec![]);
 
-        let result = payout.get_shares_for_difficulty(&provider, 1000).await.unwrap();
+        let result = payout
+            .get_shares_for_difficulty(&provider, 1000)
+            .await
+            .unwrap();
 
         assert_eq!(result.len(), 0);
     }
@@ -258,14 +329,23 @@ mod tests {
     #[tokio::test]
     async fn test_get_shares_for_difficulty_single_share_exceeds_target() {
         let payout = Payout::new(100, 86400);
-        let current_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
-        let shares = vec![
-            SimplePplnsShare::new(1500, "addr1".to_string(), "worker1".to_string(), (current_time - 1800) * 1_000_000),
-        ];
+        let shares = vec![SimplePplnsShare::new(
+            1500,
+            "addr1".to_string(),
+            "worker1".to_string(),
+            (current_time - 1800) * 1_000_000,
+        )];
 
         let provider = MockPplnsShareProvider::new(shares);
-        let result = payout.get_shares_for_difficulty(&provider, 1000).await.unwrap();
+        let result = payout
+            .get_shares_for_difficulty(&provider, 1000)
+            .await
+            .unwrap();
 
         // Should return the single share even though it exceeds target
         assert_eq!(result.len(), 1);
@@ -276,18 +356,44 @@ mod tests {
     async fn test_get_shares_for_difficulty_multiple_batches() {
         // Test with a small step size to force multiple batch queries
         let payout = Payout::new(100, 100); // 100 second step size
-        let current_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
         // Create shares spanning 300 seconds (3 batches)
         let shares = vec![
-            SimplePplnsShare::new(100, "addr1".to_string(), "worker1".to_string(), (current_time - 50) * 1_000_000),  // 50s ago
-            SimplePplnsShare::new(200, "addr2".to_string(), "worker2".to_string(), (current_time - 150) * 1_000_000), // 150s ago
-            SimplePplnsShare::new(300, "addr3".to_string(), "worker3".to_string(), (current_time - 250) * 1_000_000), // 250s ago
-            SimplePplnsShare::new(400, "addr4".to_string(), "worker4".to_string(), (current_time - 350) * 1_000_000), // 350s ago
+            SimplePplnsShare::new(
+                100,
+                "addr1".to_string(),
+                "worker1".to_string(),
+                (current_time - 50) * 1_000_000,
+            ), // 50s ago
+            SimplePplnsShare::new(
+                200,
+                "addr2".to_string(),
+                "worker2".to_string(),
+                (current_time - 150) * 1_000_000,
+            ), // 150s ago
+            SimplePplnsShare::new(
+                300,
+                "addr3".to_string(),
+                "worker3".to_string(),
+                (current_time - 250) * 1_000_000,
+            ), // 250s ago
+            SimplePplnsShare::new(
+                400,
+                "addr4".to_string(),
+                "worker4".to_string(),
+                (current_time - 350) * 1_000_000,
+            ), // 350s ago
         ];
 
         let provider = MockPplnsShareProvider::new(shares);
-        let result = payout.get_shares_for_difficulty(&provider, 550).await.unwrap();
+        let result = payout
+            .get_shares_for_difficulty(&provider, 550)
+            .await
+            .unwrap();
 
         // Should return first 3 shares (100 + 200 + 300 = 600, which exceeds 550)
         assert_eq!(result.len(), 3);
