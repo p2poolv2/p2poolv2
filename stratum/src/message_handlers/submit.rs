@@ -364,10 +364,7 @@ mod handle_submit_tests {
         mock_server.verify().await;
 
         let stratum_share = shares_rx.recv().await.unwrap();
-        assert_eq!(
-            stratum_share.btcaddress,
-            session.btcaddress.unwrap()
-        );
+        assert_eq!(stratum_share.btcaddress, session.btcaddress.unwrap());
 
         assert_eq!(metrics_handle.get_metrics().await.accepted, 1);
     }
