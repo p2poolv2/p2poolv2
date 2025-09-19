@@ -90,17 +90,15 @@ impl Payout {
 
             if has_more_shares {
                 // Process shares from newest to oldest within this batch
-                let mut batch_complete = false;
                 for share in batch_shares.into_iter().rev() {
                     if accumulated_difficulty < total_difficulty {
                         accumulated_difficulty += share.difficulty;
                         result_shares.push(share);
-                        batch_complete = accumulated_difficulty >= total_difficulty;
                     }
                 }
 
-                // Move to the next time window (further back in time) if not complete
-                if !batch_complete {
+                // Move to the next time window (further back in time) if total diff not reached
+                if accumulated_difficulty < total_difficulty {
                     end_time = start_time;
                 }
             }
