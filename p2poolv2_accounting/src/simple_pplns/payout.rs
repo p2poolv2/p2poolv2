@@ -34,7 +34,7 @@ impl Payout {
     /// # Arguments
     /// * `window_size` - The number of blocks the PPLNS window should stretch to
     /// * `step_size_seconds` - Batch size in seconds for querying shares from
-    /// Default: 86400 (1 day) for typical pool configurations
+    ///   Default: 86400 (1 day) for typical pool configurations
     pub fn new(window_size: usize, step_size_seconds: u64) -> Self {
         Self {
             window_size,
@@ -119,13 +119,15 @@ pub trait PplnsShareProvider {
     /// * `end_time` - Optional end time filter (inclusive)
     ///
     /// # Returns
-    /// Vector of SimplePplnsShare ordered by timestamp (newest first)
-    async fn get_pplns_shares_filtered(
+    /// Future that resolves to vector of SimplePplnsShare ordered by timestamp (newest first)
+    fn get_pplns_shares_filtered(
         &self,
         limit: usize,
         start_time: Option<u64>,
         end_time: Option<u64>,
-    ) -> Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>>;
+    ) -> impl std::future::Future<
+        Output = Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>>,
+    > + Send + '_;
 }
 
 #[cfg(test)]
@@ -143,28 +145,32 @@ mod tests {
     }
 
     impl PplnsShareProvider for MockPplnsShareProvider {
-        async fn get_pplns_shares_filtered(
+        fn get_pplns_shares_filtered(
             &self,
             _limit: usize,
             start_time: Option<u64>,
             end_time: Option<u64>,
-        ) -> Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>> {
-            let filtered_shares: Vec<SimplePplnsShare> = self
-                .shares
-                .iter()
-                .filter(|share| {
-                    let timestamp_secs = share.timestamp / 1_000_000;
-                    let after_start = start_time.is_none_or(|start| timestamp_secs >= start);
-                    let before_end = end_time.is_none_or(|end| timestamp_secs <= end);
-                    after_start && before_end
-                })
-                .cloned()
-                .collect();
+        ) -> impl std::future::Future<
+            Output = Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>>,
+        > + Send + '_ {
+            async move {
+                let filtered_shares: Vec<SimplePplnsShare> = self
+                    .shares
+                    .iter()
+                    .filter(|share| {
+                        let timestamp_secs = share.timestamp / 1_000_000;
+                        let after_start = start_time.is_none_or(|start| timestamp_secs >= start);
+                        let before_end = end_time.is_none_or(|end| timestamp_secs <= end);
+                        after_start && before_end
+                    })
+                    .cloned()
+                    .collect();
 
-            // Return shares ordered by timestamp (oldest first, so .rev() in function makes them newest first)
-            let mut result = filtered_shares;
-            result.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-            Ok(result)
+                // Return shares ordered by timestamp (oldest first, so .rev() in function makes them newest first)
+                let mut result = filtered_shares;
+                result.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+                Ok(result)
+            }
         }
     }
 
