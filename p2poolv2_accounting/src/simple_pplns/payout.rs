@@ -59,7 +59,7 @@ impl Payout {
     /// Queries shares in time windows going backwards from the latest timestamp.
     /// Uses the configured step_size_seconds to determine batch size, defaulting to 1 day.
     /// Continues querying additional time windows if total difficulty hasn't been reached.
-    pub async fn get_shares_for_difficulty<T>(
+    async fn get_shares_for_difficulty<T>(
         &self,
         chain_handle: &T,
         total_difficulty: u64,
