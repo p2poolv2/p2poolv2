@@ -15,6 +15,8 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::simple_pplns::SimplePplnsShare;
+use crate::OutputPair;
+use std::collections::HashMap;
 use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -105,6 +107,78 @@ impl Payout {
         }
 
         Ok(result_shares)
+    }
+
+    /// Generate output distribution based on PPLNS shares weighted by difficulty.
+    ///
+    /// # Arguments
+    /// * `chain_handle` - Handle to the chain store for querying PPLNS shares
+    /// * `total_difficulty` - Target cumulative difficulty to collect shares for
+    /// * `total_amount` - Total bitcoin amount to distribute among contributors
+    ///
+    /// # Returns
+    /// Vector of OutputPair containing addresses and their proportional amounts
+    pub async fn get_output_distribution<T>(
+        &self,
+        chain_handle: &T,
+        total_difficulty: u64,
+        total_amount: bitcoin::Amount,
+    ) -> Result<Vec<OutputPair>, Box<dyn Error + Send + Sync>>
+    where
+        T: PplnsShareProvider,
+    {
+        let shares = self
+            .get_shares_for_difficulty(chain_handle, total_difficulty)
+            .await?;
+
+        if shares.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let address_difficulty_map = Self::group_shares_by_address(&shares);
+        let output_pairs = Self::create_proportional_distribution(address_difficulty_map, total_amount)?;
+
+        Ok(output_pairs)
+    }
+
+    /// Groups shares by bitcoin address and sums their difficulties.
+    fn group_shares_by_address(shares: &[SimplePplnsShare]) -> HashMap<String, u64> {
+        let mut address_difficulty_map = HashMap::new();
+        for share in shares {
+            *address_difficulty_map
+                .entry(share.btcaddress.clone())
+                .or_insert(0) += share.difficulty;
+        }
+        address_difficulty_map
+    }
+
+    /// Creates proportional distribution of amount based on difficulty weights.
+    fn create_proportional_distribution(
+        address_difficulty_map: HashMap<String, u64>,
+        total_amount: bitcoin::Amount,
+    ) -> Result<Vec<OutputPair>, Box<dyn Error + Send + Sync>> {
+        let total_difficulty: u64 = address_difficulty_map.values().sum();
+        let mut output_pairs = Vec::new();
+        let mut distributed_amount = bitcoin::Amount::ZERO;
+
+        let addresses: Vec<_> = address_difficulty_map.keys().cloned().collect();
+        for (i, (address_str, difficulty)) in address_difficulty_map.iter().enumerate() {
+            let address = address_str.parse::<bitcoin::Address<_>>().unwrap().assume_checked();
+
+            let amount = if i == addresses.len() - 1 {
+                // Last address gets remainder to handle rounding
+                total_amount - distributed_amount
+            } else {
+                let proportion = *difficulty as f64 / total_difficulty as f64;
+                let amount_sats = (total_amount.to_sat() as f64 * proportion).round() as u64;
+                bitcoin::Amount::from_sat(amount_sats)
+            };
+
+            distributed_amount += amount;
+            output_pairs.push(OutputPair { address, amount });
+        }
+
+        Ok(output_pairs)
     }
 }
 
@@ -418,5 +492,188 @@ mod tests {
         let payout1 = Payout::new(200, 3600);
         assert_eq!(payout1.window_size, 200);
         assert_eq!(payout1.step_size_seconds, 3600);
+    }
+
+    #[tokio::test]
+    async fn test_get_output_distribution_single_address() {
+        let payout = Payout::new(100, 86400);
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let shares = vec![SimplePplnsShare::new(
+            1000,
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(),
+            "worker1".to_string(),
+            (current_time - 1800) * 1_000_000,
+        )];
+
+        let provider = MockPplnsShareProvider::new(shares);
+        let total_amount = bitcoin::Amount::from_sat(50_000_000); // 0.5 BTC
+        let result = payout
+            .get_output_distribution(&provider, 1000, total_amount)
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].amount, total_amount);
+        assert_eq!(
+            result[0].address.to_string(),
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_output_distribution_multiple_addresses() {
+        let payout = Payout::new(100, 86400);
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let shares = vec![
+            SimplePplnsShare::new(
+                600,
+                "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(),
+                "worker1".to_string(),
+                (current_time - 1800) * 1_000_000,
+            ),
+            SimplePplnsShare::new(
+                400,
+                "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(),
+                "worker2".to_string(),
+                (current_time - 2400) * 1_000_000,
+            ),
+        ];
+
+        let provider = MockPplnsShareProvider::new(shares);
+        let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
+        let result = payout
+            .get_output_distribution(&provider, 1000, total_amount)
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+
+        // Check total distribution equals input amount
+        let total_distributed: bitcoin::Amount = result.iter().map(|op| op.amount).sum();
+        assert_eq!(total_distributed, total_amount);
+
+        // Check proportional distribution (60% and 40%)
+        // Note: Due to rounding and remainder handling, we check ranges
+        let addr1_amount = result
+            .iter()
+            .find(|op| op.address.to_string() == "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq")
+            .unwrap()
+            .amount;
+        let addr2_amount = result
+            .iter()
+            .find(|op| op.address.to_string() == "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4")
+            .unwrap()
+            .amount;
+
+        // addr1 should get ~60%, addr2 should get ~40%
+        assert!(addr1_amount.to_sat() >= 59_000_000 && addr1_amount.to_sat() <= 61_000_000);
+        assert!(addr2_amount.to_sat() >= 39_000_000 && addr2_amount.to_sat() <= 41_000_000);
+    }
+
+    #[tokio::test]
+    async fn test_get_output_distribution_same_address_multiple_shares() {
+        let payout = Payout::new(100, 86400);
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Multiple shares from same address should be aggregated
+        let shares = vec![
+            SimplePplnsShare::new(
+                300,
+                "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(),
+                "worker1".to_string(),
+                (current_time - 1800) * 1_000_000,
+            ),
+            SimplePplnsShare::new(
+                200,
+                "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(),
+                "worker2".to_string(),
+                (current_time - 2400) * 1_000_000,
+            ),
+            SimplePplnsShare::new(
+                500,
+                "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(),
+                "worker3".to_string(),
+                (current_time - 3000) * 1_000_000,
+            ),
+        ];
+
+        let provider = MockPplnsShareProvider::new(shares);
+        let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
+        let result = payout
+            .get_output_distribution(&provider, 1000, total_amount)
+            .await
+            .unwrap();
+
+        // Should have 2 unique addresses
+        assert_eq!(result.len(), 2);
+
+        let total_distributed: bitcoin::Amount = result.iter().map(|op| op.amount).sum();
+        assert_eq!(total_distributed, total_amount);
+
+        // addr1 has 500 difficulty total (300+200), addr2 has 500 difficulty
+        // So should be 50/50 split
+        for output in &result {
+            assert!(output.amount.to_sat() >= 49_000_000 && output.amount.to_sat() <= 51_000_000);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_output_distribution_empty_shares() {
+        let payout = Payout::new(100, 86400);
+        let provider = MockPplnsShareProvider::new(vec![]);
+        let total_amount = bitcoin::Amount::from_sat(100_000_000);
+
+        let result = payout
+            .get_output_distribution(&provider, 1000, total_amount)
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_group_shares_by_address() {
+        let shares = vec![
+            SimplePplnsShare::new(100, "addr1".to_string(), "worker1".to_string(), 1000),
+            SimplePplnsShare::new(200, "addr2".to_string(), "worker2".to_string(), 2000),
+            SimplePplnsShare::new(300, "addr1".to_string(), "worker3".to_string(), 3000),
+        ];
+
+        let result = Payout::group_shares_by_address(&shares);
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.get("addr1"), Some(&400)); // 100 + 300
+        assert_eq!(result.get("addr2"), Some(&200));
+    }
+
+    #[tokio::test]
+    async fn test_create_proportional_distribution() {
+        let mut address_difficulty_map = HashMap::new();
+        address_difficulty_map.insert("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(), 600);
+        address_difficulty_map.insert("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(), 400);
+
+        let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
+        let result = Payout::create_proportional_distribution(address_difficulty_map, total_amount)
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+
+        let total_distributed: bitcoin::Amount = result.iter().map(|op| op.amount).sum();
+        assert_eq!(total_distributed, total_amount);
+
+        // Check proportional amounts (60% and 40%)
+        let amounts: Vec<_> = result.iter().map(|op| op.amount.to_sat()).collect();
+        assert!(amounts.contains(&60_000_000) || amounts.contains(&40_000_000));
     }
 }
