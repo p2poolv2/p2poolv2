@@ -14,8 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::simple_pplns::SimplePplnsShare;
 use crate::OutputPair;
+use crate::simple_pplns::SimplePplnsShare;
 use std::collections::HashMap;
 use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -136,7 +136,8 @@ impl Payout {
         }
 
         let address_difficulty_map = Self::group_shares_by_address(&shares);
-        let output_pairs = Self::create_proportional_distribution(address_difficulty_map, total_amount)?;
+        let output_pairs =
+            Self::create_proportional_distribution(address_difficulty_map, total_amount)?;
 
         Ok(output_pairs)
     }
@@ -161,11 +162,13 @@ impl Payout {
         let mut output_pairs = Vec::new();
         let mut distributed_amount = bitcoin::Amount::ZERO;
 
-        let addresses: Vec<_> = address_difficulty_map.keys().cloned().collect();
         for (i, (address_str, difficulty)) in address_difficulty_map.iter().enumerate() {
-            let address = address_str.parse::<bitcoin::Address<_>>().unwrap().assume_checked();
+            let address = address_str
+                .parse::<bitcoin::Address<_>>()
+                .map_err(|e| format!("Invalid bitcoin address '{address_str}': {e}"))?
+                .assume_checked();
 
-            let amount = if i == addresses.len() - 1 {
+            let amount = if i == address_difficulty_map.len() - 1 {
                 // Last address gets remainder to handle rounding
                 total_amount - distributed_amount
             } else {
@@ -201,7 +204,8 @@ pub trait PplnsShareProvider {
         end_time: Option<u64>,
     ) -> impl std::future::Future<
         Output = Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>>,
-    > + Send + '_;
+    > + Send
+    + '_;
 }
 
 #[cfg(test)]
@@ -226,7 +230,8 @@ mod tests {
             end_time: Option<u64>,
         ) -> impl std::future::Future<
             Output = Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>>,
-        > + Send + '_ {
+        > + Send
+        + '_ {
             async move {
                 let filtered_shares: Vec<SimplePplnsShare> = self
                     .shares
@@ -660,12 +665,18 @@ mod tests {
     #[tokio::test]
     async fn test_create_proportional_distribution() {
         let mut address_difficulty_map = HashMap::new();
-        address_difficulty_map.insert("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(), 600);
-        address_difficulty_map.insert("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(), 400);
+        address_difficulty_map.insert(
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(),
+            600,
+        );
+        address_difficulty_map.insert(
+            "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(),
+            400,
+        );
 
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
-        let result = Payout::create_proportional_distribution(address_difficulty_map, total_amount)
-            .unwrap();
+        let result =
+            Payout::create_proportional_distribution(address_difficulty_map, total_amount).unwrap();
 
         assert_eq!(result.len(), 2);
 
