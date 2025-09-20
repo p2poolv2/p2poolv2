@@ -154,8 +154,8 @@ mod tests {
                 .iter()
                 .filter(|share| {
                     let timestamp_secs = share.timestamp / 1_000_000;
-                    let after_start = start_time.map_or(true, |start| timestamp_secs >= start);
-                    let before_end = end_time.map_or(true, |end| timestamp_secs <= end);
+                    let after_start = start_time.is_none_or(|start| timestamp_secs >= start);
+                    let before_end = end_time.is_none_or(|end| timestamp_secs <= end);
                     after_start && before_end
                 })
                 .cloned()
