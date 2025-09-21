@@ -14,7 +14,6 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use bitcoin::Address;
 use clap::Parser;
 use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use p2poolv2_accounting::stats::metrics;
@@ -24,7 +23,6 @@ use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::shares::ShareBlock;
 use p2poolv2_lib::shares::chain::actor::ChainHandle;
 use std::process::exit;
-use std::str::FromStr;
 use stratum::client_connections::start_connections_handler;
 use stratum::server::StratumServerBuilder;
 use stratum::work::gbt::start_gbt;
@@ -120,19 +118,15 @@ async fn main() -> Result<(), String> {
     let connections_handle = start_connections_handler().await;
     let connections_cloned = connections_handle.clone();
 
-    let output_address = Address::from_str(stratum_config.solo_address.clone().unwrap().as_str())
-        .expect("Invalid output address in Stratum config")
-        .require_network(stratum_config.network)
-        .expect("Output address must match the bitcoin network in config");
-
     let tracker_handle_cloned = tracker_handle.clone();
+    let chain_handle_for_notify = chain_handle.clone();
     tokio::spawn(async move {
         info!("Starting Stratum notifier...");
         // This will run indefinitely, sending new block templates to the Stratum server as they arrive
         stratum::work::notify::start_notify(
             notify_rx,
             connections_cloned,
-            Some(output_address),
+            chain_handle_for_notify,
             tracker_handle_cloned,
         )
         .await;

@@ -34,6 +34,7 @@ mockall_double = "0.3.1"
 tempfile = "3.15.0"
 tokio-test = "0.4.3"
 bitcoindrpc = { path = '../bitcoindrpc', features = ["test-utils"] }
+p2poolv2_accounting = { path = '../p2poolv2_accounting', features = ["test-utils"] }
 wiremock = "0.6.2"
 
 

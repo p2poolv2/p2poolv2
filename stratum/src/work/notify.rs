@@ -21,10 +21,10 @@ use super::tracker::{JobId, TrackerHandle};
 use crate::messages::{Notify, NotifyParams};
 use crate::util::reverse_four_byte_chunks;
 use crate::util::to_be_hex;
-use bitcoin::Address;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::Version;
 use p2poolv2_accounting::OutputPair;
+use p2poolv2_accounting::simple_pplns::payout::{Payout, PplnsShareProvider};
 use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -48,20 +48,32 @@ fn parse_flags(flags: Option<String>) -> PushBytesBuf {
     }
 }
 
-/// Build the output distribution for the coinbase transaction.
-/// For now we only work with the solo_address provided, it will be used as the recipient of the coinbase transaction.
-fn build_output_distribution(
-    template: &BlockTemplate,
-    solo_address: Option<Address>,
-) -> Vec<OutputPair> {
-    let mut output_distribution = Vec::new();
-    if let Some(address) = solo_address {
-        output_distribution.push(OutputPair {
-            address,
-            amount: bitcoin::Amount::from_sat(template.coinbasevalue),
-        });
+/// Build the output distribution for the coinbase transaction using PPLNS accounting.
+async fn build_output_distribution<T>(template: &BlockTemplate, chain_handle: &T) -> Vec<OutputPair>
+where
+    T: PplnsShareProvider,
+{
+    // Create a Payout instance with reasonable defaults
+    // TODO: These should be configurable
+    let payout = Payout::new(2016, 86400); // 2016 blocks window, 1 day step size
+    let total_amount = bitcoin::Amount::from_sat(template.coinbasevalue);
+
+    // Use target difficulty from template as total difficulty for PPLNS
+    // TODO: This should be calculated properly based on the PPLNS window
+    // For now, use a reasonable default difficulty value
+    let total_difficulty = 1000000u64; // Placeholder - should be calculated from actual pool difficulty
+
+    match payout
+        .get_output_distribution(chain_handle, total_difficulty, total_amount)
+        .await
+    {
+        Ok(distribution) => distribution,
+        Err(e) => {
+            // Log error and return empty distribution
+            debug!("PPLNS accounting failed: {}", e);
+            Vec::new()
+        }
     }
-    output_distribution
 }
 
 #[allow(dead_code)]
@@ -122,25 +134,24 @@ pub enum NotifyCmd {
 
 /// Start a task that listens for new block template events.
 /// As new templates arrives, the tasks build new Notify messages and sends them to all connected clients.
-///
-/// The output distribution is provided and this works for solo mining. Later on we need to get the output
-/// distribution from the server or any new component we add for share accounting.
-pub async fn start_notify(
+pub async fn start_notify<T>(
     mut notifier_rx: mpsc::Receiver<NotifyCmd>,
     connections: ClientConnectionsHandle,
-    solo_address: Option<Address>,
+    pplns_provider: T,
     tracker_handle: TrackerHandle,
-) {
+) where
+    T: PplnsShareProvider,
+{
     let mut latest_template: Option<Arc<BlockTemplate>> = None;
     while let Some(cmd) = notifier_rx.recv().await {
-        let solo = solo_address.clone();
         match cmd {
             NotifyCmd::SendToAll { template } => {
                 let clean_jobs = latest_template.is_none()
                     || latest_template.unwrap().previousblockhash != template.previousblockhash;
                 latest_template = Some(Arc::clone(&template));
                 let job_id = tracker_handle.get_next_job_id().await.unwrap();
-                let output_distribution = build_output_distribution(&template, solo);
+                let output_distribution =
+                    build_output_distribution(&template, &pplns_provider).await;
                 let notify_str =
                     match build_notify(&template, output_distribution, job_id, clean_jobs) {
                         Ok(notify) => {
@@ -177,7 +188,8 @@ pub async fn start_notify(
                 }
                 let job_id = tracker_handle.get_next_job_id().await.unwrap();
                 let output_distribution =
-                    build_output_distribution(latest_template.as_ref().unwrap(), solo);
+                    build_output_distribution(latest_template.as_ref().unwrap(), &pplns_provider)
+                        .await;
                 let notify_str = match build_notify(
                     latest_template.as_ref().unwrap(),
                     output_distribution,
@@ -218,11 +230,12 @@ mod tests {
     use crate::work::coinbase::parse_address;
     use crate::work::tracker::start_tracker_actor;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
+    use p2poolv2_accounting::test_utils::MockPplnsShareProvider;
     use std::fs;
     use tokio::sync::mpsc;
 
-    #[test_log::test]
-    fn test_build_notify_from_gbt_and_compare_to_expected() {
+    #[test_log::test(tokio::test)]
+    async fn test_build_notify_from_gbt_and_compare_to_expected() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json");
         let data = fs::read_to_string(path).expect("Unable to read file");
@@ -246,7 +259,8 @@ mod tests {
 
         let job_id = JobId(1);
 
-        let output_distribution = build_output_distribution(&template, Some(address));
+        let mock_provider = MockPplnsShareProvider::new(vec![]);
+        let output_distribution = build_output_distribution(&template, &mock_provider).await;
         // Build Notify
         let notify = build_notify(&template, output_distribution, job_id, false)
             .expect("Failed to build notify");
@@ -305,16 +319,12 @@ mod tests {
 
         let work_map_handle = start_tracker_actor();
 
-        // Setup output distribution
-        let address = parse_address(
-            "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr",
-            bitcoin::Network::Regtest,
-        )
-        .unwrap();
+        // Setup mock PPLNS provider
+        let mock_provider = MockPplnsShareProvider::new(vec![]);
 
         // Start the notify task in a separate task
         let task_handle = tokio::spawn(async move {
-            start_notify(notify_rx, mock_connections, Some(address), work_map_handle).await;
+            start_notify(notify_rx, mock_connections, mock_provider, work_map_handle).await;
         });
 
         // Load a sample block template
@@ -397,7 +407,8 @@ mod tests {
             bitcoin::Network::Signet,
         )
         .unwrap();
-        let output_distribution = build_output_distribution(&template, Some(address));
+        let mock_provider = MockPplnsShareProvider::new(vec![]);
+        let output_distribution = build_output_distribution(&template, &mock_provider).await;
 
         let result = build_notify(&template, output_distribution, JobId(job_id), false);
 
