@@ -17,7 +17,48 @@
 use bitcoin::PublicKey;
 use bitcoindrpc::BitcoinRpcConfig;
 use serde::Deserialize;
-pub use stratum::config::StratumConfig;
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct StratumConfig {
+    /// The hostname for the Stratum server
+    pub hostname: String,
+    /// The port for the Stratum server
+    pub port: u16,
+    /// The start difficulty for all miners that connect to the server
+    pub start_difficulty: u64,
+    /// The minimum difficulty for the pool
+    pub minimum_difficulty: u64,
+    /// The maximum difficulty for the pool, if set to None, it is not enforced
+    pub maximum_difficulty: Option<u64>,
+    /// The address for solo mining payouts
+    pub solo_address: Option<String>,
+    /// The ZMQ publisher address for block hashes
+    pub zmqpubhashblock: String,
+    /// The network can be "main", "testnet4" or "signet
+    #[serde(deserialize_with = "deserialize_network")]
+    pub network: bitcoin::Network,
+    /// The version mask to use for version-rolling
+    #[serde(deserialize_with = "deserialize_version_mask")]
+    pub version_mask: i32,
+}
+
+/// helper function to deserialize the network from the config file, which is provided as a string like Core
+/// Possible values are: main, test, testnet4, signet, regtest
+fn deserialize_network<'de, D>(deserializer: D) -> Result<bitcoin::Network, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = serde::Deserialize::deserialize(deserializer)?;
+    bitcoin::Network::from_core_arg(&s).map_err(serde::de::Error::custom)
+}
+
+fn deserialize_version_mask<'de, D>(deserializer: D) -> Result<i32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = serde::Deserialize::deserialize(deserializer)?;
+    i32::from_str_radix(&s, 16).map_err(serde::de::Error::custom)
+}
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct NetworkConfig {

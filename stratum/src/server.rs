@@ -20,7 +20,6 @@ use crate::client_connections::ClientConnectionsHandle;
 #[mockall_double::double]
 use crate::client_connections::ClientConnectionsHandle;
 
-use crate::config::StratumConfig;
 use crate::difficulty_adjuster::{DifficultyAdjuster, DifficultyAdjusterTrait};
 use crate::message_handlers::handle_message;
 use crate::messages::Request;
@@ -42,28 +41,115 @@ use tracing::{debug, error, info};
 // A struct to represent a Stratum server configuration
 // This struct contains the port and address of the Stratum server
 pub struct StratumServer {
-    pub config: StratumConfig,
+    pub hostname: String,
+    pub port: u16,
+    pub start_difficulty: u64,
+    pub minimum_difficulty: u64,
+    pub maximum_difficulty: Option<u64>,
+    pub network: bitcoin::Network,
+    pub version_mask: i32,
     shutdown_rx: oneshot::Receiver<()>,
     connections_handle: ClientConnectionsHandle,
     shares_tx: mpsc::Sender<SimplePplnsShare>,
 }
 
-impl StratumServer {
-    // A method to create a new Stratum server configuration
-    pub async fn new(
-        config: StratumConfig,
-        shutdown_rx: oneshot::Receiver<()>,
-        connections_handle: ClientConnectionsHandle,
-        share_block_tx: mpsc::Sender<SimplePplnsShare>,
-    ) -> Self {
-        Self {
-            config,
-            shutdown_rx,
-            connections_handle,
-            shares_tx: share_block_tx,
-        }
+/// Builder for StratumServer to avoid dependency on StratumConfig
+#[derive(Default)]
+pub struct StratumServerBuilder {
+    hostname: Option<String>,
+    port: Option<u16>,
+    start_difficulty: Option<u64>,
+    minimum_difficulty: Option<u64>,
+    maximum_difficulty: Option<Option<u64>>,
+    network: Option<bitcoin::Network>,
+    version_mask: Option<i32>,
+    shutdown_rx: Option<oneshot::Receiver<()>>,
+    connections_handle: Option<ClientConnectionsHandle>,
+    shares_tx: Option<mpsc::Sender<SimplePplnsShare>>,
+    zmqpubhashblock: Option<String>,
+}
+
+impl StratumServerBuilder {
+    pub fn hostname(mut self, hostname: String) -> Self {
+        self.hostname = Some(hostname);
+        self
     }
 
+    pub fn port(mut self, port: u16) -> Self {
+        self.port = Some(port);
+        self
+    }
+
+    pub fn start_difficulty(mut self, start_difficulty: u64) -> Self {
+        self.start_difficulty = Some(start_difficulty);
+        self
+    }
+
+    pub fn minimum_difficulty(mut self, minimum_difficulty: u64) -> Self {
+        self.minimum_difficulty = Some(minimum_difficulty);
+        self
+    }
+
+    pub fn maximum_difficulty(mut self, maximum_difficulty: Option<u64>) -> Self {
+        self.maximum_difficulty = Some(maximum_difficulty);
+        self
+    }
+
+    pub fn network(mut self, network: bitcoin::Network) -> Self {
+        self.network = Some(network);
+        self
+    }
+
+    pub fn version_mask(mut self, version_mask: i32) -> Self {
+        self.version_mask = Some(version_mask);
+        self
+    }
+
+    pub fn shutdown_rx(mut self, shutdown_rx: oneshot::Receiver<()>) -> Self {
+        self.shutdown_rx = Some(shutdown_rx);
+        self
+    }
+
+    pub fn connections_handle(mut self, connections_handle: ClientConnectionsHandle) -> Self {
+        self.connections_handle = Some(connections_handle);
+        self
+    }
+
+    pub fn shares_tx(mut self, shares_tx: mpsc::Sender<SimplePplnsShare>) -> Self {
+        self.shares_tx = Some(shares_tx);
+        self
+    }
+
+    pub fn zmqpubhashblock(mut self, zmqpubhashblock: String) -> Self {
+        self.zmqpubhashblock = Some(zmqpubhashblock);
+        self
+    }
+
+    pub async fn build(self) -> Result<StratumServer, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(StratumServer {
+            hostname: self.hostname.ok_or("hostname is required")?,
+            port: self.port.ok_or("port is required")?,
+            start_difficulty: self
+                .start_difficulty
+                .ok_or("start_difficulty is required")?,
+            minimum_difficulty: self
+                .minimum_difficulty
+                .ok_or("minimum_difficulty is required")?,
+            maximum_difficulty: self
+                .maximum_difficulty
+                .ok_or("maximum_difficulty is required")?,
+            network: self.network.ok_or("network is required")?,
+            version_mask: self.version_mask.ok_or("version_mask is required")?,
+            shutdown_rx: self.shutdown_rx.ok_or("shutdown_rx is required")?,
+            connections_handle: self
+                .connections_handle
+                .ok_or("connections_handle is required")?,
+            shares_tx: self.shares_tx.ok_or("shares_tx is required")?,
+        })
+    }
+}
+
+impl StratumServer {
     // A method to start the Stratum server
     pub async fn start(
         &mut self,
@@ -73,12 +159,9 @@ impl StratumServer {
         bitcoinrpc_config: BitcoinRpcConfig,
         metrics: metrics::MetricsHandle,
     ) -> Result<(), Box<dyn std::error::Error + Send>> {
-        info!(
-            "Starting Stratum server at {}:{}",
-            self.config.hostname, self.config.port
-        );
+        info!("Starting Stratum server at {}:{}", self.hostname, self.port);
 
-        let bind_address = format!("{}:{}", self.config.hostname, self.config.port);
+        let bind_address = format!("{}:{}", self.hostname, self.port);
         let listener = match TcpListener::bind(&bind_address).await {
             Ok(listener) => listener,
             Err(e) => {
@@ -115,14 +198,14 @@ impl StratumServer {
                                 notify_tx: notify_tx.clone(),
                                 tracker_handle: tracker_handle.clone(),
                                 bitcoinrpc_config: bitcoinrpc_config.clone(),
-                                start_difficulty: self.config.start_difficulty,
-                                minimum_difficulty: self.config.minimum_difficulty,
-                                maximum_difficulty: self.config.maximum_difficulty,
+                                start_difficulty: self.start_difficulty,
+                                minimum_difficulty: self.minimum_difficulty,
+                                maximum_difficulty: self.maximum_difficulty,
                                 shares_tx: self.shares_tx.clone(),
-                                network: self.config.network,
+                                network: self.network,
                                 metrics: metrics.clone(),
                             };
-                            let version_mask = self.config.version_mask;
+                            let version_mask = self.version_mask;
                             // Spawn a new task for each connection
                             tokio::spawn(async move {
                                 // Handle the connection with graceful shutdown support
@@ -319,30 +402,30 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
-        let config = StratumConfig {
-            hostname: "127.0.0.1".to_string(),
-            port: 12345,
-            start_difficulty: 1,
-            minimum_difficulty: 1,
-            maximum_difficulty: Some(2),
-            solo_address: None,
-            zmqpubhashblock: "tcp://127.0.0.1:28332".to_string(),
-            network: bitcoin::network::Network::Regtest,
-            version_mask: 0x1fffe000,
-        };
-
         let (shares_tx, _shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
             .unwrap();
 
-        let mut server =
-            StratumServer::new(config, shutdown_rx, connections_handle, shares_tx).await;
+        let mut server = StratumServerBuilder::default()
+            .hostname("127.0.0.1".to_string())
+            .port(12345)
+            .start_difficulty(1)
+            .minimum_difficulty(1)
+            .maximum_difficulty(Some(2))
+            .network(bitcoin::network::Network::Regtest)
+            .version_mask(0x1fffe000)
+            .shutdown_rx(shutdown_rx)
+            .connections_handle(connections_handle)
+            .shares_tx(shares_tx)
+            .build()
+            .await
+            .unwrap();
 
         // Verify the server was created with the correct parameters
-        assert_eq!(server.config.port, 12345);
-        assert_eq!(server.config.hostname, "127.0.0.1");
+        assert_eq!(server.port, 12345);
+        assert_eq!(server.hostname, "127.0.0.1");
 
         let (ready_tx, ready_rx) = oneshot::channel();
         let (notify_tx, _notify_rx) = mpsc::channel(10);

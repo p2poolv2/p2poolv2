@@ -30,7 +30,6 @@ tokio-util = { workspace = true }
 tokio-stream = { workspace = true }
 tracing-appender = { workspace = true }
 bitcoindrpc = { path = '../bitcoindrpc' }
-stratum = { path = '../stratum' }
 p2poolv2_accounting = { path = '../p2poolv2_accounting' }
 chrono = { workspace = true }
 

@@ -26,7 +26,7 @@ use p2poolv2_lib::shares::chain::actor::ChainHandle;
 use std::process::exit;
 use std::str::FromStr;
 use stratum::client_connections::start_connections_handler;
-use stratum::server::StratumServer;
+use stratum::server::StratumServerBuilder;
 use stratum::work::gbt::start_gbt;
 use stratum::work::tracker::start_tracker_actor;
 use stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
@@ -149,13 +149,19 @@ async fn main() -> Result<(), String> {
     let metrics_cloned = metrics_handle.clone();
 
     tokio::spawn(async move {
-        let mut stratum_server = StratumServer::new(
-            stratum_config,
-            stratum_shutdown_rx,
-            connections_handle.clone(),
-            shares_tx,
-        )
-        .await;
+        let mut stratum_server = StratumServerBuilder::default()
+            .shutdown_rx(stratum_shutdown_rx)
+            .connections_handle(connections_handle.clone())
+            .shares_tx(shares_tx)
+            .hostname(stratum_config.hostname)
+            .port(stratum_config.port)
+            .minimum_difficulty(stratum_config.minimum_difficulty)
+            .maximum_difficulty(stratum_config.maximum_difficulty)
+            .network(stratum_config.network)
+            .version_mask(stratum_config.version_mask)
+            .build()
+            .await
+            .unwrap();
         info!("Starting Stratum server...");
         let result = stratum_server
             .start(
