@@ -21,7 +21,7 @@ use std::str;
 use stratum::{
     self,
     messages::{Response, SimpleRequest},
-    server::StratumServer,
+    server::StratumServerBuilder,
     work::{notify, tracker::start_tracker_actor},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -48,26 +48,27 @@ async fn test_stratum_server_subscribe() {
     }]);
     mock_method(&mock_server, "getblocktemplate", params, template).await;
 
-    let config = stratum::config::StratumConfig {
-        hostname: "127.0.0.1".to_string(),
-        port: 9999,
-        start_difficulty: 1,
-        minimum_difficulty: 1,
-        maximum_difficulty: Some(2),
-        solo_address: None,
-        zmqpubhashblock: "tcp://127.0.0.1:28332".to_string(),
-        network: bitcoin::network::Network::Regtest,
-        version_mask: 0x1fffe000,
-    };
-
     let (share_block_tx, _share_block_rx) = tokio::sync::mpsc::channel(10);
     let stats_dir = tempfile::tempdir().unwrap();
     let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
         .await
         .unwrap();
 
-    let mut server =
-        StratumServer::new(config, shutdown_rx, connections_handle, share_block_tx).await;
+    let mut server = StratumServerBuilder::default()
+        .shutdown_rx(shutdown_rx)
+        .connections_handle(connections_handle)
+        .shares_tx(share_block_tx)
+        .hostname("127.0.0.1".to_string())
+        .port(9999)
+        .start_difficulty(1)
+        .minimum_difficulty(1)
+        .maximum_difficulty(Some(1))
+        .zmqpubhashblock("tcp://127.0.0.1:28332".to_string())
+        .network(bitcoin::network::Network::Regtest)
+        .version_mask(0x1fffe000)
+        .build()
+        .await
+        .unwrap();
 
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let tracker_handle = start_tracker_actor();

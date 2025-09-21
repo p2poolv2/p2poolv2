@@ -3261,7 +3261,6 @@ dependencies = [
  "rust_decimal_macros",
  "serde",
  "serde_json",
- "stratum",
  "temp-env",
  "tempfile",
  "test-log",
