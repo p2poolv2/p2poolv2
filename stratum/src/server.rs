@@ -28,6 +28,7 @@ use crate::work::notify::NotifyCmd;
 use crate::work::tracker::TrackerHandle;
 use bitcoindrpc::BitcoinRpcConfig;
 use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
+use p2poolv2_accounting::simple_pplns::payout::PplnsShareProvider;
 use p2poolv2_accounting::stats::metrics;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -40,7 +41,7 @@ use tracing::{debug, error, info};
 
 // A struct to represent a Stratum server configuration
 // This struct contains the port and address of the Stratum server
-pub struct StratumServer {
+pub struct StratumServer<T> {
     pub hostname: String,
     pub port: u16,
     pub start_difficulty: u64,
@@ -51,11 +52,11 @@ pub struct StratumServer {
     shutdown_rx: oneshot::Receiver<()>,
     connections_handle: ClientConnectionsHandle,
     shares_tx: mpsc::Sender<SimplePplnsShare>,
+    chain_handle: T,
 }
 
 /// Builder for StratumServer to avoid dependency on StratumConfig
-#[derive(Default)]
-pub struct StratumServerBuilder {
+pub struct StratumServerBuilder<T> {
     hostname: Option<String>,
     port: Option<u16>,
     start_difficulty: Option<u64>,
@@ -67,9 +68,29 @@ pub struct StratumServerBuilder {
     connections_handle: Option<ClientConnectionsHandle>,
     shares_tx: Option<mpsc::Sender<SimplePplnsShare>>,
     zmqpubhashblock: Option<String>,
+    chain_handle: Option<T>,
 }
 
-impl StratumServerBuilder {
+impl<T> Default for StratumServerBuilder<T> {
+    fn default() -> Self {
+        Self {
+            hostname: None,
+            port: None,
+            start_difficulty: None,
+            minimum_difficulty: None,
+            maximum_difficulty: None,
+            network: None,
+            version_mask: None,
+            shutdown_rx: None,
+            connections_handle: None,
+            shares_tx: None,
+            zmqpubhashblock: None,
+            chain_handle: None,
+        }
+    }
+}
+
+impl<T> StratumServerBuilder<T> {
     pub fn hostname(mut self, hostname: String) -> Self {
         self.hostname = Some(hostname);
         self
@@ -125,7 +146,12 @@ impl StratumServerBuilder {
         self
     }
 
-    pub async fn build(self) -> Result<StratumServer, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn chain_handle(mut self, chain_handle: T) -> Self {
+        self.chain_handle = Some(chain_handle);
+        self
+    }
+
+    pub async fn build(self) -> Result<StratumServer<T>, Box<dyn std::error::Error + Send + Sync>> {
         Ok(StratumServer {
             hostname: self.hostname.ok_or("hostname is required")?,
             port: self.port.ok_or("port is required")?,
@@ -145,11 +171,12 @@ impl StratumServerBuilder {
                 .connections_handle
                 .ok_or("connections_handle is required")?,
             shares_tx: self.shares_tx.ok_or("shares_tx is required")?,
+            chain_handle: self.chain_handle.ok_or("chain_handle is required")?,
         })
     }
 }
 
-impl StratumServer {
+impl<T: Clone + Send + 'static> StratumServer<T> {
     // A method to start the Stratum server
     pub async fn start(
         &mut self,
@@ -204,6 +231,7 @@ impl StratumServer {
                                 shares_tx: self.shares_tx.clone(),
                                 network: self.network,
                                 metrics: metrics.clone(),
+                                chain_handle: self.chain_handle.clone(),
                             };
                             let version_mask = self.version_mask;
                             // Spawn a new task for each connection
@@ -228,7 +256,7 @@ impl StratumServer {
 
 /// A context for the Stratum server easing the number of parameters passed around.
 #[derive(Clone)]
-pub(crate) struct StratumContext {
+pub(crate) struct StratumContext<T> {
     pub notify_tx: mpsc::Sender<NotifyCmd>,
     pub tracker_handle: TrackerHandle,
     pub bitcoinrpc_config: BitcoinRpcConfig,
@@ -238,23 +266,25 @@ pub(crate) struct StratumContext {
     pub shares_tx: mpsc::Sender<SimplePplnsShare>,
     pub network: bitcoin::network::Network,
     pub metrics: metrics::MetricsHandle,
+    pub chain_handle: T,
 }
 
 /// Handles a single connection to the Stratum server.
 /// This function reads lines from the connection, processes them,
 /// and sends responses back to the client.
-async fn handle_connection<R, W>(
+async fn handle_connection<R, W, T>(
     reader: R,
     mut writer: W,
     addr: SocketAddr,
     mut message_rx: mpsc::Receiver<Arc<String>>,
     mut shutdown_rx: oneshot::Receiver<()>,
     version_mask: i32,
-    ctx: StratumContext,
+    ctx: StratumContext<T>,
 ) -> Result<(), Box<dyn std::error::Error + Send>>
 where
     R: AsyncBufReadExt + Unpin,
     W: AsyncWriteExt + Unpin,
+    T: Clone,
 {
     // Create a LinesCodec with a maximum line length of 8KB
     // This prevents potential DoS attacks with extremely long lines
@@ -332,16 +362,17 @@ where
     Ok(())
 }
 
-async fn process_incoming_message<W, D>(
+async fn process_incoming_message<W, D, T>(
     line: &str,
     writer: &mut W,
     session: &mut Session<D>,
     addr: SocketAddr,
-    ctx: StratumContext,
+    ctx: StratumContext<T>,
 ) -> Result<(), Box<dyn std::error::Error + Send>>
 where
     W: AsyncWriteExt + Unpin,
     D: DifficultyAdjusterTrait + Send + Sync,
+    T: Clone,
 {
     match serde_json::from_str::<Request>(line) {
         Ok(message) => {
@@ -419,6 +450,7 @@ mod stratum_server_tests {
             .shutdown_rx(shutdown_rx)
             .connections_handle(connections_handle)
             .shares_tx(shares_tx)
+            .chain_handle(())
             .build()
             .await
             .unwrap();
@@ -489,6 +521,7 @@ mod stratum_server_tests {
             maximum_difficulty: Some(2),
             shares_tx,
             network: bitcoin::network::Network::Regtest,
+            chain_handle: (),
         };
 
         // Run the handler
@@ -598,6 +631,7 @@ mod stratum_server_tests {
             maximum_difficulty: Some(2),
             shares_tx,
             network: bitcoin::network::Network::Regtest,
+            chain_handle: (),
         };
 
         // Run the handler
@@ -661,6 +695,7 @@ mod stratum_server_tests {
             shares_tx,
             metrics: metrics_handle,
             network: bitcoin::network::Network::Regtest,
+            chain_handle: (),
         };
 
         // Run the handler
@@ -729,6 +764,7 @@ mod stratum_server_tests {
             shares_tx,
             network: bitcoin::network::Network::Regtest,
             metrics: metrics_handle,
+            chain_handle: (),
         };
 
         // Run the handler
@@ -817,6 +853,7 @@ mod stratum_server_tests {
             shares_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
+            chain_handle: (),
         };
 
         // Spawn the handler in a separate task
@@ -924,6 +961,7 @@ mod stratum_server_tests {
             shares_tx,
             network: bitcoin::network::Network::Regtest,
             metrics: metrics_handle,
+            chain_handle: (),
         };
 
         // Spawn the handler in a separate task

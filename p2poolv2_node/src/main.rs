@@ -147,18 +147,21 @@ async fn main() -> Result<(), String> {
         }
     };
     let metrics_cloned = metrics_handle.clone();
+    let stratum_chain_handle = chain_handle.clone();
 
     tokio::spawn(async move {
-        let mut stratum_server = StratumServerBuilder::default()
+        let mut stratum_server = StratumServerBuilder::<ChainHandle>::default()
             .shutdown_rx(stratum_shutdown_rx)
             .connections_handle(connections_handle.clone())
             .shares_tx(shares_tx)
             .hostname(stratum_config.hostname)
             .port(stratum_config.port)
+            .start_difficulty(stratum_config.start_difficulty)
             .minimum_difficulty(stratum_config.minimum_difficulty)
             .maximum_difficulty(stratum_config.maximum_difficulty)
             .network(stratum_config.network)
             .version_mask(stratum_config.version_mask)
+            .chain_handle(stratum_chain_handle)
             .build()
             .await
             .unwrap();

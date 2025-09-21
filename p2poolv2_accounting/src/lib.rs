@@ -18,6 +18,9 @@ pub mod calc;
 pub mod simple_pplns;
 pub mod stats;
 
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct OutputPair {
