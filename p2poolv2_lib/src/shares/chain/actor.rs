@@ -18,7 +18,7 @@ use super::chain_store::ChainStore;
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader};
 use crate::store::Store;
-use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
+use p2poolv2_accounting::simple_pplns::{SimplePplnsShare, payout::PplnsShareProvider};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::{HashMap, HashSet};
@@ -779,6 +779,23 @@ impl ChainHandle {
         match response_receiver.recv().await {
             Some(ChainResponse::TipHeight(height)) => height,
             _ => None,
+        }
+    }
+}
+
+impl PplnsShareProvider for ChainHandle {
+    fn get_pplns_shares_filtered(
+        &self,
+        limit: usize,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+    ) -> impl std::future::Future<
+        Output = Result<Vec<SimplePplnsShare>, Box<dyn std::error::Error + Send + Sync>>,
+    > + Send
+    + '_ {
+        async move {
+            self.get_pplns_shares_filtered(limit, start_time, end_time)
+                .await
         }
     }
 }
