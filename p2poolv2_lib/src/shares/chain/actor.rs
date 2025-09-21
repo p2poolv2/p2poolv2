@@ -107,7 +107,6 @@ impl ChainActor {
 
     pub async fn run(&mut self) {
         while let Some((msg, response_sender)) = self.receiver.recv().await {
-            debug!("Chain actor received message: {:?}", msg);
             match msg {
                 ChainMessage::GetTips => {
                     let tips = self.chain_store.tips.clone();
