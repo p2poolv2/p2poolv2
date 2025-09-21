@@ -29,6 +29,8 @@ use tokio::net::TcpStream;
 
 #[tokio::test]
 async fn test_stratum_server_subscribe() {
+    use p2poolv2_accounting::test_utils::MockPplnsShareProvider;
+
     let addr: SocketAddr = "127.0.0.1:9999".parse().expect("Invalid address");
 
     // Setup server - using Arc so we can access it for shutdown
@@ -54,6 +56,7 @@ async fn test_stratum_server_subscribe() {
         .await
         .unwrap();
 
+    let mock_provider = MockPplnsShareProvider::new(vec![]);
     let mut server = StratumServerBuilder::default()
         .shutdown_rx(shutdown_rx)
         .connections_handle(connections_handle)
@@ -66,6 +69,7 @@ async fn test_stratum_server_subscribe() {
         .zmqpubhashblock("tcp://127.0.0.1:28332".to_string())
         .network(bitcoin::network::Network::Regtest)
         .version_mask(0x1fffe000)
+        .chain_handle(mock_provider)
         .build()
         .await
         .unwrap();

@@ -42,11 +42,11 @@ pub mod suggest_difficulty;
 /// Return a vector of responses to be sent back to the client.
 #[allow(dead_code)]
 #[allow(clippy::needless_lifetimes)]
-pub(crate) async fn handle_message<'a, D: DifficultyAdjusterTrait>(
+pub(crate) async fn handle_message<'a, D: DifficultyAdjusterTrait, T: Clone>(
     message: Request<'a>,
     session: &mut Session<D>,
     addr: SocketAddr,
-    ctx: StratumContext,
+    ctx: StratumContext<T>,
 ) -> Result<Vec<Message<'a>>, Error> {
     match message {
         Request::MiningConfigureRequest(_) => handle_configure(message, session).await,
@@ -59,11 +59,11 @@ pub(crate) async fn handle_message<'a, D: DifficultyAdjusterTrait>(
     }
 }
 
-async fn handle_simple_request<'a, D: DifficultyAdjusterTrait>(
+async fn handle_simple_request<'a, D: DifficultyAdjusterTrait, T: Clone>(
     message: SimpleRequest<'a>,
     session: &mut Session<D>,
     addr: SocketAddr,
-    ctx: StratumContext,
+    ctx: StratumContext<T>,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling simple request: {}", message.method);
     match message.method.as_ref() {

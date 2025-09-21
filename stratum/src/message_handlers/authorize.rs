@@ -31,11 +31,11 @@ use tracing::debug;
 ///
 /// Some broken implementations of the Stratum protocol send the "mining.authorize" message before "mining.subscribe".
 /// We support this by not checking if the session is subscribed before authorizing.
-pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
+pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait, T: Clone>(
     message: SimpleRequest<'a>,
     session: &mut Session<D>,
     addr: std::net::SocketAddr,
-    ctx: StratumContext,
+    ctx: StratumContext<T>,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.authorize message");
     if session.username.is_some() {
@@ -136,6 +136,7 @@ mod tests {
             shares_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
+            chain_handle: (),
         };
 
         // Execute
@@ -231,6 +232,7 @@ mod tests {
             shares_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
+            chain_handle: (),
         };
 
         // Execute
@@ -285,6 +287,7 @@ mod tests {
             shares_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
+            chain_handle: (),
         };
 
         // Execute

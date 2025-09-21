@@ -211,47 +211,7 @@ pub trait PplnsShareProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    struct MockPplnsShareProvider {
-        shares: Vec<SimplePplnsShare>,
-    }
-
-    impl MockPplnsShareProvider {
-        fn new(shares: Vec<SimplePplnsShare>) -> Self {
-            Self { shares }
-        }
-    }
-
-    impl PplnsShareProvider for MockPplnsShareProvider {
-        fn get_pplns_shares_filtered(
-            &self,
-            _limit: usize,
-            start_time: Option<u64>,
-            end_time: Option<u64>,
-        ) -> impl std::future::Future<
-            Output = Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>>,
-        > + Send
-        + '_ {
-            async move {
-                let filtered_shares: Vec<SimplePplnsShare> = self
-                    .shares
-                    .iter()
-                    .filter(|share| {
-                        let timestamp_secs = share.timestamp / 1_000_000;
-                        let after_start = start_time.is_none_or(|start| timestamp_secs >= start);
-                        let before_end = end_time.is_none_or(|end| timestamp_secs <= end);
-                        after_start && before_end
-                    })
-                    .cloned()
-                    .collect();
-
-                // Return shares ordered by timestamp (oldest first, so .rev() in function makes them newest first)
-                let mut result = filtered_shares;
-                result.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-                Ok(result)
-            }
-        }
-    }
+    use crate::test_utils::MockPplnsShareProvider;
 
     #[tokio::test]
     async fn test_get_shares_for_difficulty_exact_match() {
