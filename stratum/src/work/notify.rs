@@ -72,7 +72,7 @@ where
             chain_handle,
             total_difficulty,
             total_amount,
-            &bootstrap_address,
+            bootstrap_address,
         )
         .await
     {
