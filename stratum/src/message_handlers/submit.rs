@@ -542,7 +542,11 @@ mod handle_submit_tests {
 
         match &message[..] {
             [
-                Message::Response(Response { id: _, result, error: _ }),
+                Message::Response(Response {
+                    id: _,
+                    result,
+                    error: _,
+                }),
                 Message::SetDifficulty(SetDifficultyNotification { method: _, params }),
             ] => {
                 assert_eq!(result, &Some(json!(true)));
