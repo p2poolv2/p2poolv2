@@ -128,6 +128,7 @@ async fn main() -> Result<(), String> {
             connections_cloned,
             chain_handle_for_notify,
             tracker_handle_cloned,
+            stratum_config.bootstrap_address,
         )
         .await;
     });
