@@ -28,7 +28,6 @@ use crate::work::notify::NotifyCmd;
 use crate::work::tracker::TrackerHandle;
 use bitcoindrpc::BitcoinRpcConfig;
 use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
-use p2poolv2_accounting::simple_pplns::payout::PplnsShareProvider;
 use p2poolv2_accounting::stats::metrics;
 use std::net::SocketAddr;
 use std::sync::Arc;

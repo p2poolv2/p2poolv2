@@ -180,7 +180,6 @@ mod tests {
 
     #[test]
     fn test_multiple_workers() {
-        let btc_address = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
         let mut user = User::default();
 
         user.record_share("worker1", 100, 1);
@@ -199,7 +198,6 @@ mod tests {
 
     #[test]
     fn test_get_worker_mut_and_get_or_add_worker() {
-        let btc_address = "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq";
         let mut user = User::default();
 
         // Should not exist yet

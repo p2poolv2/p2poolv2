@@ -14,10 +14,9 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use bitcoin::{PublicKey, address::NetworkChecked};
+use bitcoin::PublicKey;
 use bitcoindrpc::BitcoinRpcConfig;
 use serde::Deserialize;
-use std::str::FromStr;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct StratumConfig {
