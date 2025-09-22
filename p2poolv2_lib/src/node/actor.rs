@@ -225,7 +225,7 @@ mod tests {
     use super::*;
     use crate::command::GetPplnsShareQuery;
     use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
-    use tokio::sync::{mpsc, oneshot};
+    use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn test_node_handle_get_pplns_shares_sends_correct_command() {

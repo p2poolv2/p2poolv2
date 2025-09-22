@@ -295,7 +295,7 @@ mod tests {
         assert_eq!(notify.params.version, "20000000");
         assert_eq!(notify.params.nbits, "207fffff");
         assert_eq!(notify.params.ntime, "68300262"); // we use curtime from gbt
-        assert_eq!(notify.params.clean_jobs, false);
+        assert!(!notify.params.clean_jobs);
         assert_eq!(
             notify.params.prevhash,
             "aadbdeb0c770ef1cc9115a42aa0a34e91732c422c0cd7ddbe71b3d9145f85fa6"

@@ -24,7 +24,7 @@ use rust_decimal_macros::dec;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::{debug, error};
+use tracing::error;
 
 #[derive(Debug)]
 #[allow(dead_code)]
