@@ -29,6 +29,8 @@ port = 3333
 start_difficulty = 10000
 minimum_difficulty = 100
 solo_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
+# The bitcoin address to use for first jobs when there are no shares
+bootstrap_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 zmqpubhashblock = "tcp://127.0.0.1:28332"
 # The network can be "main", "testnet4" or "signet"
 network = "signet"

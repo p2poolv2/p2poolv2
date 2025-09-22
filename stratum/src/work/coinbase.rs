@@ -114,6 +114,11 @@ pub fn build_coinbase_transaction(
     aux_flags: PushBytesBuf,
     default_witness_commitment: Option<String>,
 ) -> Result<Transaction, WorkError> {
+    if output_data.is_empty() {
+        return Err(WorkError {
+            message: "Empty output distribution".to_string(),
+        });
+    }
     // Use timestamp for providing randomness to distribute search space along with enonce1 that will be used by the miners.
     let (secs, nsecs) = get_current_timestamp_bytes();
 
