@@ -82,7 +82,8 @@ pub fn build_notify(
     output_distribution: Vec<OutputPair>,
     job_id: JobId,
     clean_jobs: bool,
-) -> Result<Notify, WorkError> {
+    _bootstrap_address: &bitcoin::Address,
+) -> Result<Notify<'static>, WorkError> {
     let coinbase = build_coinbase_transaction(
         Version::TWO,
         output_distribution.as_slice(),
@@ -139,7 +140,7 @@ pub async fn start_notify<T>(
     connections: ClientConnectionsHandle,
     pplns_provider: T,
     tracker_handle: TrackerHandle,
-    bootstrap_address: String,
+    bootstrap_address: bitcoin::Address,
 ) where
     T: PplnsShareProvider,
 {
@@ -153,27 +154,31 @@ pub async fn start_notify<T>(
                 let job_id = tracker_handle.get_next_job_id().await.unwrap();
                 let output_distribution =
                     build_output_distribution(&template, &pplns_provider).await;
-                let notify_str =
-                    match build_notify(&template, output_distribution, job_id, clean_jobs) {
-                        Ok(notify) => {
-                            tracker_handle
-                                .insert_job(
-                                    Arc::clone(&template),
-                                    notify.params.coinbase1.to_string(),
-                                    notify.params.coinbase2.to_string(),
-                                    job_id,
-                                )
-                                .await
-                                .unwrap();
+                let notify_str = match build_notify(
+                    &template,
+                    output_distribution,
+                    job_id,
+                    clean_jobs,
+                    &bootstrap_address,
+                ) {
+                    Ok(notify) => {
+                        tracker_handle
+                            .insert_job(
+                                Arc::clone(&template),
+                                notify.params.coinbase1.to_string(),
+                                notify.params.coinbase2.to_string(),
+                                job_id,
+                            )
+                            .await
+                            .unwrap();
 
-                            serde_json::to_string(&notify)
-                                .expect("Failed to serialize Notify message")
-                        }
-                        Err(e) => {
-                            debug!("Error building notify: {}", e);
-                            continue; // Skip this iteration if notify cannot be built
-                        }
-                    };
+                        serde_json::to_string(&notify).expect("Failed to serialize Notify message")
+                    }
+                    Err(e) => {
+                        debug!("Error building notify: {}", e);
+                        continue; // Skip this iteration if notify cannot be built
+                    }
+                };
                 connections.send_to_all(Arc::new(notify_str)).await;
             }
             NotifyCmd::SendToClient {
@@ -196,6 +201,7 @@ pub async fn start_notify<T>(
                     output_distribution,
                     job_id,
                     clean_jobs,
+                    &bootstrap_address,
                 ) {
                     Ok(notify) => {
                         tracker_handle
@@ -233,9 +239,8 @@ mod tests {
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
     use p2poolv2_accounting::test_utils::MockPplnsShareProvider;
-    use std::alloc::System;
     use std::fs;
-    use std::time::{Duration, SystemTime};
+    use std::time::SystemTime;
     use tokio::sync::mpsc;
 
     #[test_log::test(tokio::test)]
@@ -255,7 +260,7 @@ mod tests {
             serde_json::from_value(gbt_json.clone()).expect("Failed to parse BlockTemplate");
 
         // Address used in ckpool regtest conf
-        let address = parse_address(
+        let bootstrap_address = parse_address(
             "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr",
             bitcoin::Network::Regtest,
         )
@@ -277,8 +282,14 @@ mod tests {
         }]);
         let output_distribution = build_output_distribution(&template, &mock_provider).await;
         // Build Notify
-        let notify = build_notify(&template, output_distribution, job_id, false)
-            .expect("Failed to build notify");
+        let notify = build_notify(
+            &template,
+            output_distribution,
+            job_id,
+            false,
+            &bootstrap_address,
+        )
+        .expect("Failed to build notify");
 
         // Compare all fields except job_id (random) coinbase which also have current time component
         assert_eq!(notify.params.version, "20000000");
@@ -349,13 +360,18 @@ mod tests {
         }]);
 
         // Start the notify task in a separate task
+        let bootstrap_address = parse_address(
+            "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
+            bitcoin::Network::Testnet,
+        )
+        .unwrap();
         let task_handle = tokio::spawn(async move {
             start_notify(
                 notify_rx,
                 mock_connections,
                 mock_provider,
                 work_map_handle,
-                "tb1q9w4x5z5v5f5g5h5j5k5l5m5n5o5p5q5r5s5t5u".to_string(),
+                bootstrap_address,
             )
             .await;
         });
@@ -435,7 +451,7 @@ mod tests {
         session.enonce1_hex = enonce1.to_string();
 
         let job_id = u64::from_str_radix(&notify.params.job_id, 16).unwrap();
-        let address = parse_address(
+        let bootstrap_address = parse_address(
             "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d",
             bitcoin::Network::Signet,
         )
@@ -454,7 +470,13 @@ mod tests {
         }]);
         let output_distribution = build_output_distribution(&template, &mock_provider).await;
 
-        let result = build_notify(&template, output_distribution, JobId(job_id), false);
+        let result = build_notify(
+            &template,
+            output_distribution,
+            JobId(job_id),
+            false,
+            &bootstrap_address,
+        );
 
         assert_eq!(result.unwrap().params.prevhash, notify.params.prevhash);
     }

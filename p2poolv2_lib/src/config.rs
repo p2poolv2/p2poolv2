@@ -14,9 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use bitcoin::PublicKey;
+use bitcoin::{PublicKey, address::NetworkChecked};
 use bitcoindrpc::BitcoinRpcConfig;
 use serde::Deserialize;
+use std::str::FromStr;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct StratumConfig {
@@ -323,7 +324,7 @@ mod tests {
             "tcp://127.0.0.1:28332".to_string()
         );
         assert_eq!(
-            config.stratum.bootstrap_address,
+            config.stratum.bootstrap_address.to_string(),
             "bcrt1qxyz123example456bitcoin789address".to_string()
         );
 
