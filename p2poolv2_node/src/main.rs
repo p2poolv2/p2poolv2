@@ -120,6 +120,14 @@ async fn main() -> Result<(), String> {
 
     let tracker_handle_cloned = tracker_handle.clone();
     let chain_handle_for_notify = chain_handle.clone();
+
+    let bootstrap_address = stratum_config
+        .bootstrap_address
+        .parse::<bitcoin::Address<_>>()
+        .unwrap()
+        .require_network(stratum_config.network)
+        .unwrap();
+
     tokio::spawn(async move {
         info!("Starting Stratum notifier...");
         // This will run indefinitely, sending new block templates to the Stratum server as they arrive
@@ -128,7 +136,7 @@ async fn main() -> Result<(), String> {
             connections_cloned,
             chain_handle_for_notify,
             tracker_handle_cloned,
-            stratum_config.bootstrap_address,
+            bootstrap_address,
         )
         .await;
     });
