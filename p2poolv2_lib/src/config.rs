@@ -35,7 +35,7 @@ pub struct StratumConfig {
     /// The ZMQ publisher address for block hashes
     pub zmqpubhashblock: String,
     /// The bitcoin address to use for first jobs when there are no shares
-    pub bootstrap_address: Option<String>,
+    pub bootstrap_address: String,
     /// The network can be "main", "testnet4" or "signet
     #[serde(deserialize_with = "deserialize_network")]
     pub network: bitcoin::Network,
@@ -211,7 +211,7 @@ impl Config {
     }
 
     pub fn with_stratum_bootstrap_address(mut self, bootstrap_address: String) -> Self {
-        self.stratum.bootstrap_address = Some(bootstrap_address);
+        self.stratum.bootstrap_address = bootstrap_address;
         self
     }
 
@@ -324,7 +324,7 @@ mod tests {
         );
         assert_eq!(
             config.stratum.bootstrap_address,
-            Some("bcrt1qxyz123example456bitcoin789address".to_string())
+            "bcrt1qxyz123example456bitcoin789address".to_string()
         );
 
         assert_eq!(

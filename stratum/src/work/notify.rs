@@ -139,6 +139,7 @@ pub async fn start_notify<T>(
     connections: ClientConnectionsHandle,
     pplns_provider: T,
     tracker_handle: TrackerHandle,
+    bootstrap_address: String,
 ) where
     T: PplnsShareProvider,
 {
@@ -230,8 +231,11 @@ mod tests {
     use crate::work::coinbase::parse_address;
     use crate::work::tracker::start_tracker_actor;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
+    use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
     use p2poolv2_accounting::test_utils::MockPplnsShareProvider;
+    use std::alloc::System;
     use std::fs;
+    use std::time::{Duration, SystemTime};
     use tokio::sync::mpsc;
 
     #[test_log::test(tokio::test)]
@@ -259,7 +263,18 @@ mod tests {
 
         let job_id = JobId(1);
 
-        let mock_provider = MockPplnsShareProvider::new(vec![]);
+        let timestamp = (SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 60)
+            * 1_000_000;
+        let mock_provider = MockPplnsShareProvider::new(vec![SimplePplnsShare {
+            difficulty: 100,
+            btcaddress: "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string(),
+            workername: "".to_string(),
+            timestamp,
+        }]);
         let output_distribution = build_output_distribution(&template, &mock_provider).await;
         // Build Notify
         let notify = build_notify(&template, output_distribution, job_id, false)
@@ -320,11 +335,29 @@ mod tests {
         let work_map_handle = start_tracker_actor();
 
         // Setup mock PPLNS provider
-        let mock_provider = MockPplnsShareProvider::new(vec![]);
+        let timestamp = (SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 60)
+            * 1_000_000;
+        let mock_provider = MockPplnsShareProvider::new(vec![SimplePplnsShare {
+            difficulty: 100,
+            btcaddress: "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string(),
+            workername: "".to_string(),
+            timestamp,
+        }]);
 
         // Start the notify task in a separate task
         let task_handle = tokio::spawn(async move {
-            start_notify(notify_rx, mock_connections, mock_provider, work_map_handle).await;
+            start_notify(
+                notify_rx,
+                mock_connections,
+                mock_provider,
+                work_map_handle,
+                "tb1q9w4x5z5v5f5g5h5j5k5l5m5n5o5p5q5r5s5t5u".to_string(),
+            )
+            .await;
         });
 
         // Load a sample block template
@@ -407,7 +440,18 @@ mod tests {
             bitcoin::Network::Signet,
         )
         .unwrap();
-        let mock_provider = MockPplnsShareProvider::new(vec![]);
+        let timestamp = (SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 60)
+            * 1_000_000;
+        let mock_provider = MockPplnsShareProvider::new(vec![SimplePplnsShare {
+            difficulty: 100,
+            btcaddress: "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string(),
+            workername: "".to_string(),
+            timestamp,
+        }]);
         let output_distribution = build_output_distribution(&template, &mock_provider).await;
 
         let result = build_notify(&template, output_distribution, JobId(job_id), false);
