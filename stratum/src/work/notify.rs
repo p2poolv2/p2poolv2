@@ -89,9 +89,9 @@ pub fn build_notify(
         template.height as i64,
         parse_flags(template.coinbaseaux.get("flags").cloned()),
         template.default_witness_commitment.clone(),
-    )
-    .unwrap();
-    let (coinbase1, coinbase2) = split_coinbase(&coinbase).unwrap();
+    )?;
+
+    let (coinbase1, coinbase2) = split_coinbase(&coinbase)?;
 
     let merkle_branches = build_merkle_branches_for_template(template)
         .iter()
