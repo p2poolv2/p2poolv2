@@ -123,6 +123,7 @@ impl Payout {
         chain_handle: &T,
         total_difficulty: u64,
         total_amount: bitcoin::Amount,
+        bootstrap_address: &bitcoin::Address,
     ) -> Result<Vec<OutputPair>, Box<dyn Error + Send + Sync>>
     where
         T: PplnsShareProvider,
@@ -132,7 +133,10 @@ impl Payout {
             .await?;
 
         if shares.is_empty() {
-            return Ok(Vec::new());
+            return Ok(vec![OutputPair {
+                address: bootstrap_address.clone(),
+                amount: total_amount,
+            }]);
         }
 
         let address_difficulty_map = Self::group_shares_by_address(&shares);
@@ -476,8 +480,14 @@ mod tests {
 
         let provider = MockPplnsShareProvider::new(shares);
         let total_amount = bitcoin::Amount::from_sat(50_000_000); // 0.5 BTC
+        let bootstrap_address = "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
+            .parse::<bitcoin::Address<_>>()
+            .unwrap()
+            .require_network(bitcoin::Network::Regtest)
+            .unwrap();
+
         let result = payout
-            .get_output_distribution(&provider, 1000, total_amount)
+            .get_output_distribution(&provider, 1000, total_amount, &bootstrap_address)
             .await
             .unwrap();
 
@@ -514,8 +524,14 @@ mod tests {
 
         let provider = MockPplnsShareProvider::new(shares);
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
+        let bootstrap_address = "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
+            .parse::<bitcoin::Address<_>>()
+            .unwrap()
+            .require_network(bitcoin::Network::Regtest)
+            .unwrap();
+
         let result = payout
-            .get_output_distribution(&provider, 1000, total_amount)
+            .get_output_distribution(&provider, 1000, total_amount, &bootstrap_address)
             .await
             .unwrap();
 
@@ -575,8 +591,14 @@ mod tests {
 
         let provider = MockPplnsShareProvider::new(shares);
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
+        let bootstrap_address = "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
+            .parse::<bitcoin::Address<_>>()
+            .unwrap()
+            .require_network(bitcoin::Network::Regtest)
+            .unwrap();
+
         let result = payout
-            .get_output_distribution(&provider, 1000, total_amount)
+            .get_output_distribution(&provider, 1000, total_amount, &bootstrap_address)
             .await
             .unwrap();
 
@@ -598,13 +620,20 @@ mod tests {
         let payout = Payout::new(100, 86400);
         let provider = MockPplnsShareProvider::new(vec![]);
         let total_amount = bitcoin::Amount::from_sat(100_000_000);
+        let bootstrap_address = "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
+            .parse::<bitcoin::Address<_>>()
+            .unwrap()
+            .require_network(bitcoin::Network::Regtest)
+            .unwrap();
 
         let result = payout
-            .get_output_distribution(&provider, 1000, total_amount)
+            .get_output_distribution(&provider, 1000, total_amount, &bootstrap_address)
             .await
             .unwrap();
 
-        assert_eq!(result.len(), 0);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].address, bootstrap_address);
+        assert_eq!(result[0].amount, total_amount);
     }
 
     #[tokio::test]
