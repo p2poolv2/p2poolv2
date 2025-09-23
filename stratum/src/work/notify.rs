@@ -62,9 +62,8 @@ async fn build_output_distribution<T>(
 where
     T: PplnsShareProvider,
 {
-    // Create a Payout instance with reasonable defaults
-    // TODO: These should be configurable
-    let payout = Payout::new(2016, 86400); // 2016 blocks window, 1 day step size
+    const DEFAULT_STEP_SIZE_SECONDS: u64 = 24 * 60 * 60; // 1 day
+    let payout = Payout::new(DEFAULT_STEP_SIZE_SECONDS);
     let total_amount = bitcoin::Amount::from_sat(template.coinbasevalue);
 
     let compact_target = bitcoin::pow::CompactTarget::from_unprefixed_hex(&template.bits).unwrap();
