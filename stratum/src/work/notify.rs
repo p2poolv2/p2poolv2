@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::coinbase::{build_coinbase_transaction, split_coinbase};
+use super::difficulty;
 use super::error::WorkError;
 use super::gbt::{BlockTemplate, build_merkle_branches_for_template};
 use super::tracker::{JobId, TrackerHandle};
@@ -49,10 +50,14 @@ fn parse_flags(flags: Option<String>) -> PushBytesBuf {
 }
 
 /// Build the output distribution for the coinbase transaction using PPLNS accounting.
+///
+/// difficulty_multiplier is used to get the total difficulty we need
+/// to match to collect all the shares to use to compute output distribution.
 async fn build_output_distribution<T>(
     template: &BlockTemplate,
     chain_handle: &T,
     bootstrap_address: &bitcoin::Address,
+    difficulty_multiplier: f64,
 ) -> Vec<OutputPair>
 where
     T: PplnsShareProvider,
@@ -65,10 +70,7 @@ where
     let compact_target = bitcoin::pow::CompactTarget::from_unprefixed_hex(&template.bits).unwrap();
     let required_target = bitcoin::Target::from_compact(compact_target);
 
-    // Use target difficulty from template as total difficulty for PPLNS
-    // TODO: This should be calculated properly based on the PPLNS window
-    // For now, use a reasonable default difficulty value
-    let total_difficulty = required_target.difficulty_float(); // Placeholder - should be calculated from actual pool difficulty
+    let total_difficulty = required_target.difficulty_float() * difficulty_multiplier;
 
     match payout
         .get_output_distribution(
@@ -152,6 +154,7 @@ pub async fn start_notify<T>(
     pplns_provider: T,
     tracker_handle: TrackerHandle,
     bootstrap_address: bitcoin::Address,
+    difficulty_multiplier: f64,
 ) where
     T: PplnsShareProvider,
 {
@@ -163,8 +166,13 @@ pub async fn start_notify<T>(
                     || latest_template.unwrap().previousblockhash != template.previousblockhash;
                 latest_template = Some(Arc::clone(&template));
                 let job_id = tracker_handle.get_next_job_id().await.unwrap();
-                let output_distribution =
-                    build_output_distribution(&template, &pplns_provider, &bootstrap_address).await;
+                let output_distribution = build_output_distribution(
+                    &template,
+                    &pplns_provider,
+                    &bootstrap_address,
+                    difficulty_multiplier,
+                )
+                .await;
                 let notify_str =
                     match build_notify(&template, output_distribution, job_id, clean_jobs) {
                         Ok(notify) => {
@@ -204,6 +212,7 @@ pub async fn start_notify<T>(
                     latest_template.as_ref().unwrap(),
                     &pplns_provider,
                     &bootstrap_address,
+                    difficulty_multiplier,
                 )
                 .await;
                 let notify_str = match build_notify(
@@ -290,7 +299,7 @@ mod tests {
             timestamp,
         }]);
         let output_distribution =
-            build_output_distribution(&template, &mock_provider, &bootstrap_address).await;
+            build_output_distribution(&template, &mock_provider, &bootstrap_address, 1.0).await;
         // Build Notify
         let notify = build_notify(&template, output_distribution, job_id, false)
             .expect("Failed to build notify");
@@ -376,6 +385,7 @@ mod tests {
                 mock_provider,
                 work_map_handle,
                 bootstrap_address,
+                1.0,
             )
             .await;
         });
@@ -473,7 +483,7 @@ mod tests {
             timestamp,
         }]);
         let output_distribution =
-            build_output_distribution(&template, &mock_provider, &bootstrap_address).await;
+            build_output_distribution(&template, &mock_provider, &bootstrap_address, 1.0).await;
 
         let result = build_notify(&template, output_distribution, JobId(job_id), false);
 

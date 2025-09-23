@@ -137,6 +137,7 @@ async fn main() -> Result<(), String> {
             chain_handle_for_notify,
             tracker_handle_cloned,
             bootstrap_address,
+            stratum_config.difficulty_multiplier,
         )
         .await;
     });

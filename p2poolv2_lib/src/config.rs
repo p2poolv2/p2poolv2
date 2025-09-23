@@ -42,6 +42,8 @@ pub struct StratumConfig {
     /// The version mask to use for version-rolling
     #[serde(deserialize_with = "deserialize_version_mask")]
     pub version_mask: i32,
+    /// The difficulty multiplier for dynamic difficulty adjustment
+    pub difficulty_multiplier: f64,
 }
 
 /// helper function to deserialize the network from the config file, which is provided as a string like Core
@@ -230,6 +232,11 @@ impl Config {
         self
     }
 
+    pub fn with_difficulty_multiplier(mut self, difficulty_multiplier: f64) -> Self {
+        self.stratum.difficulty_multiplier = difficulty_multiplier;
+        self
+    }
+
     pub fn with_miner_pubkey(mut self, miner_pubkey: String) -> Self {
         self.miner.pubkey = miner_pubkey.parse().unwrap();
         self
@@ -291,6 +298,7 @@ mod tests {
             .with_start_difficulty(1)
             .with_minimum_difficulty(1)
             .with_maximum_difficulty(Some(100))
+            .with_difficulty_multiplier(2.0)
             .with_miner_pubkey(
                 "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".to_string(),
             )
@@ -314,6 +322,7 @@ mod tests {
         assert_eq!(config.stratum.start_difficulty, 1);
         assert_eq!(config.stratum.minimum_difficulty, 1);
         assert_eq!(config.stratum.maximum_difficulty, Some(100));
+        assert_eq!(config.stratum.difficulty_multiplier, 2.0);
         assert_eq!(
             config.stratum.solo_address,
             Some("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string())
