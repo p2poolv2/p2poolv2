@@ -1,0 +1,9 @@
+== Accounting for Standalone PPLNS Pool
+
+This crate provides accounting for PPLNS pool and is used to
+instantiate Hydrapool as a standalone PPLNS server.
+
+If you want to try an alternate accounting approach, email us, we can
+provide traits to help you do so. At the moment, we avoided making
+things generic - cause we want to ship Hydrapool. Maybe we will
+revisit this generalisation in the future.
