@@ -21,9 +21,6 @@ use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct Payout {
-    /// PPLNS window is the number of blocks the total work for the PPLNS window should stretch to.
-    window_size: usize,
-
     /// Step size in seconds for batch querying shares from storage.
     /// This determines how far back in time to query in each batch.
     /// Default: 86400 seconds (1 day) for typical pool configurations.
@@ -31,17 +28,13 @@ pub struct Payout {
 }
 
 impl Payout {
-    /// Creates a new Payout with specified window size and step size.
+    /// Creates a new Payout with specified step size.
     ///
     /// # Arguments
-    /// * `window_size` - The number of blocks the PPLNS window should stretch to
     /// * `step_size_seconds` - Batch size in seconds for querying shares from
     ///   Default: 86400 (1 day) for typical pool configurations
-    pub fn new(window_size: usize, step_size_seconds: u64) -> Self {
-        Self {
-            window_size,
-            step_size_seconds,
-        }
+    pub fn new(step_size_seconds: u64) -> Self {
+        Self { step_size_seconds }
     }
 
     /// Get shares from chain starting from the latest, going back in time until
@@ -219,7 +212,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_shares_for_difficulty_exact_match() {
-        let payout = Payout::new(100, 86400);
+        let payout = Payout::new(86400);
 
         // Get current time and create recent timestamps (within last hour)
         let current_time = SystemTime::now()
@@ -277,7 +270,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_shares_for_difficulty_partial_match() {
-        let payout = Payout::new(100, 86400);
+        let payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -328,7 +321,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_shares_for_difficulty_insufficient_shares() {
-        let payout = Payout::new(100, 86400);
+        let payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -364,7 +357,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_shares_for_difficulty_empty_provider() {
-        let payout = Payout::new(100, 86400);
+        let payout = Payout::new(86400);
         let provider = MockPplnsShareProvider::new(vec![]);
 
         let result = payout
@@ -377,7 +370,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_shares_for_difficulty_single_share_exceeds_target() {
-        let payout = Payout::new(100, 86400);
+        let payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -404,7 +397,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_shares_for_difficulty_multiple_batches() {
         // Test with a small step size to force multiple batch queries
-        let payout = Payout::new(100, 100); // 100 second step size
+        let payout = Payout::new(100); // 100 second step size
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -458,14 +451,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_payout_constructors() {
-        let payout1 = Payout::new(200, 3600);
-        assert_eq!(payout1.window_size, 200);
+        let payout1 = Payout::new(3600);
         assert_eq!(payout1.step_size_seconds, 3600);
     }
 
     #[tokio::test]
     async fn test_get_output_distribution_single_address() {
-        let payout = Payout::new(100, 86400);
+        let payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -501,7 +493,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_multiple_addresses() {
-        let payout = Payout::new(100, 86400);
+        let payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -561,7 +553,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_same_address_multiple_shares() {
-        let payout = Payout::new(100, 86400);
+        let payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -617,7 +609,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_empty_shares() {
-        let payout = Payout::new(100, 86400);
+        let payout = Payout::new(86400);
         let provider = MockPplnsShareProvider::new(vec![]);
         let total_amount = bitcoin::Amount::from_sat(100_000_000);
         let bootstrap_address = "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
