@@ -62,13 +62,13 @@ impl Payout {
     async fn get_shares_for_difficulty<T>(
         &self,
         chain_handle: &T,
-        total_difficulty: u64,
+        total_difficulty: f64,
     ) -> Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>>
     where
         T: PplnsShareProvider,
     {
         let mut result_shares = Vec::new();
-        let mut accumulated_difficulty = 0u64;
+        let mut accumulated_difficulty = 0f64;
 
         // Start from current time and work backwards
         let current_time = SystemTime::now()
@@ -94,7 +94,7 @@ impl Payout {
                 // Process shares from newest to oldest within this batch
                 for share in batch_shares.into_iter().rev() {
                     if accumulated_difficulty < total_difficulty {
-                        accumulated_difficulty += share.difficulty;
+                        accumulated_difficulty += share.difficulty as f64;
                         result_shares.push(share);
                     }
                 }
@@ -121,7 +121,7 @@ impl Payout {
     pub async fn get_output_distribution<T>(
         &self,
         chain_handle: &T,
-        total_difficulty: u64,
+        total_difficulty: f64,
         total_amount: bitcoin::Amount,
         bootstrap_address: &bitcoin::Address,
     ) -> Result<Vec<OutputPair>, Box<dyn Error + Send + Sync>>
@@ -257,7 +257,7 @@ mod tests {
 
         let provider = MockPplnsShareProvider::new(shares);
         let result = payout
-            .get_shares_for_difficulty(&provider, 1000)
+            .get_shares_for_difficulty(&provider, 1000.0)
             .await
             .unwrap();
 
@@ -312,7 +312,7 @@ mod tests {
 
         let provider = MockPplnsShareProvider::new(shares);
         let result = payout
-            .get_shares_for_difficulty(&provider, 750)
+            .get_shares_for_difficulty(&provider, 750.0)
             .await
             .unwrap();
 
@@ -351,7 +351,7 @@ mod tests {
 
         let provider = MockPplnsShareProvider::new(shares);
         let result = payout
-            .get_shares_for_difficulty(&provider, 500)
+            .get_shares_for_difficulty(&provider, 500.0)
             .await
             .unwrap();
 
@@ -368,7 +368,7 @@ mod tests {
         let provider = MockPplnsShareProvider::new(vec![]);
 
         let result = payout
-            .get_shares_for_difficulty(&provider, 1000)
+            .get_shares_for_difficulty(&provider, 1000.0)
             .await
             .unwrap();
 
@@ -392,7 +392,7 @@ mod tests {
 
         let provider = MockPplnsShareProvider::new(shares);
         let result = payout
-            .get_shares_for_difficulty(&provider, 1000)
+            .get_shares_for_difficulty(&provider, 1000.0)
             .await
             .unwrap();
 
@@ -440,7 +440,7 @@ mod tests {
 
         let provider = MockPplnsShareProvider::new(shares);
         let result = payout
-            .get_shares_for_difficulty(&provider, 550)
+            .get_shares_for_difficulty(&provider, 550.0)
             .await
             .unwrap();
 
@@ -487,7 +487,7 @@ mod tests {
             .unwrap();
 
         let result = payout
-            .get_output_distribution(&provider, 1000, total_amount, &bootstrap_address)
+            .get_output_distribution(&provider, 1000.0, total_amount, &bootstrap_address)
             .await
             .unwrap();
 
@@ -531,7 +531,7 @@ mod tests {
             .unwrap();
 
         let result = payout
-            .get_output_distribution(&provider, 1000, total_amount, &bootstrap_address)
+            .get_output_distribution(&provider, 1000.0, total_amount, &bootstrap_address)
             .await
             .unwrap();
 
@@ -598,7 +598,7 @@ mod tests {
             .unwrap();
 
         let result = payout
-            .get_output_distribution(&provider, 1000, total_amount, &bootstrap_address)
+            .get_output_distribution(&provider, 1000.0, total_amount, &bootstrap_address)
             .await
             .unwrap();
 
@@ -627,7 +627,7 @@ mod tests {
             .unwrap();
 
         let result = payout
-            .get_output_distribution(&provider, 1000, total_amount, &bootstrap_address)
+            .get_output_distribution(&provider, 1000.0, total_amount, &bootstrap_address)
             .await
             .unwrap();
 

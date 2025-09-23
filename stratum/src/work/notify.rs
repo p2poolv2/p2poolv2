@@ -62,10 +62,13 @@ where
     let payout = Payout::new(2016, 86400); // 2016 blocks window, 1 day step size
     let total_amount = bitcoin::Amount::from_sat(template.coinbasevalue);
 
+    let compact_target = bitcoin::pow::CompactTarget::from_unprefixed_hex(&template.bits).unwrap();
+    let required_target = bitcoin::Target::from_compact(compact_target);
+
     // Use target difficulty from template as total difficulty for PPLNS
     // TODO: This should be calculated properly based on the PPLNS window
     // For now, use a reasonable default difficulty value
-    let total_difficulty = 1000000u64; // Placeholder - should be calculated from actual pool difficulty
+    let total_difficulty = required_target.difficulty_float(); // Placeholder - should be calculated from actual pool difficulty
 
     match payout
         .get_output_distribution(
