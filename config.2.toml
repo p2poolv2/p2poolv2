@@ -35,6 +35,9 @@ zmqpubhashblock = "tcp://127.0.0.1:28332"
 # The network can be "main", "testnet4" or "signet"
 network = "signet"
 version_mask = "1fffe000"
+# The difficulty multiplier defines the window size for calculating payout proportions
+# See https://github.com/p2poolv2/p2poolv2/wiki/Difficult-Multiplier on how to choose this
+difficulty_multiplier = 1.0
 
 [miner]
 pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
