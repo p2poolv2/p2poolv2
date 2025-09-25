@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use super::gbt::BlockTemplate;
+use super::block_template::BlockTemplate;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
@@ -250,7 +250,7 @@ impl TrackerHandle {
 
 /// The actor that manages access to the Tracker
 pub struct TrackerActor {
-    map: Tracker,
+    tracker: Tracker,
     rx: mpsc::Receiver<Command>,
 }
 
@@ -260,7 +260,7 @@ impl TrackerActor {
         let (tx, rx) = mpsc::channel(100); // Buffer size of 100
 
         let actor = Self {
-            map: Tracker::default(),
+            tracker: Tracker::default(),
             rx,
         };
 
@@ -280,25 +280,25 @@ impl TrackerActor {
                     job_id,
                     resp,
                 } => {
-                    let job_id = self
-                        .map
-                        .insert_job(block_template, coinbase1, coinbase2, job_id);
+                    let job_id =
+                        self.tracker
+                            .insert_job(block_template, coinbase1, coinbase2, job_id);
                     let _ = resp.send(job_id);
                 }
                 Command::GetJob { job_id, resp } => {
-                    let details = self.map.job_details.get(&job_id).cloned();
+                    let details = self.tracker.job_details.get(&job_id).cloned();
                     let _ = resp.send(details);
                 }
                 Command::GetNextJobId { resp } => {
-                    let next_job_id = self.map.get_next_job_id();
+                    let next_job_id = self.tracker.get_next_job_id();
                     let _ = resp.send(next_job_id);
                 }
                 Command::GetLatestJobId { resp } => {
-                    let latest_job_id = self.map.latest_job_id;
+                    let latest_job_id = self.tracker.latest_job_id;
                     let _ = resp.send(latest_job_id);
                 }
                 Command::CleanupOldJobs { max_age_secs, resp } => {
-                    let removed_count = self.map.cleanup_old_jobs(max_age_secs);
+                    let removed_count = self.tracker.cleanup_old_jobs(max_age_secs);
                     let _ = resp.send(removed_count);
                 }
             }

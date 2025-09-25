@@ -16,7 +16,7 @@
 
 use crate::error::Error;
 use crate::messages::SimpleRequest;
-use crate::work::gbt::BlockTemplate;
+use crate::work::block_template::BlockTemplate;
 use crate::work::tracker::JobDetails;
 use bitcoin::blockdata::block::{Block, Header};
 use bitcoin::consensus::Decodable;

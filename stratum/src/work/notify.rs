@@ -14,10 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use super::block_template::BlockTemplate;
 use super::coinbase::{build_coinbase_transaction, split_coinbase};
-use super::difficulty;
 use super::error::WorkError;
-use super::gbt::{BlockTemplate, build_merkle_branches_for_template};
+use super::gbt::build_merkle_branches_for_template;
 use super::tracker::{JobId, TrackerHandle};
 use crate::messages::{Notify, NotifyParams};
 use crate::util::reverse_four_byte_chunks;

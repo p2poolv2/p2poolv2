@@ -183,7 +183,7 @@ mod tests {
     use bitcoin::hex::DisplayHex;
 
     use super::*;
-    use crate::work::gbt::BlockTemplate;
+    use crate::work::block_template::BlockTemplate;
     use std::fs;
 
     #[test]
