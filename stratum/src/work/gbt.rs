@@ -14,55 +14,13 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::work::block_template::BlockTemplate;
 use crate::work::error::WorkError;
 use crate::work::notify::NotifyCmd;
 use bitcoin::hashes::{Hash, sha256d};
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};
-
-/// Struct representing the getblocktemplate response from Bitcoin Core
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct BlockTemplate {
-    pub version: i32,
-    pub rules: Vec<String>,
-    pub vbavailable: std::collections::HashMap<String, i32>,
-    pub vbrequired: u32,
-    pub previousblockhash: String,
-    pub transactions: Vec<TemplateTransaction>,
-    pub coinbaseaux: HashMap<String, String>,
-    pub coinbasevalue: u64,
-    pub longpollid: String,
-    pub target: String,
-    pub mintime: u32,
-    pub mutable: Vec<String>,
-    pub noncerange: String,
-    pub sigoplimit: u32,
-    pub sizelimit: u32,
-    pub weightlimit: u32,
-    pub curtime: u32,
-    pub bits: String,
-    pub height: u32,
-    #[serde(
-        rename = "default_witness_commitment",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub default_witness_commitment: Option<String>,
-}
-
-/// Transaction data in the block template
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct TemplateTransaction {
-    pub data: String,
-    pub txid: String,
-    pub hash: String,
-    pub depends: Vec<u32>,
-    pub fee: u64,
-    pub sigops: u32,
-    pub weight: u32,
-}
 
 /// Compute merkle branches for the transactions in the block template
 /// Uses private compute_merkle_branches after parsing the txids from the template

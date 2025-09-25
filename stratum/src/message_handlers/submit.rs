@@ -175,7 +175,7 @@ mod handle_submit_tests {
     use crate::messages::SetDifficultyNotification;
     use crate::messages::{Id, Notify, SimpleRequest};
     use crate::session::Session;
-    use crate::work::gbt::BlockTemplate;
+    use crate::work::block_template::BlockTemplate;
     use crate::work::tracker::start_tracker_actor;
     use bitcoin::BlockHash;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
