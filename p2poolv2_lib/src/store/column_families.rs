@@ -27,6 +27,7 @@ pub enum ColumnFamily {
     BlockIndex,
     BlockHeight,
     Share,
+    Job,
 }
 
 impl ColumnFamily {
@@ -42,6 +43,7 @@ impl ColumnFamily {
             ColumnFamily::BlockIndex => "block_index",
             ColumnFamily::BlockHeight => "block_height",
             ColumnFamily::Share => "share",
+            ColumnFamily::Job => "job",
         }
     }
 }
@@ -60,14 +62,14 @@ impl AsRef<str> for ColumnFamily {
     }
 }
 
-impl Into<&'static str> for ColumnFamily {
-    fn into(self) -> &'static str {
-        self.as_str()
+impl From<ColumnFamily> for &'static str {
+    fn from(val: ColumnFamily) -> Self {
+        val.as_str()
     }
 }
 
-impl Into<String> for ColumnFamily {
-    fn into(self) -> String {
-        self.as_str().to_string()
+impl From<ColumnFamily> for String {
+    fn from(val: ColumnFamily) -> Self {
+        val.as_str().to_string()
     }
 }

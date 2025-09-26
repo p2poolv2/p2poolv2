@@ -423,6 +423,27 @@ impl ChainStore {
         // Return length of chain minus 1 (since chain includes the blockhash)
         Some(chain.len() - 1)
     }
+
+    /// Save a job with timestamp-prefixed key
+    /// Uses timestamp in microseconds to enable time-based range queries
+    pub fn save_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let timestamp_micros = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros() as u64;
+
+        self.store.save_job(timestamp_micros, serialized_notify)
+    }
+
+    /// Get jobs within a time range
+    /// Returns jobs ordered by timestamp (newest first)
+    pub fn get_jobs(
+        &self,
+        start_time: u64,
+        end_time: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>> {
+        self.store.get_jobs(start_time, end_time, limit)
+    }
 }
 
 #[cfg(test)]

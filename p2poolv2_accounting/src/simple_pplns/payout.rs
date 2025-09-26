@@ -205,6 +205,40 @@ pub trait PplnsShareProvider {
     + '_;
 }
 
+/// Trait for types that can save jobs with their serialized notify parameters.
+pub trait JobSaver {
+    /// Save a job with its serialized notify parameters.
+    ///
+    /// # Arguments
+    /// * `serialized_notify` - Serialized notify parameters as a string
+    /// * `job_id` - Unique job identifier
+    ///
+    /// # Returns
+    /// Future that resolves to Result<(), Error> on success or failure
+    fn save_job(
+        &self,
+        serialized_notify: String,
+    ) -> impl std::future::Future<Output = Result<(), Box<dyn Error + Send + Sync>>> + Send + '_;
+
+    /// Get jobs within a time range.
+    ///
+    /// # Arguments
+    /// * `start_time` - Start time in microseconds since Unix epoch. If None, starts from current time.
+    /// * `end_time` - End time in microseconds since Unix epoch. If None, no end limit.
+    /// * `limit` - Maximum number of jobs to return.
+    ///
+    /// # Returns
+    /// Future that resolves to Result containing a vector of (job_id, serialized_notify) tuples
+    fn get_jobs(
+        &self,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+        limit: usize,
+    ) -> impl std::future::Future<Output = Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>>>
+    + Send
+    + '_;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
