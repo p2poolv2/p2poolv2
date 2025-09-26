@@ -78,7 +78,7 @@ pub struct Error<'a> {
 pub enum Message<'a> {
     Request(Request<'a>),
     Response(Response<'a>),
-    Notify(Notify<'a>),
+    Notify(Notify),
     SetDifficulty(SetDifficultyNotification<'a>),
 }
 
@@ -170,11 +170,9 @@ pub struct Response<'a> {
 /// The mining.notify message is used to notify the client of new work
 /// The params is an array of strings and one element is a nested array of strings (the merkle branches)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Notify<'a> {
-    #[serde(borrow)]
-    pub method: Cow<'a, str>,
-    #[serde(borrow)]
-    pub params: Cow<'a, NotifyParams<'a>>,
+pub struct Notify {
+    pub method: String,
+    pub params: NotifyParams,
 }
 
 /// mining.set_difficulty message is used to notify the client of a change in difficulty
@@ -189,20 +187,20 @@ pub struct SetDifficultyNotification<'a> {
 /// It includes job_id, prevhash, coinbase1, coinbase2, merkle_branches,
 /// version, nbits, ntime, and clean_jobs
 #[derive(Debug, Clone)]
-pub struct NotifyParams<'a> {
-    pub job_id: Cow<'a, str>,
-    pub prevhash: Cow<'a, str>,
-    pub coinbase1: Cow<'a, str>,
-    pub coinbase2: Cow<'a, str>,
-    pub merkle_branches: Vec<Cow<'a, str>>,
-    pub version: Cow<'a, str>,
-    pub nbits: Cow<'a, str>,
-    pub ntime: Cow<'a, str>,
+pub struct NotifyParams {
+    pub job_id: String,
+    pub prevhash: String,
+    pub coinbase1: String,
+    pub coinbase2: String,
+    pub merkle_branches: Vec<String>,
+    pub version: String,
+    pub nbits: String,
+    pub ntime: String,
     pub clean_jobs: bool,
 }
 
 // Custom serializer to output an array format instead of keyed object
-impl Serialize for NotifyParams<'_> {
+impl Serialize for NotifyParams {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -224,7 +222,7 @@ impl Serialize for NotifyParams<'_> {
 }
 
 // Custom deserializer to parse the array format into NotifyParams
-impl<'de> Deserialize<'de> for NotifyParams<'_> {
+impl<'de> Deserialize<'de> for NotifyParams {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -235,22 +233,22 @@ impl<'de> Deserialize<'de> for NotifyParams<'_> {
         }
 
         Ok(NotifyParams {
-            job_id: Cow::Owned(vec[0].as_str().unwrap_or_default().to_string()),
-            prevhash: Cow::Owned(vec[1].as_str().unwrap_or_default().to_string()),
-            coinbase1: Cow::Owned(vec[2].as_str().unwrap_or_default().to_string()),
-            coinbase2: Cow::Owned(vec[3].as_str().unwrap_or_default().to_string()),
+            job_id: vec[0].as_str().unwrap_or_default().to_string(),
+            prevhash: vec[1].as_str().unwrap_or_default().to_string(),
+            coinbase1: vec[2].as_str().unwrap_or_default().to_string(),
+            coinbase2: vec[3].as_str().unwrap_or_default().to_string(),
             merkle_branches: vec
                 .get(4)
                 .and_then(|v| v.as_array())
                 .map(|arr| {
                     arr.iter()
-                        .map(|v| Cow::Owned(v.as_str().unwrap_or_default().to_string()))
+                        .map(|v| v.as_str().unwrap_or_default().to_string())
                         .collect()
                 })
                 .unwrap_or_default(),
-            version: Cow::Owned(vec[5].as_str().unwrap_or_default().to_string()),
-            nbits: Cow::Owned(vec[6].as_str().unwrap_or_default().to_string()),
-            ntime: Cow::Owned(vec[7].as_str().unwrap_or_default().to_string()),
+            version: vec[5].as_str().unwrap_or_default().to_string(),
+            nbits: vec[6].as_str().unwrap_or_default().to_string(),
+            ntime: vec[7].as_str().unwrap_or_default().to_string(),
             clean_jobs: vec[8].as_bool().unwrap_or(false),
         })
     }
@@ -393,12 +391,12 @@ impl Response<'_> {
 
 /// Notify represents a Stratum notification message from the server to the client
 /// It is used to notify the client of new work and changes in difficulty
-impl<'a> Notify<'a> {
+impl Notify {
     /// Creates a new notify message with the given parameters
-    pub fn new_notify(params: NotifyParams<'a>) -> Self {
+    pub fn new_notify(params: NotifyParams) -> Self {
         Notify {
-            method: Cow::Owned("mining.notify".to_string()),
-            params: Cow::Owned(params),
+            method: "mining.notify".to_string(),
+            params,
         }
     }
 }
@@ -525,14 +523,14 @@ mod tests {
     #[test]
     fn test_new_notify() {
         let notify_params = NotifyParams {
-            job_id: Cow::Borrowed("job_id"),
-            prevhash: Cow::Borrowed("prevhash"),
-            coinbase1: Cow::Borrowed("coinbase1"),
-            coinbase2: Cow::Borrowed("coinbase2"),
-            merkle_branches: vec![Cow::Borrowed("branch1"), Cow::Borrowed("branch2")],
-            version: Cow::Borrowed("version"),
-            nbits: Cow::Borrowed("nbits"),
-            ntime: Cow::Borrowed("ntime"),
+            job_id: "job_id".to_string(),
+            prevhash: "prevhash".to_string(),
+            coinbase1: "coinbase1".to_string(),
+            coinbase2: "coinbase2".to_string(),
+            merkle_branches: vec!["branch1".to_string(), "branch2".to_string()],
+            version: "version".to_string(),
+            nbits: "nbits".to_string(),
+            ntime: "ntime".to_string(),
             clean_jobs: true,
         };
 

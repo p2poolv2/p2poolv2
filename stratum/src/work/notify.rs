@@ -26,7 +26,6 @@ use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::Version;
 use p2poolv2_accounting::OutputPair;
 use p2poolv2_accounting::simple_pplns::payout::{Payout, PplnsShareProvider};
-use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -108,7 +107,7 @@ pub fn build_notify(
 
     let merkle_branches = build_merkle_branches_for_template(template)
         .iter()
-        .map(|branch| Cow::Owned(to_be_hex(&branch.to_string())))
+        .map(|branch| to_be_hex(&branch.to_string()))
         .collect::<Vec<_>>();
 
     let prevhash_byte_swapped =
@@ -117,14 +116,14 @@ pub fn build_notify(
         })?;
 
     let params = NotifyParams {
-        job_id: Cow::Owned(format!("{job_id:016x}")),
-        prevhash: Cow::Owned(prevhash_byte_swapped),
-        coinbase1: Cow::Owned(coinbase1),
-        coinbase2: Cow::Owned(coinbase2),
+        job_id: format!("{job_id:016x}"),
+        prevhash: prevhash_byte_swapped,
+        coinbase1,
+        coinbase2,
         merkle_branches,
-        version: Cow::Owned(hex::encode(template.version.to_be_bytes())),
-        nbits: Cow::Owned(template.bits.clone()),
-        ntime: Cow::Owned(hex::encode(template.curtime.to_be_bytes())),
+        version: hex::encode(template.version.to_be_bytes()),
+        nbits: template.bits.clone(),
+        ntime: hex::encode(template.curtime.to_be_bytes()),
         clean_jobs,
     };
 
