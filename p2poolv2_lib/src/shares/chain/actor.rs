@@ -23,6 +23,7 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
+use std::time::SystemTime;
 use tokio::sync::mpsc;
 use tracing::error;
 
@@ -58,6 +59,16 @@ pub enum ChainMessage {
     BuildLocator,
     GetMissingBlockhashes(Vec<ShareBlockHash>),
     GetTipHeight,
+    SaveJob(
+        String,
+        tokio::sync::oneshot::Sender<Result<(), Box<dyn Error + Send + Sync>>>,
+    ),
+    GetJobs(
+        u64,
+        Option<u64>,
+        usize,
+        tokio::sync::oneshot::Sender<Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>>>,
+    ),
 }
 
 #[derive(Debug)]
@@ -330,6 +341,18 @@ impl ChainActor {
                     let result = self.chain_store.get_tip_height();
                     if let Err(e) = response_sender.send(ChainResponse::TipHeight(result)).await {
                         error!("Failed to send get_tip_height response: {}", e);
+                    }
+                }
+                ChainMessage::SaveJob(serialized_notify, response_tx) => {
+                    let result = self.chain_store.save_job(serialized_notify);
+                    if let Err(e) = response_tx.send(result) {
+                        error!("Failed to send save_job response: {:?}", e);
+                    }
+                }
+                ChainMessage::GetJobs(start_time, end_time, limit, response_tx) => {
+                    let result = self.chain_store.get_jobs(start_time, end_time, limit);
+                    if let Err(e) = response_tx.send(result) {
+                        error!("Failed to send get_jobs response: {:?}", e);
                     }
                 }
             }
@@ -780,22 +803,91 @@ impl ChainHandle {
             _ => None,
         }
     }
+
+    /// Save a job with timestamp-prefixed key
+    async fn save_job(
+        &self,
+        serialized_notify: String,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        if let Err(e) = self
+            .sender
+            .send((
+                ChainMessage::SaveJob(serialized_notify, response_tx),
+                mpsc::channel(1).0,
+            ))
+            .await
+        {
+            error!("Failed to send SaveJob message: {}", e);
+            return Err(e.into());
+        }
+        match response_rx.await {
+            Ok(result) => result,
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Get jobs within a time range
+    /// End time < job time <= Start time
+    /// If start_time is None, it defaults to current time
+    pub async fn get_jobs(
+        &self,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>> {
+        let start_time = start_time.unwrap_or(
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_micros() as u64,
+        );
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        if let Err(e) = self
+            .sender
+            .send((
+                ChainMessage::GetJobs(start_time, end_time, limit, response_tx),
+                mpsc::channel(1).0,
+            ))
+            .await
+        {
+            error!("Failed to send GetJobs message: {}", e);
+            return Err(e.into());
+        }
+        match response_rx.await {
+            Ok(result) => result,
+            Err(e) => Err(e.into()),
+        }
+    }
 }
 
 impl PplnsShareProvider for ChainHandle {
-    fn get_pplns_shares_filtered(
+    async fn get_pplns_shares_filtered(
         &self,
         limit: usize,
         start_time: Option<u64>,
         end_time: Option<u64>,
-    ) -> impl std::future::Future<
-        Output = Result<Vec<SimplePplnsShare>, Box<dyn std::error::Error + Send + Sync>>,
-    > + Send
-    + '_ {
-        async move {
-            self.get_pplns_shares_filtered(limit, start_time, end_time)
-                .await
-        }
+    ) -> Result<Vec<SimplePplnsShare>, Box<dyn std::error::Error + Send + Sync>> {
+        self.get_pplns_shares_filtered(limit, start_time, end_time)
+            .await
+    }
+}
+
+impl p2poolv2_accounting::simple_pplns::payout::JobSaver for ChainHandle {
+    async fn save_job(
+        &self,
+        serialized_notify: String,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.save_job(serialized_notify).await
+    }
+
+    async fn get_jobs(
+        &self,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<(u64, String)>, Box<dyn std::error::Error + Send + Sync>> {
+        self.get_jobs(start_time, end_time, limit).await
     }
 }
 
@@ -828,6 +920,8 @@ mock! {
         pub async fn build_locator(&self) -> Vec<ShareBlockHash>;
         pub async fn get_missing_blockhashes(&self, blockhashes: &[ShareBlockHash]) -> Vec<ShareBlockHash>;
         pub async fn get_tip_height(&self) -> Option<u32>;
+        pub async fn save_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>>;
+        pub async fn get_jobs(&self, start_time: u64, end_time: Option<u64>, limit: usize) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>>;
     }
 
     impl Clone for ChainHandle {
@@ -1580,5 +1674,118 @@ mod tests {
         assert_eq!(shares.len(), 2); // Should include shares between 1500 and 3500
         assert_eq!(shares[0].timestamp, 3000);
         assert_eq!(shares[1].timestamp, 2000);
+    }
+
+    #[tokio::test]
+    async fn test_save_job_and_get_jobs() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
+
+        // Test saving jobs
+        let job1_notify = r#"{"id":"job1","notify":"data1"}"#.to_string();
+        let job1_id = "job_123".to_string();
+
+        let job2_notify = r#"{"id":"job2","notify":"data2"}"#.to_string();
+        let job2_id = "job_456".to_string();
+
+        let job3_notify = r#"{"id":"job3","notify":"data3"}"#.to_string();
+        let job3_id = "job_789".to_string();
+
+        // Save all jobs
+        let result1 = chain_handle.save_job(job1_notify.clone()).await;
+        assert!(result1.is_ok());
+
+        // Add a small delay to ensure different timestamps
+        tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+
+        let result2 = chain_handle.save_job(job2_notify.clone()).await;
+        assert!(result2.is_ok());
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+
+        let result3 = chain_handle.save_job(job3_notify.clone()).await;
+        assert!(result3.is_ok());
+
+        // Test with current time as start_time (should return all jobs)
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
+
+        let recent_jobs_result = chain_handle.get_jobs(Some(current_time), None, 10).await;
+        assert!(recent_jobs_result.is_ok());
+        let recent_jobs = recent_jobs_result.unwrap();
+        assert_eq!(recent_jobs.len(), 0); // No jobs should be returned since start_time is current time
+
+        // Test with future start_time (should return no jobs)
+        let past_time = current_time + 1_000_000; // 1 second in the future
+        let future_jobs_result = chain_handle.get_jobs(None, Some(past_time), 10).await;
+        assert!(future_jobs_result.is_ok());
+        let future_jobs = future_jobs_result.unwrap();
+        assert_eq!(future_jobs.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_jobs_empty_store() {
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
+
+        // Test getting jobs from empty store
+        let jobs_result = chain_handle.get_jobs(None, None, 10).await;
+        assert!(jobs_result.is_ok());
+        let jobs = jobs_result.unwrap();
+        assert_eq!(jobs.len(), 0);
+
+        // Test with time filters on empty store
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
+
+        let filtered_jobs_result = chain_handle
+            .get_jobs(Some(current_time - 1000), Some(current_time + 1000), 10)
+            .await;
+        assert!(filtered_jobs_result.is_ok());
+        let filtered_jobs = filtered_jobs_result.unwrap();
+        assert_eq!(filtered_jobs.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_job_saver_trait_implementation() {
+        use p2poolv2_accounting::simple_pplns::payout::JobSaver;
+
+        let temp_dir = tempdir().unwrap();
+        let chain_handle = ChainHandle::new(
+            temp_dir.path().to_str().unwrap().to_string(),
+            genesis_for_testnet(),
+        );
+
+        // Test JobSaver trait methods
+        let notify_data = r#"{"job":"test_trait"}"#.to_string();
+
+        // Test save_job through trait
+        let save_result = JobSaver::save_job(&chain_handle, notify_data.clone()).await;
+        assert!(save_result.is_ok());
+
+        let end_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64
+            - 1_000_000; // 1 second in the past
+
+        // Test get_jobs through trait
+        let get_result = JobSaver::get_jobs(&chain_handle, None, Some(end_time), 10).await;
+        assert!(get_result.is_ok());
+        let jobs = get_result.unwrap();
+        assert_eq!(jobs.len(), 1);
+
+        let (_, retrieved_notify) = &jobs[0];
+        assert_eq!(retrieved_notify, &notify_data);
     }
 }

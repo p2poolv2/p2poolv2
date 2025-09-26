@@ -174,6 +174,8 @@ pub async fn start_notify<T>(
                 let notify_str =
                     match build_notify(&template, output_distribution, job_id, clean_jobs) {
                         Ok(notify) => {
+                            let serialized_notify = serde_json::to_string(&notify)
+                                .expect("Failed to serialize Notify message");
                             tracker_handle
                                 .insert_job(
                                     Arc::clone(&template),
@@ -183,9 +185,7 @@ pub async fn start_notify<T>(
                                 )
                                 .await
                                 .unwrap();
-
-                            serde_json::to_string(&notify)
-                                .expect("Failed to serialize Notify message")
+                            serialized_notify
                         }
                         Err(e) => {
                             debug!("Error building notify: {}", e);
@@ -220,6 +220,8 @@ pub async fn start_notify<T>(
                     clean_jobs,
                 ) {
                     Ok(notify) => {
+                        let serialized_notify = serde_json::to_string(&notify)
+                            .expect("Failed to serialize Notify message");
                         tracker_handle
                             .insert_job(
                                 Arc::clone(latest_template.as_ref().unwrap()),
@@ -229,7 +231,7 @@ pub async fn start_notify<T>(
                             )
                             .await
                             .unwrap();
-                        serde_json::to_string(&notify).expect("Failed to serialize Notify message")
+                        serialized_notify
                     }
                     Err(e) => {
                         debug!("Error building notify: {}", e);
