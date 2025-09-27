@@ -25,7 +25,7 @@ use crate::util::to_be_hex;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::Version;
 use p2poolv2_accounting::OutputPair;
-use p2poolv2_accounting::simple_pplns::payout::{Payout, PplnsShareProvider};
+use p2poolv2_accounting::simple_pplns::payout::{JobSaver, Payout, PplnsShareProvider};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -155,6 +155,7 @@ pub async fn start_notify<T>(
     difficulty_multiplier: f64,
 ) where
     T: PplnsShareProvider,
+    T: JobSaver,
 {
     let mut latest_template: Option<Arc<BlockTemplate>> = None;
     while let Some(cmd) = notifier_rx.recv().await {
@@ -192,7 +193,10 @@ pub async fn start_notify<T>(
                             continue; // Skip this iteration if notify cannot be built
                         }
                     };
-                connections.send_to_all(Arc::new(notify_str)).await;
+                connections.send_to_all(Arc::new(notify_str.clone())).await;
+                if pplns_provider.save_job(notify_str).await.is_err() {
+                    tracing::warn!("Couldn't save job when sending to all");
+                }
             }
             NotifyCmd::SendToClient {
                 client_address,
@@ -239,8 +243,11 @@ pub async fn start_notify<T>(
                     }
                 };
                 connections
-                    .send_to_client(client_address, Arc::new(notify_str))
+                    .send_to_client(client_address, Arc::new(notify_str.clone()))
                     .await;
+                if pplns_provider.save_job(notify_str).await.is_err() {
+                    tracing::warn!("Couldn't save job when sending to client");
+                }
             }
         }
     }
@@ -378,11 +385,13 @@ mod tests {
             bitcoin::Network::Testnet,
         )
         .unwrap();
+
+        let mock_cloned = mock_provider.clone();
         let task_handle = tokio::spawn(async move {
             start_notify(
                 notify_rx,
                 mock_connections,
-                mock_provider,
+                mock_cloned,
                 work_map_handle,
                 bootstrap_address,
                 1.0,
@@ -416,6 +425,12 @@ mod tests {
             })
             .await
             .expect("Failed to send template to client");
+
+        // Give some time for the message to be processed
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        let jobs = mock_provider.get_jobs(None, None, 10).await.unwrap();
+        assert_eq!(jobs.len(), 2);
 
         // Cleanup
         drop(notify_tx); // Close the channel to terminate the task
