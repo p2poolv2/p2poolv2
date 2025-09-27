@@ -26,7 +26,7 @@ const CUSTOM_EPOCH: u64 = 1735689600000; // 2025-01-01 in ms
 ///
 /// We retain the benefits of sorted ids and avoid any conflicts in
 /// the same millisecond by using the atomic u32 sequence.
-pub fn next_id() -> u64 {
+pub fn get_next_id() -> u64 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -47,8 +47,8 @@ mod tests {
 
     #[test]
     fn test_next_id() {
-        let id1 = next_id();
-        let id2 = next_id();
+        let id1 = get_next_id();
+        let id2 = get_next_id();
 
         // IDs should be different
         assert_ne!(id1, id2);
