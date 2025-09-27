@@ -280,6 +280,25 @@ impl Store {
         }
     }
 
+    /// Get bitcoin addresses for multiple user IDs
+    /// Returns a vector of tuples (user_id, btcaddress) for users that exist
+    pub fn get_btcaddresses_for_user_ids(
+        &self,
+        user_ids: &[u64],
+    ) -> Result<Vec<(u64, String)>, Box<dyn Error>> {
+        let user_cf = self.db.cf_handle(&ColumnFamily::User).unwrap();
+        let mut results = Vec::new();
+
+        for &user_id in user_ids {
+            if let Some(serialized_user) = self.db.get_cf(user_cf, user_id.to_be_bytes())? {
+                let stored_user: StoredUser = ciborium::de::from_reader(&serialized_user[..])?;
+                results.push((user_id, stored_user.btcaddress));
+            }
+        }
+
+        Ok(results)
+    }
+
     /// Get worker by worker ID
     pub fn get_worker_by_id(&self, worker_id: u64) -> Result<Option<StoredWorker>, Box<dyn Error>> {
         let worker_cf = self.db.cf_handle(&ColumnFamily::Worker).unwrap();
@@ -2783,5 +2802,64 @@ mod tests {
         assert!(stored_user.created_at > now - 60);
         assert!(stored_worker.created_at <= now);
         assert!(stored_worker.created_at > now - 60);
+    }
+
+    #[test]
+    fn test_get_btcaddresses_for_user_ids() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Store multiple users
+        let btcaddress1 = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string();
+        let btcaddress2 = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2".to_string();
+        let btcaddress3 = "1QGTJkBFhCjPHqbnwK6z7JfEHefq6Yj2jJ".to_string();
+
+        let user_id1 = store.store_user(btcaddress1.clone()).unwrap();
+        let user_id2 = store.store_user(btcaddress2.clone()).unwrap();
+        let user_id3 = store.store_user(btcaddress3.clone()).unwrap();
+
+        // Test getting btcaddresses for existing user IDs
+        let user_ids = vec![user_id1, user_id2, user_id3];
+        let results = store.get_btcaddresses_for_user_ids(&user_ids).unwrap();
+
+        assert_eq!(results.len(), 3);
+
+        // Convert to HashMap for easier lookup
+        let result_map: std::collections::HashMap<u64, String> = results.into_iter().collect();
+
+        assert_eq!(result_map.get(&user_id1), Some(&btcaddress1));
+        assert_eq!(result_map.get(&user_id2), Some(&btcaddress2));
+        assert_eq!(result_map.get(&user_id3), Some(&btcaddress3));
+
+        // Test with subset of user IDs
+        let subset_ids = vec![user_id1, user_id3];
+        let subset_results = store.get_btcaddresses_for_user_ids(&subset_ids).unwrap();
+
+        assert_eq!(subset_results.len(), 2);
+        let subset_map: std::collections::HashMap<u64, String> =
+            subset_results.into_iter().collect();
+
+        assert_eq!(subset_map.get(&user_id1), Some(&btcaddress1));
+        assert_eq!(subset_map.get(&user_id3), Some(&btcaddress3));
+        assert!(!subset_map.contains_key(&user_id2));
+
+        // Test with non-existent user IDs
+        let nonexistent_ids = vec![9999, 8888];
+        let empty_results = store
+            .get_btcaddresses_for_user_ids(&nonexistent_ids)
+            .unwrap();
+
+        assert_eq!(empty_results.len(), 0);
+
+        // Test with mixed existing and non-existent IDs
+        let mixed_ids = vec![user_id1, 9999, user_id2];
+        let mixed_results = store.get_btcaddresses_for_user_ids(&mixed_ids).unwrap();
+
+        assert_eq!(mixed_results.len(), 2);
+        let mixed_map: std::collections::HashMap<u64, String> = mixed_results.into_iter().collect();
+
+        assert_eq!(mixed_map.get(&user_id1), Some(&btcaddress1));
+        assert_eq!(mixed_map.get(&user_id2), Some(&btcaddress2));
+        assert!(!mixed_map.contains_key(&9999));
     }
 }
