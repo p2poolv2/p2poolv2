@@ -19,6 +19,7 @@ use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader, StorageShareBlock};
 use crate::store::column_families::ColumnFamily;
 use crate::store::user_and_worker::{StoredUser, StoredWorker};
+use crate::utils::snowflake_simplified::get_next_id;
 use bitcoin::Transaction;
 use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
@@ -64,8 +65,6 @@ pub struct BlockMetadata {
 pub struct Store {
     path: String,
     db: DB,
-    user_id_mutex: std::sync::Mutex<()>,
-    worker_id_mutex: std::sync::Mutex<()>,
 }
 
 /// A rocksdb based store for share blocks.
@@ -132,12 +131,7 @@ impl Store {
         } else {
             DB::open_cf_descriptors(&db_options, path.clone(), cfs)?
         };
-        let store = Self {
-            path,
-            db,
-            user_id_mutex: std::sync::Mutex::new(()),
-            worker_id_mutex: std::sync::Mutex::new(()),
-        };
+        let store = Self { path, db };
         store.init_metadata_counters()?;
         Ok(store)
     }
@@ -164,7 +158,6 @@ impl Store {
 
     /// Get and increment the next user ID atomically
     fn get_next_user_id(&self) -> Result<u64, Box<dyn Error>> {
-        let _lock = self.user_id_mutex.lock().unwrap();
         let metadata_cf = self.db.cf_handle(&ColumnFamily::Metadata).unwrap();
 
         // Get current value
@@ -188,7 +181,6 @@ impl Store {
 
     /// Get and increment the next worker ID atomically
     fn get_next_worker_id(&self) -> Result<u64, Box<dyn Error>> {
-        let _lock = self.worker_id_mutex.lock().unwrap();
         let metadata_cf = self.db.cf_handle(&ColumnFamily::Metadata).unwrap();
 
         // Get current value
@@ -226,7 +218,7 @@ impl Store {
         }
 
         // Generate new user ID
-        let user_id = self.get_next_user_id()?;
+        let user_id = get_next_id();
         let current_timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -272,7 +264,7 @@ impl Store {
         }
 
         // Generate new worker ID
-        let worker_id = self.get_next_worker_id()?;
+        let worker_id = get_next_id();
         let current_timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -2653,7 +2645,6 @@ mod tests {
 
         // Store a new user
         let user_id = store.store_user(btcaddress.clone()).unwrap();
-        assert_eq!(user_id, 1); // First user should get ID 1
 
         // Get user by ID
         let stored_user = store.get_user_by_id(user_id).unwrap().unwrap();
@@ -2673,13 +2664,11 @@ mod tests {
         // Store different user - should get new ID
         let btcaddress2 = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2".to_string();
         let user_id2 = store.store_user(btcaddress2.clone()).unwrap();
-        assert_eq!(user_id2, 2);
 
         // Verify both users exist
         let user1 = store.get_user_by_btcaddress(&btcaddress).unwrap().unwrap();
         let user2 = store.get_user_by_btcaddress(&btcaddress2).unwrap().unwrap();
-        assert_eq!(user1.user_id, 1);
-        assert_eq!(user2.user_id, 2);
+        assert_ne!(user1.user_id, user2.user_id);
     }
 
     #[test]
@@ -2695,7 +2684,6 @@ mod tests {
 
         // Store a worker for this user
         let worker_id = store.store_worker(user_id, workername.clone()).unwrap();
-        assert_eq!(worker_id, 1); // First worker should get ID 1
 
         // Get worker by ID
         let stored_worker = store.get_worker_by_id(worker_id).unwrap().unwrap();
@@ -2720,7 +2708,7 @@ mod tests {
         // Store different worker for same user
         let workername2 = "worker2".to_string();
         let worker_id2 = store.store_worker(user_id, workername2.clone()).unwrap();
-        assert_eq!(worker_id2, 2);
+        assert_ne!(worker_id2, worker_id);
     }
 
     #[test]
@@ -2793,8 +2781,7 @@ mod tests {
             let _worker_id1 = store.store_worker(user_id1, "worker1".to_string()).unwrap();
             let _worker_id2 = store.store_worker(user_id2, "worker2".to_string()).unwrap();
 
-            assert_eq!(user_id1, 1);
-            assert_eq!(user_id2, 2);
+            assert_ne!(user_id1, user_id2);
         }
 
         // Reopen store and verify counters continue from where they left off
@@ -2803,8 +2790,7 @@ mod tests {
             let user_id3 = store.store_user("user3".to_string()).unwrap();
             let worker_id3 = store.store_worker(user_id3, "worker3".to_string()).unwrap();
 
-            assert_eq!(user_id3, 3); // Should continue from 3
-            assert_eq!(worker_id3, 3); // Should continue from 3
+            assert!(worker_id3 > user_id3);
         }
     }
 
