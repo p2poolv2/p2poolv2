@@ -156,52 +156,6 @@ impl Store {
         Ok(())
     }
 
-    /// Get and increment the next user ID atomically
-    fn get_next_user_id(&self) -> Result<u64, Box<dyn Error>> {
-        let metadata_cf = self.db.cf_handle(&ColumnFamily::Metadata).unwrap();
-
-        // Get current value
-        let current_bytes = self
-            .db
-            .get_cf(metadata_cf, b"next_user_id")?
-            .ok_or("next_user_id not found in metadata")?;
-        let current_id = u64::from_be_bytes(
-            current_bytes
-                .try_into()
-                .map_err(|_| "Invalid next_user_id format")?,
-        );
-
-        // Increment and store new value
-        let next_id = current_id + 1;
-        self.db
-            .put_cf(metadata_cf, b"next_user_id", next_id.to_be_bytes())?;
-
-        Ok(current_id)
-    }
-
-    /// Get and increment the next worker ID atomically
-    fn get_next_worker_id(&self) -> Result<u64, Box<dyn Error>> {
-        let metadata_cf = self.db.cf_handle(&ColumnFamily::Metadata).unwrap();
-
-        // Get current value
-        let current_bytes = self
-            .db
-            .get_cf(metadata_cf, b"next_worker_id")?
-            .ok_or("next_worker_id not found in metadata")?;
-        let current_id = u64::from_be_bytes(
-            current_bytes
-                .try_into()
-                .map_err(|_| "Invalid next_worker_id format")?,
-        );
-
-        // Increment and store new value
-        let next_id = current_id + 1;
-        self.db
-            .put_cf(metadata_cf, b"next_worker_id", next_id.to_be_bytes())?;
-
-        Ok(current_id)
-    }
-
     /// Store a user by btcaddress, returns the user ID
     pub fn store_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error>> {
         let user_cf = self.db.cf_handle(&ColumnFamily::User).unwrap();
