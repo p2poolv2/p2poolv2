@@ -23,9 +23,9 @@ use crate::utils::time_provider::SystemTimeProvider;
 
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 use libp2p::request_response::ResponseChannel;
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -35,7 +35,7 @@ use tracing::{debug, error, info};
 /// The caller spawns a new task to handle the event to allow concurrent handling of events
 pub async fn handle_request_response_event(
     event: RequestResponseEvent<Message, Message>,
-    chain_handle: ChainHandle,
+    store: std::sync::Arc<ChainStore>,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
 ) -> Result<(), Box<dyn Error>> {
     info!("Request-response event: {:?}", event);
@@ -54,7 +54,7 @@ pub async fn handle_request_response_event(
             let request_context = RequestContext {
                 peer,
                 request,
-                chain_handle,
+                store,
                 response_channel,
                 swarm_tx,
                 time_provider,

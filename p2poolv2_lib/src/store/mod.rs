@@ -25,8 +25,9 @@ use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
+use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
@@ -65,6 +66,11 @@ pub struct BlockMetadata {
 pub struct Store {
     path: String,
     db: DB,
+    // Thread-safe chain state for use by ChainStore
+    genesis_block_hash: Arc<RwLock<Option<ShareBlockHash>>>,
+    chain_tip: Arc<RwLock<Option<ShareBlockHash>>>,
+    tips: Arc<RwLock<HashSet<ShareBlockHash>>>,
+    total_difficulty: Arc<RwLock<Decimal>>,
 }
 
 /// A rocksdb based store for share blocks.
@@ -131,7 +137,15 @@ impl Store {
         } else {
             DB::open_cf_descriptors(&db_options, path.clone(), cfs)?
         };
-        let store = Self { path, db };
+        let store = Self {
+            path,
+            db,
+            // Initialize chain state fields
+            genesis_block_hash: Arc::new(RwLock::new(None)),
+            chain_tip: Arc::new(RwLock::new(None)),
+            tips: Arc::new(RwLock::new(HashSet::new())),
+            total_difficulty: Arc::new(RwLock::new(Decimal::ZERO)),
+        };
         store.init_metadata_counters()?;
         Ok(store)
     }
@@ -333,7 +347,7 @@ impl Store {
     /// Add a share to the store
     /// We use StorageShareBlock to serialize the share so that we do not store transactions serialized with the block.
     /// Transactions are stored separately. All writes are done in a single atomic batch.
-    pub fn add_share(&mut self, share: ShareBlock, height: u32) {
+    pub fn add_share(&self, share: ShareBlock, height: u32) {
         debug!(
             "Adding share to store with {} txs: {:?}",
             share.transactions.len(),
@@ -378,7 +392,7 @@ impl Store {
     /// Add PPLNS Share to pplns_share_cf
     /// The key is "timestamp:username:share_hash" where timestamp is microseconds since epoch
     pub fn add_pplns_share(
-        &mut self,
+        &self,
         pplns_share: SimplePplnsShare,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
@@ -390,9 +404,7 @@ impl Store {
     }
 
     // Get PPLNS shares, no filter yet
-    pub fn get_pplns_shares(
-        &mut self,
-    ) -> Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>> {
+    pub fn get_pplns_shares(&self) -> Vec<SimplePplnsShare> {
         self.get_pplns_shares_filtered(usize::MAX, None, None)
     }
 
@@ -401,8 +413,13 @@ impl Store {
     pub fn get_main_chain(&self, genesis: ShareBlockHash) -> (Vec<ShareBlockHash>, Decimal) {
         let mut current = Some(genesis);
         let mut main_chain = vec![];
-        // hard code diff 1 for the genesis block
-        let mut total_difficulty = Decimal::new(1, 0);
+        let mut total_difficulty = Decimal::new(0, 0);
+
+        // Add genesis difficulty
+        if let Some(genesis_share) = self.get_share(&genesis) {
+            total_difficulty += genesis_share.header.miner_share.diff;
+        }
+
         while current.is_some() {
             main_chain.push(current.unwrap());
             let children = self.get_children_blockhashes(&current.unwrap());
@@ -595,7 +612,7 @@ impl Store {
     }
 
     /// Add a workbase to the store
-    pub fn add_workbase(&mut self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error>> {
+    pub fn add_workbase(&self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error>> {
         let workbase_key = format!("workbase:{}", workbase.workinfoid);
         debug!("Adding workbase to store: {:?}", workbase_key);
         let workbase_cf = self.db.cf_handle(&ColumnFamily::Workbase).unwrap();
@@ -610,7 +627,7 @@ impl Store {
     }
 
     /// Add a user workbase to the store
-    pub fn add_user_workbase(&mut self, user_workbase: UserWorkbase) -> Result<(), Box<dyn Error>> {
+    pub fn add_user_workbase(&self, user_workbase: UserWorkbase) -> Result<(), Box<dyn Error>> {
         let user_workbase_key = format!("user_workbase:{}", user_workbase.workinfoid);
         debug!("Adding user workbase to store: {:?}", user_workbase_key);
         let user_workbase_cf = self.db.cf_handle(&ColumnFamily::UserWorkbase).unwrap();
@@ -630,7 +647,7 @@ impl Store {
     /// The status is stored separately from the transaction using txid + "_status" as key
     /// We read the transaction from the store, update spent_by and write back to the store.
     pub fn update_transaction_spent_status(
-        &mut self,
+        &self,
         txid: &bitcoin::Txid,
         spent_by: Option<bitcoin::Txid>,
     ) -> Result<(), Box<dyn Error>> {
@@ -791,7 +808,7 @@ impl Store {
     /// Returns jobs ordered by timestamp (newest first)
     pub fn get_jobs(
         &self,
-        start_time: u64,
+        start_time: Option<u64>,
         end_time: Option<u64>,
         limit: usize,
     ) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>> {
@@ -813,8 +830,10 @@ impl Store {
         // Create a read options object to set iteration bounds
         let mut read_opts = rocksdb::ReadOptions::default();
 
-        // Set the upper bound (end_time)
-        read_opts.set_iterate_upper_bound(start_time.to_be_bytes().to_vec());
+        if let Some(start) = start_time {
+            // Set the upper bound (start_time)
+            read_opts.set_iterate_upper_bound(start.to_be_bytes().to_vec());
+        }
 
         // Start iterating from start_time in reverse order to get newest first
         let iter = self.db.iterator_cf_opt(
@@ -1170,7 +1189,7 @@ impl Store {
     /// Set the height for the blockhash, storing it in a vector of blockhashes for that height
     /// We are fine with Vector instead of HashSet as we are not going to have a lot of blockhashes at the same height
     pub fn set_height_to_blockhash(
-        &mut self,
+        &self,
         blockhash: &ShareBlockHash,
         height: u32,
         batch: &mut rocksdb::WriteBatch,
@@ -1260,7 +1279,7 @@ impl Store {
 
     /// Set the block metadata for a blockhash
     fn set_block_metadata(
-        &mut self,
+        &self,
         blockhash: &ShareBlockHash,
         metadata: &BlockMetadata,
         batch: Option<&mut rocksdb::WriteBatch>,
@@ -1284,7 +1303,7 @@ impl Store {
 
     /// Mark a block as valid in the store
     pub fn set_block_valid(
-        &mut self,
+        &self,
         blockhash: &ShareBlockHash,
         valid: bool,
         batch: Option<&mut rocksdb::WriteBatch>,
@@ -1306,7 +1325,7 @@ impl Store {
 
     /// Mark a block as confirmed in the store
     pub fn set_block_confirmed(
-        &mut self,
+        &self,
         blockhash: &ShareBlockHash,
         confirmed: bool,
         batch: Option<&mut rocksdb::WriteBatch>,
@@ -1327,7 +1346,7 @@ impl Store {
     }
 
     pub fn set_block_height_in_metadata(
-        &mut self,
+        &self,
         blockhash: &ShareBlockHash,
         height: Option<u32>,
         batch: Option<&mut rocksdb::WriteBatch>,
@@ -1346,6 +1365,89 @@ impl Store {
         debug!("Setting block metadata: {:?}", updated_metadata);
         self.set_block_metadata(blockhash, &updated_metadata, batch)
     }
+
+    /// Get genesis block hash from chain state
+    pub fn get_genesis_block_hash(&self) -> Option<ShareBlockHash> {
+        *self.genesis_block_hash.read().unwrap()
+    }
+
+    /// Set genesis block hash in chain state
+    pub fn set_genesis_block_hash(&self, hash: ShareBlockHash) {
+        *self.genesis_block_hash.write().unwrap() = Some(hash);
+    }
+
+    /// Get chain tip from chain state
+    pub fn get_chain_tip(&self) -> Option<ShareBlockHash> {
+        *self.chain_tip.read().unwrap()
+    }
+
+    /// Set chain tip in chain state
+    pub fn set_chain_tip(&self, hash: Option<ShareBlockHash>) {
+        *self.chain_tip.write().unwrap() = hash;
+    }
+
+    /// Get tips from chain state (returns clone of the set)
+    pub fn get_tips(&self) -> HashSet<ShareBlockHash> {
+        self.tips.read().unwrap().clone()
+    }
+
+    /// Update tips in chain state
+    pub fn update_tips(&self, new_tips: HashSet<ShareBlockHash>) {
+        *self.tips.write().unwrap() = new_tips;
+    }
+
+    /// Add a tip to the chain state
+    pub fn add_tip(&self, hash: ShareBlockHash) {
+        self.tips.write().unwrap().insert(hash);
+    }
+
+    /// Remove a tip from the chain state
+    pub fn remove_tip(&self, hash: &ShareBlockHash) -> bool {
+        self.tips.write().unwrap().remove(hash)
+    }
+
+    /// Get total difficulty from chain state
+    pub fn get_total_difficulty(&self) -> Decimal {
+        *self.total_difficulty.read().unwrap()
+    }
+
+    /// Set total difficulty in chain state
+    pub fn set_total_difficulty(&self, difficulty: Decimal) {
+        *self.total_difficulty.write().unwrap() = difficulty;
+    }
+
+    /// Initialize chain state from existing data in the store
+    /// This should be called after opening an existing store to load cached state
+    pub fn init_chain_state_from_store(
+        &self,
+        genesis_hash: ShareBlockHash,
+    ) -> Result<(), Box<dyn Error>> {
+        // Set genesis block hash
+        self.set_genesis_block_hash(genesis_hash);
+
+        // Load main chain and total difficulty
+        let (main_chain, total_diff) = self.get_main_chain(genesis_hash);
+        if !main_chain.is_empty() {
+            // Set chain tip to last block in main chain
+            self.set_chain_tip(Some(*main_chain.last().unwrap()));
+            self.set_total_difficulty(total_diff);
+
+            // Load tips from the highest height
+            let height = main_chain.len() as u32 - 1;
+            let tips_shares = self.get_shares_at_height(height);
+            let tips: HashSet<ShareBlockHash> = tips_shares.keys().cloned().collect();
+            self.update_tips(tips);
+
+            debug!(
+                "Initialized chain state: tip={:?}, difficulty={}, tips_count={}",
+                self.get_chain_tip(),
+                self.get_total_difficulty(),
+                self.get_tips().len()
+            );
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1359,7 +1461,7 @@ mod tests {
     #[test]
     fn test_chain_with_uncles() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create initial share
         let share1 = TestBlockBuilder::new()
@@ -1639,7 +1741,7 @@ mod tests {
     #[test]
     fn test_transaction_spent_by_should_succeed() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create a test transaction
         let tx = bitcoin::Transaction {
@@ -1755,7 +1857,7 @@ mod tests {
     #[test]
     fn test_store_share_block_with_transactions_should_retreive_txs() {
         let temp_dir = tempfile::TempDir::new().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create test transactions
         let tx1 = bitcoin::Transaction {
@@ -1927,7 +2029,7 @@ mod tests {
     fn test_get_share_header() {
         // Create a new store with a temporary path
         let temp_dir = tempfile::tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create test share block
         let share = TestBlockBuilder::new()
@@ -1990,7 +2092,7 @@ mod tests {
     #[test]
     fn test_get_children() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create initial share
         let share1 = TestBlockBuilder::new()
@@ -2080,7 +2182,7 @@ mod tests {
     #[test]
     fn test_get_descendants() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create initial share
         let share1 = TestBlockBuilder::new()
@@ -2193,7 +2295,7 @@ mod tests {
     #[test]
     fn test_get_headers_for_block_locator_should_find_matching_blocks() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         let blockhashes = [
             "000000004ebadb55ee9096c9a2f8880e09da59c0d68b1c228da88e48844a1485", // genesis
@@ -2234,7 +2336,7 @@ mod tests {
     #[test]
     fn test_get_headers_for_block_locator_stop_block_not_found() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         let mut blocks = Vec::new();
         let mut locator = vec![];
@@ -2273,7 +2375,7 @@ mod tests {
     #[test]
     fn test_get_blockhashes_for_block_locator_should_find_matching_blocks() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         let mut blocks = Vec::new();
 
@@ -2311,7 +2413,7 @@ mod tests {
     #[test]
     fn test_block_status_operations() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create test block
         let share = TestBlockBuilder::new()
@@ -2373,7 +2475,7 @@ mod tests {
     #[test]
     fn test_multiple_block_status_updates() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create multiple test blocks
         let share1 = TestBlockBuilder::new()
@@ -2425,7 +2527,7 @@ mod tests {
     #[test]
     fn test_set_and_get_block_height_in_metadata() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create a test block
         let share = TestBlockBuilder::new()
@@ -2477,7 +2579,7 @@ mod tests {
     #[test]
     fn test_get_workbases() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         let workbase1 = TestMinerWorkbaseBuilder::new().workinfoid(1000).build();
         let workbase2 = TestMinerWorkbaseBuilder::new().workinfoid(2000).build();
@@ -2542,7 +2644,7 @@ mod tests {
     #[test]
     fn test_get_user_workbases() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         let user_workbase1 = TestUserWorkbaseBuilder::new().workinfoid(1000).build();
         let user_workbase2 = TestUserWorkbaseBuilder::new().workinfoid(2000).build();
@@ -2584,7 +2686,7 @@ mod tests {
     #[test]
     fn test_add_pplns_share() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Create a PPLNS share
         let pplns_share = SimplePplnsShare::new(
@@ -2602,7 +2704,7 @@ mod tests {
             result.err()
         );
 
-        let stored_data = store.get_pplns_shares().unwrap();
+        let stored_data = store.get_pplns_shares();
         assert!(
             !stored_data.is_empty(),
             "PPLNS share data not found in database"
@@ -2636,7 +2738,7 @@ mod tests {
 
         // Store different user - should get new ID
         let btcaddress2 = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2".to_string();
-        let user_id2 = store.store_user(btcaddress2.clone()).unwrap();
+        let _user_id2 = store.store_user(btcaddress2.clone()).unwrap();
 
         // Verify both users exist
         let user1 = store.get_user_by_btcaddress(&btcaddress).unwrap().unwrap();
@@ -2861,5 +2963,83 @@ mod tests {
         assert_eq!(mixed_map.get(&user_id1), Some(&btcaddress1));
         assert_eq!(mixed_map.get(&user_id2), Some(&btcaddress2));
         assert!(!mixed_map.contains_key(&9999));
+    }
+
+    #[test]
+    fn test_chain_state_management() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create test shares
+        let share1 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .clientid(1)
+            .diff(dec!(1.0))
+            .sdiff(dec!(1.9041854952356509))
+            .build();
+
+        let share2 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
+            .prev_share_blockhash(share1.cached_blockhash.unwrap())
+            .clientid(1)
+            .diff(dec!(2.0))
+            .sdiff(dec!(2.9041854952356509))
+            .build();
+
+        let share3 = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
+            .prev_share_blockhash(share2.cached_blockhash.unwrap())
+            .clientid(1)
+            .diff(dec!(3.0))
+            .sdiff(dec!(3.9041854952356509))
+            .build();
+
+        // Store shares
+        store.add_share(share1.clone(), 0);
+        store.add_share(share2.clone(), 1);
+        store.add_share(share3.clone(), 2);
+
+        let genesis_hash = share1.cached_blockhash.unwrap();
+
+        // Test manual chain state operations
+        store.set_genesis_block_hash(genesis_hash);
+        assert_eq!(store.get_genesis_block_hash(), Some(genesis_hash));
+
+        store.set_chain_tip(Some(share3.cached_blockhash.unwrap()));
+        assert_eq!(
+            store.get_chain_tip(),
+            Some(share3.cached_blockhash.unwrap())
+        );
+
+        let mut tips = HashSet::new();
+        tips.insert(share3.cached_blockhash.unwrap());
+        store.update_tips(tips.clone());
+        assert_eq!(store.get_tips(), tips);
+
+        store.add_tip(share2.cached_blockhash.unwrap());
+        assert!(store.get_tips().contains(&share2.cached_blockhash.unwrap()));
+
+        store.remove_tip(&share2.cached_blockhash.unwrap());
+        assert!(!store.get_tips().contains(&share2.cached_blockhash.unwrap()));
+
+        store.set_total_difficulty(dec!(6.0));
+        assert_eq!(store.get_total_difficulty(), dec!(6.0));
+
+        // Test initialization from store
+        store.init_chain_state_from_store(genesis_hash).unwrap();
+
+        // After initialization, tip should be set to last block in main chain
+        assert_eq!(
+            store.get_chain_tip(),
+            Some(share3.cached_blockhash.unwrap())
+        );
+
+        // Tips should include only blocks at highest height (height 2)
+        let tips_after_init = store.get_tips();
+        assert_eq!(tips_after_init.len(), 1);
+        assert!(tips_after_init.contains(&share3.cached_blockhash.unwrap()));
+
+        // Total difficulty should reflect sum of difficulties from main chain
+        assert_eq!(store.get_total_difficulty(), dec!(6.0)); // 1 + 2 + 3 = 6
     }
 }

@@ -16,16 +16,15 @@
 
 use super::{Store, column_families::ColumnFamily};
 use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
-use std::error::Error;
 
 impl Store {
     /// Get PPLNS shares with filtering support using timestamp-based keys for efficient range queries
     pub fn get_pplns_shares_filtered(
-        &mut self,
+        &self,
         limit: usize,
         start_time: Option<u64>,
         end_time: Option<u64>,
-    ) -> Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>> {
+    ) -> Vec<SimplePplnsShare> {
         let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
 
         // Use a simple approach with End iterator and filtering
@@ -48,7 +47,7 @@ impl Store {
             }
         }
 
-        Ok(shares)
+        shares
     }
 }
 
@@ -82,7 +81,7 @@ mod tests {
     #[test]
     fn test_get_pplns_shares_filtered_with_limit() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Add test shares with different timestamps
         let shares = vec![
@@ -96,14 +95,14 @@ mod tests {
         }
 
         // Test limit functionality
-        let result = store.get_pplns_shares_filtered(2, None, None).unwrap();
+        let result = store.get_pplns_shares_filtered(2, None, None);
         assert_eq!(result.len(), 2);
     }
 
     #[test]
     fn test_get_pplns_shares_filtered_with_time_range() {
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Add test shares with different timestamps
         let shares = vec![
@@ -117,9 +116,7 @@ mod tests {
         }
 
         // Test time filtering
-        let result = store
-            .get_pplns_shares_filtered(10, Some(1500), Some(2500))
-            .unwrap();
+        let result = store.get_pplns_shares_filtered(10, Some(1500), Some(2500));
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].timestamp, 2000);
     }

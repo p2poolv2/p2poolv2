@@ -51,7 +51,7 @@ pub struct StratumServer<T> {
     shutdown_rx: oneshot::Receiver<()>,
     connections_handle: ClientConnectionsHandle,
     shares_tx: mpsc::Sender<SimplePplnsShare>,
-    chain_handle: T,
+    store: T,
 }
 
 /// Builder for StratumServer to avoid dependency on StratumConfig
@@ -67,7 +67,7 @@ pub struct StratumServerBuilder<T> {
     connections_handle: Option<ClientConnectionsHandle>,
     shares_tx: Option<mpsc::Sender<SimplePplnsShare>>,
     zmqpubhashblock: Option<String>,
-    chain_handle: Option<T>,
+    store: Option<T>,
 }
 
 impl<T> Default for StratumServerBuilder<T> {
@@ -84,7 +84,7 @@ impl<T> Default for StratumServerBuilder<T> {
             connections_handle: None,
             shares_tx: None,
             zmqpubhashblock: None,
-            chain_handle: None,
+            store: None,
         }
     }
 }
@@ -145,8 +145,8 @@ impl<T> StratumServerBuilder<T> {
         self
     }
 
-    pub fn chain_handle(mut self, chain_handle: T) -> Self {
-        self.chain_handle = Some(chain_handle);
+    pub fn store(mut self, store: T) -> Self {
+        self.store = Some(store);
         self
     }
 
@@ -170,7 +170,7 @@ impl<T> StratumServerBuilder<T> {
                 .connections_handle
                 .ok_or("connections_handle is required")?,
             shares_tx: self.shares_tx.ok_or("shares_tx is required")?,
-            chain_handle: self.chain_handle.ok_or("chain_handle is required")?,
+            store: self.store.ok_or("store is required")?,
         })
     }
 }
@@ -230,7 +230,7 @@ impl<T: Clone + Send + 'static> StratumServer<T> {
                                 shares_tx: self.shares_tx.clone(),
                                 network: self.network,
                                 metrics: metrics.clone(),
-                                chain_handle: self.chain_handle.clone(),
+                                store: self.store.clone(),
                             };
                             let version_mask = self.version_mask;
                             // Spawn a new task for each connection
@@ -265,7 +265,7 @@ pub(crate) struct StratumContext<T> {
     pub shares_tx: mpsc::Sender<SimplePplnsShare>,
     pub network: bitcoin::network::Network,
     pub metrics: metrics::MetricsHandle,
-    pub chain_handle: T,
+    pub store: T,
 }
 
 /// Handles a single connection to the Stratum server.
@@ -449,7 +449,7 @@ mod stratum_server_tests {
             .shutdown_rx(shutdown_rx)
             .connections_handle(connections_handle)
             .shares_tx(shares_tx)
-            .chain_handle(())
+            .store(())
             .build()
             .await
             .unwrap();
@@ -520,7 +520,7 @@ mod stratum_server_tests {
             maximum_difficulty: Some(2),
             shares_tx,
             network: bitcoin::network::Network::Regtest,
-            chain_handle: (),
+            store: (),
         };
 
         // Run the handler
@@ -630,7 +630,7 @@ mod stratum_server_tests {
             maximum_difficulty: Some(2),
             shares_tx,
             network: bitcoin::network::Network::Regtest,
-            chain_handle: (),
+            store: (),
         };
 
         // Run the handler
@@ -694,7 +694,7 @@ mod stratum_server_tests {
             shares_tx,
             metrics: metrics_handle,
             network: bitcoin::network::Network::Regtest,
-            chain_handle: (),
+            store: (),
         };
 
         // Run the handler
@@ -763,7 +763,7 @@ mod stratum_server_tests {
             shares_tx,
             network: bitcoin::network::Network::Regtest,
             metrics: metrics_handle,
-            chain_handle: (),
+            store: (),
         };
 
         // Run the handler
@@ -852,7 +852,7 @@ mod stratum_server_tests {
             shares_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
-            chain_handle: (),
+            store: (),
         };
 
         // Spawn the handler in a separate task
@@ -960,7 +960,7 @@ mod stratum_server_tests {
             shares_tx,
             network: bitcoin::network::Network::Regtest,
             metrics: metrics_handle,
-            chain_handle: (),
+            store: (),
         };
 
         // Spawn the handler in a separate task

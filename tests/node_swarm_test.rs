@@ -14,12 +14,12 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use std::sync::Arc;
 mod common;
 use p2poolv2_accounting::{simple_pplns::SimplePplnsShare, stats::metrics};
-use p2poolv2_lib::{
-    node::actor::NodeHandle,
-    shares::{ShareBlock, chain::actor::ChainHandle},
-};
+use p2poolv2_lib::shares::chain::chain_store::ChainStore;
+use p2poolv2_lib::store::Store;
+use p2poolv2_lib::{node::actor::NodeHandle, shares::ShareBlock};
 
 use std::time::Duration;
 use tempfile::tempdir;
@@ -56,18 +56,18 @@ async fn test_three_nodes_connectivity() {
     let temp_dir2 = tempdir().unwrap();
     let temp_dir3 = tempdir().unwrap();
 
-    let chain_handle1 = ChainHandle::new(
-        temp_dir1.path().to_str().unwrap().to_string(),
+    let store1 = Arc::new(ChainStore::new(
+        Arc::new(Store::new(temp_dir1.path().to_str().unwrap().to_string(), false).unwrap()),
         ShareBlock::build_genesis_for_network(config1.stratum.network),
-    );
-    let chain_handle2 = ChainHandle::new(
-        temp_dir2.path().to_str().unwrap().to_string(),
+    ));
+    let store2 = Arc::new(ChainStore::new(
+        Arc::new(Store::new(temp_dir2.path().to_str().unwrap().to_string(), false).unwrap()),
         ShareBlock::build_genesis_for_network(config2.stratum.network),
-    );
-    let chain_handle3 = ChainHandle::new(
-        temp_dir3.path().to_str().unwrap().to_string(),
+    ));
+    let store3 = Arc::new(ChainStore::new(
+        Arc::new(Store::new(temp_dir3.path().to_str().unwrap().to_string(), false).unwrap()),
         ShareBlock::build_genesis_for_network(config3.stratum.network),
-    );
+    ));
 
     let (_shares_tx_1, shares_rx_1) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
     let (_shares_tx_2, shares_rx_2) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
@@ -87,15 +87,15 @@ async fn test_three_nodes_connectivity() {
         .unwrap();
 
     // Start three nodes
-    let (node1_handle, _stop_rx1) = NodeHandle::new(config1, chain_handle1, shares_rx_1, metrics1)
+    let (node1_handle, _stop_rx1) = NodeHandle::new(config1, store1, shares_rx_1, metrics1)
         .await
         .expect("Failed to create node 1");
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let (node2_handle, _stop_rx2) = NodeHandle::new(config2, chain_handle2, shares_rx_2, metrics2)
+    let (node2_handle, _stop_rx2) = NodeHandle::new(config2, store2, shares_rx_2, metrics2)
         .await
         .expect("Failed to create node 2");
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let (node3_handle, _stop_rx3) = NodeHandle::new(config3, chain_handle3, shares_rx_3, metrics3)
+    let (node3_handle, _stop_rx3) = NodeHandle::new(config3, store3, shares_rx_3, metrics3)
         .await
         .expect("Failed to create node 3");
     tokio::time::sleep(Duration::from_millis(300)).await;

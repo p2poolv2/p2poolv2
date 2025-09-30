@@ -69,7 +69,7 @@ async fn test_stratum_server_subscribe() {
         .zmqpubhashblock("tcp://127.0.0.1:28332".to_string())
         .network(bitcoin::network::Network::Regtest)
         .version_mask(0x1fffe000)
-        .chain_handle(mock_provider)
+        .store(mock_provider)
         .build()
         .await
         .unwrap();

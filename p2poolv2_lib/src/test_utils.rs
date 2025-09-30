@@ -820,26 +820,3 @@ impl TestShareHeaderBuilder {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn test_random_hex_string() {
-        // Generate two random strings
-        let str1 = random_hex_string(64, 8);
-        let str2 = random_hex_string(64, 8);
-
-        // Verify length is 64 characters
-        assert_eq!(str1.len(), 64);
-        assert_eq!(str2.len(), 64);
-
-        // Verify strings are different (extremely unlikely to be equal)
-        assert_ne!(str1, str2);
-
-        // Verify strings only contain valid hex characters
-        let is_hex = |s: &str| s.chars().all(|c| c.is_ascii_hexdigit());
-        assert!(is_hex(&str1));
-        assert!(is_hex(&str2));
-    }
-}

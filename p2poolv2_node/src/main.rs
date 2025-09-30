@@ -21,8 +21,10 @@ use p2poolv2_lib::config::Config;
 use p2poolv2_lib::logging::setup_logging;
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::shares::ShareBlock;
-use p2poolv2_lib::shares::chain::actor::ChainHandle;
+use p2poolv2_lib::shares::chain::chain_store::ChainStore;
+use p2poolv2_lib::store::Store;
 use std::process::exit;
+use std::sync::Arc;
 use stratum::client_connections::start_connections_handler;
 use stratum::server::StratumServerBuilder;
 use stratum::work::gbt::start_gbt;
@@ -76,11 +78,12 @@ async fn main() -> Result<(), String> {
     };
 
     let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
-    let chain_handle = ChainHandle::new(config.store.path.clone(), genesis);
+    let store = Arc::new(Store::new(config.store.path.clone(), false).unwrap());
+    let chain_store = Arc::new(ChainStore::new(store.clone(), genesis));
 
-    let tip = chain_handle.get_chain_tip().await;
-    let height = chain_handle.get_tip_height().await;
-    info!("Latest tip {} at height {}", tip.unwrap(), height.unwrap());
+    let tip = chain_store.store.get_chain_tip();
+    let height = chain_store.get_tip_height();
+    info!("Latest tip {:?} at height {:?}", tip, height);
 
     let stratum_config = config.stratum.clone();
     let bitcoinrpc_config = config.bitcoinrpc.clone();
@@ -119,7 +122,7 @@ async fn main() -> Result<(), String> {
     let connections_cloned = connections_handle.clone();
 
     let tracker_handle_cloned = tracker_handle.clone();
-    let chain_handle_for_notify = chain_handle.clone();
+    let store_for_notify = chain_store.clone();
 
     let bootstrap_address = stratum_config
         .bootstrap_address
@@ -134,7 +137,7 @@ async fn main() -> Result<(), String> {
         stratum::work::notify::start_notify(
             notify_rx,
             connections_cloned,
-            chain_handle_for_notify,
+            store_for_notify,
             tracker_handle_cloned,
             bootstrap_address,
             stratum_config.difficulty_multiplier,
@@ -151,10 +154,10 @@ async fn main() -> Result<(), String> {
         }
     };
     let metrics_cloned = metrics_handle.clone();
-    let stratum_chain_handle = chain_handle.clone();
+    let store_for_stratum = chain_store.clone();
 
     tokio::spawn(async move {
-        let mut stratum_server = StratumServerBuilder::<ChainHandle>::default()
+        let mut stratum_server = StratumServerBuilder::<std::sync::Arc<ChainStore>>::default()
             .shutdown_rx(stratum_shutdown_rx)
             .connections_handle(connections_handle.clone())
             .shares_tx(shares_tx)
@@ -165,7 +168,7 @@ async fn main() -> Result<(), String> {
             .maximum_difficulty(stratum_config.maximum_difficulty)
             .network(stratum_config.network)
             .version_mask(stratum_config.version_mask)
-            .chain_handle(stratum_chain_handle)
+            .store(store_for_stratum)
             .build()
             .await
             .unwrap();
@@ -185,7 +188,7 @@ async fn main() -> Result<(), String> {
         info!("Stratum server stopped");
     });
 
-    match NodeHandle::new(config, chain_handle, shares_rx, metrics_handle).await {
+    match NodeHandle::new(config, chain_store, shares_rx, metrics_handle).await {
         Ok((_node_handle, stopping_rx)) => {
             info!("Node started");
             if (stopping_rx.await).is_ok() {

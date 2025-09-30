@@ -18,6 +18,7 @@ use crate::OutputPair;
 use crate::simple_pplns::SimplePplnsShare;
 use std::collections::HashMap;
 use std::error::Error;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct Payout {
@@ -42,7 +43,7 @@ impl Payout {
     /// sequential single-share queries.
     ///
     /// # Arguments
-    /// * `chain_handle` - Handle to the chain store for querying PPLNS shares
+    /// * `store` - Handle to the chain store for querying PPLNS shares
     /// * `total_difficulty` - Target cumulative difficulty to collect shares for
     ///
     /// # Returns
@@ -54,7 +55,7 @@ impl Payout {
     /// Continues querying additional time windows if total difficulty hasn't been reached.
     async fn get_shares_for_difficulty<T>(
         &self,
-        chain_handle: &T,
+        store: &Arc<T>,
         total_difficulty: f64,
     ) -> Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>>
     where
@@ -77,9 +78,8 @@ impl Payout {
             let start_time = end_time.saturating_sub(self.step_size_seconds);
 
             // Query shares for this time window
-            let batch_shares = chain_handle
-                .get_pplns_shares_filtered(usize::MAX, Some(start_time), Some(end_time))
-                .await?;
+            let batch_shares =
+                store.get_pplns_shares_filtered(usize::MAX, Some(start_time), Some(end_time));
 
             has_more_shares = !batch_shares.is_empty();
 
@@ -105,7 +105,7 @@ impl Payout {
     /// Generate output distribution based on PPLNS shares weighted by difficulty.
     ///
     /// # Arguments
-    /// * `chain_handle` - Handle to the chain store for querying PPLNS shares
+    /// * `store` - Handle to the chain store for querying PPLNS shares
     /// * `total_difficulty` - Target cumulative difficulty to collect shares for
     /// * `total_amount` - Total bitcoin amount to distribute among contributors
     ///
@@ -113,7 +113,7 @@ impl Payout {
     /// Vector of OutputPair containing addresses and their proportional amounts
     pub async fn get_output_distribution<T>(
         &self,
-        chain_handle: &T,
+        store: &Arc<T>,
         total_difficulty: f64,
         total_amount: bitcoin::Amount,
         bootstrap_address: &bitcoin::Address,
@@ -122,7 +122,7 @@ impl Payout {
         T: PplnsShareProvider,
     {
         let shares = self
-            .get_shares_for_difficulty(chain_handle, total_difficulty)
+            .get_shares_for_difficulty(store, total_difficulty)
             .await?;
 
         if shares.is_empty() {
@@ -199,10 +199,7 @@ pub trait PplnsShareProvider {
         limit: usize,
         start_time: Option<u64>,
         end_time: Option<u64>,
-    ) -> impl std::future::Future<
-        Output = Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>>,
-    > + Send
-    + '_;
+    ) -> Vec<SimplePplnsShare>;
 }
 
 /// Trait for types that can save jobs with their serialized notify parameters.
@@ -215,10 +212,7 @@ pub trait JobSaver {
     ///
     /// # Returns
     /// Future that resolves to Result<(), Error> on success or failure
-    fn save_job(
-        &self,
-        serialized_notify: String,
-    ) -> impl std::future::Future<Output = Result<(), Box<dyn Error + Send + Sync>>> + Send + '_;
+    fn save_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>>;
 
     /// Get jobs within a time range.
     ///
@@ -234,9 +228,7 @@ pub trait JobSaver {
         start_time: Option<u64>,
         end_time: Option<u64>,
         limit: usize,
-    ) -> impl std::future::Future<Output = Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>>>
-    + Send
-    + '_;
+    ) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>>;
 }
 
 #[cfg(test)]
@@ -282,7 +274,7 @@ mod tests {
             ), // 60 min ago
         ];
 
-        let provider = MockPplnsShareProvider::new(shares);
+        let provider = Arc::new(MockPplnsShareProvider::new(shares));
         let result = payout
             .get_shares_for_difficulty(&provider, 1000.0)
             .await
@@ -337,7 +329,7 @@ mod tests {
             ),
         ];
 
-        let provider = MockPplnsShareProvider::new(shares);
+        let provider = Arc::new(MockPplnsShareProvider::new(shares));
         let result = payout
             .get_shares_for_difficulty(&provider, 750.0)
             .await
@@ -376,7 +368,7 @@ mod tests {
             ),
         ];
 
-        let provider = MockPplnsShareProvider::new(shares);
+        let provider = Arc::new(MockPplnsShareProvider::new(shares));
         let result = payout
             .get_shares_for_difficulty(&provider, 500.0)
             .await
@@ -392,7 +384,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_shares_for_difficulty_empty_provider() {
         let payout = Payout::new(86400);
-        let provider = MockPplnsShareProvider::new(vec![]);
+        let provider = Arc::new(MockPplnsShareProvider::new(vec![]));
 
         let result = payout
             .get_shares_for_difficulty(&provider, 1000.0)
@@ -417,7 +409,7 @@ mod tests {
             (current_time - 1800) * 1_000_000,
         )];
 
-        let provider = MockPplnsShareProvider::new(shares);
+        let provider = Arc::new(MockPplnsShareProvider::new(shares));
         let result = payout
             .get_shares_for_difficulty(&provider, 1000.0)
             .await
@@ -465,7 +457,7 @@ mod tests {
             ), // 350s ago
         ];
 
-        let provider = MockPplnsShareProvider::new(shares);
+        let provider = Arc::new(MockPplnsShareProvider::new(shares));
         let result = payout
             .get_shares_for_difficulty(&provider, 550.0)
             .await
@@ -504,7 +496,7 @@ mod tests {
             (current_time - 1800) * 1_000_000,
         )];
 
-        let provider = MockPplnsShareProvider::new(shares);
+        let provider = Arc::new(MockPplnsShareProvider::new(shares));
         let total_amount = bitcoin::Amount::from_sat(50_000_000); // 0.5 BTC
         let bootstrap_address = "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
             .parse::<bitcoin::Address<_>>()
@@ -548,7 +540,7 @@ mod tests {
             ),
         ];
 
-        let provider = MockPplnsShareProvider::new(shares);
+        let provider = Arc::new(MockPplnsShareProvider::new(shares));
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
         let bootstrap_address = "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
             .parse::<bitcoin::Address<_>>()
@@ -615,7 +607,7 @@ mod tests {
             ),
         ];
 
-        let provider = MockPplnsShareProvider::new(shares);
+        let provider = Arc::new(MockPplnsShareProvider::new(shares));
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
         let bootstrap_address = "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
             .parse::<bitcoin::Address<_>>()
@@ -644,7 +636,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_output_distribution_empty_shares() {
         let payout = Payout::new(86400);
-        let provider = MockPplnsShareProvider::new(vec![]);
+        let provider = Arc::new(MockPplnsShareProvider::new(vec![]));
         let total_amount = bitcoin::Amount::from_sat(100_000_000);
         let bootstrap_address = "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
             .parse::<bitcoin::Address<_>>()

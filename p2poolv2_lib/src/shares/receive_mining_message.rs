@@ -17,9 +17,9 @@
 use crate::node::Config;
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 use crate::shares::ckpool_socket::CkPoolSocketTrait;
 use crate::shares::handle_mining_message::handle_mining_message;
 use crate::shares::miner_message::CkPoolMessage;
@@ -37,7 +37,7 @@ use tracing::error;
 /// TODO: Add limits to how many concurrent tasks are run
 pub fn start_receiving_mining_messages<C: Send + 'static>(
     config: &Config,
-    chain_handle: ChainHandle,
+    store: std::sync::Arc<ChainStore>,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error>> {
     let (mining_message_tx, mut mining_message_rx) =
@@ -58,7 +58,7 @@ pub fn start_receiving_mining_messages<C: Send + 'static>(
 
             if let Err(e) = handle_mining_message::<C>(
                 mining_message,
-                chain_handle.clone(),
+                store.clone(),
                 swarm_tx.clone(),
                 miner_pubkey,
             )

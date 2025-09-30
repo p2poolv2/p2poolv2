@@ -17,9 +17,9 @@
 use crate::shares::ShareHeader;
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
 use tracing::info;
@@ -32,7 +32,7 @@ use tracing::info;
 /// 3. TODO: We need to start a task in node to pull from the task queue and send getData message for txs
 pub async fn handle_share_headers<T: TimeProvider + Send + Sync>(
     share_headers: Vec<ShareHeader>,
-    _chain_handle: ChainHandle,
+    _store: std::sync::Arc<ChainStore>,
     _time_provider: &T,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Received share headers: {:?}", share_headers);

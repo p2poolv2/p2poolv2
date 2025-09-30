@@ -20,10 +20,11 @@ use crate::node::messages::InventoryMessage;
 use crate::shares::ShareBlockHash;
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 use std::error::Error;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -36,14 +37,13 @@ const MAX_BLOCKS: usize = 500;
 pub async fn handle_getblocks<C: 'static + Send + Sync>(
     locator: Vec<ShareBlockHash>,
     stop_block_hash: ShareBlockHash,
-    chain_handle: ChainHandle,
+    store: Arc<ChainStore>,
     response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Received getblocks: {:?}", locator);
-    let response_block_hashes = chain_handle
-        .get_blockhashes_for_locator(locator, stop_block_hash, MAX_BLOCKS)
-        .await;
+    let response_block_hashes =
+        store.get_blockhashes_for_locator(&locator, &stop_block_hash, MAX_BLOCKS);
     let inventory_message =
         Message::Inventory(InventoryMessage::BlockHashes(response_block_hashes));
     swarm_tx
@@ -56,11 +56,14 @@ pub async fn handle_getblocks<C: 'static + Send + Sync>(
 mod tests {
 
     use super::*;
+    #[mockall_double::double]
+    use crate::shares::chain::chain_store::ChainStore;
     use crate::test_utils::TestBlockBuilder;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_handle_getblocks() {
-        let mut chain_handle = ChainHandle::default();
+        let mut store = ChainStore::default();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(1);
         let response_channel = 1u32;
 
@@ -87,7 +90,7 @@ mod tests {
         ];
 
         // Set up mock expectations
-        chain_handle
+        store
             .expect_get_blockhashes_for_locator()
             .returning(move |_, _, _| response_block_hashes.clone());
 
@@ -95,7 +98,7 @@ mod tests {
         handle_getblocks(
             block_hashes,
             stop_block_hash,
-            chain_handle,
+            Arc::new(store),
             response_channel,
             swarm_tx,
         )

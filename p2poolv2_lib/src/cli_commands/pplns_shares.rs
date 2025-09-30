@@ -18,6 +18,7 @@ use crate::shares::chain::chain_store::ChainStore;
 use crate::utils::time_provider::format_timestamp;
 use serde::Serialize;
 use std::error::Error;
+use std::sync::Arc;
 
 /// Structure to hold PPLNS share information for JSON output
 #[derive(Serialize)]
@@ -31,15 +32,13 @@ struct PplnsShareInfo {
 
 /// Implementation of the pplns-shares command
 pub fn execute(
-    mut chain_store: ChainStore,
+    chain_store: Arc<ChainStore>,
     limit: usize,
     start_time: Option<u64>,
     end_time: Option<u64>,
 ) -> Result<(), Box<dyn Error>> {
     // Get PPLNS shares with filtering
-    let shares = chain_store
-        .get_pplns_shares_filtered(limit, start_time, end_time)
-        .map_err(|e| -> Box<dyn Error> { e })?;
+    let shares = chain_store.get_pplns_shares_filtered(limit, start_time, end_time);
 
     // Convert to display format
     let share_infos: Vec<PplnsShareInfo> = shares
@@ -66,17 +65,19 @@ mod tests {
     use crate::shares::chain::chain_store::ChainStore;
     use crate::store::Store;
     use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     #[test]
     fn test_execute_empty_store() {
         // Create a temporary directory for the store
         let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let chain = ChainStore::new(
+        let store =
+            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap());
+        let chain = Arc::new(ChainStore::new(
             store,
             ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
-        );
+        ));
 
         // Execute the pplns-shares command with an empty store
         let result = execute(chain, 10, None, None);
@@ -89,7 +90,8 @@ mod tests {
     fn test_execute_with_shares() {
         // Create a temporary directory for the store
         let temp_dir = tempdir().unwrap();
-        let mut store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store =
+            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap());
 
         // Add test shares
         let shares = vec![
@@ -101,10 +103,10 @@ mod tests {
             store.add_pplns_share(share.clone()).unwrap();
         }
 
-        let chain = ChainStore::new(
+        let chain = Arc::new(ChainStore::new(
             store,
             ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
-        );
+        ));
 
         // Execute the pplns-shares command
         let result = execute(chain, 10, None, None);

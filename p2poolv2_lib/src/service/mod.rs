@@ -62,11 +62,12 @@ mod tests {
     use crate::node::messages::Message;
     use crate::service::p2p_service::{P2PService, RequestContext};
     #[mockall_double::double]
-    use crate::shares::chain::actor::ChainHandle;
+    use crate::shares::chain::chain_store::ChainStore;
     use crate::utils::time_provider::TestTimeProvider;
     use libp2p::PeerId;
     use std::future::Future;
     use std::pin::Pin;
+    use std::sync::Arc;
     use std::task::{Context, Poll};
     use std::time::Instant;
     use std::time::SystemTime;
@@ -147,10 +148,8 @@ mod tests {
         let (response_channel_tx2, _response_channel_rx2) = oneshot::channel::<Message>();
 
         // Create a dummy ChainHandle and TimeProvider
-        let mut chain_handle = ChainHandle::default();
-        chain_handle
-            .expect_clone()
-            .returning(|| ChainHandle::default());
+        let mut store = ChainStore::default();
+        store.expect_clone().returning(|| ChainStore::default());
 
         // Create a TestTimeProvider with the current system time
         let time_provider = TestTimeProvider(SystemTime::now());
@@ -164,7 +163,7 @@ mod tests {
         let ctx1 = RequestContext {
             peer: PeerId::random(),
             request: Message::NotFound(()),
-            chain_handle: chain_handle.clone(),
+            store: Arc::new(store.clone()),
             response_channel: response_channel_tx,
             swarm_tx: swarm_tx.clone(),
             time_provider: time_provider.clone(),
@@ -173,7 +172,7 @@ mod tests {
         let ctx2 = RequestContext {
             peer: PeerId::random(),
             request: Message::NotFound(()),
-            chain_handle: chain_handle.clone(),
+            store: Arc::new(store.clone()),
             response_channel: response_channel_tx1,
             swarm_tx: swarm_tx.clone(),
             time_provider: time_provider.clone(),
@@ -182,7 +181,7 @@ mod tests {
         let ctx3 = RequestContext {
             peer: PeerId::random(),
             request: Message::NotFound(()),
-            chain_handle: chain_handle.clone(),
+            store: Arc::new(store.clone()),
             response_channel: response_channel_tx2,
             swarm_tx: swarm_tx.clone(),
             time_provider: time_provider.clone(),
@@ -252,10 +251,8 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
 
         // Dummy chain handle
-        let mut chain_handle = ChainHandle::default();
-        chain_handle
-            .expect_clone()
-            .returning(|| ChainHandle::default());
+        let mut store = ChainStore::default();
+        store.expect_clone().returning(|| ChainStore::default());
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
@@ -269,7 +266,7 @@ mod tests {
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::NotFound(()),
-            chain_handle: chain_handle.clone(),
+            store: Arc::new(store.clone()),
             response_channel: response_channel_tx,
             swarm_tx: swarm_tx.clone(),
             time_provider: time_provider.clone(),
@@ -311,10 +308,8 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = mpsc::channel::<Message>(10);
 
         // Dummy chain handle
-        let mut chain_handle = ChainHandle::default();
-        chain_handle
-            .expect_clone()
-            .returning(|| ChainHandle::default());
+        let mut store = ChainStore::default();
+        store.expect_clone().returning(|| ChainStore::default());
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
@@ -342,7 +337,7 @@ mod tests {
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::NotFound(()),
-            chain_handle: chain_handle.clone(),
+            store: Arc::new(store.clone()),
             response_channel: response_channel_tx.clone(),
             swarm_tx: swarm_tx.clone(),
             time_provider: time_provider.clone(),
@@ -351,7 +346,7 @@ mod tests {
         let ctx1 = RequestContext {
             peer: peer_id,
             request: Message::NotFound(()),
-            chain_handle: chain_handle.clone(),
+            store: Arc::new(store.clone()),
             response_channel: response_channel_tx.clone(),
             swarm_tx: swarm_tx.clone(),
             time_provider: time_provider.clone(),
@@ -398,10 +393,8 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = mpsc::channel::<Message>(10);
 
         // Dummy chain handle
-        let mut chain_handle = ChainHandle::default();
-        chain_handle
-            .expect_clone()
-            .returning(|| ChainHandle::default());
+        let mut store = ChainStore::default();
+        store.expect_clone().returning(|| ChainStore::default());
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
@@ -429,7 +422,7 @@ mod tests {
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::NotFound(()),
-            chain_handle: chain_handle.clone(),
+            store: Arc::new(store.clone()),
             response_channel: response_channel_tx,
             swarm_tx: swarm_tx.clone(),
             time_provider: time_provider.clone(),

@@ -20,14 +20,15 @@ use crate::node::Node;
 use crate::node::SwarmSend;
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 use crate::shares::handle_stratum_shares::handle_stratum_shares;
 use libp2p::futures::StreamExt;
 use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use p2poolv2_accounting::stats::metrics::MetricsHandle;
 use std::error::Error;
+use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info};
 
@@ -44,20 +45,19 @@ impl NodeHandle {
     /// Create a new Node and return a handle to interact with it
     pub async fn new(
         config: Config,
-        chain_handle: ChainHandle,
+        store: Arc<ChainStore>,
         shares_rx: tokio::sync::mpsc::Receiver<SimplePplnsShare>,
         metrics: MetricsHandle,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
-        let (node_actor, stopping_rx) =
-            NodeActor::new(config, chain_handle.clone(), command_rx).unwrap();
+        let (node_actor, stopping_rx) = NodeActor::new(config, store.clone(), command_rx).unwrap();
 
         tokio::spawn(async move {
             node_actor.run().await;
         });
 
         tokio::spawn(async move {
-            handle_stratum_shares(shares_rx, chain_handle, metrics).await;
+            handle_stratum_shares(shares_rx, store, metrics).await;
         });
         Ok((Self { command_tx }, stopping_rx))
     }
@@ -86,15 +86,13 @@ impl NodeHandle {
     pub async fn get_pplns_shares(
         &self,
         query: crate::command::GetPplnsShareQuery,
-    ) -> Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>> {
+    ) -> Vec<SimplePplnsShare> {
         let (tx, rx) = oneshot::channel();
-        self.command_tx
+        let _ = self
+            .command_tx
             .send(Command::GetPplnsShares(query, tx))
-            .await?;
-        match rx.await {
-            Ok(result) => result,
-            Err(e) => Err(e.into()),
-        }
+            .await;
+        rx.await.unwrap_or_default()
     }
 }
 
@@ -107,7 +105,7 @@ use crate::node::messages::Message;
 #[cfg(test)]
 mock! {
     pub NodeHandle {
-        pub async fn new(config: Config, chain_handle: ChainHandle) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>>;
+        pub async fn new(config: Config, store: std::sync::Arc<ChainStore>) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>>;
         pub async fn get_peers(&self) -> Result<Vec<libp2p::PeerId>, Box<dyn Error>>;
         pub async fn shutdown(&self) -> Result<(), Box<dyn Error>>;
         pub async fn send_gossip(&self, message: Message) -> Result<(), Box<dyn Error>>;
@@ -132,10 +130,10 @@ struct NodeActor {
 impl NodeActor {
     fn new(
         config: Config,
-        chain_handle: ChainHandle,
+        store: Arc<ChainStore>,
         command_rx: mpsc::Receiver<Command>,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>> {
-        let node = Node::new(&config, chain_handle)?;
+        let node = Node::new(&config, store)?;
         let (stopping_tx, stopping_rx) = oneshot::channel();
         Ok((
             Self {
@@ -255,43 +253,15 @@ mod tests {
                 "worker1".to_string(),
                 1500,
             )];
-            let _ = tx.send(Ok(test_shares));
+            let _ = tx.send(test_shares);
         } else {
             panic!("Expected GetPplnsShares command");
         }
 
         // Verify the result is returned correctly
-        let result = handle.await.unwrap();
-        assert!(result.is_ok());
-        let shares = result.unwrap();
+        let shares = handle.await.unwrap();
         assert_eq!(shares.len(), 1);
         assert_eq!(shares[0].timestamp, 1500);
-    }
-
-    #[tokio::test]
-    async fn test_node_handle_get_pplns_shares_handles_error_response() {
-        let (command_tx, mut command_rx) = mpsc::channel(32);
-        let node_handle = NodeHandle { command_tx };
-
-        let query = GetPplnsShareQuery {
-            limit: 10,
-            start_time: None,
-            end_time: None,
-        };
-
-        // Spawn the get_pplns_shares call in a separate task
-        let handle = tokio::spawn(async move { node_handle.get_pplns_shares(query).await });
-
-        // Verify the command was sent and respond with error
-        if let Some(Command::GetPplnsShares(_, tx)) = command_rx.recv().await {
-            let _ = tx.send(Err("Test error".into()));
-        } else {
-            panic!("Expected GetPplnsShares command");
-        }
-
-        // Verify the error is propagated
-        let result = handle.await.unwrap();
-        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -309,6 +279,6 @@ mod tests {
         };
 
         let result = node_handle.get_pplns_shares(query).await;
-        assert!(result.is_err());
+        assert_eq!(result.len(), 0);
     }
 }
