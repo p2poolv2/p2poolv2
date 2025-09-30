@@ -415,15 +415,14 @@ impl Store {
         let mut main_chain = vec![];
         let mut total_difficulty = Decimal::new(0, 0);
 
-        // Add genesis difficulty
-        if let Some(genesis_share) = self.get_share(&genesis) {
-            total_difficulty += genesis_share.header.miner_share.diff;
-        }
-
         while current.is_some() {
             main_chain.push(current.unwrap());
             let children = self.get_children_blockhashes(&current.unwrap());
             if children.is_empty() {
+                // Add genesis difficulty
+                if let Some(genesis_share) = self.get_share(&genesis) {
+                    total_difficulty += genesis_share.header.miner_share.diff;
+                }
                 break;
             }
 
@@ -2994,7 +2993,7 @@ mod tests {
             .sdiff(dec!(3.9041854952356509))
             .build();
 
-        // Store shares
+        // Store shares in linear chain 0 -> 1 -> 2
         store.add_share(share1.clone(), 0);
         store.add_share(share2.clone(), 1);
         store.add_share(share3.clone(), 2);
@@ -3033,6 +3032,8 @@ mod tests {
             store.get_chain_tip(),
             Some(share3.cached_blockhash.unwrap())
         );
+
+        assert_eq!(store.get_genesis_block_hash(), Some(genesis_hash));
 
         // Tips should include only blocks at highest height (height 2)
         let tips_after_init = store.get_tips();
