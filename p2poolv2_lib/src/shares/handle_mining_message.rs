@@ -18,12 +18,13 @@ use crate::node::SwarmSend;
 use crate::shares::ShareBlock;
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 use crate::shares::miner_message::CkPoolMessage;
 use bitcoin::PublicKey;
 use std::error::Error;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
@@ -33,7 +34,7 @@ use tracing::{error, info};
 /// we assume it is valid and add it to the chain.
 pub async fn handle_mining_message<C>(
     mining_message: CkPoolMessage,
-    chain_handle: ChainHandle,
+    store: Arc<ChainStore>,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     miner_pubkey: PublicKey,
 ) -> Result<(), Box<dyn Error>> {
@@ -45,9 +46,9 @@ pub async fn handle_mining_message<C>(
                 "Mining message share block for workinfoid {:?} with hash: {:?}",
                 share_block.header.miner_share.workinfoid, share_block.header.miner_share.hash
             );
-            share_block = chain_handle.setup_share_for_chain(share_block).await;
+            share_block = store.setup_share_for_chain(share_block);
             let share_block_clone = share_block.clone();
-            if let Err(e) = chain_handle.add_share(share_block).await {
+            if let Err(e) = store.add_share(share_block) {
                 error!("Failed to add share: {}", e);
                 return Err("Error adding share to chain".into());
             }
@@ -62,7 +63,7 @@ pub async fn handle_mining_message<C>(
                 "Mining message workbase received: {:?}",
                 workbase.workinfoid
             );
-            if let Err(e) = chain_handle.add_workbase(workbase).await {
+            if let Err(e) = store.add_workbase(workbase) {
                 error!("Failed to add workbase: {}", e);
                 return Err("Error adding workbase".into());
             }
@@ -72,7 +73,7 @@ pub async fn handle_mining_message<C>(
                 "Mining message user workbase received: {:?}",
                 userworkbase.workinfoid
             );
-            if let Err(e) = chain_handle.add_user_workbase(userworkbase).await {
+            if let Err(e) = store.add_user_workbase(userworkbase) {
                 error!("Failed to add user workbase: {}", e);
                 return Err("Error adding user workbase".into());
             }
@@ -87,13 +88,14 @@ mod tests {
     use crate::node::messages::Message;
     use crate::test_utils::simple_miner_share;
     use rust_decimal_macros::dec;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_handle_mining_message_share() {
         let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
             .parse()
             .unwrap();
-        let mut mock_chain = ChainHandle::default();
+        let mut mock_chain = ChainStore::default();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(1);
         // Setup expectations
         mock_chain.expect_add_share().times(1).returning(|_| Ok(()));
@@ -120,7 +122,7 @@ mod tests {
 
         let result = handle_mining_message::<mpsc::Sender<Message>>(
             mining_message,
-            mock_chain,
+            Arc::new(mock_chain),
             swarm_tx,
             miner_pubkey,
         )
@@ -140,7 +142,7 @@ mod tests {
         let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
             .parse()
             .unwrap();
-        let mut mock_chain = ChainHandle::default();
+        let mut mock_chain = ChainStore::default();
         let (swarm_tx, _swarm_rx) = mpsc::channel(1);
         drop(_swarm_rx); // Drop receiver so if send is called the test will fail
 
@@ -172,7 +174,7 @@ mod tests {
 
         let result = handle_mining_message::<mpsc::Sender<Message>>(
             mining_message,
-            mock_chain,
+            Arc::new(mock_chain),
             swarm_tx,
             miner_pubkey,
         )
@@ -189,7 +191,7 @@ mod tests {
         let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
             .parse()
             .unwrap();
-        let mut mock_chain = ChainHandle::default();
+        let mut mock_chain = ChainStore::default();
         let (swarm_tx, swarm_rx) = mpsc::channel(1);
 
         // Close the receiver to simulate a send failure
@@ -220,7 +222,7 @@ mod tests {
 
         let result = handle_mining_message::<mpsc::Sender<Message>>(
             mining_message,
-            mock_chain,
+            Arc::new(mock_chain),
             swarm_tx,
             miner_pubkey,
         )

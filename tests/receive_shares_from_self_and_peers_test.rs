@@ -23,10 +23,12 @@ use p2poolv2_lib::node::messages::Message;
 use p2poolv2_lib::node::p2p_message_handlers::handle_request;
 use p2poolv2_lib::service::p2p_service::RequestContext;
 use p2poolv2_lib::shares::ShareBlock;
-use p2poolv2_lib::shares::chain::actor::ChainHandle;
+use p2poolv2_lib::shares::chain::chain_store::ChainStore;
 use p2poolv2_lib::shares::miner_message::CkPoolMessage;
+use p2poolv2_lib::store::Store;
 use p2poolv2_lib::utils::time_provider::{SystemTimeProvider, TestTimeProvider, TimeProvider};
 use std::fs;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tempfile::tempdir;
 use tokio::sync::mpsc;
@@ -43,10 +45,11 @@ async fn receive_shares_and_workbases_from_self_and_peers() {
         );
 
     let temp_dir = tempdir().unwrap();
-    let chain_handle = ChainHandle::new(
-        temp_dir.path().to_str().unwrap().to_string(),
+    let store = Arc::new(ChainStore::new(
+        Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
         ShareBlock::build_genesis_for_network(config.stratum.network),
-    );
+    ));
+
     let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
     let stats_dir = tempfile::tempdir().unwrap();
     let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
@@ -54,14 +57,10 @@ async fn receive_shares_and_workbases_from_self_and_peers() {
         .unwrap();
 
     // Start the node
-    let (node_handle, _stop_rx) = NodeHandle::new(
-        config.clone(),
-        chain_handle.clone(),
-        shares_rx,
-        metrics_handle,
-    )
-    .await
-    .expect("Failed to create node");
+    let (node_handle, _stop_rx) =
+        NodeHandle::new(config.clone(), store.clone(), shares_rx, metrics_handle)
+            .await
+            .expect("Failed to create node");
 
     let ckpool_data = fs::read_to_string("tests/test_data/self_shares_and_workbases.json")
         .expect("Failed to read CKPool test data file");
@@ -136,20 +135,20 @@ async fn receive_shares_and_workbases_from_self_and_peers() {
         let ctx = RequestContext {
             peer: peer_id,
             request: peer_msg.clone(),
-            chain_handle: chain_handle.clone(),
+            store: store.clone(),
             response_channel: response_channel_tx.clone(),
             swarm_tx: swarm_tx.clone(),
             time_provider,
         };
         let response = handle_request(ctx).await;
-        let _ww = chain_handle.get_workbase(7473434392883363844).await;
+        let _ww = store.get_workbase(7473434392883363844);
         tracing::debug!("Peer message response: {:?}", &response);
         assert!(response.is_ok(), "Peer message handling failed");
     }
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let peer_shares = chain_handle.get_shares_at_height(0).await;
+    let peer_shares = store.get_shares_at_height(0);
     tracing::debug!("Peer shares: {:?}", &peer_shares);
     let peer_share = peer_shares
         .values()
@@ -162,19 +161,13 @@ async fn receive_shares_and_workbases_from_self_and_peers() {
         "Previous share blockhash mismatch",
     );
 
-    let ckpool_workbase = chain_handle
-        .get_workbase(7473434392883363843)
-        .await
-        .unwrap();
+    let ckpool_workbase = store.get_workbase(7473434392883363843).unwrap();
     assert_eq!(
         ckpool_workbase.gbt.height, 123,
         "CKPool workbase height mismatch"
     );
 
-    let peer_workbase = chain_handle
-        .get_workbase(7473434392883363844)
-        .await
-        .unwrap();
+    let peer_workbase = store.get_workbase(7473434392883363844).unwrap();
     assert_eq!(
         peer_workbase.gbt.height, 123,
         "Peer workbase height mismatch"
@@ -201,24 +194,21 @@ async fn test_rate_limiting() {
     config.network.rate_limit_window_secs = 1;
 
     let temp_dir = tempdir().unwrap();
-    let chain_handle = ChainHandle::new(
-        temp_dir.path().to_str().unwrap().to_string(),
+    let store = Arc::new(ChainStore::new(
+        Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
         ShareBlock::build_genesis_for_network(config.stratum.network),
-    );
+    ));
+
     let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
     let stats_dir = tempfile::tempdir().unwrap();
     let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
         .await
         .unwrap();
 
-    let (node_handle, _stop_rx) = NodeHandle::new(
-        config.clone(),
-        chain_handle.clone(),
-        shares_rx,
-        metrics_handle,
-    )
-    .await
-    .expect("Failed to create node");
+    let (node_handle, _stop_rx) =
+        NodeHandle::new(config.clone(), store.clone(), shares_rx, metrics_handle)
+            .await
+            .expect("Failed to create node");
 
     let peer_id = libp2p::PeerId::random();
     let (swarm_tx, mut _swarm_rx) = mpsc::channel(100);
@@ -229,7 +219,7 @@ async fn test_rate_limiting() {
     let result1 = handle_request(RequestContext {
         peer: peer_id,
         request: Message::Workbase(workbase.clone()),
-        chain_handle: chain_handle.clone(),
+        store: store.clone(),
         response_channel: (),
         swarm_tx: swarm_tx.clone(),
         time_provider: time_provider.clone(),
@@ -239,7 +229,7 @@ async fn test_rate_limiting() {
     let result2 = handle_request(RequestContext {
         peer: peer_id,
         request: Message::Workbase(workbase.clone()),
-        chain_handle: chain_handle.clone(),
+        store: store.clone(),
         response_channel: (),
         swarm_tx: swarm_tx.clone(),
         time_provider: time_provider.clone(),
@@ -254,7 +244,7 @@ async fn test_rate_limiting() {
     let result3 = handle_request(RequestContext {
         peer: peer_id,
         request: Message::Workbase(workbase.clone()),
-        chain_handle: chain_handle.clone(),
+        store: store.clone(),
         response_channel: (),
         swarm_tx: swarm_tx.clone(),
         time_provider: time_provider.clone(),

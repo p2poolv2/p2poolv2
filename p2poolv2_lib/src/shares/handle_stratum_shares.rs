@@ -16,24 +16,25 @@
 
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use p2poolv2_accounting::stats::metrics::MetricsHandle;
+use std::sync::Arc;
 use tracing::info;
 
 /// Save share to database for persistence in case we need to recover from a crash
 /// Shares are saved with a TTL for 1 week or when we reach accumulated work required for 5 blocks at current difficulty.
 pub async fn handle_stratum_shares(
     mut shares_rx: tokio::sync::mpsc::Receiver<SimplePplnsShare>,
-    chain_handle: ChainHandle,
+    store: Arc<ChainStore>,
     _metrics: MetricsHandle,
 ) {
     while let Some(share) = shares_rx.recv().await {
         info!("Received share: {:?}", share);
 
-        let _ = chain_handle.add_pplns_share(share).await;
+        let _ = store.add_pplns_share(share);
     }
     info!("Shares channel closed, stopping share handler.");
 }

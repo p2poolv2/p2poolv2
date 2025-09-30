@@ -17,6 +17,7 @@
 use crate::shares::chain::chain_store::ChainStore;
 use serde::Serialize;
 use std::error::Error;
+use std::sync::Arc;
 
 /// Structure to hold chain information
 #[derive(Serialize)]
@@ -29,18 +30,21 @@ struct ChainInfo {
 }
 
 /// Implementation of the info command
-pub fn execute(chain: ChainStore) -> Result<(), Box<dyn Error>> {
+pub fn execute(chain: Arc<ChainStore>) -> Result<(), Box<dyn Error>> {
     // Get genesis block hash
-    let genesis_block_hash = chain.genesis_block_hash.map(|hash| format!("{hash:?}"));
+    let genesis_block_hash = chain
+        .store
+        .get_genesis_block_hash()
+        .map(|hash| format!("{hash:?}"));
 
     // Get chain tip height
     let chain_tip_height = chain.get_tip_height();
 
     // Get chain tip blockhash
-    let chain_tip_blockhash = chain.chain_tip.map(|hash| format!("{hash:?}"));
+    let chain_tip_blockhash = chain.store.get_chain_tip().map(|hash| format!("{hash:?}"));
 
     // Get total work (difficulty)
-    let total_work = format!("{:?}", chain.total_difficulty);
+    let total_work = format!("{:?}", chain.store.get_total_difficulty());
 
     // Count total number of shares in the chain
     let mut total_shares = 0;
@@ -72,20 +76,22 @@ mod tests {
     use crate::shares::ShareBlock;
     use crate::shares::chain::chain_store::ChainStore;
     use crate::store::Store;
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     #[test]
     fn test_execute_empty_chain() {
         // Create a temporary directory for the store
         let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let store =
+            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap());
         let chain = ChainStore::new(
             store,
             ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
         );
 
         // Execute the info command with an empty store
-        let result = execute(chain);
+        let result = execute(Arc::new(chain));
 
         // Verify the command executed successfully
         assert!(result.is_ok(), "Execute should not return an error");

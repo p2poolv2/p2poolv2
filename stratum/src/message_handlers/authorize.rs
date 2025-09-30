@@ -136,7 +136,7 @@ mod tests {
             shares_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
-            chain_handle: (),
+            store: (),
         };
 
         // Execute
@@ -232,7 +232,7 @@ mod tests {
             shares_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
-            chain_handle: (),
+            store: (),
         };
 
         // Execute
@@ -287,7 +287,7 @@ mod tests {
             shares_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
-            chain_handle: (),
+            store: (),
         };
 
         // Execute

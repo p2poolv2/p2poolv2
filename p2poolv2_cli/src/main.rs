@@ -14,14 +14,13 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use p2poolv2_lib::cli_commands;
-
-// Now use the external crate with its name
 use clap::{Parser, Subcommand};
+use p2poolv2_lib::cli_commands;
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::shares::ShareBlock;
 use p2poolv2_lib::shares::chain::chain_store::ChainStore;
 use std::error::Error;
+use std::sync::Arc;
 
 /// P2Pool v2 CLI utility
 #[derive(Parser, Debug)]
@@ -64,7 +63,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Check if store path is provided and handle it
     let store = cli_commands::store::open_store(config.store.path.clone())?;
     let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
-    let chain = ChainStore::new(store, genesis);
+    let chain = Arc::new(ChainStore::new(Arc::new(store), genesis));
 
     // Handle command if provided
     match &cli.command {

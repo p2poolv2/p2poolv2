@@ -17,12 +17,13 @@
 use crate::shares::ShareBlock;
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 use crate::shares::validation;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
+use std::sync::Arc;
 use tracing::{error, info};
 
 /// Handle a ShareBlock received from a peer in response to a getblocks request.
@@ -32,15 +33,15 @@ use tracing::{error, info};
 /// Share blocks are gossiped using the libp2p gossipsub protocol.
 pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
     share_block: ShareBlock,
-    chain_handle: ChainHandle,
+    store: Arc<ChainStore>,
     time_provider: &T,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Received share block: {:?}", share_block);
-    if let Err(e) = validation::validate(&share_block, &chain_handle, time_provider).await {
+    if let Err(e) = validation::validate(&share_block, store.clone(), time_provider).await {
         error!("Share block validation failed: {}", e);
         return Err("Share block validation failed".into());
     }
-    if let Err(e) = chain_handle.add_share(share_block.clone()).await {
+    if let Err(e) = store.add_share(share_block.clone()) {
         error!("Failed to add share: {}", e);
         return Err("Error adding share to chain".into());
     }
@@ -54,11 +55,12 @@ mod tests {
     use crate::test_utils::{TestBlockBuilder, load_valid_workbases_userworkbases_and_shares};
     use crate::utils::time_provider::TestTimeProvider;
     use mockall::predicate::*;
+    use std::sync::Arc;
     use std::time::SystemTime;
 
     #[tokio::test]
     async fn test_handle_share_block_success() {
-        let mut chain_handle = ChainHandle::default();
+        let mut store = ChainStore::default();
         let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
 
         let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
@@ -81,17 +83,17 @@ mod tests {
         .unwrap();
 
         // Set up mock expectations
-        chain_handle
+        store
             .expect_add_share()
             .with(eq(share_block.clone()))
             .returning(|_| Ok(()));
 
-        chain_handle
+        store
             .expect_get_workbase()
             .with(eq(7473434392883363843))
             .returning(move |_| Some(workbases[0].clone()));
 
-        chain_handle
+        store
             .expect_get_user_workbase()
             .with(eq(7473434392883363843))
             .returning(move |_| Some(userworkbases[0].clone()));
@@ -99,27 +101,27 @@ mod tests {
         let mut time_provider = TestTimeProvider(SystemTime::now());
         time_provider.set_time(shares[0].ntime);
 
-        let result = handle_share_block(share_block, chain_handle, &time_provider).await;
+        let result = handle_share_block(share_block, Arc::new(store), &time_provider).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_handle_share_block_validation_error() {
-        let mut chain_handle = ChainHandle::default();
+        let mut store = ChainStore::default();
         let share_block = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
             .workinfoid(7473434392883363843)
             .build();
 
         // Set up mock to return None for workbase to trigger validation error
-        chain_handle
+        store
             .expect_get_workbase()
             .with(eq(7473434392883363843))
             .returning(|_| None);
 
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        let result = handle_share_block(share_block, chain_handle, &time_provider).await;
+        let result = handle_share_block(share_block, Arc::new(store), &time_provider).await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
@@ -129,7 +131,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_share_block_add_share_error() {
-        let mut chain_handle = ChainHandle::default();
+        let mut store = ChainStore::default();
         let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
 
         let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
@@ -152,17 +154,17 @@ mod tests {
         .unwrap();
 
         // Set up mock expectations
-        chain_handle
+        store
             .expect_add_share()
             .with(eq(share_block.clone()))
             .returning(|_| Err("Failed to add share".into()));
 
-        chain_handle
+        store
             .expect_get_workbase()
             .with(eq(7473434392883363843))
             .returning(move |_| Some(workbases[0].clone()));
 
-        chain_handle
+        store
             .expect_get_user_workbase()
             .with(eq(7473434392883363843))
             .returning(move |_| Some(userworkbases[0].clone()));
@@ -170,7 +172,7 @@ mod tests {
         let mut time_provider = TestTimeProvider(SystemTime::now());
         time_provider.set_time(shares[0].ntime);
 
-        let result = handle_share_block(share_block, chain_handle, &time_provider).await;
+        let result = handle_share_block(share_block, Arc::new(store), &time_provider).await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),

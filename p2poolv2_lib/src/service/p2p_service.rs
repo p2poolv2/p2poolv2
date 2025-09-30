@@ -25,15 +25,19 @@ use tower::Service;
 use crate::node::SwarmSend;
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::handle_request;
-#[cfg_attr(test, mockall_double::double)]
-use crate::shares::chain::actor::ChainHandle;
+#[cfg(test)]
+#[mockall_double::double]
+use crate::shares::chain::chain_store::ChainStore;
+#[cfg(not(test))]
+use crate::shares::chain::chain_store::ChainStore;
 use crate::utils::time_provider::TimeProvider;
+use std::sync::Arc;
 
 /// Request context wrapping all inputs for the service call.
 pub struct RequestContext<C, T> {
     pub peer: libp2p::PeerId,
     pub request: Message,
-    pub chain_handle: ChainHandle,
+    pub store: Arc<ChainStore>,
     pub response_channel: C,
     pub swarm_tx: mpsc::Sender<SwarmSend<C>>,
     pub time_provider: T,

@@ -16,16 +16,15 @@
 
 mod bitcoin_block_validation;
 
+use crate::shares::ShareBlock;
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::actor::ChainHandle;
-
+use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
-use crate::shares::chain::actor::ChainHandle;
-
-use crate::shares::ShareBlock;
+use crate::shares::chain::chain_store::ChainStore;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
+use std::sync::Arc;
 
 pub const MAX_UNCLES: usize = 3;
 pub const MAX_TIME_DIFF: u64 = 60;
@@ -39,21 +38,19 @@ pub const MAX_TIME_DIFF: u64 = 60;
 /// validate coinbase transaction
 pub async fn validate(
     share: &ShareBlock,
-    chain_handle: &ChainHandle,
+    store: Arc<ChainStore>,
     time_provider: &impl TimeProvider,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     if let Err(e) = validate_timestamp(share, time_provider).await {
         return Err(format!("Share timestamp validation failed: {e}").into());
     }
-    if let Err(e) = validate_prev_share_blockhash(share, chain_handle).await {
+    if let Err(e) = validate_prev_share_blockhash(share, store.clone()).await {
         return Err(format!("Share prev_share_blockhash validation failed: {e}").into());
     }
-    if let Err(e) = validate_uncles(share, chain_handle).await {
+    if let Err(e) = validate_uncles(share, store.clone()).await {
         return Err(format!("Share uncles validation failed: {e}").into());
     }
-    let workbase = chain_handle
-        .get_workbase(share.header.miner_share.workinfoid)
-        .await;
+    let workbase = store.get_workbase(share.header.miner_share.workinfoid);
     if workbase.is_none() {
         return Err(format!(
             "Missing workbase for share - workinfoid: {}",
@@ -61,9 +58,7 @@ pub async fn validate(
         )
         .into());
     }
-    let userworkbase = chain_handle
-        .get_user_workbase(share.header.miner_share.workinfoid)
-        .await;
+    let userworkbase = store.get_user_workbase(share.header.miner_share.workinfoid);
     if userworkbase.is_none() {
         return Err(format!(
             "Missing user workbase for share - workinfoid: {}",
@@ -85,11 +80,11 @@ pub async fn validate(
 /// Validate prev_share_blockhash is in store or block is genesis
 pub async fn validate_prev_share_blockhash(
     share: &ShareBlock,
-    chain_handle: &ChainHandle,
+    store: Arc<ChainStore>,
 ) -> Result<(), Box<dyn Error>> {
     match share.header.prev_share_blockhash {
         Some(prev_share_blockhash) => {
-            if chain_handle.get_share(prev_share_blockhash).await.is_none() {
+            if store.get_share(&prev_share_blockhash).is_none() {
                 return Err(format!(
                     "Prev share blockhash {prev_share_blockhash} not found in store"
                 )
@@ -104,13 +99,13 @@ pub async fn validate_prev_share_blockhash(
 /// Validate the share uncles are in store and no more than MAX_UNCLES
 pub async fn validate_uncles(
     share: &ShareBlock,
-    chain_handle: &ChainHandle,
+    store: Arc<ChainStore>,
 ) -> Result<(), Box<dyn Error>> {
     if share.header.uncles.len() > MAX_UNCLES {
         return Err("Too many uncles".into());
     }
     for uncle in &share.header.uncles {
-        if chain_handle.get_share(*uncle).await.is_none() {
+        if store.get_share(uncle).is_none() {
             return Err(format!("Uncle {uncle} not found in store").into());
         }
     }
@@ -151,6 +146,7 @@ mod tests {
     use crate::test_utils::load_valid_workbases_userworkbases_and_shares;
     use crate::test_utils::simple_miner_share;
     use crate::utils::time_provider::TestTimeProvider;
+    use std::sync::Arc;
     use std::time::SystemTime;
     #[tokio::test]
     async fn test_validate_timestamp_should_fail_for_old_timestamp() {
@@ -235,8 +231,9 @@ mod tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
-        let mut chain_handle = ChainHandle::default();
-        chain_handle
+        let mut store = ChainStore::default();
+
+        store
             .expect_get_share()
             .with(mockall::predicate::eq(
                 initial_share.cached_blockhash.unwrap(),
@@ -244,11 +241,14 @@ mod tests {
             .returning(move |_| Some(initial_share.clone()));
 
         assert!(
-            validate_prev_share_blockhash(&valid_share, &chain_handle)
+            validate_prev_share_blockhash(&valid_share, Arc::new(store))
                 .await
                 .is_ok()
         );
+    }
 
+    #[tokio::test]
+    async fn test_validate_prev_blockhash_non_existing() {
         // Create share pointing to non-existent previous hash - should fail validation
         let non_existent_hash: ShareBlockHash =
             "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7".into();
@@ -257,13 +257,15 @@ mod tests {
             .prev_share_blockhash(non_existent_hash)
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        chain_handle
+
+        let mut store = ChainStore::default();
+        store
             .expect_get_share()
             .with(mockall::predicate::eq(non_existent_hash))
             .returning(move |_| None);
 
         assert!(
-            validate_prev_share_blockhash(&invalid_share, &chain_handle)
+            validate_prev_share_blockhash(&invalid_share, Arc::new(store))
                 .await
                 .is_err()
         );
@@ -271,7 +273,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_uncles() {
-        let mut chain_handle = ChainHandle::default();
+        let mut seq = mockall::Sequence::new();
+        let mut store = ChainStore::default();
 
         // Create initial shares to use as uncles
         let uncle1 = TestBlockBuilder::new()
@@ -280,8 +283,10 @@ mod tests {
             .build();
 
         let uncle1_clone = uncle1.clone();
-        chain_handle
+        store
             .expect_get_share()
+            .times(1)
+            .in_sequence(&mut seq)
             .with(mockall::predicate::eq(uncle1.cached_blockhash.unwrap()))
             .returning(move |_| Some(uncle1_clone.clone()));
 
@@ -292,8 +297,10 @@ mod tests {
 
         let uncle2_clone = uncle2.clone();
 
-        chain_handle
+        store
             .expect_get_share()
+            .times(1)
+            .in_sequence(&mut seq)
             .with(mockall::predicate::eq(uncle2.cached_blockhash.unwrap()))
             .returning(move |_| Some(uncle2_clone.clone()));
 
@@ -304,8 +311,10 @@ mod tests {
 
         let uncle3_clone = uncle3.clone();
 
-        chain_handle
+        store
             .expect_get_share()
+            .times(1)
+            .in_sequence(&mut seq)
             .with(mockall::predicate::eq(uncle3.cached_blockhash.unwrap()))
             .returning(move |_| Some(uncle3_clone.clone()));
 
@@ -316,10 +325,15 @@ mod tests {
 
         let uncle4_clone = uncle4.clone();
 
-        chain_handle
-            .expect_get_share()
-            .with(mockall::predicate::eq(uncle4.cached_blockhash.unwrap()))
-            .returning(move |_| Some(uncle4_clone.clone()));
+        // Test share with non-existent uncle
+        let non_existent_hash: ShareBlockHash =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7".into();
+
+        let invalid_share_b = TestBlockBuilder::new()
+            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8")
+            .uncles(vec![uncle1.cached_blockhash.unwrap(), non_existent_hash])
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
 
         // Test share with valid number of uncles (MAX_UNCLES = 3)
         let valid_share = TestBlockBuilder::new()
@@ -332,7 +346,12 @@ mod tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
-        assert!(validate_uncles(&valid_share, &chain_handle).await.is_ok());
+        let arc_store = Arc::new(store);
+        assert!(
+            validate_uncles(&valid_share, arc_store.clone())
+                .await
+                .is_ok()
+        );
 
         // Test share with too many uncles (> MAX_UNCLES)
         let invalid_share = TestBlockBuilder::new()
@@ -347,28 +366,13 @@ mod tests {
             .build();
 
         assert!(
-            validate_uncles(&invalid_share, &chain_handle)
+            validate_uncles(&invalid_share, arc_store.clone())
                 .await
                 .is_err()
         );
 
-        // Test share with non-existent uncle
-        let non_existent_hash: ShareBlockHash =
-            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7".into();
-
-        chain_handle
-            .expect_get_share()
-            .with(mockall::predicate::eq(non_existent_hash))
-            .returning(|_| None);
-
-        let invalid_share = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8")
-            .uncles(vec![uncle1.cached_blockhash.unwrap(), non_existent_hash])
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .build();
-
         assert!(
-            validate_uncles(&invalid_share, &chain_handle)
+            validate_uncles(&invalid_share, arc_store.clone())
                 .await
                 .is_err()
         );
@@ -376,7 +380,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_share() {
-        let mut chain_handle = ChainHandle::default();
+        let mut store = ChainStore::default();
 
         let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
         let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
@@ -399,19 +403,19 @@ mod tests {
         .unwrap();
 
         // Set up mock expectations
-        chain_handle
+        store
             .expect_add_share()
             .with(mockall::predicate::eq(share_block.clone()))
             .returning(|_| Ok(()));
 
-        chain_handle
+        store
             .expect_setup_share_for_chain()
             .returning(|share_block| share_block);
-        chain_handle
+        store
             .expect_get_workbase()
             .with(mockall::predicate::eq(7473434392883363843))
             .returning(move |_| Some(workbases[0].clone()));
-        chain_handle
+        store
             .expect_get_user_workbase()
             .with(mockall::predicate::eq(7473434392883363843))
             .returning(move |_| Some(userworkbases[0].clone()));
@@ -420,7 +424,7 @@ mod tests {
         time_provider.set_time(shares[0].ntime);
 
         // Test handle_request directly without request_id
-        let result = validate(&share_block, &chain_handle, &time_provider).await;
+        let result = validate(&share_block, Arc::new(store), &time_provider).await;
 
         assert!(result.is_ok());
     }

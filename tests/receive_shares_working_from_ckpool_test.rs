@@ -20,9 +20,11 @@ use common::default_test_config;
 use p2poolv2_accounting::{simple_pplns::SimplePplnsShare, stats::metrics};
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::shares::ShareBlock;
-use p2poolv2_lib::shares::chain::actor::ChainHandle;
+use p2poolv2_lib::shares::chain::chain_store::ChainStore;
 use p2poolv2_lib::shares::miner_message::CkPoolMessage;
+use p2poolv2_lib::store::Store;
 use std::fs;
+use std::sync::Arc;
 use std::time::Duration;
 use tempfile::tempdir;
 
@@ -38,10 +40,11 @@ async fn test_single_node_with_zmq_feed_of_workbases_only() {
         );
 
     let temp_dir = tempdir().unwrap();
-    let chain_handle = ChainHandle::new(
-        temp_dir.path().to_str().unwrap().to_string(),
+    let store = Arc::new(ChainStore::new(
+        Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
         ShareBlock::build_genesis_for_network(config.stratum.network),
-    );
+    ));
+
     let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
     let stats_dir = tempfile::tempdir().unwrap();
     let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
@@ -49,14 +52,10 @@ async fn test_single_node_with_zmq_feed_of_workbases_only() {
         .unwrap();
 
     // Start the node
-    let (node_handle, _stop_rx) = NodeHandle::new(
-        config.clone(),
-        chain_handle.clone(),
-        shares_rx,
-        metrics_handle,
-    )
-    .await
-    .expect("Failed to create node");
+    let (node_handle, _stop_rx) =
+        NodeHandle::new(config.clone(), store.clone(), shares_rx, metrics_handle)
+            .await
+            .expect("Failed to create node");
 
     // Load test data from JSON file
     let test_data = fs::read_to_string("tests/test_data/workbases_only.json")
@@ -89,16 +88,10 @@ async fn test_single_node_with_zmq_feed_of_workbases_only() {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
-    let workbase = chain_handle
-        .get_workbase(7460801854683742211)
-        .await
-        .unwrap();
+    let workbase = store.get_workbase(7460801854683742211).unwrap();
     assert_eq!(workbase.gbt.height, 109);
 
-    let workbase = chain_handle
-        .get_workbase(7460801854683742212)
-        .await
-        .unwrap();
+    let workbase = store.get_workbase(7460801854683742212).unwrap();
     assert_eq!(workbase.gbt.height, 109);
 
     // Clean up
@@ -119,10 +112,11 @@ async fn test_single_node_with_zmq_feed_of_shares_only() {
         );
 
     let temp_dir = tempdir().unwrap();
-    let chain_handle = ChainHandle::new(
-        temp_dir.path().to_str().unwrap().to_string(),
+    let store = Arc::new(ChainStore::new(
+        Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
         ShareBlock::build_genesis_for_network(config.stratum.network),
-    );
+    ));
+
     let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
     let stats_dir = tempfile::tempdir().unwrap();
     let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
@@ -130,14 +124,10 @@ async fn test_single_node_with_zmq_feed_of_shares_only() {
         .unwrap();
 
     // Start the node
-    let (node_handle, _stop_rx) = NodeHandle::new(
-        config.clone(),
-        chain_handle.clone(),
-        shares_rx,
-        metrics_handle,
-    )
-    .await
-    .expect("Failed to create node");
+    let (node_handle, _stop_rx) =
+        NodeHandle::new(config.clone(), store.clone(), shares_rx, metrics_handle)
+            .await
+            .expect("Failed to create node");
 
     // Load test data from JSON file
     let test_data = fs::read_to_string("tests/test_data/shares_only.json")
@@ -173,36 +163,31 @@ async fn test_single_node_with_zmq_feed_of_shares_only() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // load shares from the chain to verify the node received and processed the data
-    let shares = chain_handle.get_shares_at_height(1).await;
+    let shares = store.get_shares_at_height(1);
     let share_1 = shares.values().next().unwrap();
-    let shares = chain_handle.get_shares_at_height(2).await;
+    let shares = store.get_shares_at_height(2);
     let share_2 = shares.values().next().unwrap();
 
     // Verify the node received and processed the data
     assert!(
-        chain_handle
-            .get_share(share_1.cached_blockhash.unwrap())
-            .await
+        store
+            .get_share(&share_1.cached_blockhash.unwrap())
             .is_some()
     );
     assert!(
-        chain_handle
-            .get_share(share_2.cached_blockhash.unwrap())
-            .await
+        store
+            .get_share(&share_2.cached_blockhash.unwrap())
             .is_some()
     );
 
-    assert_eq!(chain_handle.get_chain_tip().await, share_2.cached_blockhash);
-    let share_at_tip = chain_handle
-        .get_share(share_2.cached_blockhash.unwrap())
-        .await
-        .unwrap();
+    assert_eq!(store.store.get_chain_tip(), share_2.cached_blockhash);
+    let share_at_tip = store.get_share(&share_2.cached_blockhash.unwrap()).unwrap();
     assert_eq!(
         share_at_tip.header.prev_share_blockhash,
         Some(share_1.cached_blockhash.unwrap())
     );
 
-    let workbase = chain_handle.get_workbase(7460801854683742211).await;
+    let workbase = store.get_workbase(7460801854683742211);
     assert!(workbase.is_none());
 
     // Clean up
@@ -224,10 +209,11 @@ async fn test_single_node_with_shares_and_workbases() {
         );
 
     let temp_dir = tempdir().unwrap();
-    let chain_handle = ChainHandle::new(
-        temp_dir.path().to_str().unwrap().to_string(),
+    let store = Arc::new(ChainStore::new(
+        Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
         ShareBlock::build_genesis_for_network(config.stratum.network),
-    );
+    ));
+
     let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
     let stats_dir = tempfile::tempdir().unwrap();
     let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
@@ -235,14 +221,10 @@ async fn test_single_node_with_shares_and_workbases() {
         .unwrap();
 
     // Start the node
-    let (node_handle, _stop_rx) = NodeHandle::new(
-        config.clone(),
-        chain_handle.clone(),
-        shares_rx,
-        metrics_handle,
-    )
-    .await
-    .expect("Failed to create node");
+    let (node_handle, _stop_rx) =
+        NodeHandle::new(config.clone(), store.clone(), shares_rx, metrics_handle)
+            .await
+            .expect("Failed to create node");
 
     // Load test data from JSON file
     let test_data = fs::read_to_string("tests/test_data/single_node_simple.json")
@@ -276,21 +258,17 @@ async fn test_single_node_with_shares_and_workbases() {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
-    let mined_shares = chain_handle.get_shares_at_height(0).await;
+    let mined_shares = store.get_shares_at_height(0);
     let mined_share = mined_shares.values().next().unwrap();
 
     // Verify the node received and processed the data
     assert!(
-        chain_handle
-            .get_share(mined_share.cached_blockhash.unwrap())
-            .await
+        store
+            .get_share(&mined_share.cached_blockhash.unwrap())
             .is_some()
     );
 
-    let workbase = chain_handle
-        .get_workbase(7460801854683742211)
-        .await
-        .unwrap();
+    let workbase = store.get_workbase(7460801854683742211).unwrap();
     assert_eq!(workbase.gbt.height, 109);
 
     // Clean up

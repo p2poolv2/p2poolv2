@@ -51,36 +51,28 @@ impl PplnsShareProvider for MockPplnsShareProvider {
         _limit: usize,
         start_time: Option<u64>,
         end_time: Option<u64>,
-    ) -> impl std::future::Future<
-        Output = Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>>,
-    > + Send
-    + '_ {
-        async move {
-            let filtered_shares: Vec<SimplePplnsShare> = self
-                .shares
-                .iter()
-                .filter(|share| {
-                    let timestamp_secs = share.timestamp / 1_000_000;
-                    let after_start = start_time.is_none_or(|start| timestamp_secs >= start);
-                    let before_end = end_time.is_none_or(|end| timestamp_secs <= end);
-                    after_start && before_end
-                })
-                .cloned()
-                .collect();
+    ) -> Vec<SimplePplnsShare> {
+        let filtered_shares: Vec<SimplePplnsShare> = self
+            .shares
+            .iter()
+            .filter(|share| {
+                let timestamp_secs = share.timestamp / 1_000_000;
+                let after_start = start_time.is_none_or(|start| timestamp_secs >= start);
+                let before_end = end_time.is_none_or(|end| timestamp_secs <= end);
+                after_start && before_end
+            })
+            .cloned()
+            .collect();
 
-            // Return shares ordered by timestamp (oldest first, so .rev() in function makes them newest first)
-            let mut result = filtered_shares;
-            result.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-            Ok(result)
-        }
+        // Return shares ordered by timestamp (oldest first, so .rev() in function makes them newest first)
+        let mut result = filtered_shares;
+        result.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        result
     }
 }
 
 impl JobSaver for MockPplnsShareProvider {
-    async fn save_job(
-        &self,
-        serialized_notify: String,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    fn save_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>> {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -91,7 +83,7 @@ impl JobSaver for MockPplnsShareProvider {
         Ok(())
     }
 
-    async fn get_jobs(
+    fn get_jobs(
         &self,
         start_time: Option<u64>,
         end_time: Option<u64>,

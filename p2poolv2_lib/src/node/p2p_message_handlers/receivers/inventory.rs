@@ -19,9 +19,9 @@ use crate::node::SwarmSend;
 use crate::node::messages::InventoryMessage;
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::info;
@@ -37,7 +37,7 @@ use tracing::info;
 ///   Note: At the moment, we only support sending blockhashes as inventory.
 pub async fn handle_inventory<C: Clone + 'static>(
     inventory: Vec<InventoryMessage>,
-    chain_handle: ChainHandle,
+    store: std::sync::Arc<ChainStore>,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     response_channel: C,
 ) -> Result<(), Box<dyn Error>> {
@@ -49,7 +49,7 @@ pub async fn handle_inventory<C: Clone + 'static>(
                 info!("Received block hashes locator: {:?}", locator);
 
                 // Check which blocks we're missing and request them
-                let missing_blocks = chain_handle.get_missing_blockhashes(&locator).await;
+                let missing_blocks = store.get_missing_blockhashes(&locator);
 
                 // Request missing blocks from the peer
                 if !missing_blocks.is_empty() {
@@ -82,19 +82,19 @@ pub async fn handle_inventory<C: Clone + 'static>(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::node::messages::{GetData, InventoryMessage};
     use crate::node::p2p_message_handlers::receivers::inventory::handle_inventory;
     use crate::node::{Message, SwarmSend};
     use crate::shares::ShareBlockHash;
-    #[mockall_double::double]
-    use crate::shares::chain::actor::ChainHandle;
     use mockall::predicate::*;
+    use std::sync::Arc;
     use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn test_handle_inventory_block_hashes() {
         // Setup
-        let mut chain_handle = ChainHandle::default();
+        let mut store = ChainStore::default();
 
         // Create some test block hashes
         let block_hash1: ShareBlockHash =
@@ -107,8 +107,8 @@ mod tests {
         let locator = vec![block_hash1, block_hash2, block_hash3];
         let missing_blocks = vec![block_hash1, block_hash3]; // Assume we're missing blocks 1 and 3
 
-        // Mock the chain_handle.get_missing_blockhashes call
-        chain_handle
+        // Mock the store.get_missing_blockhashes call
+        store
             .expect_get_missing_blockhashes()
             .with(eq(locator.clone()))
             .returning(move |_| missing_blocks.clone());
@@ -119,8 +119,13 @@ mod tests {
 
         // Execute
         let inventory = vec![InventoryMessage::BlockHashes(locator)];
-        let result =
-            handle_inventory(inventory, chain_handle, swarm_tx, response_channel.clone()).await;
+        let result = handle_inventory(
+            inventory,
+            Arc::new(store),
+            swarm_tx,
+            response_channel.clone(),
+        )
+        .await;
 
         // Verify
         assert!(result.is_ok(), "handle_inventory should return Ok");

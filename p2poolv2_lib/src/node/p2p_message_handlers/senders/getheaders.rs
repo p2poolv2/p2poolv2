@@ -19,9 +19,9 @@ use crate::node::SwarmSend;
 use crate::shares::ShareBlockHash;
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
-use crate::shares::chain::actor::ChainHandle;
+use crate::shares::chain::chain_store::ChainStore;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::error;
@@ -29,10 +29,10 @@ use tracing::error;
 /// Send a getheaders request to the peer
 pub async fn send_getheaders<C: 'static>(
     peer_id: libp2p::PeerId,
-    chain_handle: ChainHandle,
+    store: std::sync::Arc<ChainStore>,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error>> {
-    let locator = chain_handle.build_locator().await;
+    let locator = store.build_locator();
     let stop_block_hash: ShareBlockHash =
         "0000000000000000000000000000000000000000000000000000000000000000".into();
     let getheaders_request = Message::GetShareHeaders(locator.clone(), stop_block_hash);
@@ -49,13 +49,14 @@ pub async fn send_getheaders<C: 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use tokio::sync::mpsc::channel;
 
     #[tokio::test]
     async fn test_send_getheaders_success() {
         let (swarm_tx, mut swarm_rx) = channel::<SwarmSend<Message>>(1);
         let peer_id = libp2p::PeerId::random();
-        let mut chain_handle = ChainHandle::default();
+        let mut store = ChainStore::default();
 
         let test_locator = vec![ShareBlockHash::from(
             "1111111111111111111111111111111111111111111111111111111111111111",
@@ -63,12 +64,12 @@ mod tests {
 
         let test_locator_clone = test_locator.clone();
 
-        chain_handle
+        store
             .expect_build_locator()
             .times(1)
             .return_once(move || test_locator_clone);
 
-        let send_result = send_getheaders(peer_id, chain_handle, swarm_tx).await;
+        let send_result = send_getheaders(peer_id, Arc::new(store), swarm_tx).await;
         assert!(send_result.is_ok());
 
         if let Some(SwarmSend::Request(received_peer_id, message)) = swarm_rx.recv().await {
@@ -94,13 +95,13 @@ mod tests {
     async fn test_send_getheaders_channel_closed() {
         let (swarm_tx, _) = channel::<SwarmSend<()>>(1);
         let peer_id = libp2p::PeerId::random();
-        let mut chain_handle = ChainHandle::default();
+        let mut store = ChainStore::default();
 
         let test_locator = vec![ShareBlockHash::from(
             "1111111111111111111111111111111111111111111111111111111111111111",
         )];
 
-        chain_handle
+        store
             .expect_build_locator()
             .times(1)
             .return_once(move || test_locator.clone());
@@ -110,7 +111,7 @@ mod tests {
         // Drop receiver to close channel
         drop(swarm_tx_clone);
 
-        let send_result = send_getheaders(peer_id, chain_handle, swarm_tx).await;
+        let send_result = send_getheaders(peer_id, Arc::new(store), swarm_tx).await;
         assert!(send_result.is_err());
         assert!(
             send_result

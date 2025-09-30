@@ -54,7 +54,7 @@ fn parse_flags(flags: Option<String>) -> PushBytesBuf {
 /// to match to collect all the shares to use to compute output distribution.
 async fn build_output_distribution<T>(
     template: &BlockTemplate,
-    chain_handle: &T,
+    store: &Arc<T>,
     bootstrap_address: &bitcoin::Address,
     difficulty_multiplier: f64,
 ) -> Vec<OutputPair>
@@ -71,12 +71,7 @@ where
     let total_difficulty = required_target.difficulty_float() * difficulty_multiplier;
 
     match payout
-        .get_output_distribution(
-            chain_handle,
-            total_difficulty,
-            total_amount,
-            bootstrap_address,
-        )
+        .get_output_distribution(&store, total_difficulty, total_amount, bootstrap_address)
         .await
     {
         Ok(distribution) => distribution,
@@ -149,7 +144,7 @@ pub enum NotifyCmd {
 pub async fn start_notify<T>(
     mut notifier_rx: mpsc::Receiver<NotifyCmd>,
     connections: ClientConnectionsHandle,
-    pplns_provider: T,
+    pplns_provider: Arc<T>,
     tracker_handle: TrackerHandle,
     bootstrap_address: bitcoin::Address,
     difficulty_multiplier: f64,
@@ -194,7 +189,7 @@ pub async fn start_notify<T>(
                         }
                     };
                 connections.send_to_all(Arc::new(notify_str.clone())).await;
-                if pplns_provider.save_job(notify_str).await.is_err() {
+                if pplns_provider.save_job(notify_str).is_err() {
                     tracing::warn!("Couldn't save job when sending to all");
                 }
             }
@@ -245,7 +240,7 @@ pub async fn start_notify<T>(
                 connections
                     .send_to_client(client_address, Arc::new(notify_str.clone()))
                     .await;
-                if pplns_provider.save_job(notify_str).await.is_err() {
+                if pplns_provider.save_job(notify_str).is_err() {
                     tracing::warn!("Couldn't save job when sending to client");
                 }
             }
@@ -299,12 +294,12 @@ mod tests {
             .as_secs()
             - 60)
             * 1_000_000;
-        let mock_provider = MockPplnsShareProvider::new(vec![SimplePplnsShare {
+        let mock_provider = Arc::new(MockPplnsShareProvider::new(vec![SimplePplnsShare {
             difficulty: 100,
             btcaddress: "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string(),
             workername: "".to_string(),
             timestamp,
-        }]);
+        }]));
         let output_distribution =
             build_output_distribution(&template, &mock_provider, &bootstrap_address, 1.0).await;
         // Build Notify
@@ -372,12 +367,12 @@ mod tests {
             .as_secs()
             - 60)
             * 1_000_000;
-        let mock_provider = MockPplnsShareProvider::new(vec![SimplePplnsShare {
+        let mock_provider = Arc::new(MockPplnsShareProvider::new(vec![SimplePplnsShare {
             difficulty: 100,
             btcaddress: "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string(),
             workername: "".to_string(),
             timestamp,
-        }]);
+        }]));
 
         // Start the notify task in a separate task
         let bootstrap_address = parse_address(
@@ -429,7 +424,7 @@ mod tests {
         // Give some time for the message to be processed
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-        let jobs = mock_provider.get_jobs(None, None, 10).await.unwrap();
+        let jobs = mock_provider.get_jobs(None, None, 10).unwrap();
         assert_eq!(jobs.len(), 2);
 
         // Cleanup
@@ -491,12 +486,12 @@ mod tests {
             .as_secs()
             - 60)
             * 1_000_000;
-        let mock_provider = MockPplnsShareProvider::new(vec![SimplePplnsShare {
+        let mock_provider = Arc::new(MockPplnsShareProvider::new(vec![SimplePplnsShare {
             difficulty: 100,
             btcaddress: "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string(),
             workername: "".to_string(),
             timestamp,
-        }]);
+        }]));
         let output_distribution =
             build_output_distribution(&template, &mock_provider, &bootstrap_address, 1.0).await;
 
