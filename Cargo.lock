@@ -3196,32 +3196,14 @@ dependencies = [
  "bitcoin",
  "bitcoindrpc",
  "libp2p",
- "p2poolv2_accounting",
  "p2poolv2_lib",
  "serde",
  "serde_json",
- "stratum",
  "tempfile",
  "tokio",
+ "tokio-test",
  "tracing",
  "zmq",
-]
-
-[[package]]
-name = "p2poolv2_accounting"
-version = "0.1.0"
-dependencies = [
- "bitcoin",
- "ciborium",
- "clap",
- "config",
- "serde",
- "serde_json",
- "tempfile",
- "test-log",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -3254,7 +3236,6 @@ dependencies = [
  "libp2p",
  "mockall",
  "mockall_double",
- "p2poolv2_accounting",
  "rand 0.8.5",
  "rocksdb",
  "rust_decimal",
@@ -3267,6 +3248,7 @@ dependencies = [
  "thiserror 2.0.12",
  "tokio",
  "tokio-stream",
+ "tokio-test",
  "tokio-util",
  "tower 0.5.2",
  "tracing",
@@ -3287,10 +3269,8 @@ dependencies = [
  "config",
  "mockall",
  "mockall_double",
- "p2poolv2_accounting",
  "p2poolv2_lib",
  "serde",
- "stratum",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4445,39 +4425,6 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
-
-[[package]]
-name = "stratum"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "bitcoin",
- "bitcoindrpc",
- "ciborium",
- "config",
- "futures",
- "hex",
- "mockall",
- "mockall_double",
- "p2poolv2_accounting",
- "rand 0.8.5",
- "rust_decimal",
- "rust_decimal_macros",
- "serde",
- "serde_json",
- "tempfile",
- "test-log",
- "thiserror 2.0.12",
- "tokio",
- "tokio-stream",
- "tokio-test",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "wiremock",
- "zmq",
-]
 
 [[package]]
 name = "strsim"

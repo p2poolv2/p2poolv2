@@ -15,27 +15,30 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use bitcoindrpc::test_utils::{mock_method, setup_mock_bitcoin_rpc};
-use p2poolv2_accounting::stats::metrics;
-use std::net::SocketAddr;
-use std::str;
-use stratum::{
-    self,
+use p2poolv2_lib::accounting::stats::metrics;
+use p2poolv2_lib::shares::ShareBlock;
+use p2poolv2_lib::shares::chain::chain_store::ChainStore;
+use p2poolv2_lib::store::Store;
+use p2poolv2_lib::stratum::{
+    self, client_connections,
     messages::{Response, SimpleRequest},
     server::StratumServerBuilder,
     work::{notify, tracker::start_tracker_actor},
 };
+use std::net::SocketAddr;
+use std::str;
+use std::sync::Arc;
+use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 #[tokio::test]
 async fn test_stratum_server_subscribe() {
-    use p2poolv2_accounting::test_utils::MockPplnsShareProvider;
-
     let addr: SocketAddr = "127.0.0.1:9999".parse().expect("Invalid address");
 
     // Setup server - using Arc so we can access it for shutdown
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    let connections_handle = stratum::client_connections::start_connections_handler().await;
+    let connections_handle = client_connections::start_connections_handler().await;
     let (notify_tx, _notify_rx) = tokio::sync::mpsc::channel::<notify::NotifyCmd>(100);
 
     let template = std::fs::read_to_string(
@@ -56,7 +59,12 @@ async fn test_stratum_server_subscribe() {
         .await
         .unwrap();
 
-    let mock_provider = MockPplnsShareProvider::new(vec![]);
+    let temp_dir = tempdir().unwrap();
+    let store = Arc::new(ChainStore::new(
+        Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
+        ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+    ));
+
     let mut server = StratumServerBuilder::default()
         .shutdown_rx(shutdown_rx)
         .connections_handle(connections_handle)
@@ -69,7 +77,7 @@ async fn test_stratum_server_subscribe() {
         .zmqpubhashblock("tcp://127.0.0.1:28332".to_string())
         .network(bitcoin::network::Network::Regtest)
         .version_mask(0x1fffe000)
-        .store(mock_provider)
+        .store(store)
         .build()
         .await
         .unwrap();

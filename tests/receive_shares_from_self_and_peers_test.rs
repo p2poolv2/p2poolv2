@@ -17,7 +17,7 @@
 mod common;
 
 use common::{default_test_config, simple_miner_workbase};
-use p2poolv2_accounting::{simple_pplns::SimplePplnsShare, stats::metrics};
+use p2poolv2_lib::accounting::{simple_pplns::SimplePplnsShare, stats::metrics};
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::node::messages::Message;
 use p2poolv2_lib::node::p2p_message_handlers::handle_request;

@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::accounting::stats::metrics::MetricsHandle;
 use crate::command::Command;
 use crate::config::Config;
 use crate::node::Node;
@@ -25,8 +27,6 @@ use crate::shares::chain::chain_store::ChainStore;
 use crate::shares::chain::chain_store::ChainStore;
 use crate::shares::handle_stratum_shares::handle_stratum_shares;
 use libp2p::futures::StreamExt;
-use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
-use p2poolv2_accounting::stats::metrics::MetricsHandle;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
@@ -221,8 +221,8 @@ impl NodeActor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accounting::simple_pplns::SimplePplnsShare;
     use crate::command::GetPplnsShareQuery;
-    use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
     use tokio::sync::mpsc;
 
     #[tokio::test]

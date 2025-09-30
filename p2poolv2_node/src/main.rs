@@ -15,21 +15,22 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use clap::Parser;
-use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
-use p2poolv2_accounting::stats::metrics;
+use p2poolv2_lib::accounting::simple_pplns::SimplePplnsShare;
+use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::logging::setup_logging;
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::shares::ShareBlock;
 use p2poolv2_lib::shares::chain::chain_store::ChainStore;
 use p2poolv2_lib::store::Store;
+use p2poolv2_lib::stratum::client_connections::start_connections_handler;
+use p2poolv2_lib::stratum::server::StratumServerBuilder;
+use p2poolv2_lib::stratum::work::gbt::start_gbt;
+use p2poolv2_lib::stratum::work::notify::start_notify;
+use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
+use p2poolv2_lib::stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
 use std::process::exit;
 use std::sync::Arc;
-use stratum::client_connections::start_connections_handler;
-use stratum::server::StratumServerBuilder;
-use stratum::work::gbt::start_gbt;
-use stratum::work::tracker::start_tracker_actor;
-use stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
 use tracing::error;
 use tracing::info;
 
@@ -134,7 +135,7 @@ async fn main() -> Result<(), String> {
     tokio::spawn(async move {
         info!("Starting Stratum notifier...");
         // This will run indefinitely, sending new block templates to the Stratum server as they arrive
-        stratum::work::notify::start_notify(
+        start_notify(
             notify_rx,
             connections_cloned,
             store_for_notify,
@@ -157,7 +158,7 @@ async fn main() -> Result<(), String> {
     let store_for_stratum = chain_store.clone();
 
     tokio::spawn(async move {
-        let mut stratum_server = StratumServerBuilder::<std::sync::Arc<ChainStore>>::default()
+        let mut stratum_server = StratumServerBuilder::default()
             .shutdown_rx(stratum_shutdown_rx)
             .connections_handle(connections_handle.clone())
             .shares_tx(shares_tx)

@@ -61,10 +61,10 @@ pub fn execute(
 #[cfg(test)]
 mod tests {
     use super::execute;
+    use crate::accounting::simple_pplns::SimplePplnsShare;
     use crate::shares::ShareBlock;
     use crate::shares::chain::chain_store::ChainStore;
     use crate::store::Store;
-    use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
     use std::sync::Arc;
     use tempfile::tempdir;
 

@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 mod common;
-use p2poolv2_accounting::{simple_pplns::SimplePplnsShare, stats::metrics};
+use p2poolv2_lib::accounting::{simple_pplns::SimplePplnsShare, stats::metrics};
 use p2poolv2_lib::shares::chain::chain_store::ChainStore;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::{node::actor::NodeHandle, shares::ShareBlock};

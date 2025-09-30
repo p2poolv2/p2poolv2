@@ -14,20 +14,13 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod accounting;
-pub mod cli_commands;
-pub mod command;
-pub mod config;
-pub mod logging;
-pub mod middleware;
-pub mod node;
-pub mod service;
-pub mod shares;
-pub mod store;
-pub mod stratum;
-pub mod utils;
+pub mod calc;
+pub mod simple_pplns;
+pub mod stats;
 
-#[cfg(test)]
-pub mod test_utils;
-
-pub use service::build_service;
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct OutputPair {
+    pub address: bitcoin::Address,
+    pub amount: bitcoin::Amount,
+}
