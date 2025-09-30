@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::node::messages::Message;
 use std::error::Error;
 use tokio::sync::oneshot;
@@ -47,8 +48,5 @@ pub enum Command {
     /// Command to shutdown node
     Shutdown(oneshot::Sender<()>),
     /// Get PPLNS shares from the node with optional filtering
-    GetPplnsShares(
-        GetPplnsShareQuery,
-        oneshot::Sender<Vec<p2poolv2_accounting::simple_pplns::SimplePplnsShare>>,
-    ),
+    GetPplnsShares(GetPplnsShareQuery, oneshot::Sender<Vec<SimplePplnsShare>>),
 }

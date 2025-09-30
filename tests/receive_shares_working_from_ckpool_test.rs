@@ -17,7 +17,7 @@
 mod common;
 
 use common::default_test_config;
-use p2poolv2_accounting::{simple_pplns::SimplePplnsShare, stats::metrics};
+use p2poolv2_lib::accounting::{simple_pplns::SimplePplnsShare, stats::metrics};
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::shares::ShareBlock;
 use p2poolv2_lib::shares::chain::chain_store::ChainStore;

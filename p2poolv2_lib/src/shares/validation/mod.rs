@@ -323,13 +323,13 @@ mod tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
-        let uncle4_clone = uncle4.clone();
+        let _uncle4_clone = uncle4.clone();
 
         // Test share with non-existent uncle
         let non_existent_hash: ShareBlockHash =
             "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7".into();
 
-        let invalid_share_b = TestBlockBuilder::new()
+        let _invalid_share_b = TestBlockBuilder::new()
             .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8")
             .uncles(vec![uncle1.cached_blockhash.unwrap(), non_existent_hash])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")

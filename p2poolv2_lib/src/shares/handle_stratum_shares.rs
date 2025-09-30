@@ -14,13 +14,13 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::accounting::stats::metrics::MetricsHandle;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store::ChainStore;
-use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
-use p2poolv2_accounting::stats::metrics::MetricsHandle;
 use std::sync::Arc;
 use tracing::info;
 

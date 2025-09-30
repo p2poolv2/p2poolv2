@@ -29,8 +29,7 @@ tower = { version = "0.5", features = ["util", "limit"] }
 tokio-util = { workspace = true }
 tokio-stream = { workspace = true }
 tracing-appender = { workspace = true }
-bitcoindrpc = { path = '../bitcoindrpc' }
-p2poolv2_accounting = { path = '../p2poolv2_accounting' }
+bitcoindrpc = { path = '../bitcoindrpc', features = ["test-utils"] }
 chrono = { workspace = true }
 
 [dev-dependencies]
@@ -42,3 +41,4 @@ wiremock = "0.6.2"
 mockall = "0.13.1"
 mockall_double = "0.3.1"
 temp-env = "0.3.6"
+tokio-test = "0.4.3"

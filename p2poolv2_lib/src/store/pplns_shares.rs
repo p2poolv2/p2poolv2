@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::{Store, column_families::ColumnFamily};
-use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
+use crate::accounting::simple_pplns::SimplePplnsShare;
 
 impl Store {
     /// Get PPLNS shares with filtering support using timestamp-based keys for efficient range queries
@@ -74,8 +74,8 @@ fn filter_share_by_time(key: &[u8], start_time: Option<u64>, end_time: Option<u6
 
 #[cfg(test)]
 mod tests {
+    use crate::accounting::simple_pplns::SimplePplnsShare;
     use crate::store::Store;
-    use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
     use tempfile::tempdir;
 
     #[test]

@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::node::messages::Message;
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader, StorageShareBlock};
@@ -21,7 +22,6 @@ use crate::store::column_families::ColumnFamily;
 use crate::store::user_and_worker::{StoredUser, StoredWorker};
 use crate::utils::snowflake_simplified::get_next_id;
 use bitcoin::Transaction;
-use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};

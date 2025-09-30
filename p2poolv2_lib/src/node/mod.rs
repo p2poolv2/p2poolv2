@@ -21,6 +21,7 @@ pub mod actor;
 pub mod messages;
 pub mod p2p_message_handlers;
 
+use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::senders::{send_blocks_inventory, send_getheaders};
@@ -46,7 +47,6 @@ use libp2p::{
     kad::{Event as KademliaEvent, QueryResult},
     swarm::SwarmEvent,
 };
-use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc;

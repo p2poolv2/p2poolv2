@@ -14,12 +14,11 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::shares::ShareBlockHash;
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{ShareBlock, ShareHeader};
 use crate::store::Store;
-use p2poolv2_accounting::simple_pplns::SimplePplnsShare;
-use p2poolv2_accounting::simple_pplns::payout::{JobSaver, PplnsShareProvider};
 use rust_decimal::Decimal;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -439,31 +438,13 @@ impl ChainStore {
     ) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>> {
         self.store.get_jobs(start_time, end_time, limit)
     }
-}
 
-impl PplnsShareProvider for ChainStore {
-    fn get_pplns_shares_filtered(
-        &self,
-        limit: usize,
-        start_time: Option<u64>,
-        end_time: Option<u64>,
-    ) -> Vec<SimplePplnsShare> {
-        self.get_pplns_shares_filtered(limit, start_time, end_time)
-    }
-}
-
-impl JobSaver for ChainStore {
-    fn save_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>> {
-        self.save_job(serialized_notify)
+    pub fn store_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error>> {
+        self.store.store_user(btcaddress)
     }
 
-    fn get_jobs(
-        &self,
-        start_time: Option<u64>,
-        end_time: Option<u64>,
-        limit: usize,
-    ) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>> {
-        self.get_jobs(start_time, end_time, limit)
+    pub fn store_worker(&self, user_id: u64, workername: String) -> Result<u64, Box<dyn Error>> {
+        self.store.store_worker(user_id, workername)
     }
 }
 
@@ -498,6 +479,8 @@ mock! {
         pub fn get_tip_height(&self) -> Option<u32>;
         pub fn save_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn get_jobs(&self, start_time: Option<u64>, end_time: Option<u64>, limit: usize) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>>;
+        pub fn store_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error>>;
+        pub fn store_worker(&self, user_id: u64, workername: String) -> Result<u64, Box<dyn Error>>;
     }
 
 
