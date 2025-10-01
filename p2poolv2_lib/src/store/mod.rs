@@ -233,8 +233,6 @@ impl Store {
             if let Some(serialized_user) = self.db.get_cf(user_cf, user_id.to_be_bytes())? {
                 let stored_user: StoredUser = ciborium::de::from_reader(&serialized_user[..])?;
                 results.push((user_id, stored_user.btcaddress));
-            } else {
-                println!("No user id matchin {}", user_id);
             }
         }
 
