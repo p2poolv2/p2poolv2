@@ -95,8 +95,8 @@ mod tests {
 
         // Add test shares
         let shares = vec![
-            SimplePplnsShare::new(100, "addr1".to_string(), "worker1".to_string(), 1000),
-            SimplePplnsShare::new(200, "addr2".to_string(), "worker2".to_string(), 2000),
+            SimplePplnsShare::new(1, 100, "addr1".to_string(), "worker1".to_string(), 1000),
+            SimplePplnsShare::new(2, 200, "addr2".to_string(), "worker2".to_string(), 2000),
         ];
 
         for share in &shares {

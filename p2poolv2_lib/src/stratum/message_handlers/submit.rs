@@ -99,6 +99,7 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         .unwrap()
         .as_secs();
     let stratum_share = SimplePplnsShare::new(
+        session.user_id.unwrap(),
         session.difficulty_adjuster.get_current_difficulty(),
         session.btcaddress.clone().unwrap_or_default(),
         session.workername.clone().unwrap_or_default(),
@@ -231,6 +232,7 @@ mod handle_submit_tests {
             u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
         session.enonce1_hex = enonce1.to_string();
         session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
+        session.user_id = Some(1);
 
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
@@ -321,6 +323,7 @@ mod handle_submit_tests {
             u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
         session.enonce1_hex = enonce1.to_string();
         session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
+        session.user_id = Some(1);
 
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
@@ -411,6 +414,7 @@ mod handle_submit_tests {
             u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
         session.enonce1_hex = enonce1.to_string();
         session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
+        session.user_id = Some(1);
 
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
@@ -511,6 +515,7 @@ mod handle_submit_tests {
             u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
         session.enonce1_hex = enonce1.to_string();
         session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
+        session.user_id = Some(1);
 
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
@@ -591,6 +596,7 @@ mod handle_submit_tests {
             u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
         session.enonce1_hex = enonce1.to_string();
         session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
+        session.user_id = Some(1);
 
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();

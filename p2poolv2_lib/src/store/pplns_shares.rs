@@ -15,10 +15,11 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::{Store, column_families::ColumnFamily};
-use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::accounting::simple_pplns::{SimplePplnsShare, StoredPplnsShare};
 
 impl Store {
     /// Get PPLNS shares with filtering support using timestamp-based keys for efficient range queries
+    /// Retrieves StoredPplnsShare from DB and converts to SimplePplnsShare with btcaddresses
     pub fn get_pplns_shares_filtered(
         &self,
         limit: usize,
@@ -31,26 +32,57 @@ impl Store {
         let mut iter = self
             .db
             .iterator_cf(pplns_share_cf, rocksdb::IteratorMode::End);
-        let mut shares = Vec::new();
+        let mut stored_shares: Vec<StoredPplnsShare> = Vec::new();
         let mut count = 0;
 
         while let Some(Ok((key, value))) = iter.next() {
             if count >= limit {
                 break;
             }
-
             if filter_share_by_time(&key, start_time, end_time).is_some() {
                 if let Ok(share) = ciborium::de::from_reader(&value[..]) {
-                    shares.push(share);
+                    stored_shares.push(share);
                     count += 1;
                 }
             }
         }
+        self.get_full_shares(&stored_shares)
+    }
 
-        shares
+    fn get_full_shares(&self, stored_shares: &[StoredPplnsShare]) -> Vec<SimplePplnsShare> {
+        // Collect unique user_ids and query btcaddresses
+        let user_ids: Vec<u64> = stored_shares
+            .iter()
+            .map(|s| s.user_id)
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        let btcaddress_map: std::collections::HashMap<u64, String> = self
+            .get_btcaddresses_for_user_ids(&user_ids)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
+        // Convert StoredPplnsShare to SimplePplnsShare with btcaddresses
+        stored_shares
+            .iter()
+            .filter_map(|stored| {
+                btcaddress_map.get(&stored.user_id).map(|btcaddress| {
+                    SimplePplnsShare {
+                        user_id: stored.user_id,
+                        difficulty: stored.difficulty,
+                        btcaddress: btcaddress.clone(),
+                        workername: String::new(), // Not stored, leave empty
+                        timestamp: stored.timestamp,
+                    }
+                })
+            })
+            .collect()
     }
 }
 
+/// Parse the key as timestamp:<the-rest> and checks the timestamp is between start and return time
 fn filter_share_by_time(key: &[u8], start_time: Option<u64>, end_time: Option<u64>) -> Option<()> {
     let key_str = String::from_utf8_lossy(key);
     let timestamp_str = key_str.split(':').next()?;
@@ -83,11 +115,33 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
+        let user_id1 = store.store_user("addr1".to_string()).unwrap();
+        let user_id2 = store.store_user("addr2".to_string()).unwrap();
+        let user_id3 = store.store_user("addr3".to_string()).unwrap();
+
         // Add test shares with different timestamps
         let shares = vec![
-            SimplePplnsShare::new(100, "addr1".to_string(), "worker1".to_string(), 1000),
-            SimplePplnsShare::new(200, "addr2".to_string(), "worker2".to_string(), 2000),
-            SimplePplnsShare::new(300, "addr3".to_string(), "worker3".to_string(), 3000),
+            SimplePplnsShare::new(
+                user_id1,
+                100,
+                "addr1".to_string(),
+                "worker1".to_string(),
+                1000,
+            ),
+            SimplePplnsShare::new(
+                user_id2,
+                200,
+                "addr2".to_string(),
+                "worker2".to_string(),
+                2000,
+            ),
+            SimplePplnsShare::new(
+                user_id3,
+                300,
+                "addr3".to_string(),
+                "worker3".to_string(),
+                3000,
+            ),
         ];
 
         for share in &shares {
@@ -104,11 +158,33 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
+        let user_id1 = store.store_user("addr1".to_string()).unwrap();
+        let user_id2 = store.store_user("addr2".to_string()).unwrap();
+        let user_id3 = store.store_user("addr3".to_string()).unwrap();
+
         // Add test shares with different timestamps
         let shares = vec![
-            SimplePplnsShare::new(100, "addr1".to_string(), "worker1".to_string(), 1000),
-            SimplePplnsShare::new(200, "addr2".to_string(), "worker2".to_string(), 2000),
-            SimplePplnsShare::new(300, "addr3".to_string(), "worker3".to_string(), 3000),
+            SimplePplnsShare::new(
+                user_id1,
+                100,
+                "addr1".to_string(),
+                "worker1".to_string(),
+                1000,
+            ),
+            SimplePplnsShare::new(
+                user_id2,
+                200,
+                "addr2".to_string(),
+                "worker2".to_string(),
+                2000,
+            ),
+            SimplePplnsShare::new(
+                user_id3,
+                300,
+                "addr3".to_string(),
+                "worker3".to_string(),
+                3000,
+            ),
         ];
 
         for share in &shares {

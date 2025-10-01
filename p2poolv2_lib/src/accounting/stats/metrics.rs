@@ -575,6 +575,7 @@ mod tests {
             .unwrap();
         let _ = handle
             .record_share_accepted(SimplePplnsShare {
+                user_id: 1,
                 difficulty: 100,
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
@@ -591,6 +592,7 @@ mod tests {
         // Test that highest difficulty is updated correctly
         let _ = handle
             .record_share_accepted(SimplePplnsShare {
+                user_id: 1,
                 difficulty: 50,
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
@@ -604,6 +606,7 @@ mod tests {
 
         let _ = handle
             .record_share_accepted(SimplePplnsShare {
+                user_id: 1,
                 difficulty: 200,
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
@@ -644,6 +647,7 @@ mod tests {
 
         let _ = handle
             .record_share_accepted(SimplePplnsShare {
+                user_id: 1,
                 difficulty: 1000,
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
@@ -652,6 +656,7 @@ mod tests {
             .await;
         let _ = handle
             .record_share_accepted(SimplePplnsShare {
+                user_id: 1,
                 difficulty: 2000,
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
@@ -813,6 +818,7 @@ mod tests {
 
         let _ = handle
             .record_share_accepted(SimplePplnsShare {
+                user_id: 1,
                 difficulty: 123,
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
@@ -865,6 +871,7 @@ mod tests {
 
         let _ = handle
             .record_share_accepted(SimplePplnsShare {
+                user_id: 1,
                 difficulty: 77,
                 btcaddress: btcaddress.clone(),
                 workername: workername.clone(),
@@ -902,6 +909,7 @@ mod tests {
 
         let _ = handle
             .record_share_accepted(SimplePplnsShare {
+                user_id: 1,
                 difficulty: 10,
                 btcaddress: "userA".to_string(),
                 workername: "workerA1".to_string(),
@@ -910,6 +918,7 @@ mod tests {
             .await;
         let _ = handle
             .record_share_accepted(SimplePplnsShare {
+                user_id: 1,
                 difficulty: 20,
                 btcaddress: "userA".to_string(),
                 workername: "workerA2".to_string(),
@@ -918,6 +927,7 @@ mod tests {
             .await;
         let _ = handle
             .record_share_accepted(SimplePplnsShare {
+                user_id: 1,
                 difficulty: 30,
                 btcaddress: "userB".to_string(),
                 workername: "workerB1".to_string(),
