@@ -25,11 +25,10 @@ use crate::stratum::work::notify::NotifyCmd;
 use std::sync::Arc;
 use tracing::debug;
 
-/// Register user and worker in the store and update session with their IDs
-fn register_user_worker<D: DifficultyAdjusterTrait>(
+/// Register user in the store and update session with their IDs
+fn register_user<D: DifficultyAdjusterTrait>(
     session: &mut Session<D>,
     btcaddress: &str,
-    workername: Option<&str>,
     store: Arc<ChainStore>,
 ) -> Result<(), Error> {
     // Store user and get user_id
@@ -38,14 +37,6 @@ fn register_user_worker<D: DifficultyAdjusterTrait>(
         .map_err(|e| Error::AuthorizationFailure(format!("Failed to store user: {e}")))?;
 
     session.user_id = Some(user_id);
-
-    // Store worker if workername exists
-    if let Some(worker_name) = workername {
-        let worker_id = store
-            .store_worker(user_id, worker_name.to_string())
-            .map_err(|e| Error::AuthorizationFailure(format!("Failed to store worker: {e}")))?;
-        session.worker_id = Some(worker_id);
-    }
 
     Ok(())
 }
@@ -93,8 +84,8 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
     session.workername = parsed_username.1.map(|s| s.to_string());
     session.password = message.params[1].clone();
 
-    // Register user and worker in the store
-    register_user_worker(session, parsed_username.0, parsed_username.1, ctx.store)?;
+    // Register user in the store
+    register_user(session, parsed_username.0, ctx.store)?;
 
     match ctx
         .metrics
@@ -217,12 +208,6 @@ mod tests {
         assert!(session.user_id.is_some(), "user_id should be set");
         assert!(session.user_id.is_some());
 
-        // Check that worker_id is None (no worker name provided)
-        assert!(
-            session.worker_id.is_none(),
-            "worker_id should be None when no worker name provided"
-        );
-
         let notify_cmd = notify_rx.try_recv();
         assert!(
             notify_cmd.is_ok(),
@@ -309,6 +294,99 @@ mod tests {
         assert!(
             notify_cmd.is_err(),
             "No notification should be sent when already authorized"
+        );
+    }
+
+    #[test]
+    fn test_register_user() {
+        // Setup
+        let temp_dir = tempdir().unwrap();
+        let store = Arc::new(ChainStore::new(
+            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
+            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+        ));
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let btcaddress = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
+
+        // Execute
+        let result = register_user(&mut session, btcaddress, store.clone());
+
+        // Verify
+        assert!(result.is_ok(), "register_user should succeed");
+        assert!(session.user_id.is_some(), "user_id should be set");
+
+        // Verify user were stored correctly
+        let user_id = session.user_id.unwrap();
+
+        // Verify user can be retrieved
+        let btcaddresses = store
+            .store
+            .get_btcaddresses_for_user_ids(&[user_id])
+            .unwrap();
+        assert_eq!(btcaddresses.len(), 1);
+        assert_eq!(btcaddresses[0].1, btcaddress);
+    }
+
+    #[test]
+    fn test_register_same_user_twice() {
+        // Setup
+        let temp_dir = tempdir().unwrap();
+        let store = Arc::new(ChainStore::new(
+            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
+            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+        ));
+        let mut session1 = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session2 = Session::<DifficultyAdjuster>::new(2, 2, None, 0x1fffe000);
+        let btcaddress = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
+
+        // Execute - register the same user twice
+        let result1 = register_user(&mut session1, btcaddress, store.clone());
+        let result2 = register_user(&mut session2, btcaddress, store.clone());
+
+        // Verify
+        assert!(result1.is_ok(), "First registration should succeed");
+        assert!(result2.is_ok(), "Second registration should succeed");
+
+        // Both sessions should have the same user_id
+        assert_eq!(
+            session1.user_id, session2.user_id,
+            "Same user should get the same user_id"
+        );
+    }
+
+    #[test]
+    fn test_register_user_multiple_users() {
+        // Setup
+        let temp_dir = tempdir().unwrap();
+        let store = Arc::new(ChainStore::new(
+            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
+            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+        ));
+        let mut session1 = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session2 = Session::<DifficultyAdjuster>::new(2, 2, None, 0x1fffe000);
+        let btcaddress1 = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
+        let btcaddress2 = "tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7";
+
+        // Execute - register two different users
+        let result1 = register_user(&mut session1, btcaddress1, store.clone());
+        let result2 = register_user(&mut session2, btcaddress2, store.clone());
+
+        // Verify
+        assert!(result1.is_ok(), "First registration should succeed");
+        assert!(result2.is_ok(), "Second registration should succeed");
+
+        // Different users should get different user_ids
+        assert!(
+            session1.user_id.is_some(),
+            "First session should have user_id"
+        );
+        assert!(
+            session2.user_id.is_some(),
+            "Second session should have user_id"
+        );
+        assert_ne!(
+            session1.user_id, session2.user_id,
+            "Different users should get different user_ids"
         );
     }
 

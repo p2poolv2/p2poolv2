@@ -43,33 +43,3 @@ impl StoredUser {
         }
     }
 }
-
-/// Represents a stored worker with internal ID and worker name
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct StoredWorker {
-    /// Internal unique ID for the worker
-    pub worker_id: u64,
-    /// Internal user ID that this worker belongs to
-    pub user_id: u64,
-    /// Name of the worker
-    pub workername: String,
-    /// Timestamp when the worker was first stored (microseconds since epoch)
-    pub created_at: u64,
-}
-
-impl StoredWorker {
-    /// Create a new StoredWorker with current timestamp
-    pub fn new(worker_id: u64, user_id: u64, workername: String) -> Self {
-        let created_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_micros() as u64;
-
-        Self {
-            worker_id,
-            user_id,
-            workername,
-            created_at,
-        }
-    }
-}

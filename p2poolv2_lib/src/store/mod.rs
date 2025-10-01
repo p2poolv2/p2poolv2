@@ -19,7 +19,7 @@ use crate::node::messages::Message;
 use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
 use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader, StorageShareBlock};
 use crate::store::column_families::ColumnFamily;
-use crate::store::user_and_worker::{StoredUser, StoredWorker};
+use crate::store::user::StoredUser;
 use crate::utils::snowflake_simplified::get_next_id;
 use bitcoin::Transaction;
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
@@ -33,7 +33,7 @@ use tracing::debug;
 
 pub mod column_families;
 mod pplns_shares;
-pub mod user_and_worker;
+pub mod user;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TxMetadata {
@@ -100,12 +100,8 @@ impl Store {
         let job_cf = ColumnFamilyDescriptor::new(ColumnFamily::Job, RocksDbOptions::default());
         let share_cf = ColumnFamilyDescriptor::new(ColumnFamily::Share, RocksDbOptions::default());
         let user_cf = ColumnFamilyDescriptor::new(ColumnFamily::User, RocksDbOptions::default());
-        let worker_cf =
-            ColumnFamilyDescriptor::new(ColumnFamily::Worker, RocksDbOptions::default());
         let user_index_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::UserIndex, RocksDbOptions::default());
-        let worker_index_cf =
-            ColumnFamilyDescriptor::new(ColumnFamily::WorkerIndex, RocksDbOptions::default());
         let metadata_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::Metadata, RocksDbOptions::default());
 
@@ -122,9 +118,7 @@ impl Store {
             job_cf,
             share_cf,
             user_cf,
-            worker_cf,
             user_index_cf,
-            worker_index_cf,
             metadata_cf,
         ];
 
@@ -146,28 +140,7 @@ impl Store {
             tips: Arc::new(RwLock::new(HashSet::new())),
             total_difficulty: Arc::new(RwLock::new(Decimal::ZERO)),
         };
-        store.init_metadata_counters()?;
         Ok(store)
-    }
-
-    /// Initialize metadata counters for user and worker IDs
-    /// Sets counters to 1 if they don't exist
-    fn init_metadata_counters(&self) -> Result<(), Box<dyn Error>> {
-        let metadata_cf = self.db.cf_handle(&ColumnFamily::Metadata).unwrap();
-
-        // Initialize next_user_id if it doesn't exist
-        if self.db.get_cf(metadata_cf, b"next_user_id")?.is_none() {
-            self.db
-                .put_cf(metadata_cf, b"next_user_id", 1u64.to_be_bytes())?;
-        }
-
-        // Initialize next_worker_id if it doesn't exist
-        if self.db.get_cf(metadata_cf, b"next_worker_id")?.is_none() {
-            self.db
-                .put_cf(metadata_cf, b"next_worker_id", 1u64.to_be_bytes())?;
-        }
-
-        Ok(())
     }
 
     /// Store a user by btcaddress, returns the user ID
@@ -214,53 +187,6 @@ impl Store {
         self.db.write(batch)?;
 
         Ok(user_id)
-    }
-
-    /// Store a worker by workername and user_id, returns the worker ID
-    pub fn store_worker(&self, user_id: u64, workername: String) -> Result<u64, Box<dyn Error>> {
-        let worker_cf = self.db.cf_handle(&ColumnFamily::Worker).unwrap();
-        let worker_index_cf = self.db.cf_handle(&ColumnFamily::WorkerIndex).unwrap();
-
-        // Check if worker already exists via index
-        if let Some(existing_id_bytes) = self.db.get_cf(worker_index_cf, &workername)? {
-            let worker_id = u64::from_be_bytes(
-                existing_id_bytes
-                    .try_into()
-                    .map_err(|_| "Invalid worker ID format in index")?,
-            );
-            return Ok(worker_id);
-        }
-
-        // Generate new worker ID
-        let worker_id = get_next_id();
-        let current_timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        // Create stored worker
-        let stored_worker = StoredWorker {
-            worker_id,
-            user_id,
-            workername: workername.clone(),
-            created_at: current_timestamp,
-        };
-
-        // Create write batch for atomic operation
-        let mut batch = rocksdb::WriteBatch::default();
-
-        // Store worker data (key: worker_id, value: CBOR serialized StoredWorker)
-        let mut serialized_worker = Vec::new();
-        ciborium::ser::into_writer(&stored_worker, &mut serialized_worker)?;
-        batch.put_cf(worker_cf, worker_id.to_be_bytes(), serialized_worker);
-
-        // Store index mapping (key: workername, value: worker_id)
-        batch.put_cf(worker_index_cf, workername, worker_id.to_be_bytes());
-
-        // Write batch atomically
-        self.db.write(batch)?;
-
-        Ok(worker_id)
     }
 
     /// Get user by user ID
@@ -311,37 +237,6 @@ impl Store {
         }
 
         Ok(results)
-    }
-
-    /// Get worker by worker ID
-    pub fn get_worker_by_id(&self, worker_id: u64) -> Result<Option<StoredWorker>, Box<dyn Error>> {
-        let worker_cf = self.db.cf_handle(&ColumnFamily::Worker).unwrap();
-
-        if let Some(serialized_worker) = self.db.get_cf(worker_cf, worker_id.to_be_bytes())? {
-            let stored_worker: StoredWorker = ciborium::de::from_reader(&serialized_worker[..])?;
-            Ok(Some(stored_worker))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Get worker by workername
-    pub fn get_worker_by_workername(
-        &self,
-        workername: &str,
-    ) -> Result<Option<StoredWorker>, Box<dyn Error>> {
-        let worker_index_cf = self.db.cf_handle(&ColumnFamily::WorkerIndex).unwrap();
-
-        if let Some(worker_id_bytes) = self.db.get_cf(worker_index_cf, workername)? {
-            let worker_id = u64::from_be_bytes(
-                worker_id_bytes
-                    .try_into()
-                    .map_err(|_| "Invalid worker ID format in index")?,
-            );
-            self.get_worker_by_id(worker_id)
-        } else {
-            Ok(None)
-        }
     }
 
     /// Add a share to the store
@@ -2746,80 +2641,7 @@ mod tests {
     }
 
     #[test]
-    fn test_store_and_get_worker() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        let btcaddress = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string();
-        let workername = "worker1".to_string();
-
-        // First create a user
-        let user_id = store.store_user(btcaddress.clone()).unwrap();
-
-        // Store a worker for this user
-        let worker_id = store.store_worker(user_id, workername.clone()).unwrap();
-
-        // Get worker by ID
-        let stored_worker = store.get_worker_by_id(worker_id).unwrap().unwrap();
-        assert_eq!(stored_worker.worker_id, worker_id);
-        assert_eq!(stored_worker.user_id, user_id);
-        assert_eq!(stored_worker.workername, workername);
-        assert!(stored_worker.created_at > 0);
-
-        // Get worker by workername
-        let worker_by_name = store
-            .get_worker_by_workername(&workername)
-            .unwrap()
-            .unwrap();
-        assert_eq!(worker_by_name.worker_id, worker_id);
-        assert_eq!(worker_by_name.user_id, user_id);
-        assert_eq!(worker_by_name.workername, workername);
-
-        // Store same worker again - should return same ID
-        let same_worker_id = store.store_worker(user_id, workername.clone()).unwrap();
-        assert_eq!(same_worker_id, worker_id);
-
-        // Store different worker for same user
-        let workername2 = "worker2".to_string();
-        let worker_id2 = store.store_worker(user_id, workername2.clone()).unwrap();
-        assert_ne!(worker_id2, worker_id);
-    }
-
-    #[test]
-    fn test_worker_user_relationship() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        // Create two users
-        let user1_address = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string();
-        let user2_address = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2".to_string();
-
-        let user1_id = store.store_user(user1_address).unwrap();
-        let user2_id = store.store_user(user2_address).unwrap();
-
-        // Create workers for each user
-        let worker1_id = store
-            .store_worker(user1_id, "user1_worker1".to_string())
-            .unwrap();
-        let worker2_id = store
-            .store_worker(user1_id, "user1_worker2".to_string())
-            .unwrap();
-        let worker3_id = store
-            .store_worker(user2_id, "user2_worker1".to_string())
-            .unwrap();
-
-        // Verify workers belong to correct users
-        let worker1 = store.get_worker_by_id(worker1_id).unwrap().unwrap();
-        let worker2 = store.get_worker_by_id(worker2_id).unwrap().unwrap();
-        let worker3 = store.get_worker_by_id(worker3_id).unwrap().unwrap();
-
-        assert_eq!(worker1.user_id, user1_id);
-        assert_eq!(worker2.user_id, user1_id);
-        assert_eq!(worker3.user_id, user2_id);
-    }
-
-    #[test]
-    fn test_get_nonexistent_user_and_worker() {
+    fn test_get_nonexistent_user() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -2830,69 +2652,25 @@ mod tests {
         // Test getting non-existent user by btcaddress
         let user = store.get_user_by_btcaddress("nonexistent_address").unwrap();
         assert!(user.is_none());
-
-        // Test getting non-existent worker by ID
-        let worker = store.get_worker_by_id(999).unwrap();
-        assert!(worker.is_none());
-
-        // Test getting non-existent worker by workername
-        let worker = store
-            .get_worker_by_workername("nonexistent_worker")
-            .unwrap();
-        assert!(worker.is_none());
     }
 
     #[test]
-    fn test_metadata_counters_persistence() {
-        let temp_dir = tempdir().unwrap();
-        let temp_path = temp_dir.path().to_str().unwrap().to_string();
-
-        // Create store and add some users/workers
-        {
-            let store = Store::new(temp_path.clone(), false).unwrap();
-            let user_id1 = store.store_user("user1".to_string()).unwrap();
-            let user_id2 = store.store_user("user2".to_string()).unwrap();
-            let _worker_id1 = store.store_worker(user_id1, "worker1".to_string()).unwrap();
-            let _worker_id2 = store.store_worker(user_id2, "worker2".to_string()).unwrap();
-
-            assert_ne!(user_id1, user_id2);
-        }
-
-        // Reopen store and verify counters continue from where they left off
-        {
-            let store = Store::new(temp_path, false).unwrap();
-            let user_id3 = store.store_user("user3".to_string()).unwrap();
-            let worker_id3 = store.store_worker(user_id3, "worker3".to_string()).unwrap();
-
-            assert!(worker_id3 > user_id3);
-        }
-    }
-
-    #[test]
-    fn test_user_worker_cbor_serialization() {
+    fn test_user_cbor_serialization() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         let btcaddress = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string();
-        let workername = "test_worker".to_string();
 
-        // Store user and worker
+        // Store user
         let user_id = store.store_user(btcaddress.clone()).unwrap();
-        let worker_id = store.store_worker(user_id, workername.clone()).unwrap();
 
         // Retrieve and verify data integrity
         let stored_user = store.get_user_by_id(user_id).unwrap().unwrap();
-        let stored_worker = store.get_worker_by_id(worker_id).unwrap().unwrap();
 
         // Verify all fields are correctly serialized/deserialized
         assert_eq!(stored_user.user_id, user_id);
         assert_eq!(stored_user.btcaddress, btcaddress);
         assert!(stored_user.created_at > 0);
-
-        assert_eq!(stored_worker.worker_id, worker_id);
-        assert_eq!(stored_worker.user_id, user_id);
-        assert_eq!(stored_worker.workername, workername);
-        assert!(stored_worker.created_at > 0);
 
         // Verify timestamps are reasonable (within last minute)
         let now = std::time::SystemTime::now()
@@ -2901,8 +2679,6 @@ mod tests {
             .as_secs();
         assert!(stored_user.created_at <= now);
         assert!(stored_user.created_at > now - 60);
-        assert!(stored_worker.created_at <= now);
-        assert!(stored_worker.created_at > now - 60);
     }
 
     #[test]
