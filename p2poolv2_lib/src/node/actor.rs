@@ -262,7 +262,7 @@ mod tests {
         // Verify the result is returned correctly
         let shares = handle.await.unwrap();
         assert_eq!(shares.len(), 1);
-        assert_eq!(shares[0].timestamp, 1500);
+        assert_eq!(shares[0].n_time, 1500);
     }
 
     #[tokio::test]

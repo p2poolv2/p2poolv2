@@ -47,8 +47,8 @@ pub fn execute(
             difficulty: share.difficulty,
             btcaddress: share.btcaddress,
             workername: share.workername,
-            timestamp: share.timestamp,
-            formatted_time: format_timestamp(share.timestamp),
+            timestamp: share.n_time,
+            formatted_time: format_timestamp(share.n_time),
         })
         .collect();
 

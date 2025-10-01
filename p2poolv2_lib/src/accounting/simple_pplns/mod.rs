@@ -48,7 +48,7 @@ pub struct SimplePplnsShare {
     pub difficulty: u64,
     pub btcaddress: String,
     pub workername: String,
-    pub timestamp: u64,
+    pub n_time: u64,
 }
 
 impl SimplePplnsShare {
@@ -57,14 +57,14 @@ impl SimplePplnsShare {
         difficulty: u64,
         btcaddress: String,
         workername: String,
-        timestamp: u64,
+        n_time: u64,
     ) -> Self {
         SimplePplnsShare {
             user_id,
             difficulty,
             btcaddress,
             workername,
-            timestamp,
+            n_time,
         }
     }
 
@@ -73,7 +73,7 @@ impl SimplePplnsShare {
         StoredPplnsShare {
             user_id: self.user_id,
             difficulty: self.difficulty,
-            timestamp: self.timestamp,
+            timestamp: self.n_time,
         }
     }
 

@@ -241,10 +241,10 @@ mod tests {
         assert_eq!(result.len(), 4);
 
         // Verify shares are in newest-to-oldest order
-        assert_eq!(result[0].timestamp, (current_time - 1800) * 1_000_000); // 30 min ago
-        assert_eq!(result[1].timestamp, (current_time - 2400) * 1_000_000); // 40 min ago
-        assert_eq!(result[2].timestamp, (current_time - 3000) * 1_000_000); // 50 min ago
-        assert_eq!(result[3].timestamp, (current_time - 3600) * 1_000_000); // 60 min ago
+        assert_eq!(result[0].n_time, (current_time - 1800) * 1_000_000); // 30 min ago
+        assert_eq!(result[1].n_time, (current_time - 2400) * 1_000_000); // 40 min ago
+        assert_eq!(result[2].n_time, (current_time - 3000) * 1_000_000); // 50 min ago
+        assert_eq!(result[3].n_time, (current_time - 3600) * 1_000_000); // 60 min ago
 
         // Verify total difficulty
         let total: u64 = result.iter().map(|s| s.difficulty).sum();
@@ -478,9 +478,9 @@ mod tests {
         assert_eq!(result.len(), 3);
 
         // Verify order (newest first)
-        assert_eq!(result[0].timestamp, (current_time - 50) * 1_000_000);
-        assert_eq!(result[1].timestamp, (current_time - 150) * 1_000_000);
-        assert_eq!(result[2].timestamp, (current_time - 250) * 1_000_000);
+        assert_eq!(result[0].n_time, (current_time - 50) * 1_000_000);
+        assert_eq!(result[1].n_time, (current_time - 150) * 1_000_000);
+        assert_eq!(result[2].n_time, (current_time - 250) * 1_000_000);
 
         let total: u64 = result.iter().map(|s| s.difficulty).sum();
         assert_eq!(total, 600);

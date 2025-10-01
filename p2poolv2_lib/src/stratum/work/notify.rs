@@ -286,7 +286,7 @@ mod tests {
 
         let job_id = JobId(1);
 
-        let timestamp = (SystemTime::now()
+        let n_time = (SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs()
@@ -300,7 +300,7 @@ mod tests {
             difficulty: 100,
             btcaddress: "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string(),
             workername: "".to_string(),
-            timestamp,
+            n_time,
         }];
 
         store
@@ -368,7 +368,7 @@ mod tests {
         let work_map_handle = start_tracker_actor();
 
         // Setup mock PPLNS provider
-        let timestamp = (SystemTime::now()
+        let n_time = (SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs()
@@ -382,7 +382,7 @@ mod tests {
             difficulty: 100,
             btcaddress: "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string(),
             workername: "".to_string(),
-            timestamp,
+            n_time,
         }];
 
         store
@@ -493,7 +493,7 @@ mod tests {
             bitcoin::Network::Signet,
         )
         .unwrap();
-        let timestamp = (SystemTime::now()
+        let n_time = (SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs()
@@ -507,7 +507,7 @@ mod tests {
             difficulty: 100,
             btcaddress: "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string(),
             workername: "".to_string(),
-            timestamp,
+            n_time,
         }];
 
         store
