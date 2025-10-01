@@ -104,6 +104,9 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         session.btcaddress.clone().unwrap_or_default(),
         session.workername.clone().unwrap_or_default(),
         timestamp,
+        id.to_string(),
+        message.params[2].as_ref().unwrap().to_string(),
+        message.params[4].as_ref().unwrap().to_string(),
     );
 
     shares_tx

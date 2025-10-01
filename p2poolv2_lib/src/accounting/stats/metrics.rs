@@ -580,6 +580,9 @@ mod tests {
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
                 n_time: 1000,
+                job_id: "test_job".to_string(),
+                extranonce2: "test_extra".to_string(),
+                nonce: "test_nonce".to_string(),
             })
             .await;
 
@@ -597,6 +600,9 @@ mod tests {
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
                 n_time: 1000,
+                job_id: "test_job".to_string(),
+                extranonce2: "test_extra".to_string(),
+                nonce: "test_nonce".to_string(),
             })
             .await;
         let metrics = handle.get_metrics().await;
@@ -611,6 +617,9 @@ mod tests {
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
                 n_time: 1000,
+                job_id: "test_job".to_string(),
+                extranonce2: "test_extra".to_string(),
+                nonce: "test_nonce".to_string(),
             })
             .await;
         let metrics = handle.get_metrics().await;
@@ -652,6 +661,9 @@ mod tests {
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
                 n_time: 1000,
+                job_id: "test_job".to_string(),
+                extranonce2: "test_extra".to_string(),
+                nonce: "test_nonce".to_string(),
             })
             .await;
         let _ = handle
@@ -661,6 +673,9 @@ mod tests {
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
                 n_time: 1000,
+                job_id: "test_job".to_string(),
+                extranonce2: "test_extra".to_string(),
+                nonce: "test_nonce".to_string(),
             })
             .await;
         let _ = handle.record_share_rejected().await;
@@ -823,6 +838,9 @@ mod tests {
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
                 n_time: 1000,
+                job_id: "test_job".to_string(),
+                extranonce2: "test_extra".to_string(),
+                nonce: "test_nonce".to_string(),
             })
             .await;
         let _ = handle.record_share_rejected().await;
@@ -876,6 +894,9 @@ mod tests {
                 btcaddress: btcaddress.clone(),
                 workername: workername.clone(),
                 n_time: 3000,
+                job_id: "test_job".to_string(),
+                extranonce2: "test_extra".to_string(),
+                nonce: "test_nonce".to_string(),
             })
             .await;
 
@@ -914,6 +935,9 @@ mod tests {
                 btcaddress: "userA".to_string(),
                 workername: "workerA1".to_string(),
                 n_time: 4000,
+                job_id: "test_job".to_string(),
+                extranonce2: "test_extra".to_string(),
+                nonce: "test_nonce".to_string(),
             })
             .await;
         let _ = handle
@@ -923,6 +947,9 @@ mod tests {
                 btcaddress: "userA".to_string(),
                 workername: "workerA2".to_string(),
                 n_time: 5000,
+                job_id: "test_job".to_string(),
+                extranonce2: "test_extra".to_string(),
+                nonce: "test_nonce".to_string(),
             })
             .await;
         let _ = handle
@@ -932,6 +959,9 @@ mod tests {
                 btcaddress: "userB".to_string(),
                 workername: "workerB1".to_string(),
                 n_time: 6000,
+                job_id: "test_job".to_string(),
+                extranonce2: "test_extra".to_string(),
+                nonce: "test_nonce".to_string(),
             })
             .await;
 

@@ -2595,6 +2595,9 @@ mod tests {
             "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string(),
             "".to_string(),
             1000,
+            "job".to_string(),
+            "extra".to_string(),
+            "nonce".to_string(),
         );
 
         // Add the PPLNS share to the store

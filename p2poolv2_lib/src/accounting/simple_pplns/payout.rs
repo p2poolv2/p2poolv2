@@ -204,6 +204,9 @@ mod tests {
                 "addr1".to_string(),
                 "worker1".to_string(),
                 (current_time - 1800) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ), // 30 min ago
             SimplePplnsShare::new(
                 2,
@@ -211,6 +214,9 @@ mod tests {
                 "addr2".to_string(),
                 "worker2".to_string(),
                 (current_time - 2400) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ), // 40 min ago
             SimplePplnsShare::new(
                 3,
@@ -218,6 +224,9 @@ mod tests {
                 "addr3".to_string(),
                 "worker3".to_string(),
                 (current_time - 3000) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ), // 50 min ago
             SimplePplnsShare::new(
                 4,
@@ -225,6 +234,9 @@ mod tests {
                 "addr4".to_string(),
                 "worker4".to_string(),
                 (current_time - 3600) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ), // 60 min ago
         ];
 
@@ -268,6 +280,9 @@ mod tests {
                 "addr1".to_string(),
                 "worker1".to_string(),
                 (current_time - 1800) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ),
             SimplePplnsShare::new(
                 2,
@@ -275,6 +290,9 @@ mod tests {
                 "addr2".to_string(),
                 "worker2".to_string(),
                 (current_time - 2400) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ),
             SimplePplnsShare::new(
                 3,
@@ -282,6 +300,9 @@ mod tests {
                 "addr3".to_string(),
                 "worker3".to_string(),
                 (current_time - 3000) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ),
             SimplePplnsShare::new(
                 4,
@@ -289,6 +310,9 @@ mod tests {
                 "addr4".to_string(),
                 "worker4".to_string(),
                 (current_time - 3600) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ),
         ];
 
@@ -328,6 +352,9 @@ mod tests {
                 "addr1".to_string(),
                 "worker1".to_string(),
                 (current_time - 1800) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ),
             SimplePplnsShare::new(
                 2,
@@ -335,6 +362,9 @@ mod tests {
                 "addr2".to_string(),
                 "worker2".to_string(),
                 (current_time - 2400) * 1_000_000,
+                "job10".to_string(),
+                "extra10".to_string(),
+                "nonce10".to_string(),
             ),
         ];
 
@@ -397,6 +427,9 @@ mod tests {
             "addr1".to_string(),
             "worker1".to_string(),
             (current_time - 1800) * 1_000_000,
+            "job".to_string(),
+            "extra".to_string(),
+            "nonce".to_string(),
         )];
 
         store
@@ -432,6 +465,9 @@ mod tests {
                 "addr1".to_string(),
                 "worker1".to_string(),
                 (current_time - 50) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ), // 50s ago
             SimplePplnsShare::new(
                 2,
@@ -439,6 +475,9 @@ mod tests {
                 "addr2".to_string(),
                 "worker2".to_string(),
                 (current_time - 150) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ), // 150s ago
             SimplePplnsShare::new(
                 3,
@@ -446,6 +485,9 @@ mod tests {
                 "addr3".to_string(),
                 "worker3".to_string(),
                 (current_time - 250) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ), // 250s ago
             SimplePplnsShare::new(
                 4,
@@ -453,6 +495,9 @@ mod tests {
                 "addr4".to_string(),
                 "worker4".to_string(),
                 (current_time - 350) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ), // 350s ago
         ];
 
@@ -508,6 +553,9 @@ mod tests {
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(),
             "worker1".to_string(),
             (current_time - 1800) * 1_000_000,
+            "job".to_string(),
+            "extra".to_string(),
+            "nonce".to_string(),
         )];
 
         store
@@ -551,6 +599,9 @@ mod tests {
                 "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(),
                 "worker1".to_string(),
                 (current_time - 1800) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ),
             SimplePplnsShare::new(
                 2,
@@ -558,6 +609,9 @@ mod tests {
                 "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(),
                 "worker2".to_string(),
                 (current_time - 2400) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ),
         ];
 
@@ -619,6 +673,9 @@ mod tests {
                 "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(),
                 "worker1".to_string(),
                 (current_time - 1800) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ),
             SimplePplnsShare::new(
                 1,
@@ -626,6 +683,9 @@ mod tests {
                 "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(),
                 "worker2".to_string(),
                 (current_time - 2400) * 1_000_000,
+                "job20".to_string(),
+                "extra20".to_string(),
+                "nonce20".to_string(),
             ),
             SimplePplnsShare::new(
                 2,
@@ -633,6 +693,9 @@ mod tests {
                 "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(),
                 "worker3".to_string(),
                 (current_time - 3000) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ),
         ];
 
@@ -694,9 +757,36 @@ mod tests {
     #[tokio::test]
     async fn test_group_shares_by_address() {
         let shares = vec![
-            SimplePplnsShare::new(1, 100, "addr1".to_string(), "worker1".to_string(), 1000),
-            SimplePplnsShare::new(2, 200, "addr2".to_string(), "worker2".to_string(), 2000),
-            SimplePplnsShare::new(1, 300, "addr1".to_string(), "worker3".to_string(), 3000),
+            SimplePplnsShare::new(
+                1,
+                100,
+                "addr1".to_string(),
+                "worker1".to_string(),
+                1000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
+            ),
+            SimplePplnsShare::new(
+                2,
+                200,
+                "addr2".to_string(),
+                "worker2".to_string(),
+                2000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
+            ),
+            SimplePplnsShare::new(
+                1,
+                300,
+                "addr1".to_string(),
+                "worker3".to_string(),
+                3000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
+            ),
         ];
 
         let result = Payout::group_shares_by_address(&shares);

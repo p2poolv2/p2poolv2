@@ -75,6 +75,9 @@ impl Store {
                         btcaddress: btcaddress.clone(),
                         workername: String::new(), // Not stored, leave empty
                         n_time: stored.timestamp,
+                        job_id: stored.job_id.clone(),
+                        extranonce2: stored.extranonce2.clone(),
+                        nonce: stored.nonce.clone(),
                     }
                 })
             })
@@ -127,6 +130,9 @@ mod tests {
                 "addr1".to_string(),
                 "worker1".to_string(),
                 1000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ),
             SimplePplnsShare::new(
                 user_id2,
@@ -134,6 +140,9 @@ mod tests {
                 "addr2".to_string(),
                 "worker2".to_string(),
                 2000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ),
             SimplePplnsShare::new(
                 user_id3,
@@ -141,6 +150,9 @@ mod tests {
                 "addr3".to_string(),
                 "worker3".to_string(),
                 3000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ),
         ];
 
@@ -170,6 +182,9 @@ mod tests {
                 "addr1".to_string(),
                 "worker1".to_string(),
                 1000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ),
             SimplePplnsShare::new(
                 user_id2,
@@ -177,6 +192,9 @@ mod tests {
                 "addr2".to_string(),
                 "worker2".to_string(),
                 2000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ),
             SimplePplnsShare::new(
                 user_id3,
@@ -184,6 +202,9 @@ mod tests {
                 "addr3".to_string(),
                 "worker3".to_string(),
                 3000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
             ),
         ];
 

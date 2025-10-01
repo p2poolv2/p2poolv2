@@ -27,6 +27,9 @@ pub struct StoredPplnsShare {
     pub user_id: u64,
     pub difficulty: u64,
     pub timestamp: u64,
+    pub job_id: String,
+    pub extranonce2: String,
+    pub nonce: String,
 }
 
 impl StoredPplnsShare {
@@ -49,6 +52,9 @@ pub struct SimplePplnsShare {
     pub btcaddress: String,
     pub workername: String,
     pub n_time: u64,
+    pub job_id: String,
+    pub extranonce2: String,
+    pub nonce: String,
 }
 
 impl SimplePplnsShare {
@@ -58,6 +64,9 @@ impl SimplePplnsShare {
         btcaddress: String,
         workername: String,
         n_time: u64,
+        job_id: String,
+        extranonce2: String,
+        nonce: String,
     ) -> Self {
         SimplePplnsShare {
             user_id,
@@ -65,6 +74,9 @@ impl SimplePplnsShare {
             btcaddress,
             workername,
             n_time,
+            job_id,
+            extranonce2,
+            nonce,
         }
     }
 
@@ -74,6 +86,9 @@ impl SimplePplnsShare {
             user_id: self.user_id,
             difficulty: self.difficulty,
             timestamp: self.n_time,
+            job_id: self.job_id.clone(),
+            extranonce2: self.extranonce2.clone(),
+            nonce: self.nonce.clone(),
         }
     }
 
