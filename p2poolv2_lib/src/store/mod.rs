@@ -233,6 +233,8 @@ impl Store {
             if let Some(serialized_user) = self.db.get_cf(user_cf, user_id.to_be_bytes())? {
                 let stored_user: StoredUser = ciborium::de::from_reader(&serialized_user[..])?;
                 results.push((user_id, stored_user.btcaddress));
+            } else {
+                println!("No user id matchin {}", user_id);
             }
         }
 
@@ -285,15 +287,17 @@ impl Store {
     }
 
     /// Add PPLNS Share to pplns_share_cf
-    /// The key is "timestamp:username:share_hash" where timestamp is microseconds since epoch
+    /// The key is "timestamp:user_id:share_hash" where timestamp is microseconds since epoch
+    /// Stores StoredPplnsShare (without btcaddress/workername) to minimize storage
     pub fn add_pplns_share(
         &self,
         pplns_share: SimplePplnsShare,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
-        let (hash, serialized) = pplns_share.hash_and_serialize()?;
-        let timestamp = pplns_share.timestamp as u128 * 1_000_000; // Convert seconds to microseconds
-        let key = format!("{}:{}:{}", timestamp, pplns_share.btcaddress, hash);
+        let stored_share = pplns_share.to_stored();
+        let (hash, serialized) = stored_share.hash_and_serialize()?;
+        let timestamp = stored_share.timestamp as u128 * 1_000_000; // Convert seconds to microseconds
+        let key = format!("{}:{}:{}", timestamp, stored_share.user_id, hash);
         self.db.put_cf(pplns_share_cf, key, serialized)?;
         Ok(())
     }
@@ -2582,8 +2586,13 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
+        let user_id = store
+            .store_user("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string())
+            .unwrap();
+
         // Create a PPLNS share
         let pplns_share = SimplePplnsShare::new(
+            user_id,
             1,
             "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string(),
             "".to_string(),

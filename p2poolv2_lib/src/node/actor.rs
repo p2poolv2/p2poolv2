@@ -248,6 +248,7 @@ mod tests {
 
             // Send back a test response
             let test_shares = vec![SimplePplnsShare::new(
+                1,
                 100,
                 "addr1".to_string(),
                 "worker1".to_string(),

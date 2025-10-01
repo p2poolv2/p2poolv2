@@ -199,24 +199,28 @@ mod tests {
         // Create shares with total difficulty of 1000
         let shares = vec![
             SimplePplnsShare::new(
+                1,
                 400,
                 "addr1".to_string(),
                 "worker1".to_string(),
                 (current_time - 1800) * 1_000_000,
             ), // 30 min ago
             SimplePplnsShare::new(
+                2,
                 300,
                 "addr2".to_string(),
                 "worker2".to_string(),
                 (current_time - 2400) * 1_000_000,
             ), // 40 min ago
             SimplePplnsShare::new(
+                3,
                 200,
                 "addr3".to_string(),
                 "worker3".to_string(),
                 (current_time - 3000) * 1_000_000,
             ), // 50 min ago
             SimplePplnsShare::new(
+                4,
                 100,
                 "addr4".to_string(),
                 "worker4".to_string(),
@@ -259,24 +263,28 @@ mod tests {
 
         let shares = vec![
             SimplePplnsShare::new(
+                1,
                 400,
                 "addr1".to_string(),
                 "worker1".to_string(),
                 (current_time - 1800) * 1_000_000,
             ),
             SimplePplnsShare::new(
+                2,
                 300,
                 "addr2".to_string(),
                 "worker2".to_string(),
                 (current_time - 2400) * 1_000_000,
             ),
             SimplePplnsShare::new(
+                3,
                 200,
                 "addr3".to_string(),
                 "worker3".to_string(),
                 (current_time - 3000) * 1_000_000,
             ),
             SimplePplnsShare::new(
+                4,
                 100,
                 "addr4".to_string(),
                 "worker4".to_string(),
@@ -315,12 +323,14 @@ mod tests {
 
         let shares = vec![
             SimplePplnsShare::new(
+                1,
                 100,
                 "addr1".to_string(),
                 "worker1".to_string(),
                 (current_time - 1800) * 1_000_000,
             ),
             SimplePplnsShare::new(
+                2,
                 200,
                 "addr2".to_string(),
                 "worker2".to_string(),
@@ -382,6 +392,7 @@ mod tests {
         let mut store = ChainStore::default();
 
         let shares = vec![SimplePplnsShare::new(
+            1,
             1500,
             "addr1".to_string(),
             "worker1".to_string(),
@@ -416,24 +427,28 @@ mod tests {
         // Create shares spanning 300 seconds (3 batches)
         let shares = vec![
             SimplePplnsShare::new(
+                1,
                 100,
                 "addr1".to_string(),
                 "worker1".to_string(),
                 (current_time - 50) * 1_000_000,
             ), // 50s ago
             SimplePplnsShare::new(
+                2,
                 200,
                 "addr2".to_string(),
                 "worker2".to_string(),
                 (current_time - 150) * 1_000_000,
             ), // 150s ago
             SimplePplnsShare::new(
+                3,
                 300,
                 "addr3".to_string(),
                 "worker3".to_string(),
                 (current_time - 250) * 1_000_000,
             ), // 250s ago
             SimplePplnsShare::new(
+                4,
                 400,
                 "addr4".to_string(),
                 "worker4".to_string(),
@@ -488,6 +503,7 @@ mod tests {
         let mut store = ChainStore::default();
 
         let shares = vec![SimplePplnsShare::new(
+            1,
             1000,
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(),
             "worker1".to_string(),
@@ -530,12 +546,14 @@ mod tests {
 
         let shares = vec![
             SimplePplnsShare::new(
+                1,
                 600,
                 "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(),
                 "worker1".to_string(),
                 (current_time - 1800) * 1_000_000,
             ),
             SimplePplnsShare::new(
+                2,
                 400,
                 "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(),
                 "worker2".to_string(),
@@ -596,18 +614,21 @@ mod tests {
         // Multiple shares from same address should be aggregated
         let shares = vec![
             SimplePplnsShare::new(
+                1,
                 300,
                 "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(),
                 "worker1".to_string(),
                 (current_time - 1800) * 1_000_000,
             ),
             SimplePplnsShare::new(
+                1,
                 200,
                 "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(),
                 "worker2".to_string(),
                 (current_time - 2400) * 1_000_000,
             ),
             SimplePplnsShare::new(
+                2,
                 500,
                 "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(),
                 "worker3".to_string(),
@@ -673,9 +694,9 @@ mod tests {
     #[tokio::test]
     async fn test_group_shares_by_address() {
         let shares = vec![
-            SimplePplnsShare::new(100, "addr1".to_string(), "worker1".to_string(), 1000),
-            SimplePplnsShare::new(200, "addr2".to_string(), "worker2".to_string(), 2000),
-            SimplePplnsShare::new(300, "addr1".to_string(), "worker3".to_string(), 3000),
+            SimplePplnsShare::new(1, 100, "addr1".to_string(), "worker1".to_string(), 1000),
+            SimplePplnsShare::new(2, 200, "addr2".to_string(), "worker2".to_string(), 2000),
+            SimplePplnsShare::new(1, 300, "addr1".to_string(), "worker3".to_string(), 3000),
         ];
 
         let result = Payout::group_shares_by_address(&shares);
