@@ -29,9 +29,7 @@ pub enum ColumnFamily {
     Share,
     Job,
     User,
-    Worker,
     UserIndex,
-    WorkerIndex,
     Metadata,
 }
 
@@ -50,9 +48,7 @@ impl ColumnFamily {
             ColumnFamily::Share => "share",
             ColumnFamily::Job => "job",
             ColumnFamily::User => "user",
-            ColumnFamily::Worker => "worker",
             ColumnFamily::UserIndex => "user_index",
-            ColumnFamily::WorkerIndex => "worker_index",
             ColumnFamily::Metadata => "metadata",
         }
     }
