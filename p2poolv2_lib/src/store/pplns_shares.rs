@@ -74,7 +74,7 @@ impl Store {
                         difficulty: stored.difficulty,
                         btcaddress: btcaddress.clone(),
                         workername: String::new(), // Not stored, leave empty
-                        timestamp: stored.timestamp,
+                        n_time: stored.timestamp,
                     }
                 })
             })
@@ -194,6 +194,6 @@ mod tests {
         // Test time filtering
         let result = store.get_pplns_shares_filtered(10, Some(1500), Some(2500));
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].timestamp, 2000);
+        assert_eq!(result[0].n_time, 2000);
     }
 }

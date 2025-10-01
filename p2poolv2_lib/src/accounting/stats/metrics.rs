@@ -579,7 +579,7 @@ mod tests {
                 difficulty: 100,
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
-                timestamp: 1000,
+                n_time: 1000,
             })
             .await;
 
@@ -596,7 +596,7 @@ mod tests {
                 difficulty: 50,
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
-                timestamp: 1000,
+                n_time: 1000,
             })
             .await;
         let metrics = handle.get_metrics().await;
@@ -610,7 +610,7 @@ mod tests {
                 difficulty: 200,
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
-                timestamp: 1000,
+                n_time: 1000,
             })
             .await;
         let metrics = handle.get_metrics().await;
@@ -651,7 +651,7 @@ mod tests {
                 difficulty: 1000,
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
-                timestamp: 1000,
+                n_time: 1000,
             })
             .await;
         let _ = handle
@@ -660,7 +660,7 @@ mod tests {
                 difficulty: 2000,
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
-                timestamp: 1000,
+                n_time: 1000,
             })
             .await;
         let _ = handle.record_share_rejected().await;
@@ -822,7 +822,7 @@ mod tests {
                 difficulty: 123,
                 btcaddress: "user1".to_string(),
                 workername: "worker1".to_string(),
-                timestamp: 1000,
+                n_time: 1000,
             })
             .await;
         let _ = handle.record_share_rejected().await;
@@ -875,7 +875,7 @@ mod tests {
                 difficulty: 77,
                 btcaddress: btcaddress.clone(),
                 workername: workername.clone(),
-                timestamp: 3000,
+                n_time: 3000,
             })
             .await;
 
@@ -913,7 +913,7 @@ mod tests {
                 difficulty: 10,
                 btcaddress: "userA".to_string(),
                 workername: "workerA1".to_string(),
-                timestamp: 4000,
+                n_time: 4000,
             })
             .await;
         let _ = handle
@@ -922,7 +922,7 @@ mod tests {
                 difficulty: 20,
                 btcaddress: "userA".to_string(),
                 workername: "workerA2".to_string(),
-                timestamp: 5000,
+                n_time: 5000,
             })
             .await;
         let _ = handle
@@ -931,7 +931,7 @@ mod tests {
                 difficulty: 30,
                 btcaddress: "userB".to_string(),
                 workername: "workerB1".to_string(),
-                timestamp: 6000,
+                n_time: 6000,
             })
             .await;
 
