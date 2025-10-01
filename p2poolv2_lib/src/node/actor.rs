@@ -253,6 +253,9 @@ mod tests {
                 "addr1".to_string(),
                 "worker1".to_string(),
                 1500,
+                "job1".to_string(),
+                "extra1".to_string(),
+                "nonce1".to_string(),
             )];
             let _ = tx.send(test_shares);
         } else {

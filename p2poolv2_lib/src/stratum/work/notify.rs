@@ -301,6 +301,9 @@ mod tests {
             btcaddress: "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string(),
             workername: "".to_string(),
             n_time,
+            job_id: "test_job".to_string(),
+            extranonce2: "test_extra".to_string(),
+            nonce: "test_nonce".to_string(),
         }];
 
         store
@@ -383,6 +386,9 @@ mod tests {
             btcaddress: "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string(),
             workername: "".to_string(),
             n_time,
+            job_id: "test_job".to_string(),
+            extranonce2: "test_extra".to_string(),
+            nonce: "test_nonce".to_string(),
         }];
 
         store
@@ -508,6 +514,9 @@ mod tests {
             btcaddress: "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string(),
             workername: "".to_string(),
             n_time,
+            job_id: "test_job".to_string(),
+            extranonce2: "test_extra".to_string(),
+            nonce: "test_nonce".to_string(),
         }];
 
         store
