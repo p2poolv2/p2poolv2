@@ -442,10 +442,6 @@ impl ChainStore {
     pub fn store_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error>> {
         self.store.store_user(btcaddress)
     }
-
-    pub fn store_worker(&self, user_id: u64, workername: String) -> Result<u64, Box<dyn Error>> {
-        self.store.store_worker(user_id, workername)
-    }
 }
 
 #[cfg(test)]
