@@ -14,8 +14,6 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use bitcoin::BlockHash;
-use ciborium;
 use serde::{Deserialize, Serialize};
 
 pub mod payout;
@@ -60,55 +58,24 @@ impl SimplePplnsShare {
         }
     }
 
-    /// Serialize the pplns share and take a double sha256 hash for it
-    /// The result is used to identify the share uniquely and store it in store
-    /// Note: btcaddress and workername are skipped during serialization (serde(skip))
-    pub fn hash_and_serialize(&self) -> Result<(PplnsShareBlockHash, Vec<u8>), std::io::Error> {
-        let mut serialized = Vec::new();
-        ciborium::ser::into_writer(&self, &mut serialized).unwrap();
-        let hash = PplnsShareBlockHash(bitcoin::hashes::Hash::hash(&serialized));
-        Ok((hash, serialized))
+    /// Makes key for share
+    ///
+    /// Three 8 bytes key components: n_time, user_id, and sequence
+    pub fn make_key(n_time: u64, user_id: u64, seq: u64) -> Vec<u8> {
+        let mut key = Vec::<u8>::with_capacity(24);
+        key.extend_from_slice(&n_time.to_be_bytes());
+        key.extend_from_slice(&user_id.to_be_bytes());
+        key.extend_from_slice(&seq.to_be_bytes());
+        key
     }
-}
 
-/// Type alias for bitcoin block hash, so we can depend on types to catch potential errors
-#[derive(Clone, PartialEq, Serialize, Deserialize, Debug, Hash, Copy)]
-pub struct PplnsShareBlockHash(BlockHash);
-
-impl From<&str> for PplnsShareBlockHash {
-    fn from(s: &str) -> PplnsShareBlockHash {
-        PplnsShareBlockHash(s.parse().expect("Invalid pplns share block hash string"))
-    }
-}
-
-impl std::fmt::Display for PplnsShareBlockHash {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl PartialEq<PplnsShareBlockHash> for &str {
-    fn eq(&self, other: &PplnsShareBlockHash) -> bool {
-        self.parse::<BlockHash>().unwrap() == other.0
-    }
-}
-
-impl PartialEq<&str> for PplnsShareBlockHash {
-    fn eq(&self, other: &&str) -> bool {
-        self.0 == other.parse().unwrap()
-    }
-}
-
-impl PartialEq<PplnsShareBlockHash> for &PplnsShareBlockHash {
-    fn eq(&self, other: &PplnsShareBlockHash) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl Eq for PplnsShareBlockHash {}
-
-impl AsRef<[u8]> for PplnsShareBlockHash {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
+    /// Parse key made by make_key2
+    ///
+    /// Three 8 byte components, n_time, user_id and sequence
+    /// Returns n_time and user_id
+    pub fn parse_key(key: &[u8]) -> (u64, u64) {
+        let n_time = u64::from_be_bytes(key[0..8].try_into().unwrap());
+        let user_id = u64::from_be_bytes(key[8..16].try_into().unwrap());
+        (n_time, user_id)
     }
 }

@@ -16,6 +16,8 @@
 
 use super::{Store, column_families::ColumnFamily};
 use crate::accounting::simple_pplns::SimplePplnsShare;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 const INITIAL_SHARE_VEC_CAPACITY: usize = 100_000;
 
 impl Store {
@@ -30,26 +32,44 @@ impl Store {
     ) -> Vec<SimplePplnsShare> {
         let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
 
-        // Use a simple approach with End iterator and filtering
-        let mut iter = self
-            .db
-            .iterator_cf(pplns_share_cf, rocksdb::IteratorMode::End);
+        // Convert end_time to microseconds, default to current time if not specified
+        let effective_end_time = end_time.map(|t| t * 1_000_000).unwrap_or_else(|| {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_micros() as u64
+        });
+
+        let mut read_opts = rocksdb::ReadOptions::default();
+
+        // Set lower bound for start_time if specified (exclusive lower bound)
+        if let Some(start) = start_time {
+            let start_micros = start * 1_000_000;
+            // Create boundary key with minimum user_id and seq for lower bound
+            let start_key = SimplePplnsShare::make_key(start_micros, 0, 0);
+            read_opts.set_iterate_lower_bound(start_key);
+        }
+
+        // Create starting boundary key with maximum user_id and seq for reverse iteration
+        let end_key = SimplePplnsShare::make_key(effective_end_time, u64::MAX, u64::MAX);
+
+        let iter = self.db.iterator_cf_opt(
+            pplns_share_cf,
+            read_opts,
+            rocksdb::IteratorMode::From(&end_key, rocksdb::Direction::Reverse),
+        );
 
         let use_limit = limit.unwrap_or(INITIAL_SHARE_VEC_CAPACITY);
         let mut shares: Vec<SimplePplnsShare> = Vec::with_capacity(use_limit);
-        let mut count = 0;
 
-        while let Some(Ok((key, value))) = iter.next() {
-            if count >= use_limit {
-                break;
-            }
-            if filter_share_by_time(&key, start_time, end_time).is_some() {
+        for item in iter.take(use_limit) {
+            if let Ok((_key, value)) = item {
                 if let Ok(share) = ciborium::de::from_reader(&value[..]) {
                     shares.push(share);
-                    count += 1;
                 }
             }
         }
+
         self.populate_btcaddresses(&shares)
     }
 
@@ -78,28 +98,6 @@ impl Store {
             })
             .collect()
     }
-}
-
-/// Parse the key as timestamp:<the-rest> and checks the timestamp is between start and return time
-fn filter_share_by_time(key: &[u8], start_time: Option<u64>, end_time: Option<u64>) -> Option<()> {
-    let key_str = String::from_utf8_lossy(key);
-    let timestamp_str = key_str.split(':').next()?;
-    let timestamp_micros = timestamp_str.parse::<u64>().ok()?;
-    let timestamp_secs = timestamp_micros / 1_000_000;
-
-    if let Some(start) = start_time {
-        if timestamp_secs < start {
-            return None;
-        }
-    }
-
-    if let Some(end) = end_time {
-        if timestamp_secs > end {
-            return None;
-        }
-    }
-
-    Some(())
 }
 
 #[cfg(test)]

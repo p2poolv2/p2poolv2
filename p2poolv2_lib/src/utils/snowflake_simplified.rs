@@ -26,6 +26,10 @@ const CUSTOM_EPOCH: u64 = 1735689600000; // 2025-01-01 in ms
 ///
 /// We retain the benefits of sorted ids and avoid any conflicts in
 /// the same millisecond by using the atomic u32 sequence.
+///
+/// Generates an 8 byte id, with ms timestamp and ~4M sequence per ms
+/// Depends on global atomic, so if we use it in a lot of places, we
+/// can stripe it into key type
 pub fn get_next_id() -> u64 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)

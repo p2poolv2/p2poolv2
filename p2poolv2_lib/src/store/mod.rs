@@ -307,16 +307,20 @@ impl Store {
     }
 
     /// Add PPLNS Share to pplns_share_cf
-    /// The key is "timestamp:user_id:share_hash" where timestamp is microseconds since epoch
     /// btcaddress and workername are skipped during serialization (serde(skip)) to minimize storage
+    ///
+    /// Key is timestamp (8) + user_id (8) + share id (8) = 24 bytes
     pub fn add_pplns_share(
         &self,
         pplns_share: SimplePplnsShare,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
-        let (hash, serialized) = pplns_share.hash_and_serialize()?;
-        let timestamp = pplns_share.n_time as u128 * 1_000_000; // Convert seconds to microseconds
-        let key = format!("{}:{}:{}", timestamp, pplns_share.user_id, hash);
+
+        let mut serialized = Vec::new();
+        ciborium::ser::into_writer(&pplns_share, &mut serialized).unwrap();
+
+        let n_time = pplns_share.n_time * 1_000_000;
+        let key = SimplePplnsShare::make_key(n_time, pplns_share.user_id, get_next_id());
         self.db.put_cf(pplns_share_cf, key, serialized)?;
         Ok(())
     }
