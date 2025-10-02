@@ -62,11 +62,9 @@ impl Store {
         let use_limit = limit.unwrap_or(INITIAL_SHARE_VEC_CAPACITY);
         let mut shares: Vec<SimplePplnsShare> = Vec::with_capacity(use_limit);
 
-        for item in iter.take(use_limit) {
-            if let Ok((_key, value)) = item {
-                if let Ok(share) = ciborium::de::from_reader(&value[..]) {
-                    shares.push(share);
-                }
+        for (_key, value) in iter.take(use_limit).flatten() {
+            if let Ok(share) = ciborium::de::from_reader(&value[..]) {
+                shares.push(share);
             }
         }
 
