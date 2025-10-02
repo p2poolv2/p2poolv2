@@ -69,7 +69,7 @@ impl SimplePplnsShare {
         key
     }
 
-    /// Parse key made by make_key2
+    /// Parse key made by make_key
     ///
     /// Three 8 byte components, n_time, user_id and sequence
     /// Returns n_time and user_id
