@@ -146,7 +146,7 @@ pub enum NotifyCmd {
 pub async fn start_notify(
     mut notifier_rx: mpsc::Receiver<NotifyCmd>,
     connections: ClientConnectionsHandle,
-    pplns_provider: Arc<ChainStore>,
+    chain_store: Arc<ChainStore>,
     tracker_handle: TrackerHandle,
     bootstrap_address: bitcoin::Address,
     difficulty_multiplier: f64,
@@ -161,7 +161,7 @@ pub async fn start_notify(
                 let job_id = tracker_handle.get_next_job_id().await.unwrap();
                 let output_distribution = build_output_distribution(
                     &template,
-                    &pplns_provider,
+                    &chain_store,
                     &bootstrap_address,
                     difficulty_multiplier,
                 )
@@ -188,7 +188,7 @@ pub async fn start_notify(
                         }
                     };
                 connections.send_to_all(Arc::new(notify_str.clone())).await;
-                if pplns_provider.save_job(notify_str).is_err() {
+                if chain_store.add_job(notify_str).is_err() {
                     tracing::warn!("Couldn't save job when sending to all");
                 }
             }
@@ -206,7 +206,7 @@ pub async fn start_notify(
                 let job_id = tracker_handle.get_next_job_id().await.unwrap();
                 let output_distribution = build_output_distribution(
                     latest_template.as_ref().unwrap(),
-                    &pplns_provider,
+                    &chain_store,
                     &bootstrap_address,
                     difficulty_multiplier,
                 )
@@ -239,7 +239,7 @@ pub async fn start_notify(
                 connections
                     .send_to_client(client_address, Arc::new(notify_str.clone()))
                     .await;
-                if pplns_provider.save_job(notify_str).is_err() {
+                if chain_store.add_job(notify_str).is_err() {
                     tracing::warn!("Couldn't save job when sending to client");
                 }
             }
@@ -395,7 +395,7 @@ mod tests {
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
-        store.expect_save_job().returning(|_| Ok(()));
+        store.expect_add_job().returning(|_| Ok(()));
 
         // Start the notify task in a separate task
         let bootstrap_address = parse_address(

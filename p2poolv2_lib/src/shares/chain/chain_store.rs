@@ -420,12 +420,12 @@ impl ChainStore {
 
     /// Save a job with timestamp-prefixed key
     /// Uses timestamp in microseconds to enable time-based range queries
-    pub fn save_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub fn add_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>> {
         use std::time::{SystemTime, UNIX_EPOCH};
 
         let timestamp_micros = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros() as u64;
 
-        self.store.save_job(timestamp_micros, serialized_notify)
+        self.store.add_job(timestamp_micros, serialized_notify)
     }
 
     /// Get jobs within a time range
@@ -439,8 +439,8 @@ impl ChainStore {
         self.store.get_jobs(start_time, end_time, limit)
     }
 
-    pub fn store_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error>> {
-        self.store.store_user(btcaddress)
+    pub fn add_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error>> {
+        self.store.add_user(btcaddress)
     }
 }
 
@@ -473,10 +473,9 @@ mock! {
         pub fn build_locator(&self) -> Vec<ShareBlockHash>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[ShareBlockHash]) -> Vec<ShareBlockHash>;
         pub fn get_tip_height(&self) -> Option<u32>;
-        pub fn save_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>>;
+        pub fn add_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn get_jobs(&self, start_time: Option<u64>, end_time: Option<u64>, limit: usize) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>>;
-        pub fn store_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error>>;
-        pub fn store_worker(&self, user_id: u64, workername: String) -> Result<u64, Box<dyn Error>>;
+        pub fn add_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error>>;
     }
 
 

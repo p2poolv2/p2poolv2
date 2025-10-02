@@ -33,7 +33,7 @@ fn register_user<D: DifficultyAdjusterTrait>(
 ) -> Result<(), Error> {
     // Store user and get user_id
     let user_id = store
-        .store_user(btcaddress.to_string())
+        .add_user(btcaddress.to_string())
         .map_err(|e| Error::AuthorizationFailure(format!("Failed to store user: {e}")))?;
 
     session.user_id = Some(user_id);

@@ -113,9 +113,9 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
-        let user_id1 = store.store_user("addr1".to_string()).unwrap();
-        let user_id2 = store.store_user("addr2".to_string()).unwrap();
-        let user_id3 = store.store_user("addr3".to_string()).unwrap();
+        let user_id1 = store.add_user("addr1".to_string()).unwrap();
+        let user_id2 = store.add_user("addr2".to_string()).unwrap();
+        let user_id3 = store.add_user("addr3".to_string()).unwrap();
 
         // Add test shares with different timestamps
         let shares = vec![
@@ -165,9 +165,9 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
-        let user_id1 = store.store_user("addr1".to_string()).unwrap();
-        let user_id2 = store.store_user("addr2".to_string()).unwrap();
-        let user_id3 = store.store_user("addr3".to_string()).unwrap();
+        let user_id1 = store.add_user("addr1".to_string()).unwrap();
+        let user_id2 = store.add_user("addr2".to_string()).unwrap();
+        let user_id3 = store.add_user("addr3".to_string()).unwrap();
 
         // Add test shares with different timestamps
         let shares = vec![
