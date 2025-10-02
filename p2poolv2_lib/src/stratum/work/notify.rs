@@ -298,8 +298,8 @@ mod tests {
         let shares = vec![SimplePplnsShare {
             user_id: 1,
             difficulty: 100,
-            btcaddress: "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string(),
-            workername: "".to_string(),
+            btcaddress: Some("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string()),
+            workername: Some("".to_string()),
             n_time,
             job_id: "test_job".to_string(),
             extranonce2: "test_extra".to_string(),
@@ -383,8 +383,8 @@ mod tests {
         let shares = vec![SimplePplnsShare {
             user_id: 1,
             difficulty: 100,
-            btcaddress: "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string(),
-            workername: "".to_string(),
+            btcaddress: Some("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string()),
+            workername: Some("".to_string()),
             n_time,
             job_id: "test_job".to_string(),
             extranonce2: "test_extra".to_string(),
@@ -511,8 +511,8 @@ mod tests {
         let shares = vec![SimplePplnsShare {
             user_id: 1,
             difficulty: 100,
-            btcaddress: "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string(),
-            workername: "".to_string(),
+            btcaddress: Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string()),
+            workername: Some("".to_string()),
             n_time,
             job_id: "test_job".to_string(),
             extranonce2: "test_extra".to_string(),

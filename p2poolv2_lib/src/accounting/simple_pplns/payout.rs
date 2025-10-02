@@ -142,9 +142,11 @@ impl Payout {
     fn group_shares_by_address(shares: &[SimplePplnsShare]) -> HashMap<String, u64> {
         let mut address_difficulty_map = HashMap::new();
         for share in shares {
-            *address_difficulty_map
-                .entry(share.btcaddress.clone())
-                .or_insert(0) += share.difficulty;
+            if let Some(btcaddress) = &share.btcaddress {
+                *address_difficulty_map
+                    .entry(btcaddress.clone())
+                    .or_insert(0) += share.difficulty;
+            }
         }
         address_difficulty_map
     }

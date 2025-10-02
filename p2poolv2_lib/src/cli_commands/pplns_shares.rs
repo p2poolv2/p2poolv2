@@ -45,8 +45,8 @@ pub fn execute(
         .into_iter()
         .map(|share| PplnsShareInfo {
             difficulty: share.difficulty,
-            btcaddress: share.btcaddress,
-            workername: share.workername,
+            btcaddress: share.btcaddress.unwrap_or_default(),
+            workername: share.workername.unwrap_or_default(),
             timestamp: share.n_time,
             formatted_time: format_timestamp(share.n_time),
         })
