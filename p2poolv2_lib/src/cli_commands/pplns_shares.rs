@@ -38,7 +38,7 @@ pub fn execute(
     end_time: Option<u64>,
 ) -> Result<(), Box<dyn Error>> {
     // Get PPLNS shares with filtering
-    let shares = chain_store.get_pplns_shares_filtered(limit, start_time, end_time);
+    let shares = chain_store.get_pplns_shares_filtered(Some(limit), start_time, end_time);
 
     // Convert to display format
     let share_infos: Vec<PplnsShareInfo> = shares
@@ -95,8 +95,26 @@ mod tests {
 
         // Add test shares
         let shares = vec![
-            SimplePplnsShare::new(1, 100, "addr1".to_string(), "worker1".to_string(), 1000, "job1".to_string(), "extra1".to_string(), "nonce1".to_string()),
-            SimplePplnsShare::new(2, 200, "addr2".to_string(), "worker2".to_string(), 2000, "job1".to_string(), "extra1".to_string(), "nonce1".to_string()),
+            SimplePplnsShare::new(
+                1,
+                100,
+                "addr1".to_string(),
+                "worker1".to_string(),
+                1000,
+                "job1".to_string(),
+                "extra1".to_string(),
+                "nonce1".to_string(),
+            ),
+            SimplePplnsShare::new(
+                2,
+                200,
+                "addr2".to_string(),
+                "worker2".to_string(),
+                2000,
+                "job1".to_string(),
+                "extra1".to_string(),
+                "nonce1".to_string(),
+            ),
         ];
 
         for share in &shares {

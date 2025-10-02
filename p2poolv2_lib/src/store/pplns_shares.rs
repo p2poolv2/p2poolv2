@@ -16,6 +16,7 @@
 
 use super::{Store, column_families::ColumnFamily};
 use crate::accounting::simple_pplns::SimplePplnsShare;
+const INITIAL_SHARE_VEC_CAPACITY: usize = 100_000;
 
 impl Store {
     /// Get PPLNS shares with filtering support using timestamp-based keys for efficient range queries
@@ -23,7 +24,7 @@ impl Store {
     /// and enriches with btcaddress from user store
     pub fn get_pplns_shares_filtered(
         &self,
-        limit: usize,
+        limit: Option<usize>,
         start_time: Option<u64>,
         end_time: Option<u64>,
     ) -> Vec<SimplePplnsShare> {
@@ -33,11 +34,13 @@ impl Store {
         let mut iter = self
             .db
             .iterator_cf(pplns_share_cf, rocksdb::IteratorMode::End);
-        let mut shares: Vec<SimplePplnsShare> = Vec::new();
+
+        let use_limit = limit.unwrap_or(INITIAL_SHARE_VEC_CAPACITY);
+        let mut shares: Vec<SimplePplnsShare> = Vec::with_capacity(use_limit);
         let mut count = 0;
 
         while let Some(Ok((key, value))) = iter.next() {
-            if count >= limit {
+            if count >= use_limit {
                 break;
             }
             if filter_share_by_time(&key, start_time, end_time).is_some() {
@@ -47,18 +50,16 @@ impl Store {
                 }
             }
         }
-        self.get_full_shares(&shares)
+        self.populate_btcaddresses(&shares)
     }
 
-    fn get_full_shares(&self, shares: &[SimplePplnsShare]) -> Vec<SimplePplnsShare> {
+    /// Populate the btcaddress for user_ids in the shares
+    /// Uses get_btcaddresses_for_userids
+    fn populate_btcaddresses(&self, shares: &[SimplePplnsShare]) -> Vec<SimplePplnsShare> {
         // Collect unique user_ids and query btcaddresses
-        let user_ids: Vec<u64> = shares
-            .iter()
-            .map(|s| s.user_id)
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect();
+        let user_ids: Vec<u64> = shares.iter().map(|s| s.user_id).collect();
 
+        // Pass HashSet directly - no intermediate Vec allocation needed
         let btcaddress_map: std::collections::HashMap<u64, String> = self
             .get_btcaddresses_for_user_ids(&user_ids)
             .unwrap_or_default()
@@ -155,7 +156,7 @@ mod tests {
         }
 
         // Test limit functionality
-        let result = store.get_pplns_shares_filtered(2, None, None);
+        let result = store.get_pplns_shares_filtered(Some(2), None, None);
         assert_eq!(result.len(), 2);
     }
 
@@ -207,7 +208,7 @@ mod tests {
         }
 
         // Test time filtering
-        let result = store.get_pplns_shares_filtered(10, Some(1500), Some(2500));
+        let result = store.get_pplns_shares_filtered(Some(10), Some(1500), Some(2500));
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].n_time, 2000);
     }

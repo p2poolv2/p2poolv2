@@ -81,7 +81,7 @@ impl Payout {
 
             // Query shares for this time window
             let batch_shares =
-                store.get_pplns_shares_filtered(usize::MAX, Some(start_time), Some(end_time));
+                store.get_pplns_shares_filtered(None, Some(start_time), Some(end_time));
 
             has_more_shares = !batch_shares.is_empty();
 
