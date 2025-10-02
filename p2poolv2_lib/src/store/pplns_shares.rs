@@ -15,11 +15,12 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::{Store, column_families::ColumnFamily};
-use crate::accounting::simple_pplns::{SimplePplnsShare, StoredPplnsShare};
+use crate::accounting::simple_pplns::SimplePplnsShare;
 
 impl Store {
     /// Get PPLNS shares with filtering support using timestamp-based keys for efficient range queries
-    /// Retrieves StoredPplnsShare from DB and converts to SimplePplnsShare with btcaddresses
+    /// Deserializes SimplePplnsShare from DB (btcaddress/workername are skipped during serialization)
+    /// and enriches with btcaddress from user store
     pub fn get_pplns_shares_filtered(
         &self,
         limit: usize,
@@ -32,7 +33,7 @@ impl Store {
         let mut iter = self
             .db
             .iterator_cf(pplns_share_cf, rocksdb::IteratorMode::End);
-        let mut stored_shares: Vec<StoredPplnsShare> = Vec::new();
+        let mut shares: Vec<SimplePplnsShare> = Vec::new();
         let mut count = 0;
 
         while let Some(Ok((key, value))) = iter.next() {
@@ -41,17 +42,17 @@ impl Store {
             }
             if filter_share_by_time(&key, start_time, end_time).is_some() {
                 if let Ok(share) = ciborium::de::from_reader(&value[..]) {
-                    stored_shares.push(share);
+                    shares.push(share);
                     count += 1;
                 }
             }
         }
-        self.get_full_shares(&stored_shares)
+        self.get_full_shares(&shares)
     }
 
-    fn get_full_shares(&self, stored_shares: &[StoredPplnsShare]) -> Vec<SimplePplnsShare> {
+    fn get_full_shares(&self, shares: &[SimplePplnsShare]) -> Vec<SimplePplnsShare> {
         // Collect unique user_ids and query btcaddresses
-        let user_ids: Vec<u64> = stored_shares
+        let user_ids: Vec<u64> = shares
             .iter()
             .map(|s| s.user_id)
             .collect::<std::collections::HashSet<_>>()
@@ -64,21 +65,14 @@ impl Store {
             .into_iter()
             .collect();
 
-        // Convert StoredPplnsShare to SimplePplnsShare with btcaddresses
-        stored_shares
+        // Populate btcaddress field (workername remains None as it's not stored)
+        shares
             .iter()
-            .filter_map(|stored| {
-                btcaddress_map.get(&stored.user_id).map(|btcaddress| {
-                    SimplePplnsShare {
-                        user_id: stored.user_id,
-                        difficulty: stored.difficulty,
-                        btcaddress: btcaddress.clone(),
-                        workername: String::new(), // Not stored, leave empty
-                        n_time: stored.timestamp,
-                        job_id: stored.job_id.clone(),
-                        extranonce2: stored.extranonce2.clone(),
-                        nonce: stored.nonce.clone(),
-                    }
+            .filter_map(|share| {
+                btcaddress_map.get(&share.user_id).map(|btcaddress| {
+                    let mut enriched_share = share.clone();
+                    enriched_share.btcaddress = Some(btcaddress.clone());
+                    enriched_share
                 })
             })
             .collect()

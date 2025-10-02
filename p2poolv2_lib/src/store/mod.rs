@@ -286,16 +286,15 @@ impl Store {
 
     /// Add PPLNS Share to pplns_share_cf
     /// The key is "timestamp:user_id:share_hash" where timestamp is microseconds since epoch
-    /// Stores StoredPplnsShare (without btcaddress/workername) to minimize storage
+    /// btcaddress and workername are skipped during serialization (serde(skip)) to minimize storage
     pub fn add_pplns_share(
         &self,
         pplns_share: SimplePplnsShare,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
-        let stored_share = pplns_share.to_stored();
-        let (hash, serialized) = stored_share.hash_and_serialize()?;
-        let timestamp = stored_share.timestamp as u128 * 1_000_000; // Convert seconds to microseconds
-        let key = format!("{}:{}:{}", timestamp, stored_share.user_id, hash);
+        let (hash, serialized) = pplns_share.hash_and_serialize()?;
+        let timestamp = pplns_share.n_time as u128 * 1_000_000; // Convert seconds to microseconds
+        let key = format!("{}:{}:{}", timestamp, pplns_share.user_id, hash);
         self.db.put_cf(pplns_share_cf, key, serialized)?;
         Ok(())
     }

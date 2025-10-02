@@ -374,8 +374,8 @@ impl MetricsHandle {
         let (response_tx, response_rx) = oneshot::channel();
         self.sender
             .send(MetricsMessage::RecordShareAccepted {
-                btcaddress: share.btcaddress,
-                workername: share.workername,
+                btcaddress: share.btcaddress.unwrap_or_default(),
+                workername: share.workername.unwrap_or_default(),
                 difficulty: share.difficulty,
                 response: response_tx,
             })
@@ -577,8 +577,8 @@ mod tests {
             .record_share_accepted(SimplePplnsShare {
                 user_id: 1,
                 difficulty: 100,
-                btcaddress: "user1".to_string(),
-                workername: "worker1".to_string(),
+                btcaddress: Some("user1".to_string()),
+                workername: Some("worker1".to_string()),
                 n_time: 1000,
                 job_id: "test_job".to_string(),
                 extranonce2: "test_extra".to_string(),
@@ -597,8 +597,8 @@ mod tests {
             .record_share_accepted(SimplePplnsShare {
                 user_id: 1,
                 difficulty: 50,
-                btcaddress: "user1".to_string(),
-                workername: "worker1".to_string(),
+                btcaddress: Some("user1".to_string()),
+                workername: Some("worker1".to_string()),
                 n_time: 1000,
                 job_id: "test_job".to_string(),
                 extranonce2: "test_extra".to_string(),
@@ -614,8 +614,8 @@ mod tests {
             .record_share_accepted(SimplePplnsShare {
                 user_id: 1,
                 difficulty: 200,
-                btcaddress: "user1".to_string(),
-                workername: "worker1".to_string(),
+                btcaddress: Some("user1".to_string()),
+                workername: Some("worker1".to_string()),
                 n_time: 1000,
                 job_id: "test_job".to_string(),
                 extranonce2: "test_extra".to_string(),
@@ -658,8 +658,8 @@ mod tests {
             .record_share_accepted(SimplePplnsShare {
                 user_id: 1,
                 difficulty: 1000,
-                btcaddress: "user1".to_string(),
-                workername: "worker1".to_string(),
+                btcaddress: Some("user1".to_string()),
+                workername: Some("worker1".to_string()),
                 n_time: 1000,
                 job_id: "test_job".to_string(),
                 extranonce2: "test_extra".to_string(),
@@ -670,8 +670,8 @@ mod tests {
             .record_share_accepted(SimplePplnsShare {
                 user_id: 1,
                 difficulty: 2000,
-                btcaddress: "user1".to_string(),
-                workername: "worker1".to_string(),
+                btcaddress: Some("user1".to_string()),
+                workername: Some("worker1".to_string()),
                 n_time: 1000,
                 job_id: "test_job".to_string(),
                 extranonce2: "test_extra".to_string(),
@@ -835,8 +835,8 @@ mod tests {
             .record_share_accepted(SimplePplnsShare {
                 user_id: 1,
                 difficulty: 123,
-                btcaddress: "user1".to_string(),
-                workername: "worker1".to_string(),
+                btcaddress: Some("user1".to_string()),
+                workername: Some("worker1".to_string()),
                 n_time: 1000,
                 job_id: "test_job".to_string(),
                 extranonce2: "test_extra".to_string(),
@@ -891,8 +891,8 @@ mod tests {
             .record_share_accepted(SimplePplnsShare {
                 user_id: 1,
                 difficulty: 77,
-                btcaddress: btcaddress.clone(),
-                workername: workername.clone(),
+                btcaddress: Some(btcaddress.clone()),
+                workername: Some(workername.clone()),
                 n_time: 3000,
                 job_id: "test_job".to_string(),
                 extranonce2: "test_extra".to_string(),
@@ -932,8 +932,8 @@ mod tests {
             .record_share_accepted(SimplePplnsShare {
                 user_id: 1,
                 difficulty: 10,
-                btcaddress: "userA".to_string(),
-                workername: "workerA1".to_string(),
+                btcaddress: Some("userA".to_string()),
+                workername: Some("workerA1".to_string()),
                 n_time: 4000,
                 job_id: "test_job".to_string(),
                 extranonce2: "test_extra".to_string(),
@@ -944,8 +944,8 @@ mod tests {
             .record_share_accepted(SimplePplnsShare {
                 user_id: 1,
                 difficulty: 20,
-                btcaddress: "userA".to_string(),
-                workername: "workerA2".to_string(),
+                btcaddress: Some("userA".to_string()),
+                workername: Some("workerA2".to_string()),
                 n_time: 5000,
                 job_id: "test_job".to_string(),
                 extranonce2: "test_extra".to_string(),
@@ -956,8 +956,8 @@ mod tests {
             .record_share_accepted(SimplePplnsShare {
                 user_id: 1,
                 difficulty: 30,
-                btcaddress: "userB".to_string(),
-                workername: "workerB1".to_string(),
+                btcaddress: Some("userB".to_string()),
+                workername: Some("workerB1".to_string()),
                 n_time: 6000,
                 job_id: "test_job".to_string(),
                 extranonce2: "test_extra".to_string(),

@@ -20,37 +20,17 @@ use serde::{Deserialize, Serialize};
 
 pub mod payout;
 
-/// Stored representation of a PPLNS share - persisted to database
-/// Contains only essential data to minimize storage size
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoredPplnsShare {
-    pub user_id: u64,
-    pub difficulty: u64,
-    pub timestamp: u64,
-    pub job_id: String,
-    pub extranonce2: String,
-    pub nonce: String,
-}
-
-impl StoredPplnsShare {
-    /// Serialize the stored pplns share and take a double sha256 hash for it
-    /// The result is used to identify the share uniquely and store it in store
-    pub fn hash_and_serialize(&self) -> Result<(PplnsShareBlockHash, Vec<u8>), std::io::Error> {
-        let mut serialized = Vec::new();
-        ciborium::ser::into_writer(&self, &mut serialized).unwrap();
-        let hash = PplnsShareBlockHash(bitcoin::hashes::Hash::hash(&serialized));
-        Ok((hash, serialized))
-    }
-}
-
-/// In-memory representation of a PPLNS share
-/// Contains additional fields (btcaddress, workername) for metrics and display
+/// PPLNS share representation
+/// btcaddress and workername are skipped during serialization to minimize storage
+/// They are restored from user_id when loading from database
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimplePplnsShare {
     pub user_id: u64,
     pub difficulty: u64,
-    pub btcaddress: String,
-    pub workername: String,
+    #[serde(skip)]
+    pub btcaddress: Option<String>,
+    #[serde(skip)]
+    pub workername: Option<String>,
     pub n_time: u64,
     pub job_id: String,
     pub extranonce2: String,
@@ -71,8 +51,8 @@ impl SimplePplnsShare {
         SimplePplnsShare {
             user_id,
             difficulty,
-            btcaddress,
-            workername,
+            btcaddress: Some(btcaddress),
+            workername: Some(workername),
             n_time,
             job_id,
             extranonce2,
@@ -80,22 +60,14 @@ impl SimplePplnsShare {
         }
     }
 
-    /// Convert to stored representation for database persistence
-    pub fn to_stored(&self) -> StoredPplnsShare {
-        StoredPplnsShare {
-            user_id: self.user_id,
-            difficulty: self.difficulty,
-            timestamp: self.n_time,
-            job_id: self.job_id.clone(),
-            extranonce2: self.extranonce2.clone(),
-            nonce: self.nonce.clone(),
-        }
-    }
-
     /// Serialize the pplns share and take a double sha256 hash for it
     /// The result is used to identify the share uniquely and store it in store
+    /// Note: btcaddress and workername are skipped during serialization (serde(skip))
     pub fn hash_and_serialize(&self) -> Result<(PplnsShareBlockHash, Vec<u8>), std::io::Error> {
-        self.to_stored().hash_and_serialize()
+        let mut serialized = Vec::new();
+        ciborium::ser::into_writer(&self, &mut serialized).unwrap();
+        let hash = PplnsShareBlockHash(bitcoin::hashes::Hash::hash(&serialized));
+        Ok((hash, serialized))
     }
 }
 
