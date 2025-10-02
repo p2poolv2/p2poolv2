@@ -144,7 +144,7 @@ impl Store {
     }
 
     /// Store a user by btcaddress, returns the user ID
-    pub fn store_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error>> {
+    pub fn add_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error>> {
         let user_cf = self.db.cf_handle(&ColumnFamily::User).unwrap();
         let user_index_cf = self.db.cf_handle(&ColumnFamily::UserIndex).unwrap();
 
@@ -276,11 +276,11 @@ impl Store {
         let mut batch = rocksdb::WriteBatch::default();
 
         // Store transactions and get their metadata
-        let txs_metadata = self.store_txs(&share.transactions, &mut batch);
+        let txs_metadata = self.add_txs(&share.transactions, &mut batch);
 
         let txids = txs_metadata.iter().map(|t| t.txid).collect();
         // Store block -> txids index
-        self.store_txids_to_block_index(&blockhash, &txids, &mut batch);
+        self.add_txids_to_block_index(&blockhash, &txids, &mut batch);
 
         if let Err(e) =
             self.update_block_index(&share.header.prev_share_blockhash, &blockhash, &mut batch)
@@ -435,8 +435,8 @@ impl Store {
     /// Store transactions in the store
     /// Store inputs and outputs for each transaction in separate column families
     /// Store txid -> transaction metadata in the tx column family
-    /// The block -> txids store is done in store_txids_to_block_index. This function lets us store transactions outside of a block context
-    fn store_txs(
+    /// The block -> txids store is done in add_txids_to_block_index. This function lets us store transactions outside of a block context
+    fn add_txs(
         &self,
         transactions: &[Transaction],
         batch: &mut rocksdb::WriteBatch,
@@ -446,7 +446,7 @@ impl Store {
         let mut txs_metadata = Vec::new();
         for tx in transactions {
             let txid = tx.compute_txid();
-            let metadata = self.store_tx_metadata(txid, tx, batch);
+            let metadata = self.add_tx_metadata(txid, tx, batch);
             txs_metadata.push(metadata);
 
             // Store each input for the transaction
@@ -469,7 +469,7 @@ impl Store {
     }
 
     /// Store transaction metadata
-    fn store_tx_metadata(
+    fn add_tx_metadata(
         &self,
         txid: bitcoin::Txid,
         tx: &Transaction,
@@ -492,8 +492,8 @@ impl Store {
     }
 
     /// Add the list of transaction IDs to the batch
-    /// Transactions themselves are stored in store_txs, here we just store the association between block and txids
-    fn store_txids_to_block_index(
+    /// Transactions themselves are stored in add_txs, here we just store the association between block and txids
+    fn add_txids_to_block_index(
         &self,
         blockhash: &ShareBlockHash,
         txids: &Vec<bitcoin::Txid>,
@@ -706,7 +706,7 @@ impl Store {
     }
 
     /// Save a job with the given timestamp key to the Job column family
-    pub fn save_job(
+    pub fn add_job(
         &self,
         timestamp: u64,
         serialized_notify: String,
@@ -1629,7 +1629,7 @@ mod tests {
         // Store the transaction
         let txid = tx.compute_txid();
         let mut batch = rocksdb::WriteBatch::default();
-        let txs_metadata = store.store_txs(&[tx.clone()], &mut batch);
+        let txs_metadata = store.add_txs(&[tx.clone()], &mut batch);
         store.db.write(batch).unwrap();
 
         assert_eq!(txs_metadata.len(), 1);
@@ -1671,7 +1671,7 @@ mod tests {
         // Store the transaction
         let txid = tx.compute_txid();
         let mut batch = rocksdb::WriteBatch::default();
-        store.store_txs(&[tx.clone()], &mut batch);
+        store.add_txs(&[tx.clone()], &mut batch);
         store.db.write(batch).unwrap();
 
         // Initially status should be None
@@ -1753,7 +1753,7 @@ mod tests {
         // Store the txids for the blockhash
         let txids = vec![txid1, txid2];
         let mut batch = rocksdb::WriteBatch::default();
-        store.store_txids_to_block_index(&blockhash, &txids, &mut batch);
+        store.add_txids_to_block_index(&blockhash, &txids, &mut batch);
         store.db.write(batch).unwrap();
 
         // Get txids for the blockhash
@@ -1827,7 +1827,7 @@ mod tests {
     }
 
     #[test]
-    fn test_store_tx_metadata_with_no_inputs_or_outputs_should_succeed() {
+    fn test_add_tx_metadata_with_no_inputs_or_outputs_should_succeed() {
         let temp_dir = tempfile::tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -1840,7 +1840,7 @@ mod tests {
 
         let txid = tx.compute_txid();
         let mut batch = rocksdb::WriteBatch::default();
-        let res = store.store_tx_metadata(txid, &tx, &mut batch);
+        let res = store.add_tx_metadata(txid, &tx, &mut batch);
         store.db.write(batch).unwrap();
 
         assert_eq!(res.txid, txid);
@@ -1853,7 +1853,7 @@ mod tests {
     }
 
     #[test]
-    fn test_store_txs_with_inputs_or_outputs_should_succeed() {
+    fn test_add_txs_with_inputs_or_outputs_should_succeed() {
         let temp_dir = tempfile::tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -1882,7 +1882,7 @@ mod tests {
 
         let txid = tx.compute_txid();
         let mut batch = rocksdb::WriteBatch::default();
-        let res = store.store_txs(&[tx.clone()], &mut batch);
+        let res = store.add_txs(&[tx.clone()], &mut batch);
         store.db.write(batch).unwrap();
 
         assert_eq!(res[0].txid, txid);
@@ -1907,7 +1907,7 @@ mod tests {
     }
 
     #[test]
-    fn test_store_txs_should_succeed() {
+    fn test_add_txs_should_succeed() {
         // Create a new store with a temporary path
         let temp_dir = tempfile::tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
@@ -1931,7 +1931,7 @@ mod tests {
 
         // Add transactions to store
         let mut batch = rocksdb::WriteBatch::default();
-        store.store_txs(&transactions, &mut batch);
+        store.add_txs(&transactions, &mut batch);
         store.db.write(batch).unwrap();
 
         // Verify transactions were stored correctly by retrieving them by txid
@@ -2606,7 +2606,7 @@ mod tests {
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         let user_id = store
-            .store_user("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string())
+            .add_user("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string())
             .unwrap();
 
         // Create a PPLNS share
@@ -2644,7 +2644,7 @@ mod tests {
         let btcaddress = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string();
 
         // Store a new user
-        let user_id = store.store_user(btcaddress.clone()).unwrap();
+        let user_id = store.add_user(btcaddress.clone()).unwrap();
 
         // Get user by ID
         let stored_user = store.get_user_by_id(user_id).unwrap().unwrap();
@@ -2658,12 +2658,12 @@ mod tests {
         assert_eq!(user_by_address.btcaddress, btcaddress);
 
         // Store same user again - should return same ID
-        let same_user_id = store.store_user(btcaddress.clone()).unwrap();
+        let same_user_id = store.add_user(btcaddress.clone()).unwrap();
         assert_eq!(same_user_id, user_id);
 
         // Store different user - should get new ID
         let btcaddress2 = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2".to_string();
-        let _user_id2 = store.store_user(btcaddress2.clone()).unwrap();
+        let _user_id2 = store.add_user(btcaddress2.clone()).unwrap();
 
         // Verify both users exist
         let user1 = store.get_user_by_btcaddress(&btcaddress).unwrap().unwrap();
@@ -2693,7 +2693,7 @@ mod tests {
         let btcaddress = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string();
 
         // Store user
-        let user_id = store.store_user(btcaddress.clone()).unwrap();
+        let user_id = store.add_user(btcaddress.clone()).unwrap();
 
         // Retrieve and verify data integrity
         let stored_user = store.get_user_by_id(user_id).unwrap().unwrap();
@@ -2722,9 +2722,9 @@ mod tests {
         let btcaddress2 = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2".to_string();
         let btcaddress3 = "1QGTJkBFhCjPHqbnwK6z7JfEHefq6Yj2jJ".to_string();
 
-        let user_id1 = store.store_user(btcaddress1.clone()).unwrap();
-        let user_id2 = store.store_user(btcaddress2.clone()).unwrap();
-        let user_id3 = store.store_user(btcaddress3.clone()).unwrap();
+        let user_id1 = store.add_user(btcaddress1.clone()).unwrap();
+        let user_id2 = store.add_user(btcaddress2.clone()).unwrap();
+        let user_id3 = store.add_user(btcaddress3.clone()).unwrap();
 
         // Test getting btcaddresses for existing user IDs
         let user_ids = &[user_id1, user_id2, user_id3];
