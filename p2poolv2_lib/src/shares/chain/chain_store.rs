@@ -140,7 +140,7 @@ impl ChainStore {
 
     pub fn get_pplns_shares_filtered(
         &self,
-        limit: usize,
+        limit: Option<usize>,
         start_time: Option<u64>,
         end_time: Option<u64>,
     ) -> Vec<SimplePplnsShare> {
@@ -465,7 +465,7 @@ mock! {
         pub fn add_user_workbase(&self, user_workbase: UserWorkbase) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase>;
         pub fn get_share(&self, share_hash: &ShareBlockHash) -> Option<ShareBlock>;
-        pub fn get_pplns_shares_filtered(&self, limit: usize, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
+        pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
         pub fn get_shares_at_height(&self, height: u32) -> HashMap<ShareBlockHash, ShareBlock>;
         pub fn get_share_headers(&self, share_hashes: Vec<ShareBlockHash>) -> Vec<ShareHeader>;
         pub fn get_headers_for_locator(&self, block_hashes: &[ShareBlockHash], stop_block_hash: &ShareBlockHash, max_headers: usize) -> Vec<ShareHeader>;

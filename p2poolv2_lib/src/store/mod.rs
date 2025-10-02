@@ -222,19 +222,41 @@ impl Store {
 
     /// Get bitcoin addresses for multiple user IDs
     /// Returns a vector of tuples (user_id, btcaddress) for users that exist
+    /// Accepts any iterable of user IDs for flexibility (HashSet, Vec, slice, etc.)
+    /// Uses RocksDB multi_get_cf for efficient batch querying
     pub fn get_btcaddresses_for_user_ids(
         &self,
         user_ids: &[u64],
     ) -> Result<Vec<(u64, String)>, Box<dyn Error>> {
         let user_cf = self.db.cf_handle(&ColumnFamily::User).unwrap();
-        let mut results = Vec::new();
 
-        for &user_id in user_ids {
-            if let Some(serialized_user) = self.db.get_cf(user_cf, user_id.to_be_bytes())? {
-                let stored_user: StoredUser = ciborium::de::from_reader(&serialized_user[..])?;
-                results.push((user_id, stored_user.btcaddress));
-            }
-        }
+        // Build keys for multi_get_cf: (column_family, key_bytes)
+        let keys: Vec<_> = user_ids
+            .iter()
+            .map(|user_id| (user_cf, user_id.to_be_bytes()))
+            .collect();
+
+        // Batch fetch all users in a single multi_get_cf call
+        let users = self.db.multi_get_cf(keys);
+
+        // Zip user_ids with results, filter successful ones, and extract btcaddresses
+        let results: Vec<(u64, String)> = user_ids
+            .iter()
+            .zip(users)
+            .filter_map(|(user_id, result)| {
+                if let Ok(Some(serialized_user)) = result {
+                    if let Ok(stored_user) =
+                        ciborium::de::from_reader::<StoredUser, _>(&serialized_user[..])
+                    {
+                        Some((*user_id, stored_user.btcaddress))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         Ok(results)
     }
@@ -301,7 +323,7 @@ impl Store {
 
     // Get PPLNS shares, no filter yet
     pub fn get_pplns_shares(&self) -> Vec<SimplePplnsShare> {
-        self.get_pplns_shares_filtered(usize::MAX, None, None)
+        self.get_pplns_shares_filtered(None, None, None)
     }
 
     /// Iterate over the store from provided start blockhash
@@ -2705,8 +2727,8 @@ mod tests {
         let user_id3 = store.store_user(btcaddress3.clone()).unwrap();
 
         // Test getting btcaddresses for existing user IDs
-        let user_ids = vec![user_id1, user_id2, user_id3];
-        let results = store.get_btcaddresses_for_user_ids(&user_ids).unwrap();
+        let user_ids = &[user_id1, user_id2, user_id3];
+        let results = store.get_btcaddresses_for_user_ids(user_ids).unwrap();
 
         assert_eq!(results.len(), 3);
 
@@ -2718,8 +2740,8 @@ mod tests {
         assert_eq!(result_map.get(&user_id3), Some(&btcaddress3));
 
         // Test with subset of user IDs
-        let subset_ids = vec![user_id1, user_id3];
-        let subset_results = store.get_btcaddresses_for_user_ids(&subset_ids).unwrap();
+        let subset_ids = &[user_id1, user_id3];
+        let subset_results = store.get_btcaddresses_for_user_ids(subset_ids).unwrap();
 
         assert_eq!(subset_results.len(), 2);
         let subset_map: std::collections::HashMap<u64, String> =
@@ -2730,16 +2752,16 @@ mod tests {
         assert!(!subset_map.contains_key(&user_id2));
 
         // Test with non-existent user IDs
-        let nonexistent_ids = vec![9999, 8888];
+        let nonexistent_ids = &[9999, 8888];
         let empty_results = store
-            .get_btcaddresses_for_user_ids(&nonexistent_ids)
+            .get_btcaddresses_for_user_ids(nonexistent_ids)
             .unwrap();
 
         assert_eq!(empty_results.len(), 0);
 
         // Test with mixed existing and non-existent IDs
-        let mixed_ids = vec![user_id1, 9999, user_id2];
-        let mixed_results = store.get_btcaddresses_for_user_ids(&mixed_ids).unwrap();
+        let mixed_ids = &[user_id1, 9999, user_id2];
+        let mixed_results = store.get_btcaddresses_for_user_ids(mixed_ids).unwrap();
 
         assert_eq!(mixed_results.len(), 2);
         let mixed_map: std::collections::HashMap<u64, String> = mixed_results.into_iter().collect();
