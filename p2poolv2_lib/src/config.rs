@@ -36,6 +36,14 @@ pub struct StratumConfig {
     pub zmqpubhashblock: String,
     /// The bitcoin address to use for first jobs when there are no shares
     pub bootstrap_address: String,
+    /// The donation address for developers
+    pub donation_address: Option<String>,
+    /// The donation basis points
+    pub donation: Option<u8>,
+    /// The fee address
+    pub fee_address: Option<String>,
+    /// The donation basis points
+    pub fee: Option<u8>,
     /// The network can be "main", "testnet4" or "signet
     #[serde(deserialize_with = "deserialize_network")]
     pub network: bitcoin::Network,
