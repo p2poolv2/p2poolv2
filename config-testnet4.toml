@@ -17,6 +17,8 @@ max_requests_per_second = 1
 
 [store]
 path = "./store-testnet4.db"
+background_task_frequency_hours = 24
+pplns_ttl_days = 7
 
 [ckpool]
 host = "localhost"

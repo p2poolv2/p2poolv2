@@ -31,6 +31,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
+pub mod background_tasks;
 pub mod column_families;
 mod pplns_shares;
 pub mod user;

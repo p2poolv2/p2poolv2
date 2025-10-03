@@ -510,6 +510,8 @@ mod tests {
             },
             store: StoreConfig {
                 path: "test_chain.db".to_string(),
+                background_task_frequency_hours: 1,
+                pplns_ttl_days: 3,
             },
             ckpool: CkPoolConfig {
                 host: "127.0.0.1".to_string(),
