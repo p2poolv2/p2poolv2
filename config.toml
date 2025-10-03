@@ -18,6 +18,8 @@ dial_timeout_secs = 30
 
 [store]
 path = "./store.db"
+background_task_frequency_hours = 24
+pplns_ttl_days = 7
 
 [ckpool]
 host = "localhost"

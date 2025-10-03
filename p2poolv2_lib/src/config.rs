@@ -87,6 +87,20 @@ pub struct NetworkConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct StoreConfig {
     pub path: String,
+    /// How often to run background cleanup tasks (in hours)
+    #[serde(default = "default_background_task_frequency_hours")]
+    pub background_task_frequency_hours: u64,
+    /// Time-to-live for PPLNS shares (in days)
+    #[serde(default = "default_pplns_ttl_days")]
+    pub pplns_ttl_days: u64,
+}
+
+fn default_background_task_frequency_hours() -> u64 {
+    1
+}
+
+fn default_pplns_ttl_days() -> u64 {
+    3
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -179,6 +193,16 @@ impl Config {
 
     pub fn with_store_path(mut self, store_path: String) -> Self {
         self.store.path = store_path;
+        self
+    }
+
+    pub fn with_background_task_frequency_hours(mut self, hours: u64) -> Self {
+        self.store.background_task_frequency_hours = hours;
+        self
+    }
+
+    pub fn with_pplns_ttl_days(mut self, days: u64) -> Self {
+        self.store.pplns_ttl_days = days;
         self
     }
 
@@ -350,6 +374,21 @@ mod tests {
         assert_eq!(config.network.max_established_outgoing, 50);
         assert_eq!(config.network.max_established_per_peer, 1);
         assert_eq!(config.logging.stats_dir, "./logs/stats");
+
+        // Test values from config.toml
+        assert_eq!(config.store.background_task_frequency_hours, 24);
+        assert_eq!(config.store.pplns_ttl_days, 7);
+    }
+
+    #[test]
+    fn test_config_store_background_settings() {
+        let config = Config::load("../config.toml")
+            .unwrap()
+            .with_background_task_frequency_hours(2)
+            .with_pplns_ttl_days(7);
+
+        assert_eq!(config.store.background_task_frequency_hours, 2);
+        assert_eq!(config.store.pplns_ttl_days, 7);
     }
 
     #[test]
