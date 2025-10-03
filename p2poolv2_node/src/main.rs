@@ -141,6 +141,7 @@ async fn main() -> Result<(), String> {
         .require_network(stratum_config.network)
         .unwrap();
 
+    let cloned_stratum_config = stratum_config.clone();
     tokio::spawn(async move {
         info!("Starting Stratum notifier...");
         // This will run indefinitely, sending new block templates to the Stratum server as they arrive
@@ -150,7 +151,7 @@ async fn main() -> Result<(), String> {
             store_for_notify,
             tracker_handle_cloned,
             bootstrap_address,
-            stratum_config.difficulty_multiplier,
+            &cloned_stratum_config,
         )
         .await;
     });
