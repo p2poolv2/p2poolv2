@@ -14,12 +14,25 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use bitcoin::PublicKey;
+use crate::stratum::work::coinbase::parse_address;
+use crate::stratum::work::error::WorkError;
+use bitcoin::address::NetworkChecked;
+use bitcoin::{Address, PublicKey};
 use bitcoindrpc::BitcoinRpcConfig;
 use serde::Deserialize;
+use std::marker::PhantomData;
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct StratumConfig {
+/// Marker type for raw (unparsed) StratumConfig state
+#[derive(Debug, Clone, Default)]
+pub struct Raw;
+
+/// Marker type for parsed (validated) StratumConfig state
+#[derive(Debug, Clone)]
+pub struct Parsed;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(bound(deserialize = "State: Default"))]
+pub struct StratumConfig<State = Raw> {
     /// The hostname for the Stratum server
     pub hostname: String,
     /// The port for the Stratum server
@@ -34,15 +47,15 @@ pub struct StratumConfig {
     pub solo_address: Option<String>,
     /// The ZMQ publisher address for block hashes
     pub zmqpubhashblock: String,
-    /// The bitcoin address to use for first jobs when there are no shares
+    /// The bitcoin address to use for first jobs when there are no shares (string in Raw state)
     pub bootstrap_address: String,
-    /// The donation address for developers
+    /// The donation address for developers (string in Raw state)
     pub donation_address: Option<String>,
     /// The donation basis points
     pub donation: Option<u8>,
-    /// The fee address
+    /// The fee address (string in Raw state)
     pub fee_address: Option<String>,
-    /// The donation basis points
+    /// The fee basis points
     pub fee: Option<u8>,
     /// The network can be "main", "testnet4" or "signet
     #[serde(deserialize_with = "deserialize_network")]
@@ -52,6 +65,107 @@ pub struct StratumConfig {
     pub version_mask: i32,
     /// The difficulty multiplier for dynamic difficulty adjustment
     pub difficulty_multiplier: f64,
+
+    // Parsed addresses - only available when State = Parsed
+    #[serde(skip)]
+    pub(crate) bootstrap_address_parsed: Option<Address<NetworkChecked>>,
+    #[serde(skip)]
+    pub(crate) donation_address_parsed: Option<Address<NetworkChecked>>,
+    #[serde(skip)]
+    pub(crate) fee_address_parsed: Option<Address<NetworkChecked>>,
+
+    #[serde(skip)]
+    #[serde(default)]
+    _state: PhantomData<State>,
+}
+
+impl StratumConfig<Raw> {
+    /// Parse and validate addresses, converting from Raw to Parsed state
+    pub fn parse(self) -> Result<StratumConfig<Parsed>, WorkError> {
+        let bootstrap_address_parsed = parse_address(&self.bootstrap_address, self.network)?;
+
+        let donation_address_parsed = self
+            .donation_address
+            .as_ref()
+            .map(|addr| parse_address(addr, self.network))
+            .transpose()?;
+
+        let fee_address_parsed = self
+            .fee_address
+            .as_ref()
+            .map(|addr| parse_address(addr, self.network))
+            .transpose()?;
+
+        Ok(StratumConfig {
+            hostname: self.hostname,
+            port: self.port,
+            start_difficulty: self.start_difficulty,
+            minimum_difficulty: self.minimum_difficulty,
+            maximum_difficulty: self.maximum_difficulty,
+            solo_address: self.solo_address,
+            zmqpubhashblock: self.zmqpubhashblock,
+            bootstrap_address: self.bootstrap_address,
+            donation_address: self.donation_address,
+            donation: self.donation,
+            fee_address: self.fee_address,
+            fee: self.fee,
+            network: self.network,
+            version_mask: self.version_mask,
+            difficulty_multiplier: self.difficulty_multiplier,
+            bootstrap_address_parsed: Some(bootstrap_address_parsed),
+            donation_address_parsed,
+            fee_address_parsed,
+            _state: PhantomData,
+        })
+    }
+}
+
+impl StratumConfig<Parsed> {
+    /// Get the parsed and validated bootstrap address
+    pub fn bootstrap_address(&self) -> &Address<NetworkChecked> {
+        self.bootstrap_address_parsed
+            .as_ref()
+            .expect("bootstrap_address_parsed should always be Some in Parsed state")
+    }
+
+    /// Get the parsed and validated donation address, if any
+    pub fn donation_address(&self) -> Option<&Address<NetworkChecked>> {
+        self.donation_address_parsed.as_ref()
+    }
+
+    /// Get the parsed and validated fee address, if any
+    pub fn fee_address(&self) -> Option<&Address<NetworkChecked>> {
+        self.fee_address_parsed.as_ref()
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl StratumConfig<Raw> {
+    /// Helper for tests to create a basic StratumConfig
+    /// Uses regtest network by default with a valid regtest address
+    pub fn new_for_test_default() -> Self {
+        StratumConfig {
+            hostname: "127.0.0.1".to_string(),
+            port: 3333,
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(1000),
+            solo_address: None,
+            zmqpubhashblock: "tcp://127.0.0.1:28332".to_string(),
+            bootstrap_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
+            donation_address: None,
+            donation: None,
+            fee_address: None,
+            fee: None,
+            network: bitcoin::Network::Signet,
+            version_mask: 0x1fffe000,
+            difficulty_multiplier: 1.0,
+            bootstrap_address_parsed: None,
+            donation_address_parsed: None,
+            fee_address_parsed: None,
+            _state: PhantomData,
+        }
+    }
 }
 
 /// helper function to deserialize the network from the config file, which is provided as a string like Core
