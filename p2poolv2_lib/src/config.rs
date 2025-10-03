@@ -108,7 +108,7 @@ fn default_background_task_frequency_hours() -> u64 {
 }
 
 fn default_pplns_ttl_days() -> u64 {
-    3
+    7
 }
 
 #[derive(Debug, Deserialize, Clone)]
