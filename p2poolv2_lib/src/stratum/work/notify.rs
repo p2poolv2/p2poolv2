@@ -61,8 +61,7 @@ fn parse_flags(flags: Option<String>) -> PushBytesBuf {
 async fn build_output_distribution(
     template: &BlockTemplate,
     store: &Arc<ChainStore>,
-    bootstrap_address: &bitcoin::Address,
-    config: &StratumConfig,
+    config: &StratumConfig<crate::config::Parsed>,
 ) -> Vec<OutputPair> {
     const DEFAULT_STEP_SIZE_SECONDS: u64 = 24 * 60 * 60; // 1 day
     let payout = Payout::new(DEFAULT_STEP_SIZE_SECONDS);
@@ -74,7 +73,7 @@ async fn build_output_distribution(
     let total_difficulty = required_target.difficulty_float() * config.difficulty_multiplier;
 
     match payout
-        .get_output_distribution(store, total_difficulty, total_amount, bootstrap_address)
+        .get_output_distribution(store, total_difficulty, total_amount, config)
         .await
     {
         Ok(distribution) => distribution,
@@ -149,8 +148,7 @@ pub async fn start_notify(
     connections: ClientConnectionsHandle,
     chain_store: Arc<ChainStore>,
     tracker_handle: TrackerHandle,
-    bootstrap_address: bitcoin::Address,
-    config: &StratumConfig,
+    config: &StratumConfig<crate::config::Parsed>,
 ) {
     let mut latest_template: Option<Arc<BlockTemplate>> = None;
     while let Some(cmd) = notifier_rx.recv().await {
@@ -161,8 +159,7 @@ pub async fn start_notify(
                 latest_template = Some(Arc::clone(&template));
                 let job_id = tracker_handle.get_next_job_id().await.unwrap();
                 let output_distribution =
-                    build_output_distribution(&template, &chain_store, &bootstrap_address, config)
-                        .await;
+                    build_output_distribution(&template, &chain_store, config).await;
                 let notify_str =
                     match build_notify(&template, output_distribution, job_id, clean_jobs) {
                         Ok(notify) => {
@@ -204,7 +201,6 @@ pub async fn start_notify(
                 let output_distribution = build_output_distribution(
                     latest_template.as_ref().unwrap(),
                     &chain_store,
-                    &bootstrap_address,
                     config,
                 )
                 .await;
@@ -251,7 +247,6 @@ mod tests {
     use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
     use crate::stratum::messages::{Response, SimpleRequest};
     use crate::stratum::session::Session;
-    use crate::stratum::work::coinbase::parse_address;
     use crate::stratum::work::tracker::start_tracker_actor;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use std::fs;
@@ -273,13 +268,6 @@ mod tests {
         // Parse BlockTemplate from GBT
         let template: BlockTemplate =
             serde_json::from_value(gbt_json.clone()).expect("Failed to parse BlockTemplate");
-
-        // Address used in ckpool regtest conf
-        let bootstrap_address = parse_address(
-            "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr",
-            bitcoin::Network::Regtest,
-        )
-        .unwrap();
 
         let job_id = JobId(1);
 
@@ -307,31 +295,10 @@ mod tests {
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
-        let stratum_config = StratumConfig {
-            hostname: "127.0.0.1".to_string(),
-            port: 3333,
-            start_difficulty: 1,
-            minimum_difficulty: 1,
-            maximum_difficulty: Some(1000),
-            solo_address: Some("tb1q9w4x5z5v5f5g5h5j5k5l5m5n5o5p5q5r5s5t5u".to_string()),
-            zmqpubhashblock: "tcp://127.0.0.1:28332".to_string(),
-            bootstrap_address: "tb1q9w4x5z5v5f5g5h5j5k5l5m5n5o5p5q5r5s5t5u".to_string(),
-            donation_address: None,
-            donation: None,
-            fee_address: None,
-            fee: None,
-            network: bitcoin::network::Network::Signet,
-            version_mask: 0x1fffe000,
-            difficulty_multiplier: 1.0,
-        };
+        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
-        let output_distribution = build_output_distribution(
-            &template,
-            &Arc::new(store),
-            &bootstrap_address,
-            &stratum_config,
-        )
-        .await;
+        let output_distribution =
+            build_output_distribution(&template, &Arc::new(store), &stratum_config).await;
         // Build Notify
         let notify = build_notify(&template, output_distribution, job_id, false)
             .expect("Failed to build notify");
@@ -417,30 +384,7 @@ mod tests {
 
         store.expect_add_job().returning(|_| Ok(()));
 
-        // Start the notify task in a separate task
-        let bootstrap_address = parse_address(
-            "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
-            bitcoin::Network::Testnet,
-        )
-        .unwrap();
-
-        let stratum_config = StratumConfig {
-            hostname: "127.0.0.1".to_string(),
-            port: 3333,
-            start_difficulty: 1,
-            minimum_difficulty: 1,
-            maximum_difficulty: Some(1000),
-            solo_address: Some("tb1q9w4x5z5v5f5g5h5j5k5l5m5n5o5p5q5r5s5t5u".to_string()),
-            zmqpubhashblock: "tcp://127.0.0.1:28332".to_string(),
-            bootstrap_address: "tb1q9w4x5z5v5f5g5h5j5k5l5m5n5o5p5q5r5s5t5u".to_string(),
-            donation_address: None,
-            donation: None,
-            fee_address: None,
-            fee: None,
-            network: bitcoin::network::Network::Signet,
-            version_mask: 0x1fffe000,
-            difficulty_multiplier: 1.0,
-        };
+        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let task_handle = tokio::spawn(async move {
             start_notify(
@@ -448,7 +392,6 @@ mod tests {
                 mock_connections,
                 Arc::new(store),
                 work_map_handle,
-                bootstrap_address,
                 &stratum_config,
             )
             .await;
@@ -532,11 +475,6 @@ mod tests {
         session.enonce1_hex = enonce1.to_string();
 
         let job_id = u64::from_str_radix(&notify.params.job_id, 16).unwrap();
-        let bootstrap_address = parse_address(
-            "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d",
-            bitcoin::Network::Signet,
-        )
-        .unwrap();
         let n_time = (SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -561,31 +499,10 @@ mod tests {
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
-        let stratum_config = StratumConfig {
-            hostname: "127.0.0.1".to_string(),
-            port: 3333,
-            start_difficulty: 1,
-            minimum_difficulty: 1,
-            maximum_difficulty: Some(1000),
-            solo_address: Some("tb1q9w4x5z5v5f5g5h5j5k5l5m5n5o5p5q5r5s5t5u".to_string()),
-            zmqpubhashblock: "tcp://127.0.0.1:28332".to_string(),
-            bootstrap_address: "tb1q9w4x5z5v5f5g5h5j5k5l5m5n5o5p5q5r5s5t5u".to_string(),
-            donation_address: None,
-            donation: None,
-            fee_address: None,
-            fee: None,
-            network: bitcoin::network::Network::Signet,
-            version_mask: 0x1fffe000,
-            difficulty_multiplier: 1.0,
-        };
+        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
-        let output_distribution = build_output_distribution(
-            &template,
-            &Arc::new(store),
-            &bootstrap_address,
-            &stratum_config,
-        )
-        .await;
+        let output_distribution =
+            build_output_distribution(&template, &Arc::new(store), &stratum_config).await;
 
         let result = build_notify(&template, output_distribution, JobId(job_id), false);
 

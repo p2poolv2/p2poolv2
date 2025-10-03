@@ -95,7 +95,7 @@ async fn main() -> Result<(), String> {
         Duration::from_secs(config.store.pplns_ttl_days * 3600 * 24),
     );
 
-    let stratum_config = config.stratum.clone();
+    let stratum_config = config.stratum.clone().parse().unwrap();
     let bitcoinrpc_config = config.bitcoinrpc.clone();
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
     let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(1);
@@ -134,13 +134,6 @@ async fn main() -> Result<(), String> {
     let tracker_handle_cloned = tracker_handle.clone();
     let store_for_notify = chain_store.clone();
 
-    let bootstrap_address = stratum_config
-        .bootstrap_address
-        .parse::<bitcoin::Address<_>>()
-        .unwrap()
-        .require_network(stratum_config.network)
-        .unwrap();
-
     let cloned_stratum_config = stratum_config.clone();
     tokio::spawn(async move {
         info!("Starting Stratum notifier...");
@@ -150,7 +143,6 @@ async fn main() -> Result<(), String> {
             connections_cloned,
             store_for_notify,
             tracker_handle_cloned,
-            bootstrap_address,
             &cloned_stratum_config,
         )
         .await;

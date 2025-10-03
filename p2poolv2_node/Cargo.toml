@@ -20,5 +20,6 @@ name = "p2poolv2"
 path = "src/main.rs"
 
 [dev-dependencies]
+p2poolv2_lib = { workspace = true, features = ["test-utils"] }
 mockall = "0.13.1"
 mockall_double = "0.3.1"

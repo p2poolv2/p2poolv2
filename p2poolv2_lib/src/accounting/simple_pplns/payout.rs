@@ -16,6 +16,7 @@
 
 use crate::accounting::OutputPair;
 use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::config::StratumConfig;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store::ChainStore;
@@ -118,7 +119,7 @@ impl Payout {
         store: &Arc<ChainStore>,
         total_difficulty: f64,
         total_amount: bitcoin::Amount,
-        bootstrap_address: &bitcoin::Address,
+        config: &StratumConfig<crate::config::Parsed>,
     ) -> Result<Vec<OutputPair>, Box<dyn Error + Send + Sync>> {
         let shares = self
             .get_shares_for_difficulty(store, total_difficulty)
@@ -126,7 +127,7 @@ impl Payout {
 
         if shares.is_empty() {
             return Ok(vec![OutputPair {
-                address: bootstrap_address.clone(),
+                address: config.bootstrap_address().clone(),
                 amount: total_amount,
             }]);
         }
@@ -565,14 +566,11 @@ mod tests {
             .return_const(shares);
 
         let total_amount = bitcoin::Amount::from_sat(50_000_000); // 0.5 BTC
-        let bootstrap_address = "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
-            .parse::<bitcoin::Address<_>>()
-            .unwrap()
-            .require_network(bitcoin::Network::Regtest)
-            .unwrap();
+
+        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &bootstrap_address)
+            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
             .await
             .unwrap();
 
@@ -622,14 +620,11 @@ mod tests {
             .return_const(shares);
 
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
-        let bootstrap_address = "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
-            .parse::<bitcoin::Address<_>>()
-            .unwrap()
-            .require_network(bitcoin::Network::Regtest)
-            .unwrap();
+
+        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &bootstrap_address)
+            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
             .await
             .unwrap();
 
@@ -706,14 +701,11 @@ mod tests {
             .return_const(shares);
 
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
-        let bootstrap_address = "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
-            .parse::<bitcoin::Address<_>>()
-            .unwrap()
-            .require_network(bitcoin::Network::Regtest)
-            .unwrap();
+
+        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &bootstrap_address)
+            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
             .await
             .unwrap();
 
@@ -736,23 +728,20 @@ mod tests {
         let mut store = ChainStore::default();
 
         let total_amount = bitcoin::Amount::from_sat(100_000_000);
-        let bootstrap_address = "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
-            .parse::<bitcoin::Address<_>>()
-            .unwrap()
-            .require_network(bitcoin::Network::Regtest)
-            .unwrap();
 
         store
             .expect_get_pplns_shares_filtered()
             .return_const(vec![]);
 
+        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+
         let result = payout
-            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &bootstrap_address)
+            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
             .await
             .unwrap();
 
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].address, bootstrap_address);
+        assert_eq!(result[0].address, *stratum_config.bootstrap_address());
         assert_eq!(result[0].amount, total_amount);
     }
 
