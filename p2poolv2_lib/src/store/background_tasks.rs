@@ -40,6 +40,10 @@ pub fn start_background_tasks(
             if let Err(e) = store.prune_shares(pplns_ttl) {
                 error!("Error running shares cleanup: {:?}", e);
             }
+
+            if let Err(e) = store.prune_jobs(pplns_ttl) {
+                error!("Error running jobs cleanup: {:?}", e);
+            }
         }
     })
 }
@@ -77,6 +81,40 @@ impl Store {
             .delete_range_cf(pplns_share_cf, &start_key, &end_key)?;
 
         info!("Deleted PPLNS shares older than cutoff time");
+
+        Ok(())
+    }
+
+    /// Delete all jobs older than the given TTL
+    ///
+    /// Uses RocksDB range delete for efficient bulk deletion
+    /// Keys are in format: timestamp(8 bytes) in big-endian
+    fn prune_jobs(&self, job_ttl: Duration) -> Result<(), Box<dyn Error>> {
+        let job_cf = self.db.cf_handle(&ColumnFamily::Job).unwrap();
+
+        // Calculate cutoff time in microseconds
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
+        let cutoff_micros = now.saturating_sub(job_ttl.as_micros() as u64);
+
+        info!(
+            "Cleaning up jobs older than {} seconds (cutoff: {})",
+            job_ttl.as_secs(),
+            cutoff_micros
+        );
+
+        // Create range: from beginning (min timestamp) to cutoff (exclusive)
+        // Jobs use simple u64 timestamp keys in big-endian format
+        let start_key = 0u64.to_be_bytes();
+        let end_key = cutoff_micros.saturating_add(1).to_be_bytes();
+
+        // Use RocksDB range delete for efficient bulk deletion
+        // delete_range_cf deletes all keys in [start_key, end_key)
+        self.db.delete_range_cf(job_cf, &start_key, &end_key)?;
+
+        info!("Deleted jobs older than cutoff time");
 
         Ok(())
     }
@@ -214,11 +252,10 @@ mod tests {
 
         let user_id = store.add_user("addr1".to_string()).unwrap();
 
-        // Get current time in seconds
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        // Get current time in seconds and microseconds
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let now_secs = now.as_secs();
+        let now_micros = now.as_micros() as u64;
 
         // Add an old share (1 hour ago)
         let old_share = SimplePplnsShare::new(
@@ -226,12 +263,18 @@ mod tests {
             100,
             "addr1".to_string(),
             "worker1".to_string(),
-            now - 3600,
+            now_secs - 3600,
             "job".to_string(),
             "extra".to_string(),
             "nonce".to_string(),
         );
         store.add_pplns_share(old_share).unwrap();
+
+        // Add an old job (1 hour ago in microseconds)
+        let old_job_timestamp = now_micros - 3_600_000_000; // 1 hour in microseconds
+        store
+            .add_job(old_job_timestamp, "old_job_data".to_string())
+            .unwrap();
 
         // Start background task with short frequency and TTL of 30 minutes
         let frequency = Duration::from_millis(100);
@@ -245,7 +288,97 @@ mod tests {
         let remaining_shares = store.get_pplns_shares_filtered(None, None, None);
         assert_eq!(remaining_shares.len(), 0);
 
+        // Verify job was deleted (use a future end_time to capture all jobs)
+        let future_time = now_micros + 1_000_000_000; // 1000 seconds in the future
+        let remaining_jobs = store.get_jobs(None, Some(future_time), 10).unwrap();
+        assert_eq!(remaining_jobs.len(), 0);
+
         // Cancel background task
         handle.abort();
+    }
+
+    #[test]
+    fn test_prune_jobs_removes_old_jobs() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Get current time in microseconds
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
+
+        // Add jobs with different timestamps (in microseconds)
+        let job1_time = now - 3_600_000_000; // 1 hour ago
+        let job2_time = now - 1_800_000_000; // 30 minutes ago
+        let job3_time = now - 300_000_000; // 5 minutes ago
+
+        store.add_job(job1_time, "job1".to_string()).unwrap();
+        store.add_job(job2_time, "job2".to_string()).unwrap();
+        store.add_job(job3_time, "job3".to_string()).unwrap();
+
+        // Verify all jobs are stored (use a future end_time to capture all jobs)
+        let future_time = now + 1_000_000_000; // 1000 seconds in the future
+        let all_jobs = store.get_jobs(None, Some(future_time), 10).unwrap();
+        assert_eq!(all_jobs.len(), 3);
+
+        // Run cleanup with TTL of 1500 seconds (25 minutes)
+        // This should delete jobs older than 25 minutes: 1 hour and 30 minute old jobs
+        let ttl = Duration::from_secs(1500);
+        store.prune_jobs(ttl).unwrap();
+
+        // Verify only the newest job remains (use a future end_time to capture all jobs)
+        let future_time = now + 1_000_000_000; // 1000 seconds in the future
+        let remaining_jobs = store.get_jobs(None, Some(future_time), 10).unwrap();
+        assert_eq!(remaining_jobs.len(), 1);
+        assert_eq!(remaining_jobs[0].0, job3_time);
+    }
+
+    #[test]
+    fn test_prune_jobs_no_jobs_to_delete() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Get current time in microseconds
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
+
+        // Add a recent job (30 seconds ago)
+        let recent_job_time = now - 30_000_000; // 30 seconds in microseconds
+        store
+            .add_job(recent_job_time, "recent_job".to_string())
+            .unwrap();
+
+        // Run cleanup with TTL of 100 seconds - should not delete the 30 second old job
+        let ttl = Duration::from_secs(100);
+        let result = store.prune_jobs(ttl);
+        assert!(result.is_ok());
+
+        // Verify job still exists (use a future end_time to capture all jobs)
+        let future_time = now + 1_000_000_000; // 1000 seconds in the future
+        let remaining_jobs = store.get_jobs(None, Some(future_time), 10).unwrap();
+        assert_eq!(remaining_jobs.len(), 1);
+    }
+
+    #[test]
+    fn test_prune_jobs_empty_store() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Run cleanup on empty store - should not error
+        let ttl = Duration::from_secs(3600);
+        let result = store.prune_jobs(ttl);
+        assert!(result.is_ok());
+
+        // Verify still empty (use a future end_time to capture all jobs)
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
+        let future_time = now + 1_000_000_000; // 1000 seconds in the future
+        let jobs = store.get_jobs(None, Some(future_time), 10).unwrap();
+        assert_eq!(jobs.len(), 0);
     }
 }
