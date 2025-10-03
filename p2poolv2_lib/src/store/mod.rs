@@ -2918,9 +2918,7 @@ mod tests {
 
         // Add 5 jobs
         for i in 1..=5 {
-            store
-                .add_job(i * 1000000, format!("job{}", i))
-                .unwrap();
+            store.add_job(i * 1000000, format!("job{}", i)).unwrap();
         }
 
         // Request only 3 jobs
@@ -2951,9 +2949,7 @@ mod tests {
 
         // Get jobs between start_time=1.5M and end_time=3.5M
         // Should return job3 and job2 (newest first)
-        let jobs = store
-            .get_jobs(Some(1500000), Some(3500000), 10)
-            .unwrap();
+        let jobs = store.get_jobs(Some(1500000), Some(3500000), 10).unwrap();
 
         assert_eq!(jobs.len(), 2);
         assert_eq!(jobs[0].0, job3_time);
