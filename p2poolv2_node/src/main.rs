@@ -89,13 +89,11 @@ async fn main() -> Result<(), String> {
     info!("Latest tip {:?} at height {:?}", tip, height);
 
     let background_tasks_store = store.clone();
-    tokio::spawn(async move {
-        p2poolv2_lib::store::background_tasks::start_background_tasks(
-            background_tasks_store,
-            Duration::from_secs(config.store.background_task_frequency_hours * 3600),
-            Duration::from_secs(config.store.pplns_ttl_days * 3600 * 24),
-        );
-    });
+    p2poolv2_lib::store::background_tasks::start_background_tasks(
+        background_tasks_store,
+        Duration::from_secs(config.store.background_task_frequency_hours * 3600),
+        Duration::from_secs(config.store.pplns_ttl_days * 3600 * 24),
+    );
 
     let stratum_config = config.stratum.clone();
     let bitcoinrpc_config = config.bitcoinrpc.clone();

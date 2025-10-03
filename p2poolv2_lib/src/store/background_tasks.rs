@@ -22,6 +22,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info};
 
+const MIN_TIMESTAMP: u64 = 0;
+
 /// Start any background tasks required
 ///
 /// Start a tokio task that runs every frequency period and
@@ -107,7 +109,7 @@ impl Store {
 
         // Create range: from beginning (min timestamp) to cutoff (exclusive)
         // Jobs use simple u64 timestamp keys in big-endian format
-        let start_key = 0u64.to_be_bytes();
+        let start_key = MIN_TIMESTAMP.to_be_bytes();
         let end_key = cutoff_micros.saturating_add(1).to_be_bytes();
 
         // Use RocksDB range delete for efficient bulk deletion
