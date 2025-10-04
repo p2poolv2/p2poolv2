@@ -52,11 +52,11 @@ pub struct StratumConfig<State = Raw> {
     /// The donation address for developers (string in Raw state)
     pub donation_address: Option<String>,
     /// The donation basis points
-    pub donation: Option<u8>,
+    pub donation: Option<u16>,
     /// The fee address (string in Raw state)
     pub fee_address: Option<String>,
     /// The fee basis points
-    pub fee: Option<u8>,
+    pub fee: Option<u16>,
     /// The network can be "main", "testnet4" or "signet
     #[serde(deserialize_with = "deserialize_network")]
     pub network: bitcoin::Network,
