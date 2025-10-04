@@ -36,6 +36,7 @@ bitcoindrpc = { path = '../bitcoindrpc', features = ["test-utils"] }
 chrono = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true }
+toml = "0.8"
 
 [dev-dependencies]
 tempfile = "3.15.0"

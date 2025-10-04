@@ -16,35 +16,41 @@
 
 #[cfg(test)]
 mod tests {
-    use super::handlers;
-    use super::models::ApiState;
     use crate::accounting::simple_pplns::SimplePplnsShare;
+    use crate::api::handlers;
+    use crate::api::models::ApiState;
+    use crate::config::Parsed;
+    use crate::config::Raw;
     use crate::config::StratumConfig;
     use crate::shares::ShareBlock;
     use crate::shares::chain::chain_store::ChainStore;
     use crate::store::Store;
     use crate::stratum::work::block_template::BlockTemplate;
     use axum::{
+        Router,
         body::Body,
         http::{Request, StatusCode},
         routing::get,
-        Router,
     };
     use std::collections::HashMap;
     use std::sync::Arc;
     use tempfile::tempdir;
+    use toml;
     use tower::ServiceExt;
-
     async fn create_test_api_state() -> ApiState {
         let temp_dir = tempdir().unwrap();
-        let store = Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap());
+        let store =
+            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap());
         let chain_store = Arc::new(ChainStore::new(
             store,
             ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
         ));
 
         // Add some test shares
-        let user_id = chain_store.store.add_user("test_address".to_string()).unwrap();
+        let user_id = chain_store
+            .store
+            .add_user("test_address".to_string())
+            .unwrap();
         let share = SimplePplnsShare::new(
             user_id,
             100,
@@ -63,7 +69,8 @@ mod tests {
             rules: vec!["segwit".to_string()],
             vbavailable: HashMap::new(),
             vbrequired: 0,
-            previousblockhash: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+            previousblockhash: "0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
             transactions: vec![],
             coinbaseaux: HashMap::new(),
             coinbasevalue: 5000000000,
@@ -83,8 +90,20 @@ mod tests {
 
         let current_template = Arc::new(tokio::sync::RwLock::new(Some(template)));
 
-        // Create minimal config
-        let mut config = StratumConfig::default();
+        let toml_str = r#"
+    hostname = "127.0.0.1"
+    port = 3333
+    start_difficulty = 1
+    minimum_difficulty = 1
+    maximum_difficulty = 1000
+    zmqpubhashblock = "tcp://127.0.0.1:28332"
+    bootstrap_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
+    network = "signet"
+    version_mask = 536870912
+    difficulty_multiplier = 1.0
+    "#;
+
+        let mut config: StratumConfig<Parsed> = toml::from_str(toml_str).unwrap();
         config.network = bitcoin::Network::Signet;
         config.difficulty_multiplier = 1.0;
 
@@ -97,11 +116,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check() {
-        let app = Router::new()
-            .route("/health", get(handlers::health_check));
+        let app = Router::new().route("/health", get(handlers::health_check));
 
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -116,7 +139,12 @@ mod tests {
             .with_state(state);
 
         let response = app
-            .oneshot(Request::builder().uri("/api/shares").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/shares")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -131,7 +159,12 @@ mod tests {
             .with_state(state);
 
         let response = app
-            .oneshot(Request::builder().uri("/api/block-template").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/block-template")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -142,11 +175,19 @@ mod tests {
     async fn test_get_pplns_distribution() {
         let state = create_test_api_state().await;
         let app = Router::new()
-            .route("/api/pplns-distribution", get(handlers::get_pplns_distribution))
+            .route(
+                "/api/pplns-distribution",
+                get(handlers::get_pplns_distribution),
+            )
             .with_state(state);
 
         let response = app
-            .oneshot(Request::builder().uri("/api/pplns-distribution").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/pplns-distribution")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 

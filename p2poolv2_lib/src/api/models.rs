@@ -100,6 +100,8 @@ pub struct ErrorResponse {
 #[derive(Clone)]
 pub struct ApiState {
     pub chain_store: std::sync::Arc<crate::shares::chain::chain_store::ChainStore>,
-    pub current_template: std::sync::Arc<tokio::sync::RwLock<Option<crate::stratum::work::block_template::BlockTemplate>>>,
+    pub current_template: std::sync::Arc<
+        tokio::sync::RwLock<Option<crate::stratum::work::block_template::BlockTemplate>>,
+    >,
     pub config: crate::config::StratumConfig<crate::config::Parsed>,
 }

@@ -19,10 +19,7 @@ use super::models::ApiState;
 use crate::config::StratumConfig;
 use crate::shares::chain::chain_store::ChainStore;
 use crate::stratum::work::block_template::BlockTemplate;
-use axum::{
-    routing::get,
-    Router,
-};
+use axum::{Router, routing::get};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -32,6 +29,7 @@ use tower_http::trace::TraceLayer;
 use tracing::info;
 
 /// API Server for P2Pool v2
+#[derive(Clone)]
 pub struct ApiServer {
     chain_store: Arc<ChainStore>,
     current_template: Arc<RwLock<Option<BlockTemplate>>>,
@@ -65,12 +63,12 @@ impl ApiServer {
     pub async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let app = self.create_app().await?;
         let addr = SocketAddr::from(([0, 0, 0, 0], self.port));
-        
+
         info!("Starting API server on {}", addr);
-        
+
         let listener = tokio::net::TcpListener::bind(addr).await?;
         axum::serve(listener, app).await?;
-        
+
         Ok(())
     }
 

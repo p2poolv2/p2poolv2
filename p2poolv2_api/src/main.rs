@@ -30,7 +30,7 @@ struct Args {
     /// Path to p2poolv2 config file
     #[arg(short, long)]
     config: String,
-    
+
     /// API server port
     #[arg(short, long, default_value = "8080")]
     port: u16,
@@ -39,20 +39,24 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Starting P2Pool v2 API Server...");
-    
+
     // Parse command line arguments
     let args = Args::parse();
 
     // Load configuration
     let config = Config::load(&args.config)?;
-    
+
     // Configure logging based on config
-    let _guard = setup_logging(&config.logging).map_err(|e| format!("Failed to setup logging: {}", e))?;
+    let _guard =
+        setup_logging(&config.logging).map_err(|e| format!("Failed to setup logging: {}", e))?;
     info!("Logging set up successfully");
 
     // Initialize store and chain
     let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
-    let store = Arc::new(Store::open_read_only(config.store.path.clone()).map_err(|e| format!("Failed to create store: {}", e))?);
+    let store = Arc::new(
+        Store::open_read_only(config.store.path.clone())
+            .map_err(|e| format!("Failed to create store: {}", e))?,
+    );
     let chain_store = Arc::new(ChainStore::new(store, genesis));
 
     let tip = chain_store.store.get_chain_tip();
@@ -60,13 +64,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Latest tip {:?} at height {:?}", tip, height);
 
     // Parse stratum config
-    let stratum_config = config.stratum.parse().map_err(|e| format!("Failed to parse stratum config: {}", e))?;
+    let stratum_config = config
+        .stratum
+        .parse()
+        .map_err(|e| format!("Failed to parse stratum config: {}", e))?;
 
     // Create and start API server
     let api_server = ApiServer::new(chain_store, stratum_config, args.port);
-    
+
     info!("Starting API server on port {}", args.port);
     api_server.start().await?;
-    
+
     Ok(())
 }
