@@ -53,13 +53,13 @@ rust_decimal = { version = "1.36.0", features = [
 rust_decimal_macros = "1.36.0"
 zmq = "0.10"
 bitcoin = { version = "0.32.5", features = ["serde", "rand"] }
-jsonrpsee = { version = "0.24", features = ["http-client", "client"] }
 base64 = "0.22.1"
 void = "1.0.2"
 chrono = { version = "0.4", features = ["serde"] }
 tokio-util = "0.7.15"
 tokio-stream = "0.1.17"
 p2poolv2_lib = { path = "p2poolv2_lib" }
+reqwest = { version = "0.12", features = ["json"] }
 
 # This package declaration is required to make the top-level directory buildable
 # even though we're using a workspace structure

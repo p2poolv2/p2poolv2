@@ -16,15 +16,39 @@
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use bitcoin::consensus::encode::serialize_hex;
-use jsonrpsee::core::client::ClientT;
-use jsonrpsee::http_client::{HeaderMap, HttpClient, HttpClientBuilder};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::debug;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
+
+/// JSON-RPC 1.0 request structure (Bitcoin Core format)
+#[derive(Serialize)]
+struct JsonRpcRequest {
+    method: String,
+    params: Vec<serde_json::Value>,
+    id: u64,
+}
+
+/// JSON-RPC 1.0 response structure (Bitcoin Core format)
+/// In JSON-RPC 1.0, both result and error are always present
+/// One will be the actual value, the other will be null
+#[derive(Deserialize, Debug)]
+struct JsonRpcResponse<T> {
+    result: T,
+    error: Option<JsonRpcError>,
+}
+
+/// JSON-RPC 1.0 error structure
+#[derive(Deserialize, Debug)]
+struct JsonRpcError {
+    code: i32,
+    message: String,
+}
 
 #[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
@@ -58,30 +82,34 @@ impl fmt::Display for BitcoindRpcError {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct BitcoindRpcClient {
-    client: HttpClient,
+    client: reqwest::Client,
+    url: String,
+    request_id: Arc<AtomicU64>,
 }
 
 impl BitcoindRpcClient {
     pub fn new(url: &str, username: &str, password: &str) -> Result<Self, BitcoindRpcError> {
-        let mut headers = HeaderMap::new();
+        let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
-            "Authorization",
+            reqwest::header::AUTHORIZATION,
             format!(
                 "Basic {}",
                 STANDARD.encode(format!("{username}:{password}"))
             )
             .parse()
-            .unwrap(),
+            .map_err(|e| BitcoindRpcError::Other(format!("Invalid header: {e}")))?,
         );
-        let client = match HttpClientBuilder::default().set_headers(headers).build(url) {
-            Ok(client) => client,
-            Err(e) => {
-                return Err(BitcoindRpcError::Other(format!(
-                    "Failed to create HTTP client: {e}"
-                )));
-            }
-        };
-        Ok(Self { client })
+
+        let client = reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .map_err(|e| BitcoindRpcError::Other(format!("Failed to create HTTP client: {e}")))?;
+
+        Ok(Self {
+            client,
+            url: url.to_string(),
+            request_id: Arc::new(AtomicU64::new(0)),
+        })
     }
 
     pub async fn request<T: serde::de::DeserializeOwned>(
@@ -89,12 +117,37 @@ impl BitcoindRpcClient {
         method: &str,
         params: Vec<serde_json::Value>,
     ) -> Result<T, BitcoindRpcError> {
-        match self.client.request(method, params).await {
-            Ok(response) => Ok(response),
-            Err(e) => Err(BitcoindRpcError::Other(format!(
-                "Failed to send RPC request: {e}",
-            ))),
+        let id = self.request_id.fetch_add(1, Ordering::SeqCst);
+
+        let request = JsonRpcRequest {
+            method: method.to_string(),
+            params,
+            id,
+        };
+
+        let response = self
+            .client
+            .post(&self.url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| BitcoindRpcError::Other(format!("HTTP request failed: {e}")))?;
+
+        let rpc_response: JsonRpcResponse<T> = response
+            .json()
+            .await
+            .map_err(|e| BitcoindRpcError::Other(format!("Failed to parse response: {e}")))?;
+
+        // JSON-RPC 1.0: check error first, then return result
+        if let Some(error) = rpc_response.error {
+            return Err(BitcoindRpcError::Other(format!(
+                "RPC error {}: {}",
+                error.code, error.message
+            )));
         }
+
+        // In JSON-RPC 1.0, result is always present (can be null for void methods like submitblock)
+        Ok(rpc_response.result)
     }
 
     /// Get current bitcoin difficulty from bitcoind rpc
@@ -214,16 +267,9 @@ impl BitcoindRpcClient {
         // Prepare params for the RPC call
         let params = vec![serde_json::Value::String(block_hex)];
 
-        // Make the RPC request
-        match self
-            .request::<serde_json::Value>("submitblock", params)
-            .await
-        {
-            Ok(result) => Ok(result.to_string()),
-            Err(e) => Err(BitcoindRpcError::Other(format!(
-                "Failed to submit block: {e}"
-            ))),
-        }
+        // Make the RPC request - submitblock returns null on success, or error string on failure
+        let result: serde_json::Value = self.request("submitblock", params).await?;
+        Ok(result.to_string())
     }
 }
 
@@ -246,19 +292,18 @@ mod tests {
             STANDARD.encode(format!("{}:{}", "testuser", "testpass"))
         );
 
-        // Define expected request and response
+        // Define expected request and response (JSON-RPC 1.0)
         Mock::given(method("POST"))
             .and(path("/"))
             .and(header("Authorization", auth_header))
             .and(body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "method": "test",
                 "params": [],
                 "id": 0
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "result": "test response",
+                "error": null,
                 "id": 0
             })))
             .mount(&mock_server)
@@ -303,14 +348,13 @@ mod tests {
             .and(path("/"))
             .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
             .and(body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "method": "getdifficulty",
                 "params": [],
                 "id": 0
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "result": 1234.56,
+                "error": null,
                 "id": 0
             })))
             .mount(&mock_server)
@@ -330,7 +374,6 @@ mod tests {
             .and(path("/"))
             .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
             .and(body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "method": "getblocktemplate",
                 "params": [{
                     "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
@@ -339,7 +382,6 @@ mod tests {
                 "id": 0
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "result": {
                     "version": 536870912,
                     "previousblockhash": "0000000000000000000b4d0b2e8e7e4e6b8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
@@ -358,6 +400,7 @@ mod tests {
                     "height": 1000000,
                     "default_witness_commitment": "6a24aa21a9ed"
                 },
+                "error": null,
                 "id": 0
             })))
             .mount(&mock_server)
@@ -381,7 +424,6 @@ mod tests {
             .and(path("/"))
             .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
             .and(body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "method": "getblocktemplate",
                 "params": [{
                     "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
@@ -390,7 +432,6 @@ mod tests {
                 "id": 0
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "result": {
                     "version": 536870912,
                     "previousblockhash": "0000000000000000000b4d0b2e8e7e4e6b8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
@@ -409,6 +450,7 @@ mod tests {
                     "height": 2000000,
                     "default_witness_commitment": "6a24aa21a9ed"
                 },
+                "error": null,
                 "id": 0
             })))
             .mount(&mock_server)
@@ -440,19 +482,18 @@ mod tests {
         )
         .unwrap();
 
-        // Setup mock for decoderawtransaction
+        // Setup mock for decoderawtransaction (JSON-RPC 1.0)
         Mock::given(method("POST"))
             .and(path("/"))
             .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
             .and(body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "method": "decoderawtransaction",
                 "params": [tx_hex],
                 "id": 0
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "result": serde_json::to_value(tx.clone()).unwrap(),
+                "error": null,
                 "id": 0
             })))
             .mount(&mock_server)
@@ -488,19 +529,18 @@ mod tests {
 
         let block_hex = serialize_hex(&block);
 
-        // Setup mock for submitblock
+        // Setup mock for submitblock (JSON-RPC 1.0)
         Mock::given(method("POST"))
             .and(path("/"))
             .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
             .and(body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "method": "submitblock",
                 "params": [block_hex],
                 "id": 0
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "result": null,  // null indicates success in Bitcoin Core
+                "error": null,
                 "id": 0
             })))
             .mount(&mock_server)
@@ -517,14 +557,13 @@ mod tests {
         let mock_server = MockServer::start().await;
         let auth_header = "Basic cDJwb29sOnAycG9vbA==";
 
-        // Mock 3 failed responses followed by a successful one
+        // Mock 3 failed responses followed by a successful one (JSON-RPC 1.0)
         // First 3 calls fail
-        for i in 1..4 {
+        for i in 0..3 {
             Mock::given(method("POST"))
                 .and(path("/"))
                 .and(header("Authorization", auth_header))
                 .and(body_json(serde_json::json!({
-                    "jsonrpc": "2.0",
                     "method": "getblocktemplate",
                     "params": [{
                         "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
@@ -532,8 +571,8 @@ mod tests {
                     }],
                     "id": i
                 })))
-                .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
-                    "jsonrpc": "2.0",
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "result": null,
                     "error": {
                         "code": -1,
                         "message": format!("Failed attempt {}", i)
@@ -550,23 +589,22 @@ mod tests {
             .and(path("/"))
             .and(header("Authorization", auth_header))
             .and(body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "method": "getblocktemplate",
                 "params": [{
                     "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
                     "rules": ["segwit"],
                 }],
-                "id": 4
+                "id": 3
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "result": {
                     "version": 536870912,
                     "height": 1000000,
                     "previousblockhash": "0000000000000000000b4d0b2e8e7e4e6b8e8e8e8e8e8e8e8e8e8e8e8e8e8e",
                     "bits": "1a01f56e"
                 },
-                "id": 4
+                "error": null,
+                "id": 3
             })))
             .expect(1)
             .mount(&mock_server)

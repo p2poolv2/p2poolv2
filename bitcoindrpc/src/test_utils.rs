@@ -56,14 +56,15 @@ pub async fn mock_method(
         .and(path("/"))
         .and(header("Authorization", auth_header))
         .and(body_json(serde_json::json!({
-            "jsonrpc": "2.0",
             "id": 0,
             "method": api_method,
             "params": params,
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(
-            serde_json::json!({ "jsonrpc": "2.0", "result": template_json, "id": 0 }),
-        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "result": template_json, "error": null, "id": 0 }),
+            ),
+        )
         .mount(mock_server)
         .await;
 }
@@ -78,14 +79,8 @@ pub async fn mock_submit_block_with_any_body(mock_server: &MockServer) {
     Mock::given(method("POST"))
         .and(path("/"))
         .and(header("Authorization", auth_header))
-        // .and(any())
-        // .and(body_json(serde_json::json!({
-        //     "jsonrpc": "2.0",
-        //     "id": 0,
-        //     "method":"submitblock",
-        // })))
         .respond_with(ResponseTemplate::new(200).set_body_json(
-            serde_json::json!({ "jsonrpc": "2.0", "result": serde_json::Value::Null, "id": 0 }),
+            serde_json::json!({ "result": serde_json::Value::Null, "error": null, "id": 0 }),
         ))
         .mount(mock_server)
         .await;
