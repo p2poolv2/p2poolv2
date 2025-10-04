@@ -27,7 +27,7 @@ use std::marker::PhantomData;
 pub struct Raw;
 
 /// Marker type for parsed (validated) StratumConfig state
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Parsed;
 
 #[derive(Debug, Clone, Deserialize)]

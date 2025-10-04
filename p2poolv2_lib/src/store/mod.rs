@@ -144,6 +144,13 @@ impl Store {
         Ok(store)
     }
 
+    /// Create a new read-only share store
+    /// This method opens the store in read-only mode to avoid LOCK errors when multiple processes
+    /// need to access the same database (e.g., when both node and API are running)
+    pub fn open_read_only(path: String) -> Result<Self, Box<dyn Error>> {
+        Self::new(path, true)
+    }
+
     /// Store a user by btcaddress, returns the user ID
     pub fn add_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error>> {
         let user_cf = self.db.cf_handle(&ColumnFamily::User).unwrap();

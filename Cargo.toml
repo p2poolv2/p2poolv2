@@ -4,6 +4,7 @@ members = [
     "p2poolv2_lib",
     "p2poolv2_node",
     "p2poolv2_cli",
+    "p2poolv2_api",
 ]
 resolver = "2"
 
@@ -60,6 +61,9 @@ tokio-util = "0.7.15"
 tokio-stream = "0.1.17"
 p2poolv2_lib = { path = "p2poolv2_lib" }
 reqwest = { version = "0.12", features = ["json"] }
+axum = { version = "0.7", features = ["json", "macros"] }
+tower = { version = "0.5", features = ["util", "limit"] }
+tower-http = { version = "0.5", features = ["cors", "trace"] }
 
 # This package declaration is required to make the top-level directory buildable
 # even though we're using a workspace structure
