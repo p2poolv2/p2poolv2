@@ -99,12 +99,11 @@ mod tests {
                 .encode(format!("{}:{}", "testuser", "testpass"))
         );
 
-        // Set up expected request/response
+        // Set up expected request/response (JSON-RPC 1.0)
         Mock::given(method("POST"))
             .and(path("/"))
             .and(header("Authorization", auth_header))
             .and(body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "id": 0,
                 "method": "getblocktemplate",
                 "params": [{
@@ -114,6 +113,7 @@ mod tests {
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "result": "duplicate",
+                "error": null,
                 "id": 0
             })))
             .mount(&mock_server)
@@ -147,12 +147,11 @@ mod tests {
                 .encode(format!("{}:{}", "testuser", "testpass"))
         );
 
-        // Set up expected request/response
+        // Set up expected request/response (JSON-RPC 1.0)
         Mock::given(method("POST"))
             .and(path("/"))
             .and(header("Authorization", auth_header))
             .and(body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "id": 0,
                 "method": "getblocktemplate",
                 "params": [{
@@ -162,6 +161,7 @@ mod tests {
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "result": "rejected",
+                "error": null,
                 "id": 0
             })))
             .mount(&mock_server)
@@ -200,7 +200,6 @@ mod tests {
             .and(path("/"))
             .and(header("Authorization", auth_header))
             .and(body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "id": 0,
                 "method": "getblocktemplate",
                 "params": [{
@@ -244,14 +243,13 @@ mod tests {
             .and(path("/"))
             .and(header("Authorization", &auth_header))
             .and(body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "id": 0,
                 "method": "getdifficulty",
                 "params": [],
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "result": 1.0,
+                "error": null,
                 "id": 0
             })))
             .mount(&mock_server)
@@ -262,7 +260,6 @@ mod tests {
             .and(path("/"))
             .and(header("Authorization", &auth_header))
             .and(body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "id": 0,
                 "method": "getblocktemplate",
                 "params": [{
@@ -271,8 +268,8 @@ mod tests {
                 }],
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "result": "duplicate",
+                "error": null,
                 "id": 0
             })))
             .mount(&mock_server)
@@ -316,14 +313,13 @@ mod tests {
             .and(path("/"))
             .and(header("Authorization", &auth_header))
             .and(body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "id": 0,
                 "method": "getdifficulty",
                 "params": [],
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "jsonrpc": "2.0",
                 "result": 2.0, // Network difficulty is 2.0
+                "error": null,
                 "id": 0
             })))
             .mount(&mock_server)
