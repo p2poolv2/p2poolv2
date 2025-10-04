@@ -34,15 +34,14 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tracing::{error, info};
-// Conditional imports for ChainStore and MockChainStore
+
 #[cfg(test)]
 use crate::shares::chain::chain_store::MockChainStore;
 
-/// Wrapper to call get_output_distribution with correct type in test and non-test builds
 #[cfg(test)]
 async fn call_output_distribution(
     payout: &Payout,
-    store: &Arc<ChainStore>, // actually MockChainStore due to mockall_double
+    store: &Arc<ChainStore>,
     difficulty: f64,
     amount: bitcoin::Amount,
     config: &crate::config::StratumConfig<crate::config::Parsed>,

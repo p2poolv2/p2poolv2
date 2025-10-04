@@ -91,17 +91,17 @@ mod tests {
         let current_template = Arc::new(tokio::sync::RwLock::new(Some(template)));
 
         let toml_str = r#"
-    hostname = "127.0.0.1"
-    port = 3333
-    start_difficulty = 1
-    minimum_difficulty = 1
-    maximum_difficulty = 1000
-    zmqpubhashblock = "tcp://127.0.0.1:28332"
-    bootstrap_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
-    network = "signet"
-    version_mask = 536870912
-    difficulty_multiplier = 1.0
-    "#;
+            hostname = "127.0.0.1"
+            port = 3333
+            start_difficulty = 1
+            minimum_difficulty = 1
+            maximum_difficulty = 1000
+            zmqpubhashblock = "tcp://127.0.0.1:28332"
+            bootstrap_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
+            network = "signet"
+            version_mask = 20000000
+            difficulty_multiplier = 1.0
+            "#;
 
         let mut config: StratumConfig<Parsed> = toml::from_str(toml_str).unwrap();
         config.network = bitcoin::Network::Signet;
