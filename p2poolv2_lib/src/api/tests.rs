@@ -38,15 +38,26 @@ mod tests {
     use toml;
     use tower::ServiceExt;
     async fn create_test_api_state() -> ApiState {
+        use crate::accounting::simple_pplns::SimplePplnsShare;
+        use crate::api::models::ApiState;
+        use crate::config::StratumConfig;
+        use crate::shares::ShareBlock;
+        use crate::shares::chain::chain_store::ChainStore;
+        use crate::store::Store;
+        use crate::stratum::work::block_template::BlockTemplate;
+        use std::collections::HashMap;
+        use std::sync::Arc;
+        use tempfile::tempdir;
+
         let temp_dir = tempdir().unwrap();
         let store =
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap());
         let chain_store = Arc::new(ChainStore::new(
-            store,
+            store.clone(),
             ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
         ));
 
-        // Add some test shares
+        // Add one PPLNS share
         let user_id = chain_store
             .store
             .add_user("test_address".to_string())
@@ -62,8 +73,22 @@ mod tests {
             "test_nonce".to_string(),
         );
         chain_store.store.add_pplns_share(share).unwrap();
+        chain_store.store.flush().unwrap(); // ensures the share is visible to API handlers
 
-        // Create a test block template
+        // Add a minimal ShareBlock so /api/shares works
+        let genesis_share = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
+        let share_block = ShareBlock {
+            previous_share_hash: Some(genesis_share.hash),
+            hash: bitcoin::Txid::from_inner([1u8; 32]),
+            difficulty: 1.0,
+            timestamp: 1640995200,
+            merkle_root: bitcoin::Txid::from_inner([2u8; 32]),
+            miner_address: "test_address".to_string(),
+            nonce: 42,
+        };
+        chain_store.add_share_block(share_block).unwrap();
+
+        // Create a dummy block template
         let template = BlockTemplate {
             version: 536870912,
             rules: vec!["segwit".to_string()],
@@ -87,23 +112,23 @@ mod tests {
             height: 1,
             default_witness_commitment: None,
         };
-
         let current_template = Arc::new(tokio::sync::RwLock::new(Some(template)));
 
+        // TOML config: version_mask is a string now
         let toml_str = r#"
-            hostname = "127.0.0.1"
-            port = 3333
-            start_difficulty = 1
-            minimum_difficulty = 1
-            maximum_difficulty = 1000
-            zmqpubhashblock = "tcp://127.0.0.1:28332"
-            bootstrap_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
-            network = "signet"
-            version_mask = 20000000
-            difficulty_multiplier = 1.0
-            "#;
+        hostname = "127.0.0.1"
+        port = 3333
+        start_difficulty = 1
+        minimum_difficulty = 1
+        maximum_difficulty = 1000
+        zmqpubhashblock = "tcp://127.0.0.1:28332"
+        bootstrap_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
+        network = "signet"
+        version_mask = "20000000"
+        difficulty_multiplier = 1.0
+    "#;
 
-        let mut config: StratumConfig<Parsed> = toml::from_str(toml_str).unwrap();
+        let mut config: StratumConfig<crate::config::Parsed> = toml::from_str(toml_str).unwrap();
         config.network = bitcoin::Network::Signet;
         config.difficulty_multiplier = 1.0;
 
