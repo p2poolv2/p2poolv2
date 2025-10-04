@@ -158,7 +158,7 @@ impl Payout {
         Ok(distribution)
     }
 
-    /// Appends new output pair to distribtuion and returns remaining amount
+    /// Appends new output pair to distribution and returns remaining amount
     fn include_address_and_cut(
         distribution: &mut Vec<OutputPair>,
         total_amount: bitcoin::Amount,
@@ -166,24 +166,24 @@ impl Payout {
         cut: Option<u16>, // in basis points
     ) -> Amount {
         const BASIS_POINT_FACTOR: u64 = 10_000; // 100 * 100
-        println!("Address {address:?}, Total {total_amount:?}, cut {cut:?}");
-        if address.is_some() && cut.is_some() {
-            let mut amount = total_amount.checked_mul(cut.unwrap().into()).unwrap();
-            println!("Amount multiplied {amount:?}");
-            amount = amount.checked_div(BASIS_POINT_FACTOR).unwrap();
-            distribution.push(OutputPair {
-                address: address.as_ref().unwrap().clone(),
-                amount,
-            });
-            println!("Total {total_amount:?}, cut {cut:?}, amount {amount:?}");
-            println!(
-                "Total {total_amount:?}, cut {cut:?}, amount {amount:?}, remaining {}",
-                total_amount - amount
-            );
-            total_amount - amount
-        } else {
-            total_amount
+        if let (Some(addr), Some(cut_bp)) = (address.as_ref(), cut.filter(|c| *c > 0)) {
+            if let Some(amount) = total_amount.checked_mul(cut_bp.into()) {
+                if let Some(div_amount) = amount.checked_div(BASIS_POINT_FACTOR) {
+                    distribution.push(OutputPair {
+                        address: addr.clone(),
+                        amount: div_amount,
+                    });
+                    return total_amount - div_amount;
+                } else {
+                    tracing::warn!("checked_div failed for amount: {amount:?}");
+                }
+            } else {
+                tracing::warn!(
+                    "checked_mul failed for total_amount: {total_amount:?}, cut_bp: {cut_bp:?}"
+                );
+            }
         }
+        total_amount
     }
 
     /// Groups shares by bitcoin address and sums their difficulties.
@@ -1176,5 +1176,154 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].address, *stratum_config.bootstrap_address());
         assert_eq!(result[0].amount, total_amount);
+    }
+
+    #[tokio::test]
+    async fn test_get_output_distribution_with_zero_donation() {
+        let payout = Payout::new(86400);
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let mut store = ChainStore::default();
+
+        let shares = vec![
+            SimplePplnsShare::new(
+                1,
+                600,
+                "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(),
+                "worker1".to_string(),
+                (current_time - 1800) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
+            ),
+            SimplePplnsShare::new(
+                2,
+                400,
+                "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(),
+                "worker2".to_string(),
+                (current_time - 2400) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
+            ),
+        ];
+
+        store
+            .expect_get_pplns_shares_filtered()
+            .return_const(shares);
+
+        let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
+
+        // Create config with 0% donation (should be filtered out)
+        let mut stratum_config = StratumConfig::new_for_test_default();
+        stratum_config.donation_address =
+            Some("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string());
+        stratum_config.donation = Some(0); // 0% - should not create output
+        let stratum_config = stratum_config.parse().unwrap();
+
+        let result = payout
+            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
+            .await
+            .unwrap();
+
+        // Should have only 2 outputs: just the 2 miners (no donation output)
+        assert_eq!(result.len(), 2);
+
+        // Verify no donation address in outputs
+        assert!(
+            result
+                .iter()
+                .all(|op| op.address.to_string() != "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx")
+        );
+
+        // Total should still equal input
+        let total_distributed: bitcoin::Amount = result.iter().map(|op| op.amount).sum();
+        assert_eq!(total_distributed, total_amount);
+
+        // Miners should get full 100M sats proportionally (60% and 40%)
+        let miner1_output = result
+            .iter()
+            .find(|op| op.address.to_string() == "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq")
+            .unwrap();
+        let miner2_output = result
+            .iter()
+            .find(|op| op.address.to_string() == "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4")
+            .unwrap();
+
+        // 60% of 100M = 60M, 40% of 100M = 40M
+        assert!(
+            miner1_output.amount.to_sat() >= 59_900_000
+                && miner1_output.amount.to_sat() <= 60_100_000
+        );
+        assert!(
+            miner2_output.amount.to_sat() >= 39_900_000
+                && miner2_output.amount.to_sat() <= 40_100_000
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_output_distribution_with_zero_fee() {
+        let payout = Payout::new(86400);
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let mut store = ChainStore::default();
+
+        let shares = vec![
+            SimplePplnsShare::new(
+                1,
+                600,
+                "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(),
+                "worker1".to_string(),
+                (current_time - 1800) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
+            ),
+            SimplePplnsShare::new(
+                2,
+                400,
+                "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(),
+                "worker2".to_string(),
+                (current_time - 2400) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
+            ),
+        ];
+
+        store
+            .expect_get_pplns_shares_filtered()
+            .return_const(shares);
+
+        let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
+
+        // Create config with 0% fee (should be filtered out)
+        let mut stratum_config = StratumConfig::new_for_test_default();
+        stratum_config.fee_address =
+            Some("tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7".to_string());
+        stratum_config.fee = Some(0); // 0% - should not create output
+        let stratum_config = stratum_config.parse().unwrap();
+
+        let result = payout
+            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
+            .await
+            .unwrap();
+
+        // Should have only 2 outputs: just the 2 miners (no fee output)
+        assert_eq!(result.len(), 2);
+
+        // Verify no fee address in outputs
+        assert!(result.iter().all(|op| op.address.to_string()
+            != "tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7"));
+
+        // Total should still equal input
+        let total_distributed: bitcoin::Amount = result.iter().map(|op| op.amount).sum();
+        assert_eq!(total_distributed, total_amount);
     }
 }
