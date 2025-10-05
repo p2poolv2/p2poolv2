@@ -14,16 +14,16 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use std::sync::Arc;
-use tempfile::tempdir;
 use crate::config::Raw;
-use tokio::time::{sleep, Duration};
+use p2poolv2_api::{api_shutdown, api_start};
 use p2poolv2_lib::config;
 use p2poolv2_lib::config::StratumConfig;
-use reqwest::Client;
 use p2poolv2_lib::shares::{ShareBlock, chain::chain_store::ChainStore};
 use p2poolv2_lib::store::Store;
-use p2poolv2_api::{api_start, api_shutdown};
+use reqwest::Client;
+use std::sync::Arc;
+use tempfile::tempdir;
+use tokio::time::{Duration, sleep};
 
 #[tokio::test]
 async fn test_api_server_health_check() {
@@ -33,12 +33,14 @@ async fn test_api_server_health_check() {
     let genesis_block = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
     let chain_store = Arc::new(ChainStore::new(store, genesis_block));
 
-    // Stratum config 
+    // Stratum config
     let stratum_config_raw = StratumConfig::<Raw>::new_for_test_default();
-    let stratum_config = stratum_config_raw.parse().expect("Failed to parse StratumConfig");
+    let stratum_config = stratum_config_raw
+        .parse()
+        .expect("Failed to parse StratumConfig");
 
     // Start API server
-    let port = 4000; 
+    let port = 4000;
     let (shutdown_handle, api_server) = api_start(chain_store.clone(), stratum_config, port);
 
     // Give server a moment to start
@@ -53,12 +55,17 @@ async fn test_api_server_health_check() {
         .await
         .expect("Failed to call /health");
 
-    assert!(response.status().is_success(), "Health endpoint did not return 200 OK");
+    assert!(
+        response.status().is_success(),
+        "Health endpoint did not return 200 OK"
+    );
     let body = response.text().await.expect("Failed to read response body");
     assert_eq!(body, "ok", "Health endpoint returned unexpected body");
 
     // Send shutdown signal
-    shutdown_handle.send(()).expect("Failed to send shutdown signal");
+    shutdown_handle
+        .send(())
+        .expect("Failed to send shutdown signal");
 
     api_server.await.expect("Server task panicked");
 
