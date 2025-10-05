@@ -13,3 +13,7 @@ tracing-subscriber = { workspace = true }
 clap = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
+
+[lib]
+name = "p2poolv2_api"
+path = "src/lib.rs"

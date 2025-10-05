@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use clap::Parser;
+use p2poolv2_api::{api_shutdown, api_start};
 use p2poolv2_lib::accounting::simple_pplns::SimplePplnsShare;
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::config::Config;
@@ -97,6 +98,9 @@ async fn main() -> Result<(), String> {
 
     let stratum_config = config.stratum.clone().parse().unwrap();
     let bitcoinrpc_config = config.bitcoinrpc.clone();
+    let api_port = 3000;
+    let (api_shutdown_tx, api_handle) =
+        api_start(chain_store.clone(), stratum_config.clone(), api_port);
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
     let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(1);
     let tracker_handle = start_tracker_actor();
@@ -200,6 +204,7 @@ async fn main() -> Result<(), String> {
                     .expect("Failed to send shutdown signal to Stratum server");
                 info!("Node stopped");
             }
+            api_shutdown(api_shutdown_tx, api_handle).await;
         }
         Err(e) => {
             error!("Failed to start node: {e}");

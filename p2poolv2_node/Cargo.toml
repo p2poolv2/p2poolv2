@@ -14,6 +14,7 @@ config = { workspace = true }
 serde = { workspace = true }
 bitcoin = { workspace = true }
 bitcoindrpc = { path = "../bitcoindrpc" }
+p2poolv2_api = { path = "../p2poolv2_api" }
 
 [[bin]]
 name = "p2poolv2"

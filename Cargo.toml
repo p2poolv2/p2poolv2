@@ -59,6 +59,7 @@ void = "1.0.2"
 chrono = { version = "0.4", features = ["serde"] }
 tokio-util = "0.7.15"
 tokio-stream = "0.1.17"
+p2poolv2_api = { path = "p2poolv2_api" }
 p2poolv2_lib = { path = "p2poolv2_lib" }
 reqwest = { version = "0.12", features = ["json"] }
 
@@ -97,3 +98,5 @@ libp2p = { version = "0.53", features = [
     "secp256k1",
     "request-response",
 ] }
+p2poolv2_api = { path = "p2poolv2_api" }
+reqwest = { version = "0.12", features = ["json","blocking"] }
