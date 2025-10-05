@@ -4,6 +4,7 @@ members = [
     "p2poolv2_lib",
     "p2poolv2_node",
     "p2poolv2_cli",
+    "p2poolv2_api",
 ]
 resolver = "2"
 
