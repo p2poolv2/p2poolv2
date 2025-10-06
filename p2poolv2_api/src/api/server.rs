@@ -25,8 +25,8 @@ use tokio::sync::oneshot;
 use tracing::info;
 
 pub struct ApiServer {
-    chain_store: Arc<ChainStore>,
-    config: StratumConfig<config::Parsed>,
+    _chain_store: Arc<ChainStore>,
+    _config: StratumConfig<config::Parsed>,
     port: u16,
 }
 
@@ -37,42 +37,38 @@ impl ApiServer {
         port: u16,
     ) -> Self {
         Self {
-            chain_store,
-            config,
+            _chain_store: chain_store,
+            _config: config,
             port,
         }
     }
 
-    // Start returns only the shutdown_tx
-    pub fn start(self) -> Result<oneshot::Sender<()>, ApiError> {
+    /// Start the API server and return a shutdown channel
+    ///
+    /// Send a signal through the returned channel to gracefully shutdown the server.
+    pub fn start(self) -> oneshot::Sender<()> {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
         let app = Router::new().route("/health", get(Self::health_check));
-        // Spawn the server into the background
-        tokio::spawn(async move { self.run_server(addr, app, shutdown_rx).await });
-        Ok(shutdown_tx)
-    }
 
-    async fn run_server(
-        self,
-        addr: SocketAddr,
-        app: Router,
-        shutdown_rx: oneshot::Receiver<()>,
-    ) -> Result<(), ApiError> {
-        let listener = tokio::net::TcpListener::bind(addr)
-            .await
-            .map_err(ApiError::BindError)?;
-        info!("API server listening on {}", addr);
+        tokio::spawn(async move {
+            let listener = tokio::net::TcpListener::bind(addr)
+                .await
+                .map_err(ApiError::BindError)?;
+            info!("API server listening on {}", addr);
 
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async move {
-                let _ = shutdown_rx.await;
-                info!("API shutdown signal received.");
-            })
-            .await
-            .map_err(|e| ApiError::ServerError(e.to_string()))?;
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.await;
+                    info!("API server shutdown signal received");
+                })
+                .await
+                .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
-        Ok(())
+            info!("API server stopped");
+            Ok::<(), ApiError>(())
+        });
+        shutdown_tx
     }
 
     async fn health_check() -> &'static str {
