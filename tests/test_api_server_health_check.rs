@@ -14,10 +14,9 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::config::Raw;
 use p2poolv2_api::api::error::ApiError;
-use p2poolv2_api::{api_shutdown, api_start};
-use p2poolv2_lib::config;
+use p2poolv2_api::api_start;
+use p2poolv2_lib::config::Raw;
 use p2poolv2_lib::config::StratumConfig;
 use p2poolv2_lib::shares::{ShareBlock, chain::chain_store::ChainStore};
 use p2poolv2_lib::store::Store;
@@ -25,7 +24,6 @@ use reqwest::Client;
 use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::time::{Duration, sleep};
-use tracing::error;
 
 #[tokio::test]
 async fn test_api_server_health_check() -> Result<(), ApiError> {
@@ -55,7 +53,7 @@ async fn test_api_server_health_check() -> Result<(), ApiError> {
 
     // Check /health endpoint
     let response = client
-        .get(&format!("http://127.0.0.1:{}/health", port))
+        .get(format!("http://127.0.0.1:{port}/health"))
         .send()
         .await
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
@@ -76,7 +74,7 @@ async fn test_api_server_health_check() -> Result<(), ApiError> {
         .map_err(|_| ApiError::ServerError("Failed to send shutdown signal".to_string()))?;
 
     let result = client
-        .get(&format!("http://127.0.0.1:{}/health", port))
+        .get(format!("http://127.0.0.1:{port}/health"))
         .send()
         .await;
 
