@@ -45,7 +45,7 @@ async fn test_api_server_health_check() -> Result<(), ApiError> {
 
     // Start API server
     let port = 4000;
-    let (shutdown_handle, api_server) = api_start(chain_store.clone(), stratum_config, port)
+    let shutdown_handle = api_start(chain_store.clone(), stratum_config, port)
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
     // Give server a moment to start

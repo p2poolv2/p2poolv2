@@ -21,7 +21,7 @@ use p2poolv2_lib::{
     shares::chain::chain_store::ChainStore,
 };
 use std::{net::SocketAddr, sync::Arc};
-use tokio::{sync::oneshot, task::JoinHandle};
+use tokio::sync::oneshot;
 use tracing::info;
 
 pub struct ApiServer {
@@ -42,17 +42,15 @@ impl ApiServer {
             port,
         }
     }
-    pub fn start(
-        self,
-    ) -> Result<(oneshot::Sender<()>, JoinHandle<Result<(), ApiError>>), ApiError> {
+
+    // Start returns only the shutdown_tx
+    pub fn start(self) -> Result<oneshot::Sender<()>, ApiError> {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
         let app = Router::new().route("/health", get(Self::health_check));
-
-        // Move the async logic into a separate function
-        let handle = tokio::spawn(Self::run_server(addr, app, shutdown_rx));
-
-        Ok((shutdown_tx, handle))
+        // Spawn the server into the background
+        tokio::spawn(Self::run_server(addr, app, shutdown_rx));
+        Ok(shutdown_tx)
     }
 
     async fn run_server(
