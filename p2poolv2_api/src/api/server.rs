@@ -49,14 +49,15 @@ impl ApiServer {
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
         let app = Router::new().route("/health", get(Self::health_check));
         // Spawn the server into the background
-        tokio::spawn(Self::run_server(addr, app, shutdown_rx));
+        tokio::spawn(async move { self.run_server(addr, app, shutdown_rx).await });
         Ok(shutdown_tx)
     }
 
     async fn run_server(
+        self,
         addr: SocketAddr,
         app: Router,
-        mut shutdown_rx: oneshot::Receiver<()>,
+        shutdown_rx: oneshot::Receiver<()>,
     ) -> Result<(), ApiError> {
         let listener = tokio::net::TcpListener::bind(addr)
             .await
