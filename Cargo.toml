@@ -60,7 +60,7 @@ chrono = { version = "0.4", features = ["serde"] }
 tokio-util = "0.7.15"
 tokio-stream = "0.1.17"
 p2poolv2_api = { path = "p2poolv2_api" }
-p2poolv2_lib = { path = "p2poolv2_lib" }
+p2poolv2_lib = { path = "p2poolv2_lib", features = ["test-utils"] }
 reqwest = { version = "0.12", features = ["json"] }
 
 # This package declaration is required to make the top-level directory buildable
