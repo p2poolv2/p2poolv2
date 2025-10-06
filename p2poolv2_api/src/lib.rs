@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::api::error::ApiError;
 use p2poolv2_lib::{
     config::{self, StratumConfig},
     shares::chain::chain_store::ChainStore,
@@ -21,7 +22,6 @@ use p2poolv2_lib::{
 use std::sync::Arc;
 use tokio::{sync::oneshot, task::JoinHandle};
 use tracing::info;
-
 pub mod api;
 pub use api::server::ApiServer;
 
@@ -30,17 +30,22 @@ pub fn api_start(
     chain_store: Arc<ChainStore>,
     config: StratumConfig<config::Parsed>,
     port: u16,
-) -> (oneshot::Sender<()>, JoinHandle<()>) {
+) -> Result<(oneshot::Sender<()>, JoinHandle<Result<(), ApiError>>), ApiError> {
     let server = ApiServer::new(chain_store, config, port);
-    let (shutdown_tx, handle) = server.start();
+    let (shutdown_tx, handle) = server.start()?;
     info!("API server started on port {}", port);
-    (shutdown_tx, handle)
+    Ok((shutdown_tx, handle))
 }
 
 /// Gracefully shuts down the API server.
-pub async fn api_shutdown(shutdown_tx: oneshot::Sender<()>, handle: JoinHandle<()>) {
+pub async fn api_shutdown(
+    shutdown_tx: oneshot::Sender<()>,
+    handle: JoinHandle<Result<(), ApiError>>,
+) {
     info!("Shutting down API server...");
     let _ = shutdown_tx.send(());
-    let _ = handle.await;
+    if let Err(e) = handle.await {
+        tracing::error!("API server shutdown error: {}", e);
+    }
     info!("API server stopped.");
 }

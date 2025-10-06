@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 p2poolv2_lib = { workspace = true }
 axum = "0.7"
+thiserror = "1.0"
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

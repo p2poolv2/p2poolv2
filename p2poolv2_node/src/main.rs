@@ -100,7 +100,13 @@ async fn main() -> Result<(), String> {
     let bitcoinrpc_config = config.bitcoinrpc.clone();
     let api_port = 3000;
     let (api_shutdown_tx, api_handle) =
-        api_start(chain_store.clone(), stratum_config.clone(), api_port);
+        match api_start(chain_store.clone(), stratum_config.clone(), api_port) {
+            Ok(res) => res,
+            Err(e) => {
+                error!("Failed to start API server: {e}");
+                return Err(format!("Failed to start API server: {e}"));
+            }
+        };
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
     let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(1);
     let tracker_handle = start_tracker_actor();
@@ -203,8 +209,9 @@ async fn main() -> Result<(), String> {
                     .send(())
                     .expect("Failed to send shutdown signal to Stratum server");
                 info!("Node stopped");
+                api_shutdown(api_shutdown_tx, api_handle).await;
+                info!("API server stopped");
             }
-            api_shutdown(api_shutdown_tx, api_handle).await;
         }
         Err(e) => {
             error!("Failed to start node: {e}");

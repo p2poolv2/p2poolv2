@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::config::Raw;
+use p2poolv2_api::api::error::ApiError;
 use p2poolv2_api::{api_shutdown, api_start};
 use p2poolv2_lib::config;
 use p2poolv2_lib::config::StratumConfig;
@@ -24,12 +25,15 @@ use reqwest::Client;
 use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::time::{Duration, sleep};
+use tracing::error;
 
 #[tokio::test]
-async fn test_api_server_health_check() {
-    // Setup temporary store & chain store
-    let temp_dir = tempdir().unwrap();
-    let store = Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap());
+async fn test_api_server_health_check() -> Result<(), ApiError> {
+    let temp_dir = tempdir().map_err(|e| ApiError::ServerError(e.to_string()))?;
+    let store = Arc::new(
+        Store::new(temp_dir.path().to_str().unwrap().to_string(), false)
+            .map_err(|e| ApiError::ServerError(e.to_string()))?,
+    );
     let genesis_block = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
     let chain_store = Arc::new(ChainStore::new(store, genesis_block));
 
@@ -37,11 +41,12 @@ async fn test_api_server_health_check() {
     let stratum_config_raw = StratumConfig::<Raw>::new_for_test_default();
     let stratum_config = stratum_config_raw
         .parse()
-        .expect("Failed to parse StratumConfig");
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
     // Start API server
     let port = 4000;
-    let (shutdown_handle, api_server) = api_start(chain_store.clone(), stratum_config, port);
+    let (shutdown_handle, api_server) = api_start(chain_store.clone(), stratum_config, port)
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
     // Give server a moment to start
     sleep(Duration::from_millis(500)).await;
@@ -53,21 +58,22 @@ async fn test_api_server_health_check() {
         .get(&format!("http://127.0.0.1:{}/health", port))
         .send()
         .await
-        .expect("Failed to call /health");
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
     assert!(
         response.status().is_success(),
         "Health endpoint did not return 200 OK"
     );
-    let body = response.text().await.expect("Failed to read response body");
+    let body = response
+        .text()
+        .await
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
     assert_eq!(body, "ok", "Health endpoint returned unexpected body");
 
     // Send shutdown signal
     shutdown_handle
         .send(())
-        .expect("Failed to send shutdown signal");
-
-    api_server.await.expect("Server task panicked");
+        .map_err(|_| ApiError::ServerError("Failed to send shutdown signal".to_string()))?;
 
     let result = client
         .get(&format!("http://127.0.0.1:{}/health", port))
@@ -78,4 +84,6 @@ async fn test_api_server_health_check() {
         result.is_err(),
         "API server should not respond after shutdown"
     );
+
+    Ok(())
 }
