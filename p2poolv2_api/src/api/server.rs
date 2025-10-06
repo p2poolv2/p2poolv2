@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::api::error::ApiError;
 use axum::{Router, routing::get};
 use p2poolv2_lib::{
     config::{self, StratumConfig},
@@ -41,27 +42,38 @@ impl ApiServer {
             port,
         }
     }
-
-    pub fn start(self) -> (oneshot::Sender<()>, JoinHandle<()>) {
-        let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+    pub fn start(
+        self,
+    ) -> Result<(oneshot::Sender<()>, JoinHandle<Result<(), ApiError>>), ApiError> {
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
-
         let app = Router::new().route("/health", get(Self::health_check));
 
-        let handle = tokio::spawn(async move {
-            let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-            info!("API server listening on {}", addr);
+        // Move the async logic into a separate function
+        let handle = tokio::spawn(Self::run_server(addr, app, shutdown_rx));
 
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    let _ = shutdown_rx.await;
-                    info!("API shutdown signal received.");
-                })
-                .await
-                .unwrap();
-        });
+        Ok((shutdown_tx, handle))
+    }
 
-        (shutdown_tx, handle)
+    async fn run_server(
+        addr: SocketAddr,
+        app: Router,
+        mut shutdown_rx: oneshot::Receiver<()>,
+    ) -> Result<(), ApiError> {
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .map_err(ApiError::BindError)?;
+        info!("API server listening on {}", addr);
+
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_rx.await;
+                info!("API shutdown signal received.");
+            })
+            .await
+            .map_err(|e| ApiError::ServerError(e.to_string()))?;
+
+        Ok(())
     }
 
     async fn health_check() -> &'static str {
