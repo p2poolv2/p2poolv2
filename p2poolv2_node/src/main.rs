@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use clap::Parser;
-use p2poolv2_api::{api_shutdown, api_start};
+use p2poolv2_api::ApiServer;
 use p2poolv2_lib::accounting::simple_pplns::SimplePplnsShare;
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::config::Config;
@@ -24,7 +24,6 @@ use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::shares::ShareBlock;
 use p2poolv2_lib::shares::chain::chain_store::ChainStore;
 use p2poolv2_lib::store::Store;
-use p2poolv2_lib::store::background_tasks::start_background_tasks;
 use p2poolv2_lib::stratum::client_connections::start_connections_handler;
 use p2poolv2_lib::stratum::server::StratumServerBuilder;
 use p2poolv2_lib::stratum::work::gbt::start_gbt;
@@ -99,13 +98,10 @@ async fn main() -> Result<(), String> {
     let stratum_config = config.stratum.clone().parse().unwrap();
     let bitcoinrpc_config = config.bitcoinrpc.clone();
     let api_port = 3000;
-    let api_shutdown_tx = match api_start(chain_store.clone(), stratum_config.clone(), api_port) {
-        Ok(tx) => tx,
-        Err(e) => {
-            error!("Failed to start API server: {e}");
-            return Err(format!("Failed to start API server: {e}"));
-        }
-    };
+    let api_server = ApiServer::new(chain_store.clone(), stratum_config.clone(), api_port);
+    let api_shutdown_tx = api_server.start();
+    info!("API server started on port {}", api_port);
+
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
     let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(1);
     let tracker_handle = start_tracker_actor();
@@ -204,12 +200,15 @@ async fn main() -> Result<(), String> {
         Ok((_node_handle, stopping_rx)) => {
             info!("Node started");
             if (stopping_rx.await).is_ok() {
+                info!("Node shutting down ...");
+
                 stratum_shutdown_tx
                     .send(())
                     .expect("Failed to send shutdown signal to Stratum server");
+
+                let _ = api_shutdown_tx.send(());
+
                 info!("Node stopped");
-                api_shutdown(api_shutdown_tx).await;
-                info!("API server stopped");
             }
         }
         Err(e) => {

@@ -14,8 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use p2poolv2_api::ApiServer;
 use p2poolv2_api::api::error::ApiError;
-use p2poolv2_api::api_start;
 use p2poolv2_lib::config::Raw;
 use p2poolv2_lib::config::StratumConfig;
 use p2poolv2_lib::shares::{ShareBlock, chain::chain_store::ChainStore};
@@ -43,8 +43,8 @@ async fn test_api_server_health_check() -> Result<(), ApiError> {
 
     // Start API server
     let port = 4000;
-    let shutdown_handle = api_start(chain_store.clone(), stratum_config, port)
-        .map_err(|e| ApiError::ServerError(e.to_string()))?;
+    let api_server = ApiServer::new(chain_store.clone(), stratum_config, port);
+    let shutdown_tx = api_server.start();
 
     // Give server a moment to start
     sleep(Duration::from_millis(500)).await;
@@ -69,9 +69,10 @@ async fn test_api_server_health_check() -> Result<(), ApiError> {
     assert_eq!(body, "ok", "Health endpoint returned unexpected body");
 
     // Send shutdown signal
-    shutdown_handle
-        .send(())
-        .map_err(|_| ApiError::ServerError("Failed to send shutdown signal".to_string()))?;
+    let _ = shutdown_tx.send(());
+
+    // Give server a moment to shut down
+    sleep(Duration::from_millis(200)).await;
 
     let result = client
         .get(format!("http://127.0.0.1:{port}/health"))
