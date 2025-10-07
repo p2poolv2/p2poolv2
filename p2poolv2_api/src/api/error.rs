@@ -14,22 +14,17 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
 use std::error::Error;
 use std::fmt;
-use std::io;
 
 #[derive(Debug)]
 pub enum ApiError {
-    BindError(io::Error),
     ServerError(String),
 }
 
 impl fmt::Display for ApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ApiError::BindError(e) => write!(f, "failed to bind to address: {}", e),
             ApiError::ServerError(msg) => write!(f, "axum server error: {}", msg),
         }
     }
@@ -38,19 +33,7 @@ impl fmt::Display for ApiError {
 impl Error for ApiError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            ApiError::BindError(e) => Some(e),
             ApiError::ServerError(_) => None,
         }
-    }
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        let (status, msg) = match &self {
-            ApiError::BindError(_) | ApiError::ServerError(_) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
-            }
-        };
-        (status, msg).into_response()
     }
 }

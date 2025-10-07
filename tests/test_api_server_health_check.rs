@@ -44,7 +44,7 @@ async fn test_api_server_health_check() -> Result<(), ApiError> {
     // Start API server
     let port = 4000;
     let api_server = ApiServer::new(chain_store.clone(), stratum_config, port);
-    let shutdown_tx = api_server.start();
+    let shutdown_tx = api_server.start().await.unwrap();
 
     // Give server a moment to start
     sleep(Duration::from_millis(500)).await;

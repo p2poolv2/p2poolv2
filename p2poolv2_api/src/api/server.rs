@@ -46,17 +46,19 @@ impl ApiServer {
     /// Start the API server and return a shutdown channel
     ///
     /// Send a signal through the returned channel to gracefully shutdown the server.
-    pub fn start(self) -> oneshot::Sender<()> {
+    pub async fn start(self) -> Result<oneshot::Sender<()>, std::io::Error> {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
         let app = Router::new().route("/health", get(Self::health_check));
 
-        tokio::spawn(async move {
-            let listener = tokio::net::TcpListener::bind(addr)
-                .await
-                .map_err(ApiError::BindError)?;
-            info!("API server listening on {}", addr);
+        let listener = match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => listener,
+            Err(e) => return Err(e),
+        };
 
+        info!("API server listening on {}", addr);
+
+        tokio::spawn(async move {
             axum::serve(listener, app)
                 .with_graceful_shutdown(async move {
                     let _ = shutdown_rx.await;
@@ -68,7 +70,7 @@ impl ApiServer {
             info!("API server stopped");
             Ok::<(), ApiError>(())
         });
-        shutdown_tx
+        Ok(shutdown_tx)
     }
 
     async fn health_check() -> &'static str {
