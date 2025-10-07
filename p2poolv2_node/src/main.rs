@@ -98,7 +98,7 @@ async fn main() -> Result<(), String> {
     let stratum_config = config.stratum.clone().parse().unwrap();
     let bitcoinrpc_config = config.bitcoinrpc.clone();
     let api_port = 3000;
-    let api_server = ApiServer::new(chain_store.clone(), stratum_config.clone(), api_port);
+    let api_server = ApiServer::new(chain_store.clone(), config.api.clone());
     let api_shutdown_tx = match api_server.start().await {
         Ok(shutdown_tx) => shutdown_tx,
         Err(e) => {
