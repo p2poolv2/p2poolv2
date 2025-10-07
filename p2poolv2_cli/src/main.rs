@@ -22,13 +22,15 @@ use p2poolv2_lib::shares::chain::chain_store::ChainStore;
 use std::error::Error;
 use std::sync::Arc;
 
+mod commands;
+
 /// P2Pool v2 CLI utility
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    /// Path to p2poolv2 config file
-    #[arg(short, long)]
-    config: String,
+    /// Path to p2poolv2 config file (not required for gen-auth command)
+    #[arg(short, long, global = true)]
+    config: Option<String>,
 
     /// Command to execute
     #[command(subcommand)]
@@ -51,6 +53,13 @@ enum Commands {
         #[arg(short, long)]
         end_time: Option<u64>,
     },
+    /// Generate API authentication credentials (salt, password, HMAC)
+    GenAuth {
+        /// Username for API authentication
+        username: String,
+        /// Password (leave empty to auto-generate, or use "-" to prompt)
+        password: Option<String>,
+    },
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -58,24 +67,38 @@ fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
-    let config = Config::load(&cli.config)?;
-
-    // Check if store path is provided and handle it
-    let store = cli_commands::store::open_store(config.store.path.clone())?;
-    let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
-    let chain = Arc::new(ChainStore::new(Arc::new(store), genesis));
 
     // Handle command if provided
     match &cli.command {
-        Some(Commands::Info) => {
-            cli_commands::chain_info::execute(chain)?;
+        Some(Commands::GenAuth { username, password }) => {
+            // gen-auth doesn't need config or store
+            commands::gen_auth::execute(username.clone(), password.clone())?;
         }
-        Some(Commands::PplnsShares {
-            limit,
-            start_time,
-            end_time,
-        }) => {
-            cli_commands::pplns_shares::execute(chain, *limit, *start_time, *end_time)?;
+        Some(Commands::Info) | Some(Commands::PplnsShares { .. }) => {
+            // These commands require config and store
+            let config_path = cli
+                .config
+                .as_ref()
+                .ok_or("Config file required for this command. Use --config")?;
+            let config = Config::load(config_path)?;
+
+            let store = cli_commands::store::open_store(config.store.path.clone())?;
+            let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
+            let chain = Arc::new(ChainStore::new(Arc::new(store), genesis));
+
+            match &cli.command {
+                Some(Commands::Info) => {
+                    cli_commands::chain_info::execute(chain)?;
+                }
+                Some(Commands::PplnsShares {
+                    limit,
+                    start_time,
+                    end_time,
+                }) => {
+                    cli_commands::pplns_shares::execute(chain, *limit, *start_time, *end_time)?;
+                }
+                _ => unreachable!(),
+            }
         }
         None => {
             println!("No command specified. Use --help for usage information.");
