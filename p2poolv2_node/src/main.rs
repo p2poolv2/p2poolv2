@@ -97,7 +97,6 @@ async fn main() -> Result<(), String> {
 
     let stratum_config = config.stratum.clone().parse().unwrap();
     let bitcoinrpc_config = config.bitcoinrpc.clone();
-    let api_port = 3000;
     let api_server = ApiServer::new(chain_store.clone(), config.api.clone());
     let api_shutdown_tx = match api_server.start().await {
         Ok(shutdown_tx) => shutdown_tx,
@@ -106,7 +105,10 @@ async fn main() -> Result<(), String> {
             return Err("Failed to start API Server. Quitting.".into());
         }
     };
-    info!("API server started on port {}", api_port);
+    info!(
+        "API server started on host {} port {}",
+        config.api.hostname, config.api.port
+    );
 
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
     let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(1);
