@@ -16,8 +16,7 @@
 
 use p2poolv2_api::ApiServer;
 use p2poolv2_api::api::error::ApiError;
-use p2poolv2_lib::config::Raw;
-use p2poolv2_lib::config::StratumConfig;
+use p2poolv2_lib::config::ApiConfig;
 use p2poolv2_lib::shares::{ShareBlock, chain::chain_store::ChainStore};
 use p2poolv2_lib::store::Store;
 use reqwest::Client;
@@ -35,15 +34,14 @@ async fn test_api_server_health_check() -> Result<(), ApiError> {
     let genesis_block = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
     let chain_store = Arc::new(ChainStore::new(store, genesis_block));
 
-    // Stratum config
-    let stratum_config_raw = StratumConfig::<Raw>::new_for_test_default();
-    let stratum_config = stratum_config_raw
-        .parse()
-        .map_err(|e| ApiError::ServerError(e.to_string()))?;
-
+    let api_config = ApiConfig {
+        hostname: "127.0.0.1".into(),
+        port: 4000,
+        auth_user: None,
+        auth_token: None,
+    };
     // Start API server
-    let port = 4000;
-    let api_server = ApiServer::new(chain_store.clone(), stratum_config, port);
+    let api_server = ApiServer::new(chain_store.clone(), api_config.clone());
     let shutdown_tx = api_server.start().await.unwrap();
 
     // Give server a moment to start
@@ -53,7 +51,7 @@ async fn test_api_server_health_check() -> Result<(), ApiError> {
 
     // Check /health endpoint
     let response = client
-        .get(format!("http://127.0.0.1:{port}/health"))
+        .get(format!("http://127.0.0.1:{}/health", api_config.port))
         .send()
         .await
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
@@ -75,7 +73,7 @@ async fn test_api_server_health_check() -> Result<(), ApiError> {
     sleep(Duration::from_millis(200)).await;
 
     let result = client
-        .get(format!("http://127.0.0.1:{port}/health"))
+        .get(format!("http://127.0.0.1:{}/health", api_config.port))
         .send()
         .await;
 

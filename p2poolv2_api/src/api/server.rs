@@ -16,30 +16,21 @@
 
 use crate::api::error::ApiError;
 use axum::{Router, routing::get};
-use p2poolv2_lib::{
-    config::{self, StratumConfig},
-    shares::chain::chain_store::ChainStore,
-};
+use p2poolv2_lib::{config::ApiConfig, shares::chain::chain_store::ChainStore};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
 use tracing::info;
 
 pub struct ApiServer {
     _chain_store: Arc<ChainStore>,
-    _config: StratumConfig<config::Parsed>,
-    port: u16,
+    config: ApiConfig,
 }
 
 impl ApiServer {
-    pub fn new(
-        chain_store: Arc<ChainStore>,
-        config: StratumConfig<config::Parsed>,
-        port: u16,
-    ) -> Self {
+    pub fn new(chain_store: Arc<ChainStore>, config: ApiConfig) -> Self {
         Self {
             _chain_store: chain_store,
-            _config: config,
-            port,
+            config,
         }
     }
 
@@ -48,7 +39,10 @@ impl ApiServer {
     /// Send a signal through the returned channel to gracefully shutdown the server.
     pub async fn start(self) -> Result<oneshot::Sender<()>, std::io::Error> {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-        let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
+        let addr = SocketAddr::new(
+            std::net::IpAddr::V4(self.config.hostname.parse().unwrap()),
+            self.config.port,
+        );
         let app = Router::new().route("/health", get(Self::health_check));
 
         let listener = match tokio::net::TcpListener::bind(addr).await {
