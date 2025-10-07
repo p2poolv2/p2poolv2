@@ -16,7 +16,8 @@
 
 use bitcoindrpc::BitcoinRpcConfig;
 use p2poolv2_lib::config::{
-    CkPoolConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig, StratumConfig,
+    ApiConfig, CkPoolConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig,
+    StratumConfig,
 };
 use p2poolv2_lib::shares::miner_message::MinerWorkbase;
 
@@ -68,6 +69,12 @@ pub fn default_test_config() -> Config {
             level: "info".to_string(),
             file: Some("./p2pool.log".to_string()),
             stats_dir: "./logs/stats".to_string(),
+        },
+        api: ApiConfig {
+            hostname: "127.0.0.1".to_string(),
+            port: 3000,
+            auth_user: None,
+            auth_token: None,
         },
     }
 }

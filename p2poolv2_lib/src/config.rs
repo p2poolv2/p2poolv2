@@ -257,6 +257,18 @@ fn default_stats_dir() -> String {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct ApiConfig {
+    /// The hostname for the API server
+    pub hostname: String,
+    /// The port for the API server
+    pub port: u16,
+    /// Optional authentication username
+    pub auth_user: Option<String>,
+    /// Optional authentication token
+    pub auth_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
 pub struct Config {
     pub network: NetworkConfig,
@@ -266,6 +278,7 @@ pub struct Config {
     pub miner: MinerConfig,
     pub bitcoinrpc: BitcoinRpcConfig,
     pub logging: LoggingConfig,
+    pub api: ApiConfig,
 }
 
 #[allow(dead_code)]
@@ -412,6 +425,26 @@ impl Config {
         self.logging.stats_dir = stats_dir;
         self
     }
+
+    pub fn with_api_hostname(mut self, hostname: String) -> Self {
+        self.api.hostname = hostname;
+        self
+    }
+
+    pub fn with_api_port(mut self, port: u16) -> Self {
+        self.api.port = port;
+        self
+    }
+
+    pub fn with_api_auth_user(mut self, auth_user: Option<String>) -> Self {
+        self.api.auth_user = auth_user;
+        self
+    }
+
+    pub fn with_api_auth_token(mut self, auth_token: Option<String>) -> Self {
+        self.api.auth_token = auth_token;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -452,7 +485,11 @@ mod tests {
             .with_bitcoinrpc_username("testuser".to_string())
             .with_bitcoinrpc_password("testpass".to_string())
             .with_bitcoin_network(bitcoin::Network::Signet)
-            .with_stats_dir("./logs/stats".to_string());
+            .with_stats_dir("./logs/stats".to_string())
+            .with_api_hostname("127.0.0.1".to_string())
+            .with_api_port(3000)
+            .with_api_auth_user(Some("admin".to_string()))
+            .with_api_auth_token(Some("secret_token".to_string()));
 
         assert_eq!(config.network.listen_address, "127.0.0.1:8080");
         assert_eq!(
@@ -496,6 +533,12 @@ mod tests {
         assert_eq!(config.network.max_established_outgoing, 50);
         assert_eq!(config.network.max_established_per_peer, 1);
         assert_eq!(config.logging.stats_dir, "./logs/stats");
+
+        // Test API config
+        assert_eq!(config.api.hostname, "127.0.0.1");
+        assert_eq!(config.api.port, 3000);
+        assert_eq!(config.api.auth_user, Some("admin".to_string()));
+        assert_eq!(config.api.auth_token, Some("secret_token".to_string()));
 
         // Test values from config.toml
         assert_eq!(config.store.background_task_frequency_hours, 24);
