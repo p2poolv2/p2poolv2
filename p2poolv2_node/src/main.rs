@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use clap::Parser;
-use p2poolv2_api::ApiServer;
+use p2poolv2_api::start_api_server;
 use p2poolv2_lib::accounting::simple_pplns::SimplePplnsShare;
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::config::Config;
@@ -97,18 +97,6 @@ async fn main() -> Result<(), String> {
 
     let stratum_config = config.stratum.clone().parse().unwrap();
     let bitcoinrpc_config = config.bitcoinrpc.clone();
-    let api_server = ApiServer::new(chain_store.clone(), config.api.clone());
-    let api_shutdown_tx = match api_server.start().await {
-        Ok(shutdown_tx) => shutdown_tx,
-        Err(e) => {
-            info!("Error starting server: {}", e);
-            return Err("Failed to start API Server. Quitting.".into());
-        }
-    };
-    info!(
-        "API server started on host {} port {}",
-        config.api.hostname, config.api.port
-    );
 
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
     let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(1);
@@ -203,6 +191,24 @@ async fn main() -> Result<(), String> {
         }
         info!("Stratum server stopped");
     });
+
+    let api_shutdown_tx = match start_api_server(
+        config.api.clone(),
+        chain_store.clone(),
+        metrics_handle.clone(),
+    )
+    .await
+    {
+        Ok(shutdown_tx) => shutdown_tx,
+        Err(e) => {
+            info!("Error starting server: {}", e);
+            return Err("Failed to start API Server. Quitting.".into());
+        }
+    };
+    info!(
+        "API server started on host {} port {}",
+        config.api.hostname, config.api.port
+    );
 
     match NodeHandle::new(config, chain_store, shares_rx, metrics_handle).await {
         Ok((_node_handle, stopping_rx)) => {

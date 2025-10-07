@@ -14,8 +14,9 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use p2poolv2_api::ApiServer;
 use p2poolv2_api::api::error::ApiError;
+use p2poolv2_api::start_api_server;
+use p2poolv2_lib::accounting::stats::metrics::start_metrics;
 use p2poolv2_lib::config::ApiConfig;
 use p2poolv2_lib::shares::{ShareBlock, chain::chain_store::ChainStore};
 use p2poolv2_lib::store::Store;
@@ -34,15 +35,22 @@ async fn test_api_server_health_check() -> Result<(), ApiError> {
     let genesis_block = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
     let chain_store = Arc::new(ChainStore::new(store, genesis_block));
 
+    // Start metrics actor
+    let metrics_handle = start_metrics(temp_dir.path().to_str().unwrap().to_string())
+        .await
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
+
     let api_config = ApiConfig {
         hostname: "127.0.0.1".into(),
         port: 4000,
         auth_user: None,
         auth_token: None,
     };
-    // Start API server
-    let api_server = ApiServer::new(chain_store.clone(), api_config.clone());
-    let shutdown_tx = api_server.start().await.unwrap();
+
+    // Start API server with the new signature
+    let shutdown_tx = start_api_server(api_config.clone(), chain_store.clone(), metrics_handle)
+        .await
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
     // Give server a moment to start
     sleep(Duration::from_millis(500)).await;
@@ -64,7 +72,7 @@ async fn test_api_server_health_check() -> Result<(), ApiError> {
         .text()
         .await
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
-    assert_eq!(body, "ok", "Health endpoint returned unexpected body");
+    assert_eq!(body, "<h1>OK</h1>", "Health endpoint returned unexpected body");
 
     // Send shutdown signal
     let _ = shutdown_tx.send(());
