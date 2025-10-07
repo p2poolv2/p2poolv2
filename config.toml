@@ -70,6 +70,7 @@ hostname = "127.0.0.1"
 port = 3000
 # Optional authentication credentials
 # auth_user = "admin"
+# auth_token is of the format salt:password-hmac. Use can p2poolv2_cli gen-auth to generate a token.
 # auth_token = "your_secret_token"
 
 [[tests]]
