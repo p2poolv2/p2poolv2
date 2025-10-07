@@ -43,7 +43,7 @@ impl ApiServer {
             std::net::IpAddr::V4(self.config.hostname.parse().unwrap()),
             self.config.port,
         );
-        let app = Router::new().route("/health", get(Self::health_check));
+        let app = Router::new().route("/health", get(health_check));
 
         let listener = match tokio::net::TcpListener::bind(addr).await {
             Ok(listener) => listener,
@@ -66,8 +66,8 @@ impl ApiServer {
         });
         Ok(shutdown_tx)
     }
+}
 
-    async fn health_check() -> &'static str {
-        "ok"
-    }
+async fn health_check() -> String {
+    "ok".into()
 }
