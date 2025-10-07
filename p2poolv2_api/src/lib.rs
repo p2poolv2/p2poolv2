@@ -15,4 +15,4 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod api;
-pub use api::server::ApiServer;
+pub use api::server::start_api_server;
