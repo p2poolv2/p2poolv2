@@ -464,7 +464,8 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use crate::config::{
-        CkPoolConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig, StratumConfig,
+        ApiConfig, CkPoolConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig,
+        StratumConfig,
     };
     use crate::node::Node;
     #[mockall_double::double]
@@ -527,6 +528,12 @@ mod tests {
                 level: "info".to_string(),
                 file: Some("./p2pool.log".to_string()),
                 stats_dir: "./logs/stats".to_string(),
+            },
+            api: ApiConfig {
+                hostname: "127.0.0.1".to_string(),
+                port: 3000,
+                auth_user: None,
+                auth_token: None,
             },
         };
         config.network = network_config;
