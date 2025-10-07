@@ -12,6 +12,12 @@ tracing-subscriber = { workspace = true }
 clap = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
+rand = "0.8"
+hex = "0.4"
+base64 = "0.22"
+hmac = "0.12"
+sha2 = "0.10"
+rpassword = "7.3"
 
 
 [[bin]]
