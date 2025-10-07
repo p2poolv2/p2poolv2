@@ -72,7 +72,7 @@ async fn test_api_server_health_check() -> Result<(), ApiError> {
         .text()
         .await
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
-    assert_eq!(body, "<h1>OK</h1>", "Health endpoint returned unexpected body");
+    assert_eq!(body, "OK", "Health endpoint returned unexpected body");
 
     // Send shutdown signal
     let _ = shutdown_tx.send(());
