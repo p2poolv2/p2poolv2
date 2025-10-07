@@ -78,8 +78,8 @@ pub async fn start_api_server(
     Ok(shutdown_tx)
 }
 
-async fn health_check() -> Html<String> {
-    Html("<h1>OK</h1>".into())
+async fn health_check() -> String {
+    "OK".into()
 }
 
 async fn metrics(State(state): State<Arc<AppState>>) -> Json<String> {
