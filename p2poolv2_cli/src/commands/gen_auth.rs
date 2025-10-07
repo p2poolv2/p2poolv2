@@ -120,4 +120,18 @@ mod tests {
         // Different passwords should produce different HMACs
         assert_ne!(hmac1, hmac2);
     }
+
+    #[test]
+    fn test_execute_with_auto_generated_password() {
+        // Smoke test: execute should not fail with auto-generated password
+        let result = execute("testuser".to_string(), None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_execute_with_custom_password() {
+        // Smoke test: execute should not fail with custom password
+        let result = execute("testuser".to_string(), Some("mypassword123".to_string()));
+        assert!(result.is_ok());
+    }
 }
