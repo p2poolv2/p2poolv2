@@ -3146,6 +3146,7 @@ checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
 name = "p2poolv2"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bitcoin",
  "bitcoindrpc",
  "libp2p",
@@ -3166,7 +3167,11 @@ name = "p2poolv2_api"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
+ "hex",
+ "hmac",
  "p2poolv2_lib",
+ "sha2",
  "tokio",
  "tracing",
  "tracing-subscriber",
