@@ -10,6 +10,10 @@ axum = "0.7"
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+base64 = "0.22"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
 
 [lib]
 name = "p2poolv2_api"

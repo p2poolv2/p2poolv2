@@ -18,7 +18,8 @@ use crate::api::error::ApiError;
 use axum::{
     Router,
     extract::State,
-    response::{Html, Json},
+    middleware::{self},
+    response::Json,
     routing::get,
 };
 use p2poolv2_lib::{
@@ -29,10 +30,14 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
 use tracing::info;
 
+use crate::api::auth::auth_middleware;
+
 #[derive(Clone)]
-struct AppState {
-    chain_store: Arc<ChainStore>,
-    metrics_handle: MetricsHandle,
+pub(crate) struct AppState {
+    pub(crate) chain_store: Arc<ChainStore>,
+    pub(crate) metrics_handle: MetricsHandle,
+    pub(crate) auth_user: Option<String>,
+    pub(crate) auth_token: Option<String>,
 }
 
 /// Start the API server and return a shutdown channel
@@ -44,6 +49,8 @@ pub async fn start_api_server(
     let app_state = Arc::new(AppState {
         chain_store,
         metrics_handle,
+        auth_user: config.auth_user.clone(),
+        auth_token: config.auth_token.clone(),
     });
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -54,6 +61,10 @@ pub async fn start_api_server(
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/metrics", get(metrics))
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            auth_middleware,
+        ))
         .with_state(app_state);
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
