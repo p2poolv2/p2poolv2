@@ -19,7 +19,6 @@ use axum::{
     Router,
     extract::State,
     middleware::{self},
-    response::Json,
     routing::get,
 };
 use p2poolv2_lib::{
@@ -93,6 +92,7 @@ async fn health_check() -> String {
     "OK".into()
 }
 
-async fn metrics(State(state): State<Arc<AppState>>) -> Json<String> {
-    Json("metrics".into())
+async fn metrics(State(state): State<Arc<AppState>>) -> String {
+    let pool_metrics = state.metrics_handle.get_metrics().await;
+    pool_metrics.get_exposition()
 }
