@@ -30,7 +30,7 @@ use crate::accounting::stats::computed::ComputedHashrate;
 use serde::{Deserialize, Serialize};
 
 /// Worker record, captures username, id, and hashrate stats
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Worker {
     /// Timestamp of the last share submitted by the worker, time since epoch in ms
     pub last_share_at: u64,
@@ -47,20 +47,6 @@ pub struct Worker {
     pub unaccounted_difficulty: u64,
     /// Computed stats holding hashrate and share rate metrics
     pub computed_hash_rate: ComputedHashrate,
-}
-
-impl Default for Worker {
-    fn default() -> Self {
-        Self {
-            last_share_at: 0,
-            shares_valid: 0,
-            active: true,
-            best_share: 0,
-            best_share_ever: None,
-            computed_hash_rate: ComputedHashrate::default(),
-            unaccounted_difficulty: 0,
-        }
-    }
 }
 
 impl Worker {
@@ -84,6 +70,7 @@ impl Worker {
         } else {
             self.best_share_ever = Some(difficulty);
         }
+        self.active = true;
     }
 
     pub fn reset(&mut self) {
@@ -120,13 +107,16 @@ mod tests {
         assert_eq!(worker.shares_valid, 0);
         assert_eq!(worker.best_share, 0);
         assert_eq!(worker.best_share_ever, None);
+        assert!(!worker.active);
 
         // First share
         worker.record_share(difficulty, timestamp);
+
         assert_eq!(worker.last_share_at, timestamp);
         assert_eq!(worker.shares_valid, 1);
         assert_eq!(worker.best_share, difficulty);
         assert_eq!(worker.best_share_ever, Some(difficulty));
+        assert!(worker.active);
 
         // New best share
         worker.record_share(2000, timestamp + 1000);
