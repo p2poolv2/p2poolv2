@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
     libbz2-dev \
     liblz4-dev \
     zlib1g-dev \
+    libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Build and install RocksDB
@@ -27,12 +28,11 @@ RUN git clone --depth 1 --branch v7.10.2 https://github.com/facebook/rocksdb.git
 
 # Create and set working directory
 RUN mkdir -p /p2pool
-COPY stratum/ /p2pool/stratum
 COPY bitcoindrpc/ /p2pool/bitcoindrpc
 COPY p2poolv2_cli/ /p2pool/p2poolv2_cli
 COPY p2poolv2_node/ /p2pool/p2poolv2_node
 COPY p2poolv2_lib/ /p2pool/p2poolv2_lib
-COPY p2poolv2_accounting/ /p2pool/p2poolv2_accounting
+COPY p2poolv2_api/ /p2pool/p2poolv2_api
 
 COPY Cargo.lock /p2pool/Cargo.lock
 COPY Cargo.toml /p2pool/Cargo.toml
