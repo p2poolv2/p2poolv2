@@ -121,9 +121,9 @@ mod tests {
         let pool_stats = PoolMetrics {
             start_time: 1234567890,
             lastupdate: Some(1234567890),
-            num_users: 10,
-            num_workers: 15,
-            num_idle_users: 2,
+            users_count: 10,
+            workers_count: 15,
+            idle_users_count: 2,
             unaccounted_shares: 0,
             unaccounted_difficulty: 0,
             unaccounted_rejected: 0,
@@ -131,7 +131,7 @@ mod tests {
             rejected: 0,
             bestshare: 0,
             users: HashMap::with_capacity(100),
-            difficulty: 500000,
+            pool_difficulty: 500000,
             computed_hashrate: ComputedHashrate {
                 hashrate_1m: 1000,
                 hashrate_5m: 1200,
@@ -180,9 +180,9 @@ mod tests {
         let pool_stats = PoolMetrics {
             start_time: 1234567890,
             lastupdate: Some(1234567890),
-            num_users: 10,
-            num_workers: 15,
-            num_idle_users: 2,
+            users_count: 10,
+            workers_count: 15,
+            idle_users_count: 2,
             unaccounted_shares: 0,
             unaccounted_difficulty: 0,
             unaccounted_rejected: 0,
@@ -190,7 +190,7 @@ mod tests {
             rejected: 0,
             bestshare: 0,
             users: HashMap::with_capacity(100),
-            difficulty: 500000,
+            pool_difficulty: 500000,
             computed_hashrate: ComputedHashrate {
                 hashrate_1m: 1000,
                 hashrate_5m: 1200,

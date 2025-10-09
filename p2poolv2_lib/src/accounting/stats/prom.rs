@@ -32,19 +32,19 @@ impl PoolMetrics {
         output.push('\n');
 
         // Gauges
-        output.push_str("# HELP users Number of users\n");
-        output.push_str("# TYPE users gauge\n");
-        output.push_str(&format!("users {}\n", self.num_users));
+        output.push_str("# HELP users_count Number of users\n");
+        output.push_str("# TYPE users_count gauge\n");
+        output.push_str(&format!("users_count {}\n", self.users_count));
         output.push('\n');
 
-        output.push_str("# HELP workers Number of workers\n");
-        output.push_str("# TYPE workers gauge\n");
-        output.push_str(&format!("workers {}\n", self.num_workers));
+        output.push_str("# HELP workers_count Number of workers\n");
+        output.push_str("# TYPE workers_count gauge\n");
+        output.push_str(&format!("workers_count {}\n", self.workers_count));
         output.push('\n');
 
-        output.push_str("# HELP idle_users Number of idle users\n");
-        output.push_str("# TYPE idle_users gauge\n");
-        output.push_str(&format!("idle_users {}\n", self.num_idle_users));
+        output.push_str("# HELP idle_users_count Number of idle users\n");
+        output.push_str("# TYPE idle_users_count gauge\n");
+        output.push_str(&format!("idle_users_count {}\n", self.idle_users_count));
         output.push('\n');
 
         output.push_str("# HELP best_share Highest difficulty share\n");
@@ -52,9 +52,9 @@ impl PoolMetrics {
         output.push_str(&format!("best_share {}\n", self.bestshare));
         output.push('\n');
 
-        output.push_str("# HELP difficulty Current pool difficulty\n");
-        output.push_str("# TYPE difficulty gauge\n");
-        output.push_str(&format!("difficulty {}\n", self.difficulty));
+        output.push_str("# HELP pool_difficulty Current pool difficulty\n");
+        output.push_str("# TYPE pool_difficulty gauge\n");
+        output.push_str(&format!("pool_difficulty {}\n", self.pool_difficulty));
         output.push('\n');
 
         output.push_str("# HELP start_time_seconds Pool start time in Unix timestamp\n");
@@ -80,12 +80,12 @@ impl PoolMetrics {
         let mut output = String::new();
 
         // User metrics with btcaddress label
-        output.push_str("# HELP user_shares_valid Total valid shares submitted by user\n");
-        output.push_str("# TYPE user_shares_valid counter\n");
+        output.push_str("# HELP user_shares_valid_total Total valid shares submitted by user\n");
+        output.push_str("# TYPE user_shares_valid_total counter\n");
         for (btcaddress, user) in &self.users {
             output.push_str(&format!(
-                "user_shares_valid{{btcaddress=\"{}\"}} {}\n",
-                btcaddress, user.shares_valid
+                "user_shares_valid_total{{btcaddress=\"{}\"}} {}\n",
+                btcaddress, user.shares_valid_total
             ));
         }
         output.push('\n');
@@ -128,13 +128,14 @@ impl PoolMetrics {
         let mut output = String::new();
 
         // Worker metrics with btcaddress and workername labels
-        output.push_str("# HELP worker_shares_valid Total valid shares submitted by worker\n");
-        output.push_str("# TYPE worker_shares_valid counter\n");
+        output
+            .push_str("# HELP worker_shares_valid_total Total valid shares submitted by worker\n");
+        output.push_str("# TYPE worker_shares_valid_total counter\n");
         for (btcaddress, user) in &self.users {
             for (workername, worker) in &user.workers {
                 output.push_str(&format!(
-                    "worker_shares_valid{{btcaddress=\"{}\",workername=\"{}\"}} {}\n",
-                    btcaddress, workername, worker.shares_valid
+                    "worker_shares_valid_total{{btcaddress=\"{}\",workername=\"{}\"}} {}\n",
+                    btcaddress, workername, worker.shares_valid_total
                 ));
             }
         }
@@ -210,11 +211,11 @@ mod tests {
         let metrics = PoolMetrics {
             accepted: 100,
             rejected: 5,
-            num_users: 3,
-            num_workers: 7,
-            num_idle_users: 1,
+            users_count: 3,
+            workers_count: 7,
+            idle_users_count: 1,
             bestshare: 500,
-            difficulty: 1000,
+            pool_difficulty: 1000,
             start_time: 1234567890,
             lastupdate: Some(1234567900),
             ..Default::default()
@@ -225,9 +226,9 @@ mod tests {
         // Check that it contains the expected metrics
         assert!(exposition.contains("shares_accepted_total 100"));
         assert!(exposition.contains("shares_rejected_total 5"));
-        assert!(exposition.contains("users 3"));
-        assert!(exposition.contains("workers 7"));
-        assert!(exposition.contains("idle_users 1"));
+        assert!(exposition.contains("users_count 3"));
+        assert!(exposition.contains("workers_count 7"));
+        assert!(exposition.contains("idle_users_count 1"));
         assert!(exposition.contains("best_share 500"));
         assert!(exposition.contains("difficulty 1000"));
         assert!(exposition.contains("start_time_seconds 1234567890"));
@@ -236,7 +237,7 @@ mod tests {
         // Check that it contains HELP and TYPE comments
         assert!(exposition.contains("# HELP shares_accepted_total"));
         assert!(exposition.contains("# TYPE shares_accepted_total counter"));
-        assert!(exposition.contains("# TYPE users gauge"));
+        assert!(exposition.contains("# TYPE users_count gauge"));
     }
 
     #[test]
@@ -245,7 +246,7 @@ mod tests {
 
         let user1 = User {
             last_share_at: 1234567890,
-            shares_valid: 42,
+            shares_valid_total: 42,
             best_share: 1000,
             best_share_ever: Some(2000),
             ..Default::default()
@@ -253,7 +254,7 @@ mod tests {
 
         let user2 = User {
             last_share_at: 1234567900,
-            shares_valid: 100,
+            shares_valid_total: 100,
             best_share: 500,
             best_share_ever: None,
             ..Default::default()
@@ -271,9 +272,9 @@ mod tests {
 
         // Check user metrics are present
         assert!(exposition.contains("# HELP user_shares_valid"));
-        assert!(exposition.contains("# TYPE user_shares_valid counter"));
-        assert!(exposition.contains("user_shares_valid{btcaddress=\"bc1quser1\"} 42"));
-        assert!(exposition.contains("user_shares_valid{btcaddress=\"bc1quser2\"} 100"));
+        assert!(exposition.contains("# TYPE user_shares_valid_total counter"));
+        assert!(exposition.contains("user_shares_valid_total{btcaddress=\"bc1quser1\"} 42"));
+        assert!(exposition.contains("user_shares_valid_total{btcaddress=\"bc1quser2\"} 100"));
 
         assert!(exposition.contains("# HELP user_best_share"));
         assert!(exposition.contains("# TYPE user_best_share gauge"));
@@ -302,7 +303,7 @@ mod tests {
 
         let mut user1 = User {
             last_share_at: 1234567890,
-            shares_valid: 42,
+            shares_valid_total: 42,
             best_share: 1000,
             best_share_ever: Some(2000),
             ..Default::default()
@@ -310,7 +311,7 @@ mod tests {
 
         let worker1 = Worker {
             last_share_at: 1234567891,
-            shares_valid: 20,
+            shares_valid_total: 20,
             active: true,
             best_share: 800,
             best_share_ever: Some(1500),
@@ -319,7 +320,7 @@ mod tests {
 
         let worker2 = Worker {
             last_share_at: 1234567892,
-            shares_valid: 22,
+            shares_valid_total: 22,
             active: false,
             best_share: 600,
             best_share_ever: None,
@@ -340,17 +341,13 @@ mod tests {
 
         // Check worker metrics are present
         assert!(exposition.contains("# HELP worker_shares_valid"));
-        assert!(exposition.contains("# TYPE worker_shares_valid counter"));
-        assert!(
-            exposition.contains(
-                "worker_shares_valid{btcaddress=\"bc1quser1\",workername=\"worker1\"} 20"
-            )
-        );
-        assert!(
-            exposition.contains(
-                "worker_shares_valid{btcaddress=\"bc1quser1\",workername=\"worker2\"} 22"
-            )
-        );
+        assert!(exposition.contains("# TYPE worker_shares_valid_total counter"));
+        assert!(exposition.contains(
+            "worker_shares_valid_total{btcaddress=\"bc1quser1\",workername=\"worker1\"} 20"
+        ));
+        assert!(exposition.contains(
+            "worker_shares_valid_total{btcaddress=\"bc1quser1\",workername=\"worker2\"} 22"
+        ));
 
         assert!(exposition.contains("# HELP worker_active"));
         assert!(exposition.contains("# TYPE worker_active gauge"));

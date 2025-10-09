@@ -66,7 +66,7 @@ mod tests {
 
         // Create a test user
         let mut user = User::default();
-        user.shares_valid = 10;
+        user.shares_valid_total = 10;
 
         // Save the user stats
         save_user_stats("test_address", &user, log_dir.to_string()).unwrap();
@@ -75,7 +75,7 @@ mod tests {
         let loaded_user = load_user_stats("test_address", log_dir).unwrap();
 
         // Verify that the loaded user matches the original
-        assert_eq!(loaded_user.shares_valid, user.shares_valid);
+        assert_eq!(loaded_user.shares_valid_total, user.shares_valid_total);
     }
 
     #[test]
