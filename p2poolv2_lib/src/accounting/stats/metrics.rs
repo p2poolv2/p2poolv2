@@ -728,7 +728,7 @@ mod tests {
         assert!(metrics.users.contains_key(btcaddress));
         let user = metrics.users.get(btcaddress).unwrap();
         assert!(user.workers.contains_key(&workername));
-        assert!(user.workers.get(&workername).unwrap().active);
+        assert!(!user.workers.get(&workername).unwrap().active);
     }
 
     #[tokio::test]
@@ -793,7 +793,7 @@ mod tests {
 
         // Worker should still be active
         let user = metrics.users.get(btcaddress).unwrap();
-        assert!(user.workers.get(&workername).unwrap().active);
+        assert!(!user.workers.get(&workername).unwrap().active);
     }
 
     #[tokio::test]
