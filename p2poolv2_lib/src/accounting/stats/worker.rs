@@ -35,7 +35,7 @@ pub struct Worker {
     /// Timestamp of the last share submitted by the worker, time since epoch in ms
     pub last_share_at: u64,
     /// Valid share submissions
-    pub shares_valid: u32,
+    pub shares_valid_total: u32,
     /// Active state
     pub active: bool,
     /// Best share in this instance of the server
@@ -58,7 +58,7 @@ impl Worker {
     /// Record a share submission for the worker, updating stats accordingly.
     pub fn record_share(&mut self, difficulty: u64, unix_timestamp: u64) {
         self.last_share_at = unix_timestamp;
-        self.shares_valid += 1;
+        self.shares_valid_total += 1;
         self.unaccounted_difficulty += difficulty;
         if difficulty > self.best_share {
             self.best_share = difficulty;
@@ -93,7 +93,7 @@ mod tests {
         assert_eq!(worker.computed_hash_rate.hashrate_1hr, 0);
         assert_eq!(worker.computed_hash_rate.hashrate_6hr, 0);
         assert_eq!(worker.computed_hash_rate.hashrate_1d, 0);
-        assert_eq!(worker.shares_valid, 0);
+        assert_eq!(worker.shares_valid_total, 0);
     }
 
     #[test]
@@ -104,7 +104,7 @@ mod tests {
 
         // Initial state
         assert_eq!(worker.last_share_at, 0);
-        assert_eq!(worker.shares_valid, 0);
+        assert_eq!(worker.shares_valid_total, 0);
         assert_eq!(worker.best_share, 0);
         assert_eq!(worker.best_share_ever, None);
         assert!(!worker.active);
@@ -113,7 +113,7 @@ mod tests {
         worker.record_share(difficulty, timestamp);
 
         assert_eq!(worker.last_share_at, timestamp);
-        assert_eq!(worker.shares_valid, 1);
+        assert_eq!(worker.shares_valid_total, 1);
         assert_eq!(worker.best_share, difficulty);
         assert_eq!(worker.best_share_ever, Some(difficulty));
         assert!(worker.active);
@@ -121,14 +121,14 @@ mod tests {
         // New best share
         worker.record_share(2000, timestamp + 1000);
         assert_eq!(worker.last_share_at, timestamp + 1000);
-        assert_eq!(worker.shares_valid, 2);
+        assert_eq!(worker.shares_valid_total, 2);
         assert_eq!(worker.best_share, 2000);
         assert_eq!(worker.best_share_ever, Some(2000));
 
         // Submit a lower difficulty share, best_share and best_share_ever should not change
         worker.record_share(500, timestamp + 2000);
         assert_eq!(worker.last_share_at, timestamp + 2000);
-        assert_eq!(worker.shares_valid, 3);
+        assert_eq!(worker.shares_valid_total, 3);
         assert_eq!(worker.best_share, 2000);
         assert_eq!(worker.best_share_ever, Some(2000));
     }

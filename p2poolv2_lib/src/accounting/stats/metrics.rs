@@ -38,11 +38,11 @@ pub struct PoolMetrics {
     /// Last update timestamp, time since epoch in seconds
     pub lastupdate: Option<u64>,
     /// Number of users
-    pub num_users: u32,
+    pub users_count: u32,
     /// Number of workers
-    pub num_workers: u32,
+    pub workers_count: u32,
     /// Number of idle users
-    pub num_idle_users: u32,
+    pub idle_users_count: u32,
     /// Tracks the number of shares since last stats update
     #[serde(skip)]
     pub unaccounted_shares: u64,
@@ -61,7 +61,7 @@ pub struct PoolMetrics {
     /// User metrics
     pub users: HashMap<String, User>,
     /// Current pool difficulty
-    pub difficulty: u64,
+    pub pool_difficulty: u64,
     /// Hashrate computed from unaccounted difficulty
     pub computed_hashrate: ComputedHashrate,
     /// Shares per second computed from unaccounted shares
@@ -77,16 +77,16 @@ impl Default for PoolMetrics {
             unaccounted_rejected: 0,
             accepted: 0,
             rejected: 0,
-            num_users: 0,
-            num_workers: 0,
-            num_idle_users: 0,
+            users_count: 0,
+            workers_count: 0,
+            idle_users_count: 0,
             start_time: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
             bestshare: 0,
             users: HashMap::with_capacity(INITIAL_USER_MAP_CAPACITY),
-            difficulty: 0,
+            pool_difficulty: 0,
             computed_hashrate: ComputedHashrate::default(),
             computed_share_rate: ComputedShareRate::default(),
         }
@@ -272,7 +272,7 @@ impl MetricsActor {
 
     /// Increment worker counts - called after worker has authorised successfully.
     fn increment_worker_count(&mut self, btcaddress: String, workername: String) {
-        self.metrics.num_workers += 1;
+        self.metrics.workers_count += 1;
         self.metrics
             .users
             .entry(btcaddress.clone())
@@ -288,8 +288,8 @@ impl MetricsActor {
     /// Also marks Worker inactive, if found.
     fn decrement_worker_count(&mut self, btcaddress: Option<String>, workername: String) {
         if let Some(btcaddress) = btcaddress {
-            if self.metrics.num_workers > 0 {
-                self.metrics.num_workers -= 1;
+            if self.metrics.workers_count > 0 {
+                self.metrics.workers_count -= 1;
             }
             if let Some(user) = self.metrics.users.get_mut(&btcaddress) {
                 if let Some(worker) = user.workers.get_mut(&workername) {
@@ -301,13 +301,13 @@ impl MetricsActor {
 
     /// Mark user idle
     fn mark_user_idle(&mut self) {
-        self.metrics.num_idle_users += 1;
+        self.metrics.idle_users_count += 1;
     }
 
     /// Mark user not idle
     fn mark_user_active(&mut self) {
-        if self.metrics.num_idle_users > 0 {
-            self.metrics.num_idle_users -= 1;
+        if self.metrics.idle_users_count > 0 {
+            self.metrics.idle_users_count -= 1;
         }
     }
 
@@ -536,9 +536,9 @@ mod tests {
         assert_eq!(metrics.unaccounted_shares, 0);
         assert_eq!(metrics.unaccounted_difficulty, 0);
         assert_eq!(metrics.unaccounted_rejected, 0);
-        assert_eq!(metrics.num_users, 0);
-        assert_eq!(metrics.num_idle_users, 0);
-        assert_eq!(metrics.num_workers, 0);
+        assert_eq!(metrics.users_count, 0);
+        assert_eq!(metrics.idle_users_count, 0);
+        assert_eq!(metrics.workers_count, 0);
         assert!(metrics.lastupdate.is_none());
         assert!(metrics.bestshare == 0);
     }
@@ -549,9 +549,9 @@ mod tests {
         metrics.unaccounted_shares = 10;
         metrics.unaccounted_difficulty = 1000;
         metrics.unaccounted_rejected = 5;
-        metrics.num_users = 3;
-        metrics.num_idle_users = 1;
-        metrics.num_workers = 5;
+        metrics.users_count = 3;
+        metrics.idle_users_count = 1;
+        metrics.workers_count = 5;
         metrics.lastupdate = None;
         metrics.bestshare = 500;
 
@@ -560,9 +560,9 @@ mod tests {
         assert_eq!(metrics.unaccounted_shares, 0);
         assert_eq!(metrics.unaccounted_difficulty, 0);
         assert_eq!(metrics.unaccounted_rejected, 0);
-        assert_eq!(metrics.num_users, 3);
-        assert_eq!(metrics.num_idle_users, 1);
-        assert_eq!(metrics.num_workers, 5);
+        assert_eq!(metrics.users_count, 3);
+        assert_eq!(metrics.idle_users_count, 1);
+        assert_eq!(metrics.workers_count, 5);
         assert!(metrics.lastupdate.is_none());
         assert_eq!(metrics.bestshare, 500);
     }
@@ -724,7 +724,7 @@ mod tests {
             .await;
         let metrics = handle.get_metrics().await;
 
-        assert_eq!(metrics.num_workers, 1);
+        assert_eq!(metrics.workers_count, 1);
         assert!(metrics.users.contains_key(btcaddress));
         let user = metrics.users.get(btcaddress).unwrap();
         assert!(user.workers.contains_key(&workername));
@@ -746,14 +746,14 @@ mod tests {
             .increment_worker_count(btcaddress.to_string(), workername.clone())
             .await;
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.num_workers, 1);
+        assert_eq!(metrics.workers_count, 1);
 
         // Decrement
         let _ = handle
             .decrement_worker_count(Some(btcaddress.to_string()), workername.clone())
             .await;
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.num_workers, 0);
+        assert_eq!(metrics.workers_count, 0);
 
         // Worker should be marked inactive
         let user = metrics.users.get(btcaddress).unwrap();
@@ -764,7 +764,7 @@ mod tests {
             .decrement_worker_count(Some(btcaddress.to_string()), workername.clone())
             .await;
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.num_workers, 0);
+        assert_eq!(metrics.workers_count, 0);
     }
 
     #[tokio::test]
@@ -782,14 +782,14 @@ mod tests {
             .increment_worker_count(btcaddress.to_string(), workername.clone())
             .await;
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.num_workers, 1);
+        assert_eq!(metrics.workers_count, 1);
 
         // Decrement with None btcaddress, should not change num_workers or worker state
         let _ = handle
             .decrement_worker_count(None, workername.clone())
             .await;
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.num_workers, 1);
+        assert_eq!(metrics.workers_count, 1);
 
         // Worker should still be active
         let user = metrics.users.get(btcaddress).unwrap();
@@ -805,23 +805,23 @@ mod tests {
 
         // Initially idle users should be 0
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.num_idle_users, 0);
+        assert_eq!(metrics.idle_users_count, 0);
 
         // Mark user idle
         let _ = handle.mark_user_idle().await;
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.num_idle_users, 1);
+        assert_eq!(metrics.idle_users_count, 1);
 
         // Mark user active (should decrement inc and then dec idle count)
         let _ = handle.mark_user_idle().await;
         let _ = handle.mark_user_active().await;
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.num_idle_users, 1);
+        assert_eq!(metrics.idle_users_count, 1);
 
         // Mark user active again (should increment to 2)
         let _ = handle.mark_user_idle().await;
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.num_idle_users, 2);
+        assert_eq!(metrics.idle_users_count, 2);
     }
 
     #[test_log::test(tokio::test)]
@@ -852,7 +852,7 @@ mod tests {
         assert_eq!(metrics.unaccounted_shares, 1);
         assert_eq!(metrics.unaccounted_difficulty, 123);
         assert_eq!(metrics.unaccounted_rejected, 1);
-        assert_eq!(metrics.num_workers, 1);
+        assert_eq!(metrics.workers_count, 1);
         assert!(metrics.users.contains_key("user4"));
         assert!(
             metrics
@@ -906,7 +906,7 @@ mod tests {
         // Check that worker exists and is active
         assert!(worker.active);
         // Check that user stats are updated
-        assert_eq!(user.shares_valid, 1);
+        assert_eq!(user.shares_valid_total, 1);
         assert_eq!(user.best_share, 77);
         assert!(user.last_share_at > 0);
     }
@@ -970,13 +970,13 @@ mod tests {
         assert_eq!(metrics.unaccounted_difficulty, 60);
 
         let user_a = metrics.users.get("userA").unwrap();
-        assert_eq!(user_a.shares_valid, 2);
+        assert_eq!(user_a.shares_valid_total, 2);
         assert_eq!(user_a.best_share, 20);
         assert!(user_a.workers.contains_key("workerA1"));
         assert!(user_a.workers.contains_key("workerA2"));
 
         let user_b = metrics.users.get("userB").unwrap();
-        assert_eq!(user_b.shares_valid, 1);
+        assert_eq!(user_b.shares_valid_total, 1);
         assert_eq!(user_b.best_share, 30);
         assert!(user_b.workers.contains_key("workerB1"));
     }

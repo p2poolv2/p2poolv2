@@ -41,7 +41,7 @@ pub struct User {
     /// Timestamp of the last share submitted by the user, time since epoch in ms
     pub last_share_at: u64,
     /// Valid share submissions
-    pub shares_valid: u32,
+    pub shares_valid_total: u32,
     /// Workers for the user, we maintain list of disconnected workers for persistent stats
     pub workers: HashMap<String, Worker>,
     /// Best share in this instance of the server
@@ -59,7 +59,7 @@ impl Default for User {
     fn default() -> Self {
         User {
             last_share_at: 0,
-            shares_valid: 0,
+            shares_valid_total: 0,
             workers: HashMap::with_capacity(INITIAL_WORKER_MAP_CAPACITY),
             best_share: 0,
             best_share_ever: None,
@@ -78,7 +78,7 @@ impl User {
     /// Record a share submission for the user, updating stats accordingly.
     pub fn record_share(&mut self, workername: &str, difficulty: u64, current_time_stamp: u64) {
         self.last_share_at = current_time_stamp;
-        self.shares_valid += 1;
+        self.shares_valid_total += 1;
         self.unaccounted_difficulty += difficulty;
         if difficulty > self.best_share {
             self.best_share = difficulty;
@@ -135,7 +135,7 @@ mod tests {
         let mut user = User::default();
 
         // Initial state
-        assert_eq!(user.shares_valid, 0);
+        assert_eq!(user.shares_valid_total, 0);
         assert_eq!(user.best_share, 0);
         assert_eq!(user.best_share_ever, None);
         assert_eq!(user.workers.len(), 0);
@@ -146,7 +146,7 @@ mod tests {
         user.record_share(worker_name, difficulty, timestamp);
 
         // User stats updated
-        assert_eq!(user.shares_valid, 1);
+        assert_eq!(user.shares_valid_total, 1);
         assert_eq!(user.last_share_at, timestamp);
         assert_eq!(user.best_share, difficulty);
         assert_eq!(user.best_share_ever, Some(difficulty));
@@ -155,26 +155,26 @@ mod tests {
         // Worker stats updated
         let worker = user.workers.get(worker_name).unwrap();
         assert_eq!(worker.last_share_at, timestamp);
-        assert_eq!(worker.shares_valid, 1);
+        assert_eq!(worker.shares_valid_total, 1);
         assert_eq!(worker.best_share, difficulty);
         assert_eq!(worker.best_share_ever, Some(difficulty));
 
         // Record a lower difficulty share
         user.record_share(worker_name, 500, timestamp + 1);
-        assert_eq!(user.shares_valid, 2);
+        assert_eq!(user.shares_valid_total, 2);
         assert_eq!(user.best_share, difficulty); // unchanged
         assert_eq!(user.best_share_ever, Some(difficulty));
         let worker = user.workers.get(worker_name).unwrap();
-        assert_eq!(worker.shares_valid, 2);
+        assert_eq!(worker.shares_valid_total, 2);
         assert_eq!(worker.best_share, difficulty);
 
         // Record a higher difficulty share
         user.record_share(worker_name, 2000, timestamp + 2);
-        assert_eq!(user.shares_valid, 3);
+        assert_eq!(user.shares_valid_total, 3);
         assert_eq!(user.best_share, 2000);
         assert_eq!(user.best_share_ever, Some(2000));
         let worker = user.workers.get(worker_name).unwrap();
-        assert_eq!(worker.shares_valid, 3);
+        assert_eq!(worker.shares_valid_total, 3);
         assert_eq!(worker.best_share, 2000);
     }
 
@@ -190,9 +190,9 @@ mod tests {
         let worker1 = user.workers.get("worker1").unwrap();
         let worker2 = user.workers.get("worker2").unwrap();
 
-        assert_eq!(worker1.shares_valid, 1);
+        assert_eq!(worker1.shares_valid_total, 1);
         assert_eq!(worker1.best_share, 100);
-        assert_eq!(worker2.shares_valid, 1);
+        assert_eq!(worker2.shares_valid_total, 1);
         assert_eq!(worker2.best_share, 200);
     }
 
@@ -205,11 +205,11 @@ mod tests {
 
         // Add worker
         let worker = user.get_or_add_worker("worker1");
-        assert_eq!(worker.shares_valid, 0);
+        assert_eq!(worker.shares_valid_total, 0);
 
         // Now should exist
         let worker_mut = user.get_worker_mut("worker1").unwrap();
-        worker_mut.shares_valid = 42;
-        assert_eq!(user.workers.get("worker1").unwrap().shares_valid, 42);
+        worker_mut.shares_valid_total = 42;
+        assert_eq!(user.workers.get("worker1").unwrap().shares_valid_total, 42);
     }
 }
