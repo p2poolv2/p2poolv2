@@ -27,6 +27,7 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
       - ../prometheus/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./prometheus/grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "3000:3000"
     environment:

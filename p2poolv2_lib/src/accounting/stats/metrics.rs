@@ -215,7 +215,8 @@ impl MetricsActor {
 
     /// Increment worker counts - called after worker has authorised successfully.
     fn worker_authorized(&mut self, btcaddress: String, workername: String) {
-        self.metrics.users
+        self.metrics
+            .users
             .entry(btcaddress)
             .or_insert_with(User::default)
             .workers
