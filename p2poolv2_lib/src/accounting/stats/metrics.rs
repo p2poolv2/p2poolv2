@@ -42,8 +42,6 @@ pub struct PoolMetrics {
     pub users_count: u32,
     /// Number of workers
     pub workers_count: u32,
-    /// Number of idle users
-    pub idle_users_count: u32,
     /// Tracks the number of shares since last stats update
     #[serde(skip)]
     pub unaccounted_shares: u64,
@@ -80,7 +78,6 @@ impl Default for PoolMetrics {
             rejected_total: 0,
             users_count: 0,
             workers_count: 0,
-            idle_users_count: 0,
             start_time: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -142,9 +139,7 @@ pub enum MetricsMessage {
         workername: String,
         response: oneshot::Sender<()>,
     },
-    MarkUserIdle {
-        response: oneshot::Sender<()>,
-    },
+
     MarkUserActive {
         response: oneshot::Sender<()>,
     },
@@ -220,10 +215,6 @@ impl MetricsActor {
                 response,
             } => {
                 self.decrement_worker_count(btcaddress, workername);
-                let _ = response.send(());
-            }
-            MetricsMessage::MarkUserIdle { response } => {
-                self.mark_user_idle();
                 let _ = response.send(());
             }
             MetricsMessage::MarkUserActive { response } => {
@@ -302,18 +293,6 @@ impl MetricsActor {
                     worker.active = false;
                 }
             }
-        }
-    }
-
-    /// Mark user idle
-    fn mark_user_idle(&mut self) {
-        self.metrics.idle_users_count += 1;
-    }
-
-    /// Mark user not idle
-    fn mark_user_active(&mut self) {
-        if self.metrics.idle_users_count > 0 {
-            self.metrics.idle_users_count -= 1;
         }
     }
 
@@ -441,18 +420,6 @@ impl MetricsHandle {
         response_rx.await
     }
 
-    /// Mark a user as idle
-    pub async fn mark_user_idle(&self) -> Result<(), tokio::sync::oneshot::error::RecvError> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.sender
-            .send(MetricsMessage::MarkUserIdle {
-                response: response_tx,
-            })
-            .await
-            .expect("Error marking user idle");
-        response_rx.await
-    }
-
     /// Mark a user as active
     pub async fn mark_user_active(&self) -> Result<(), tokio::sync::oneshot::error::RecvError> {
         let (response_tx, response_rx) = oneshot::channel();
@@ -543,7 +510,6 @@ mod tests {
         assert_eq!(metrics.unaccounted_difficulty, 0);
         assert_eq!(metrics.unaccounted_rejected, 0);
         assert_eq!(metrics.users_count, 0);
-        assert_eq!(metrics.idle_users_count, 0);
         assert_eq!(metrics.workers_count, 0);
         assert!(metrics.lastupdate.is_none());
         assert!(metrics.best_share == 0);
@@ -556,7 +522,6 @@ mod tests {
         metrics.unaccounted_difficulty = 1000;
         metrics.unaccounted_rejected = 5;
         metrics.users_count = 3;
-        metrics.idle_users_count = 1;
         metrics.workers_count = 5;
         metrics.lastupdate = None;
         metrics.best_share = 500;
@@ -567,7 +532,6 @@ mod tests {
         assert_eq!(metrics.unaccounted_difficulty, 0);
         assert_eq!(metrics.unaccounted_rejected, 0);
         assert_eq!(metrics.users_count, 3);
-        assert_eq!(metrics.idle_users_count, 1);
         assert_eq!(metrics.workers_count, 5);
         assert!(metrics.lastupdate.is_none());
         assert_eq!(metrics.best_share, 500);
@@ -841,34 +805,6 @@ mod tests {
         // Worker should still be active
         let user = metrics.users.get(btcaddress).unwrap();
         assert!(!user.workers.get(&workername).unwrap().active);
-    }
-
-    #[tokio::test]
-    async fn test_mark_user_idle_and_active() {
-        let log_dir = tempfile::tempdir().unwrap();
-        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
-
-        // Initially idle users should be 0
-        let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.idle_users_count, 0);
-
-        // Mark user idle
-        let _ = handle.mark_user_idle().await;
-        let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.idle_users_count, 1);
-
-        // Mark user active (should decrement inc and then dec idle count)
-        let _ = handle.mark_user_idle().await;
-        let _ = handle.mark_user_active().await;
-        let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.idle_users_count, 1);
-
-        // Mark user active again (should increment to 2)
-        let _ = handle.mark_user_idle().await;
-        let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.idle_users_count, 2);
     }
 
     #[test_log::test(tokio::test)]
