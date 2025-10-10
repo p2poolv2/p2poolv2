@@ -27,7 +27,7 @@ use std::time::SystemTime;
 use tokio::sync::{mpsc, oneshot};
 use tracing::error;
 
-const METRICS_MESSAGE_BUFFER_SIZE: usize = 100;
+const METRICS_MESSAGE_BUFFER_SIZE: usize = 1000;
 pub const INITIAL_USER_MAP_CAPACITY: usize = 1000;
 const METRICS_SAVE_INTERVAL: u64 = 5;
 
