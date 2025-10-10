@@ -22,6 +22,7 @@ use crate::accounting::stats::worker::Worker;
 use crate::accounting::{simple_pplns::SimplePplnsShare, stats::pool_local_stats};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::time::SystemTime;
 use tokio::sync::{mpsc, oneshot};
 use tracing::error;
@@ -53,11 +54,11 @@ pub struct PoolMetrics {
     #[serde(skip)]
     pub unaccounted_rejected: u64,
     /// Total accepted shares
-    pub accepted: u64,
+    pub accepted_total: u64,
     /// Total rejected shares
-    pub rejected: u64,
+    pub rejected_total: u64,
     /// Highest difficulty share
-    pub bestshare: u64,
+    pub best_share: u64,
     /// User metrics
     pub users: HashMap<String, User>,
     /// Current pool difficulty
@@ -75,8 +76,8 @@ impl Default for PoolMetrics {
             unaccounted_shares: 0,
             unaccounted_difficulty: 0,
             unaccounted_rejected: 0,
-            accepted: 0,
-            rejected: 0,
+            accepted_total: 0,
+            rejected_total: 0,
             users_count: 0,
             workers_count: 0,
             idle_users_count: 0,
@@ -84,7 +85,7 @@ impl Default for PoolMetrics {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
-            bestshare: 0,
+            best_share: 0,
             users: HashMap::with_capacity(INITIAL_USER_MAP_CAPACITY),
             pool_difficulty: 0,
             computed_hashrate: ComputedHashrate::default(),
@@ -98,8 +99,8 @@ impl PoolMetrics {
     pub fn load_existing(log_dir: &str) -> Result<Self, std::io::Error> {
         let pool_stats = load_pool_local_stats(log_dir)?;
         Ok(PoolMetrics {
-            accepted: pool_stats.accepted,
-            rejected: pool_stats.rejected,
+            accepted_total: pool_stats.accepted_total,
+            rejected_total: pool_stats.rejected_total,
             users: pool_stats.users,
             ..Default::default()
         })
@@ -253,11 +254,11 @@ impl MetricsActor {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         self.metrics.unaccounted_shares += 1;
-        self.metrics.accepted += 1;
+        self.metrics.accepted_total += difficulty;
         self.metrics.unaccounted_difficulty += difficulty;
         self.metrics.lastupdate = Some(current_unix_timestamp);
-        if self.metrics.bestshare < difficulty {
-            self.metrics.bestshare = difficulty;
+        if self.metrics.best_share < difficulty {
+            self.metrics.best_share = difficulty;
         }
         if let Some(user) = self.metrics.users.get_mut(&btcaddress) {
             user.record_share(&workername, difficulty, current_unix_timestamp);
@@ -267,21 +268,26 @@ impl MetricsActor {
     /// Update metrics from rejected share
     fn record_share_rejected(&mut self) {
         self.metrics.unaccounted_rejected += 1;
-        self.metrics.rejected += 1;
+        self.metrics.rejected_total += 1;
     }
 
     /// Increment worker counts - called after worker has authorised successfully.
     fn increment_worker_count(&mut self, btcaddress: String, workername: String) {
-        self.metrics.workers_count += 1;
-        self.metrics
-            .users
-            .entry(btcaddress.clone())
-            .or_insert_with(|| {
+        match self.metrics.users.entry(btcaddress) {
+            Occupied(mut entry) => {
+                let user = entry.get_mut();
+                if user.workers.insert(workername, Worker::default()).is_none() {
+                    self.metrics.workers_count += 1;
+                }
+            }
+            Vacant(entry) => {
                 let mut user = User::default();
-                let worker = Worker::default();
-                user.workers.insert(workername, worker);
-                user
-            });
+                user.workers.insert(workername, Worker::default());
+                entry.insert(user);
+                self.metrics.users_count += 1;
+                self.metrics.workers_count += 1;
+            }
+        }
     }
 
     /// Decrement pool wide worker counts, if worker found as authorised. Unauthorised workers are not counted.
@@ -540,7 +546,7 @@ mod tests {
         assert_eq!(metrics.idle_users_count, 0);
         assert_eq!(metrics.workers_count, 0);
         assert!(metrics.lastupdate.is_none());
-        assert!(metrics.bestshare == 0);
+        assert!(metrics.best_share == 0);
     }
 
     #[test]
@@ -553,7 +559,7 @@ mod tests {
         metrics.idle_users_count = 1;
         metrics.workers_count = 5;
         metrics.lastupdate = None;
-        metrics.bestshare = 500;
+        metrics.best_share = 500;
 
         metrics.reset();
 
@@ -564,7 +570,7 @@ mod tests {
         assert_eq!(metrics.idle_users_count, 1);
         assert_eq!(metrics.workers_count, 5);
         assert!(metrics.lastupdate.is_none());
-        assert_eq!(metrics.bestshare, 500);
+        assert_eq!(metrics.best_share, 500);
     }
 
     #[tokio::test]
@@ -590,7 +596,7 @@ mod tests {
         assert_eq!(metrics.unaccounted_shares, 1);
         assert_eq!(metrics.unaccounted_difficulty, 100);
         assert!(metrics.lastupdate.is_some());
-        assert_eq!(metrics.bestshare, 100);
+        assert_eq!(metrics.best_share, 100);
 
         // Test that highest difficulty is updated correctly
         let _ = handle
@@ -608,7 +614,7 @@ mod tests {
         let metrics = handle.get_metrics().await;
         assert_eq!(metrics.unaccounted_shares, 2);
         assert_eq!(metrics.unaccounted_difficulty, 150);
-        assert_eq!(metrics.bestshare, 100);
+        assert_eq!(metrics.best_share, 100);
 
         let _ = handle
             .record_share_accepted(SimplePplnsShare {
@@ -625,7 +631,7 @@ mod tests {
         let metrics = handle.get_metrics().await;
         assert_eq!(metrics.unaccounted_shares, 3);
         assert_eq!(metrics.unaccounted_difficulty, 350);
-        assert_eq!(metrics.bestshare, 200);
+        assert_eq!(metrics.best_share, 200);
     }
 
     #[tokio::test]
@@ -697,7 +703,7 @@ mod tests {
         assert_eq!(metrics.unaccounted_shares, 0);
         assert_eq!(metrics.unaccounted_difficulty, 0);
         assert_eq!(metrics.unaccounted_rejected, 0);
-        assert_eq!(metrics.bestshare, 2000);
+        assert_eq!(metrics.best_share, 2000);
         assert_eq!(metrics.computed_hashrate.hashrate_1m, 19);
 
         let user1_metrics = metrics.users.get_mut("user1").unwrap();
@@ -719,16 +725,57 @@ mod tests {
         let btcaddress = "user1";
         let workername = "workerA".to_string();
 
+        // Initially, users_count and workers_count should be 0
+        let metrics = handle.get_metrics().await;
+        assert_eq!(metrics.users_count, 0);
+        assert_eq!(metrics.workers_count, 0);
+
+        // Add first worker for new user
         let _ = handle
             .increment_worker_count(btcaddress.to_string(), workername.clone())
             .await;
         let metrics = handle.get_metrics().await;
 
+        assert_eq!(metrics.users_count, 1);
         assert_eq!(metrics.workers_count, 1);
         assert!(metrics.users.contains_key(btcaddress));
         let user = metrics.users.get(btcaddress).unwrap();
         assert!(user.workers.contains_key(&workername));
         assert!(!user.workers.get(&workername).unwrap().active);
+
+        // Add second worker for same user
+        let workername2 = "workerB".to_string();
+        let _ = handle
+            .increment_worker_count(btcaddress.to_string(), workername2.clone())
+            .await;
+        let metrics = handle.get_metrics().await;
+
+        assert_eq!(metrics.users_count, 1); // Should still be 1
+        assert_eq!(metrics.workers_count, 2); // Should be 2 now
+        let user = metrics.users.get(btcaddress).unwrap();
+        assert!(user.workers.contains_key(&workername));
+        assert!(user.workers.contains_key(&workername2));
+
+        // Add worker for new user
+        let btcaddress2 = "user2";
+        let workername3 = "workerC".to_string();
+        let _ = handle
+            .increment_worker_count(btcaddress2.to_string(), workername3.clone())
+            .await;
+        let metrics = handle.get_metrics().await;
+
+        assert_eq!(metrics.users_count, 2); // Should be 2 now
+        assert_eq!(metrics.workers_count, 3); // Should be 3 now
+        assert!(metrics.users.contains_key(btcaddress2));
+
+        // Try to increment same worker again - should not increase counts
+        let _ = handle
+            .increment_worker_count(btcaddress.to_string(), workername.clone())
+            .await;
+        let metrics = handle.get_metrics().await;
+
+        assert_eq!(metrics.users_count, 2); // Should still be 2
+        assert_eq!(metrics.workers_count, 3); // Should still be 3
     }
 
     #[tokio::test]
@@ -862,14 +909,14 @@ mod tests {
                 .workers
                 .contains_key("workerD")
         );
-        assert_eq!(metrics.accepted, 1);
-        assert_eq!(metrics.rejected, 1);
+        assert_eq!(metrics.accepted_total, 123);
+        assert_eq!(metrics.rejected_total, 1);
 
         // save and reload metrics to verify persistence
         let _ = save_pool_local_stats(&metrics, log_dir.path().to_str().unwrap());
         let reloaded = PoolMetrics::load_existing(log_dir.path().to_str().unwrap()).unwrap();
-        assert_eq!(reloaded.accepted, metrics.accepted);
-        assert_eq!(reloaded.rejected, metrics.rejected);
+        assert_eq!(reloaded.accepted_total, metrics.accepted_total);
+        assert_eq!(reloaded.rejected_total, metrics.rejected_total);
         assert_eq!(reloaded.users, metrics.users);
     }
 
@@ -906,7 +953,7 @@ mod tests {
         // Check that worker exists and is active
         assert!(worker.active);
         // Check that user stats are updated
-        assert_eq!(user.shares_valid_total, 1);
+        assert_eq!(user.shares_valid_total, 77);
         assert_eq!(user.best_share, 77);
         assert!(user.last_share_at > 0);
     }
@@ -970,13 +1017,13 @@ mod tests {
         assert_eq!(metrics.unaccounted_difficulty, 60);
 
         let user_a = metrics.users.get("userA").unwrap();
-        assert_eq!(user_a.shares_valid_total, 2);
+        assert_eq!(user_a.shares_valid_total, 30);
         assert_eq!(user_a.best_share, 20);
         assert!(user_a.workers.contains_key("workerA1"));
         assert!(user_a.workers.contains_key("workerA2"));
 
         let user_b = metrics.users.get("userB").unwrap();
-        assert_eq!(user_b.shares_valid_total, 1);
+        assert_eq!(user_b.shares_valid_total, 30);
         assert_eq!(user_b.best_share, 30);
         assert!(user_b.workers.contains_key("workerB1"));
     }
