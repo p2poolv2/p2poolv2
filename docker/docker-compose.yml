@@ -47,19 +47,18 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.p2pool
-    depends_on:
-      - bitcoind
     environment:
       - P2POOL_BITCOIN_NETWORK=${NETWORK:-signet}
       - P2POOL_BITCOIN_URL=bitcoind:${BTC_RPC_PORT:-38332}
       - P2POOL_STORE_PATH=/data/${NETWORK:-signet}
       - RUST_LOG=info
-    command: /p2pool/target/debug/p2poolv2 --config=/p2pool/config.toml
+    command: /p2pool/target/debug/p2poolv2 --config=/p2pool/config-dev.toml
     volumes:
       - p2pool_data:/data
     restart: unless-stopped
     ports:
       - "3333:3333"
+      - "46884:46884" # API server port
     networks:
       - p2pool_network
     logging:
