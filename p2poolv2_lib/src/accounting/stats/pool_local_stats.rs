@@ -103,7 +103,6 @@ pub async fn start_stats_saver(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounting::stats::computed::{ComputedHashrate, ComputedShareRate};
     use std::collections::HashMap;
     use std::fs;
     use tempfile::tempdir;
@@ -123,25 +122,11 @@ mod tests {
             lastupdate: Some(1234567890),
             users_count: 10,
             workers_count: 15,
-            idle_users_count: 2,
-            unaccounted_shares: 0,
-            unaccounted_difficulty: 0,
-            unaccounted_rejected: 0,
             accepted_total: 0,
             rejected_total: 0,
             best_share: 0,
             users: HashMap::with_capacity(100),
             pool_difficulty: 500000,
-            computed_hashrate: ComputedHashrate {
-                hashrate_1m: 1000,
-                hashrate_5m: 1200,
-                hashrate_15m: 1100,
-                hashrate_1hr: 1050,
-                hashrate_6hr: 1020,
-                hashrate_1d: 980,
-                hashrate_7d: 950,
-            },
-            computed_share_rate: ComputedShareRate::default(),
         };
 
         // Save stats
@@ -182,25 +167,11 @@ mod tests {
             lastupdate: Some(1234567890),
             users_count: 10,
             workers_count: 15,
-            idle_users_count: 2,
-            unaccounted_shares: 0,
-            unaccounted_difficulty: 0,
-            unaccounted_rejected: 0,
             accepted_total: 0,
             rejected_total: 0,
             best_share: 0,
             users: HashMap::with_capacity(100),
             pool_difficulty: 500000,
-            computed_hashrate: ComputedHashrate {
-                hashrate_1m: 1000,
-                hashrate_5m: 1200,
-                hashrate_15m: 1100,
-                hashrate_1hr: 1050,
-                hashrate_6hr: 1020,
-                hashrate_1d: 980,
-                hashrate_7d: 950,
-            },
-            computed_share_rate: ComputedShareRate::default(),
         };
 
         // Save should fail because directory doesn't exist

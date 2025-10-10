@@ -27,7 +27,6 @@
 //! User statistics are maintained in memory during runtime and are persisted
 //! to disk every 5 minutes.
 
-use crate::accounting::stats::computed::ComputedHashrate;
 use crate::accounting::stats::worker::Worker;
 use bitcoin::hashes::{Hash, sha256};
 use serde::{Deserialize, Serialize};
@@ -48,11 +47,6 @@ pub struct User {
     pub best_share: u64,
     /// Best ever share, loaded from disk on startup
     pub best_share_ever: Option<u64>,
-    /// Unaccounted for difficulty
-    #[serde(skip)]
-    pub unaccounted_difficulty: u64,
-    /// Computed stats holding hashrate and share rate metrics
-    pub computed_hash_rate: ComputedHashrate,
 }
 
 impl Default for User {
@@ -63,8 +57,6 @@ impl Default for User {
             workers: HashMap::with_capacity(INITIAL_WORKER_MAP_CAPACITY),
             best_share: 0,
             best_share_ever: None,
-            computed_hash_rate: ComputedHashrate::default(),
-            unaccounted_difficulty: 0,
         }
     }
 }
@@ -79,7 +71,6 @@ impl User {
     pub fn record_share(&mut self, workername: &str, difficulty: u64, current_time_stamp: u64) {
         self.last_share_at = current_time_stamp;
         self.shares_valid_total += difficulty;
-        self.unaccounted_difficulty += difficulty;
         if difficulty > self.best_share {
             self.best_share = difficulty;
         }
@@ -99,10 +90,6 @@ impl User {
     pub fn get_or_add_worker(&mut self, workername: &str) -> &mut Worker {
         self.workers.entry(workername.to_string()).or_default()
     }
-
-    pub fn reset(&mut self) {
-        self.unaccounted_difficulty = 0;
-    }
 }
 
 /// Generate an id for the a given Bitcoin address to be used as user id.
@@ -120,11 +107,6 @@ mod tests {
 
         // Verify default values
         assert_eq!(user.last_share_at, 0);
-        assert_eq!(user.computed_hash_rate.hashrate_1m, 0);
-        assert_eq!(user.computed_hash_rate.hashrate_5m, 0);
-        assert_eq!(user.computed_hash_rate.hashrate_1hr, 0);
-        assert_eq!(user.computed_hash_rate.hashrate_6hr, 0);
-        assert_eq!(user.computed_hash_rate.hashrate_1d, 0);
         assert!(user.workers.capacity() >= INITIAL_WORKER_MAP_CAPACITY);
         assert_eq!(user.workers.len(), 0);
     }

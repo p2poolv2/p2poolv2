@@ -26,7 +26,6 @@
 //! Worker records serve as the basis for tracking individual miner performance
 //! and calculating rewards distribution using the accounting modules.
 
-use crate::accounting::stats::computed::ComputedHashrate;
 use serde::{Deserialize, Serialize};
 
 /// Worker record, captures username, id, and hashrate stats
@@ -42,11 +41,6 @@ pub struct Worker {
     pub best_share: u64,
     /// Best ever share, loaded from disk on startup
     pub best_share_ever: Option<u64>,
-    /// Unaccounted for difficulty
-    #[serde(skip)]
-    pub unaccounted_difficulty: u64,
-    /// Computed stats holding hashrate and share rate metrics
-    pub computed_hash_rate: ComputedHashrate,
 }
 
 impl Worker {
@@ -59,7 +53,6 @@ impl Worker {
     pub fn record_share(&mut self, difficulty: u64, unix_timestamp: u64) {
         self.last_share_at = unix_timestamp;
         self.shares_valid_total += difficulty;
-        self.unaccounted_difficulty += difficulty;
         if difficulty > self.best_share {
             self.best_share = difficulty;
         }
@@ -71,10 +64,6 @@ impl Worker {
             self.best_share_ever = Some(difficulty);
         }
         self.active = true;
-    }
-
-    pub fn reset(&mut self) {
-        self.unaccounted_difficulty = 0;
     }
 }
 
@@ -88,11 +77,6 @@ mod tests {
 
         // Verify default values
         assert_eq!(worker.last_share_at, 0);
-        assert_eq!(worker.computed_hash_rate.hashrate_1m, 0);
-        assert_eq!(worker.computed_hash_rate.hashrate_5m, 0);
-        assert_eq!(worker.computed_hash_rate.hashrate_1hr, 0);
-        assert_eq!(worker.computed_hash_rate.hashrate_6hr, 0);
-        assert_eq!(worker.computed_hash_rate.hashrate_1d, 0);
         assert_eq!(worker.shares_valid_total, 0);
     }
 

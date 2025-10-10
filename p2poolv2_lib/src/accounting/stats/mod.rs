@@ -14,7 +14,6 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod computed;
 pub mod metrics;
 pub mod pool_local_stats;
 mod prom;
