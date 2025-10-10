@@ -20,7 +20,6 @@ use crate::accounting::stats::worker::Worker;
 use crate::accounting::{simple_pplns::SimplePplnsShare, stats::pool_local_stats};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::time::SystemTime;
 use tokio::sync::{mpsc, oneshot};
 use tracing::error;
@@ -36,10 +35,6 @@ pub struct PoolMetrics {
     pub start_time: u64,
     /// Last update timestamp, time since epoch in seconds
     pub lastupdate: Option<u64>,
-    /// Number of users
-    pub users_count: u32,
-    /// Number of workers
-    pub workers_count: u32,
     /// Total accepted shares
     pub accepted_total: u64,
     /// Total rejected shares
@@ -60,8 +55,6 @@ impl Default for PoolMetrics {
             lastupdate: None,
             accepted_total: 0,
             rejected_total: 0,
-            users_count: 0,
-            workers_count: 0,
             start_time: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -172,7 +165,7 @@ impl MetricsActor {
                 workername,
                 response,
             } => {
-                self.increment_worker_count(btcaddress, workername);
+                self.worker_authorized(btcaddress, workername);
                 let _ = response.send(());
             }
             MetricsMessage::DecrementWorkerCount {
@@ -180,7 +173,7 @@ impl MetricsActor {
                 workername,
                 response,
             } => {
-                self.decrement_worker_count(btcaddress, workername);
+                self.mark_worker_inactive(btcaddress, workername);
                 let _ = response.send(());
             }
             MetricsMessage::Commit { response } => {
@@ -221,35 +214,18 @@ impl MetricsActor {
     }
 
     /// Increment worker counts - called after worker has authorised successfully.
-    fn increment_worker_count(&mut self, btcaddress: String, workername: String) {
-        match self.metrics.users.entry(btcaddress) {
-            Occupied(mut entry) => {
-                let user = entry.get_mut();
-                user.workers.insert(workername, Worker::default());
-                // Increment worker count, as this is triggered by
-                // authorize. Even if we have the worker in workers
-                // hashmap, we need to increment the count as it is
-                // authorizing anew, which meant it disconnected and
-                // therefore the count was decremented.
-                self.metrics.workers_count += 1;
-            }
-            Vacant(entry) => {
-                let mut user = User::default();
-                user.workers.insert(workername, Worker::default());
-                entry.insert(user);
-                self.metrics.users_count += 1;
-                self.metrics.workers_count += 1;
-            }
-        }
+    fn worker_authorized(&mut self, btcaddress: String, workername: String) {
+        self.metrics.users
+            .entry(btcaddress)
+            .or_insert_with(User::default)
+            .workers
+            .insert(workername, Worker::default());
     }
 
     /// Decrement pool wide worker counts, if worker found as authorised. Unauthorised workers are not counted.
     /// Also marks Worker inactive, if found.
-    fn decrement_worker_count(&mut self, btcaddress: Option<String>, workername: String) {
+    fn mark_worker_inactive(&mut self, btcaddress: Option<String>, workername: String) {
         if let Some(btcaddress) = btcaddress {
-            if self.metrics.workers_count > 0 {
-                self.metrics.workers_count -= 1;
-            }
             if let Some(user) = self.metrics.users.get_mut(&btcaddress) {
                 if let Some(worker) = user.workers.get_mut(&workername) {
                     worker.active = false;
@@ -427,8 +403,6 @@ mod tests {
     #[test]
     fn test_pool_metrics_default() {
         let metrics = PoolMetrics::default();
-        assert_eq!(metrics.users_count, 0);
-        assert_eq!(metrics.workers_count, 0);
         assert!(metrics.lastupdate.is_none());
         assert!(metrics.best_share == 0);
     }
@@ -495,10 +469,8 @@ mod tests {
             .await
             .unwrap();
         let _ = handle.record_share_rejected().await;
-        let metrics = handle.get_metrics().await;
 
         let _ = handle.record_share_rejected().await;
-        let metrics = handle.get_metrics().await;
     }
 
     #[test_log::test(tokio::test)]
@@ -555,125 +527,6 @@ mod tests {
         assert_eq!(metrics.best_share, 2000);
     }
 
-    #[tokio::test]
-    async fn test_increment_worker_count() {
-        let log_dir = tempfile::tempdir().unwrap();
-        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
-
-        let btcaddress = "user1";
-        let workername = "workerA".to_string();
-
-        // Initially, users_count and workers_count should be 0
-        let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.users_count, 0);
-        assert_eq!(metrics.workers_count, 0);
-
-        // Add first worker for new user
-        let _ = handle
-            .increment_worker_count(btcaddress.to_string(), workername.clone())
-            .await;
-        let metrics = handle.get_metrics().await;
-
-        assert_eq!(metrics.users_count, 1);
-        assert_eq!(metrics.workers_count, 1);
-        assert!(metrics.users.contains_key(btcaddress));
-        let user = metrics.users.get(btcaddress).unwrap();
-        assert!(user.workers.contains_key(&workername));
-        assert!(!user.workers.get(&workername).unwrap().active);
-
-        // Add second worker for same user
-        let workername2 = "workerB".to_string();
-        let _ = handle
-            .increment_worker_count(btcaddress.to_string(), workername2.clone())
-            .await;
-        let metrics = handle.get_metrics().await;
-
-        assert_eq!(metrics.users_count, 1); // Should still be 1
-        assert_eq!(metrics.workers_count, 2); // Should be 2 now
-        let user = metrics.users.get(btcaddress).unwrap();
-        assert!(user.workers.contains_key(&workername));
-        assert!(user.workers.contains_key(&workername2));
-
-        // Add worker for new user
-        let btcaddress2 = "user2";
-        let workername3 = "workerC".to_string();
-        let _ = handle
-            .increment_worker_count(btcaddress2.to_string(), workername3.clone())
-            .await;
-        let metrics = handle.get_metrics().await;
-
-        assert_eq!(metrics.users_count, 2); // Should be 2 now
-        assert_eq!(metrics.workers_count, 3); // Should be 3 now
-        assert!(metrics.users.contains_key(btcaddress2));
-    }
-
-    #[tokio::test]
-    async fn test_decrement_worker_count() {
-        let log_dir = tempfile::tempdir().unwrap();
-        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
-
-        let btcaddress = "user2";
-        let workername = "workerB".to_string();
-
-        // Increment first
-        let _ = handle
-            .increment_worker_count(btcaddress.to_string(), workername.clone())
-            .await;
-        let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.workers_count, 1);
-
-        // Decrement
-        let _ = handle
-            .decrement_worker_count(Some(btcaddress.to_string()), workername.clone())
-            .await;
-        let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.workers_count, 0);
-
-        // Worker should be marked inactive
-        let user = metrics.users.get(btcaddress).unwrap();
-        assert!(!user.workers.get(&workername).unwrap().active);
-
-        // Decrement again, num_workers should not go below zero
-        let _ = handle
-            .decrement_worker_count(Some(btcaddress.to_string()), workername.clone())
-            .await;
-        let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.workers_count, 0);
-    }
-
-    #[tokio::test]
-    async fn test_decrement_worker_count_none_btcaddress() {
-        let log_dir = tempfile::tempdir().unwrap();
-        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
-
-        let btcaddress = "user3";
-        let workername = "workerC".to_string();
-
-        // Increment first
-        let _ = handle
-            .increment_worker_count(btcaddress.to_string(), workername.clone())
-            .await;
-        let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.workers_count, 1);
-
-        // Decrement with None btcaddress, should not change num_workers or worker state
-        let _ = handle
-            .decrement_worker_count(None, workername.clone())
-            .await;
-        let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.workers_count, 1);
-
-        // Worker should still be active
-        let user = metrics.users.get(btcaddress).unwrap();
-        assert!(!user.workers.get(&workername).unwrap().active);
-    }
-
     #[test_log::test(tokio::test)]
     async fn test_get_metrics_consistency() {
         let log_dir = tempfile::tempdir().unwrap();
@@ -699,7 +552,6 @@ mod tests {
             .await;
 
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.workers_count, 1);
         assert!(metrics.users.contains_key("user4"));
         assert!(
             metrics

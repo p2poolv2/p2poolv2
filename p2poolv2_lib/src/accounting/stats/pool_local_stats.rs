@@ -120,8 +120,6 @@ mod tests {
         let pool_stats = PoolMetrics {
             start_time: 1234567890,
             lastupdate: Some(1234567890),
-            users_count: 10,
-            workers_count: 15,
             accepted_total: 0,
             rejected_total: 0,
             best_share: 0,
@@ -166,8 +164,6 @@ mod tests {
         let pool_stats = PoolMetrics {
             start_time: 1234567890,
             lastupdate: Some(1234567890),
-            users_count: 10,
-            workers_count: 15,
             accepted_total: 0,
             rejected_total: 0,
             best_share: 0,
