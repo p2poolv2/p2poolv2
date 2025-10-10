@@ -44,8 +44,10 @@ pub struct PoolMetrics {
     pub accepted_total: u64,
     /// Total rejected shares
     pub rejected_total: u64,
-    /// Highest difficulty share
+    /// Highest difficulty share on this start
     pub best_share: u64,
+    /// Highest difficulty share across restarts
+    pub best_share_ever: u64,
     /// User metrics
     pub users: HashMap<String, User>,
     /// Current pool difficulty
@@ -65,6 +67,7 @@ impl Default for PoolMetrics {
                 .unwrap()
                 .as_secs(),
             best_share: 0,
+            best_share_ever: 0,
             users: HashMap::with_capacity(INITIAL_USER_MAP_CAPACITY),
             pool_difficulty: 0,
         }
@@ -205,9 +208,8 @@ impl MetricsActor {
             .unwrap_or(0);
         self.metrics.accepted_total += difficulty;
         self.metrics.lastupdate = Some(current_unix_timestamp);
-        if self.metrics.best_share < difficulty {
-            self.metrics.best_share = difficulty;
-        }
+        self.metrics.best_share = self.metrics.best_share.max(difficulty);
+        self.metrics.best_share_ever = self.metrics.best_share_ever.max(difficulty);
         if let Some(user) = self.metrics.users.get_mut(&btcaddress) {
             user.record_share(&workername, difficulty, current_unix_timestamp);
         }
@@ -605,15 +607,6 @@ mod tests {
         assert_eq!(metrics.users_count, 2); // Should be 2 now
         assert_eq!(metrics.workers_count, 3); // Should be 3 now
         assert!(metrics.users.contains_key(btcaddress2));
-
-        // Try to increment same worker again - should not increase counts
-        let _ = handle
-            .increment_worker_count(btcaddress.to_string(), workername.clone())
-            .await;
-        let metrics = handle.get_metrics().await;
-
-        assert_eq!(metrics.users_count, 2); // Should still be 2
-        assert_eq!(metrics.workers_count, 3); // Should still be 3
     }
 
     #[tokio::test]

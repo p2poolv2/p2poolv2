@@ -51,6 +51,11 @@ impl PoolMetrics {
         output.push_str(&format!("best_share {}\n", self.best_share));
         output.push('\n');
 
+        output.push_str("# HELP best_share_ever Highest difficulty share across restarts\n");
+        output.push_str("# TYPE best_share_ever gauge\n");
+        output.push_str(&format!("best_share_ever {}\n", self.best_share_ever));
+        output.push('\n');
+
         output.push_str("# HELP pool_difficulty Current pool difficulty\n");
         output.push_str("# TYPE pool_difficulty gauge\n");
         output.push_str(&format!("pool_difficulty {}\n", self.pool_difficulty));
@@ -105,8 +110,7 @@ impl PoolMetrics {
         for (btcaddress, user) in &self.users {
             output.push_str(&format!(
                 "user_best_share_ever{{btcaddress=\"{}\"}} {}\n",
-                btcaddress,
-                user.best_share_ever.unwrap_or(0)
+                btcaddress, user.best_share_ever
             ));
         }
         output.push('\n');
@@ -177,9 +181,7 @@ impl PoolMetrics {
             for (workername, worker) in &user.workers {
                 output.push_str(&format!(
                     "worker_best_share_ever{{btcaddress=\"{}\",workername=\"{}\"}} {}\n",
-                    btcaddress,
-                    workername,
-                    worker.best_share_ever.unwrap_or(0)
+                    btcaddress, workername, worker.best_share_ever
                 ));
             }
         }
@@ -216,6 +218,7 @@ mod tests {
             users_count: 3,
             workers_count: 7,
             best_share: 500,
+            best_share_ever: 500,
             pool_difficulty: 1000,
             start_time: 1234567890,
             lastupdate: Some(1234567900),
@@ -230,6 +233,7 @@ mod tests {
         assert!(exposition.contains("users_count 3"));
         assert!(exposition.contains("workers_count 7"));
         assert!(exposition.contains("best_share 500"));
+        assert!(exposition.contains("best_share_ever 500"));
         assert!(exposition.contains("difficulty 1000"));
         assert!(exposition.contains("start_time_seconds 1234567890"));
         assert!(exposition.contains("last_update_seconds 1234567900"));
@@ -248,7 +252,7 @@ mod tests {
             last_share_at: 1234567890,
             shares_valid_total: 42,
             best_share: 1000,
-            best_share_ever: Some(2000),
+            best_share_ever: 2000,
             ..Default::default()
         };
 
@@ -256,7 +260,7 @@ mod tests {
             last_share_at: 1234567900,
             shares_valid_total: 100,
             best_share: 500,
-            best_share_ever: None,
+            best_share_ever: 0,
             ..Default::default()
         };
 
@@ -311,7 +315,7 @@ mod tests {
             last_share_at: 1234567890,
             shares_valid_total: 42,
             best_share: 1000,
-            best_share_ever: Some(2000),
+            best_share_ever: 2000,
             ..Default::default()
         };
 
@@ -320,7 +324,7 @@ mod tests {
             shares_valid_total: 20,
             active: true,
             best_share: 800,
-            best_share_ever: Some(1500),
+            best_share_ever: 1500,
             ..Default::default()
         };
 
@@ -329,7 +333,7 @@ mod tests {
             shares_valid_total: 22,
             active: false,
             best_share: 600,
-            best_share_ever: None,
+            best_share_ever: 0,
             ..Default::default()
         };
 

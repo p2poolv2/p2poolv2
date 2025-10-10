@@ -40,7 +40,7 @@ pub struct Worker {
     /// Best share in this instance of the server
     pub best_share: u64,
     /// Best ever share, loaded from disk on startup
-    pub best_share_ever: Option<u64>,
+    pub best_share_ever: u64,
 }
 
 impl Worker {
@@ -53,16 +53,10 @@ impl Worker {
     pub fn record_share(&mut self, difficulty: u64, unix_timestamp: u64) {
         self.last_share_at = unix_timestamp;
         self.shares_valid_total += difficulty;
-        if difficulty > self.best_share {
-            self.best_share = difficulty;
-        }
-        if let Some(best_ever) = self.best_share_ever {
-            if difficulty > best_ever {
-                self.best_share_ever = Some(difficulty);
-            }
-        } else {
-            self.best_share_ever = Some(difficulty);
-        }
+
+        self.best_share = self.best_share.max(difficulty);
+        self.best_share_ever = self.best_share_ever.max(difficulty);
+
         self.active = true;
     }
 }
@@ -90,7 +84,7 @@ mod tests {
         assert_eq!(worker.last_share_at, 0);
         assert_eq!(worker.shares_valid_total, 0);
         assert_eq!(worker.best_share, 0);
-        assert_eq!(worker.best_share_ever, None);
+        assert_eq!(worker.best_share_ever, 0);
         assert!(!worker.active);
 
         // First share
@@ -99,7 +93,7 @@ mod tests {
         assert_eq!(worker.last_share_at, timestamp);
         assert_eq!(worker.shares_valid_total, 1000);
         assert_eq!(worker.best_share, difficulty);
-        assert_eq!(worker.best_share_ever, Some(difficulty));
+        assert_eq!(worker.best_share_ever, difficulty);
         assert!(worker.active);
 
         // New best share
@@ -107,13 +101,13 @@ mod tests {
         assert_eq!(worker.last_share_at, timestamp + 1000);
         assert_eq!(worker.shares_valid_total, 3000);
         assert_eq!(worker.best_share, 2000);
-        assert_eq!(worker.best_share_ever, Some(2000));
+        assert_eq!(worker.best_share_ever, 2000);
 
         // Submit a lower difficulty share, best_share and best_share_ever should not change
         worker.record_share(500, timestamp + 2000);
         assert_eq!(worker.last_share_at, timestamp + 2000);
         assert_eq!(worker.shares_valid_total, 3500);
         assert_eq!(worker.best_share, 2000);
-        assert_eq!(worker.best_share_ever, Some(2000));
+        assert_eq!(worker.best_share_ever, 2000);
     }
 }
