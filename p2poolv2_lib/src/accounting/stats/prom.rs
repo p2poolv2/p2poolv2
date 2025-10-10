@@ -35,17 +35,6 @@ impl PoolMetrics {
         output.push_str(&format!("shares_rejected_total {}\n", self.rejected_total));
         output.push('\n');
 
-        // Gauges
-        output.push_str("# HELP users_count Number of users\n");
-        output.push_str("# TYPE users_count gauge\n");
-        output.push_str(&format!("users_count {}\n", self.users_count));
-        output.push('\n');
-
-        output.push_str("# HELP workers_count Number of workers\n");
-        output.push_str("# TYPE workers_count gauge\n");
-        output.push_str(&format!("workers_count {}\n", self.workers_count));
-        output.push('\n');
-
         output.push_str("# HELP best_share Highest difficulty share\n");
         output.push_str("# TYPE best_share gauge\n");
         output.push_str(&format!("best_share {}\n", self.best_share));
@@ -147,20 +136,6 @@ impl PoolMetrics {
         }
         output.push('\n');
 
-        output.push_str("# HELP worker_active Worker active status (1 = active, 0 = inactive)\n");
-        output.push_str("# TYPE worker_active gauge\n");
-        for (btcaddress, user) in &self.users {
-            for (workername, worker) in &user.workers {
-                output.push_str(&format!(
-                    "worker_active{{btcaddress=\"{}\",workername=\"{}\"}} {}\n",
-                    btcaddress,
-                    workername,
-                    if worker.active { 1 } else { 0 }
-                ));
-            }
-        }
-        output.push('\n');
-
         output.push_str("# HELP worker_best_share Best share difficulty for this session\n");
         output.push_str("# TYPE worker_best_share gauge\n");
         for (btcaddress, user) in &self.users {
@@ -215,8 +190,6 @@ mod tests {
         let metrics = PoolMetrics {
             accepted_total: 100,
             rejected_total: 5,
-            users_count: 3,
-            workers_count: 7,
             best_share: 500,
             best_share_ever: 500,
             pool_difficulty: 1000,
@@ -230,8 +203,6 @@ mod tests {
         // Check that it contains the expected metrics
         assert!(exposition.contains(&format!("shares_accepted_total {}", 100 * TWO32)));
         assert!(exposition.contains("shares_rejected_total 5"));
-        assert!(exposition.contains("users_count 3"));
-        assert!(exposition.contains("workers_count 7"));
         assert!(exposition.contains("best_share 500"));
         assert!(exposition.contains("best_share_ever 500"));
         assert!(exposition.contains("difficulty 1000"));
@@ -241,7 +212,6 @@ mod tests {
         // Check that it contains HELP and TYPE comments
         assert!(exposition.contains("# HELP shares_accepted_total"));
         assert!(exposition.contains("# TYPE shares_accepted_total counter"));
-        assert!(exposition.contains("# TYPE users_count gauge"));
     }
 
     #[test]
@@ -360,15 +330,6 @@ mod tests {
             r#"worker_shares_valid_total{{btcaddress="bc1quser1",workername="worker2"}} {}"#,
             22 * TWO32
         )));
-
-        assert!(exposition.contains("# HELP worker_active"));
-        assert!(exposition.contains("# TYPE worker_active gauge"));
-        assert!(
-            exposition.contains("worker_active{btcaddress=\"bc1quser1\",workername=\"worker1\"} 1")
-        );
-        assert!(
-            exposition.contains("worker_active{btcaddress=\"bc1quser1\",workername=\"worker2\"} 0")
-        );
 
         assert!(exposition.contains("# HELP worker_best_share"));
         assert!(exposition.contains("# TYPE worker_best_share gauge"));
