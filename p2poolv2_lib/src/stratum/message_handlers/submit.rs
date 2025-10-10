@@ -281,7 +281,7 @@ mod handle_submit_tests {
         // Verify that the block was not submitted to the mock server
         mock_server.verify().await;
 
-        assert_eq!(metrics_handle.get_metrics().await.accepted, 1);
+        assert_eq!(metrics_handle.get_metrics().await.accepted_total, 1);
     }
 
     #[tokio::test]
@@ -372,7 +372,7 @@ mod handle_submit_tests {
         let stratum_share = shares_rx.recv().await.unwrap();
         assert_eq!(stratum_share.btcaddress, Some(session.btcaddress.unwrap()));
 
-        assert_eq!(metrics_handle.get_metrics().await.accepted, 1);
+        assert_eq!(metrics_handle.get_metrics().await.accepted_total, 1);
     }
 
     #[tokio::test]
@@ -460,7 +460,7 @@ mod handle_submit_tests {
         // Verify that the block was not submitted to the mock server
         mock_server.verify().await;
 
-        assert_eq!(metrics_handle.get_metrics().await.accepted, 1);
+        assert_eq!(metrics_handle.get_metrics().await.accepted_total, 1);
     }
 
     #[tokio::test]

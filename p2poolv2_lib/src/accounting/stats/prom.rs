@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::stats::metrics::PoolMetrics;
+const TWO32: u64 = 1u64 << 32;
 
 impl PoolMetrics {
     pub fn get_exposition(&self) -> String {
@@ -23,12 +24,15 @@ impl PoolMetrics {
         // Counters
         output.push_str("# HELP shares_accepted_total Total number of accepted shares\n");
         output.push_str("# TYPE shares_accepted_total counter\n");
-        output.push_str(&format!("shares_accepted_total {}\n", self.accepted));
+        output.push_str(&format!(
+            "shares_accepted_total {}\n",
+            self.accepted_total * TWO32
+        ));
         output.push('\n');
 
         output.push_str("# HELP shares_rejected_total Total number of rejected shares\n");
         output.push_str("# TYPE shares_rejected_total counter\n");
-        output.push_str(&format!("shares_rejected_total {}\n", self.rejected));
+        output.push_str(&format!("shares_rejected_total {}\n", self.rejected_total));
         output.push('\n');
 
         // Gauges
@@ -49,7 +53,7 @@ impl PoolMetrics {
 
         output.push_str("# HELP best_share Highest difficulty share\n");
         output.push_str("# TYPE best_share gauge\n");
-        output.push_str(&format!("best_share {}\n", self.bestshare));
+        output.push_str(&format!("best_share {}\n", self.best_share));
         output.push('\n');
 
         output.push_str("# HELP pool_difficulty Current pool difficulty\n");
@@ -85,7 +89,8 @@ impl PoolMetrics {
         for (btcaddress, user) in &self.users {
             output.push_str(&format!(
                 "user_shares_valid_total{{btcaddress=\"{}\"}} {}\n",
-                btcaddress, user.shares_valid_total
+                btcaddress,
+                user.shares_valid_total * TWO32
             ));
         }
         output.push('\n');
@@ -135,7 +140,9 @@ impl PoolMetrics {
             for (workername, worker) in &user.workers {
                 output.push_str(&format!(
                     "worker_shares_valid_total{{btcaddress=\"{}\",workername=\"{}\"}} {}\n",
-                    btcaddress, workername, worker.shares_valid_total
+                    btcaddress,
+                    workername,
+                    worker.shares_valid_total * TWO32
                 ));
             }
         }
@@ -209,12 +216,12 @@ mod tests {
     #[test]
     fn test_get_exposition_format() {
         let metrics = PoolMetrics {
-            accepted: 100,
-            rejected: 5,
+            accepted_total: 100,
+            rejected_total: 5,
             users_count: 3,
             workers_count: 7,
             idle_users_count: 1,
-            bestshare: 500,
+            best_share: 500,
             pool_difficulty: 1000,
             start_time: 1234567890,
             lastupdate: Some(1234567900),
@@ -224,7 +231,7 @@ mod tests {
         let exposition = metrics.get_exposition();
 
         // Check that it contains the expected metrics
-        assert!(exposition.contains("shares_accepted_total 100"));
+        assert!(exposition.contains(&format!("shares_accepted_total {}", 100 * TWO32)));
         assert!(exposition.contains("shares_rejected_total 5"));
         assert!(exposition.contains("users_count 3"));
         assert!(exposition.contains("workers_count 7"));
@@ -273,8 +280,14 @@ mod tests {
         // Check user metrics are present
         assert!(exposition.contains("# HELP user_shares_valid"));
         assert!(exposition.contains("# TYPE user_shares_valid_total counter"));
-        assert!(exposition.contains("user_shares_valid_total{btcaddress=\"bc1quser1\"} 42"));
-        assert!(exposition.contains("user_shares_valid_total{btcaddress=\"bc1quser2\"} 100"));
+        assert!(exposition.contains(&format!(
+            "user_shares_valid_total{{btcaddress=\"bc1quser1\"}} {}",
+            42 * TWO32
+        )));
+        assert!(exposition.contains(&format!(
+            "user_shares_valid_total{{btcaddress=\"bc1quser2\"}} {}",
+            100 * TWO32
+        )));
 
         assert!(exposition.contains("# HELP user_best_share"));
         assert!(exposition.contains("# TYPE user_best_share gauge"));
@@ -342,12 +355,14 @@ mod tests {
         // Check worker metrics are present
         assert!(exposition.contains("# HELP worker_shares_valid"));
         assert!(exposition.contains("# TYPE worker_shares_valid_total counter"));
-        assert!(exposition.contains(
-            "worker_shares_valid_total{btcaddress=\"bc1quser1\",workername=\"worker1\"} 20"
-        ));
-        assert!(exposition.contains(
-            "worker_shares_valid_total{btcaddress=\"bc1quser1\",workername=\"worker2\"} 22"
-        ));
+        assert!(exposition.contains(&format!(
+            r#"worker_shares_valid_total{{btcaddress="bc1quser1",workername="worker1"}} {}"#,
+            20 * TWO32
+        )));
+        assert!(exposition.contains(&format!(
+            r#"worker_shares_valid_total{{btcaddress="bc1quser1",workername="worker2"}} {}"#,
+            22 * TWO32
+        )));
 
         assert!(exposition.contains("# HELP worker_active"));
         assert!(exposition.contains("# TYPE worker_active gauge"));

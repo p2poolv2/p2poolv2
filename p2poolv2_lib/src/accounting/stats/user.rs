@@ -41,7 +41,7 @@ pub struct User {
     /// Timestamp of the last share submitted by the user, time since epoch in ms
     pub last_share_at: u64,
     /// Valid share submissions
-    pub shares_valid_total: u32,
+    pub shares_valid_total: u64,
     /// Workers for the user, we maintain list of disconnected workers for persistent stats
     pub workers: HashMap<String, Worker>,
     /// Best share in this instance of the server
@@ -78,7 +78,7 @@ impl User {
     /// Record a share submission for the user, updating stats accordingly.
     pub fn record_share(&mut self, workername: &str, difficulty: u64, current_time_stamp: u64) {
         self.last_share_at = current_time_stamp;
-        self.shares_valid_total += 1;
+        self.shares_valid_total += difficulty;
         self.unaccounted_difficulty += difficulty;
         if difficulty > self.best_share {
             self.best_share = difficulty;
@@ -146,7 +146,7 @@ mod tests {
         user.record_share(worker_name, difficulty, timestamp);
 
         // User stats updated
-        assert_eq!(user.shares_valid_total, 1);
+        assert_eq!(user.shares_valid_total, 1000);
         assert_eq!(user.last_share_at, timestamp);
         assert_eq!(user.best_share, difficulty);
         assert_eq!(user.best_share_ever, Some(difficulty));
@@ -155,26 +155,26 @@ mod tests {
         // Worker stats updated
         let worker = user.workers.get(worker_name).unwrap();
         assert_eq!(worker.last_share_at, timestamp);
-        assert_eq!(worker.shares_valid_total, 1);
+        assert_eq!(worker.shares_valid_total, 1000);
         assert_eq!(worker.best_share, difficulty);
         assert_eq!(worker.best_share_ever, Some(difficulty));
 
         // Record a lower difficulty share
         user.record_share(worker_name, 500, timestamp + 1);
-        assert_eq!(user.shares_valid_total, 2);
+        assert_eq!(user.shares_valid_total, 1500);
         assert_eq!(user.best_share, difficulty); // unchanged
         assert_eq!(user.best_share_ever, Some(difficulty));
         let worker = user.workers.get(worker_name).unwrap();
-        assert_eq!(worker.shares_valid_total, 2);
+        assert_eq!(worker.shares_valid_total, 1500);
         assert_eq!(worker.best_share, difficulty);
 
         // Record a higher difficulty share
         user.record_share(worker_name, 2000, timestamp + 2);
-        assert_eq!(user.shares_valid_total, 3);
+        assert_eq!(user.shares_valid_total, 3500);
         assert_eq!(user.best_share, 2000);
         assert_eq!(user.best_share_ever, Some(2000));
         let worker = user.workers.get(worker_name).unwrap();
-        assert_eq!(worker.shares_valid_total, 3);
+        assert_eq!(worker.shares_valid_total, 3500);
         assert_eq!(worker.best_share, 2000);
     }
 
@@ -190,9 +190,9 @@ mod tests {
         let worker1 = user.workers.get("worker1").unwrap();
         let worker2 = user.workers.get("worker2").unwrap();
 
-        assert_eq!(worker1.shares_valid_total, 1);
+        assert_eq!(worker1.shares_valid_total, 100);
         assert_eq!(worker1.best_share, 100);
-        assert_eq!(worker2.shares_valid_total, 1);
+        assert_eq!(worker2.shares_valid_total, 200);
         assert_eq!(worker2.best_share, 200);
     }
 
