@@ -46,11 +46,6 @@ impl PoolMetrics {
         output.push_str(&format!("workers_count {}\n", self.workers_count));
         output.push('\n');
 
-        output.push_str("# HELP idle_users_count Number of idle users\n");
-        output.push_str("# TYPE idle_users_count gauge\n");
-        output.push_str(&format!("idle_users_count {}\n", self.idle_users_count));
-        output.push('\n');
-
         output.push_str("# HELP best_share Highest difficulty share\n");
         output.push_str("# TYPE best_share gauge\n");
         output.push_str(&format!("best_share {}\n", self.best_share));
@@ -220,7 +215,6 @@ mod tests {
             rejected_total: 5,
             users_count: 3,
             workers_count: 7,
-            idle_users_count: 1,
             best_share: 500,
             pool_difficulty: 1000,
             start_time: 1234567890,
@@ -235,7 +229,6 @@ mod tests {
         assert!(exposition.contains("shares_rejected_total 5"));
         assert!(exposition.contains("users_count 3"));
         assert!(exposition.contains("workers_count 7"));
-        assert!(exposition.contains("idle_users_count 1"));
         assert!(exposition.contains("best_share 500"));
         assert!(exposition.contains("difficulty 1000"));
         assert!(exposition.contains("start_time_seconds 1234567890"));

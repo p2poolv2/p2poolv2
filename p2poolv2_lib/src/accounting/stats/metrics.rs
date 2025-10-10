@@ -14,8 +14,6 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::accounting::stats::computed::time_since;
-use crate::accounting::stats::computed::{ComputedHashrate, ComputedShareRate};
 use crate::accounting::stats::pool_local_stats::load_pool_local_stats;
 use crate::accounting::stats::user::User;
 use crate::accounting::stats::worker::Worker;
@@ -42,15 +40,6 @@ pub struct PoolMetrics {
     pub users_count: u32,
     /// Number of workers
     pub workers_count: u32,
-    /// Tracks the number of shares since last stats update
-    #[serde(skip)]
-    pub unaccounted_shares: u64,
-    /// Tracks the total difficulty since last stats update
-    #[serde(skip)]
-    pub unaccounted_difficulty: u64,
-    /// Tracks the number of rejected shares since last stats update
-    #[serde(skip)]
-    pub unaccounted_rejected: u64,
     /// Total accepted shares
     pub accepted_total: u64,
     /// Total rejected shares
@@ -61,19 +50,12 @@ pub struct PoolMetrics {
     pub users: HashMap<String, User>,
     /// Current pool difficulty
     pub pool_difficulty: u64,
-    /// Hashrate computed from unaccounted difficulty
-    pub computed_hashrate: ComputedHashrate,
-    /// Shares per second computed from unaccounted shares
-    pub computed_share_rate: ComputedShareRate,
 }
 
 impl Default for PoolMetrics {
     fn default() -> Self {
         Self {
             lastupdate: None,
-            unaccounted_shares: 0,
-            unaccounted_difficulty: 0,
-            unaccounted_rejected: 0,
             accepted_total: 0,
             rejected_total: 0,
             users_count: 0,
@@ -85,8 +67,6 @@ impl Default for PoolMetrics {
             best_share: 0,
             users: HashMap::with_capacity(INITIAL_USER_MAP_CAPACITY),
             pool_difficulty: 0,
-            computed_hashrate: ComputedHashrate::default(),
-            computed_share_rate: ComputedShareRate::default(),
         }
     }
 }
@@ -101,19 +81,6 @@ impl PoolMetrics {
             users: pool_stats.users,
             ..Default::default()
         })
-    }
-
-    /// Reset metrics to their default values using default
-    fn reset(&mut self) {
-        self.unaccounted_shares = 0;
-        self.unaccounted_rejected = 0;
-        self.unaccounted_difficulty = 0;
-        for (_, user) in self.users.iter_mut() {
-            user.reset();
-            for (_, worker) in user.workers.iter_mut() {
-                worker.reset();
-            }
-        }
     }
 }
 
@@ -137,10 +104,6 @@ pub enum MetricsMessage {
     DecrementWorkerCount {
         btcaddress: Option<String>,
         workername: String,
-        response: oneshot::Sender<()>,
-    },
-
-    MarkUserActive {
         response: oneshot::Sender<()>,
     },
     Commit {
@@ -217,10 +180,6 @@ impl MetricsActor {
                 self.decrement_worker_count(btcaddress, workername);
                 let _ = response.send(());
             }
-            MetricsMessage::MarkUserActive { response } => {
-                self.mark_user_active();
-                let _ = response.send(());
-            }
             MetricsMessage::Commit { response } => {
                 let result = self.commit();
                 let _ = response.send(result);
@@ -244,9 +203,7 @@ impl MetricsActor {
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        self.metrics.unaccounted_shares += 1;
         self.metrics.accepted_total += difficulty;
-        self.metrics.unaccounted_difficulty += difficulty;
         self.metrics.lastupdate = Some(current_unix_timestamp);
         if self.metrics.best_share < difficulty {
             self.metrics.best_share = difficulty;
@@ -258,7 +215,6 @@ impl MetricsActor {
 
     /// Update metrics from rejected share
     fn record_share_rejected(&mut self) {
-        self.metrics.unaccounted_rejected += 1;
         self.metrics.rejected_total += 1;
     }
 
@@ -300,36 +256,7 @@ impl MetricsActor {
     /// Export current metrics as json, returning the serialized json
     /// Reset the metrics to start again
     fn commit(&mut self) -> String {
-        self.metrics.computed_hashrate.set_hashrate_metrics(
-            time_since(self.metrics.lastupdate),
-            self.metrics.unaccounted_difficulty,
-        );
-
-        self.metrics.computed_share_rate.set_share_rate_metrics(
-            time_since(self.metrics.lastupdate),
-            self.metrics.unaccounted_shares,
-        );
-
-        self.commit_users();
-
-        let serialized = serde_json::to_string(&self.metrics).unwrap();
-        self.metrics.reset();
-        serialized
-    }
-
-    fn commit_users(&mut self) {
-        for (_btcaddress, user) in self.metrics.users.iter_mut() {
-            user.computed_hash_rate.set_hashrate_metrics(
-                time_since(Some(user.last_share_at)),
-                user.unaccounted_difficulty,
-            );
-            for (_workername, worker) in user.workers.iter_mut() {
-                worker.computed_hash_rate.set_hashrate_metrics(
-                    time_since(Some(worker.last_share_at)),
-                    worker.unaccounted_difficulty,
-                );
-            }
-        }
+        serde_json::to_string(&self.metrics).unwrap()
     }
 
     /// Set last update time. Largely used for testing.
@@ -420,18 +347,6 @@ impl MetricsHandle {
         response_rx.await
     }
 
-    /// Mark a user as active
-    pub async fn mark_user_active(&self) -> Result<(), tokio::sync::oneshot::error::RecvError> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.sender
-            .send(MetricsMessage::MarkUserActive {
-                response: response_tx,
-            })
-            .await
-            .expect("Error marking user active");
-        response_rx.await
-    }
-
     /// Commit metrics and get JSON result
     pub async fn commit(&self) -> Result<String, tokio::sync::oneshot::error::RecvError> {
         let (response_tx, response_rx) = oneshot::channel();
@@ -476,7 +391,7 @@ impl MetricsHandle {
 /// Construct a new metrics actor with existing metrics and return its handle
 pub async fn start_metrics(log_dir: String) -> Result<MetricsHandle, std::io::Error> {
     let (sender, receiver) = mpsc::channel(METRICS_MESSAGE_BUFFER_SIZE);
-    let actor = MetricsActor::with_existing_metrics(&log_dir, receiver)?;
+    let actor = MetricsActor::new(receiver);
     tokio::spawn(async move {
         actor.run().await;
     });
@@ -506,35 +421,10 @@ mod tests {
     #[test]
     fn test_pool_metrics_default() {
         let metrics = PoolMetrics::default();
-        assert_eq!(metrics.unaccounted_shares, 0);
-        assert_eq!(metrics.unaccounted_difficulty, 0);
-        assert_eq!(metrics.unaccounted_rejected, 0);
         assert_eq!(metrics.users_count, 0);
         assert_eq!(metrics.workers_count, 0);
         assert!(metrics.lastupdate.is_none());
         assert!(metrics.best_share == 0);
-    }
-
-    #[test]
-    fn test_pool_metrics_reset() {
-        let mut metrics = PoolMetrics::default();
-        metrics.unaccounted_shares = 10;
-        metrics.unaccounted_difficulty = 1000;
-        metrics.unaccounted_rejected = 5;
-        metrics.users_count = 3;
-        metrics.workers_count = 5;
-        metrics.lastupdate = None;
-        metrics.best_share = 500;
-
-        metrics.reset();
-
-        assert_eq!(metrics.unaccounted_shares, 0);
-        assert_eq!(metrics.unaccounted_difficulty, 0);
-        assert_eq!(metrics.unaccounted_rejected, 0);
-        assert_eq!(metrics.users_count, 3);
-        assert_eq!(metrics.workers_count, 5);
-        assert!(metrics.lastupdate.is_none());
-        assert_eq!(metrics.best_share, 500);
     }
 
     #[tokio::test]
@@ -557,8 +447,6 @@ mod tests {
             .await;
 
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.unaccounted_shares, 1);
-        assert_eq!(metrics.unaccounted_difficulty, 100);
         assert!(metrics.lastupdate.is_some());
         assert_eq!(metrics.best_share, 100);
 
@@ -576,8 +464,6 @@ mod tests {
             })
             .await;
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.unaccounted_shares, 2);
-        assert_eq!(metrics.unaccounted_difficulty, 150);
         assert_eq!(metrics.best_share, 100);
 
         let _ = handle
@@ -593,8 +479,6 @@ mod tests {
             })
             .await;
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.unaccounted_shares, 3);
-        assert_eq!(metrics.unaccounted_difficulty, 350);
         assert_eq!(metrics.best_share, 200);
     }
 
@@ -606,11 +490,9 @@ mod tests {
             .unwrap();
         let _ = handle.record_share_rejected().await;
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.unaccounted_rejected, 1);
 
         let _ = handle.record_share_rejected().await;
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.unaccounted_rejected, 2);
     }
 
     #[test_log::test(tokio::test)]
@@ -662,21 +544,9 @@ mod tests {
         // Check that lastupdate exists and is a recent timestamp
         assert!(json["lastupdate"].as_u64().is_some());
 
-        let mut metrics = handle.get_metrics().await;
+        let metrics = handle.get_metrics().await;
         // After commit, the metrics should be reset
-        assert_eq!(metrics.unaccounted_shares, 0);
-        assert_eq!(metrics.unaccounted_difficulty, 0);
-        assert_eq!(metrics.unaccounted_rejected, 0);
         assert_eq!(metrics.best_share, 2000);
-        assert_eq!(metrics.computed_hashrate.hashrate_1m, 19);
-
-        let user1_metrics = metrics.users.get_mut("user1").unwrap();
-        assert_eq!(user1_metrics.unaccounted_difficulty, 0);
-        assert_eq!(user1_metrics.computed_hash_rate.hashrate_1m, 19);
-
-        let worker1_metrics = user1_metrics.get_worker_mut("worker1").unwrap();
-        assert_eq!(worker1_metrics.unaccounted_difficulty, 0);
-        assert_eq!(worker1_metrics.computed_hash_rate.hashrate_1m, 19);
     }
 
     #[tokio::test]
@@ -832,9 +702,6 @@ mod tests {
             .await;
 
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.unaccounted_shares, 1);
-        assert_eq!(metrics.unaccounted_difficulty, 123);
-        assert_eq!(metrics.unaccounted_rejected, 1);
         assert_eq!(metrics.workers_count, 1);
         assert!(metrics.users.contains_key("user4"));
         assert!(
@@ -949,8 +816,6 @@ mod tests {
             .await;
 
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.unaccounted_shares, 3);
-        assert_eq!(metrics.unaccounted_difficulty, 60);
 
         let user_a = metrics.users.get("userA").unwrap();
         assert_eq!(user_a.shares_valid_total, 30);
