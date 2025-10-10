@@ -125,6 +125,7 @@ mod tests {
             accepted_total: 0,
             rejected_total: 0,
             best_share: 0,
+            best_share_ever: 0,
             users: HashMap::with_capacity(100),
             pool_difficulty: 500000,
         };
@@ -170,6 +171,7 @@ mod tests {
             accepted_total: 0,
             rejected_total: 0,
             best_share: 0,
+            best_share_ever: 0,
             users: HashMap::with_capacity(100),
             pool_difficulty: 500000,
         };
