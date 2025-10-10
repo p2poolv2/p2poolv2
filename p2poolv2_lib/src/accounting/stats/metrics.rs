@@ -223,9 +223,13 @@ impl MetricsActor {
         match self.metrics.users.entry(btcaddress) {
             Occupied(mut entry) => {
                 let user = entry.get_mut();
-                if user.workers.insert(workername, Worker::default()).is_none() {
-                    self.metrics.workers_count += 1;
-                }
+                user.workers.insert(workername, Worker::default());
+                // Increment worker count, as this is triggered by
+                // authorize. Even if we have the worker in workers
+                // hashmap, we need to increment the count as it is
+                // authorizing anew, which meant it disconnected and
+                // therefore the count was decremented.
+                self.metrics.workers_count += 1;
             }
             Vacant(entry) => {
                 let mut user = User::default();
