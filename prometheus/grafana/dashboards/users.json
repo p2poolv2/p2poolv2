@@ -18,7 +18,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 0,
+  "id": 3,
   "links": [],
   "panels": [
     {
@@ -284,18 +284,11 @@
       },
       "id": 3,
       "options": {
-        "displayMode": "gradient",
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": false
-        },
-        "maxVizHeight": 300,
-        "minVizHeight": 16,
-        "minVizWidth": 8,
-        "namePlacement": "auto",
-        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -303,17 +296,19 @@
           "fields": "",
           "values": false
         },
-        "showUnfilled": true,
-        "sizing": "auto",
-        "valueMode": "color"
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
       },
       "pluginVersion": "12.2.0",
+      "repeat": "workername",
       "repeatDirection": "h",
       "targets": [
         {
           "editorMode": "builder",
           "exemplar": false,
-          "expr": "worker_best_share{btcaddress=\"$user_address\"}",
+          "expr": "worker_best_share_ever{btcaddress=\"$user_address\", workername=\"$workername\"}",
+          "format": "time_series",
           "instant": true,
           "legendFormat": "{{workername}}",
           "range": false,
@@ -321,7 +316,7 @@
         }
       ],
       "title": "Highest Difficulty",
-      "type": "bargauge"
+      "type": "stat"
     }
   ],
   "preload": false,
@@ -380,7 +375,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "User Dashboard",
+  "title": "Users and Workers",
   "uid": "adnhx6x",
-  "version": 16
+  "version": 29
 }
