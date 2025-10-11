@@ -374,7 +374,7 @@ impl MetricsHandle {
 /// Construct a new metrics actor with existing metrics and return its handle
 pub async fn start_metrics(log_dir: String) -> Result<MetricsHandle, std::io::Error> {
     let (sender, receiver) = mpsc::channel(METRICS_MESSAGE_BUFFER_SIZE);
-    let actor = MetricsActor::new(receiver);
+    let actor = MetricsActor::with_existing_metrics(&log_dir, receiver)?;
     tokio::spawn(async move {
         actor.run().await;
     });
