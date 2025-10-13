@@ -206,6 +206,29 @@ pub struct NetworkConfig {
     pub dial_timeout_secs: u64,
 }
 
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            listen_address: "".to_string(),
+            dial_peers: vec![],
+            max_pending_incoming: 10,
+            max_pending_outgoing: 10,
+            max_established_incoming: 50,
+            max_established_outgoing: 50,
+            max_established_per_peer: 1,
+            max_workbase_per_second: 10,
+            max_userworkbase_per_second: 10,
+            max_miningshare_per_second: 100,
+            max_inventory_per_second: 100,
+            max_transaction_per_second: 100,
+            rate_limit_window_secs: 1,
+            max_requests_per_second: 1,
+            peer_inactivity_timeout_secs: 60,
+            dial_timeout_secs: 30,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct StoreConfig {
     pub path: String,
@@ -271,6 +294,7 @@ pub struct ApiConfig {
 #[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
 pub struct Config {
+    #[serde(default)]
     pub network: NetworkConfig,
     pub store: StoreConfig,
     pub ckpool: CkPoolConfig,
