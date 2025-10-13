@@ -138,46 +138,48 @@ impl Node {
             })
             .build();
 
-        match config.network.listen_address.parse() {
-            Ok(addr) => match swarm.listen_on(addr) {
-                Ok(_) => {
-                    info!("Node listening on {}", config.network.listen_address);
-                }
+        if !config.network.listen_address.is_empty() {
+            match config.network.listen_address.parse() {
+                Ok(addr) => match swarm.listen_on(addr) {
+                    Ok(_) => {
+                        info!("Node listening on {}", config.network.listen_address);
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to listen on {}: {}",
+                            config.network.listen_address, e
+                        );
+                        return Err(format!(
+                            "Failed to listen on {}: {}",
+                            config.network.listen_address, e
+                        )
+                        .into());
+                    }
+                },
                 Err(e) => {
                     error!(
-                        "Failed to listen on {}: {}",
+                        "Invalid listen address {}: {}",
                         config.network.listen_address, e
                     );
                     return Err(format!(
-                        "Failed to listen on {}: {}",
+                        "Invalid listen address {}: {}",
                         config.network.listen_address, e
                     )
                     .into());
                 }
-            },
-            Err(e) => {
-                error!(
-                    "Invalid listen address {}: {}",
-                    config.network.listen_address, e
-                );
-                return Err(format!(
-                    "Invalid listen address {}: {}",
-                    config.network.listen_address, e
-                )
-                .into());
             }
-        }
 
-        for peer_addr in &config.network.dial_peers {
-            match peer_addr.parse::<Multiaddr>() {
-                Ok(remote) => {
-                    if let Err(e) = swarm.dial(remote) {
-                        debug!("Failed to dial {}: {}", peer_addr, e);
-                    } else {
-                        info!("Dialed {}", peer_addr);
+            for peer_addr in &config.network.dial_peers {
+                match peer_addr.parse::<Multiaddr>() {
+                    Ok(remote) => {
+                        if let Err(e) = swarm.dial(remote) {
+                            debug!("Failed to dial {}: {}", peer_addr, e);
+                        } else {
+                            info!("Dialed {}", peer_addr);
+                        }
                     }
+                    Err(e) => debug!("Invalid multiaddr {}: {}", peer_addr, e),
                 }
-                Err(e) => debug!("Invalid multiaddr {}: {}", peer_addr, e),
             }
         }
 
