@@ -594,4 +594,10 @@ mod tests {
             },
         );
     }
+
+    #[test]
+    fn test_default_network_config() {
+        let config = NetworkConfig::default();
+        assert!(config.listen_address.is_empty());
+    }
 }
