@@ -16,6 +16,7 @@
 
 use crate::stratum::difficulty_adjuster::DifficultyAdjusterTrait;
 use bitcoin::secp256k1::rand::{self, Rng};
+use std::time::Instant;
 
 /// Use 4 byte extranonce1
 pub const EXTRANONCE1_SIZE: usize = 4;
@@ -34,6 +35,8 @@ pub struct Session<D: DifficultyAdjusterTrait> {
     pub enonce1_hex: String,
     /// Did the mine subscribe already?
     pub subscribed: bool,
+    /// Has the miner been successfully authorized?
+    pub authorized: bool,
     /// Optional username of the miner, supplied by the miner, we just store it in session
     pub username: Option<String>,
     /// bitcoin address used as user identifier
@@ -52,6 +55,12 @@ pub struct Session<D: DifficultyAdjusterTrait> {
     pub version_mask: i32,
     /// Difficulty suggested by the client
     pub suggested_difficulty: Option<u64>,
+    /// Instant when the session was created
+    pub connected_at: Instant,
+    /// Instant when the last valid share was submitted
+    pub last_share_time: Option<Instant>,
+    /// Whether at least one share has been submitted
+    pub has_submitted_share: bool,
 }
 
 impl<D: DifficultyAdjusterTrait> Session<D> {
@@ -64,11 +73,13 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
     ) -> Self {
         let id = Session::<D>::generate_id();
         let enonce1 = id.to_le();
+        let now = Instant::now();
         Self {
             id: hex::encode(id.to_be_bytes()),
             enonce1,
             enonce1_hex: hex::encode(enonce1.to_le_bytes()),
             subscribed: false,
+            authorized: false,
             username: None,
             workername: None,
             btcaddress: None,
@@ -78,6 +89,9 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
             difficulty_adjuster: D::new(start_difficulty, minimum_difficulty, maximum_difficulty),
             version_mask,
             suggested_difficulty: None,
+            connected_at: now,
+            last_share_time: None,
+            has_submitted_share: false,
         }
     }
 
@@ -145,6 +159,8 @@ mod tests {
             )
         );
         assert!(!session.subscribed);
+        assert!(!session.authorized);
+        assert!(!session.has_submitted_share);
     }
 
     #[test]
