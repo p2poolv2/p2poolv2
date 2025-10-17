@@ -75,6 +75,7 @@ publish = false
 [dependencies]
 p2poolv2_lib = { path = "p2poolv2_lib" }
 bitcoindrpc = { path = "bitcoindrpc", features = ["test-utils"] }
+chrono.workspace = true
 
 # Repeat dev dependencies for use integration tests
 [dev-dependencies]

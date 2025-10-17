@@ -14,8 +14,9 @@ base64 = "0.22"
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
-serde = { version = "1", features = ["derive"] }
+serde = { workspace = true }
 serde_json = "1"
+chrono = { workspace = true }
 
 [lib]
 name = "p2poolv2_api"

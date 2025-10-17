@@ -21,9 +21,11 @@ use axum::{
     middleware::{self},
     routing::get,
 };
+use chrono::{DateTime, TimeZone, Utc};
 use p2poolv2_lib::{
-    accounting::simple_pplns::SimplePplnsShare, accounting::stats::metrics::MetricsHandle,
-    config::ApiConfig, shares::chain::chain_store::ChainStore,
+    accounting::{simple_pplns::SimplePplnsShare, stats::metrics::MetricsHandle},
+    config::ApiConfig,
+    shares::chain::chain_store::ChainStore,
 };
 use serde::Deserialize;
 use std::{net::SocketAddr, sync::Arc};
@@ -43,8 +45,8 @@ pub(crate) struct AppState {
 #[derive(Deserialize)]
 pub struct PplnsQuery {
     limit: Option<usize>,
-    start_time: Option<u64>,
-    end_time: Option<u64>,
+    start_time: Option<String>,
+    end_time: Option<String>,
 }
 
 /// Start the API server and return a shutdown channel
@@ -110,9 +112,39 @@ async fn pplns_shares(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PplnsQuery>,
 ) -> Result<Json<Vec<SimplePplnsShare>>, ApiError> {
+    // Convert ISO 8601 strings to Unix timestamps
+    let start_time = match query.start_time.as_ref() {
+        Some(s) => match DateTime::parse_from_rfc3339(s) {
+            Ok(dt) => dt.timestamp() as u64,
+            Err(_) => {
+                return Err(ApiError::ServerError("Invalid time format".into()));
+            }
+        },
+        None => 0,
+    };
+
+    let end_time = match query.end_time.as_ref() {
+        Some(s) => match DateTime::parse_from_rfc3339(s) {
+            Ok(dt) => dt.timestamp() as u64,
+            Err(_) => {
+                return Err(ApiError::ServerError("Invalid time format".into()));
+            }
+        },
+        None => {
+            // Default to current time
+            let now = chrono::Utc::now();
+            now.timestamp() as u64
+        }
+    };
+
+    if end_time < start_time {
+        return Err(ApiError::ServerError("Invalid time format".into()));
+    }
+
     let shares =
         state
             .chain_store
-            .get_pplns_shares_filtered(query.limit, query.start_time, query.end_time);
+            .get_pplns_shares_filtered(query.limit, Some(start_time), Some(end_time));
+
     Ok(Json(shares))
 }
