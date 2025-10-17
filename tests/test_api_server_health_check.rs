@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use base64::Engine;
+use chrono::{DateTime, TimeZone, Utc};
 use p2poolv2_api::api::error::ApiError;
 use p2poolv2_api::start_api_server;
 use p2poolv2_lib::accounting::{simple_pplns::SimplePplnsShare, stats::metrics::start_metrics};
@@ -253,13 +254,16 @@ async fn test_pplns_shares_endpoint() -> Result<(), ApiError> {
         .add_user("tb1qtestaddress".to_string())
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
+    let t1 = Utc.ymd(2025, 10, 17).and_hms(19, 40, 0).timestamp() as u64;
+    let t2 = Utc.ymd(2025, 10, 17).and_hms(19, 50, 0).timestamp() as u64;
+
     let shares = vec![
         SimplePplnsShare::new(
             user_id,
             100,
             "tb1qtestaddress".to_string(),
             "worker1".to_string(),
-            1_000,
+            t1,
             "job1".to_string(),
             "extra".to_string(),
             "nonce1".to_string(),
@@ -269,7 +273,7 @@ async fn test_pplns_shares_endpoint() -> Result<(), ApiError> {
             101,
             "tb1qtestaddress".to_string(),
             "worker2".to_string(),
-            1_500,
+            t2,
             "job2".to_string(),
             "extra".to_string(),
             "nonce2".to_string(),
@@ -284,11 +288,14 @@ async fn test_pplns_shares_endpoint() -> Result<(), ApiError> {
 
     let client = Client::new();
 
+    let start_iso = "2025-10-17T19:39:59Z";
+    let end_iso = "2025-10-17T19:55:00Z";
+
     // Test 1: Get all shares
     let response = client
         .get(format!(
-            "http://127.0.0.1:{}/pplns_shares?limit=10",
-            api_config.port
+            "http://127.0.0.1:{}/pplns_shares?start_time={}&end_time={}&limit=10",
+            api_config.port, start_iso, end_iso
         ))
         .send()
         .await
@@ -318,7 +325,7 @@ async fn test_pplns_shares_endpoint() -> Result<(), ApiError> {
     // Test 3: Time filtering
     let response = client
         .get(format!(
-            "http://127.0.0.1:{}/pplns_shares?start_time=1200&end_time=1600",
+            "http://127.0.0.1:{}/pplns_shares?start_time=2025-10-17T19:40:01Z&end_time=2025-10-17T19:50:00Z",
             api_config.port
         ))
         .send()
@@ -329,7 +336,10 @@ async fn test_pplns_shares_endpoint() -> Result<(), ApiError> {
         .await
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
     assert_eq!(filtered.len(), 1, "Time filter should return 1 share");
-    assert_eq!(filtered[0].n_time, 1_500);
+    assert_eq!(
+        filtered[0].n_time, t2,
+        "Returned share should have correct timestamp"
+    );
 
     // Shutdown server
     let _ = shutdown_tx.send(());
