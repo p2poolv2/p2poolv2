@@ -14,6 +14,12 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use axum::{
+    Json,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use serde_json::json;
 use std::error::Error;
 use std::fmt;
 
@@ -30,10 +36,15 @@ impl fmt::Display for ApiError {
     }
 }
 
-impl Error for ApiError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl Error for ApiError {}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
         match self {
-            ApiError::ServerError(_) => None,
+            ApiError::ServerError(msg) => {
+                let body = Json(json!({ "error": msg }));
+                (StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
+            }
         }
     }
 }
