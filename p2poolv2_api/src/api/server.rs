@@ -16,15 +16,16 @@
 
 use crate::api::error::ApiError;
 use axum::{
-    Router,
-    extract::State,
+    Json, Router,
+    extract::{Query, State},
     middleware::{self},
     routing::get,
 };
 use p2poolv2_lib::{
-    accounting::stats::metrics::MetricsHandle, config::ApiConfig,
-    shares::chain::chain_store::ChainStore,
+    accounting::simple_pplns::SimplePplnsShare, accounting::stats::metrics::MetricsHandle,
+    config::ApiConfig, shares::chain::chain_store::ChainStore,
 };
+use serde::Deserialize;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
 use tracing::info;
@@ -37,6 +38,13 @@ pub(crate) struct AppState {
     pub(crate) metrics_handle: MetricsHandle,
     pub(crate) auth_user: Option<String>,
     pub(crate) auth_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct PplnsQuery {
+    limit: Option<usize>,
+    start_time: Option<u64>,
+    end_time: Option<u64>,
 }
 
 /// Start the API server and return a shutdown channel
@@ -60,6 +68,7 @@ pub async fn start_api_server(
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/metrics", get(metrics))
+        .route("/pplns_shares", get(pplns_shares))
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth_middleware,
@@ -95,4 +104,15 @@ async fn health_check() -> String {
 async fn metrics(State(state): State<Arc<AppState>>) -> String {
     let pool_metrics = state.metrics_handle.get_metrics().await;
     pool_metrics.get_exposition()
+}
+
+async fn pplns_shares(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PplnsQuery>,
+) -> Result<Json<Vec<SimplePplnsShare>>, ApiError> {
+    let shares =
+        state
+            .chain_store
+            .get_pplns_shares_filtered(query.limit, query.start_time, query.end_time);
+    Ok(Json(shares))
 }

@@ -17,7 +17,7 @@
 use base64::Engine;
 use p2poolv2_api::api::error::ApiError;
 use p2poolv2_api::start_api_server;
-use p2poolv2_lib::accounting::stats::metrics::start_metrics;
+use p2poolv2_lib::accounting::{simple_pplns::SimplePplnsShare, stats::metrics::start_metrics};
 use p2poolv2_lib::config::ApiConfig;
 use p2poolv2_lib::shares::{ShareBlock, chain::chain_store::ChainStore};
 use p2poolv2_lib::store::Store;
@@ -206,6 +206,133 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
     let _ = shutdown_tx.send(());
 
     // Give server a moment to shut down
+    sleep(Duration::from_millis(200)).await;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_pplns_shares_endpoint() -> Result<(), ApiError> {
+    // Setup temporary DB
+    let temp_dir = tempdir().map_err(|e| ApiError::ServerError(e.to_string()))?;
+    let store = Arc::new(
+        Store::new(temp_dir.path().to_str().unwrap().to_string(), false)
+            .map_err(|e| ApiError::ServerError(e.to_string()))?,
+    );
+    let genesis_block = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
+    let chain_store = Arc::new(p2poolv2_lib::shares::chain::chain_store::ChainStore::new(
+        store.clone(),
+        genesis_block,
+    ));
+
+    // Start metrics actor
+    let metrics_handle = p2poolv2_lib::accounting::stats::metrics::start_metrics(
+        temp_dir.path().to_str().unwrap().to_string(),
+    )
+    .await
+    .map_err(|e| ApiError::ServerError(e.to_string()))?;
+
+    // API config without auth
+    let api_config = p2poolv2_lib::config::ApiConfig {
+        hostname: "127.0.0.1".into(),
+        port: 4002,
+        auth_user: None,
+        auth_token: None,
+    };
+
+    // Start API server
+    let shutdown_tx =
+        p2poolv2_api::start_api_server(api_config.clone(), chain_store.clone(), metrics_handle)
+            .await
+            .map_err(|e| ApiError::ServerError(e.to_string()))?;
+
+    sleep(Duration::from_millis(500)).await;
+
+    // Insert test shares
+    let user_id = store
+        .add_user("tb1qtestaddress".to_string())
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
+
+    let shares = vec![
+        SimplePplnsShare::new(
+            user_id,
+            100,
+            "tb1qtestaddress".to_string(),
+            "worker1".to_string(),
+            1_000,
+            "job1".to_string(),
+            "extra".to_string(),
+            "nonce1".to_string(),
+        ),
+        SimplePplnsShare::new(
+            user_id,
+            101,
+            "tb1qtestaddress".to_string(),
+            "worker2".to_string(),
+            1_500,
+            "job2".to_string(),
+            "extra".to_string(),
+            "nonce2".to_string(),
+        ),
+    ];
+
+    for share in &shares {
+        store
+            .add_pplns_share(share.clone())
+            .map_err(|e| ApiError::ServerError(e.to_string()))?;
+    }
+
+    let client = Client::new();
+
+    // Test 1: Get all shares
+    let response = client
+        .get(format!(
+            "http://127.0.0.1:{}/pplns_shares?limit=10",
+            api_config.port
+        ))
+        .send()
+        .await
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
+    assert!(response.status().is_success(), "Expected 200 OK");
+    let body: Vec<SimplePplnsShare> = response
+        .json()
+        .await
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
+    assert_eq!(body.len(), 2, "Should return 2 shares");
+
+    // Test 2: Limit filtering
+    let response = client
+        .get(format!(
+            "http://127.0.0.1:{}/pplns_shares?limit=1",
+            api_config.port
+        ))
+        .send()
+        .await
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
+    let limited: Vec<SimplePplnsShare> = response
+        .json()
+        .await
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
+    assert_eq!(limited.len(), 1, "Limit=1 should return 1 share");
+
+    // Test 3: Time filtering
+    let response = client
+        .get(format!(
+            "http://127.0.0.1:{}/pplns_shares?start_time=1200&end_time=1600",
+            api_config.port
+        ))
+        .send()
+        .await
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
+    let filtered: Vec<SimplePplnsShare> = response
+        .json()
+        .await
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
+    assert_eq!(filtered.len(), 1, "Time filter should return 1 share");
+    assert_eq!(filtered[0].n_time, 1_500);
+
+    // Shutdown server
+    let _ = shutdown_tx.send(());
     sleep(Duration::from_millis(200)).await;
 
     Ok(())
