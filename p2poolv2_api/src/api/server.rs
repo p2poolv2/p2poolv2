@@ -138,7 +138,7 @@ async fn pplns_shares(
     };
 
     if end_time < start_time {
-        return Err(ApiError::ServerError("Invalid time format".into()));
+        return Err(ApiError::ServerError("Invalid date range".into()));
     }
 
     let shares =
