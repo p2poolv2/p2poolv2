@@ -62,13 +62,13 @@ pub fn execute(username: String, password: Option<String>) -> Result<(), Box<dyn
 
     // Display results in an easy-to-copy format
     println!("\n=== API Authentication Credentials ===\n");
-    println!("Username: {}", username);
-    println!("Password: {}", password);
-    println!("Salt:     {}", salt);
-    println!("HMAC:     {}", hmac);
+    println!("Username: {username}");
+    println!("Password: {password}");
+    println!("Salt:     {salt}");
+    println!("HMAC:     {hmac}");
     println!("\n=== Add to config.toml ===\n");
-    println!("auth_user = \"{}\"", username);
-    println!("auth_token = \"{}${}\"", salt, hmac);
+    println!("auth_user = \"{username}\"");
+    println!("auth_token = \"{salt}${hmac}\"");
     println!();
 
     Ok(())

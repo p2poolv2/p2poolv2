@@ -3,10 +3,6 @@ path = "./store.db"
 background_task_frequency_hours = 24
 pplns_ttl_days = 7
 
-[ckpool]
-host = "localhost"
-port = 8881
-
 [stratum]
 hostname = "0.0.0.0"
 port = 3333

@@ -20,6 +20,7 @@ use crate::stratum::work::block_template::BlockTemplate;
 use crate::stratum::work::tracker::JobDetails;
 use bitcoin::blockdata::block::{Block, Header};
 use bitcoin::consensus::Decodable;
+use hex::FromHex;
 use std::str::FromStr;
 use tracing::debug;
 
@@ -34,22 +35,17 @@ fn decode_txids(blocktemplate: &BlockTemplate) -> Result<Vec<bitcoin::Txid>, Err
         .collect()
 }
 
-/// Build coinbase from the submitted share and block template.
-pub fn build_coinbase_from_submission(
-    job: &JobDetails,
-    submission: &SimpleRequest<'_>,
-    enonce1_hex: &str,
+/// Build coinbase from the submitted share and block template components.
+pub fn build_coinbase_from_components(
+    coinbase1: &str,
+    enonce1: &str,
+    enonce2: &str,
+    coinbase2: &str,
 ) -> Result<bitcoin::Transaction, Error> {
-    use hex::FromHex;
-
-    let coinb1 = &job.coinbase1;
-    let coinb2 = &job.coinbase2;
-    let enonce2 = &submission.params[2].as_ref().unwrap();
-
     // Add detailed logging to debug the issue
-    debug!("Building coinbase with coinb1: {}", coinb1);
+    debug!("Building coinbase with coinb1: {}", coinbase1);
 
-    let complete_tx = format!("{coinb1}{enonce1_hex}{enonce2}{coinb2}");
+    let complete_tx = format!("{coinbase1}{enonce1}{enonce2}{coinbase2}");
     debug!("Complete coinbase tx hex: {}", complete_tx);
 
     let tx_bytes = Vec::from_hex(&complete_tx).unwrap();
@@ -95,9 +91,17 @@ pub fn validate_submission_difficulty(
         .map_err(|_| Error::InvalidParams("Failed to parse compact target".into()))?;
     let target = bitcoin::Target::from_compact(compact_target);
 
+    let enonce2 = submission.params[2].as_ref().unwrap().as_str();
+
+    debug!(
+        "Coinbase components coinbase1: {} enonce1: {}, enonce2: {}, coinbase2: {}",
+        &job.coinbase1, enonce1_hex, enonce2, &job.coinbase2
+    );
+
     // build coinbase from submission
-    let coinbase = build_coinbase_from_submission(job, submission, enonce1_hex)
-        .map_err(|_| Error::InvalidParams("Failed to build coinbase transaction".into()))?;
+    let coinbase =
+        build_coinbase_from_components(&job.coinbase1, enonce1_hex, enonce2, &job.coinbase2)
+            .map_err(|_| Error::InvalidParams("Failed to build coinbase transaction".into()))?;
 
     debug!("Coinbase transaction: {:?}", coinbase);
 

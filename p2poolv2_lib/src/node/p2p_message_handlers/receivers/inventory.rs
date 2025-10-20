@@ -86,7 +86,8 @@ mod tests {
     use crate::node::messages::{GetData, InventoryMessage};
     use crate::node::p2p_message_handlers::receivers::inventory::handle_inventory;
     use crate::node::{Message, SwarmSend};
-    use crate::shares::ShareBlockHash;
+    use crate::test_utils::TestShareBlockBuilder;
+    use bitcoin::BlockHash;
     use mockall::predicate::*;
     use std::sync::Arc;
     use tokio::sync::mpsc;
@@ -96,13 +97,16 @@ mod tests {
         // Setup
         let mut store = ChainStore::default();
 
+        let block1 = TestShareBlockBuilder::new().build();
+
+        let block2 = TestShareBlockBuilder::new().build();
+
+        let block3 = TestShareBlockBuilder::new().build();
+
         // Create some test block hashes
-        let block_hash1: ShareBlockHash =
-            "0000000000000000000000000000000000000000000000000000000000000001".into();
-        let block_hash2: ShareBlockHash =
-            "0000000000000000000000000000000000000000000000000000000000000002".into();
-        let block_hash3: ShareBlockHash =
-            "0000000000000000000000000000000000000000000000000000000000000003".into();
+        let block_hash1: BlockHash = block1.block_hash();
+        let block_hash2: BlockHash = block2.block_hash();
+        let block_hash3: BlockHash = block3.block_hash();
 
         let locator = vec![block_hash1, block_hash2, block_hash3];
         let missing_blocks = vec![block_hash1, block_hash3]; // Assume we're missing blocks 1 and 3

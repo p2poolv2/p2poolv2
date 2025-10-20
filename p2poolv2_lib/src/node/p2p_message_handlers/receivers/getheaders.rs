@@ -16,12 +16,12 @@
 
 use crate::node::Message;
 use crate::node::SwarmSend;
-use crate::shares::ShareBlockHash;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store::ChainStore;
+use bitcoin::BlockHash;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::info;
@@ -33,8 +33,8 @@ const MAX_HEADERS: usize = 2000;
 /// - limit the number of blocks to MAX_HEADERS
 /// - respond with send all headers found
 pub async fn handle_getheaders<C: 'static + Send + Sync>(
-    block_hashes: Vec<ShareBlockHash>,
-    stop_block_hash: ShareBlockHash,
+    block_hashes: Vec<BlockHash>,
+    stop_block_hash: BlockHash,
     store: std::sync::Arc<ChainStore>,
     response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
@@ -59,7 +59,7 @@ mod tests {
     use super::*;
     #[mockall_double::double]
     use crate::shares::chain::chain_store::ChainStore;
-    use crate::test_utils::TestBlockBuilder;
+    use crate::test_utils::TestShareBlockBuilder;
     use std::sync::Arc;
     use tokio::sync::mpsc;
 
@@ -69,23 +69,15 @@ mod tests {
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
         let response_channel = 1u32;
 
-        let block_hashes = vec![
-            "0000000000000000000000000000000000000000000000000000000000000001".into(),
-            "0000000000000000000000000000000000000000000000000000000000000002".into(),
-        ];
+        let block1 = TestShareBlockBuilder::new().build();
 
-        let block1 = TestBlockBuilder::new()
-            .blockhash("0000000000000000000000000000000000000000000000000000000000000001")
-            .build();
+        let block2 = TestShareBlockBuilder::new().build();
 
-        let block2 = TestBlockBuilder::new()
-            .blockhash("0000000000000000000000000000000000000000000000000000000000000002")
-            .build();
+        let block_hashes = vec![block1.block_hash(), block2.block_hash()];
 
         let response_headers = vec![block1.header.clone(), block2.header.clone()];
 
-        let stop_block_hash =
-            "0000000000000000000000000000000000000000000000000000000000000002".into();
+        let stop_block_hash = block2.block_hash();
 
         // Set up mock expectations
         store
@@ -118,13 +110,13 @@ mod tests {
         let (swarm_tx, swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
         let response_channel = 1u32;
 
-        let block_hashes = vec![
-            "0000000000000000000000000000000000000000000000000000000000000001".into(),
-            "0000000000000000000000000000000000000000000000000000000000000002".into(),
-        ];
+        let block1 = TestShareBlockBuilder::new().build();
 
-        let stop_block_hash =
-            "0000000000000000000000000000000000000000000000000000000000000002".into();
+        let block2 = TestShareBlockBuilder::new().build();
+
+        let block_hashes = vec![block1.block_hash(), block2.block_hash()];
+
+        let stop_block_hash = block2.block_hash();
 
         // Set up mock expectations
         store

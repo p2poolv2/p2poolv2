@@ -20,7 +20,8 @@ use p2poolv2_api::api::error::ApiError;
 use p2poolv2_api::start_api_server;
 use p2poolv2_lib::accounting::{simple_pplns::SimplePplnsShare, stats::metrics::start_metrics};
 use p2poolv2_lib::config::ApiConfig;
-use p2poolv2_lib::shares::{ShareBlock, chain::chain_store::ChainStore};
+use p2poolv2_lib::shares::chain::chain_store::ChainStore;
+use p2poolv2_lib::shares::share_block::ShareBlock;
 use p2poolv2_lib::store::Store;
 use reqwest::{Client, header};
 use std::sync::Arc;
@@ -35,7 +36,11 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
             .map_err(|e| ApiError::ServerError(e.to_string()))?,
     );
     let genesis_block = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
-    let chain_store = Arc::new(ChainStore::new(store, genesis_block));
+    let chain_store = Arc::new(ChainStore::new(
+        store,
+        genesis_block,
+        bitcoin::Network::Signet,
+    ));
 
     // Start metrics actor
     let metrics_handle = start_metrics(temp_dir.path().to_str().unwrap().to_string())
@@ -103,7 +108,11 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
             .map_err(|e| ApiError::ServerError(e.to_string()))?,
     );
     let genesis_block = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
-    let chain_store = Arc::new(ChainStore::new(store, genesis_block));
+    let chain_store = Arc::new(ChainStore::new(
+        store,
+        genesis_block,
+        bitcoin::Network::Signet,
+    ));
 
     // Start metrics actor
     let metrics_handle = start_metrics(temp_dir.path().to_str().unwrap().to_string())
@@ -118,7 +127,7 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
 
     // Pre-computed HMAC-SHA256 for salt=0123456789abcdef0123456789abcdef, password=testpassword
     let test_hmac = "ae9b643bfa9f224a9c11accafec1ab89c3851c54ac036af2ac7f5b7a7d064fcb";
-    let test_token = format!("{}${}", test_salt, test_hmac);
+    let test_token = format!("{test_salt}${test_hmac}");
 
     let api_config = ApiConfig {
         hostname: "127.0.0.1".into(),
@@ -171,7 +180,7 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
     // Test 3: Request with valid credentials should succeed
     let valid_auth = format!(
         "Basic {}",
-        base64::engine::general_purpose::STANDARD.encode(format!("testuser:{}", test_password))
+        base64::engine::general_purpose::STANDARD.encode(format!("testuser:{test_password}"))
     );
     let response = client
         .get(format!("http://127.0.0.1:{}/health", api_config.port))

@@ -15,11 +15,10 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::simple_pplns::SimplePplnsShare;
-use crate::shares::ShareBlockHash;
-use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
-use crate::shares::{ShareBlock, ShareHeader};
+use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
-use rust_decimal::Decimal;
+use bitcoin::BlockHash;
+use bitcoin::hashes::Hash;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::sync::Arc;
@@ -34,6 +33,8 @@ const MIN_CONFIRMATION_DEPTH: usize = 100;
 pub struct ChainStore {
     /// RocksDB store used by the chain
     pub store: Arc<Store>,
+    /// Network type for the chain stored here
+    pub network: bitcoin::Network,
 }
 
 #[allow(dead_code)]
@@ -41,17 +42,19 @@ impl ChainStore {
     /// Create a new chain and load data from the store
     /// This will read the entire chain and set the cached metadata
     /// Add the genesis block to the chain if it is not already present
-    pub fn new(store: Arc<Store>, genesis_block: ShareBlock) -> Self {
-        let genesis_block_hash = genesis_block.cached_blockhash.unwrap();
+    pub fn new(store: Arc<Store>, genesis_block: ShareBlock, network: bitcoin::Network) -> Self {
+        let genesis_block_hash = genesis_block.header.block_hash();
         let genesis_in_store = store.get_share(&genesis_block_hash);
-        let chain = Self { store };
+        let chain = Self { store, network };
 
         // Initialize chain state if needed
         if genesis_in_store.is_none() {
             chain.add_share(genesis_block).unwrap();
         } else {
             // Initialize chain state from existing store data
-            let _ = chain.store.init_chain_state_from_store(genesis_block_hash);
+            let _ = chain
+                .store
+                .init_chain_state_from_store(genesis_block_hash, network);
         }
         chain
     }
@@ -62,12 +65,14 @@ impl ChainStore {
 
         let tips = self.store.get_tips();
         if tips.is_empty() {
-            self.store
-                .set_genesis_block_hash(share.cached_blockhash.unwrap());
+            self.store.set_genesis_block_hash(share.block_hash());
         }
-        let blockhash = share.cached_blockhash.unwrap();
+        let blockhash = share.block_hash();
         let prev_share_blockhash = share.header.prev_share_blockhash;
-        let share_difficulty = share.header.miner_share.diff;
+        debug!("Bitcoin network: {:?}", self.network);
+        debug!("Bitcoin bits: {:?}", share.header.bitcoin_header.bits);
+        debug!("Bitcoin target: {:?}", share.header.bitcoin_header.target());
+        let share_difficulty = share.header.bitcoin_header.difficulty(self.network);
 
         let height = match self.get_height_for_prevhash(prev_share_blockhash) {
             Some(prev_height) => prev_height + 1,
@@ -76,7 +81,7 @@ impl ChainStore {
         // save to share to store for all cases
         tracing::debug!(
             "Adding share to store: {:?} at height: {}",
-            share.cached_blockhash,
+            share.block_hash(),
             height
         );
         self.store.add_share(share.clone(), height);
@@ -86,14 +91,13 @@ impl ChainStore {
             info!("New chain: {:?}", blockhash);
             self.store.add_tip(blockhash);
             self.store.set_total_difficulty(share_difficulty);
-            self.store.set_chain_tip(Some(blockhash));
+            self.store.set_chain_tip(blockhash);
             return Ok(());
         }
 
-        // remove the previous blockhash from tips if it exists
-        if let Some(prev) = prev_share_blockhash {
-            self.store.remove_tip(&prev);
-        }
+        // remove the previous blockhash from tips
+        self.store.remove_tip(&prev_share_blockhash);
+
         // remove uncles from tips
         if !share.header.uncles.is_empty() {
             for uncle in &share.header.uncles {
@@ -104,26 +108,23 @@ impl ChainStore {
         self.store.add_tip(blockhash);
         // handle potential reorgs
         // get total difficulty up to prev_share_blockhash
-        if let Some(prev_share_blockhash) = prev_share_blockhash {
-            tracing::info!("Checking for reorgs at share: {:?}", prev_share_blockhash);
-            let chain_upto_prev_share_blockhash = self.store.get_chain_upto(&prev_share_blockhash);
-            let total_difficulty_upto_prev_share_blockhash = chain_upto_prev_share_blockhash
-                .iter()
-                .map(|share| share.header.miner_share.diff)
-                .sum::<Decimal>();
-            let current_total_difficulty = self.store.get_total_difficulty();
-            debug!(
-                "Total difficulty up to prev share blockhash: {:?}. Current total difficulty: {:?}",
-                total_difficulty_upto_prev_share_blockhash, current_total_difficulty
-            );
-            if total_difficulty_upto_prev_share_blockhash + share_difficulty
-                > current_total_difficulty
-            {
-                let reorg_result = self.reorg(share, total_difficulty_upto_prev_share_blockhash);
-                if reorg_result.is_err() {
-                    error!("Failed to reorg chain for share: {:?}", blockhash);
-                    return Err(reorg_result.err().unwrap());
-                }
+        tracing::info!("Checking for reorgs at share: {:?}", prev_share_blockhash);
+        let chain_upto_prev_share_blockhash = self.store.get_chain_upto(&prev_share_blockhash);
+        let total_difficulty_upto_prev_share_blockhash = chain_upto_prev_share_blockhash
+            .iter()
+            .map(|share| share.get_difficulty(self.network))
+            .sum::<u128>();
+        let current_total_difficulty = self.store.get_total_difficulty();
+        debug!(
+            "Total difficulty up to prev share blockhash: {:?}. Current total difficulty: {:?}",
+            total_difficulty_upto_prev_share_blockhash, current_total_difficulty
+        );
+        if total_difficulty_upto_prev_share_blockhash + share_difficulty > current_total_difficulty
+        {
+            let reorg_result = self.reorg(share, total_difficulty_upto_prev_share_blockhash);
+            if reorg_result.is_err() {
+                error!("Failed to reorg chain for share: {:?}", blockhash);
+                return Err(reorg_result.err().unwrap());
             }
         }
         Ok(())
@@ -149,25 +150,22 @@ impl ChainStore {
     }
 
     /// Get height for the previous blockhash
-    fn get_height_for_prevhash(&self, hash: Option<ShareBlockHash>) -> Option<u32> {
-        match hash {
-            Some(prev) => match self.store.get_block_metadata(&prev) {
-                Some(metadata) => metadata.height,
-                None => None, // If prev not found in index, treat as genesis
-            },
-            None => None,
+    fn get_height_for_prevhash(&self, hash: BlockHash) -> Option<u32> {
+        match self.store.get_block_metadata(&hash) {
+            Some(metadata) => metadata.height,
+            None => None, // If prev not found in index, treat as genesis
         }
     }
 
     /// Remove a blockhash from the tips set
     /// If the blockhash is not in the tips set, this is a no-op
-    pub fn remove_from_tips(&self, blockhash: &ShareBlockHash) {
+    pub fn remove_from_tips(&self, blockhash: &BlockHash) {
         self.store.remove_tip(blockhash);
     }
 
     /// Add a blockhash to the tips set
     /// If the blockhash is already in the tips set, this is a no-op
-    pub fn add_to_tips(&self, blockhash: ShareBlockHash) {
+    pub fn add_to_tips(&self, blockhash: BlockHash) {
         self.store.add_tip(blockhash);
     }
 
@@ -178,66 +176,39 @@ impl ChainStore {
     pub fn reorg(
         &self,
         share: ShareBlock,
-        total_difficulty_upto_prev_share_blockhash: Decimal,
+        total_difficulty_upto_prev_share_blockhash: u128,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        info!(
-            "Reorging chain to share: {:?}",
-            share.cached_blockhash.unwrap()
-        );
+        info!("Reorging chain to share: {:?}", share.block_hash());
         self.store.set_total_difficulty(
-            total_difficulty_upto_prev_share_blockhash + share.header.miner_share.diff,
+            total_difficulty_upto_prev_share_blockhash + share.get_difficulty(self.network),
         );
-        self.store.set_chain_tip(share.cached_blockhash);
+        self.store.set_chain_tip(share.block_hash());
         Ok(())
     }
 
     /// Check if a share is confirmed according to the minimum confirmation depth
     pub fn is_confirmed(&self, share: ShareBlock) -> bool {
-        if share.header.prev_share_blockhash.is_none() {
+        if share.header.prev_share_blockhash == BlockHash::all_zeros() {
             return true;
         }
         self.store
-            .get_chain_upto(&share.header.prev_share_blockhash.unwrap())
+            .get_chain_upto(&share.header.prev_share_blockhash)
             .len()
             > MIN_CONFIRMATION_DEPTH
     }
 
-    /// Add a workbase to the chain
-    pub fn add_workbase(
-        &self,
-        workbase: MinerWorkbase,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        if let Err(e) = self.store.add_workbase(workbase) {
-            error!("Failed to add workbase to store: {}", e);
-            return Err("Error adding workbase to store".into());
-        }
-        Ok(())
-    }
-
-    /// Add a user workbase to the chain
-    pub fn add_user_workbase(
-        &self,
-        user_workbase: UserWorkbase,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        if let Err(e) = self.store.add_user_workbase(user_workbase) {
-            error!("Failed to add user workbase to store: {}", e);
-            return Err("Error adding user workbase to store".into());
-        }
-        Ok(())
-    }
-
     /// Get a share from the chain given a share hash
-    pub fn get_share(&self, share_hash: &ShareBlockHash) -> Option<ShareBlock> {
+    pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock> {
         self.store.get_share(share_hash)
     }
 
     /// Get a share from the chain given a height
-    pub fn get_shares_at_height(&self, height: u32) -> HashMap<ShareBlockHash, ShareBlock> {
+    pub fn get_shares_at_height(&self, height: u32) -> HashMap<BlockHash, ShareBlock> {
         self.store.get_shares_at_height(height)
     }
 
     /// Get a share header from the chain given a share hash
-    pub fn get_share_headers(&self, share_hashes: &[ShareBlockHash]) -> Vec<ShareHeader> {
+    pub fn get_share_headers(&self, share_hashes: &[BlockHash]) -> Vec<ShareHeader> {
         self.store.get_share_headers(share_hashes)
     }
 
@@ -245,14 +216,10 @@ impl ChainStore {
     /// Returns a list of shares starting from the earliest block from the block hashes
     pub fn get_headers_for_locator(
         &self,
-        block_hashes: &[ShareBlockHash],
-        stop_block_hash: &ShareBlockHash,
+        block_hashes: &[BlockHash],
+        stop_block_hash: &BlockHash,
         limit: usize,
     ) -> Vec<ShareHeader> {
-        if self.store.get_chain_tip().is_none() {
-            return vec![];
-        }
-
         self.store
             .get_headers_for_locator(block_hashes, stop_block_hash, limit)
     }
@@ -261,40 +228,29 @@ impl ChainStore {
     /// Returns a list of shares starting from the earliest block from the block hashes
     pub fn get_blockhashes_for_locator(
         &self,
-        locator: &[ShareBlockHash],
-        stop_block_hash: &ShareBlockHash,
+        locator: &[BlockHash],
+        stop_block_hash: &BlockHash,
         max_blockhashes: usize,
-    ) -> Vec<ShareBlockHash> {
-        if self.store.get_chain_tip().is_none() {
-            return vec![];
-        }
+    ) -> Vec<BlockHash> {
         self.store
             .get_blockhashes_for_locator(locator, stop_block_hash, max_blockhashes)
     }
 
     /// Get the height of the chain tip
     pub fn get_tip_height(&self) -> Option<u32> {
-        match self.store.get_chain_tip() {
-            Some(tip) => {
-                let metadata = self
-                    .store
-                    .get_block_metadata(&tip)
-                    .expect("Failed to get metadata for chain tip");
-                metadata.height
-            }
-            None => None,
-        }
+        let tip = self.store.get_chain_tip();
+        let metadata = self
+            .store
+            .get_block_metadata(&tip)
+            .expect("Failed to get metadata for chain tip");
+        metadata.height
     }
 
     /// Get a locator for the chain.
     /// - Start from the tip, go back until we hit genesis block
     /// - After 10 blocks, double the step size each time
     /// - Return the locator
-    pub fn build_locator(&self) -> Vec<ShareBlockHash> {
-        if self.store.get_chain_tip().is_none() {
-            return vec![];
-        }
-
+    pub fn build_locator(&self) -> Vec<BlockHash> {
         let tip_height = self.get_tip_height();
         match tip_height {
             Some(tip_height) => {
@@ -337,38 +293,16 @@ impl ChainStore {
         locator
     }
 
-    /// Get a workbase from the chain given a workinfoid
-    pub fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase> {
-        self.store.get_workbase(workinfoid)
-    }
-
-    /// Get workbases from the chain given a list of workinfoids
-    pub fn get_workbases(&self, workinfoids: &[u64]) -> Vec<MinerWorkbase> {
-        self.store.get_workbases(workinfoids)
-    }
-
-    /// Get a user workbase from the chain given a workinfoid
-    pub fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase> {
-        self.store.get_user_workbase(workinfoid)
-    }
-
-    /// Get user workbases from the chain given a list of workinfoids
-    pub fn get_user_workbases(&self, workinfoids: &[u64]) -> Vec<UserWorkbase> {
-        self.store.get_user_workbases(workinfoids)
-    }
-
     /// Get the total difficulty of the chain
-    pub fn get_total_difficulty(&self) -> Decimal {
+    pub fn get_total_difficulty(&self) -> u128 {
         self.store.get_total_difficulty()
     }
 
     /// Get the chain tip and uncles
-    pub fn get_chain_tip_and_uncles(&self) -> (Option<ShareBlockHash>, HashSet<ShareBlockHash>) {
+    pub fn get_chain_tip_and_uncles(&self) -> (BlockHash, HashSet<BlockHash>) {
         let mut uncles = self.store.get_tips();
         let chain_tip = self.store.get_chain_tip();
-        if let Some(tip) = chain_tip {
-            uncles.remove(&tip);
-        }
+        uncles.remove(&chain_tip);
         (chain_tip, uncles)
     }
 
@@ -379,28 +313,27 @@ impl ChainStore {
         let (chain_tip, tips) = self.get_chain_tip_and_uncles();
         tracing::debug!(
             "Setting up share for share blockhash: {:?} with chain_tip: {:?} and tips: {:?}",
-            share_block.cached_blockhash,
+            share_block.block_hash(),
             chain_tip,
             tips
         );
         share_block.header.prev_share_blockhash = chain_tip;
         share_block.header.uncles = tips.into_iter().collect();
-        share_block.compute_blockhash();
         share_block
     }
 
     /// Check which blockhashes from the provided list are missing from the chain
     /// Returns a vector of blockhashes that are not present in the chain
-    pub fn get_missing_blockhashes(&self, blockhashes: &[ShareBlockHash]) -> Vec<ShareBlockHash> {
+    pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash> {
         self.store.get_missing_blockhashes(blockhashes)
     }
 
     /// Get the depth of a blockhash from chain tip
     /// Returns None if blockhash is not found in chain
     /// Returns 0 if blockhash is the chain tip
-    pub fn get_depth(&self, blockhash: &ShareBlockHash) -> Option<usize> {
+    pub fn get_depth(&self, blockhash: &BlockHash) -> Option<usize> {
         // If chain tip is None, return None
-        let tip = self.store.get_chain_tip()?;
+        let tip = self.store.get_chain_tip();
 
         // If blockhash is chain tip, return 0
         if tip == *blockhash {
@@ -451,27 +384,23 @@ use mockall::mock;
 mock! {
     pub ChainStore {
         pub fn new(store_path: String, genesis_block: ShareBlock) -> Self;
-        pub fn get_tips(&self) -> HashSet<ShareBlockHash>;
-        pub fn reorg(&self, share_block: ShareBlock, total_difficulty_upto_prev_share_blockhash: Decimal) -> Result<(), Box<dyn Error + Send + Sync>>;
+        pub fn get_tips(&self) -> HashSet<BlockHash>;
+        pub fn reorg(&self, share_block: ShareBlock, total_difficulty_upto_prev_share_blockhash: u128) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn is_confirmed(&self, share_block: ShareBlock) -> Result<bool, Box<dyn Error + Send + Sync>>;
         pub fn add_share(&self, share_block: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), Box<dyn Error + Send + Sync>>;
-        pub fn add_workbase(&self, workbase: MinerWorkbase) -> Result<(), Box<dyn Error + Send + Sync>>;
-        pub fn get_workbase(&self, workinfoid: u64) -> Option<MinerWorkbase>;
-        pub fn get_chain_tip(&self) -> Option<ShareBlockHash>;
-        pub fn get_chain_tip_and_uncles(&self) -> (Option<ShareBlockHash>, HashSet<ShareBlockHash>);
-        pub fn get_depth(&self, blockhash: ShareBlockHash) -> Option<usize>;
+        pub fn get_chain_tip(&self) -> Option<BlockHash>;
+        pub fn get_chain_tip_and_uncles(&self) -> (Option<BlockHash>, HashSet<BlockHash>);
+        pub fn get_depth(&self, blockhash: BlockHash) -> Option<usize>;
         pub fn setup_share_for_chain(&self, share_block: ShareBlock) -> ShareBlock;
-        pub fn add_user_workbase(&self, user_workbase: UserWorkbase) -> Result<(), Box<dyn Error + Send + Sync>>;
-        pub fn get_user_workbase(&self, workinfoid: u64) -> Option<UserWorkbase>;
-        pub fn get_share(&self, share_hash: &ShareBlockHash) -> Option<ShareBlock>;
+        pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock>;
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
-        pub fn get_shares_at_height(&self, height: u32) -> HashMap<ShareBlockHash, ShareBlock>;
-        pub fn get_share_headers(&self, share_hashes: Vec<ShareBlockHash>) -> Vec<ShareHeader>;
-        pub fn get_headers_for_locator(&self, block_hashes: &[ShareBlockHash], stop_block_hash: &ShareBlockHash, max_headers: usize) -> Vec<ShareHeader>;
-        pub fn get_blockhashes_for_locator(&self, locator: &[ShareBlockHash], stop_block_hash: &ShareBlockHash, max_blockhashes: usize) -> Vec<ShareBlockHash>;
-        pub fn build_locator(&self) -> Vec<ShareBlockHash>;
-        pub fn get_missing_blockhashes(&self, blockhashes: &[ShareBlockHash]) -> Vec<ShareBlockHash>;
+        pub fn get_shares_at_height(&self, height: u32) -> HashMap<BlockHash, ShareBlock>;
+        pub fn get_share_headers(&self, share_hashes: Vec<BlockHash>) -> Vec<ShareHeader>;
+        pub fn get_headers_for_locator(&self, block_hashes: &[BlockHash], stop_block_hash: &BlockHash, max_headers: usize) -> Vec<ShareHeader>;
+        pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Vec<BlockHash>;
+        pub fn build_locator(&self) -> Vec<BlockHash>;
+        pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
         pub fn get_tip_height(&self) -> Option<u32>;
         pub fn add_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn get_jobs(&self, start_time: Option<u64>, end_time: Option<u64>, limit: usize) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>>;
@@ -489,194 +418,157 @@ mock! {
 #[cfg(test)]
 mod chain_tests {
     use super::*;
-    use crate::test_utils::TestBlockBuilder;
-    use crate::test_utils::genesis_for_testnet;
-    use crate::test_utils::random_hex_string;
-    use rust_decimal_macros::dec;
+    use crate::test_utils::TestShareBlockBuilder;
+    use crate::test_utils::genesis_for_tests;
     use std::collections::HashSet;
+    use std::str::FromStr;
     use tempfile::tempdir;
 
-    #[test]
+    #[test_log::test]
     /// Setup a test chain with 3 shares on the main chain, where shares 2 and 3 have two uncles each
     fn test_chain_add_shares() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let chain = ChainStore::new(Arc::new(store), genesis_for_testnet());
+        let chain = ChainStore::new(
+            Arc::new(store),
+            genesis_for_tests(),
+            bitcoin::Network::Signet,
+        );
 
         // Create initial share (1)
-        let share1 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
-            .prev_share_blockhash(genesis_for_testnet().cached_blockhash.unwrap())
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis_for_tests().block_hash().to_string())
+            .diff(2)
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
         chain.add_share(share1.clone()).unwrap();
 
         let mut expected_tips = HashSet::new();
-        expected_tips.insert(share1.cached_blockhash.unwrap());
+        expected_tips.insert(share1.block_hash());
         assert_eq!(chain.store.get_tips().len(), 1);
-        assert_eq!(chain.store.get_total_difficulty(), dec!(2.0));
-        assert_eq!(
-            chain.store.get_chain_tip(),
-            Some(share1.cached_blockhash.unwrap())
-        );
+        assert_eq!(chain.store.get_total_difficulty(), 3); // genesis (1) + share1 (2)
+        assert_eq!(chain.store.get_chain_tip(), share1.block_hash());
 
         // Create uncles for share2
-        let uncle1_share2 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-            .prev_share_blockhash(share1.cached_blockhash.unwrap())
+        let uncle1_share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .nonce(0xe9695792)
             .build();
 
-        let uncle2_share2 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
-            .prev_share_blockhash(share1.cached_blockhash.unwrap())
+        let uncle2_share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .nonce(0xe9695793)
             .build();
 
         // first orphan is a tip
         chain.add_share(uncle1_share2.clone()).unwrap();
         expected_tips.clear();
-        expected_tips.insert(uncle1_share2.cached_blockhash.unwrap());
+        expected_tips.insert(uncle1_share2.block_hash());
         assert_eq!(chain.store.get_tips(), expected_tips);
-        assert_eq!(chain.store.get_total_difficulty(), dec!(3.0));
-        assert_eq!(
-            chain.store.get_chain_tip(),
-            Some(uncle1_share2.cached_blockhash.unwrap())
-        );
+        assert_eq!(chain.store.get_total_difficulty(), 4); // genesis (1) + share1 (2) + uncle1_share2 (1)
+        assert_eq!(chain.store.get_chain_tip(), uncle1_share2.block_hash());
 
         // second orphan is also a tip
         chain.add_share(uncle2_share2.clone()).unwrap();
         expected_tips.clear();
-        expected_tips.insert(uncle1_share2.cached_blockhash.unwrap());
-        expected_tips.insert(uncle2_share2.cached_blockhash.unwrap());
+        expected_tips.insert(uncle1_share2.block_hash());
+        expected_tips.insert(uncle2_share2.block_hash());
         assert_eq!(chain.store.get_tips(), expected_tips);
-        assert_eq!(chain.store.get_total_difficulty(), dec!(3.0));
+        assert_eq!(chain.store.get_total_difficulty(), 4); // genesis (1) + share1 (2) + uncle1_share2 (1) [same diff uncles, only one is counted]
         // chain tip doesn't change as uncle2_share2 has same difficulty as uncle1_share2
-        assert_eq!(
-            chain.store.get_chain_tip(),
-            Some(uncle1_share2.cached_blockhash.unwrap())
-        );
+        assert_eq!(chain.store.get_chain_tip(), uncle1_share2.block_hash());
 
         // Create share2 with its uncles
-        let share2 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8")
-            .prev_share_blockhash(share1.cached_blockhash.unwrap())
-            .uncles(vec![
-                uncle1_share2.cached_blockhash.unwrap(),
-                uncle2_share2.cached_blockhash.unwrap(),
-            ])
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .uncles(vec![uncle1_share2.block_hash(), uncle2_share2.block_hash()])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .workinfoid(7452731920372203525 + 3)
-            .clientid(1)
-            .diff(dec!(2.0))
-            .sdiff(dec!(2.9041854952356509))
+            .diff(2)
             .build();
 
         chain.add_share(share2.clone()).unwrap();
 
         // two tips that will be future uncles and the chain tip
         expected_tips.clear();
-        expected_tips.insert(share2.cached_blockhash.unwrap());
+        expected_tips.insert(share2.block_hash());
         assert_eq!(chain.store.get_tips(), expected_tips);
-        assert_eq!(chain.store.get_total_difficulty(), dec!(4.0));
-        assert_eq!(
-            chain.store.get_chain_tip(),
-            Some(share2.cached_blockhash.unwrap())
-        );
+        assert_eq!(chain.store.get_total_difficulty(), 5); // genesis (1) + share1 (2) + share2 (2) [both uncles not counted as they are removed from main chain]
+        assert_eq!(chain.store.get_chain_tip(), share2.block_hash());
         // Create uncles for share3
-        let uncle1_share3 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb9")
-            .prev_share_blockhash(share2.cached_blockhash.unwrap())
+        let uncle1_share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .workinfoid(7452731920372203525 + 4)
-            .clientid(1)
-            .diff(dec!(1.0))
-            .sdiff(dec!(1.9041854952356509))
+            .nonce(0xe9695793)
+            .diff(1)
             .build();
 
-        let uncle2_share3 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bba")
-            .prev_share_blockhash(share2.cached_blockhash.unwrap())
+        let uncle2_share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .workinfoid(7452731920372203525 + 5)
-            .clientid(1)
-            .diff(dec!(1.0))
-            .sdiff(dec!(1.9041854952356509))
+            .nonce(0xe9695794)
+            .diff(1)
             .build();
 
         chain.add_share(uncle1_share3.clone()).unwrap();
         expected_tips.clear();
-        expected_tips.insert(uncle1_share3.cached_blockhash.unwrap());
+        expected_tips.insert(uncle1_share3.block_hash());
 
         assert_eq!(chain.store.get_tips(), expected_tips);
         // we only look at total difficulty for the highest work chain, which now is 1, 2, 3.1
-        assert_eq!(chain.store.get_total_difficulty(), dec!(5.0));
-        assert_eq!(
-            chain.store.get_chain_tip(),
-            Some(uncle1_share3.cached_blockhash.unwrap())
-        );
+        assert_eq!(chain.store.get_total_difficulty(), 6); // genesis (1) + share1 (2) + share2 (2) + uncle1_share3 (1)
+        assert_eq!(chain.store.get_chain_tip(), uncle1_share3.block_hash());
+
         chain.add_share(uncle2_share3.clone()).unwrap();
         expected_tips.clear();
-        expected_tips.insert(uncle1_share3.cached_blockhash.unwrap());
-        expected_tips.insert(uncle2_share3.cached_blockhash.unwrap());
+        expected_tips.insert(uncle1_share3.block_hash());
+        expected_tips.insert(uncle2_share3.block_hash());
 
         assert_eq!(chain.store.get_tips(), expected_tips);
         // we only look at total difficulty for the highest work chain, which now is 1, 2, 3.1 (not 3.2)
-        assert_eq!(chain.store.get_total_difficulty(), dec!(5.0));
-        assert_eq!(
-            chain.store.get_chain_tip(),
-            Some(uncle1_share3.cached_blockhash.unwrap())
-        );
+        assert_eq!(chain.store.get_total_difficulty(), 6); // genesis (1) + share1 (2) + share2 (2) + uncle1_share3 (1)
+        assert_eq!(chain.store.get_chain_tip(), uncle1_share3.block_hash());
         // Create share3 with its uncles
-        let share3 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bbb")
-            .prev_share_blockhash(share2.cached_blockhash.unwrap())
-            .uncles(vec![
-                uncle1_share3.cached_blockhash.unwrap(),
-                uncle2_share3.cached_blockhash.unwrap(),
-            ])
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .uncles(vec![uncle1_share3.block_hash(), uncle2_share3.block_hash()])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .workinfoid(7452731920372203525 + 6)
-            .clientid(1)
-            .diff(dec!(3.0))
-            .sdiff(dec!(3.9041854952356509))
+            .diff(3)
             .build();
 
         chain.add_share(share3.clone()).unwrap();
 
         expected_tips.clear();
-        expected_tips.insert(share3.cached_blockhash.unwrap());
+        expected_tips.insert(share3.block_hash());
 
         assert_eq!(chain.store.get_tips(), expected_tips);
         // we only look at total difficulty for the highest work chain, which now is 1, 2, 3
-        assert_eq!(chain.store.get_total_difficulty(), dec!(7.0));
-        assert_eq!(
-            chain.store.get_chain_tip(),
-            Some(share3.cached_blockhash.unwrap())
-        );
+        assert_eq!(chain.store.get_total_difficulty(), 8); // genesis (1) + share1 (2) + share2 (2) + share3 (3)
+        assert_eq!(chain.store.get_chain_tip(), share3.block_hash());
 
         // Verify heights of all shares
         assert_eq!(
             chain.store.get_blockhashes_for_height(1),
-            vec![share1.cached_blockhash.unwrap()]
+            vec![share1.block_hash()]
         );
 
         assert_eq!(
             chain.store.get_blockhashes_for_height(2),
             vec![
-                uncle1_share2.cached_blockhash.unwrap(),
-                uncle2_share2.cached_blockhash.unwrap(),
-                share2.cached_blockhash.unwrap(),
+                uncle1_share2.block_hash(),
+                uncle2_share2.block_hash(),
+                share2.block_hash(),
             ]
         );
 
         assert_eq!(
             chain.store.get_blockhashes_for_height(3),
             vec![
-                uncle1_share3.cached_blockhash.unwrap(),
-                uncle2_share3.cached_blockhash.unwrap(),
-                share3.cached_blockhash.unwrap()
+                uncle1_share3.block_hash(),
+                uncle2_share3.block_hash(),
+                share3.block_hash()
             ]
         );
     }
@@ -685,7 +577,11 @@ mod chain_tests {
     fn test_confirmations() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let chain = ChainStore::new(Arc::new(store), genesis_for_testnet());
+        let chain = ChainStore::new(
+            Arc::new(store),
+            genesis_for_tests(),
+            bitcoin::Network::Signet,
+        );
 
         // Create initial chain of MIN_CONFIRMATION_DEPTH + 1 blocks
         let mut prev_hash = None;
@@ -694,23 +590,19 @@ mod chain_tests {
 
         // Generate blocks
         for i in 0..=MIN_CONFIRMATION_DEPTH + 1 {
-            let mut share_builder =
-                TestBlockBuilder::new().blockhash(random_hex_string(64, 8).as_str());
+            let mut share_builder = TestShareBlockBuilder::new();
             if prev_hash.is_some() {
                 share_builder = share_builder.prev_share_blockhash(prev_hash.unwrap());
             }
 
             let share = share_builder
                 .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-                .workinfoid(7452731920372203525 + i as u64)
-                .clientid(1)
-                .diff(dec!(1.0))
-                .sdiff(dec!(1.9041854952356509))
+                .diff(1)
                 .build();
 
             blocks.push(share.clone());
             chain.add_share(share.clone()).unwrap();
-            blockhash_strings.push(share.cached_blockhash.unwrap().to_string());
+            blockhash_strings.push(share.block_hash().to_string());
             prev_hash = Some(blockhash_strings.last().unwrap().as_str().into());
 
             if i > MIN_CONFIRMATION_DEPTH || i == 0 {
@@ -722,85 +614,50 @@ mod chain_tests {
     }
 
     #[test]
-    fn test_add_workbase() {
-        use crate::shares::miner_message::CkPoolMessage;
-        use std::fs;
-
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let chain = ChainStore::new(Arc::new(store), genesis_for_testnet());
-
-        // Load test data from JSON file
-        let test_data = fs::read_to_string("../tests/test_data/single_node_simple.json")
-            .expect("Failed to read test data file");
-
-        // Deserialize into CkPoolMessage array
-        let ckpool_messages: Vec<CkPoolMessage> =
-            serde_json::from_str(&test_data).expect("Failed to deserialize test data");
-
-        // Find first workbase message
-        let workbase = ckpool_messages
-            .iter()
-            .find_map(|msg| match msg {
-                CkPoolMessage::Workbase(wb) => Some(wb.clone()),
-                _ => None,
-            })
-            .expect("No workbase found in test data");
-
-        // Add workbase and verify it succeeds
-        let result = chain.add_workbase(workbase.clone());
-        assert!(result.is_ok());
-
-        // Verify workbase was stored by checking it matches what we stored
-        assert_eq!(chain.get_workbase(workbase.workinfoid), Some(workbase));
-    }
-
-    #[test]
     fn test_get_depth() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let chain = ChainStore::new(Arc::new(store), genesis_for_testnet());
+        let chain = ChainStore::new(
+            Arc::new(store),
+            genesis_for_tests(),
+            bitcoin::Network::Signet,
+        );
 
         // Test when chain is empty (no chain tip)
-        let random_hash = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".into();
+        let random_hash =
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap();
         assert_eq!(chain.get_depth(&random_hash), None);
 
         // Create initial share
-        let share1 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
-            .prev_share_blockhash(genesis_for_testnet().cached_blockhash.unwrap())
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis_for_tests().block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .workinfoid(7452731920372203525)
-            .clientid(1)
-            .diff(dec!(1.0))
-            .sdiff(dec!(1.9041854952356509))
+            .diff(1)
             .build();
 
         chain.add_share(share1.clone()).unwrap();
 
         // Test when blockhash is chain tip
-        assert_eq!(chain.get_depth(&share1.cached_blockhash.unwrap()), Some(0));
+        assert_eq!(chain.get_depth(&share1.block_hash()), Some(0));
 
         // Create second share
-        let share2 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-            .prev_share_blockhash(share1.cached_blockhash.unwrap())
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .workinfoid(7452731920372203526)
-            .clientid(1)
-            .diff(dec!(1.0))
-            .sdiff(dec!(1.9041854952356509))
+            .diff(1)
             .build();
 
         chain.add_share(share2.clone()).unwrap();
 
         // Test depth of first share when it's not the tip
-        assert_eq!(chain.get_depth(&share2.cached_blockhash.unwrap()), Some(0));
-        assert_eq!(chain.get_depth(&share1.cached_blockhash.unwrap()), Some(1));
+        assert_eq!(chain.get_depth(&share2.block_hash()), Some(0));
+        assert_eq!(chain.get_depth(&share1.block_hash()), Some(1));
 
         // Test when blockhash is not found in chain
         let non_existent_hash =
-            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7".into();
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
+                .unwrap();
         assert_eq!(chain.get_depth(&non_existent_hash), None);
     }
 
@@ -808,56 +665,40 @@ mod chain_tests {
     fn test_get_headers_for_locator() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let chain = ChainStore::new(Arc::new(store), genesis_for_testnet());
+        let chain = ChainStore::new(
+            Arc::new(store),
+            genesis_for_tests(),
+            bitcoin::Network::Signet,
+        );
 
         // Create a chain of 5 shares
-        let share1 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb1")
+        let share1 = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .workinfoid(1)
-            .clientid(1)
-            .diff(dec!(1.0))
-            .sdiff(dec!(1.9041854952356509))
+            .diff(1)
             .build();
 
-        let share2 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2")
-            .prev_share_blockhash(share1.cached_blockhash.unwrap())
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .workinfoid(2)
-            .clientid(1)
-            .diff(dec!(1.0))
-            .sdiff(dec!(1.9041854952356509))
+            .diff(1)
             .build();
 
-        let share3 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3")
-            .prev_share_blockhash(share2.cached_blockhash.unwrap())
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .workinfoid(3)
-            .clientid(1)
-            .diff(dec!(1.0))
-            .sdiff(dec!(1.9041854952356509))
+            .diff(1)
             .build();
 
-        let share4 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
-            .prev_share_blockhash(share3.cached_blockhash.unwrap())
+        let share4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share3.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .workinfoid(4)
-            .clientid(1)
-            .diff(dec!(1.0))
-            .sdiff(dec!(1.9041854952356509))
+            .diff(1)
             .build();
 
-        let share5 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
-            .prev_share_blockhash(share4.cached_blockhash.unwrap())
+        let share5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share4.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .workinfoid(5)
-            .clientid(1)
-            .diff(dec!(1.0))
-            .sdiff(dec!(1.9041854952356509))
+            .diff(1)
             .build();
 
         // Add shares to chain
@@ -868,91 +709,83 @@ mod chain_tests {
         chain.add_share(share5.clone()).unwrap();
 
         // Test 1: Get headers starting from share1 up to share3
-        let locator = vec![share1.cached_blockhash.unwrap()];
-        let stop_hash = share3.cached_blockhash.unwrap();
+        let locator = vec![share1.block_hash()];
+        let stop_hash = share3.block_hash();
         let headers = chain.get_headers_for_locator(&locator, &stop_hash, 500);
         assert_eq!(headers.len(), 2); // Should return share2 and share3
         assert_eq!(headers[0], share2.header);
         assert_eq!(headers[1], share3.header);
 
         // Test 2: Get headers with limit
-        let headers = chain.get_headers_for_locator(&locator, &share5.cached_blockhash.unwrap(), 2);
+        let headers = chain.get_headers_for_locator(&locator, &share5.block_hash(), 2);
         assert_eq!(headers.len(), 2); // Should only return 2 headers due to limit
         assert_eq!(headers[0], share2.header);
         assert_eq!(headers[1], share3.header);
 
         // Test 3: Get headers with non-existent locator
         let non_existent =
-            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6".into();
-        let headers =
-            chain.get_headers_for_locator(&[non_existent], &share5.cached_blockhash.unwrap(), 500);
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
+                .unwrap();
+        let headers = chain.get_headers_for_locator(&[non_existent], &share5.block_hash(), 500);
         assert_eq!(headers.len(), 1); // Should return genesis when no match found
 
         // Test 4: Multiple locator hashes, results should start from first found
         let locator = vec![
             non_existent,
-            share3.cached_blockhash.unwrap(),
-            share2.cached_blockhash.unwrap(),
-            share1.cached_blockhash.unwrap(),
+            share3.block_hash(),
+            share2.block_hash(),
+            share1.block_hash(),
         ];
-        let headers =
-            chain.get_headers_for_locator(&locator, &share5.cached_blockhash.unwrap(), 500);
+        let headers = chain.get_headers_for_locator(&locator, &share5.block_hash(), 500);
         assert_eq!(headers.len(), 2); // Should return share4 and share5
         assert_eq!(headers[0], share4.header);
         assert_eq!(headers[1], share5.header);
 
         // Test 5: Get blockhashes for locator
-        let blockhashes =
-            chain.get_blockhashes_for_locator(&locator, &share5.cached_blockhash.unwrap(), 500);
+        let blockhashes = chain.get_blockhashes_for_locator(&locator, &share5.block_hash(), 500);
         assert_eq!(blockhashes.len(), 2); // Should return share4 and share5
-        assert_eq!(blockhashes[0], share4.cached_blockhash.unwrap());
-        assert_eq!(blockhashes[1], share5.cached_blockhash.unwrap());
+        assert_eq!(blockhashes[0], share4.block_hash());
+        assert_eq!(blockhashes[1], share5.block_hash());
     }
 
     #[test]
     fn test_build_locator_with_less_than_10_blocks() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let chain = ChainStore::new(Arc::new(store), genesis_for_testnet());
+        let chain = ChainStore::new(
+            Arc::new(store),
+            genesis_for_tests(),
+            bitcoin::Network::Signet,
+        );
 
         let mut blocks: Vec<ShareBlock> = Vec::new();
 
-        let block_builder = TestBlockBuilder::new()
-            .blockhash(format!("{:064x}", 0).as_str())
-            .prev_share_blockhash(genesis_for_testnet().cached_blockhash.unwrap());
+        let block_builder = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis_for_tests().block_hash().to_string());
         let block = block_builder.build();
         blocks.push(block.clone());
         chain.add_share(block.clone()).unwrap();
 
-        assert_eq!(
-            chain.store.get_chain_tip(),
-            Some(block.cached_blockhash.unwrap())
-        );
+        assert_eq!(chain.store.get_chain_tip(), block.block_hash());
 
         for i in 1..5 {
-            let block_builder = TestBlockBuilder::new().blockhash(format!("{:064x}", i).as_str());
+            let block_builder = TestShareBlockBuilder::new();
             let block = block_builder
-                .prev_share_blockhash(blocks[i - 1].cached_blockhash.unwrap())
+                .prev_share_blockhash(blocks[i - 1].block_hash().to_string())
                 .build();
             blocks.push(block.clone());
             chain.add_share(block.clone()).unwrap();
-            assert_eq!(
-                chain.store.get_chain_tip(),
-                Some(block.cached_blockhash.unwrap())
-            );
+            assert_eq!(chain.store.get_chain_tip(), block.block_hash());
         }
 
         assert_eq!(blocks.len(), 5);
-        assert_eq!(
-            chain.store.get_chain_tip(),
-            Some(blocks[4].cached_blockhash.unwrap())
-        );
+        assert_eq!(chain.store.get_chain_tip(), blocks[4].block_hash());
 
         let locator = chain.build_locator();
         assert_eq!(locator.len(), 6); // Should return all blocks
         // Verify blocks are in reverse order (tip to genesis)
         for i in 0..5 {
-            assert_eq!(locator[i], blocks[4 - i].cached_blockhash.unwrap());
+            assert_eq!(locator[i], blocks[4 - i].block_hash());
         }
     }
 
@@ -960,20 +793,23 @@ mod chain_tests {
     fn test_build_locator_with_more_than_10_blocks() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let chain = ChainStore::new(Arc::new(store), genesis_for_testnet());
+        let chain = ChainStore::new(
+            Arc::new(store),
+            genesis_for_tests(),
+            bitcoin::Network::Signet,
+        );
 
         let mut blocks: Vec<ShareBlock> = Vec::new();
         for i in 1..=25 {
             let prev_hash = if i == 1 {
-                Some(genesis_for_testnet().cached_blockhash.unwrap())
+                Some(genesis_for_tests().block_hash())
             } else {
-                Some(blocks[i - 2].cached_blockhash.unwrap())
+                Some(blocks[i - 2].block_hash())
             };
 
-            let mut block_builder =
-                TestBlockBuilder::new().blockhash(format!("{:064x}", i).as_str());
+            let mut block_builder = TestShareBlockBuilder::new();
             if prev_hash.is_some() {
-                block_builder = block_builder.prev_share_blockhash(prev_hash.unwrap());
+                block_builder = block_builder.prev_share_blockhash(prev_hash.unwrap().to_string());
             }
             let block = block_builder.build();
             blocks.push(block.clone());
@@ -989,13 +825,13 @@ mod chain_tests {
 
         // Verify first 10 blocks are sequential from tip
         for i in 0..10 {
-            assert_eq!(locator[i], blocks[24 - i].cached_blockhash.unwrap());
+            assert_eq!(locator[i], blocks[24 - i].block_hash());
         }
 
         // Verify the step blocks
-        assert_eq!(locator[10], blocks[14].cached_blockhash.unwrap());
-        assert_eq!(locator[11], blocks[12].cached_blockhash.unwrap());
-        assert_eq!(locator[12], blocks[8].cached_blockhash.unwrap());
-        assert_eq!(locator[13], blocks[0].cached_blockhash.unwrap());
+        assert_eq!(locator[10], blocks[14].block_hash());
+        assert_eq!(locator[11], blocks[12].block_hash());
+        assert_eq!(locator[12], blocks[8].block_hash());
+        assert_eq!(locator[13], blocks[0].block_hash());
     }
 }

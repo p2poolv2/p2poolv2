@@ -31,7 +31,7 @@ pub enum ApiError {
 impl fmt::Display for ApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ApiError::ServerError(msg) => write!(f, "axum server error: {}", msg),
+            ApiError::ServerError(msg) => write!(f, "axum server error: {msg}"),
         }
     }
 }

@@ -21,14 +21,14 @@ use crate::stratum::error::Error;
 use crate::stratum::messages::{Message, Request, SimpleRequest};
 use crate::stratum::server::StratumContext;
 use crate::stratum::session::Session;
-use authorize::handle_authorize;
+use authorize_response::handle_authorize;
 use configure::handle_configure;
 use submit::handle_submit;
 use subscribe::handle_subscribe;
 use suggest_difficulty::handle_suggest_difficulty;
 use tracing::debug;
 
-pub mod authorize;
+pub mod authorize_response;
 pub mod configure;
 pub mod submit;
 pub mod subscribe;

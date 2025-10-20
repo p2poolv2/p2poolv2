@@ -16,12 +16,13 @@
 
 use crate::node::Message;
 use crate::node::SwarmSend;
-use crate::shares::ShareBlockHash;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store::ChainStore;
+use bitcoin::BlockHash;
+use bitcoin::hashes::Hash;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::error;
@@ -33,8 +34,7 @@ pub async fn send_getheaders<C: 'static>(
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error>> {
     let locator = store.build_locator();
-    let stop_block_hash: ShareBlockHash =
-        "0000000000000000000000000000000000000000000000000000000000000000".into();
+    let stop_block_hash: BlockHash = BlockHash::all_zeros();
     let getheaders_request = Message::GetShareHeaders(locator.clone(), stop_block_hash);
     if let Err(e) = swarm_tx
         .send(SwarmSend::Request(peer_id, getheaders_request))
@@ -49,7 +49,7 @@ pub async fn send_getheaders<C: 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use std::{str::FromStr, sync::Arc};
     use tokio::sync::mpsc::channel;
 
     #[tokio::test]
@@ -58,9 +58,10 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let mut store = ChainStore::default();
 
-        let test_locator = vec![ShareBlockHash::from(
-            "1111111111111111111111111111111111111111111111111111111111111111",
-        )];
+        let test_locator = vec![
+            BlockHash::from_str("1111111111111111111111111111111111111111111111111111111111111111")
+                .unwrap(),
+        ];
 
         let test_locator_clone = test_locator.clone();
 
@@ -79,9 +80,10 @@ mod tests {
                     assert_eq!(locator, test_locator);
                     assert_eq!(
                         stop_hash,
-                        ShareBlockHash::from(
+                        BlockHash::from_str(
                             "0000000000000000000000000000000000000000000000000000000000000000"
                         )
+                        .unwrap()
                     );
                 }
                 _ => panic!("Unexpected message type"),
@@ -97,9 +99,10 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let mut store = ChainStore::default();
 
-        let test_locator = vec![ShareBlockHash::from(
-            "1111111111111111111111111111111111111111111111111111111111111111",
-        )];
+        let test_locator = vec![
+            BlockHash::from_str("1111111111111111111111111111111111111111111111111111111111111111")
+                .unwrap(),
+        ];
 
         store
             .expect_build_locator()

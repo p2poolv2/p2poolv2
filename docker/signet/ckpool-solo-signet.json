@@ -1,13 +1,13 @@
 {
 	"btcd": [
 		{
-			"url": "bitcoind:38332",
+			"url": "localhost:38332",
 			"auth": "p2pool",
 			"pass": "p2pool",
 			"notify": false
 		}
 	],
-	"btcaddress": "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
+	"btcaddress": "tb1q28yw2gm7nzgt8yrw00cv6m837hv975qlrqrxvv",
 	"btcsig": "/p2poolv2/",
 	"blockpoll": 100,
 	"donation": 2.0,
@@ -23,6 +23,6 @@
 	"maxdiff": 0,
 	"maxclients": 2,
 	"zmqblock": "tcp://bitcoind:28332",
-	"logdir": "/logs",
+	"logdir": "logs",
 	"btcnetwork": "signet"
 }

@@ -16,15 +16,15 @@
 
 use clap::Parser;
 use p2poolv2_api::start_api_server;
-use p2poolv2_lib::accounting::simple_pplns::SimplePplnsShare;
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::logging::setup_logging;
 use p2poolv2_lib::node::actor::NodeHandle;
-use p2poolv2_lib::shares::ShareBlock;
 use p2poolv2_lib::shares::chain::chain_store::ChainStore;
+use p2poolv2_lib::shares::share_block::ShareBlock;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::stratum::client_connections::start_connections_handler;
+use p2poolv2_lib::stratum::emission::Emission;
 use p2poolv2_lib::stratum::server::StratumServerBuilder;
 use p2poolv2_lib::stratum::work::gbt::start_gbt;
 use p2poolv2_lib::stratum::work::notify::start_notify;
@@ -43,7 +43,7 @@ const GBT_POLL_INTERVAL: u64 = 10; // seconds
 pub const SOCKET_PATH: &str = "/tmp/p2pool_blocknotify.sock";
 
 /// Maximum number of pending shares from all clients connected to stratum server
-const STRATUM_SHARES_BUFFER_SIZE: usize = 100;
+const STRATUM_SHARES_BUFFER_SIZE: usize = 1000;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -82,7 +82,11 @@ async fn main() -> Result<(), String> {
 
     let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
     let store = Arc::new(Store::new(config.store.path.clone(), false).unwrap());
-    let chain_store = Arc::new(ChainStore::new(store.clone(), genesis));
+    let chain_store = Arc::new(ChainStore::new(
+        store.clone(),
+        genesis,
+        config.stratum.network,
+    ));
 
     let tip = chain_store.store.get_chain_tip();
     let height = chain_store.get_tip_height();
@@ -149,8 +153,8 @@ async fn main() -> Result<(), String> {
         .await;
     });
 
-    let (shares_tx, shares_rx) =
-        tokio::sync::mpsc::channel::<SimplePplnsShare>(STRATUM_SHARES_BUFFER_SIZE);
+    let (shares_tx, shares_rx) = tokio::sync::mpsc::channel::<Emission>(STRATUM_SHARES_BUFFER_SIZE);
+
     let metrics_handle = match metrics::start_metrics(config.logging.stats_dir.clone()).await {
         Ok(handle) => handle,
         Err(e) => {

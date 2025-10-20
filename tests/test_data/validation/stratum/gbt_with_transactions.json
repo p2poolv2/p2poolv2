@@ -1,0 +1,72 @@
+{
+    "capabilities": [
+        "proposal"
+    ],
+    "version": 536870912,
+    "rules": [
+        "csv",
+        "!segwit",
+        "!signet",
+        "taproot"
+    ],
+    "vbavailable": {},
+    "vbrequired": 0,
+    "previousblockhash": "000002d6ed0236ae93ae9affa9d02f7a4ebf21430a202a86a7ef4ae4f95bad00",
+    "transactions": [
+        {
+            "data": "02000000000101d6c83b002c07d56399a5e0c887ddc7b74071b301a3ffa630c15754c63d8bee750000000000fdffffff02ac78f62901000000160014aecdd0cfae0829ee25e172cc8a94b2aa702869a040420f0000000000160014230a8d012b7cfce1a3118c617d6c50ce9f7482d602473044022037aede936712b0e32aaeba0413833f66929b1bff3726414294b1b140cc93595402204aa43cce61d2c8a9e8131aa335d884212bc2d63f74fea0c13c8ade3640f4b291012103555f1c1815b0a5a5ce7eeac3b7da8923e2c440ed94fc40e9d2685ed45f5335b5bb030000",
+            "txid": "74d7b9bf9f51dd7447e117b6a835a20b6f7d5d807285d1435da37574563ca525",
+            "hash": "bbeed491d05d0ced21b591013ab2ba37682c56bd53c59d51dbe01fc2c78a7063",
+            "depends": [],
+            "fee": 14100,
+            "sigops": 1,
+            "weight": 561
+        },
+        {
+            "data": "02000000000101e466df04a253fb49ad8106b28bc7fc7ce37f99c45bb8f9b6d72799337bfc97100000000000fdffffff02ac78f629010000001600144acca802732963e9252a8e9ed2f499e9e283461040420f0000000000160014230a8d012b7cfce1a3118c617d6c50ce9f7482d602473044022038232b7018082382b00e5bdc50b1ce0957bba0f6412bcb041d565ee8a662c1f70220173d7fee8a545ddaf789e588ea86e85b083ca5b2b6e6b859f40851caf9fdb07e012103555f1c1815b0a5a5ce7eeac3b7da8923e2c440ed94fc40e9d2685ed45f5335b5bb030000",
+            "txid": "a3744f49fe8c8c64973731fd5f08980718498616f3c09eeb185cc886a8b9aa73",
+            "hash": "ad22a3d2ac4c8967c04b966f61e54c29c509f7b2dbaab6713873b5ae3bc3566b",
+            "depends": [],
+            "fee": 14100,
+            "sigops": 1,
+            "weight": 561
+        },
+        {
+            "data": "02000000000101eb7f1068215d394b8642c686d3614bed8d59b8db86ce7365e1c22936d33e65d20000000000fdffffff02ac78f6290100000016001437a4ce56b41215d596dcfa8a11470bcf2b9bba4940420f0000000000160014230a8d012b7cfce1a3118c617d6c50ce9f7482d602473044022053f7ebcf0f257b4291f78aeb0dac1d72ff57da4ad0b8d9b5e5b3ecd13cbf593b02201d66aba09931d598207c83bee8d98a5d24d39fbddcb329d10a33d107ac2af441012103555f1c1815b0a5a5ce7eeac3b7da8923e2c440ed94fc40e9d2685ed45f5335b5bb030000",
+            "txid": "4268b761a00548d2f04629b2c2b51c23608db352db4572126ff756a512db2bb2",
+            "hash": "1b850743824cdde5ca49874bec86a3ba18598f16946a69dd1ccb888c21091b1d",
+            "depends": [],
+            "fee": 14100,
+            "sigops": 1,
+            "weight": 561
+        },
+        {
+            "data": "020000000001014fd6148922bd3ac316f51e6ee5134560cf9884c63e88b40546c602d4170b9d190100000000fdffffff0258ffe62901000000160014e2cb4c89a9de0b80b419a3d828f099b4f884929c40420f0000000000160014230a8d012b7cfce1a3118c617d6c50ce9f7482d60247304402203145003f29f7eacd7c1c443617438bb0b380cd969d9c2e7f37ba8f4161efb34a022048ecde142b7230bcbb7543af138c83c79e1aa932cb63561f9abd34a82bb97dd30121036607d2f9dcb353489e474fbbfc029af4c11ae60d2ab3427a013ddc69f615785b7c030000",
+            "txid": "45bf7923a0afa64816c9080c5a0aea45975f1432644f8b6c9fe34865da04c0f3",
+            "hash": "17a51c9953d2533506081c48dba52df4086940a119f9767035b03170ca7dbeb0",
+            "depends": [],
+            "fee": 14100,
+            "sigops": 1,
+            "weight": 561
+        }
+    ],
+    "coinbaseaux": {},
+    "coinbasevalue": 5000056400,
+    "longpollid": "000002d6ed0236ae93ae9affa9d02f7a4ebf21430a202a86a7ef4ae4f95bad00961",
+    "target": "00000377ae000000000000000000000000000000000000000000000000000000",
+    "mintime": 1760780492,
+    "mutable": [
+        "time",
+        "transactions",
+        "prevblock"
+    ],
+    "noncerange": "00000000ffffffff",
+    "sigoplimit": 80000,
+    "sizelimit": 4000000,
+    "weightlimit": 4000000,
+    "curtime": 1760780546,
+    "bits": "1e0377ae",
+    "height": 956,
+    "signet_challenge": "51",
+    "default_witness_commitment": "6a24aa21a9ed7d9df1867138bfd0a160230fff2f34fe32e0765d338fefd972263bffaee4394a"
+}

@@ -16,8 +16,8 @@
 
 use bitcoindrpc::test_utils::{mock_method, setup_mock_bitcoin_rpc};
 use p2poolv2_lib::accounting::stats::metrics;
-use p2poolv2_lib::shares::ShareBlock;
 use p2poolv2_lib::shares::chain::chain_store::ChainStore;
+use p2poolv2_lib::shares::share_block::ShareBlock;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::stratum::{
     self, client_connections,
@@ -63,6 +63,7 @@ async fn test_stratum_server_subscribe() {
     let store = Arc::new(ChainStore::new(
         Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
         ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+        bitcoin::Network::Signet,
     ));
 
     let mut server = StratumServerBuilder::default()

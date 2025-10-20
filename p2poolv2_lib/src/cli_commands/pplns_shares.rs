@@ -62,8 +62,8 @@ pub fn execute(
 mod tests {
     use super::execute;
     use crate::accounting::simple_pplns::SimplePplnsShare;
-    use crate::shares::ShareBlock;
     use crate::shares::chain::chain_store::ChainStore;
+    use crate::shares::share_block::ShareBlock;
     use crate::store::Store;
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -77,6 +77,7 @@ mod tests {
         let chain = Arc::new(ChainStore::new(
             store,
             ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+            bitcoin::Network::Signet,
         ));
 
         // Execute the pplns-shares command with an empty store
@@ -124,6 +125,7 @@ mod tests {
         let chain = Arc::new(ChainStore::new(
             store,
             ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+            bitcoin::Network::Signet,
         ));
 
         // Execute the pplns-shares command
