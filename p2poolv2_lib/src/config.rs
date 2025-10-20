@@ -249,12 +249,6 @@ fn default_pplns_ttl_days() -> u64 {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct CkPoolConfig {
-    pub host: String,
-    pub port: u16,
-}
-
-#[derive(Debug, Deserialize, Clone)]
 pub struct MinerConfig {
     pub pubkey: PublicKey,
 }
@@ -297,7 +291,6 @@ pub struct Config {
     #[serde(default)]
     pub network: NetworkConfig,
     pub store: StoreConfig,
-    pub ckpool: CkPoolConfig,
     pub stratum: StratumConfig,
     pub miner: MinerConfig,
     pub bitcoinrpc: BitcoinRpcConfig,
@@ -362,16 +355,6 @@ impl Config {
 
     pub fn with_pplns_ttl_days(mut self, days: u64) -> Self {
         self.store.pplns_ttl_days = days;
-        self
-    }
-
-    pub fn with_ckpool_host(mut self, ckpool_host: String) -> Self {
-        self.ckpool.host = ckpool_host;
-        self
-    }
-
-    pub fn with_ckpool_port(mut self, ckpool_port: u16) -> Self {
-        self.ckpool.port = ckpool_port;
         self
     }
 
@@ -491,8 +474,6 @@ mod tests {
             .with_max_established_outgoing(50)
             .with_max_established_per_peer(1)
             .with_store_path("/tmp/store".to_string())
-            .with_ckpool_host("ckpool.example.com".to_string())
-            .with_ckpool_port(3333)
             .with_stratum_hostname("stratum.example.com".to_string())
             .with_stratum_port(3333)
             .with_stratum_solo_address("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string())
@@ -521,8 +502,6 @@ mod tests {
             vec!["peer1.example.com", "peer2.example.com"]
         );
         assert_eq!(config.store.path, "/tmp/store");
-        assert_eq!(config.ckpool.host, "ckpool.example.com");
-        assert_eq!(config.ckpool.port, 3333);
 
         assert_eq!(config.stratum.hostname, "stratum.example.com");
         assert_eq!(config.stratum.port, 3333);

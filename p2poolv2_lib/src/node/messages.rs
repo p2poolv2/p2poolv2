@@ -14,9 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::shares::miner_message::{MinerWorkbase, UserWorkbase};
-use crate::shares::{ShareBlock, ShareBlockHash, ShareHeader};
-use bitcoin::Txid;
+use crate::shares::share_block::{ShareBlock, ShareHeader};
+use bitcoin::{BlockHash, Txid};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt::Display;
@@ -28,15 +27,12 @@ use std::fmt::Display;
 pub enum Message {
     Inventory(InventoryMessage),
     NotFound(()),
-    GetShareHeaders(Vec<ShareBlockHash>, ShareBlockHash),
-    GetShareBlocks(Vec<ShareBlockHash>, ShareBlockHash),
+    GetShareHeaders(Vec<BlockHash>, BlockHash),
+    GetShareBlocks(Vec<BlockHash>, BlockHash),
     ShareHeaders(Vec<ShareHeader>),
     ShareBlock(ShareBlock),
     GetData(GetData),
-    Workbase(MinerWorkbase),
-    UserWorkbase(UserWorkbase),
     Transaction(bitcoin::Transaction),
-    MiningShare(ShareBlock),
 }
 
 impl Message {
@@ -68,10 +64,7 @@ impl Display for Message {
             Message::ShareHeaders(_) => write!(f, "ShareHeaders"),
             Message::ShareBlock(_) => write!(f, "ShareBlock"),
             Message::GetData(_) => write!(f, "GetData"),
-            Message::Workbase(_) => write!(f, "Workbase"),
-            Message::UserWorkbase(_) => write!(f, "UserWorkbase"),
             Message::Transaction(_) => write!(f, "Transaction"),
-            Message::MiningShare(_) => write!(f, "MiningShare"),
         }
     }
 }
@@ -80,14 +73,14 @@ impl Display for Message {
 /// The message can be used to tell the peer about share headers, blocks, or transactions that this peer has.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum InventoryMessage {
-    BlockHashes(Vec<ShareBlockHash>),
+    BlockHashes(Vec<BlockHash>),
     TransactionHashes(Vec<Txid>),
 }
 
 /// Message for requesting data from peers
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum GetData {
-    Block(ShareBlockHash),
+    Block(BlockHash),
     Txid(Txid),
 }
 
@@ -99,9 +92,15 @@ mod tests {
     #[test]
     fn test_inventory_message_serde() {
         let have_shares = vec![
-            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".into(),
-            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6".into(),
-            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7".into(),
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+                .parse::<BlockHash>()
+                .unwrap(),
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
+                .parse::<BlockHash>()
+                .unwrap(),
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
+                .parse::<BlockHash>()
+                .unwrap(),
         ];
 
         let msg = Message::Inventory(InventoryMessage::BlockHashes(have_shares.clone()));
@@ -112,7 +111,7 @@ mod tests {
         // Test deserialization
         let deserialized = Message::cbor_deserialize(&serialized).unwrap();
 
-        let deserialized: Vec<ShareBlockHash> = match deserialized {
+        let deserialized: Vec<BlockHash> = match deserialized {
             Message::Inventory(InventoryMessage::BlockHashes(have_shares)) => have_shares,
             _ => panic!("Expected Inventory variant"),
         };
@@ -128,14 +127,16 @@ mod tests {
     fn test_get_data_message_serde() {
         // Test BlockHash variant
         let block_msg = Message::GetData(GetData::Block(
-            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".into(),
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
+                .parse::<BlockHash>()
+                .unwrap(),
         ));
         let serialized = block_msg.cbor_serialize().unwrap();
         let deserialized = Message::cbor_deserialize(&serialized).unwrap();
         match deserialized {
             Message::GetData(GetData::Block(hash)) => {
                 assert_eq!(
-                    hash,
+                    hash.to_string(),
                     "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5"
                 )
             }

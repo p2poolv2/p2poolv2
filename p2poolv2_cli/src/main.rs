@@ -17,8 +17,8 @@
 use clap::{Parser, Subcommand};
 use p2poolv2_lib::cli_commands;
 use p2poolv2_lib::config::Config;
-use p2poolv2_lib::shares::ShareBlock;
 use p2poolv2_lib::shares::chain::chain_store::ChainStore;
+use p2poolv2_lib::shares::share_block::ShareBlock;
 use std::error::Error;
 use std::sync::Arc;
 
@@ -84,7 +84,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             let store = cli_commands::store::open_store(config.store.path.clone())?;
             let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
-            let chain = Arc::new(ChainStore::new(Arc::new(store), genesis));
+            let chain = Arc::new(ChainStore::new(
+                Arc::new(store),
+                genesis,
+                config.stratum.network,
+            ));
 
             match &cli.command {
                 Some(Commands::Info) => {

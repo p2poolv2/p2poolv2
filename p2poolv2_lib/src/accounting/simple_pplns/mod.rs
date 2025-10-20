@@ -19,19 +19,28 @@ use serde::{Deserialize, Serialize};
 pub mod payout;
 
 /// PPLNS share representation
+///
 /// btcaddress and workername are skipped during serialization to minimize storage
 /// They are restored from user_id when loading from database
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimplePplnsShare {
+    /// Local node user id, used for tracking local pplns
     pub user_id: u64,
+    /// Target difficulty when the share was found
     pub difficulty: u64,
+    /// btcaddress of the miner, used to track metrics for local node
     #[serde(skip)]
     pub btcaddress: Option<String>,
+    /// workername for the asic, used to track metrics for local node
     #[serde(skip)]
     pub workername: Option<String>,
+    /// nTime from the mining.submit message
     pub n_time: u64,
+    /// job id of the job for building the block from this share
     pub job_id: String,
+    /// extranonce2 from the mining.submit message, used to build block
     pub extranonce2: String,
+    /// nonce from the mining session, used to build block
     pub nonce: String,
 }
 

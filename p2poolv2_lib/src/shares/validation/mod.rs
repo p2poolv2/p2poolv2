@@ -16,12 +16,12 @@
 
 mod bitcoin_block_validation;
 
-use crate::shares::ShareBlock;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::share_block::ShareBlock;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
 use std::sync::Arc;
@@ -50,30 +50,8 @@ pub async fn validate(
     if let Err(e) = validate_uncles(share, store.clone()).await {
         return Err(format!("Share uncles validation failed: {e}").into());
     }
-    let workbase = store.get_workbase(share.header.miner_share.workinfoid);
-    if workbase.is_none() {
-        return Err(format!(
-            "Missing workbase for share - workinfoid: {}",
-            share.header.miner_share.workinfoid
-        )
-        .into());
-    }
-    let userworkbase = store.get_user_workbase(share.header.miner_share.workinfoid);
-    if userworkbase.is_none() {
-        return Err(format!(
-            "Missing user workbase for share - workinfoid: {}",
-            share.header.miner_share.workinfoid
-        )
-        .into());
-    }
-    if let Err(e) = share
-        .header
-        .miner_share
-        .validate(&workbase.unwrap(), &userworkbase.unwrap())
-    {
-        return Err(format!("Share validation failed: {e}").into());
-    }
-
+    // TODO: Populate bitcoin block from ShortIDs in share and use bitcoin_block_validation to validate difficulty
+    // OR - Fetch diffculty from bitcoind rpc and validate share blockhash meets difficulty
     Ok(())
 }
 
@@ -82,18 +60,17 @@ pub async fn validate_prev_share_blockhash(
     share: &ShareBlock,
     store: Arc<ChainStore>,
 ) -> Result<(), Box<dyn Error>> {
-    match share.header.prev_share_blockhash {
-        Some(prev_share_blockhash) => {
-            if store.get_share(&prev_share_blockhash).is_none() {
-                return Err(format!(
-                    "Prev share blockhash {prev_share_blockhash} not found in store"
-                )
-                .into());
-            }
-            Ok(())
-        }
-        None => Ok(()),
+    if store
+        .get_share(&share.header.prev_share_blockhash)
+        .is_none()
+    {
+        return Err(format!(
+            "Prev share blockhash {} not found in store",
+            share.header.prev_share_blockhash
+        )
+        .into());
     }
+    Ok(())
 }
 
 /// Validate the share uncles are in store and no more than MAX_UNCLES
@@ -119,19 +96,12 @@ pub async fn validate_timestamp(
 ) -> Result<(), Box<dyn Error>> {
     let current_time = time_provider.seconds_since_epoch();
 
-    let miner_share_time = share.header.miner_share.ntime.to_consensus_u32() as u64;
-    let time_diff = if current_time > miner_share_time {
-        current_time - miner_share_time
-    } else {
-        miner_share_time - current_time
-    };
+    let block_timestamp = share.header.bitcoin_header.time as u64;
+    let time_diff = current_time.abs_diff(block_timestamp);
 
     if time_diff > MAX_TIME_DIFF {
         return Err(format!(
-            "Share timestamp {} is more than {} seconds from current time {}",
-            share.header.miner_share.ntime.to_consensus_u32(),
-            MAX_TIME_DIFF,
-            current_time
+            "Share timestamp {block_timestamp} is more than {MAX_TIME_DIFF} seconds from current time {current_time}",
         )
         .into());
     }
@@ -141,28 +111,21 @@ pub async fn validate_timestamp(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shares::{PublicKey, ShareBlockHash};
-    use crate::test_utils::TestBlockBuilder;
-    use crate::test_utils::load_valid_workbases_userworkbases_and_shares;
-    use crate::test_utils::simple_miner_share;
+    use crate::test_utils::{TestShareBlockBuilder, genesis_for_tests};
     use crate::utils::time_provider::TestTimeProvider;
+    use bitcoin::{BlockHash, hashes::Hash};
+    use mockall::predicate::*;
     use std::sync::Arc;
     use std::time::SystemTime;
+
     #[tokio::test]
     async fn test_validate_timestamp_should_fail_for_old_timestamp() {
-        let miner_share = simple_miner_share(None, None, None, None, None);
-        let miner_pubkey: PublicKey =
-            "020202020202020202020202020202020202020202020202020202020202020202"
-                .parse()
-                .unwrap();
-        let share = ShareBlock::new(
-            miner_share,
-            miner_pubkey,
-            bitcoin::Network::Regtest,
-            &mut vec![],
-        );
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+
         let mut time_provider = TestTimeProvider(SystemTime::now());
-        let share_timestamp = share.header.miner_share.ntime.to_consensus_u32() as u64 - 120;
+        let share_timestamp = share.header.bitcoin_header.time as u64 - 120;
 
         time_provider
             .set_time(bitcoin::absolute::Time::from_consensus(share_timestamp as u32).unwrap());
@@ -170,48 +133,44 @@ mod tests {
         let result = validate_timestamp(&share, &time_provider).await;
         assert_eq!(
             result.err().unwrap().to_string(),
-            "Share timestamp 1735224490 is more than 60 seconds from current time 1735224370"
+            format!(
+                "Share timestamp {} is more than {MAX_TIME_DIFF} seconds from current time {}",
+                share.header.bitcoin_header.time as u64,
+                time_provider.seconds_since_epoch()
+            )
         );
     }
 
     #[tokio::test]
     async fn test_validate_timestamp_should_fail_for_future_timestamp() {
-        let miner_share = simple_miner_share(None, None, None, None, None);
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
         let mut time_provider = TestTimeProvider(SystemTime::now());
-        let future_time = miner_share.ntime.to_consensus_u32() as u64 + 120;
+        let future_time = share.header.bitcoin_header.time as u64 + 120;
         time_provider
             .set_time(bitcoin::absolute::Time::from_consensus(future_time as u32).unwrap());
 
-        let miner_pubkey: PublicKey =
-            "020202020202020202020202020202020202020202020202020202020202020202"
-                .parse()
-                .unwrap();
-        let share = ShareBlock::new(
-            miner_share,
-            miner_pubkey,
-            bitcoin::Network::Regtest,
-            &mut vec![],
-        );
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
 
         assert!(validate_timestamp(&share, &time_provider).await.is_err());
     }
 
     #[tokio::test]
     async fn test_validate_timestamp_should_succeed_for_valid_timestamp() {
-        let miner_share = simple_miner_share(None, None, None, None, None);
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
         let mut time_provider = TestTimeProvider(SystemTime::now());
-        time_provider.set_time(miner_share.ntime);
-
-        let miner_pubkey: PublicKey =
-            "020202020202020202020202020202020202020202020202020202020202020202"
-                .parse()
-                .unwrap();
-        let share = ShareBlock::new(
-            miner_share,
-            miner_pubkey,
-            bitcoin::Network::Regtest,
-            &mut vec![],
+        time_provider.set_time(
+            bitcoin::absolute::Time::from_consensus(share.header.bitcoin_header.time).unwrap(),
         );
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
 
         assert!(validate_timestamp(&share, &time_provider).await.is_ok());
     }
@@ -219,15 +178,13 @@ mod tests {
     #[tokio::test]
     async fn test_validate_prev_blockhash_exists() {
         // Create and add initial share to chain
-        let initial_share = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+        let initial_share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
         // Create new share pointing to existing share - should validate
-        let valid_share = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
-            .prev_share_blockhash(initial_share.cached_blockhash.unwrap())
+        let valid_share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(initial_share.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
@@ -235,9 +192,7 @@ mod tests {
 
         store
             .expect_get_share()
-            .with(mockall::predicate::eq(
-                initial_share.cached_blockhash.unwrap(),
-            ))
+            .with(mockall::predicate::eq(initial_share.block_hash()))
             .returning(move |_| Some(initial_share.clone()));
 
         assert!(
@@ -250,18 +205,19 @@ mod tests {
     #[tokio::test]
     async fn test_validate_prev_blockhash_non_existing() {
         // Create share pointing to non-existent previous hash - should fail validation
-        let non_existent_hash: ShareBlockHash =
-            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7".into();
-        let invalid_share = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8")
-            .prev_share_blockhash(non_existent_hash)
+        let non_existent_hash =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7".to_string();
+        let invalid_share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(non_existent_hash.clone())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
         let mut store = ChainStore::default();
         store
             .expect_get_share()
-            .with(mockall::predicate::eq(non_existent_hash))
+            .with(mockall::predicate::eq(
+                non_existent_hash.parse::<BlockHash>().unwrap(),
+            ))
             .returning(move |_| None);
 
         assert!(
@@ -277,8 +233,7 @@ mod tests {
         let mut store = ChainStore::default();
 
         // Create initial shares to use as uncles
-        let uncle1 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb1")
+        let uncle1 = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
@@ -287,11 +242,10 @@ mod tests {
             .expect_get_share()
             .times(1)
             .in_sequence(&mut seq)
-            .with(mockall::predicate::eq(uncle1.cached_blockhash.unwrap()))
+            .with(mockall::predicate::eq(uncle1.block_hash()))
             .returning(move |_| Some(uncle1_clone.clone()));
 
-        let uncle2 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb2")
+        let uncle2 = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
@@ -301,11 +255,10 @@ mod tests {
             .expect_get_share()
             .times(1)
             .in_sequence(&mut seq)
-            .with(mockall::predicate::eq(uncle2.cached_blockhash.unwrap()))
+            .with(mockall::predicate::eq(uncle2.block_hash()))
             .returning(move |_| Some(uncle2_clone.clone()));
 
-        let uncle3 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb3")
+        let uncle3 = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
@@ -315,33 +268,31 @@ mod tests {
             .expect_get_share()
             .times(1)
             .in_sequence(&mut seq)
-            .with(mockall::predicate::eq(uncle3.cached_blockhash.unwrap()))
+            .with(mockall::predicate::eq(uncle3.block_hash()))
             .returning(move |_| Some(uncle3_clone.clone()));
 
-        let uncle4 = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
+        let uncle4 = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
         let _uncle4_clone = uncle4.clone();
 
         // Test share with non-existent uncle
-        let non_existent_hash: ShareBlockHash =
-            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7".into();
+        let non_existent_hash = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
+            .parse::<BlockHash>()
+            .unwrap();
 
-        let _invalid_share_b = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb8")
-            .uncles(vec![uncle1.cached_blockhash.unwrap(), non_existent_hash])
+        let _invalid_share_b = TestShareBlockBuilder::new()
+            .uncles(vec![uncle1.block_hash(), non_existent_hash])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
         // Test share with valid number of uncles (MAX_UNCLES = 3)
-        let valid_share = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+        let valid_share = TestShareBlockBuilder::new()
             .uncles(vec![
-                uncle1.cached_blockhash.unwrap(),
-                uncle2.cached_blockhash.unwrap(),
-                uncle3.cached_blockhash.unwrap(),
+                uncle1.block_hash(),
+                uncle2.block_hash(),
+                uncle3.block_hash(),
             ])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
@@ -354,13 +305,12 @@ mod tests {
         );
 
         // Test share with too many uncles (> MAX_UNCLES)
-        let invalid_share = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
+        let invalid_share = TestShareBlockBuilder::new()
             .uncles(vec![
-                uncle1.cached_blockhash.unwrap(),
-                uncle2.cached_blockhash.unwrap(),
-                uncle3.cached_blockhash.unwrap(),
-                uncle4.cached_blockhash.unwrap(),
+                uncle1.block_hash(),
+                uncle2.block_hash(),
+                uncle3.block_hash(),
+                uncle4.block_hash(),
             ])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
@@ -382,46 +332,29 @@ mod tests {
     async fn test_validate_share() {
         let mut store = ChainStore::default();
 
-        let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
-        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<bitcoin::PublicKey>()
-            .unwrap();
-        let share_header = crate::shares::miner_message::builders::build_share_header(
-            &workbases[0],
-            &shares[0],
-            &userworkbases[0],
-            pubkey,
-        )
-        .unwrap();
-
-        let share_block = crate::shares::miner_message::builders::build_share_block(
-            &workbases[0],
-            &userworkbases[0],
-            &shares[0],
-            share_header,
-        )
-        .unwrap();
+        let share_block = crate::test_utils::build_block_from_work_components(
+            "../tests/test_data/validation/stratum/b/",
+        );
 
         // Set up mock expectations
         store
             .expect_add_share()
             .with(mockall::predicate::eq(share_block.clone()))
             .returning(|_| Ok(()));
+        store
+            .expect_get_share()
+            .with(eq(bitcoin::BlockHash::all_zeros()))
+            .returning(|_| Some(genesis_for_tests()));
 
         store
             .expect_setup_share_for_chain()
             .returning(|share_block| share_block);
-        store
-            .expect_get_workbase()
-            .with(mockall::predicate::eq(7473434392883363843))
-            .returning(move |_| Some(workbases[0].clone()));
-        store
-            .expect_get_user_workbase()
-            .with(mockall::predicate::eq(7473434392883363843))
-            .returning(move |_| Some(userworkbases[0].clone()));
 
         let mut time_provider = TestTimeProvider(SystemTime::now());
-        time_provider.set_time(shares[0].ntime);
+        time_provider.set_time(
+            bitcoin::absolute::Time::from_consensus(share_block.header.bitcoin_header.time)
+                .unwrap(),
+        );
 
         // Test handle_request directly without request_id
         let result = validate(&share_block, Arc::new(store), &time_provider).await;

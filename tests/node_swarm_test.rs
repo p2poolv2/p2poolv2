@@ -16,10 +16,11 @@
 
 use std::sync::Arc;
 mod common;
-use p2poolv2_lib::accounting::{simple_pplns::SimplePplnsShare, stats::metrics};
+use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::shares::chain::chain_store::ChainStore;
 use p2poolv2_lib::store::Store;
-use p2poolv2_lib::{node::actor::NodeHandle, shares::ShareBlock};
+use p2poolv2_lib::stratum::emission::Emission;
+use p2poolv2_lib::{node::actor::NodeHandle, shares::share_block::ShareBlock};
 
 use std::time::Duration;
 use tempfile::tempdir;
@@ -59,19 +60,22 @@ async fn test_three_nodes_connectivity() {
     let store1 = Arc::new(ChainStore::new(
         Arc::new(Store::new(temp_dir1.path().to_str().unwrap().to_string(), false).unwrap()),
         ShareBlock::build_genesis_for_network(config1.stratum.network),
+        config1.stratum.network,
     ));
     let store2 = Arc::new(ChainStore::new(
         Arc::new(Store::new(temp_dir2.path().to_str().unwrap().to_string(), false).unwrap()),
         ShareBlock::build_genesis_for_network(config2.stratum.network),
+        config2.stratum.network,
     ));
     let store3 = Arc::new(ChainStore::new(
         Arc::new(Store::new(temp_dir3.path().to_str().unwrap().to_string(), false).unwrap()),
         ShareBlock::build_genesis_for_network(config3.stratum.network),
+        config3.stratum.network,
     ));
 
-    let (_shares_tx_1, shares_rx_1) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
-    let (_shares_tx_2, shares_rx_2) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
-    let (_shares_tx_3, shares_rx_3) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
+    let (_shares_tx_1, shares_rx_1) = tokio::sync::mpsc::channel::<Emission>(10);
+    let (_shares_tx_2, shares_rx_2) = tokio::sync::mpsc::channel::<Emission>(10);
+    let (_shares_tx_3, shares_rx_3) = tokio::sync::mpsc::channel::<Emission>(10);
 
     let stats_dir1 = tempfile::tempdir().unwrap();
     let stats_dir2 = tempfile::tempdir().unwrap();

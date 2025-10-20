@@ -121,7 +121,7 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
 mod tests {
     use super::*;
     use crate::accounting::stats::metrics;
-    use crate::shares::ShareBlock;
+    use crate::shares::share_block::ShareBlock;
     use crate::store::Store;
     use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
     use crate::stratum::messages::Id;
@@ -153,6 +153,7 @@ mod tests {
         let store = Arc::new(ChainStore::new(
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
             ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+            bitcoin::Network::Signet,
         ));
 
         let ctx = StratumContext {
@@ -258,6 +259,7 @@ mod tests {
         let store = Arc::new(ChainStore::new(
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
             ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+            bitcoin::Network::Signet,
         ));
 
         let ctx = StratumContext {
@@ -304,6 +306,7 @@ mod tests {
         let store = Arc::new(ChainStore::new(
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
             ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+            bitcoin::Network::Signet,
         ));
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         let btcaddress = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
@@ -334,6 +337,7 @@ mod tests {
         let store = Arc::new(ChainStore::new(
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
             ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+            bitcoin::Network::Signet,
         ));
         let mut session1 = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         let mut session2 = Session::<DifficultyAdjuster>::new(2, 2, None, 0x1fffe000);
@@ -361,6 +365,7 @@ mod tests {
         let store = Arc::new(ChainStore::new(
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
             ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+            bitcoin::Network::Signet,
         ));
         let mut session1 = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         let mut session2 = Session::<DifficultyAdjuster>::new(2, 2, None, 0x1fffe000);
@@ -412,6 +417,7 @@ mod tests {
         let store = Arc::new(ChainStore::new(
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
             ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+            bitcoin::Network::Signet,
         ));
 
         let ctx = StratumContext {
