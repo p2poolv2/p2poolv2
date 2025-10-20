@@ -25,7 +25,7 @@ struct ChainInfo {
     genesis_block_hash: Option<String>,
     chain_tip_height: Option<u32>,
     total_work: String,
-    chain_tip_blockhash: Option<String>,
+    chain_tip_blockhash: String,
     total_shares: u64,
 }
 
@@ -41,7 +41,7 @@ pub fn execute(chain: Arc<ChainStore>) -> Result<(), Box<dyn Error>> {
     let chain_tip_height = chain.get_tip_height();
 
     // Get chain tip blockhash
-    let chain_tip_blockhash = chain.store.get_chain_tip().map(|hash| format!("{hash:?}"));
+    let chain_tip_blockhash = format!("{:?}", chain.store.get_chain_tip());
 
     // Get total work (difficulty)
     let total_work = format!("{:?}", chain.store.get_total_difficulty());
@@ -73,8 +73,8 @@ pub fn execute(chain: Arc<ChainStore>) -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::execute;
-    use crate::shares::ShareBlock;
     use crate::shares::chain::chain_store::ChainStore;
+    use crate::shares::share_block::ShareBlock;
     use crate::store::Store;
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -88,6 +88,7 @@ mod tests {
         let chain = ChainStore::new(
             store,
             ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+            bitcoin::Network::Signet,
         );
 
         // Execute the info command with an empty store

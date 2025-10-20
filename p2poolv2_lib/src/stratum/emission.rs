@@ -14,17 +14,16 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod client_connections;
-pub mod difficulty_adjuster;
-pub mod emission;
-pub mod error;
-pub mod message_handlers;
-pub mod messages;
-pub mod server;
-pub mod session;
-pub mod share_block;
-pub mod timeout;
-pub mod util;
-mod validate_username;
-pub mod work;
-pub mod zmq_listener;
+use crate::accounting::simple_pplns::SimplePplnsShare;
+use bitcoin::Block;
+use tokio::sync::mpsc;
+
+/// Shares emitted by stratum and consumed by accounting and p2p
+/// network.
+pub struct Emission {
+    pub pplns: SimplePplnsShare,
+    pub block: Block,
+}
+
+pub type EmissionSender = mpsc::Sender<Emission>;
+pub type EmissionReceiver = mpsc::Receiver<Emission>;

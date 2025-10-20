@@ -14,27 +14,28 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::accounting::stats::metrics::MetricsHandle;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store::ChainStore;
+use crate::stratum::emission::EmissionReceiver;
 use std::sync::Arc;
 use tracing::info;
 
 /// Save share to database for persistence in case we need to recover from a crash
 /// Shares are saved with a TTL for 1 week or when we reach accumulated work required for 5 blocks at current difficulty.
 pub async fn handle_stratum_shares(
-    mut shares_rx: tokio::sync::mpsc::Receiver<SimplePplnsShare>,
+    mut shares_rx: EmissionReceiver,
     store: Arc<ChainStore>,
     _metrics: MetricsHandle,
 ) {
-    while let Some(share) = shares_rx.recv().await {
-        info!("Received share: {:?}", share);
+    while let Some(emission) = shares_rx.recv().await {
+        info!("Received share: {:?}", emission.pplns);
 
-        let _ = store.add_pplns_share(share);
+        let _ = store.add_pplns_share(emission.pplns);
     }
+    // TODO: Send block as Message::ShareBlock to peers. It should include the block as compact block.
     info!("Shares channel closed, stopping share handler.");
 }

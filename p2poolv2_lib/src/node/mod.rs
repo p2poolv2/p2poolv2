@@ -27,13 +27,12 @@ use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::senders::{send_blocks_inventory, send_getheaders};
 use crate::service::build_service;
 use crate::service::p2p_service::RequestContext;
-use crate::shares::ShareBlock;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store::ChainStore;
-use crate::shares::receive_mining_message::start_receiving_mining_messages;
+use crate::shares::share_block::ShareBlock;
 use crate::utils::time_provider::SystemTimeProvider;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::PeerId;
@@ -184,11 +183,6 @@ impl Node {
         }
 
         let (swarm_tx, swarm_rx) = mpsc::channel(100);
-
-        if let Err(e) = start_receiving_mining_messages(config, store.clone(), swarm_tx.clone()) {
-            error!("Failed to start receiving shares: {}", e);
-            return Err(e);
-        }
 
         // Initialize the service field before constructing the Node
         let service =
@@ -466,8 +460,7 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use crate::config::{
-        ApiConfig, CkPoolConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig,
-        StratumConfig,
+        ApiConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig, StratumConfig,
     };
     use crate::node::Node;
     #[mockall_double::double]
@@ -516,10 +509,7 @@ mod tests {
                 background_task_frequency_hours: 1,
                 pplns_ttl_days: 3,
             },
-            ckpool: CkPoolConfig {
-                host: "127.0.0.1".to_string(),
-                port: 8881,
-            },
+
             stratum: StratumConfig::new_for_test_default(),
             miner: MinerConfig {
                 pubkey: "020202020202020202020202020202020202020202020202020202020202020202"

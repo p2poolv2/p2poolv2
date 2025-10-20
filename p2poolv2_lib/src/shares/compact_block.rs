@@ -14,7 +14,6 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::stratum::error::Error;
 use bitcoin::secp256k1::rand::{self, RngCore};
 use bitcoin::{Block, bip152::HeaderAndShortIds, p2p::message_compact_blocks::CmpctBlock};
 use tokio::sync::mpsc;
@@ -24,16 +23,15 @@ use tracing::warn;
 const COMPACT_BLOCK_VERSION: u32 = 2;
 
 /// Create a compact block from a given block
+/// Create a compact block from a given block
 /// Does not prefill any transactions. Coinbase is always prefilled by default.
-fn create_compact_block_from_share(block: &Block) -> Result<CmpctBlock, Error> {
+pub(crate) fn create_compact_block_from_share(
+    block: &Block,
+) -> Result<CmpctBlock, Box<dyn std::error::Error>> {
     let mut rng = rand::thread_rng();
     let nonce: u64 = rng.next_u64();
     let header_and_short_ids: HeaderAndShortIds =
-        HeaderAndShortIds::from_block(block, nonce, COMPACT_BLOCK_VERSION, &[]).map_err(|e| {
-            Error::IoError(std::io::Error::other(format!(
-                "Failed to create HeaderAndShortIds: {e}"
-            )))
-        })?;
+        HeaderAndShortIds::from_block(block, nonce, COMPACT_BLOCK_VERSION, &[])?;
     let message = CmpctBlock {
         compact_block: header_and_short_ids,
     };
@@ -50,12 +48,12 @@ pub async fn send_share_compact_block(
             Ok(_) => Ok(()),
             Err(e) => {
                 warn!("Error sending compact block to shares channel: {e}");
-                Err(Box::new(e))
+                Err(e.into())
             }
         },
         Err(e) => {
             warn!("Error creating compact block from share block: {e}");
-            Err(Box::new(e))
+            Err(e)
         }
     }
 }

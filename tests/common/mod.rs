@@ -16,10 +16,8 @@
 
 use bitcoindrpc::BitcoinRpcConfig;
 use p2poolv2_lib::config::{
-    ApiConfig, CkPoolConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig,
-    StratumConfig,
+    ApiConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig, StratumConfig,
 };
-use p2poolv2_lib::shares::miner_message::MinerWorkbase;
 
 /// Build a default test configuration with test values that can be replaced later by each test
 /// We avoid providing a Default implementation for Config as it exposes us to the risk of
@@ -55,10 +53,6 @@ pub fn default_test_config() -> Config {
             background_task_frequency_hours: 1,
             pplns_ttl_days: 3,
         },
-        ckpool: CkPoolConfig {
-            host: "127.0.0.1".to_string(),
-            port: 8881,
-        },
         stratum: StratumConfig::new_for_test_default(),
         miner: MinerConfig {
             pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
@@ -77,10 +71,4 @@ pub fn default_test_config() -> Config {
             auth_token: None,
         },
     }
-}
-
-#[allow(dead_code)]
-pub fn simple_miner_workbase() -> MinerWorkbase {
-    let json_str = include_str!("../test_data/simple_miner_workbase.json");
-    serde_json::from_str(json_str).unwrap()
 }

@@ -16,15 +16,18 @@
 
 use crate::api::error::ApiError;
 use axum::{
-    Router,
-    extract::State,
+    Json, Router,
+    extract::{Query, State},
     middleware::{self},
     routing::get,
 };
+use chrono::DateTime;
 use p2poolv2_lib::{
-    accounting::stats::metrics::MetricsHandle, config::ApiConfig,
+    accounting::{simple_pplns::SimplePplnsShare, stats::metrics::MetricsHandle},
+    config::ApiConfig,
     shares::chain::chain_store::ChainStore,
 };
+use serde::Deserialize;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
 use tracing::info;
@@ -37,6 +40,13 @@ pub(crate) struct AppState {
     pub(crate) metrics_handle: MetricsHandle,
     pub(crate) auth_user: Option<String>,
     pub(crate) auth_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct PplnsQuery {
+    limit: Option<usize>,
+    start_time: Option<String>,
+    end_time: Option<String>,
 }
 
 /// Start the API server and return a shutdown channel
@@ -60,6 +70,7 @@ pub async fn start_api_server(
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/metrics", get(metrics))
+        .route("/pplns_shares", get(pplns_shares))
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth_middleware,
@@ -95,4 +106,45 @@ async fn health_check() -> String {
 async fn metrics(State(state): State<Arc<AppState>>) -> String {
     let pool_metrics = state.metrics_handle.get_metrics().await;
     pool_metrics.get_exposition()
+}
+
+async fn pplns_shares(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PplnsQuery>,
+) -> Result<Json<Vec<SimplePplnsShare>>, ApiError> {
+    // Convert ISO 8601 strings to Unix timestamps
+    let start_time = match query.start_time.as_ref() {
+        Some(s) => match DateTime::parse_from_rfc3339(s) {
+            Ok(dt) => dt.timestamp() as u64,
+            Err(_) => {
+                return Err(ApiError::ServerError("Invalid time format".into()));
+            }
+        },
+        None => 0,
+    };
+
+    let end_time = match query.end_time.as_ref() {
+        Some(s) => match DateTime::parse_from_rfc3339(s) {
+            Ok(dt) => dt.timestamp() as u64,
+            Err(_) => {
+                return Err(ApiError::ServerError("Invalid time format".into()));
+            }
+        },
+        None => {
+            // Default to current time
+            let now = chrono::Utc::now();
+            now.timestamp() as u64
+        }
+    };
+
+    if end_time < start_time {
+        return Err(ApiError::ServerError("Invalid date range".into()));
+    }
+
+    let shares =
+        state
+            .chain_store
+            .get_pplns_shares_filtered(query.limit, Some(start_time), Some(end_time));
+
+    Ok(Json(shares))
 }

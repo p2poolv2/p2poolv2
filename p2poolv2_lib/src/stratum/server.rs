@@ -20,10 +20,10 @@ use crate::stratum::client_connections::ClientConnectionsHandle;
 #[mockall_double::double]
 use crate::stratum::client_connections::ClientConnectionsHandle;
 
-use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::accounting::stats::metrics;
 use crate::shares::chain::chain_store::ChainStore;
 use crate::stratum::difficulty_adjuster::{DifficultyAdjuster, DifficultyAdjusterTrait};
+use crate::stratum::emission::EmissionSender;
 use crate::stratum::message_handlers::handle_message;
 use crate::stratum::messages::Request;
 use crate::stratum::session::Session;
@@ -56,7 +56,7 @@ pub struct StratumServer {
     pub version_mask: i32,
     shutdown_rx: oneshot::Receiver<()>,
     connections_handle: ClientConnectionsHandle,
-    shares_tx: mpsc::Sender<SimplePplnsShare>,
+    shares_tx: EmissionSender,
     store: Arc<ChainStore>,
 }
 
@@ -72,7 +72,7 @@ pub struct StratumServerBuilder {
     version_mask: Option<i32>,
     shutdown_rx: Option<oneshot::Receiver<()>>,
     connections_handle: Option<ClientConnectionsHandle>,
-    shares_tx: Option<mpsc::Sender<SimplePplnsShare>>,
+    shares_tx: Option<EmissionSender>,
     zmqpubhashblock: Option<String>,
     store: Option<Arc<ChainStore>>,
     handshake_timeout: Option<Duration>,
@@ -126,7 +126,7 @@ impl StratumServerBuilder {
         self
     }
 
-    pub fn shares_tx(mut self, shares_tx: mpsc::Sender<SimplePplnsShare>) -> Self {
+    pub fn shares_tx(mut self, shares_tx: EmissionSender) -> Self {
         self.shares_tx = Some(shares_tx);
         self
     }
@@ -268,7 +268,7 @@ pub(crate) struct StratumContext {
     pub start_difficulty: u64,
     pub minimum_difficulty: u64,
     pub maximum_difficulty: Option<u64>,
-    pub shares_tx: mpsc::Sender<SimplePplnsShare>,
+    pub shares_tx: EmissionSender,
     pub network: bitcoin::network::Network,
     pub metrics: metrics::MetricsHandle,
     pub store: Arc<ChainStore>,
@@ -443,8 +443,8 @@ where
 #[cfg(test)]
 mod stratum_server_tests {
     use super::*;
-    use crate::shares::ShareBlock;
     use crate::shares::chain::chain_store::ChainStore;
+    use crate::shares::share_block::ShareBlock;
     use crate::store::Store;
     use crate::stratum::messages::SimpleRequest;
     use crate::stratum::server;
@@ -453,6 +453,7 @@ mod stratum_server_tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::Arc;
     use tempfile::tempdir;
+    use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn test_create_and_start_server() {
@@ -461,7 +462,7 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
-        let (shares_tx, _shares_rx) = tokio::sync::mpsc::channel::<SimplePplnsShare>(10);
+        let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
@@ -470,7 +471,8 @@ mod stratum_server_tests {
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
+            bitcoin::network::Network::Signet,
         ));
 
         let mut server = StratumServerBuilder::default()
@@ -548,7 +550,8 @@ mod stratum_server_tests {
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
+            bitcoin::network::Network::Signet,
         ));
 
         let ctx = StratumContext {
@@ -664,7 +667,8 @@ mod stratum_server_tests {
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
+            bitcoin::network::Network::Signet,
         ));
 
         let ctx = StratumContext {
@@ -734,7 +738,8 @@ mod stratum_server_tests {
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
+            bitcoin::network::Network::Signet,
         ));
 
         let ctx = StratumContext {
@@ -809,7 +814,8 @@ mod stratum_server_tests {
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
+            bitcoin::network::Network::Signet,
         ));
 
         let ctx = StratumContext {
@@ -904,7 +910,8 @@ mod stratum_server_tests {
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
+            bitcoin::network::Network::Signet,
         ));
 
         let ctx = StratumContext {
@@ -1018,7 +1025,8 @@ mod stratum_server_tests {
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
+            bitcoin::network::Network::Signet,
         ));
 
         let ctx = StratumContext {

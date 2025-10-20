@@ -63,22 +63,6 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
             }
             Ok(())
         }
-        Message::Workbase(workbase) => {
-            info!("Received workbase: {:?}", workbase);
-            if let Err(e) = ctx.store.add_workbase(workbase.clone()) {
-                error!("Failed to store workbase: {}", e);
-                return Err(format!("Error storing workbase: {e}").into());
-            }
-            Ok(())
-        }
-        Message::UserWorkbase(userworkbase) => {
-            info!("Received user workbase: {:?}", userworkbase);
-            if let Err(e) = ctx.store.add_user_workbase(userworkbase.clone()) {
-                error!("Failed to store user workbase: {}", e);
-                return Err("Error storing user workbase".into());
-            }
-            Ok(())
-        }
         Message::Inventory(inventory) => {
             info!("Received inventory: {:?}", inventory);
             match inventory {
@@ -114,10 +98,6 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
             info!("Received transaction: {:?}", transaction);
             Ok(())
         }
-        Message::MiningShare(share_block) => {
-            info!("Received mining share from ckpool: {:?}", share_block);
-            Ok(())
-        }
     }
 }
 
@@ -125,18 +105,19 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
 mod tests {
     use super::*;
     use crate::node::SwarmSend;
-    use crate::shares::ShareBlockHash;
     #[mockall_double::double]
     use crate::shares::chain::chain_store::ChainStore;
-    use crate::test_utils::simple_miner_workbase;
-    use crate::test_utils::{TestBlockBuilder, load_valid_workbases_userworkbases_and_shares};
+    use crate::test_utils::{
+        TestShareBlockBuilder, build_block_from_work_components, genesis_for_tests,
+    };
     use crate::utils::time_provider::TestTimeProvider;
     use crate::utils::time_provider::TimeProvider;
-    use tokio::sync::mpsc;
-
+    use bitcoin::BlockHash;
+    use bitcoin::hashes::Hash as _;
     use mockall::predicate::*;
     use std::sync::Arc;
     use std::time::SystemTime;
+    use tokio::sync::mpsc;
     use tokio::sync::oneshot;
 
     #[tokio::test]
@@ -146,44 +127,31 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let peer_id = libp2p::PeerId::random();
         let mut time_provider = TestTimeProvider(SystemTime::now());
-        let (workbases, userworkbases, shares) = load_valid_workbases_userworkbases_and_shares();
-        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+
+        let _pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
             .parse::<bitcoin::PublicKey>()
             .unwrap();
-        let share_header = crate::shares::miner_message::builders::build_share_header(
-            &workbases[0],
-            &shares[0],
-            &userworkbases[0],
-            pubkey,
-        )
-        .unwrap();
 
-        let share_block = crate::shares::miner_message::builders::build_share_block(
-            &workbases[0],
-            &userworkbases[0],
-            &shares[0],
-            share_header,
-        )
-        .unwrap();
+        let share_block =
+            build_block_from_work_components("../tests/test_data/validation/stratum/a/");
 
         store
             .expect_add_share()
             .with(eq(share_block.clone()))
             .returning(|_| Ok(()));
+        store
+            .expect_get_share()
+            .with(eq(bitcoin::BlockHash::all_zeros()))
+            .returning(|_| Some(genesis_for_tests()));
 
         store
             .expect_setup_share_for_chain()
             .returning(|share_block| share_block);
-        store
-            .expect_get_workbase()
-            .with(eq(7473434392883363843))
-            .returning(move |_| Some(workbases[0].clone()));
-        store
-            .expect_get_user_workbase()
-            .with(eq(7473434392883363843))
-            .returning(move |_| Some(userworkbases[0].clone()));
 
-        time_provider.set_time(shares[0].ntime);
+        time_provider.set_time(
+            bitcoin::absolute::Time::from_consensus(share_block.header.bitcoin_header.time)
+                .unwrap(),
+        );
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -207,10 +175,8 @@ mod tests {
         let mut store = ChainStore::default();
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        let share_block = TestBlockBuilder::new()
-            .blockhash("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+        let share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .workinfoid(7459044800742817807)
             .build();
 
         store
@@ -221,11 +187,6 @@ mod tests {
         store
             .expect_setup_share_for_chain()
             .returning(|share_block| share_block);
-
-        store
-            .expect_get_workbase()
-            .with(eq(7459044800742817807))
-            .returning(|_| Some(simple_miner_workbase()));
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -246,72 +207,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_request_workbase_success() {
-        let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
-        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let mut store = ChainStore::default();
-        let time_provider = TestTimeProvider(SystemTime::now());
-
-        let workbase = simple_miner_workbase();
-
-        store
-            .expect_add_workbase()
-            .with(eq(workbase.clone()))
-            .returning(|_| Ok(()));
-
-        store
-            .expect_setup_share_for_chain()
-            .returning(|share_block| share_block);
-
-        let ctx = RequestContext {
-            peer: peer_id,
-            request: Message::Workbase(workbase),
-            store: Arc::new(store),
-            response_channel: response_channel_tx,
-            swarm_tx,
-            time_provider,
-        };
-
-        let result = handle_request(ctx).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_handle_request_workbase_error() {
-        let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
-        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let mut store = ChainStore::default();
-        let time_provider = TestTimeProvider(SystemTime::now());
-
-        let workbase = simple_miner_workbase();
-
-        // Set up mock to return error
-        store
-            .expect_add_workbase()
-            .with(eq(workbase.clone()))
-            .returning(|_| Err("Failed to add workbase".into()));
-
-        let ctx = RequestContext {
-            peer: peer_id,
-            request: Message::Workbase(workbase),
-            store: Arc::new(store),
-            response_channel: response_channel_tx,
-            swarm_tx,
-            time_provider,
-        };
-
-        let result = handle_request(ctx).await;
-
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "Error storing workbase: Failed to add workbase"
-        );
-    }
-
-    #[tokio::test]
     async fn test_handle_request_getheaders() {
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
@@ -319,18 +214,13 @@ mod tests {
         let mut store = ChainStore::default();
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        let block_hashes =
-            vec!["0000000000000000000000000000000000000000000000000000000000000001".into()];
-        let stop_block_hash =
-            "0000000000000000000000000000000000000000000000000000000000000002".into();
-
         // Mock the response headers
-        let block1 = TestBlockBuilder::new()
-            .blockhash("0000000000000000000000000000000000000000000000000000000000000001")
-            .build();
-        let block2 = TestBlockBuilder::new()
-            .blockhash("0000000000000000000000000000000000000000000000000000000000000002")
-            .build();
+        let block1 = TestShareBlockBuilder::new().build();
+        let block2 = TestShareBlockBuilder::new().build();
+
+        let block_hashes = vec![block1.block_hash()];
+        let stop_block_hash = block2.block_hash();
+
         let response_headers = vec![block1.header.clone(), block2.header.clone()];
 
         store
@@ -368,31 +258,17 @@ mod tests {
         let mut store = ChainStore::default();
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        let stop_block_hash =
-            "0000000000000000000000000000000000000000000000000000000000000002".into();
-
         // Create test blocks that will be returned
-        let block1 = TestBlockBuilder::new()
-            .blockhash("0000000000000000000000000000000000000000000000000000000000000001")
-            .build();
-        let block2 = TestBlockBuilder::new()
-            .blockhash("0000000000000000000000000000000000000000000000000000000000000002")
-            .build();
+        let block1 = TestShareBlockBuilder::new().build();
+        let block2 = TestShareBlockBuilder::new().build();
 
-        let block_hashes: Vec<ShareBlockHash> = vec![
-            block1.cached_blockhash.unwrap(),
-            block2.cached_blockhash.unwrap(),
-        ];
+        let block_hashes: Vec<BlockHash> = vec![block1.block_hash(), block2.block_hash()];
+        let stop_block_hash = block2.block_hash();
 
         // Set up mock expectations
         store
             .expect_get_blockhashes_for_locator()
-            .returning(move |_, _, _| {
-                vec![
-                    block1.cached_blockhash.unwrap(),
-                    block2.cached_blockhash.unwrap(),
-                ]
-            });
+            .returning(move |_, _, _| vec![block1.block_hash(), block2.block_hash()]);
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -420,68 +296,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_request_user_workbase_success() {
-        let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
-        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let mut store = ChainStore::default();
-        let time_provider = TestTimeProvider(SystemTime::now());
-
-        let (_, user_workbases, _) = load_valid_workbases_userworkbases_and_shares();
-        let user_workbase = user_workbases[0].clone();
-
-        // Set up mock to return success
-        store
-            .expect_add_user_workbase()
-            .with(eq(user_workbase.clone()))
-            .returning(|_| Ok(()));
-
-        let ctx = RequestContext {
-            peer: peer_id,
-            request: Message::UserWorkbase(user_workbase),
-            store: Arc::new(store),
-            response_channel: response_channel_tx,
-            swarm_tx,
-            time_provider,
-        };
-
-        let result = handle_request(ctx).await;
-
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_handle_request_user_workbase_error() {
-        let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
-        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let mut store = ChainStore::default();
-        let time_provider = TestTimeProvider(SystemTime::now());
-
-        let (_, user_workbases, _) = load_valid_workbases_userworkbases_and_shares();
-        let user_workbase = user_workbases[0].clone();
-
-        // Set up mock to return error
-        store
-            .expect_add_user_workbase()
-            .with(eq(user_workbase.clone()))
-            .returning(|_| Err("Failed to add user workbase".into()));
-
-        let ctx = RequestContext {
-            peer: peer_id,
-            request: Message::UserWorkbase(user_workbase),
-            store: Arc::new(store),
-            response_channel: response_channel_tx,
-            swarm_tx,
-            time_provider,
-        };
-
-        let result = handle_request(ctx).await;
-
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
     async fn test_handle_request_inventory_for_blocks() {
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
@@ -491,8 +305,12 @@ mod tests {
 
         // Test BlockHashes inventory
         let block_hashes = vec![
-            "0000000000000000000000000000000000000000000000000000000000000001".into(),
-            "0000000000000000000000000000000000000000000000000000000000000002".into(),
+            "0000000000000000000000000000000000000000000000000000000000000001"
+                .parse::<BlockHash>()
+                .unwrap(),
+            "0000000000000000000000000000000000000000000000000000000000000002"
+                .parse::<BlockHash>()
+                .unwrap(),
         ];
         let inventory = InventoryMessage::BlockHashes(block_hashes);
 
@@ -573,7 +391,9 @@ mod tests {
         let store = ChainStore::default();
         let time_provider = TestTimeProvider(SystemTime::now());
 
-        let block_hash = "0000000000000000000000000000000000000000000000000000000000000001".into();
+        let block_hash = "0000000000000000000000000000000000000000000000000000000000000001"
+            .parse::<BlockHash>()
+            .unwrap();
         let get_data = GetData::Block(block_hash);
 
         let ctx = RequestContext {
@@ -644,33 +464,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_request_mining_share() {
-        let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
-        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let store = ChainStore::default();
-        let time_provider = TestTimeProvider(SystemTime::now());
-
-        // Create a test share block
-        let share_block = TestBlockBuilder::new()
-            .blockhash("0000000000000000000000000000000000000000000000000000000000000001")
-            .build();
-
-        let ctx = RequestContext {
-            peer: peer_id,
-            request: Message::MiningShare(share_block),
-            store: Arc::new(store),
-            response_channel: response_channel_tx,
-            swarm_tx,
-            time_provider,
-        };
-
-        let result = handle_request(ctx).await;
-
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
     async fn test_handle_request_share_headers() {
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
@@ -679,12 +472,8 @@ mod tests {
         let time_provider = TestTimeProvider(SystemTime::now());
 
         // Create test share headers
-        let block1 = TestBlockBuilder::new()
-            .blockhash("0000000000000000000000000000000000000000000000000000000000000001")
-            .build();
-        let block2 = TestBlockBuilder::new()
-            .blockhash("0000000000000000000000000000000000000000000000000000000000000002")
-            .build();
+        let block1 = TestShareBlockBuilder::new().build();
+        let block2 = TestShareBlockBuilder::new().build();
 
         let share_headers = vec![block1.header.clone(), block2.header.clone()];
 

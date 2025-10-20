@@ -26,6 +26,7 @@ use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store::ChainStore;
 use crate::shares::handle_stratum_shares::handle_stratum_shares;
+use crate::stratum::emission::EmissionReceiver;
 use libp2p::futures::StreamExt;
 use std::error::Error;
 use std::sync::Arc;
@@ -46,7 +47,7 @@ impl NodeHandle {
     pub async fn new(
         config: Config,
         store: Arc<ChainStore>,
-        shares_rx: tokio::sync::mpsc::Receiver<SimplePplnsShare>,
+        shares_rx: EmissionReceiver,
         metrics: MetricsHandle,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
@@ -56,9 +57,12 @@ impl NodeHandle {
             node_actor.run().await;
         });
 
+        let store_clone = store.clone();
+        let metrics_clone = metrics.clone();
         tokio::spawn(async move {
-            handle_stratum_shares(shares_rx, store, metrics).await;
+            handle_stratum_shares(shares_rx, store_clone, metrics_clone).await;
         });
+
         Ok((Self { command_tx }, stopping_rx))
     }
 

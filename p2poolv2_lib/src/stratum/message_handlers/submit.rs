@@ -17,6 +17,7 @@
 use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::accounting::stats::metrics;
 use crate::stratum::difficulty_adjuster::DifficultyAdjusterTrait;
+use crate::stratum::emission::{Emission, EmissionSender};
 use crate::stratum::error::Error;
 use crate::stratum::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
 use crate::stratum::session::Session;
@@ -50,7 +51,7 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     session: &mut Session<D>,
     tracker_handle: TrackerHandle,
     bitcoinrpc_config: BitcoinRpcConfig,
-    shares_tx: mpsc::Sender<SimplePplnsShare>,
+    shares_tx: EmissionSender,
     metrics: metrics::MetricsHandle,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.submit message");
@@ -109,8 +110,15 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         message.params[4].as_ref().unwrap().to_string(),
     );
 
+    // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet
+    let truediff = get_true_difficulty(&block.block_hash());
+    debug!("True difficulty: {}", truediff);
+
     shares_tx
-        .send(stratum_share.clone())
+        .send(Emission {
+            pplns: stratum_share.clone(),
+            block,
+        })
         .await
         .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;
 
@@ -178,14 +186,15 @@ fn get_true_difficulty(hash: &bitcoin::BlockHash) -> u128 {
 mod handle_submit_tests {
     use super::*;
     use crate::stratum::difficulty_adjuster::{DifficultyAdjuster, MockDifficultyAdjusterTrait};
+    use crate::stratum::messages::Id;
     use crate::stratum::messages::SetDifficultyNotification;
-    use crate::stratum::messages::{Id, Notify, SimpleRequest};
     use crate::stratum::session::Session;
-    use crate::stratum::work::block_template::BlockTemplate;
     use crate::stratum::work::tracker::start_tracker_actor;
+    use crate::test_utils::load_valid_stratum_work_components;
     use bitcoin::BlockHash;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use std::sync::Arc;
+    use tokio::sync::mpsc;
 
     #[test]
     fn test_true_difficulty() {
@@ -204,33 +213,9 @@ mod handle_submit_tests {
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         mock_submit_block_with_any_body(&mock_server).await;
 
-        let template_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/b/template.json"),
-        )
-        .unwrap();
-        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
+        let (template, notify, submit, authorize_response) =
+            load_valid_stratum_work_components("../tests/test_data/validation/stratum/b/");
 
-        let notify_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/b/notify.json"),
-        )
-        .unwrap();
-        let notify: Notify = serde_json::from_str(&notify_str).unwrap();
-
-        let submit_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/b/submit.json"),
-        )
-        .unwrap();
-        let submit: SimpleRequest = serde_json::from_str(&submit_str).unwrap();
-
-        let authorize_response_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/b/authorize_response.json"),
-        )
-        .unwrap();
-        let authorize_response: Response = serde_json::from_str(&authorize_response_str).unwrap();
         let enonce1 = authorize_response.result.unwrap()[1].clone();
         let enonce1: &str = enonce1.as_str().unwrap();
         session.enonce1 =
@@ -278,7 +263,7 @@ mod handle_submit_tests {
         assert_eq!(response.result, Some(json!(true)));
 
         let share = shares_rx.try_recv().unwrap();
-        assert_eq!(share.btcaddress, Some(session.btcaddress.unwrap()));
+        assert_eq!(share.pplns.btcaddress, Some(session.btcaddress.unwrap()));
 
         // Verify that the block was not submitted to the mock server
         mock_server.verify().await;
@@ -294,33 +279,8 @@ mod handle_submit_tests {
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         mock_submit_block_with_any_body(&mock_server).await;
 
-        let template_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/a/template.json"),
-        )
-        .unwrap();
-        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
-
-        let notify_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/a/notify.json"),
-        )
-        .unwrap();
-        let notify: Notify = serde_json::from_str(&notify_str).unwrap();
-
-        let submit_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/a/submit.json"),
-        )
-        .unwrap();
-        let submit: SimpleRequest = serde_json::from_str(&submit_str).unwrap();
-
-        let authorize_response_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/a/authorize_response.json"),
-        )
-        .unwrap();
-        let authorize_response: Response = serde_json::from_str(&authorize_response_str).unwrap();
+        let (template, notify, submit, authorize_response) =
+            load_valid_stratum_work_components("../tests/test_data/validation/stratum/a/");
 
         let enonce1 = authorize_response.result.unwrap()[1].clone();
         let enonce1: &str = enonce1.as_str().unwrap();
@@ -372,7 +332,10 @@ mod handle_submit_tests {
         mock_server.verify().await;
 
         let stratum_share = shares_rx.recv().await.unwrap();
-        assert_eq!(stratum_share.btcaddress, Some(session.btcaddress.unwrap()));
+        assert_eq!(
+            stratum_share.pplns.btcaddress,
+            Some(session.btcaddress.unwrap())
+        );
 
         assert_eq!(metrics_handle.get_metrics().await.accepted_total, 1);
     }
@@ -385,33 +348,9 @@ mod handle_submit_tests {
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         mock_submit_block_with_any_body(&mock_server).await;
 
-        let template_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/with_version_rolling/template.json"),
-        )
-        .unwrap();
-        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
-
-        let notify_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/with_version_rolling/notify.json"),
-        )
-        .unwrap();
-        let notify: Notify = serde_json::from_str(&notify_str).unwrap();
-
-        let submit_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/with_version_rolling/submit.json"),
-        )
-        .unwrap();
-        let submit: SimpleRequest = serde_json::from_str(&submit_str).unwrap();
-
-        let authorize_response_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/with_version_rolling/authorize_response.json"),
-        )
-        .unwrap();
-        let authorize_response: Response = serde_json::from_str(&authorize_response_str).unwrap();
+        let (template, notify, submit, authorize_response) = load_valid_stratum_work_components(
+            "../tests/test_data/validation/stratum/with_version_rolling/",
+        );
 
         let enonce1 = authorize_response.result.unwrap()[1].clone();
         let enonce1: &str = enonce1.as_str().unwrap();
@@ -485,34 +424,8 @@ mod handle_submit_tests {
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         mock_submit_block_with_any_body(&mock_server).await;
 
-        // Use test data from "a" as a base
-        let template_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/a/template.json"),
-        )
-        .unwrap();
-        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
-
-        let notify_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/a/notify.json"),
-        )
-        .unwrap();
-        let notify: Notify = serde_json::from_str(&notify_str).unwrap();
-
-        let submit_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/a/submit.json"),
-        )
-        .unwrap();
-        let submit: SimpleRequest = serde_json::from_str(&submit_str).unwrap();
-
-        let authorize_response_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/a/authorize_response.json"),
-        )
-        .unwrap();
-        let authorize_response: Response = serde_json::from_str(&authorize_response_str).unwrap();
+        let (template, notify, submit, authorize_response) =
+            load_valid_stratum_work_components("../tests/test_data/validation/stratum/a/");
 
         let enonce1 = authorize_response.result.unwrap()[1].clone();
         let enonce1: &str = enonce1.as_str().unwrap();
@@ -575,26 +488,9 @@ mod handle_submit_tests {
 
         let (_mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
-        // Prepare a valid submit message but with a job_id that is not inserted into the tracker
-        let submit_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/a/submit.json"),
-        )
-        .unwrap();
-        let mut submit: SimpleRequest = serde_json::from_str(&submit_str).unwrap();
+        let (_template, _notify, submit, authorize_response) =
+            load_valid_stratum_work_components("../tests/test_data/validation/stratum/a/");
 
-        // Overwrite job_id param to an unknown value (e.g., "deadbeef")
-        if submit.params.len() > 1 {
-            submit.params.to_mut()[1] = Some("deadbeef".to_string());
-        }
-
-        // Set enonce1 from authorize_response
-        let authorize_response_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/a/authorize_response.json"),
-        )
-        .unwrap();
-        let authorize_response: Response = serde_json::from_str(&authorize_response_str).unwrap();
         let enonce1 = authorize_response.result.unwrap()[1].clone();
         let enonce1: &str = enonce1.as_str().unwrap();
         session.enonce1 =

@@ -17,12 +17,12 @@
 use crate::node::Message;
 use crate::node::SwarmSend;
 use crate::node::messages::InventoryMessage;
-use crate::shares::ShareBlockHash;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store::ChainStore;
+use bitcoin::BlockHash;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -35,8 +35,8 @@ const MAX_BLOCKS: usize = 500;
 /// - limit the number of blocks to MAX_BLOCKS
 /// - generate an inventory message to send blockhashes
 pub async fn handle_getblocks<C: 'static + Send + Sync>(
-    locator: Vec<ShareBlockHash>,
-    stop_block_hash: ShareBlockHash,
+    locator: Vec<BlockHash>,
+    stop_block_hash: BlockHash,
     store: Arc<ChainStore>,
     response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
@@ -58,7 +58,7 @@ mod tests {
     use super::*;
     #[mockall_double::double]
     use crate::shares::chain::chain_store::ChainStore;
-    use crate::test_utils::TestBlockBuilder;
+    use crate::test_utils::TestShareBlockBuilder;
     use std::sync::Arc;
 
     #[tokio::test]
@@ -67,27 +67,19 @@ mod tests {
         let (swarm_tx, mut swarm_rx) = mpsc::channel(1);
         let response_channel = 1u32;
 
-        let block_hashes =
-            vec!["0000000000000000000000000000000000000000000000000000000000000001".into()];
-        let stop_block_hash =
-            "0000000000000000000000000000000000000000000000000000000000000002".into();
-
         // Mock response headers
-        let block1 = TestBlockBuilder::new()
-            .blockhash("0000000000000000000000000000000000000000000000000000000000000001")
-            .build();
+        let block1 = TestShareBlockBuilder::new().build();
 
-        let block2 = TestBlockBuilder::new()
-            .blockhash("0000000000000000000000000000000000000000000000000000000000000002")
+        let block2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(
                 "0000000000000000000000000000000000000000000000000000000000000001".into(),
             )
             .build();
 
-        let response_block_hashes = vec![
-            block1.cached_blockhash.unwrap(),
-            block2.cached_blockhash.unwrap(),
-        ];
+        let block_hashes = vec![block1.block_hash()];
+        let stop_block_hash = block2.block_hash();
+
+        let response_block_hashes = vec![block1.block_hash(), block2.block_hash()];
 
         // Set up mock expectations
         store
@@ -113,8 +105,8 @@ mod tests {
         {
             assert_eq!(channel, response_channel);
             assert_eq!(hashes.len(), 2);
-            assert_eq!(hashes[0], block1.cached_blockhash.unwrap());
-            assert_eq!(hashes[1], block2.cached_blockhash.unwrap());
+            assert_eq!(hashes[0], block1.block_hash());
+            assert_eq!(hashes[1], block2.block_hash());
         } else {
             panic!("Expected SwarmSend::Response with Inventory message");
         }
