@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use base64::Engine;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
 use p2poolv2_api::api::error::ApiError;
 use p2poolv2_api::start_api_server;
 use p2poolv2_lib::accounting::{simple_pplns::SimplePplnsShare, stats::metrics::start_metrics};
@@ -233,6 +233,7 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
     let chain_store = Arc::new(p2poolv2_lib::shares::chain::chain_store::ChainStore::new(
         store.clone(),
         genesis_block,
+        bitcoin::Network::Signet,
     ));
 
     // Start metrics actor
@@ -263,8 +264,16 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
         .add_user("tb1qtestaddress".to_string())
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
-    let t1 = Utc.ymd(2025, 10, 17).and_hms(19, 40, 0).timestamp() as u64;
-    let t2 = Utc.ymd(2025, 10, 17).and_hms(19, 50, 0).timestamp() as u64;
+    let share1_timestamp = Utc
+        .with_ymd_and_hms(2025, 10, 17, 19, 40, 0)
+        .single()
+        .unwrap()
+        .timestamp() as u64;
+    let share2_timestamp = Utc
+        .with_ymd_and_hms(2025, 10, 17, 19, 50, 0)
+        .single()
+        .unwrap()
+        .timestamp() as u64;
 
     let shares = vec![
         SimplePplnsShare::new(
@@ -272,7 +281,7 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
             100,
             "tb1qtestaddress".to_string(),
             "worker1".to_string(),
-            t1,
+            share1_timestamp,
             "job1".to_string(),
             "extra".to_string(),
             "nonce1".to_string(),
@@ -282,7 +291,7 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
             101,
             "tb1qtestaddress".to_string(),
             "worker2".to_string(),
-            t2,
+            share2_timestamp,
             "job2".to_string(),
             "extra".to_string(),
             "nonce2".to_string(),
@@ -335,6 +344,7 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
     let chain_store = Arc::new(p2poolv2_lib::shares::chain::chain_store::ChainStore::new(
         store.clone(),
         genesis_block,
+        bitcoin::Network::Signet,
     ));
 
     // Start metrics actor
@@ -365,8 +375,16 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
         .add_user("tb1qtestaddress".to_string())
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
-    let t1 = Utc.ymd(2025, 10, 17).and_hms(19, 40, 0).timestamp() as u64;
-    let t2 = Utc.ymd(2025, 10, 17).and_hms(19, 50, 0).timestamp() as u64;
+    let t1 = Utc
+        .with_ymd_and_hms(2025, 10, 17, 19, 40, 0)
+        .single()
+        .unwrap()
+        .timestamp() as u64;
+    let t2 = Utc
+        .with_ymd_and_hms(2025, 10, 17, 19, 50, 0)
+        .single()
+        .unwrap()
+        .timestamp() as u64;
 
     let shares = vec![
         SimplePplnsShare::new(
@@ -433,6 +451,7 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
     let chain_store = Arc::new(p2poolv2_lib::shares::chain::chain_store::ChainStore::new(
         store.clone(),
         genesis_block,
+        bitcoin::Network::Signet,
     ));
 
     // Start metrics actor
@@ -463,8 +482,16 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
         .add_user("tb1qtestaddress".to_string())
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
-    let t1 = Utc.ymd(2025, 10, 17).and_hms(19, 40, 0).timestamp() as u64;
-    let t2 = Utc.ymd(2025, 10, 17).and_hms(19, 50, 0).timestamp() as u64;
+    let share1_timestamp = Utc
+        .with_ymd_and_hms(2025, 10, 17, 19, 40, 0)
+        .single()
+        .unwrap()
+        .timestamp() as u64;
+    let share2_timestamp = Utc
+        .with_ymd_and_hms(2025, 10, 17, 19, 50, 0)
+        .single()
+        .unwrap()
+        .timestamp() as u64;
 
     let shares = vec![
         SimplePplnsShare::new(
@@ -472,7 +499,7 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
             100,
             "tb1qtestaddress".to_string(),
             "worker1".to_string(),
-            t1,
+            share1_timestamp,
             "job1".to_string(),
             "extra".to_string(),
             "nonce1".to_string(),
@@ -482,7 +509,7 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
             101,
             "tb1qtestaddress".to_string(),
             "worker2".to_string(),
-            t2,
+            share2_timestamp,
             "job2".to_string(),
             "extra".to_string(),
             "nonce2".to_string(),
@@ -512,7 +539,7 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
     assert_eq!(filtered.len(), 1, "Time filter should return 1 share");
     assert_eq!(
-        filtered[0].n_time, t2,
+        filtered[0].n_time, share2_timestamp,
         "Returned share should have correct timestamp"
     );
 

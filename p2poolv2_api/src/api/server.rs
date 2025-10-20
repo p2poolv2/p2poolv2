@@ -21,7 +21,7 @@ use axum::{
     middleware::{self},
     routing::get,
 };
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::DateTime;
 use p2poolv2_lib::{
     accounting::{simple_pplns::SimplePplnsShare, stats::metrics::MetricsHandle},
     config::ApiConfig,
