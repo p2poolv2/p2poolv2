@@ -8,16 +8,25 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Kulpreet Singh<kp@opdup.com>"]
+license = "AGPLv3"
+description = "P2Pool for bitcoin"
+readme = "README.adoc"
+homepage = "https://github.com/p2poolv2/p2poolv2"
+repository = "https://github.com/p2poolv2/p2poolv2"
+keywords = ["bitcoin", "mining", "pool", "p2p"]
+categories = ["cryptography::cryptocurrencies"]
+exclude=["tests"]
+rust-version = "1.88"
+
 [profile.release]
 codegen-units = 1
 lto = "fat"
 strip = "symbols"
 panic = "abort"
-
-[workspace.package]
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.88"
 
 [workspace.dependencies]
 libp2p = { version = "0.53", features = [
