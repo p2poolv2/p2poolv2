@@ -6,13 +6,6 @@ members = [
     "p2poolv2_cli",
     "p2poolv2_api",
 ]
-default-members = [
-    "bitcoindrpc",
-    "p2poolv2_lib",
-    "p2poolv2_node",
-    "p2poolv2_cli",
-    "p2poolv2_api",
-]
 resolver = "2"
 
 [workspace.package]
@@ -28,6 +21,7 @@ keywords = ["bitcoin", "mining", "pool", "p2p"]
 categories = ["cryptography::cryptocurrencies"]
 exclude=["tests"]
 rust-version = "1.88"
+publish = false
 
 [profile.release]
 codegen-units = 1
