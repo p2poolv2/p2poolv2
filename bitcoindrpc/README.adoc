@@ -1,0 +1,13 @@
+== BitcoindRPC
+
+This crate is used by p2poolv2 to make bitcoind API calls.
+
+We only support the endpoints that we need to call. As we need more,
+we will add more here.
+
+List of supported calls:
+
+. getdifficulty
+. getblocktemplate
+. decoderawtransaction
+. submitblock
