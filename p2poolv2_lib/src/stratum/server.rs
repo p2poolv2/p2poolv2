@@ -14,7 +14,6 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::config::StratumConfig;
 #[cfg(not(test))]
 use crate::stratum::client_connections::ClientConnectionsHandle;
 #[cfg(test)]
@@ -30,70 +29,20 @@ use crate::stratum::messages::Request;
 use crate::stratum::session::Session;
 use crate::stratum::work::notify::NotifyCmd;
 use crate::stratum::work::tracker::TrackerHandle;
+use crate::stratum::timeout::{SessionTimeouts, check_session_timeouts};
+use crate::stratum::error::Error;
 use bitcoindrpc::BitcoinRpcConfig;
-use tokio::time;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, LinesCodec};
 use tracing::{debug, error, info};
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum TimeoutReason {
-    Handshake,
-    Inactivity,
-}
-
-#[derive(Clone, Copy)]
-pub struct SessionTimeouts {
-    pub handshake_timeout: Duration,
-    pub inactivity_timeout: Duration,
-    pub monitor_interval: Duration,
-}
-
-impl SessionTimeouts {
-
-    fn new() -> Self {
-        // TODO: get data from the config toml files
-        // TODO: new StratumConfig::default?
-        let stratum_config = StratumConfig::new_for_test_default();
-        Self {
-            handshake_timeout: Duration::from_secs(stratum_config.handshake_timeout),
-            inactivity_timeout: Duration::from_secs(stratum_config.inactivity_timeout),
-            monitor_interval: Duration::from_secs(stratum_config.monitor_interval)
-        }
-    }
-}
-
-fn check_session_timeouts(session: &Session<DifficultyAdjuster>, timeouts: &SessionTimeouts) -> Option<TimeoutReason> {
-    let now = Instant::now();
-    if !(session.subscribed && session.authorized) {
-        
-        let since_connect = now.duration_since(session.connected_at);
-        
-        if since_connect >= timeouts.handshake_timeout {
-            return Some(TimeoutReason::Handshake);
-        }
-    }
-
-    let lst = match session.last_share_time {
-        Some(val) => val,
-        None => session.connected_at,
-    };
-    let since_last_share = now.duration_since(lst);
-    if session.authorized
-        && session.has_submitted_share
-        && since_last_share >= timeouts.inactivity_timeout
-    {
-        return Some(TimeoutReason::Inactivity);
-    }
-
-    None
-}
 
 // A struct to represent a Stratum server configuration
 // This struct contains the port and address of the Stratum server
@@ -341,7 +290,6 @@ where
     R: AsyncBufReadExt + Unpin,
     W: AsyncWriteExt + Unpin,
 {
-
     let timeouts = SessionTimeouts::new();
 
     // Create a LinesCodec with a maximum line length of 8KB
@@ -355,7 +303,6 @@ where
         ctx.maximum_difficulty,
         version_mask,
     );
-
 
     let mut monitor = time::interval(timeouts.monitor_interval);
     monitor.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
@@ -414,16 +361,16 @@ where
                 }
             }
             _ = monitor.tick() => {
-                if let Some(reason) = check_session_timeouts(session, &timeouts) {
-                    match reason {
-                        TimeoutReason::Handshake => {
-                            info!("Disconnecting {addr} for incomplete handshake after connecting");
-                        },
-                        TimeoutReason::Inactivity => {
-                            info!("Disconnecting {addr} for inactivity");
-                        }
+                match check_session_timeouts(session, &timeouts) {
+                    Ok(()) => {}
+                    Err(Error::TimeoutError) => {
+                        info!("Disconnecting {addr}");
+                        break;
                     }
-                    break; // Exit the loopt and close the connection
+                    Err(err) => {
+                        error!("Timeout monitor failed for {addr}: {err}");
+                        break;
+                    }
                 }
             }
         }
@@ -1145,65 +1092,5 @@ mod stratum_server_tests {
             subscribe_response.get("result").is_some(),
             "Subscribe response should have 'result' field"
         );
-    }
-
-    #[tokio::test]
-    async fn test_handle_connection_handshake_timeout() {
-        tokio::time::pause();
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-        let mut writer = Vec::new();
-        let (_, message_rx) = mpsc::channel(10);
-        let (_shutdown_tx, shutdown_rx) = oneshot::channel();
-        let (notify_tx, _notify_rx) = mpsc::channel(10);
-        let tracker_handle = start_tracker_actor();
-        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
-        let (shares_tx, _shares_rx) = mpsc::channel(10);
-        let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
-
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
-        ));
-
-        let ctx = StratumContext {
-            notify_tx,
-            tracker_handle,
-            bitcoinrpc_config,
-            metrics: metrics_handle,
-            start_difficulty: 10000,
-            minimum_difficulty: 1,
-            maximum_difficulty: Some(2),
-            shares_tx,
-            network: bitcoin::network::Network::Regtest,
-            store,
-        };
-
-
-        let reader = BufReader::new(io::empty());
-
-        let handle = tokio::spawn(async move {
-            let result = handle_connection(
-                reader,
-                &mut writer,
-                addr,
-                message_rx,
-                shutdown_rx,
-                0x1fffe000,
-                ctx,
-            )
-            .await;
-            result
-        });
-
-        // Advance time beyond handshake timeout
-        tokio::time::advance(Duration::from_secs(2)).await;
-
-        // The task should have completed (disconnected)
-        let result = handle.await.unwrap();
-        assert!(result.is_ok()); // Connection closed due to timeout
     }
 }

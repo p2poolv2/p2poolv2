@@ -27,6 +27,7 @@ pub enum Error {
     SubscriptionFailure(String),
     IoError(std::io::Error),
     InsufficientWork,
+    TimeoutError,
 }
 
 impl fmt::Display for Error {
@@ -39,6 +40,7 @@ impl fmt::Display for Error {
             Self::SubscriptionFailure(reason) => write!(f, "Subscription failure: {reason}"),
             Self::IoError(err) => write!(f, "IO error: {err}"),
             Self::InsufficientWork => write!(f, "Insufficient work"),
+            Self::TimeoutError => write!(f, "Timeout Error"),
         }
     }
 }

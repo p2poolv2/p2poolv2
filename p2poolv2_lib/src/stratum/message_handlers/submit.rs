@@ -114,9 +114,6 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         .await
         .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;
 
-    if !session.has_submitted_share {
-        session.has_submitted_share = true;
-    }
     session.last_share_time = Some(Instant::now());
 
     // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet

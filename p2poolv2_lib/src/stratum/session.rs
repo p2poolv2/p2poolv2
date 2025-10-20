@@ -35,8 +35,6 @@ pub struct Session<D: DifficultyAdjusterTrait> {
     pub enonce1_hex: String,
     /// Did the mine subscribe already?
     pub subscribed: bool,
-    /// Has the miner been successfully authorized?
-    pub authorized: bool,
     /// Optional username of the miner, supplied by the miner, we just store it in session
     pub username: Option<String>,
     /// bitcoin address used as user identifier
@@ -59,8 +57,6 @@ pub struct Session<D: DifficultyAdjusterTrait> {
     pub connected_at: Instant,
     /// Instant when the last valid share was submitted
     pub last_share_time: Option<Instant>,
-    /// Whether at least one share has been submitted
-    pub has_submitted_share: bool,
 }
 
 impl<D: DifficultyAdjusterTrait> Session<D> {
@@ -79,7 +75,6 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
             enonce1,
             enonce1_hex: hex::encode(enonce1.to_le_bytes()),
             subscribed: false,
-            authorized: false,
             username: None,
             workername: None,
             btcaddress: None,
@@ -91,7 +86,6 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
             suggested_difficulty: None,
             connected_at: now,
             last_share_time: None,
-            has_submitted_share: false,
         }
     }
 

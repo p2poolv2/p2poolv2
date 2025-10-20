@@ -22,6 +22,7 @@ pub mod messages;
 pub mod server;
 pub mod session;
 pub mod share_block;
+pub mod timeout;
 pub mod util;
 mod validate_username;
 pub mod work;

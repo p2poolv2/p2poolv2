@@ -269,8 +269,6 @@ impl SimpleRequest<'_> {
         let user_agent_param = user_agent + "/" + &version;
         let mut params = vec![(Some(user_agent_param))];
         if extra_nonce.is_some() {
-            //let extra_nonce = extra_nonce.unwrap();
-            //params.push(Some(extra_nonce));
             params.push(extra_nonce);
         }
         SimpleRequest {

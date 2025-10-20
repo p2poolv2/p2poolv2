@@ -112,8 +112,6 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
         })
         .await;
     
-    session.authorized = true;
-    
     Ok(vec![
         Message::Response(Response::new_ok(message.id, serde_json::json!(true))),
         Message::SetDifficulty(SetDifficultyNotification::new(ctx.start_difficulty)),
