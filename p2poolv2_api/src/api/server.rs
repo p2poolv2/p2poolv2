@@ -15,10 +15,13 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::api::error::ApiError;
+use crate::api::rate_limiter::RateLimiter;
 use axum::{
     Json, Router,
     extract::{Query, State},
-    middleware::{self},
+    http::StatusCode,
+    middleware::{self, Next},
+    response::Response,
     routing::get,
 };
 use chrono::DateTime;
@@ -28,7 +31,7 @@ use p2poolv2_lib::{
     shares::chain::chain_store::ChainStore,
 };
 use serde::Deserialize;
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::sync::oneshot;
 use tracing::info;
 
@@ -40,6 +43,7 @@ pub(crate) struct AppState {
     pub(crate) metrics_handle: MetricsHandle,
     pub(crate) auth_user: Option<String>,
     pub(crate) auth_token: Option<String>,
+    pub(crate) rate_limiter: RateLimiter,
 }
 
 #[derive(Deserialize)]
@@ -55,11 +59,15 @@ pub async fn start_api_server(
     chain_store: Arc<ChainStore>,
     metrics_handle: MetricsHandle,
 ) -> Result<oneshot::Sender<()>, std::io::Error> {
+    // Create rate limiter: 10 requests per minute per IP
+    let rate_limiter = RateLimiter::new(10, Duration::from_secs(60));
+
     let app_state = Arc::new(AppState {
         chain_store,
         metrics_handle,
         auth_user: config.auth_user.clone(),
         auth_token: config.auth_token.clone(),
+        rate_limiter,
     });
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -71,6 +79,10 @@ pub async fn start_api_server(
         .route("/health", get(health_check))
         .route("/metrics", get(metrics))
         .route("/pplns_shares", get(pplns_shares))
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            rate_limit_middleware,
+        ))
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth_middleware,
@@ -147,4 +159,35 @@ async fn pplns_shares(
             .get_pplns_shares_filtered(query.limit, Some(start_time), Some(end_time));
 
     Ok(Json(shares))
+}
+
+async fn rate_limit_middleware(
+    State(state): State<Arc<AppState>>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    // Only apply rate limiting to pplns_shares endpoint
+    if request.uri().path() == "/pplns_shares" {
+        // Extract IP from headers or use default
+        let client_ip = request
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.split(',').next())
+            .and_then(|s| s.trim().parse().ok())
+            .or_else(|| {
+                request
+                    .headers()
+                    .get("x-real-ip")
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(|s| s.parse().ok())
+            })
+            .unwrap_or_else(|| std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)));
+
+        if !state.rate_limiter.is_allowed(client_ip) {
+            return Err(StatusCode::TOO_MANY_REQUESTS);
+        }
+    }
+
+    Ok(next.run(request).await)
 }

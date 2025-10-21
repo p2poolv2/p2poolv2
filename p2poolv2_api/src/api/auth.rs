@@ -55,10 +55,10 @@ fn validate_password(password: &str, stored_token: &str) -> bool {
 /// Authentication middleware that checks for valid Basic authentication
 pub(crate) async fn auth_middleware(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    let headers = request.headers().clone();
     // If no auth is configured, allow all requests
     let (Some(expected_user), Some(expected_token)) = (&state.auth_user, &state.auth_token) else {
         return Ok(next.run(request).await);

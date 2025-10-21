@@ -16,4 +16,5 @@
 
 mod auth;
 pub mod error;
+pub mod rate_limiter;
 pub mod server;
