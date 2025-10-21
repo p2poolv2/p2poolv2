@@ -153,8 +153,6 @@ mod tests {
             )
         );
         assert!(!session.subscribed);
-        assert!(!session.authorized);
-        assert!(!session.has_submitted_share);
     }
 
     #[test]

@@ -28,7 +28,6 @@ use bitcoin::hashes::Hash;
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use serde_json::json;
 use std::time::{Instant, SystemTime};
-use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 /// Handle the "mining.submit" message
@@ -111,7 +110,8 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     );
 
     // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet
-    let truediff = get_true_difficulty(&block.block_hash());
+    let block_hash = block.block_hash();
+    let truediff = get_true_difficulty(&block_hash);
     debug!("True difficulty: {}", truediff);
 
     shares_tx
@@ -123,10 +123,6 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;
 
     session.last_share_time = Some(Instant::now());
-
-    // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet
-    let truediff = get_true_difficulty(&block.block_hash());
-    debug!("True difficulty: {}", truediff);
 
     let _ = metrics.record_share_accepted(stratum_share).await;
 
