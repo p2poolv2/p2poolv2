@@ -14,9 +14,4 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use p2poolv2_cli::commands;
-use std::error::Error;
-
-fn main() -> Result<(), Box<dyn Error>> {
-    commands::run()
-}
+pub mod commands;

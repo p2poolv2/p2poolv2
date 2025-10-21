@@ -2,10 +2,17 @@
 name = "p2poolv2_node"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description.workspace = true
+readme.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-p2poolv2_lib = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -13,8 +20,9 @@ clap = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
 bitcoin = { workspace = true }
-bitcoindrpc = { path = "../bitcoindrpc" }
-p2poolv2_api = { path = "../p2poolv2_api" }
+bitcoindrpc = { workspace = true }
+p2poolv2_api = { workspace = true }
+p2poolv2_lib = { workspace = true }
 
 [[bin]]
 name = "p2poolv2"
