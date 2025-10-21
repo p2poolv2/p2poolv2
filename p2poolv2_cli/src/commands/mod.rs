@@ -24,7 +24,6 @@ use p2poolv2_lib::shares::share_block::ShareBlock;
 use std::error::Error;
 use std::sync::Arc;
 
-/// P2Pool v2 CLI utility
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
