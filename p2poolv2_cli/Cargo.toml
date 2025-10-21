@@ -12,6 +12,10 @@ keywords.workspace = true
 categories.workspace = true
 rust-version.workspace = true
 
+[lib]
+name = "p2poolv2_cli"
+path = "src/lib.rs"
+
 [dependencies]
 p2poolv2_lib = { workspace = true }
 tokio = { workspace = true }
