@@ -36,11 +36,8 @@ use std::time::Duration;
 use tracing::error;
 use tracing::info;
 
-/// Interval in seconds to poll for new block templates since the last blocknotify signal
+/// Interval in seconds to poll for new block templates since the last zmq event signal
 const GBT_POLL_INTERVAL: u64 = 10; // seconds
-
-/// Path to the Unix socket for receiving blocknotify signals from bitcoind
-pub const SOCKET_PATH: &str = "/tmp/p2pool_blocknotify.sock";
 
 /// Maximum number of pending shares from all clients connected to stratum server
 const STRATUM_SHARES_BUFFER_SIZE: usize = 1000;
@@ -121,7 +118,6 @@ async fn main() -> Result<(), String> {
         if let Err(e) = start_gbt(
             bitcoinrpc_config_cloned,
             notify_tx_for_gbt,
-            SOCKET_PATH,
             GBT_POLL_INTERVAL,
             stratum_config.network,
             zmq_trigger_rx,
