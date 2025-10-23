@@ -31,8 +31,6 @@ use std::str::FromStr;
 const EXTRANONCE_SEPARATOR: [u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE] =
     [1u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE];
 
-const POOL_SIGNATURE: [u8; 8] = *b"P2Poolv2";
-
 // Parse Address from a string provided by the miner
 #[allow(dead_code)]
 pub fn parse_address(address: &str, network: Network) -> Result<Address, WorkError> {
@@ -113,6 +111,7 @@ pub fn build_coinbase_transaction(
     height: i64,
     aux_flags: PushBytesBuf,
     default_witness_commitment: Option<String>,
+    pool_signature: &[u8],
 ) -> Result<Transaction, WorkError> {
     if output_data.is_empty() {
         return Err(WorkError {
@@ -122,7 +121,10 @@ pub fn build_coinbase_transaction(
     // Use timestamp for providing randomness to distribute search space along with enonce1 that will be used by the miners.
     let (secs, nsecs) = get_current_timestamp_bytes();
 
-    let coinbase_script = Builder::new()
+    let mut signature_buf = PushBytesBuf::with_capacity(pool_signature.len());
+    signature_buf.extend_from_slice(pool_signature).unwrap();
+
+    let coinbase_builder = Builder::new()
         .push_int(height)
         // ckpool pushes just bytes. The spec recommends using PUSH opcodes, so we do that.
         // resuling in us geting 0x0100 instead of ck's 0x00 for flags in the serialized script.
@@ -130,8 +132,9 @@ pub fn build_coinbase_transaction(
         .push_slice(secs.to_le_bytes())
         .push_slice(nsecs.to_le_bytes())
         .push_slice(EXTRANONCE_SEPARATOR)
-        .push_slice(POOL_SIGNATURE)
-        .into_script();
+        .push_slice(signature_buf);
+
+    let coinbase_script = coinbase_builder.into_script();
 
     let mut outputs = build_outputs(output_data);
     append_default_witness_commitment(&mut outputs, default_witness_commitment)?;
@@ -181,6 +184,7 @@ pub fn split_coinbase(coinbase: &Transaction) -> Result<(String, String), WorkEr
 #[cfg(test)]
 mod tests {
     use bitcoin::hex::DisplayHex;
+    use tokio_test::assert_err;
 
     use super::*;
     use crate::stratum::work::block_template::BlockTemplate;
@@ -243,6 +247,7 @@ mod tests {
             height,
             PushBytesBuf::from(&[0u8]),
             None,
+            &[],
         )
         .unwrap();
 
@@ -295,6 +300,7 @@ mod tests {
             height,
             PushBytesBuf::from(&[0u8]),
             None,
+            &[],
         )
         .unwrap();
 
@@ -356,6 +362,7 @@ mod tests {
             template.height as i64,
             PushBytesBuf::from(&[0u8]),
             template.default_witness_commitment.clone(),
+            b"P2Poolv2",
         )
         .unwrap();
 
@@ -400,7 +407,7 @@ mod tests {
         assert_eq!(script_bytes[28], 8u8); // Pool signature length
         assert_eq!(
             &script_bytes[29..37],
-            POOL_SIGNATURE, // Check the pool signature
+            b"P2Poolv2", // Check the pool signature
         );
     }
 }
