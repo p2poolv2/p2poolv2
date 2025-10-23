@@ -248,6 +248,10 @@ fn default_pplns_ttl_days() -> u64 {
     7
 }
 
+/// Configuration for local miner on P2Pool node
+///
+/// This is optional in Config to support standalone pools that don't
+/// connect to p2poolv2.
 #[derive(Debug, Deserialize, Clone)]
 pub struct MinerConfig {
     pub pubkey: PublicKey,
@@ -285,6 +289,11 @@ pub struct ApiConfig {
     pub auth_token: Option<String>,
 }
 
+/// Config for p2poolv2 nodes
+///
+/// The network and miner configs switch to defaults if not
+/// provided. This is the case for standalone PPPLNS pools like
+/// Hydrapool.
 #[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
 pub struct Config {
@@ -292,7 +301,7 @@ pub struct Config {
     pub network: NetworkConfig,
     pub store: StoreConfig,
     pub stratum: StratumConfig,
-    pub miner: MinerConfig,
+    pub miner: Option<MinerConfig>,
     pub bitcoinrpc: BitcoinRpcConfig,
     pub logging: LoggingConfig,
     pub api: ApiConfig,
@@ -404,7 +413,9 @@ impl Config {
     }
 
     pub fn with_miner_pubkey(mut self, miner_pubkey: String) -> Self {
-        self.miner.pubkey = miner_pubkey.parse().unwrap();
+        self.miner = Some(MinerConfig {
+            pubkey: miner_pubkey.parse::<PublicKey>().unwrap(),
+        });
         self
     }
 
@@ -523,7 +534,7 @@ mod tests {
         );
 
         assert_eq!(
-            config.miner.pubkey.to_string(),
+            config.miner.unwrap().pubkey.to_string(),
             "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
         );
         assert_eq!(config.bitcoinrpc.url, "http://localhost:8332");
