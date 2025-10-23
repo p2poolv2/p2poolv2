@@ -54,11 +54,11 @@ pub fn default_test_config() -> Config {
             pplns_ttl_days: 3,
         },
         stratum: StratumConfig::new_for_test_default(),
-        miner: MinerConfig {
+        miner: Some(MinerConfig {
             pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap(),
-        },
+        }),
         logging: LoggingConfig {
             level: "info".to_string(),
             file: Some("./p2pool.log".to_string()),
