@@ -37,7 +37,7 @@ difficulty_multiplier = 1.0
 # to mine anonymous blocks. This signature is only used to show others
 # how large your pool is, if you are running private, there is no need
 # to add a pool signature.
-pool_signature = "p2pool"
+pool_signature = "P2Poolv2"
 
 [miner]
 pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
