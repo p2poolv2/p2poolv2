@@ -36,7 +36,7 @@ difficulty_multiplier = 1.0
 # Add a pool signature, if you want. Comment out the line if you want
 # to mine anonymous blocks. This signature is only used to show others
 # how large your pool is, if you are running private, there is no need
-# to add a pool signature.
+# to add a pool signature. Maximum length 16 bytes.
 pool_signature = "P2Poolv2"
 
 [miner]

@@ -91,6 +91,7 @@ pub fn build_notify(
     output_distribution: Vec<OutputPair>,
     job_id: JobId,
     clean_jobs: bool,
+    pool_signature: &[u8],
 ) -> Result<Notify, WorkError> {
     let coinbase = build_coinbase_transaction(
         Version::TWO,
@@ -98,6 +99,7 @@ pub fn build_notify(
         template.height as i64,
         parse_flags(template.coinbaseaux.get("flags").cloned()),
         template.default_witness_commitment.clone(),
+        pool_signature,
     )?;
 
     let (coinbase1, coinbase2) = split_coinbase(&coinbase)?;
@@ -151,6 +153,10 @@ pub async fn start_notify(
     config: &StratumConfig<crate::config::Parsed>,
 ) {
     let mut latest_template: Option<Arc<BlockTemplate>> = None;
+    let pool_signature = match config.pool_signature {
+        Some(ref sig) => sig.as_bytes(),
+        None => &[],
+    };
     while let Some(cmd) = notifier_rx.recv().await {
         match cmd {
             NotifyCmd::SendToAll { template } => {
@@ -160,27 +166,32 @@ pub async fn start_notify(
                 let job_id = tracker_handle.get_next_job_id().await.unwrap();
                 let output_distribution =
                     build_output_distribution(&template, &chain_store, config).await;
-                let notify_str =
-                    match build_notify(&template, output_distribution, job_id, clean_jobs) {
-                        Ok(notify) => {
-                            let serialized_notify = serde_json::to_string(&notify)
-                                .expect("Failed to serialize Notify message");
-                            tracker_handle
-                                .insert_job(
-                                    Arc::clone(&template),
-                                    notify.params.coinbase1.to_string(),
-                                    notify.params.coinbase2.to_string(),
-                                    job_id,
-                                )
-                                .await
-                                .unwrap();
-                            serialized_notify
-                        }
-                        Err(e) => {
-                            debug!("Error building notify: {}", e);
-                            continue; // Skip this iteration if notify cannot be built
-                        }
-                    };
+                let notify_str = match build_notify(
+                    &template,
+                    output_distribution,
+                    job_id,
+                    clean_jobs,
+                    pool_signature,
+                ) {
+                    Ok(notify) => {
+                        let serialized_notify = serde_json::to_string(&notify)
+                            .expect("Failed to serialize Notify message");
+                        tracker_handle
+                            .insert_job(
+                                Arc::clone(&template),
+                                notify.params.coinbase1.to_string(),
+                                notify.params.coinbase2.to_string(),
+                                job_id,
+                            )
+                            .await
+                            .unwrap();
+                        serialized_notify
+                    }
+                    Err(e) => {
+                        debug!("Error building notify: {}", e);
+                        continue; // Skip this iteration if notify cannot be built
+                    }
+                };
                 connections.send_to_all(Arc::new(notify_str.clone())).await;
                 if chain_store.add_job(notify_str).is_err() {
                     tracing::warn!("Couldn't save job when sending to all");
@@ -209,6 +220,7 @@ pub async fn start_notify(
                     output_distribution,
                     job_id,
                     clean_jobs,
+                    pool_signature,
                 ) {
                     Ok(notify) => {
                         let serialized_notify = serde_json::to_string(&notify)
@@ -300,7 +312,7 @@ mod tests {
         let output_distribution =
             build_output_distribution(&template, &Arc::new(store), &stratum_config).await;
         // Build Notify
-        let notify = build_notify(&template, output_distribution, job_id, false)
+        let notify = build_notify(&template, output_distribution, job_id, false, &[])
             .expect("Failed to build notify");
 
         // Compare all fields except job_id (random) coinbase which also have current time component
@@ -504,7 +516,7 @@ mod tests {
         let output_distribution =
             build_output_distribution(&template, &Arc::new(store), &stratum_config).await;
 
-        let result = build_notify(&template, output_distribution, JobId(job_id), false);
+        let result = build_notify(&template, output_distribution, JobId(job_id), false, &[]);
 
         assert_eq!(result.unwrap().params.prevhash, notify.params.prevhash);
     }

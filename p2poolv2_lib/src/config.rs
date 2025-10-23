@@ -22,6 +22,9 @@ use bitcoindrpc::BitcoinRpcConfig;
 use serde::Deserialize;
 use std::marker::PhantomData;
 
+/// Max length for pool signature P2Poolv2 + 8 more bytes for users to add
+const MAX_POOL_SIGNATURE_LENGTH: usize = 16;
+
 /// Marker type for raw (unparsed) StratumConfig state
 #[derive(Debug, Clone, Default)]
 pub struct Raw;
@@ -84,6 +87,12 @@ pub struct StratumConfig<State = Raw> {
 impl StratumConfig<Raw> {
     /// Parse and validate addresses, converting from Raw to Parsed state
     pub fn parse(self) -> Result<StratumConfig<Parsed>, WorkError> {
+        if self.pool_signature.clone().unwrap_or("".to_string()).len() > MAX_POOL_SIGNATURE_LENGTH {
+            return Err(WorkError {
+                message: format!("Pool signature length is limited to {MAX_POOL_SIGNATURE_LENGTH}"),
+            });
+        }
+
         let bootstrap_address_parsed = parse_address(&self.bootstrap_address, self.network)?;
 
         let donation_address_parsed = self
@@ -473,6 +482,7 @@ impl Config {
 mod tests {
     use super::*;
     use temp_env::with_var;
+    use tokio_test::assert_err;
 
     #[test]
     fn test_config_builder() {
@@ -608,10 +618,21 @@ mod tests {
         // Test with Some value
         let mut config_with_sig = StratumConfig::<Raw>::new_for_test_default();
         config_with_sig.pool_signature = Some("MyPool/1.0".to_string());
-        assert_eq!(config_with_sig.pool_signature, Some("MyPool/1.0".to_string()));
+        assert_eq!(
+            config_with_sig.pool_signature,
+            Some("MyPool/1.0".to_string())
+        );
 
         // Test parsing preserves Some value
         let parsed_with_sig = config_with_sig.parse().unwrap();
-        assert_eq!(parsed_with_sig.pool_signature, Some("MyPool/1.0".to_string()));
+        assert_eq!(
+            parsed_with_sig.pool_signature,
+            Some("MyPool/1.0".to_string())
+        );
+
+        // Test sig length limit
+        let mut config_with_sig = StratumConfig::<Raw>::new_for_test_default();
+        config_with_sig.pool_signature = Some("MyPool/1.0 and some more bytes....".to_string());
+        assert_err!(config_with_sig.parse());
     }
 }
