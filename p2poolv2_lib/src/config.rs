@@ -65,6 +65,8 @@ pub struct StratumConfig<State = Raw> {
     pub version_mask: i32,
     /// The difficulty multiplier for dynamic difficulty adjustment
     pub difficulty_multiplier: f64,
+    /// Optional pool signature to include in coinbase
+    pub pool_signature: Option<String>,
 
     // Parsed addresses - only available when State = Parsed
     #[serde(skip)]
@@ -112,6 +114,7 @@ impl StratumConfig<Raw> {
             network: self.network,
             version_mask: self.version_mask,
             difficulty_multiplier: self.difficulty_multiplier,
+            pool_signature: self.pool_signature,
             bootstrap_address_parsed: Some(bootstrap_address_parsed),
             donation_address_parsed,
             fee_address_parsed,
@@ -160,6 +163,7 @@ impl StratumConfig<Raw> {
             network: bitcoin::Network::Signet,
             version_mask: 0x1fffe000,
             difficulty_multiplier: 1.0,
+            pool_signature: None,
             bootstrap_address_parsed: None,
             donation_address_parsed: None,
             fee_address_parsed: None,
@@ -589,5 +593,25 @@ mod tests {
     fn test_default_network_config() {
         let config = NetworkConfig::default();
         assert!(config.listen_address.is_empty());
+    }
+
+    #[test]
+    fn test_pool_signature_option() {
+        // Test with None
+        let config = StratumConfig::<Raw>::new_for_test_default();
+        assert_eq!(config.pool_signature, None);
+
+        // Test parsing preserves pool_signature
+        let parsed = config.parse().unwrap();
+        assert_eq!(parsed.pool_signature, None);
+
+        // Test with Some value
+        let mut config_with_sig = StratumConfig::<Raw>::new_for_test_default();
+        config_with_sig.pool_signature = Some("MyPool/1.0".to_string());
+        assert_eq!(config_with_sig.pool_signature, Some("MyPool/1.0".to_string()));
+
+        // Test parsing preserves Some value
+        let parsed_with_sig = config_with_sig.parse().unwrap();
+        assert_eq!(parsed_with_sig.pool_signature, Some("MyPool/1.0".to_string()));
     }
 }
