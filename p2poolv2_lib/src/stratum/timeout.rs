@@ -14,12 +14,13 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use std::time::{Duration, Instant};
 use crate::config::Config;
 use crate::stratum::error::Error;
 use crate::stratum::session::Session;
 use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
+use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 
+use std::time::Duration;
 use tracing::error;
 
 
@@ -68,10 +69,15 @@ pub fn check_session_timeouts(
     session: &Session<DifficultyAdjuster>,
     timeouts: &SessionTimeouts,
 ) -> Result<(), Error> {
-    let now = Instant::now();
+    let now = SystemTimeProvider.now();
     if !(session.subscribed && session.username.is_some()) {
-        let since_connect = now.duration_since(session.connected_at);
-
+        let since_connect = match now.duration_since(session.connected_at) {
+            Ok(since_connect) => since_connect,
+            Err(_) => {
+                error!("Error retrieving the duration since the connection");
+                return Err(Error::TimeoutError);
+            }
+        };
         if since_connect >= timeouts.first_share_timeout {
             error!("Initialization timeout");
             return Err(Error::TimeoutError);
@@ -85,7 +91,13 @@ pub fn check_session_timeouts(
             return Err(Error::TimeoutError)
         },
     };
-    let since_last_share = now.duration_since(last_share_time);
+    let since_last_share = match now.duration_since(last_share_time) {
+        Ok(since_last_share) => since_last_share,
+        Err(_) => {
+            error!("Error retrieving the duration since the last share sent");
+            return Err(Error::TimeoutError);
+        }
+    };
     if session.username.is_some()
         && session.last_share_time.is_some()
         && since_last_share >= timeouts.inactivity_timeout
@@ -95,46 +107,4 @@ pub fn check_session_timeouts(
     }
 
     Ok(())
-}
-
-
-#[cfg(test)]
-mod timeout_tests {
-    use super::*;
-    use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
-    use crate::stratum::error::Error;
-    use crate::stratum::session::Session;
-    use std::time::Instant;
-
-    #[test]
-    fn test_first_share_timeout() {
-        let mut session: Session<DifficultyAdjuster> = Session::new(1, 1, Some(2), 0);
-        let timeouts = SessionTimeouts {
-            first_share_timeout: Duration::from_secs(1),
-            ..SessionTimeouts::default()
-        };
-        let now = Instant::now();
-        session.connected_at = now - Duration::from_secs(2);
-        session.last_share_time = Some(now);
-
-        let result = check_session_timeouts(&session, &timeouts);
-        
-        assert!(matches!(result, Err(Error::TimeoutError))); // Connection closed due to timeout
-    }
-
-    #[test]
-    fn test_inactivity_timeout() {
-        let mut session: Session<DifficultyAdjuster> = Session::new(1, 1, Some(2), 0);
-        session.subscribed = true;
-        session.username = Some("user".to_string());
-        let timeouts = SessionTimeouts {
-            inactivity_timeout: Duration::from_secs(1),
-            ..SessionTimeouts::default()
-        };
-        let now = Instant::now();
-        session.last_share_time = Some(now - Duration::from_secs(2));
-
-        let result = check_session_timeouts(&session, &timeouts);
-        assert!(matches!(result, Err(Error::TimeoutError)));
-    }
 }

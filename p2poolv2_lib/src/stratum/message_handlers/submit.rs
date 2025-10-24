@@ -27,7 +27,7 @@ use bitcoin::blockdata::block::Block;
 use bitcoin::hashes::Hash;
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use serde_json::json;
-use std::time::{Instant, SystemTime};
+use std::time::SystemTime;
 use tracing::{debug, error, info};
 
 /// Handle the "mining.submit" message
@@ -122,7 +122,7 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         .await
         .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;
 
-    session.last_share_time = Some(Instant::now());
+    session.last_share_time = Some(SystemTime::now());
 
     let _ = metrics.record_share_accepted(stratum_share).await;
 
