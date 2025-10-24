@@ -196,10 +196,10 @@ impl ShareBlock {
         )
         .unwrap()
         .into();
-        let block_hex = hex::decode(genesis_data.bitcoin_block_hex).unwrap();
+        let header_hex = hex::decode(genesis_data.bitcoin_header_hex).unwrap();
         // panic here, as if the genesis block is bad, we bail at the start of the process
-        let block: Block = match bitcoin::consensus::deserialize(&block_hex) {
-            Ok(b) => b,
+        let header: Header = match bitcoin::consensus::deserialize(&header_hex) {
+            Ok(header) => header,
             Err(e) => {
                 println!("Failed to deserialize genesis block: {e}");
                 panic!("Invalid genesis block data");
@@ -209,7 +209,7 @@ impl ShareBlock {
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: vec![],
             miner_pubkey: public_key,
-            bitcoin_header: block.header,
+            bitcoin_header: header,
             merkle_root,
         };
         Self {

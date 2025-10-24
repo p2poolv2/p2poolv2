@@ -20,6 +20,7 @@ use crate::stratum::work::block_template::BlockTemplate;
 use crate::stratum::work::tracker::JobDetails;
 use bitcoin::blockdata::block::{Block, Header};
 use bitcoin::consensus::Decodable;
+use bitcoin::hex::DisplayHex;
 use hex::FromHex;
 use std::str::FromStr;
 use tracing::debug;
@@ -134,6 +135,10 @@ pub fn validate_submission_difficulty(
         nonce: u32::from_str_radix(submission.params[4].as_ref().unwrap(), 16).unwrap(),
     };
 
+    debug!(
+        "Header hex : {}",
+        bitcoin::consensus::serialize(&header).to_lower_hex_string()
+    );
     debug!("Header hash : {}", header.block_hash().to_string());
 
     match header.validate_pow(target) {
