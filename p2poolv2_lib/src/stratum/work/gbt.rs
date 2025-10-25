@@ -357,9 +357,6 @@ mod gbt_server_tests {
 
     #[tokio::test]
     async fn test_start_gbt_trigger_from_timeout() {
-        let binding = tempfile::tempdir().unwrap();
-        let binding = binding.path().join("notify.sock");
-
         // Mock bitcoind RPC
         let template = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -414,9 +411,6 @@ mod gbt_server_tests {
 
     #[tokio::test]
     async fn test_start_gbt_trigger_from_zmq_event() {
-        let binding = tempfile::tempdir().unwrap();
-        let binding = binding.path().join("notify.sock");
-
         // Mock bitcoind RPC
         let template = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
