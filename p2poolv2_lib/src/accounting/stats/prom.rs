@@ -63,56 +63,7 @@ impl PoolMetrics {
         ));
         output.push('\n');
 
-        output.push_str(&self.get_user_expositions());
         output.push_str(&self.get_worker_expositions());
-
-        output
-    }
-
-    fn get_user_expositions(&self) -> String {
-        let mut output = String::new();
-
-        // User metrics with btcaddress label
-        output.push_str("# HELP user_shares_valid_total Total valid shares submitted by user\n");
-        output.push_str("# TYPE user_shares_valid_total counter\n");
-        for (btcaddress, user) in &self.users {
-            output.push_str(&format!(
-                "user_shares_valid_total{{btcaddress=\"{}\"}} {}\n",
-                btcaddress,
-                user.shares_valid_total * TWO32
-            ));
-        }
-        output.push('\n');
-
-        output.push_str("# HELP user_best_share Best share difficulty for this session\n");
-        output.push_str("# TYPE user_best_share gauge\n");
-        for (btcaddress, user) in &self.users {
-            output.push_str(&format!(
-                "user_best_share{{btcaddress=\"{}\"}} {}\n",
-                btcaddress, user.best_share
-            ));
-        }
-        output.push('\n');
-
-        output.push_str("# HELP user_best_share_ever Best share difficulty ever submitted\n");
-        output.push_str("# TYPE user_best_share_ever gauge\n");
-        for (btcaddress, user) in &self.users {
-            output.push_str(&format!(
-                "user_best_share_ever{{btcaddress=\"{}\"}} {}\n",
-                btcaddress, user.best_share_ever
-            ));
-        }
-        output.push('\n');
-
-        output.push_str("# HELP user_last_share_at Last share submission time in Unix timestamp\n");
-        output.push_str("# TYPE user_last_share_at gauge\n");
-        for (btcaddress, user) in &self.users {
-            output.push_str(&format!(
-                "user_last_share_at{{btcaddress=\"{}\"}} {}\n",
-                btcaddress, user.last_share_at
-            ));
-        }
-        output.push('\n');
 
         output
     }
@@ -215,67 +166,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_user_expositions() {
-        let mut users = HashMap::new();
-
-        let user1 = User {
-            last_share_at: 1234567890,
-            shares_valid_total: 42,
-            best_share: 1000,
-            best_share_ever: 2000,
-            ..Default::default()
-        };
-
-        let user2 = User {
-            last_share_at: 1234567900,
-            shares_valid_total: 100,
-            best_share: 500,
-            best_share_ever: 0,
-            ..Default::default()
-        };
-
-        users.insert("bc1quser1".to_string(), user1);
-        users.insert("bc1quser2".to_string(), user2);
-
-        let metrics = PoolMetrics {
-            users,
-            ..Default::default()
-        };
-
-        let exposition = metrics.get_exposition();
-
-        // Check user metrics are present
-        assert!(exposition.contains("# HELP user_shares_valid"));
-        assert!(exposition.contains("# TYPE user_shares_valid_total counter"));
-        assert!(exposition.contains(&format!(
-            "user_shares_valid_total{{btcaddress=\"bc1quser1\"}} {}",
-            42 * TWO32
-        )));
-        assert!(exposition.contains(&format!(
-            "user_shares_valid_total{{btcaddress=\"bc1quser2\"}} {}",
-            100 * TWO32
-        )));
-
-        assert!(exposition.contains("# HELP user_best_share"));
-        assert!(exposition.contains("# TYPE user_best_share gauge"));
-        assert!(exposition.contains("user_best_share{btcaddress=\"bc1quser1\"} 1000"));
-        assert!(exposition.contains("user_best_share{btcaddress=\"bc1quser2\"} 500"));
-
-        assert!(exposition.contains("# HELP user_best_share_ever"));
-        assert!(exposition.contains("# TYPE user_best_share_ever gauge"));
-        assert!(exposition.contains("user_best_share_ever{btcaddress=\"bc1quser1\"} 2000"));
-        assert!(exposition.contains("user_best_share_ever{btcaddress=\"bc1quser2\"} 0"));
-
-        assert!(exposition.contains("# HELP user_last_share_at"));
-        assert!(exposition.contains("# TYPE user_last_share_at gauge"));
-        assert!(exposition.contains("user_last_share_at{btcaddress=\"bc1quser1\"} 1234567890"));
-        assert!(exposition.contains("user_last_share_at{btcaddress=\"bc1quser2\"} 1234567900"));
-
-        // Verify no p2pool_ prefix
-        assert!(!exposition.contains("p2pool_"));
-    }
-
-    #[test]
     fn test_get_worker_expositions() {
         use crate::accounting::stats::worker::Worker;
 
@@ -295,7 +185,6 @@ mod tests {
             active: true,
             best_share: 800,
             best_share_ever: 1500,
-            ..Default::default()
         };
 
         let worker2 = Worker {
@@ -304,7 +193,6 @@ mod tests {
             active: false,
             best_share: 600,
             best_share_ever: 0,
-            ..Default::default()
         };
 
         user1.workers.insert("worker1".to_string(), worker1);

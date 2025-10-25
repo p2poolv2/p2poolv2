@@ -51,11 +51,6 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     session: &mut Session<D>,
     stratum_context: StratumContext,
 ) -> Result<Vec<Message<'a>>, Error> {
-    // tracker_handle: TrackerHandle,
-    // bitcoinrpc_config: BitcoinRpcConfig,
-    // shares_tx: EmissionSender,
-    // metrics: metrics::MetricsHandle,
-
     debug!("Handling mining.submit message");
     if message.params.len() < 4 {
         return Err(Error::InvalidParams("Missing parameters".into()));
