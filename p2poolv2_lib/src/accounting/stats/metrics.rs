@@ -226,7 +226,7 @@ impl MetricsActor {
         self.metrics
             .users
             .entry(btcaddress)
-            .or_insert_with(User::default)
+            .or_default()
             .workers
             .insert(workername, Worker::default());
     }
