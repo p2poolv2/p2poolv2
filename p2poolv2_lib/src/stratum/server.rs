@@ -1101,4 +1101,9 @@ mod stratum_server_tests {
             "Subscribe response should have 'result' field"
         );
     }
+
+    #[test]
+    fn test_session_timeout() {
+        
+    }
 }

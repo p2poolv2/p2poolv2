@@ -108,3 +108,59 @@ pub fn check_session_timeouts(
 
     Ok(())
 }
+
+
+#[cfg(test)]
+mod timeout_test {
+    use super::*;
+    use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
+    use crate::stratum::error::Error;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn test_inactivity_timeout() {
+        let base_time = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0);
+        session.subscribed = true;
+        session.username = Some("miner".to_string());
+        session.connected_at = base_time;
+        session.last_share_time = Some(base_time - Duration::from_secs(1));
+
+        let timeouts = SessionTimeouts {
+            first_share_timeout: Duration::from_secs(10),
+            inactivity_timeout: Duration::from_secs(5),
+            monitor_interval: Duration::from_secs(1),
+        };
+
+        let result = check_session_timeouts(
+            &session,
+            &timeouts,
+        );
+
+        assert!(matches!(result, Err(Error::TimeoutError)));
+    }
+
+    #[test]
+    fn test_last_share_timeout() {
+        let base_time = UNIX_EPOCH + Duration::from_secs(2_000_000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0);
+        session.subscribed = true;
+        session.username = Some("miner".to_string());
+        session.connected_at = base_time;
+        session.last_share_time = None;
+
+        let timeouts = SessionTimeouts {
+            first_share_timeout: Duration::from_secs(10),
+            inactivity_timeout: Duration::from_secs(5),
+            monitor_interval: Duration::from_secs(1),
+        };
+
+        let result = check_session_timeouts(
+            &session,
+            &timeouts,
+        );
+
+        assert!(matches!(result, Err(Error::TimeoutError)));
+    }
+
+}
