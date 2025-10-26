@@ -68,14 +68,20 @@ impl User {
     }
 
     /// Record a share submission for the user, updating stats accordingly.
-    pub fn record_share(&mut self, workername: &str, difficulty: u64, current_time_stamp: u64) {
+    pub fn record_share(
+        &mut self,
+        workername: &str,
+        difficulty: u64,
+        truediff: u64,
+        current_time_stamp: u64,
+    ) {
         self.last_share_at = current_time_stamp;
         self.shares_valid_total += difficulty;
-        self.best_share = self.best_share.max(difficulty);
-        self.best_share_ever = self.best_share_ever.max(difficulty);
+        self.best_share = self.best_share.max(truediff);
+        self.best_share_ever = self.best_share_ever.max(truediff);
 
         let worker = self.get_or_add_worker(workername);
-        worker.record_share(difficulty, current_time_stamp);
+        worker.record_share(difficulty, truediff, current_time_stamp);
     }
 
     /// Get a mutable reference to a worker by name, adding it if it doesn't exist.
@@ -117,57 +123,59 @@ mod tests {
         // Record a share
         let difficulty = 1000;
         let timestamp = 1234567890;
-        user.record_share(worker_name, difficulty, timestamp);
+        user.record_share(worker_name, difficulty, 1100, timestamp);
 
         // User stats updated
         assert_eq!(user.shares_valid_total, 1000);
         assert_eq!(user.last_share_at, timestamp);
-        assert_eq!(user.best_share, difficulty);
-        assert_eq!(user.best_share_ever, difficulty);
+        assert_eq!(user.best_share, 1100);
+        assert_eq!(user.best_share_ever, 1100);
         assert_eq!(user.workers.len(), 1);
 
         // Worker stats updated
         let worker = user.workers.get(worker_name).unwrap();
         assert_eq!(worker.last_share_at, timestamp);
         assert_eq!(worker.shares_valid_total, 1000);
-        assert_eq!(worker.best_share, difficulty);
-        assert_eq!(worker.best_share_ever, difficulty);
+        assert_eq!(worker.best_share, 1100);
+        assert_eq!(worker.best_share_ever, 1100);
 
         // Record a lower difficulty share
-        user.record_share(worker_name, 500, timestamp + 1);
+        user.record_share(worker_name, 500, 550, timestamp + 1);
         assert_eq!(user.shares_valid_total, 1500);
-        assert_eq!(user.best_share, difficulty); // unchanged
-        assert_eq!(user.best_share_ever, difficulty);
+        assert_eq!(user.best_share, 1100); // unchanged
+        assert_eq!(user.best_share_ever, 1100);
         let worker = user.workers.get(worker_name).unwrap();
         assert_eq!(worker.shares_valid_total, 1500);
-        assert_eq!(worker.best_share, difficulty);
+        assert_eq!(worker.best_share, 1100);
 
         // Record a higher difficulty share
-        user.record_share(worker_name, 2000, timestamp + 2);
+        user.record_share(worker_name, 2000, 2200, timestamp + 2);
         assert_eq!(user.shares_valid_total, 3500);
-        assert_eq!(user.best_share, 2000);
-        assert_eq!(user.best_share_ever, 2000);
+        assert_eq!(user.best_share, 2200);
+        assert_eq!(user.best_share_ever, 2200);
         let worker = user.workers.get(worker_name).unwrap();
         assert_eq!(worker.shares_valid_total, 3500);
-        assert_eq!(worker.best_share, 2000);
+        assert_eq!(worker.best_share, 2200);
     }
 
     #[test]
     fn test_multiple_workers() {
         let mut user = User::default();
 
-        user.record_share("worker1", 100, 1);
-        user.record_share("worker2", 200, 2);
+        user.record_share("worker1", 100, 110, 1);
+        user.record_share("worker2", 200, 220, 2);
 
         assert_eq!(user.workers.len(), 2);
 
         let worker1 = user.workers.get("worker1").unwrap();
         let worker2 = user.workers.get("worker2").unwrap();
 
+        assert_eq!(user.best_share, 220);
+
         assert_eq!(worker1.shares_valid_total, 100);
-        assert_eq!(worker1.best_share, 100);
+        assert_eq!(worker1.best_share, 110);
         assert_eq!(worker2.shares_valid_total, 200);
-        assert_eq!(worker2.best_share, 200);
+        assert_eq!(worker2.best_share, 220);
     }
 
     #[test]

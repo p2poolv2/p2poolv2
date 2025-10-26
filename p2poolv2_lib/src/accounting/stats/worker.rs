@@ -50,12 +50,12 @@ impl Worker {
     }
 
     /// Record a share submission for the worker, updating stats accordingly.
-    pub fn record_share(&mut self, difficulty: u64, unix_timestamp: u64) {
+    pub fn record_share(&mut self, difficulty: u64, truediff: u64, unix_timestamp: u64) {
         self.last_share_at = unix_timestamp;
         self.shares_valid_total += difficulty;
 
-        self.best_share = self.best_share.max(difficulty);
-        self.best_share_ever = self.best_share_ever.max(difficulty);
+        self.best_share = self.best_share.max(truediff);
+        self.best_share_ever = self.best_share_ever.max(truediff);
 
         self.active = true;
     }
@@ -88,26 +88,26 @@ mod tests {
         assert!(!worker.active);
 
         // First share
-        worker.record_share(difficulty, timestamp);
+        worker.record_share(difficulty, 1100, timestamp);
 
         assert_eq!(worker.last_share_at, timestamp);
         assert_eq!(worker.shares_valid_total, 1000);
-        assert_eq!(worker.best_share, difficulty);
-        assert_eq!(worker.best_share_ever, difficulty);
+        assert_eq!(worker.best_share, 1100);
+        assert_eq!(worker.best_share_ever, 1100);
         assert!(worker.active);
 
         // New best share
-        worker.record_share(2000, timestamp + 1000);
+        worker.record_share(2000, 2200, timestamp + 1000);
         assert_eq!(worker.last_share_at, timestamp + 1000);
         assert_eq!(worker.shares_valid_total, 3000);
-        assert_eq!(worker.best_share, 2000);
-        assert_eq!(worker.best_share_ever, 2000);
+        assert_eq!(worker.best_share, 2200);
+        assert_eq!(worker.best_share_ever, 2200);
 
         // Submit a lower difficulty share, best_share and best_share_ever should not change
-        worker.record_share(500, timestamp + 2000);
+        worker.record_share(500, 550, timestamp + 2000);
         assert_eq!(worker.last_share_at, timestamp + 2000);
         assert_eq!(worker.shares_valid_total, 3500);
-        assert_eq!(worker.best_share, 2000);
-        assert_eq!(worker.best_share_ever, 2000);
+        assert_eq!(worker.best_share, 2200);
+        assert_eq!(worker.best_share_ever, 2200);
     }
 }

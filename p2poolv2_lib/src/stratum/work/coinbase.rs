@@ -184,7 +184,6 @@ pub fn split_coinbase(coinbase: &Transaction) -> Result<(String, String), WorkEr
 #[cfg(test)]
 mod tests {
     use bitcoin::hex::DisplayHex;
-    use tokio_test::assert_err;
 
     use super::*;
     use crate::stratum::work::block_template::BlockTemplate;
