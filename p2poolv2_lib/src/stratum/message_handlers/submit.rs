@@ -100,6 +100,10 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         submit_block(&validation_result.block, stratum_context.bitcoinrpc_config).await;
     }
 
+    // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet
+    let truediff = get_true_difficulty(&validation_result.block.block_hash());
+    debug!("True difficulty: {}", truediff);
+
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -114,10 +118,6 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         message.params[2].as_ref().unwrap().to_string(),
         message.params[4].as_ref().unwrap().to_string(),
     );
-
-    // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet
-    let truediff = get_true_difficulty(&validation_result.block.block_hash());
-    debug!("True difficulty: {}", truediff);
 
     stratum_context
         .shares_tx
@@ -134,7 +134,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     if meets_session_difficulty {
         let _ = stratum_context
             .metrics
-            .record_share_accepted(stratum_share)
+            .record_share_accepted(stratum_share, truediff as u64)
             .await;
     } else {
         let _ = stratum_context.metrics.record_share_rejected().await;

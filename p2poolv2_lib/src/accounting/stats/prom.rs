@@ -254,3 +254,15 @@ mod tests {
         assert!(!exposition.contains("p2pool_"));
     }
 }
+
+// HIDE LABELS
+
+// USERS
+// count(
+//   (sum by (btcaddress) (rate(worker_shares_valid_total[5m])) > 0)
+// )
+
+// WORKERS
+// count(
+//   (sum by (workername) (rate(worker_shares_valid_total[5m])) > 0)
+// )
