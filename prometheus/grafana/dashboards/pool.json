@@ -208,7 +208,7 @@
           "calcs": [],
           "displayMode": "list",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "tooltip": {
           "hideZeros": false,
@@ -225,7 +225,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "count without(worker) (sum_over_time(rate(worker_shares_valid_total[5m])[5m:]) > 0)",
+          "expr": "count((sum by (btcaddress) (rate(worker_shares_valid_total[5m])) > 0))",
           "instant": false,
           "legendFormat": "Users",
           "range": true,
@@ -308,7 +308,7 @@
           "calcs": [],
           "displayMode": "list",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "tooltip": {
           "hideZeros": false,
@@ -321,7 +321,7 @@
         {
           "editorMode": "code",
           "exemplar": false,
-          "expr": "count without(user) (sum_over_time(rate(worker_shares_valid_total[5m])[5m:]) > 0)",
+          "expr": "count((sum by (workername) (rate(worker_shares_valid_total[5m])) > 0))",
           "instant": false,
           "legendFormat": "Workers",
           "range": true,
