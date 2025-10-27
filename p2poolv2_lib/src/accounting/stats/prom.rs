@@ -77,10 +77,15 @@ impl PoolMetrics {
         output.push_str("# TYPE worker_shares_valid_total counter\n");
         for (btcaddress, user) in &self.users {
             for (workername, worker) in &user.workers {
+                let display_name = if workername.is_empty() {
+                    "unnamed"
+                } else {
+                    workername
+                };
                 output.push_str(&format!(
                     "worker_shares_valid_total{{btcaddress=\"{}\",workername=\"{}\"}} {}\n",
                     btcaddress,
-                    workername,
+                    display_name,
                     worker.shares_valid_total * TWO32
                 ));
             }
@@ -91,9 +96,14 @@ impl PoolMetrics {
         output.push_str("# TYPE worker_best_share gauge\n");
         for (btcaddress, user) in &self.users {
             for (workername, worker) in &user.workers {
+                let display_name = if workername.is_empty() {
+                    "unnamed"
+                } else {
+                    workername
+                };
                 output.push_str(&format!(
                     "worker_best_share{{btcaddress=\"{}\",workername=\"{}\"}} {}\n",
-                    btcaddress, workername, worker.best_share
+                    btcaddress, display_name, worker.best_share
                 ));
             }
         }
@@ -105,9 +115,14 @@ impl PoolMetrics {
         output.push_str("# TYPE worker_best_share_ever gauge\n");
         for (btcaddress, user) in &self.users {
             for (workername, worker) in &user.workers {
+                let display_name = if workername.is_empty() {
+                    "unnamed"
+                } else {
+                    workername
+                };
                 output.push_str(&format!(
                     "worker_best_share_ever{{btcaddress=\"{}\",workername=\"{}\"}} {}\n",
-                    btcaddress, workername, worker.best_share_ever
+                    btcaddress, display_name, worker.best_share_ever
                 ));
             }
         }
@@ -118,9 +133,14 @@ impl PoolMetrics {
         output.push_str("# TYPE worker_last_share_at gauge\n");
         for (btcaddress, user) in &self.users {
             for (workername, worker) in &user.workers {
+                let display_name = if workername.is_empty() {
+                    "unnamed"
+                } else {
+                    workername
+                };
                 output.push_str(&format!(
                     "worker_last_share_at{{btcaddress=\"{}\",workername=\"{}\"}} {}\n",
-                    btcaddress, workername, worker.last_share_at
+                    btcaddress, display_name, worker.last_share_at
                 ));
             }
         }
@@ -252,5 +272,57 @@ mod tests {
 
         // Verify no p2pool_ prefix
         assert!(!exposition.contains("p2pool_"));
+    }
+
+    #[test]
+    fn test_empty_workername_becomes_unnamed() {
+        use crate::accounting::stats::worker::Worker;
+
+        let mut users = HashMap::new();
+
+        let mut user1 = User {
+            last_share_at: 1234567890,
+            shares_valid_total: 10,
+            best_share: 500,
+            best_share_ever: 500,
+            ..Default::default()
+        };
+
+        let worker_with_empty_name = Worker {
+            last_share_at: 1234567891,
+            shares_valid_total: 10,
+            active: true,
+            best_share: 500,
+            best_share_ever: 500,
+        };
+
+        user1.workers.insert("".to_string(), worker_with_empty_name);
+        users.insert("bc1qtest".to_string(), user1);
+
+        let metrics = PoolMetrics {
+            users,
+            ..Default::default()
+        };
+
+        let exposition = metrics.get_exposition();
+
+        // Verify that empty workername is replaced with "unnamed"
+        assert!(exposition.contains(r#"workername="unnamed""#));
+        assert!(exposition.contains(&format!(
+            r#"worker_shares_valid_total{{btcaddress="bc1qtest",workername="unnamed"}} {}"#,
+            10 * TWO32
+        )));
+        assert!(
+            exposition
+                .contains(r#"worker_best_share{btcaddress="bc1qtest",workername="unnamed"} 500"#)
+        );
+        assert!(
+            exposition.contains(
+                r#"worker_best_share_ever{btcaddress="bc1qtest",workername="unnamed"} 500"#
+            )
+        );
+        assert!(exposition.contains(
+            r#"worker_last_share_at{btcaddress="bc1qtest",workername="unnamed"} 1234567891"#
+        ));
     }
 }

@@ -18,9 +18,34 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 1,
+  "id": 3,
   "links": [],
   "panels": [
+    {
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 10,
+      "options": {
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "[Pool Stats](/d/ad4559x/pool) | [Users and Workers](/d/adnhx6x/users-and-workers) | [Hydrapool Github](https://github.com/256-Foundation/Hydra-Pool)\n\n",
+        "mode": "markdown"
+      },
+      "pluginVersion": "12.2.0",
+      "title": "Links",
+      "type": "text"
+    },
     {
       "datasource": {
         "type": "prometheus",
@@ -87,7 +112,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 0
+        "y": 2
       },
       "id": 1,
       "options": {
@@ -103,7 +128,7 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.2.1",
+      "pluginVersion": "12.2.0",
       "targets": [
         {
           "datasource": {
@@ -200,7 +225,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 7
+        "y": 9
       },
       "id": 6,
       "options": {
@@ -216,7 +241,7 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.2.1",
+      "pluginVersion": "12.2.0",
       "targets": [
         {
           "datasource": {
@@ -300,7 +325,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 7
+        "y": 9
       },
       "id": 7,
       "options": {
@@ -316,12 +341,12 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.2.1",
+      "pluginVersion": "12.2.0",
       "targets": [
         {
           "editorMode": "code",
           "exemplar": false,
-          "expr": "count((sum by (workername) (rate(worker_shares_valid_total[5m])) > 0))",
+          "expr": "count((sum by (btcaddress, workername) (rate(worker_shares_valid_total[5m])) > 0))",
           "instant": false,
           "legendFormat": "Workers",
           "range": true,
@@ -363,7 +388,7 @@
         "h": 10,
         "w": 6,
         "x": 0,
-        "y": 15
+        "y": 17
       },
       "id": 5,
       "options": {
@@ -383,7 +408,7 @@
         "textMode": "auto",
         "wideLayout": true
       },
-      "pluginVersion": "12.2.1",
+      "pluginVersion": "12.2.0",
       "targets": [
         {
           "editorMode": "builder",
@@ -432,7 +457,7 @@
         "h": 10,
         "w": 6,
         "x": 6,
-        "y": 15
+        "y": 17
       },
       "id": 4,
       "options": {
@@ -450,7 +475,7 @@
         "showThresholdMarkers": true,
         "sizing": "auto"
       },
-      "pluginVersion": "12.2.1",
+      "pluginVersion": "12.2.0",
       "targets": [
         {
           "editorMode": "builder",
@@ -490,7 +515,7 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 15
+        "y": 17
       },
       "id": 9,
       "options": {
@@ -516,7 +541,7 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.2.1",
+      "pluginVersion": "12.2.0",
       "targets": [
         {
           "editorMode": "code",
@@ -594,7 +619,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 25
+        "y": 27
       },
       "id": 8,
       "options": {
@@ -610,7 +635,7 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.2.1",
+      "pluginVersion": "12.2.0",
       "targets": [
         {
           "datasource": {
@@ -644,5 +669,5 @@
   "timezone": "browser",
   "title": "Pool",
   "uid": "ad4559x",
-  "version": 1
+  "version": 5
 }
