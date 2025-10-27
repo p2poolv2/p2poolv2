@@ -18,7 +18,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 4,
+  "id": 2,
   "links": [],
   "panels": [
     {
@@ -341,7 +341,6 @@
         },
         "refresh": 1,
         "regex": "",
-        "sort": 5,
         "type": "query"
       },
       {
@@ -379,5 +378,5 @@
   "timezone": "browser",
   "title": "Users and Workers",
   "uid": "adnhx6x",
-  "version": 1
+  "version": 10
 }
