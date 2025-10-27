@@ -18,7 +18,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 4,
+  "id": 3,
   "links": [],
   "panels": [
     {
@@ -325,24 +325,22 @@
   "templating": {
     "list": [
       {
-        "allowCustomValue": false,
         "current": {
-          "text": "bc1qu784gk8czv5kwm9pwssk53e0q9trpkec85r0t2",
-          "value": "bc1qu784gk8czv5kwm9pwssk53e0q9trpkec85r0t2"
+          "text": "",
+          "value": ""
         },
-        "definition": "label_values(worker_shares_valid_total,btcaddress)",
+        "description": "The user's bitcoin address for searching workers",
         "label": "User's BTC Address",
         "name": "user_address",
-        "options": [],
-        "query": {
-          "qryType": 1,
-          "query": "label_values(worker_shares_valid_total,btcaddress)",
-          "refId": "PrometheusVariableQueryEditor-VariableQuery"
-        },
-        "refresh": 1,
-        "regex": "",
-        "sort": 5,
-        "type": "query"
+        "options": [
+          {
+            "selected": true,
+            "text": "",
+            "value": ""
+          }
+        ],
+        "query": "",
+        "type": "textbox"
       },
       {
         "allowCustomValue": false,
@@ -379,5 +377,5 @@
   "timezone": "browser",
   "title": "Users and Workers",
   "uid": "adnhx6x",
-  "version": 1
+  "version": 29
 }
