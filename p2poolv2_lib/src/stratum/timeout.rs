@@ -141,7 +141,7 @@ mod timeout_test {
     }
 
     #[test]
-    fn test_last_share_timeout() {
+    fn test_first_share_timeout() {
         let base_time = UNIX_EPOCH + Duration::from_secs(2_000_000);
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0);
         session.subscribed = true;

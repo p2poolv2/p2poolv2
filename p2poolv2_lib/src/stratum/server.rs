@@ -452,6 +452,7 @@ mod stratum_server_tests {
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::Arc;
+    use std::time::Duration;
     use tempfile::tempdir;
     use tokio::sync::mpsc;
 
@@ -1102,8 +1103,163 @@ mod stratum_server_tests {
         );
     }
 
+        #[test]
+    fn test_handle_connection_first_share_timeout() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        runtime.block_on(async {
+            tokio::time::pause();
+
+            let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8083);
+            let mut writer = Vec::new();
+            let (_, message_rx) = mpsc::channel(10);
+            let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+            let (notify_tx, _notify_rx) = mpsc::channel(10);
+            let tracker_handle = start_tracker_actor();
+            let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+            let (shares_tx, _shares_rx) = mpsc::channel(10);
+            let stats_dir = tempfile::tempdir().unwrap();
+            let metrics_handle = metrics::start_metrics(
+                stats_dir.path().to_str().unwrap().to_string(),
+            )
+            .await
+            .unwrap();
+
+            let temp_dir = tempdir().unwrap();
+            let store = Arc::new(ChainStore::new(
+                Arc::new(
+                    Store::new(temp_dir.path().to_str().unwrap().to_string(), false)
+                        .unwrap(),
+                ),
+                ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+                bitcoin::Network::Signet,
+            ));
+
+            let ctx = StratumContext {
+                notify_tx,
+                tracker_handle,
+                bitcoinrpc_config,
+                metrics: metrics_handle,
+                start_difficulty: 10000,
+                minimum_difficulty: 1,
+                maximum_difficulty: Some(2),
+                shares_tx,
+                network: bitcoin::network::Network::Regtest,
+                store,
+            };
+
+            let reader = BufReader::new(tokio::io::empty());
+
+            let handle = tokio::spawn(async move {
+                handle_connection(
+                    reader,
+                    &mut writer,
+                    addr,
+                    message_rx,
+                    shutdown_rx,
+                    0x1fffe000,
+                    ctx,
+                )
+                .await
+            });
+
+            tokio::time::advance(Duration::from_secs(2)).await;
+
+            let result = handle.await.unwrap();
+            assert!(result.is_ok());
+        });
+    }
+
+
     #[test]
-    fn test_session_timeout() {
-        
+    fn test_handle_connection_inactivity_timeout() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        runtime.block_on(async {
+            tokio::time::pause();
+
+            let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8084);
+            let mut writer = Vec::new();
+            let (_, message_rx) = mpsc::channel(10);
+            let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+            let (notify_tx, _notify_rx) = mpsc::channel(10);
+            let tracker_handle = start_tracker_actor();
+            let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+            let (shares_tx, _shares_rx) = mpsc::channel(10);
+            let stats_dir = tempfile::tempdir().unwrap();
+            let metrics_handle = metrics::start_metrics(
+                stats_dir.path().to_str().unwrap().to_string(),
+            )
+            .await
+            .unwrap();
+
+            let temp_dir = tempdir().unwrap();
+            let store = Arc::new(ChainStore::new(
+                Arc::new(
+                    Store::new(temp_dir.path().to_str().unwrap().to_string(), false)
+                        .unwrap(),
+                ),
+                ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+                bitcoin::Network::Signet,
+            ));
+
+            let ctx = StratumContext {
+                notify_tx,
+                tracker_handle,
+                bitcoinrpc_config,
+                metrics: metrics_handle,
+                start_difficulty: 10000,
+                minimum_difficulty: 1,
+                maximum_difficulty: Some(2),
+                shares_tx,
+                network: bitcoin::network::Network::Regtest,
+                store,
+            };
+
+            let subscribe_message = SimpleRequest::new_subscribe(
+                1,
+                "agent".to_string(),
+                "1.0".to_string(),
+                None,
+            );
+            let subscribe_str = serde_json::to_string(&subscribe_message).unwrap();
+
+            let authorize_message = SimpleRequest::new_authorize(
+                2,
+                "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
+                Some("test_password".to_string()),
+            );
+            let authorize_str = serde_json::to_string(&authorize_message).unwrap();
+
+            let mut mock_reader = tokio_test::io::Builder::new()
+                .read(format!("{subscribe_str}\n").as_bytes())
+                .read(format!("{authorize_str}\n").as_bytes())
+                .build();
+
+            let handle = tokio::spawn(async move {
+                let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
+                handle_connection(
+                    buf_reader,
+                    &mut writer,
+                    addr,
+                    message_rx,
+                    shutdown_rx,
+                    0x1fffe000,
+                    ctx,
+                )
+                .await
+            });
+
+            tokio::time::advance(Duration::from_secs(2)).await;
+
+            let result = handle.await.unwrap();
+            assert!(result.is_ok());
+        });
     }
 }
