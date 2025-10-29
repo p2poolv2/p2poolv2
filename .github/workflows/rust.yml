@@ -37,6 +37,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
 
       - name: Install latest nextest release
         uses: taiki-e/install-action@nextest
