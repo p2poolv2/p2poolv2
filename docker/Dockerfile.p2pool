@@ -17,14 +17,14 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Build and install RocksDB
-RUN git clone --depth 1 --branch v7.10.2 https://github.com/facebook/rocksdb.git && \
-    cd rocksdb && \
-    PORTABLE=1 make -j$(nproc) shared_lib && \
-    cp librocksdb.so* /usr/lib/ && \
-    cp -r include/rocksdb /usr/include/ && \
-    cd .. && \
-    rm -rf rocksdb
+# # Build and install RocksDB
+# RUN git clone --depth 1 --branch v7.10.2 https://github.com/facebook/rocksdb.git && \
+#     cd rocksdb && \
+#     PORTABLE=1 make -j$(nproc) shared_lib && \
+#     cp librocksdb.so* /usr/lib/ && \
+#     cp -r include/rocksdb /usr/include/ && \
+#     cd .. && \
+#     rm -rf rocksdb
 
 # Create and set working directory
 RUN mkdir -p /p2pool
