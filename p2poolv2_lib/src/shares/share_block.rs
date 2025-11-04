@@ -15,9 +15,9 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::shares::genesis;
-use bitcoin::TxMerkleNode;
 use bitcoin::hashes::Hash;
 use bitcoin::{Block, BlockHash, PublicKey, Transaction, block::Header};
+use bitcoin::{CompactTarget, TxMerkleNode};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 
@@ -41,6 +41,10 @@ pub struct ShareHeader {
     pub merkle_root: TxMerkleNode,
     /// Bitcoin header the share is found for
     pub bitcoin_header: Header,
+    /// Share chain difficult as compact target
+    pub bits: CompactTarget,
+    /// Timestamp for the share, as set by the miner
+    pub time: u32,
 }
 
 impl ShareHeader {
@@ -117,6 +121,8 @@ impl ShareBlock {
             miner_pubkey: public_key,
             merkle_root: TxMerkleNode::all_zeros(),
             bitcoin_header: block.header,
+            time: 1700000000u32,
+            bits: CompactTarget::from_consensus(0x207fffff),
         };
         Self {
             header,
@@ -155,6 +161,8 @@ impl ShareBlock {
             miner_pubkey,
             bitcoin_header: bitcoin_block_header,
             merkle_root,
+            time: 1700000000u32,
+            bits: CompactTarget::from_consensus(0x207fffff),
         };
         Ok(Self {
             header,
@@ -211,6 +219,8 @@ impl ShareBlock {
             miner_pubkey: public_key,
             bitcoin_header: header,
             merkle_root,
+            time: 1700000000u32,
+            bits: CompactTarget::from_consensus(0x207fffff),
         };
         Self {
             header,

@@ -151,6 +151,8 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
         .unwrap(),
         merkle_root: share_merkle_root,
         bitcoin_header,
+        time: 1700000000u32,
+        bits: CompactTarget::from_consensus(0x207fffff),
     };
 
     ShareBlock {
@@ -300,6 +302,8 @@ fn test_share_block(
         miner_pubkey: PublicKey::from_str(miner_pubkey).unwrap(),
         merkle_root: share_merkle_root,
         bitcoin_header,
+        time: 1700000000u32,
+        bits: CompactTarget::from_consensus(0x207fffff),
     };
 
     ShareBlock {
@@ -391,6 +395,8 @@ impl TestShareHeaderBuilder {
                 bits: CompactTarget::from_consensus(0x207fffff),
                 nonce: 0,
             },
+            time: 1700000000u32,
+            bits: CompactTarget::from_consensus(0x207fffff),
         }
     }
 }
