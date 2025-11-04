@@ -71,6 +71,26 @@ impl ShareHeader {
             Err(e) => Err(e.into()),
         }
     }
+
+    /// Generate a commitment hash serialized as CBOR bytes
+    ///
+    /// Serialize all fields in ShareHeader apart from bitcoin_header
+    /// and return a sha256d of the serialized bytes
+    pub fn commitment_hash(&self) -> Result<bitcoin::hashes::sha256d::Hash, Box<dyn Error>> {
+        let mut serialized = Vec::new();
+        ciborium::ser::into_writer(
+            &(
+                &self.prev_share_blockhash,
+                &self.uncles,
+                &self.miner_pubkey,
+                &self.merkle_root,
+                &self.bits,
+                self.time,
+            ),
+            &mut serialized,
+        )?;
+        Ok(bitcoin::hashes::sha256d::Hash::hash(&serialized))
+    }
 }
 
 /// Captures a block on the share chain.
@@ -450,5 +470,50 @@ mod tests {
         .unwrap()
         .into();
         assert_eq!(share_block.header.merkle_root, expected_merkle_root);
+    }
+
+    #[test]
+    fn test_commitment_hash() {
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4".to_string(),
+            )
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .diff(1)
+            .build();
+
+        let hash = share.header.commitment_hash().unwrap();
+        assert_eq!(hash.to_string().len(), 64); // SHA256d hash is 64 hex chars
+    }
+
+    #[test]
+    fn test_commitment_hash_excludes_bitcoin_header() {
+        let bitcoin_header1 = TestShareBlockBuilder::new().build().header.bitcoin_header;
+        let bitcoin_header2 = TestShareBlockBuilder::new()
+            .diff(2)
+            .build()
+            .header
+            .bitcoin_header;
+
+        let prev_hash =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4".to_string();
+        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202";
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(prev_hash.clone())
+            .miner_pubkey(pubkey)
+            .diff(1)
+            .build();
+
+        let mut share2 = share1.clone();
+        share2.header.bitcoin_header = bitcoin_header2;
+
+        let hash1 = share1.header.commitment_hash().unwrap();
+        let hash2 = share2.header.commitment_hash().unwrap();
+
+        assert_eq!(
+            hash1, hash2,
+            "Commitment hash should be the same even with different bitcoin headers"
+        );
     }
 }
