@@ -83,12 +83,12 @@ async fn get_block_template(
             match serde_json::from_str::<BlockTemplate>(blocktemplate_json.as_str()) {
                 Ok(template) => Ok(template),
                 Err(e) => Err(Box::new(WorkError {
-                    message: format!("Failed to parse block template: {e}"),
+                    message: e.to_string(),
                 })),
             }
         }
         Err(e) => Err(Box::new(WorkError {
-            message: format!("Failed to get block template: {e}"),
+            message: e.to_string(),
         })),
     }
 }

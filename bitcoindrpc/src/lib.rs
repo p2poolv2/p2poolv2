@@ -21,7 +21,7 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::debug;
+use tracing::{debug, error};
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
@@ -61,12 +61,18 @@ pub struct BitcoinRpcConfig {
 /// Error type for the BitcoindRpcClient
 #[derive(Debug)]
 pub enum BitcoindRpcError {
+    HttpError { status_code: u16, message: String },
+    ParseError { message: String },
+    RpcError { code: i32, message: String },
     Other(String),
 }
 
 impl Error for BitcoindRpcError {
     fn description(&self) -> &str {
         match self {
+            BitcoindRpcError::HttpError { message, .. } => message,
+            BitcoindRpcError::ParseError { message } => message,
+            BitcoindRpcError::RpcError { message, .. } => message,
             BitcoindRpcError::Other(msg) => msg,
         }
     }
@@ -74,6 +80,18 @@ impl Error for BitcoindRpcError {
 impl fmt::Display for BitcoindRpcError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            BitcoindRpcError::HttpError {
+                status_code,
+                message,
+            } => {
+                write!(f, "HTTP error {status_code}: {message}")
+            }
+            BitcoindRpcError::ParseError { message } => {
+                write!(f, "Parse error: {message}")
+            }
+            BitcoindRpcError::RpcError { code, message } => {
+                write!(f, "RPC error {code}: {message}")
+            }
             BitcoindRpcError::Other(msg) => write!(f, "{msg}"),
         }
     }
@@ -125,25 +143,51 @@ impl BitcoindRpcClient {
             id,
         };
 
-        let response = self
-            .client
-            .post(&self.url)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| BitcoindRpcError::Other(format!("HTTP request failed: {e}")))?;
+        let response = match self.client.post(&self.url).json(&request).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                let status_code = e.status().map(|s| s.as_u16());
+                error!(
+                    "HTTP request failed to bitcoin node: status={:?}, error={}",
+                    status_code, e
+                );
+                return Err(BitcoindRpcError::Other(format!("HTTP request failed: {e}")));
+            }
+        };
 
-        let rpc_response: JsonRpcResponse<T> = response
-            .json()
-            .await
-            .map_err(|e| BitcoindRpcError::Other(format!("Failed to parse response: {e}")))?;
+        let status = response.status();
+
+        // Check for non-success HTTP status codes
+        if !status.is_success() {
+            let status_code = status.as_u16();
+            let error_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Failed to read error body".to_string());
+            error!(
+                "Error reaching bitcoin node with status={:?}. Message={:?}",
+                status_code, error_body
+            );
+            return Err(BitcoindRpcError::HttpError {
+                status_code,
+                message: error_body,
+            });
+        }
+
+        let rpc_response: JsonRpcResponse<T> =
+            response
+                .json()
+                .await
+                .map_err(|e| BitcoindRpcError::ParseError {
+                    message: format!("Failed to parse response: {e}"),
+                })?;
 
         // JSON-RPC 1.0: check error first, then return result
         if let Some(error) = rpc_response.error {
-            return Err(BitcoindRpcError::Other(format!(
-                "RPC error {}: {}",
-                error.code, error.message
-            )));
+            return Err(BitcoindRpcError::RpcError {
+                code: error.code,
+                message: error.message,
+            });
         }
 
         // In JSON-RPC 1.0, result is always present (can be null for void methods like submitblock)
@@ -616,5 +660,38 @@ mod tests {
         assert!(result.is_ok());
         let result_value = serde_json::from_str::<serde_json::Value>(&result.unwrap()).unwrap();
         assert_eq!(result_value.get("height").unwrap(), 1000000);
+    }
+
+    #[tokio::test]
+    async fn test_request_with_4xx_http_error() {
+        let mock_server = MockServer::start().await;
+
+        // Mock a 401 Unauthorized response
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getdifficulty",
+                "params": [],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(401).set_body_string("Unauthorized"))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result: Result<f64, BitcoindRpcError> = client.get_difficulty().await;
+
+        assert!(result.is_err());
+        if let Err(BitcoindRpcError::HttpError {
+            status_code,
+            message,
+        }) = result
+        {
+            assert_eq!(status_code, 401);
+            assert_eq!(message, "Unauthorized");
+        } else {
+            panic!("Expected BitcoindRpcError::HttpError, got {result:?}");
+        }
     }
 }
