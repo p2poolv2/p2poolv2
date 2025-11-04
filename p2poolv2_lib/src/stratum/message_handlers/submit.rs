@@ -15,7 +15,6 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::simple_pplns::SimplePplnsShare;
-use crate::accounting::stats::metrics;
 use crate::stratum::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::stratum::emission::Emission;
 use crate::stratum::error::Error;
@@ -198,6 +197,7 @@ fn get_true_difficulty(hash: &bitcoin::BlockHash) -> u128 {
 #[cfg(test)]
 mod handle_submit_tests {
     use super::*;
+    use crate::accounting::stats::metrics;
     use crate::shares::chain::chain_store::ChainStore;
     use crate::shares::share_block::ShareBlock;
     use crate::store::Store;
