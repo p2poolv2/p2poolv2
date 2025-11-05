@@ -23,6 +23,41 @@ use std::error::Error;
 
 use super::transactions;
 
+/// Share commitment created by miner and embedded in the bitcoin
+/// coinbase to tie the share to the bitcoin weak block
+///
+/// When we need to build ShareHeader from the commitment, we move the
+/// fields into the ShareHeader. This does mean there is some code
+/// duplication, but we don't want to use indirection as
+/// header.commitment.time.
+///
+/// Instead, we let the compiler catch discrepancies between the two
+/// by implementing a From in ShareHeader
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+pub struct ShareCommitment {
+    /// The hash of the prev share block, will be None for genesis block
+    pub prev_share_blockhash: BlockHash,
+    /// The uncles of the share
+    pub uncles: Vec<BlockHash>,
+    /// Compressed pubkey identifying the miner
+    pub miner_pubkey: PublicKey,
+    /// Share block transactions merkle root
+    pub merkle_root: TxMerkleNode,
+    /// Share chain difficult as compact target
+    pub bits: CompactTarget,
+    /// Timestamp for the share, as set by the miner
+    pub time: u32,
+}
+
+impl ShareCommitment {
+    /// Make a SHA256 hash for commitment
+    pub fn hash(&self) -> bitcoin::hashes::sha256::Hash {
+        let mut serialized = Vec::new();
+        ciborium::ser::into_writer(&self, &mut serialized).unwrap();
+        bitcoin::hashes::sha256::Hash::hash(&serialized)
+    }
+}
+
 /// Header for the share chain block.
 ///
 /// Exludes bitcoin compact block and share chain transactions.
@@ -48,6 +83,23 @@ pub struct ShareHeader {
 }
 
 impl ShareHeader {
+    /// Build a ShareHeader from a commitment and a bitcoin header
+    /// which contains a coinbase matching the commitment.
+    ///
+    /// We do not validate the commitment is actually present in the
+    /// bitcoin header. That happens at the receiving node.
+    pub fn from_commitment_and_header(commitment: ShareCommitment, bitcoin_header: Header) -> Self {
+        Self {
+            prev_share_blockhash: commitment.prev_share_blockhash,
+            uncles: commitment.uncles,
+            miner_pubkey: commitment.miner_pubkey,
+            merkle_root: commitment.merkle_root,
+            bitcoin_header,
+            bits: commitment.bits,
+            time: commitment.time,
+        }
+    }
+
     /// Block hash for the share header
     pub fn block_hash(&self) -> BlockHash {
         let mut serialized = Vec::new();
@@ -515,5 +567,37 @@ mod tests {
             hash1, hash2,
             "Commitment hash should be the same even with different bitcoin headers"
         );
+    }
+
+    #[test]
+    fn test_from_commitment_and_header() {
+        let bitcoin_header = TestShareBlockBuilder::new().build().header.bitcoin_header;
+        let commitment = ShareCommitment {
+            prev_share_blockhash: BlockHash::from_str(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
+            )
+            .unwrap(),
+            uncles: vec![],
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse::<PublicKey>()
+                .unwrap(),
+            merkle_root: TxMerkleNode::all_zeros(),
+            bits: CompactTarget::from_consensus(0x207fffff),
+            time: 1700000000,
+        };
+
+        let cloned = commitment.clone();
+        let header = ShareHeader::from_commitment_and_header(commitment, bitcoin_header);
+
+        assert_eq!(header.prev_share_blockhash, cloned.prev_share_blockhash);
+        assert_eq!(header.uncles, cloned.uncles);
+        assert_eq!(header.miner_pubkey, cloned.miner_pubkey);
+        assert_eq!(header.merkle_root, cloned.merkle_root);
+        assert_eq!(header.bitcoin_header, bitcoin_header);
+        assert_eq!(header.bits, cloned.bits);
+        assert_eq!(header.time, cloned.time);
+
+        let hashed = cloned.hash();
+        assert_ne!(hashed, bitcoin::hashes::sha256::Hash::all_zeros());
     }
 }
