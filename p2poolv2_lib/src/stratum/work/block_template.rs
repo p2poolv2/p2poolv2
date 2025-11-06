@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use bitcoin::{TxMerkleNode, merkle_tree};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -71,9 +72,23 @@ impl From<TemplateTransaction> for bitcoin::Transaction {
         bitcoin::Transaction::from(&tx)
     }
 }
+
+impl BlockTemplate {
+    /// Get the merkle root for block template without the coinbase
+    /// We need this to build the ShareCommitment to capture the hash of all transactions from the block
+    pub(crate) fn get_merkle_root_without_coinbase(&self) -> Option<TxMerkleNode> {
+        let hashes = self
+            .transactions
+            .iter()
+            .map(|obj| obj.txid.parse().unwrap());
+        merkle_tree::calculate_root(hashes)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::hashes::Hash;
     use std::fs;
     use std::path::Path;
 
@@ -130,5 +145,54 @@ mod tests {
             btc_tx.output[0].value,
             bitcoin::Amount::from_btc(49.98985900).unwrap()
         );
+    }
+
+    #[test]
+    fn test_get_merkle_root_with_transactions() {
+        // Load template with 4 transactions
+        let json_path =
+            Path::new("../tests/test_data/validation/stratum/gbt_with_transactions.json");
+        let json_content = fs::read_to_string(json_path).expect("Failed to read test JSON file");
+        let block_template: BlockTemplate =
+            serde_json::from_str(&json_content).expect("Failed to parse JSON into BlockTemplate");
+
+        // Get merkle root
+        let merkle_root = block_template.get_merkle_root_without_coinbase();
+
+        // Should be Some since we have transactions
+        assert!(merkle_root.is_some());
+        let root = merkle_root.unwrap();
+
+        // Verify it's not all zeros
+        assert_ne!(root, TxMerkleNode::all_zeros());
+
+        // Manually verify merkle root calculation from the 4 transaction txids
+        let expected_root = merkle_tree::calculate_root(
+            block_template
+                .transactions
+                .iter()
+                .map(|tx| tx.txid.parse().unwrap()),
+        )
+        .unwrap();
+
+        assert_eq!(root, expected_root);
+    }
+
+    #[test]
+    fn test_get_merkle_root_without_transactions() {
+        // Load template with no transactions
+        let json_path = Path::new("../tests/test_data/validation/stratum/a/template.json");
+        let json_content = fs::read_to_string(json_path).expect("Failed to read test JSON file");
+        let block_template: BlockTemplate =
+            serde_json::from_str(&json_content).expect("Failed to parse JSON into BlockTemplate");
+
+        // Verify template has no transactions
+        assert!(block_template.transactions.is_empty());
+
+        // Get merkle root
+        let merkle_root = block_template.get_merkle_root_without_coinbase();
+
+        // Should be None when there are no transactions
+        assert!(merkle_root.is_none());
     }
 }
