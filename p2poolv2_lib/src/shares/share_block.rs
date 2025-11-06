@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::shares::genesis;
+use crate::shares::share_commitment::ShareCommitment;
 use bitcoin::hashes::Hash;
 use bitcoin::{Block, BlockHash, PublicKey, Transaction, block::Header};
 use bitcoin::{CompactTarget, TxMerkleNode};
@@ -22,41 +23,6 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 
 use super::transactions;
-
-/// Share commitment created by miner and embedded in the bitcoin
-/// coinbase to tie the share to the bitcoin weak block
-///
-/// When we need to build ShareHeader from the commitment, we move the
-/// fields into the ShareHeader. This does mean there is some code
-/// duplication, but we don't want to use indirection as
-/// header.commitment.time.
-///
-/// Instead, we let the compiler catch discrepancies between the two
-/// by implementing a From in ShareHeader
-#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
-pub struct ShareCommitment {
-    /// The hash of the prev share block, will be None for genesis block
-    pub prev_share_blockhash: BlockHash,
-    /// The uncles of the share
-    pub uncles: Vec<BlockHash>,
-    /// Compressed pubkey identifying the miner
-    pub miner_pubkey: PublicKey,
-    /// Share block transactions merkle root
-    pub merkle_root: TxMerkleNode,
-    /// Share chain difficult as compact target
-    pub bits: CompactTarget,
-    /// Timestamp for the share, as set by the miner
-    pub time: u32,
-}
-
-impl ShareCommitment {
-    /// Make a SHA256 hash for commitment
-    pub fn hash(&self) -> bitcoin::hashes::sha256::Hash {
-        let mut serialized = Vec::new();
-        ciborium::ser::into_writer(&self, &mut serialized).unwrap();
-        bitcoin::hashes::sha256::Hash::hash(&serialized)
-    }
-}
 
 /// Header for the share chain block.
 ///
@@ -73,7 +39,7 @@ pub struct ShareHeader {
     /// Compressed pubkey identifying the miner
     pub miner_pubkey: PublicKey,
     /// Share block transactions merkle root
-    pub merkle_root: TxMerkleNode,
+    pub merkle_root: Option<TxMerkleNode>,
     /// Bitcoin header the share is found for
     pub bitcoin_header: Header,
     /// Share chain difficult as compact target
@@ -88,7 +54,10 @@ impl ShareHeader {
     ///
     /// We do not validate the commitment is actually present in the
     /// bitcoin header. That happens at the receiving node.
-    pub fn from_commitment_and_header(commitment: ShareCommitment, bitcoin_header: Header) -> Self {
+    pub(crate) fn from_commitment_and_header(
+        commitment: ShareCommitment,
+        bitcoin_header: Header,
+    ) -> Self {
         Self {
             prev_share_blockhash: commitment.prev_share_blockhash,
             uncles: commitment.uncles,
@@ -191,7 +160,7 @@ impl ShareBlock {
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: vec![],
             miner_pubkey: public_key,
-            merkle_root: TxMerkleNode::all_zeros(),
+            merkle_root: None,
             bitcoin_header: block.header,
             time: 1700000000u32,
             bits: CompactTarget::from_consensus(0x207fffff),
@@ -220,19 +189,18 @@ impl ShareBlock {
         let coinbase = transactions::coinbase::create_coinbase_transaction(&miner_pubkey, network);
         let mut all_transactions = vec![coinbase];
         all_transactions.extend(transactions);
-        let merkle_root = match bitcoin::merkle_tree::calculate_root(
+        let merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
             all_transactions.iter().map(Transaction::compute_txid),
-        ) {
-            Some(root) => root.into(),
-            None => return Err("Failed to calculate merkle root for share block".into()),
-        };
+        )
+        .unwrap()
+        .into();
 
         let header = ShareHeader {
             prev_share_blockhash,
             uncles: uncles.to_vec(),
             miner_pubkey,
             bitcoin_header: bitcoin_block_header,
-            merkle_root,
+            merkle_root: Some(merkle_root),
             time: 1700000000u32,
             bits: CompactTarget::from_consensus(0x207fffff),
         };
@@ -290,7 +258,7 @@ impl ShareBlock {
             uncles: vec![],
             miner_pubkey: public_key,
             bitcoin_header: header,
-            merkle_root,
+            merkle_root: Some(merkle_root),
             time: 1700000000u32,
             bits: CompactTarget::from_consensus(0x207fffff),
         };
@@ -513,7 +481,7 @@ mod tests {
         assert!(share_block.transactions[0].is_coinbase());
 
         // Verify merkle root is correctly calculated
-        let expected_merkle_root = bitcoin::merkle_tree::calculate_root(
+        let expected_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
             share_block
                 .transactions
                 .iter()
@@ -521,7 +489,7 @@ mod tests {
         )
         .unwrap()
         .into();
-        assert_eq!(share_block.header.merkle_root, expected_merkle_root);
+        assert_eq!(share_block.header.merkle_root, Some(expected_merkle_root));
     }
 
     #[test]
@@ -580,7 +548,7 @@ mod tests {
             miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse::<PublicKey>()
                 .unwrap(),
-            merkle_root: TxMerkleNode::all_zeros(),
+            merkle_root: None,
             bits: CompactTarget::from_consensus(0x207fffff),
             time: 1700000000,
         };

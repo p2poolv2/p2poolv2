@@ -21,12 +21,13 @@ use super::gbt::build_merkle_branches_for_template;
 use super::tracker::{JobId, TrackerHandle};
 use crate::accounting::OutputPair;
 use crate::accounting::simple_pplns::payout::Payout;
-use crate::config::StratumConfig;
+use crate::config::{MinerConfig, StratumConfig};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::share_commitment::build_share_commitment;
 use crate::stratum::messages::{Notify, NotifyParams};
 use crate::stratum::util::reverse_four_byte_chunks;
 use crate::stratum::util::to_be_hex;
@@ -73,7 +74,7 @@ async fn build_output_distribution(
     let total_difficulty = required_target.difficulty_float() * config.difficulty_multiplier;
 
     match payout
-        .get_output_distribution(store, total_difficulty, total_amount, config)
+        .get_output_distribution(&store, total_difficulty, total_amount, config)
         .await
     {
         Ok(distribution) => distribution,
@@ -166,6 +167,8 @@ pub async fn start_notify(
                 let job_id = tracker_handle.get_next_job_id().await.unwrap();
                 let output_distribution =
                     build_output_distribution(&template, &chain_store, config).await;
+                // TODO: Uncomment when miner_pubkey is available in this context
+                // let share_commitment = build_share_commitment(&chain_store, &template, &miner_pubkey);
                 let notify_str = match build_notify(
                     &template,
                     output_distribution,
@@ -260,8 +263,10 @@ mod tests {
     use crate::stratum::messages::{Response, SimpleRequest};
     use crate::stratum::session::Session;
     use crate::stratum::work::tracker::start_tracker_actor;
+    use bitcoin::PublicKey;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use std::fs;
+    use std::str::FromStr;
     use std::time::SystemTime;
     use tokio::sync::mpsc;
 
