@@ -375,6 +375,16 @@ impl ChainStore {
     pub fn add_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error>> {
         self.store.add_user(btcaddress)
     }
+
+    /// Get the target for the tip share block
+    pub fn get_current_target(&self) -> Result<u32, Box<dyn Error>> {
+        let tip = self.store.get_chain_tip();
+        let headers = self.get_share_headers(&[tip]);
+        match headers.first() {
+            None => Err("No tips found".into()),
+            Some(header) => Ok(header.bits.to_consensus()),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -405,6 +415,7 @@ mock! {
         pub fn add_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn get_jobs(&self, start_time: Option<u64>, end_time: Option<u64>, limit: usize) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>>;
         pub fn add_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error>>;
+        pub fn get_current_target() -> Result<u32, Box<dyn Error>>;
     }
 
 
@@ -833,5 +844,34 @@ mod chain_tests {
         assert_eq!(locator[11], blocks[12].block_hash());
         assert_eq!(locator[12], blocks[8].block_hash());
         assert_eq!(locator[13], blocks[0].block_hash());
+    }
+
+    #[test]
+    fn test_get_current_target() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = genesis_for_tests();
+
+        let chain = ChainStore::new(Arc::new(store), genesis.clone(), bitcoin::Network::Signet);
+
+        // Get the current target from genesis block (which is the tip initially)
+        let target = chain.get_current_target().unwrap();
+        assert_eq!(target, genesis.header.bits.to_consensus());
+
+        // Add a share - it becomes the new tip
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis_for_tests().block_hash().to_string())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .diff(2)
+            .build();
+
+        chain.add_share(share1.clone()).unwrap();
+
+        // Get current target should now return share1's target (the new tip)
+        let new_target = chain.get_current_target().unwrap();
+        assert_eq!(new_target, share1.header.bits.to_consensus());
+
+        // Verify that chain tip has changed
+        assert_eq!(chain.store.get_chain_tip(), share1.block_hash());
     }
 }
