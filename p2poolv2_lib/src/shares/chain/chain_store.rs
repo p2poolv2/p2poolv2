@@ -400,7 +400,7 @@ mock! {
         pub fn add_share(&self, share_block: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn get_chain_tip(&self) -> Option<BlockHash>;
-        pub fn get_chain_tip_and_uncles(&self) -> (Option<BlockHash>, HashSet<BlockHash>);
+        pub fn get_chain_tip_and_uncles(&self) -> (BlockHash, HashSet<BlockHash>);
         pub fn get_depth(&self, blockhash: BlockHash) -> Option<usize>;
         pub fn setup_share_for_chain(&self, share_block: ShareBlock) -> ShareBlock;
         pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock>;
@@ -415,7 +415,7 @@ mock! {
         pub fn add_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn get_jobs(&self, start_time: Option<u64>, end_time: Option<u64>, limit: usize) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>>;
         pub fn add_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error>>;
-        pub fn get_current_target() -> Result<u32, Box<dyn Error>>;
+        pub fn get_current_target(&self) -> Result<u32, Box<dyn Error>>;
     }
 
 
