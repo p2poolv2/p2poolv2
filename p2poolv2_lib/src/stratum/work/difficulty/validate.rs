@@ -21,7 +21,6 @@ use crate::stratum::work::tracker::JobDetails;
 use bitcoin::blockdata::block::{Block, Header};
 use bitcoin::consensus::Decodable;
 use bitcoin::hex::DisplayHex;
-use bitcoin::params::Params;
 use hex::FromHex;
 use std::str::FromStr;
 use tracing::{debug, info};
