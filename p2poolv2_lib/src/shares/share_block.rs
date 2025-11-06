@@ -540,8 +540,7 @@ mod tests {
 
     #[test]
     fn test_commitment_hash_excludes_bitcoin_header() {
-        let bitcoin_header1 = TestShareBlockBuilder::new().build().header.bitcoin_header;
-        let bitcoin_header2 = TestShareBlockBuilder::new()
+        let bitcoin_header = TestShareBlockBuilder::new()
             .diff(2)
             .build()
             .header
@@ -558,7 +557,7 @@ mod tests {
             .build();
 
         let mut share2 = share1.clone();
-        share2.header.bitcoin_header = bitcoin_header2;
+        share2.header.bitcoin_header = bitcoin_header;
 
         let hash1 = share1.header.commitment_hash().unwrap();
         let hash2 = share2.header.commitment_hash().unwrap();
