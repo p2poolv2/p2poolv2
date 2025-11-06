@@ -97,6 +97,7 @@ async fn main() -> Result<(), String> {
     );
 
     let stratum_config = config.stratum.clone().parse().unwrap();
+    let miner_config = config.miner.clone();
     let bitcoinrpc_config = config.bitcoinrpc.clone();
 
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();

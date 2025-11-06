@@ -1,0 +1,356 @@
+// Copyright (C) 2024, 2025 P2Poolv2 Developers (see AUTHORS)
+//
+// This file is part of P2Poolv2
+//
+// P2Poolv2 is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free
+// Software Foundation, either version 3 of the License, or (at your option)
+// any later version.
+//
+// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
+// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along with
+// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+
+#[cfg(test)]
+#[mockall_double::double]
+use crate::shares::chain::chain_store::ChainStore;
+#[cfg(not(test))]
+use crate::shares::chain::chain_store::ChainStore;
+use crate::stratum::work::block_template::BlockTemplate;
+use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
+use bitcoin::hashes::Hash;
+use bitcoin::{BlockHash, CompactTarget, PublicKey, TxMerkleNode, hashes};
+use serde::Serialize;
+use std::collections::HashSet;
+use std::sync::Arc;
+
+/// Share commitment created by miner and embedded in the bitcoin
+/// coinbase to tie the share to the bitcoin weak block
+///
+/// When we need to build ShareHeader from the commitment, we move the
+/// fields into the ShareHeader. This does mean there is some code
+/// duplication, but we don't want to use indirection as
+/// header.commitment.time.
+///
+/// Instead, we let the compiler catch discrepancies between the two
+/// by implementing a From in ShareHeader
+///
+/// We only ever serialize received commitment to check against the
+/// hash in coinbase input scriptsig. We therefore leave out
+/// Deserialize, which Address<NetworkChecked> doesn't support.
+#[derive(Clone, PartialEq, Debug, Serialize)]
+pub(crate) struct ShareCommitment {
+    /// The hash of the prev share block, will be None for genesis block
+    pub prev_share_blockhash: BlockHash,
+    /// The uncles of the share
+    pub uncles: Vec<BlockHash>,
+    /// Pubkey identifying the miner mining the share
+    pub miner_pubkey: PublicKey,
+    /// Share block transactions merkle root. If there are no transactions, this is None.
+    pub merkle_root: Option<TxMerkleNode>,
+    /// Share chain difficult as compact target
+    pub bits: CompactTarget,
+    /// Timestamp for the share, as set by the miner
+    pub time: u32,
+}
+
+impl ShareCommitment {
+    /// Make a SHA256 hash for commitment
+    pub fn hash(&self) -> hashes::sha256::Hash {
+        let mut serialized = Vec::new();
+        ciborium::ser::into_writer(&self, &mut serialized).unwrap();
+        bitcoin::hashes::sha256::Hash::hash(&serialized)
+    }
+}
+
+/// Build share commitment by querying the database for fields to set.
+///
+/// Query the chain store for previous share and uncles.
+/// Uses the current timestamp
+pub(crate) fn build_share_commitment(
+    chain_store: &Arc<ChainStore>,
+    template: &Arc<BlockTemplate>,
+    miner_pubkey: PublicKey,
+) -> Result<ShareCommitment, Box<dyn std::error::Error>> {
+    let target = chain_store.get_current_target()?;
+    let (tip, uncles) = chain_store.get_chain_tip_and_uncles();
+    let merkle_root = template.get_merkle_root_without_coinbase();
+    let time = SystemTimeProvider.seconds_since_epoch() as u32;
+
+    Ok(ShareCommitment {
+        prev_share_blockhash: tip,
+        uncles: uncles.into_iter().collect(),
+        miner_pubkey,
+        merkle_root,
+        bits: CompactTarget::from_consensus(target),
+        time,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shares::chain::chain_store::MockChainStore;
+    use crate::stratum::work::block_template::BlockTemplate;
+    use bitcoin::hashes::Hash;
+    use std::fs;
+    use std::path::Path;
+    use std::str::FromStr;
+
+    fn create_test_commitment() -> ShareCommitment {
+        ShareCommitment {
+            prev_share_blockhash: BlockHash::from_str(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
+            )
+            .unwrap(),
+            uncles: vec![],
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse::<PublicKey>()
+                .unwrap(),
+            merkle_root: Some(TxMerkleNode::all_zeros()),
+            bits: CompactTarget::from_consensus(0x207fffff),
+            time: 1700000000,
+        }
+    }
+
+    #[test]
+    fn test_hash_produces_valid_sha256() {
+        let commitment = create_test_commitment();
+        let hash = commitment.hash();
+
+        // SHA256 hash should be 32 bytes
+        assert_eq!(hash.as_byte_array().len(), 32);
+        // Hash should not be all zeros
+        assert_ne!(hash, hashes::sha256::Hash::all_zeros());
+    }
+
+    #[test]
+    fn test_hash_determinism() {
+        let commitment1 = create_test_commitment();
+        let commitment2 = create_test_commitment();
+
+        let hash1 = commitment1.hash();
+        let hash2 = commitment2.hash();
+
+        // Same commitment should produce same hash
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hash_uniqueness_different_prev_blockhash() {
+        let commitment1 = create_test_commitment();
+        let mut commitment2 = create_test_commitment();
+
+        commitment2.prev_share_blockhash =
+            BlockHash::from_str("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6")
+                .unwrap();
+
+        let hash1 = commitment1.hash();
+        let hash2 = commitment2.hash();
+
+        // Different commitments should produce different hashes
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hash_uniqueness_different_miner_pubkey() {
+        let commitment1 = create_test_commitment();
+        let mut commitment2 = create_test_commitment();
+
+        commitment2.miner_pubkey =
+            "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
+                .parse::<PublicKey>()
+                .unwrap();
+
+        let hash1 = commitment1.hash();
+        let hash2 = commitment2.hash();
+
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hash_uniqueness_different_time() {
+        let commitment1 = create_test_commitment();
+        let mut commitment2 = create_test_commitment();
+
+        commitment2.time = 1700000001;
+
+        let hash1 = commitment1.hash();
+        let hash2 = commitment2.hash();
+
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_serialization_with_some_merkle_root() {
+        let commitment = create_test_commitment();
+
+        let mut serialized = Vec::new();
+        ciborium::ser::into_writer(&commitment, &mut serialized).unwrap();
+
+        // Should produce valid CBOR bytes
+        assert!(!serialized.is_empty());
+        // CBOR typically starts with a map indicator
+        assert!(serialized[0] >= 0xa0 && serialized[0] <= 0xbf || serialized[0] == 0xbf);
+    }
+
+    #[test]
+    fn test_serialization_with_none_merkle_root() {
+        let mut commitment = create_test_commitment();
+        commitment.merkle_root = None;
+
+        let mut serialized = Vec::new();
+        ciborium::ser::into_writer(&commitment, &mut serialized).unwrap();
+
+        // Should produce valid CBOR bytes
+        assert!(!serialized.is_empty());
+    }
+
+    #[test]
+    fn test_serialization_with_uncles() {
+        let mut commitment = create_test_commitment();
+        commitment.uncles.push(
+            BlockHash::from_str("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6")
+                .unwrap(),
+        );
+        commitment.uncles.push(
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
+                .unwrap(),
+        );
+
+        let mut serialized = Vec::new();
+        ciborium::ser::into_writer(&commitment, &mut serialized).unwrap();
+
+        // Should produce valid CBOR bytes
+        assert!(!serialized.is_empty());
+    }
+
+    #[test]
+    fn test_build_share_commitment_success() {
+        let mut mock_store = MockChainStore::default();
+
+        // Load template from file
+        let json_path = Path::new("../tests/test_data/validation/stratum/a/template.json");
+        let json_content = fs::read_to_string(json_path).expect("Failed to read test JSON file");
+        let template = Arc::new(
+            serde_json::from_str::<BlockTemplate>(&json_content)
+                .expect("Failed to parse JSON into BlockTemplate"),
+        );
+
+        let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+            .parse::<PublicKey>()
+            .unwrap();
+
+        // Set up mock expectations
+        mock_store
+            .expect_get_current_target()
+            .returning(|| Ok(0x207fffff));
+
+        mock_store.expect_get_chain_tip_and_uncles().returning(|| {
+            (
+                BlockHash::from_str(
+                    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
+                )
+                .unwrap(),
+                HashSet::new(),
+            )
+        });
+
+        let store = Arc::new(mock_store);
+        let result = build_share_commitment(&store, &template, miner_pubkey);
+
+        assert!(result.is_ok());
+        let commitment = result.unwrap();
+
+        // Verify fields are set correctly
+        assert_eq!(
+            commitment.prev_share_blockhash,
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
+                .unwrap()
+        );
+        assert_eq!(commitment.uncles.len(), 0);
+        assert_eq!(commitment.miner_pubkey, miner_pubkey);
+        assert_eq!(commitment.bits, CompactTarget::from_consensus(0x207fffff));
+        // Time should be current, so just verify it's set
+        assert!(commitment.time > 0);
+        // Merkle root should be None for template with no transactions
+        assert_eq!(commitment.merkle_root, None);
+    }
+
+    #[test]
+    fn test_build_share_commitment_with_uncles() {
+        let mut mock_store = MockChainStore::default();
+
+        // Load template from file
+        let json_path = Path::new("../tests/test_data/validation/stratum/a/template.json");
+        let json_content = fs::read_to_string(json_path).expect("Failed to read test JSON file");
+        let template = Arc::new(
+            serde_json::from_str::<BlockTemplate>(&json_content)
+                .expect("Failed to parse JSON into BlockTemplate"),
+        );
+
+        let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+            .parse::<PublicKey>()
+            .unwrap();
+
+        // Set up mock expectations
+        mock_store
+            .expect_get_current_target()
+            .returning(|| Ok(0x207fffff));
+
+        let uncle1 =
+            BlockHash::from_str("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6")
+                .unwrap();
+        let uncle2 =
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
+                .unwrap();
+
+        mock_store
+            .expect_get_chain_tip_and_uncles()
+            .returning(move || {
+                let uncles = HashSet::from([uncle1, uncle2]);
+                (BlockHash::all_zeros(), uncles)
+            });
+
+        let store = Arc::new(mock_store);
+        let result = build_share_commitment(&store, &template, miner_pubkey);
+
+        assert!(result.is_ok());
+        let commitment = result.unwrap();
+
+        // Verify uncles are set correctly
+        assert_eq!(commitment.uncles.len(), 2);
+        assert!(commitment.uncles.contains(&uncle1));
+        assert!(commitment.uncles.contains(&uncle2));
+    }
+
+    #[test]
+    fn test_build_share_commitment_error_on_get_target_failure() {
+        let mut mock_store = MockChainStore::default();
+
+        // Load template from file
+        let json_path = Path::new("../tests/test_data/validation/stratum/a/template.json");
+        let json_content = fs::read_to_string(json_path).expect("Failed to read test JSON file");
+        let template = Arc::new(
+            serde_json::from_str::<BlockTemplate>(&json_content)
+                .expect("Failed to parse JSON into BlockTemplate"),
+        );
+
+        let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+            .parse::<PublicKey>()
+            .unwrap();
+
+        // Set up mock to return error
+        mock_store
+            .expect_get_current_target()
+            .returning(|| Err("Failed to get target".into()));
+
+        let store = Arc::new(mock_store);
+        let result = build_share_commitment(&store, &template, miner_pubkey);
+
+        assert!(result.is_err());
+    }
+}
