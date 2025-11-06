@@ -14,8 +14,6 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
 use std::error::Error;
 
 /// Genesis block data captures the first block in the share chain
