@@ -27,13 +27,13 @@ use crate::config::StratumConfig;
 use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store::ChainStore;
-use crate::shares::share_commitment::{self, ShareCommitment, build_share_commitment};
+use crate::shares::share_commitment::{ShareCommitment, build_share_commitment};
 use crate::stratum::messages::{Notify, NotifyParams};
 use crate::stratum::util::reverse_four_byte_chunks;
 use crate::stratum::util::to_be_hex;
+use bitcoin::PublicKey;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::Version;
-use bitcoin::{PubkeyHash, PublicKey};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;

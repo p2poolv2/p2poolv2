@@ -28,11 +28,11 @@ use tracing::{debug, info};
 /// Share validation result
 ///
 /// Captures the block and boolens to signal if block meets bitcoin and job difficult
-pub(crate) struct ValidationResult {
+pub struct ValidationResult {
     /// The block built with the share components
-    pub(crate) block: Block,
+    pub block: Block,
     /// Does the block meet bitcoin difficulty
-    pub(crate) meets_bitcoin_difficulty: bool,
+    pub meets_bitcoin_difficulty: bool,
 }
 
 /// parse all transactions from block template with data and txid
@@ -97,8 +97,8 @@ pub fn validate_submission_difficulty(
     submission: &SimpleRequest<'_>,
     enonce1_hex: &str,
     version_mask: i32,
-    session_difficulty: u64,
-    network: bitcoin::Network,
+    _session_difficulty: u64,
+    _network: bitcoin::Network,
 ) -> Result<ValidationResult, Error> {
     let compact_target = bitcoin::CompactTarget::from_unprefixed_hex(&job.blocktemplate.bits)
         .map_err(|_| Error::InvalidParams("Failed to parse compact target".into()))?;
