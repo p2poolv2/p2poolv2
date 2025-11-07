@@ -25,6 +25,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, PublicKey, TxMerkleNode, hashes};
 use serde::Serialize;
 use std::collections::HashSet;
+use std::error::Error;
 use std::sync::Arc;
 
 /// Share commitment created by miner and embedded in the bitcoin
@@ -74,8 +75,11 @@ pub(crate) fn build_share_commitment(
     chain_store: &Arc<ChainStore>,
     template: &Arc<BlockTemplate>,
     miner_pubkey: PublicKey,
-) -> Result<ShareCommitment, Box<dyn std::error::Error>> {
-    let target = chain_store.get_current_target()?;
+) -> Result<ShareCommitment, Box<dyn Error + Send + Sync>> {
+    let target = match chain_store.get_current_target() {
+        Ok(t) => t,
+        Err(e) => return Err(format!("Failed to get current target: {}", e).into()),
+    };
     let (tip, uncles) = chain_store.get_chain_tip_and_uncles();
     let merkle_root = template.get_merkle_root_without_coinbase();
     let time = SystemTimeProvider.seconds_since_epoch() as u32;
