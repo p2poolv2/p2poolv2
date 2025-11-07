@@ -74,24 +74,27 @@ impl ShareCommitment {
 pub(crate) fn build_share_commitment(
     chain_store: &Arc<ChainStore>,
     template: &Arc<BlockTemplate>,
-    miner_pubkey: PublicKey,
-) -> Result<ShareCommitment, Box<dyn Error + Send + Sync>> {
+    miner_pubkey: Option<PublicKey>,
+) -> Result<Option<ShareCommitment>, Box<dyn Error + Send + Sync>> {
     let target = match chain_store.get_current_target() {
-        Ok(t) => t,
-        Err(e) => return Err(format!("Failed to get current target: {}", e).into()),
+        Ok(target) => target,
+        Err(e) => return Err(format!("Failed to get current target: {e}").into()),
     };
     let (tip, uncles) = chain_store.get_chain_tip_and_uncles();
     let merkle_root = template.get_merkle_root_without_coinbase();
     let time = SystemTimeProvider.seconds_since_epoch() as u32;
 
-    Ok(ShareCommitment {
-        prev_share_blockhash: tip,
-        uncles: uncles.into_iter().collect(),
-        miner_pubkey,
-        merkle_root,
-        bits: CompactTarget::from_consensus(target),
-        time,
-    })
+    match miner_pubkey {
+        Some(key) => Ok(Some(ShareCommitment {
+            prev_share_blockhash: tip,
+            uncles: uncles.into_iter().collect(),
+            miner_pubkey: key,
+            merkle_root,
+            bits: CompactTarget::from_consensus(target),
+            time,
+        })),
+        None => Ok(None),
+    }
 }
 
 #[cfg(test)]
@@ -264,10 +267,10 @@ mod tests {
         });
 
         let store = Arc::new(mock_store);
-        let result = build_share_commitment(&store, &template, miner_pubkey);
+        let result = build_share_commitment(&store, &template, Some(miner_pubkey));
 
         assert!(result.is_ok());
-        let commitment = result.unwrap();
+        let commitment = result.unwrap().unwrap();
 
         // Verify fields are set correctly
         assert_eq!(
@@ -320,10 +323,10 @@ mod tests {
             });
 
         let store = Arc::new(mock_store);
-        let result = build_share_commitment(&store, &template, miner_pubkey);
+        let result = build_share_commitment(&store, &template, Some(miner_pubkey));
 
         assert!(result.is_ok());
-        let commitment = result.unwrap();
+        let commitment = result.unwrap().unwrap();
 
         // Verify uncles are set correctly
         assert_eq!(commitment.uncles.len(), 2);
@@ -353,8 +356,45 @@ mod tests {
             .returning(|| Err("Failed to get target".into()));
 
         let store = Arc::new(mock_store);
-        let result = build_share_commitment(&store, &template, miner_pubkey);
+        let result = build_share_commitment(&store, &template, Some(miner_pubkey));
 
         assert!(result.is_err());
+    }
+
+    #[test_log::test]
+    fn test_build_share_commitment_with_none_miner_pubkey_returns_none() {
+        let mut mock_store = MockChainStore::default();
+
+        // Load template from file
+        let json_path = Path::new("../tests/test_data/validation/stratum/a/template.json");
+        let json_content = fs::read_to_string(json_path).expect("Failed to read test JSON file");
+        let template = Arc::new(
+            serde_json::from_str::<BlockTemplate>(&json_content)
+                .expect("Failed to parse JSON into BlockTemplate"),
+        );
+
+        let uncle1 =
+            BlockHash::from_str("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6")
+                .unwrap();
+        let uncle2 =
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
+                .unwrap();
+
+        mock_store
+            .expect_get_chain_tip_and_uncles()
+            .returning(move || {
+                let uncles = HashSet::from([uncle1, uncle2]);
+                (BlockHash::all_zeros(), uncles)
+            });
+
+        mock_store
+            .expect_get_current_target()
+            .returning(|| Ok(0x207fffff));
+
+        let store = Arc::new(mock_store);
+        let result = build_share_commitment(&store, &template, None);
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
     }
 }

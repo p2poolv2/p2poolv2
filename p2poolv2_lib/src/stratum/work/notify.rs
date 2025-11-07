@@ -27,7 +27,7 @@ use crate::config::StratumConfig;
 use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store::ChainStore;
-use crate::shares::share_commitment::build_share_commitment;
+use crate::shares::share_commitment::{self, ShareCommitment, build_share_commitment};
 use crate::stratum::messages::{Notify, NotifyParams};
 use crate::stratum::util::reverse_four_byte_chunks;
 use crate::stratum::util::to_be_hex;
@@ -94,6 +94,7 @@ pub fn build_notify(
     job_id: JobId,
     clean_jobs: bool,
     pool_signature: &[u8],
+    share_commitment: Option<ShareCommitment>,
 ) -> Result<Notify, WorkError> {
     let coinbase = build_coinbase_transaction(
         Version::TWO,
@@ -102,6 +103,7 @@ pub fn build_notify(
         parse_flags(template.coinbaseaux.get("flags").cloned()),
         template.default_witness_commitment.clone(),
         pool_signature,
+        share_commitment,
     )?;
 
     let (coinbase1, coinbase2) = split_coinbase(&coinbase)?;
@@ -153,7 +155,7 @@ pub async fn start_notify(
     chain_store: Arc<ChainStore>,
     tracker_handle: TrackerHandle,
     config: &StratumConfig<crate::config::Parsed>,
-    miner_pubkey: PublicKey,
+    miner_pubkey: Option<PublicKey>,
 ) {
     let mut latest_template: Option<Arc<BlockTemplate>> = None;
     let pool_signature = match config.pool_signature {
@@ -170,13 +172,22 @@ pub async fn start_notify(
                 let output_distribution =
                     build_output_distribution(&template, &chain_store, config).await;
                 let share_commitment =
-                    build_share_commitment(&chain_store, &template, miner_pubkey);
+                    match build_share_commitment(&chain_store, &template, miner_pubkey) {
+                        Ok(commitment) => commitment,
+                        Err(_) => {
+                            tracing::error!(
+                                "Failed to build share commitment. Skipping this building notify."
+                            );
+                            continue;
+                        }
+                    };
                 let notify_str = match build_notify(
                     &template,
                     output_distribution,
                     job_id,
                     clean_jobs,
                     pool_signature,
+                    share_commitment,
                 ) {
                     Ok(notify) => {
                         let serialized_notify = serde_json::to_string(&notify)
@@ -220,17 +231,27 @@ pub async fn start_notify(
                     config,
                 )
                 .await;
-                let share_commitment = build_share_commitment(
+                let share_commitment = match build_share_commitment(
                     &chain_store,
                     latest_template.as_ref().unwrap(),
                     miner_pubkey,
-                );
+                ) {
+                    Ok(commitment) => commitment,
+                    Err(_) => {
+                        tracing::error!(
+                            "Failed to build share commitment. Skipping this building notify."
+                        );
+                        continue;
+                    }
+                };
+
                 let notify_str = match build_notify(
                     latest_template.as_ref().unwrap(),
                     output_distribution,
                     job_id,
                     clean_jobs,
                     pool_signature,
+                    share_commitment,
                 ) {
                     Ok(notify) => {
                         let serialized_notify = serde_json::to_string(&notify)
@@ -323,7 +344,7 @@ mod tests {
         let output_distribution =
             build_output_distribution(&template, &Arc::new(store), &stratum_config).await;
         // Build Notify
-        let notify = build_notify(&template, output_distribution, job_id, false, &[])
+        let notify = build_notify(&template, output_distribution, job_id, false, &[], None)
             .expect("Failed to build notify");
 
         // Compare all fields except job_id (random) coinbase which also have current time component
@@ -429,7 +450,7 @@ mod tests {
                 Arc::new(store),
                 work_map_handle,
                 &stratum_config,
-                miner_pubkey,
+                Some(miner_pubkey),
             )
             .await;
         });
@@ -541,7 +562,14 @@ mod tests {
         let output_distribution =
             build_output_distribution(&template, &Arc::new(store), &stratum_config).await;
 
-        let result = build_notify(&template, output_distribution, JobId(job_id), false, &[]);
+        let result = build_notify(
+            &template,
+            output_distribution,
+            JobId(job_id),
+            false,
+            &[],
+            None,
+        );
 
         assert_eq!(result.unwrap().params.prevhash, notify.params.prevhash);
     }

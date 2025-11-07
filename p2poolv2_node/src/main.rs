@@ -98,12 +98,8 @@ async fn main() -> Result<(), String> {
 
     let stratum_config = config.stratum.clone().parse().unwrap();
     let miner_pubkey = match config.miner {
-        Some(ref miner_config) => miner_config.pubkey.clone(),
-        None => {
-            panic!(
-                "To run p2poolv2, you need to provide a miner config section with a miner public key"
-            )
-        }
+        Some(ref miner_config) => Some(miner_config.pubkey.clone()),
+        None => None,
     };
     let bitcoinrpc_config = config.bitcoinrpc.clone();
 
