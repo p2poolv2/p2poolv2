@@ -24,7 +24,6 @@ use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, PublicKey, TxMerkleNode, hashes};
 use serde::Serialize;
-use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
 
@@ -43,7 +42,7 @@ use std::sync::Arc;
 /// hash in coinbase input scriptsig. We therefore leave out
 /// Deserialize, which Address<NetworkChecked> doesn't support.
 #[derive(Clone, PartialEq, Debug, Serialize)]
-pub(crate) struct ShareCommitment {
+pub struct ShareCommitment {
     /// The hash of the prev share block, will be None for genesis block
     pub prev_share_blockhash: BlockHash,
     /// The uncles of the share
@@ -103,6 +102,7 @@ mod tests {
     use crate::shares::chain::chain_store::MockChainStore;
     use crate::stratum::work::block_template::BlockTemplate;
     use bitcoin::hashes::Hash;
+    use std::collections::HashSet;
     use std::fs;
     use std::path::Path;
     use std::str::FromStr;

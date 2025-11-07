@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::OutputPair;
-use crate::shares::share_commitment::{self, ShareCommitment};
+use crate::shares::share_commitment::ShareCommitment;
 use crate::stratum::session::{EXTRANONCE1_SIZE, EXTRANONCE2_SIZE};
 use crate::stratum::work::error::WorkError;
 use bitcoin::absolute::LockTime;
@@ -457,6 +457,8 @@ mod tests {
             time: 1700000000u32,
         };
 
+        let share_commitment_cloned = share_commitment.clone();
+
         let coinbase = build_coinbase_transaction(
             Version(1), // ckpool uses version 1
             &[
@@ -511,8 +513,8 @@ mod tests {
         assert_eq!(script_bytes[0], 2);
         assert_eq!(script_bytes[1..3].as_hex().to_string(), "fa01"); // Height 506 in little-endian
         assert_eq!(
-            script_bytes[3..36].as_hex().to_string(),
-            share_commitment
+            script_bytes[4..36].as_hex().to_string(),
+            share_commitment_cloned
                 .hash()
                 .as_byte_array()
                 .to_lower_hex_string()
