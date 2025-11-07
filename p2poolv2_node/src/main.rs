@@ -97,7 +97,14 @@ async fn main() -> Result<(), String> {
     );
 
     let stratum_config = config.stratum.clone().parse().unwrap();
-    let miner_config = config.miner.clone();
+    let miner_pubkey = match config.miner {
+        Some(ref miner_config) => miner_config.pubkey.clone(),
+        None => {
+            panic!(
+                "To run p2poolv2, you need to provide a miner config section with a miner public key"
+            )
+        }
+    };
     let bitcoinrpc_config = config.bitcoinrpc.clone();
 
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
@@ -146,6 +153,7 @@ async fn main() -> Result<(), String> {
             store_for_notify,
             tracker_handle_cloned,
             &cloned_stratum_config,
+            miner_pubkey,
         )
         .await;
     });

@@ -21,7 +21,7 @@ use super::gbt::build_merkle_branches_for_template;
 use super::tracker::{JobId, TrackerHandle};
 use crate::accounting::OutputPair;
 use crate::accounting::simple_pplns::payout::Payout;
-use crate::config::{MinerConfig, StratumConfig};
+use crate::config::StratumConfig;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store::ChainStore;
@@ -33,6 +33,7 @@ use crate::stratum::util::reverse_four_byte_chunks;
 use crate::stratum::util::to_be_hex;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::Version;
+use bitcoin::{PubkeyHash, PublicKey};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -152,6 +153,7 @@ pub async fn start_notify(
     chain_store: Arc<ChainStore>,
     tracker_handle: TrackerHandle,
     config: &StratumConfig<crate::config::Parsed>,
+    miner_pubkey: PublicKey,
 ) {
     let mut latest_template: Option<Arc<BlockTemplate>> = None;
     let pool_signature = match config.pool_signature {
@@ -167,8 +169,8 @@ pub async fn start_notify(
                 let job_id = tracker_handle.get_next_job_id().await.unwrap();
                 let output_distribution =
                     build_output_distribution(&template, &chain_store, config).await;
-                // TODO: Uncomment when miner_pubkey is available in this context
-                // let share_commitment = build_share_commitment(&chain_store, &template, &miner_pubkey);
+                let share_commitment =
+                    build_share_commitment(&chain_store, &template, miner_pubkey);
                 let notify_str = match build_notify(
                     &template,
                     output_distribution,
@@ -218,6 +220,11 @@ pub async fn start_notify(
                     config,
                 )
                 .await;
+                let share_commitment = build_share_commitment(
+                    &chain_store,
+                    latest_template.as_ref().unwrap(),
+                    miner_pubkey,
+                );
                 let notify_str = match build_notify(
                     latest_template.as_ref().unwrap(),
                     output_distribution,
@@ -263,10 +270,9 @@ mod tests {
     use crate::stratum::messages::{Response, SimpleRequest};
     use crate::stratum::session::Session;
     use crate::stratum::work::tracker::start_tracker_actor;
-    use bitcoin::PublicKey;
+    use crate::test_utils::genesis_for_tests;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use std::fs;
-    use std::str::FromStr;
     use std::time::SystemTime;
     use tokio::sync::mpsc;
 
@@ -401,7 +407,20 @@ mod tests {
 
         store.expect_add_job().returning(|_| Ok(()));
 
+        store
+            .expect_get_current_target()
+            .returning(|| Ok(503543726));
+
+        let genesis = genesis_for_tests().block_hash();
+        store
+            .expect_get_chain_tip_and_uncles()
+            .returning(move || (genesis, std::collections::HashSet::new()));
+
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+        let miner_pubkey: PublicKey =
+            "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap();
 
         let task_handle = tokio::spawn(async move {
             start_notify(
@@ -410,6 +429,7 @@ mod tests {
                 Arc::new(store),
                 work_map_handle,
                 &stratum_config,
+                miner_pubkey,
             )
             .await;
         });
