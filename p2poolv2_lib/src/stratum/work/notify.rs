@@ -133,6 +133,53 @@ pub fn build_notify(
     Ok(Notify::new_notify(params))
 }
 
+/// Helper function to build notify, build share commitment and insert
+/// job into tracker. We need to do all this for SendToAll and
+/// SendToClient. So we DRY it here.
+///
+/// Returns the serialized notify string on success.
+async fn build_notify_and_commitment(
+    template: &Arc<BlockTemplate>,
+    clean_jobs: bool,
+    chain_store: &Arc<ChainStore>,
+    config: &StratumConfig<crate::config::Parsed>,
+    miner_pubkey: Option<PublicKey>,
+    pool_signature: &[u8],
+    tracker_handle: &TrackerHandle,
+) -> Result<String, WorkError> {
+    let job_id = tracker_handle.get_next_job_id().await.unwrap();
+    let output_distribution = build_output_distribution(template, chain_store, config).await;
+
+    let share_commitment =
+        build_share_commitment(chain_store, template, miner_pubkey).map_err(|_| WorkError {
+            message: "Failed to build share commitment".to_string(),
+        })?;
+
+    let notify = build_notify(
+        template,
+        output_distribution,
+        job_id,
+        clean_jobs,
+        pool_signature,
+        share_commitment,
+    )?;
+
+    let serialized_notify =
+        serde_json::to_string(&notify).expect("Failed to serialize Notify message");
+
+    tracker_handle
+        .insert_job(
+            Arc::clone(template),
+            notify.params.coinbase1.to_string(),
+            notify.params.coinbase2.to_string(),
+            job_id,
+        )
+        .await
+        .unwrap();
+
+    Ok(serialized_notify)
+}
+
 /// NotifyCmd is used to send notify to all clients or a single client.
 pub enum NotifyCmd {
     SendToAll {
@@ -168,46 +215,25 @@ pub async fn start_notify(
                 let clean_jobs = latest_template.is_none()
                     || latest_template.unwrap().previousblockhash != template.previousblockhash;
                 latest_template = Some(Arc::clone(&template));
-                let job_id = tracker_handle.get_next_job_id().await.unwrap();
-                let output_distribution =
-                    build_output_distribution(&template, &chain_store, config).await;
-                let share_commitment =
-                    match build_share_commitment(&chain_store, &template, miner_pubkey) {
-                        Ok(commitment) => commitment,
-                        Err(_) => {
-                            tracing::error!(
-                                "Failed to build share commitment. Skipping this building notify."
-                            );
-                            continue;
-                        }
-                    };
-                let notify_str = match build_notify(
+
+                let notify_str = match build_notify_and_commitment(
                     &template,
-                    output_distribution,
-                    job_id,
                     clean_jobs,
+                    &chain_store,
+                    config,
+                    miner_pubkey,
                     pool_signature,
-                    share_commitment,
-                ) {
-                    Ok(notify) => {
-                        let serialized_notify = serde_json::to_string(&notify)
-                            .expect("Failed to serialize Notify message");
-                        tracker_handle
-                            .insert_job(
-                                Arc::clone(&template),
-                                notify.params.coinbase1.to_string(),
-                                notify.params.coinbase2.to_string(),
-                                job_id,
-                            )
-                            .await
-                            .unwrap();
-                        serialized_notify
-                    }
+                    &tracker_handle,
+                )
+                .await
+                {
+                    Ok(serialized) => serialized,
                     Err(e) => {
-                        debug!("Error building notify: {}", e);
-                        continue; // Skip this iteration if notify cannot be built
+                        tracing::error!("Failed to build notify: {}. Skipping.", e);
+                        continue;
                     }
                 };
+
                 connections.send_to_all(Arc::new(notify_str.clone())).await;
                 if chain_store.add_job(notify_str).is_err() {
                     tracing::warn!("Couldn't save job when sending to all");
@@ -222,56 +248,28 @@ pub async fn start_notify(
                         "No latest template available to send to client: {}",
                         client_address
                     );
-                    continue; // Skip if no latest template is available
+                    continue;
                 }
-                let job_id = tracker_handle.get_next_job_id().await.unwrap();
-                let output_distribution = build_output_distribution(
-                    latest_template.as_ref().unwrap(),
+
+                let template = latest_template.as_ref().unwrap();
+                let notify_str = match build_notify_and_commitment(
+                    template,
+                    clean_jobs,
                     &chain_store,
                     config,
-                )
-                .await;
-                let share_commitment = match build_share_commitment(
-                    &chain_store,
-                    latest_template.as_ref().unwrap(),
                     miner_pubkey,
-                ) {
-                    Ok(commitment) => commitment,
-                    Err(_) => {
-                        tracing::error!(
-                            "Failed to build share commitment. Skipping this building notify."
-                        );
+                    pool_signature,
+                    &tracker_handle,
+                )
+                .await
+                {
+                    Ok(serialized) => serialized,
+                    Err(e) => {
+                        tracing::error!("Failed to build notify: {}. Skipping.", e);
                         continue;
                     }
                 };
 
-                let notify_str = match build_notify(
-                    latest_template.as_ref().unwrap(),
-                    output_distribution,
-                    job_id,
-                    clean_jobs,
-                    pool_signature,
-                    share_commitment,
-                ) {
-                    Ok(notify) => {
-                        let serialized_notify = serde_json::to_string(&notify)
-                            .expect("Failed to serialize Notify message");
-                        tracker_handle
-                            .insert_job(
-                                Arc::clone(latest_template.as_ref().unwrap()),
-                                notify.params.coinbase1.to_string(),
-                                notify.params.coinbase2.to_string(),
-                                job_id,
-                            )
-                            .await
-                            .unwrap();
-                        serialized_notify
-                    }
-                    Err(e) => {
-                        debug!("Error building notify: {}", e);
-                        continue; // Skip this iteration if notify cannot be built
-                    }
-                };
                 connections
                     .send_to_client(client_address, Arc::new(notify_str.clone()))
                     .await;
