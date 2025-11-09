@@ -17,6 +17,7 @@
 use clap::Parser;
 use p2poolv2_api::start_api_server;
 use p2poolv2_lib::accounting::stats::metrics;
+use p2poolv2_lib::cache::{CachedCoinbaseInfo, SharedCoinbaseCache};
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::logging::setup_logging;
 use p2poolv2_lib::node::actor::NodeHandle;
@@ -32,6 +33,7 @@ use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
 use p2poolv2_lib::stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
 use std::process::exit;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::time::Duration;
 use tracing::error;
 use tracing::info;
@@ -77,6 +79,7 @@ async fn main() -> Result<(), String> {
         }
     };
 
+    let coinbase_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
     let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
     let store = Arc::new(Store::new(config.store.path.clone(), false).unwrap());
     let chain_store = Arc::new(ChainStore::new(
@@ -139,6 +142,7 @@ async fn main() -> Result<(), String> {
     let tracker_handle_cloned = tracker_handle.clone();
     let store_for_notify = chain_store.clone();
 
+    let notify_cache_clone = coinbase_cache.clone();
     let cloned_stratum_config = stratum_config.clone();
     tokio::spawn(async move {
         info!("Starting Stratum notifier...");
@@ -150,18 +154,21 @@ async fn main() -> Result<(), String> {
             tracker_handle_cloned,
             &cloned_stratum_config,
             miner_pubkey,
+            notify_cache_clone,
         )
         .await;
     });
 
     let (shares_tx, shares_rx) = tokio::sync::mpsc::channel::<Emission>(STRATUM_SHARES_BUFFER_SIZE);
 
-    let metrics_handle = match metrics::start_metrics(config.logging.stats_dir.clone()).await {
-        Ok(handle) => handle,
-        Err(e) => {
-            return Err(format!("Failed to start metrics: {e}"));
-        }
-    };
+    let metrics_cache_clone = coinbase_cache.clone();
+    let metrics_handle =
+        match metrics::start_metrics(config.logging.stats_dir.clone(), metrics_cache_clone).await {
+            Ok(handle) => handle,
+            Err(e) => {
+                return Err(format!("Failed to start metrics: {e}"));
+            }
+        };
     let metrics_cloned = metrics_handle.clone();
     let store_for_stratum = chain_store.clone();
 

@@ -16,6 +16,7 @@
 
 use bitcoindrpc::test_utils::{mock_method, setup_mock_bitcoin_rpc};
 use p2poolv2_lib::accounting::stats::metrics;
+use p2poolv2_lib::cache::{CachedCoinbaseInfo, SharedCoinbaseCache};
 use p2poolv2_lib::shares::chain::chain_store::ChainStore;
 use p2poolv2_lib::shares::share_block::ShareBlock;
 use p2poolv2_lib::store::Store;
@@ -28,6 +29,7 @@ use p2poolv2_lib::stratum::{
 use std::net::SocketAddr;
 use std::str;
 use std::sync::Arc;
+use std::sync::RwLock;
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -55,9 +57,11 @@ async fn test_stratum_server_subscribe() {
 
     let (share_block_tx, _share_block_rx) = tokio::sync::mpsc::channel(10);
     let stats_dir = tempfile::tempdir().unwrap();
-    let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-        .await
-        .unwrap();
+    let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+    let metrics_handle =
+        metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string(), dummy_cache)
+            .await
+            .unwrap();
 
     let temp_dir = tempdir().unwrap();
     let store = Arc::new(ChainStore::new(

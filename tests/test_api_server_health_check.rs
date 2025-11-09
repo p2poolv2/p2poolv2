@@ -19,12 +19,15 @@ use chrono::{TimeZone, Utc};
 use p2poolv2_api::api::error::ApiError;
 use p2poolv2_api::start_api_server;
 use p2poolv2_lib::accounting::{simple_pplns::SimplePplnsShare, stats::metrics::start_metrics};
+use p2poolv2_lib::cache::CoinbaseOutput;
+use p2poolv2_lib::cache::{CachedCoinbaseInfo, SharedCoinbaseCache};
 use p2poolv2_lib::config::ApiConfig;
 use p2poolv2_lib::shares::chain::chain_store::ChainStore;
 use p2poolv2_lib::shares::share_block::ShareBlock;
 use p2poolv2_lib::store::Store;
 use reqwest::{Client, header};
 use std::sync::Arc;
+use std::sync::RwLock;
 use tempfile::tempdir;
 use tokio::time::{Duration, sleep};
 
@@ -42,8 +45,9 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
         bitcoin::Network::Signet,
     ));
 
+    let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
     // Start metrics actor
-    let metrics_handle = start_metrics(temp_dir.path().to_str().unwrap().to_string())
+    let metrics_handle = start_metrics(temp_dir.path().to_str().unwrap().to_string(), dummy_cache)
         .await
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
@@ -114,8 +118,9 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
         bitcoin::Network::Signet,
     ));
 
+    let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
     // Start metrics actor
-    let metrics_handle = start_metrics(temp_dir.path().to_str().unwrap().to_string())
+    let metrics_handle = start_metrics(temp_dir.path().to_str().unwrap().to_string(), dummy_cache)
         .await
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
@@ -236,9 +241,12 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
         bitcoin::Network::Signet,
     ));
 
+    let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+
     // Start metrics actor
     let metrics_handle = p2poolv2_lib::accounting::stats::metrics::start_metrics(
         temp_dir.path().to_str().unwrap().to_string(),
+        dummy_cache,
     )
     .await
     .map_err(|e| ApiError::ServerError(e.to_string()))?;
@@ -347,9 +355,11 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
         bitcoin::Network::Signet,
     ));
 
+    let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
     // Start metrics actor
     let metrics_handle = p2poolv2_lib::accounting::stats::metrics::start_metrics(
         temp_dir.path().to_str().unwrap().to_string(),
+        dummy_cache,
     )
     .await
     .map_err(|e| ApiError::ServerError(e.to_string()))?;
@@ -454,9 +464,11 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
         bitcoin::Network::Signet,
     ));
 
+    let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
     // Start metrics actor
     let metrics_handle = p2poolv2_lib::accounting::stats::metrics::start_metrics(
         temp_dir.path().to_str().unwrap().to_string(),
+        dummy_cache,
     )
     .await
     .map_err(|e| ApiError::ServerError(e.to_string()))?;
@@ -544,6 +556,99 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
     );
 
     // Shutdown server
+    let _ = shutdown_tx.send(());
+    sleep(Duration::from_millis(200)).await;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_metrics_endpoint_exposes_coinbase() -> Result<(), ApiError> {
+    let temp_dir = tempdir().map_err(|e| ApiError::ServerError(e.to_string()))?;
+    let store = Arc::new(
+        Store::new(temp_dir.path().to_str().unwrap().to_string(), false)
+            .map_err(|e| ApiError::ServerError(e.to_string()))?,
+    );
+    let genesis_block = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
+    let chain_store = Arc::new(ChainStore::new(
+        store,
+        genesis_block,
+        bitcoin::Network::Signet,
+    ));
+
+    // We keep a handle to the cache so we can write to it
+    let coinbase_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+
+    let metrics_handle = start_metrics(
+        temp_dir.path().to_str().unwrap().to_string(),
+        coinbase_cache.clone(),
+    )
+    .await
+    .map_err(|e| ApiError::ServerError(e.to_string()))?;
+
+    let api_config = ApiConfig {
+        hostname: "127.0.0.1".into(),
+        port: 40005, // Use a new port to avoid conflicts
+        auth_user: None,
+        auth_token: None,
+    };
+
+    let shutdown_tx = start_api_server(api_config.clone(), chain_store.clone(), metrics_handle)
+        .await
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
+
+    sleep(Duration::from_millis(500)).await;
+
+    // We write our test data directly to the cache.
+    let test_data = CachedCoinbaseInfo {
+        total_block_reward: 1000,
+        outputs: vec![
+            CoinbaseOutput {
+                name: "miners".to_string(),
+                address: "addr1".to_string(),
+                value_sats: 980,
+            },
+            CoinbaseOutput {
+                name: "dev_fund".to_string(),
+                address: "addr2".to_string(),
+                value_sats: 20,
+            },
+        ],
+    };
+    // Write the data into the cache that the server is using
+    *coinbase_cache.write().unwrap() = test_data;
+
+    let client = Client::new();
+    let response = client
+        .get(format!("http://127.0.0.1:{}/metrics", api_config.port))
+        .send()
+        .await
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
+
+    assert!(
+        response.status().is_success(),
+        "Metrics endpoint did not return 200 OK"
+    );
+    let body = response
+        .text()
+        .await
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
+        
+    // Check that the body contains our new metrics
+    assert!(
+        body.contains("# HELP pool_coinbase_split"),
+        "Body missing metric HELP text"
+    );
+    assert!(
+        body.contains("pool_coinbase_split{name=\"miners\", address=\"addr1\"} 98"),
+        "Body missing miners metric"
+    );
+    assert!(
+        body.contains("pool_coinbase_split{name=\"dev_fund\", address=\"addr2\"} 2"),
+        "Body missing dev_fund metric"
+    );
+
+    //  SHUTDOWN
     let _ = shutdown_tx.send(());
     sleep(Duration::from_millis(200)).await;
 

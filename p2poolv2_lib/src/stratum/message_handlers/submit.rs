@@ -198,6 +198,7 @@ fn get_true_difficulty(hash: &bitcoin::BlockHash) -> u128 {
 mod handle_submit_tests {
     use super::*;
     use crate::accounting::stats::metrics;
+    use crate::cache::{CachedCoinbaseInfo, SharedCoinbaseCache};
     use crate::shares::chain::chain_store::ChainStore;
     use crate::shares::share_block::ShareBlock;
     use crate::store::Store;
@@ -210,6 +211,7 @@ mod handle_submit_tests {
     use bitcoin::BlockHash;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use std::sync::Arc;
+    use std::sync::RwLock;
     use tempfile::tempdir;
     use tokio::sync::mpsc;
 
@@ -254,9 +256,11 @@ mod handle_submit_tests {
 
         let (shares_tx, mut shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let metrics_handle =
+            metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string(), dummy_cache)
+                .await
+                .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let temp_dir = tempdir().unwrap();
@@ -331,9 +335,11 @@ mod handle_submit_tests {
 
         let (shares_tx, mut shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let metrics_handle =
+            metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string(), dummy_cache)
+                .await
+                .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let temp_dir = tempdir().unwrap();
@@ -412,9 +418,11 @@ mod handle_submit_tests {
 
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let metrics_handle =
+            metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string(), dummy_cache)
+                .await
+                .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let temp_dir = tempdir().unwrap();
@@ -498,9 +506,11 @@ mod handle_submit_tests {
 
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let metrics_handle =
+            metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string(), dummy_cache)
+                .await
+                .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
 
@@ -563,9 +573,11 @@ mod handle_submit_tests {
 
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let metrics_handle =
+            metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string(), dummy_cache)
+                .await
+                .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let temp_dir = tempdir().unwrap();
@@ -631,9 +643,11 @@ mod handle_submit_tests {
 
         let (shares_tx, mut shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let metrics_handle =
+            metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string(), dummy_cache)
+                .await
+                .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let temp_dir = tempdir().unwrap();

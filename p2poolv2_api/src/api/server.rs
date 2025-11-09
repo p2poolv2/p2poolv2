@@ -104,8 +104,7 @@ async fn health_check() -> String {
 }
 
 async fn metrics(State(state): State<Arc<AppState>>) -> String {
-    let pool_metrics = state.metrics_handle.get_metrics().await;
-    pool_metrics.get_exposition()
+    state.metrics_handle.get_prometheus_exposition().await
 }
 
 async fn pplns_shares(

@@ -14,21 +14,23 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod accounting;
-pub mod cache;
-pub mod cli_commands;
-pub mod command;
-pub mod config;
-pub mod logging;
-pub mod middleware;
-pub mod node;
-pub mod service;
-pub mod shares;
-pub mod store;
-pub mod stratum;
-pub mod utils;
+use serde::Serialize;
+use std::sync::{Arc, RwLock};
 
-#[cfg(test)]
-pub mod test_utils;
+/// Represents a single output in the coinbase tx
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct CoinbaseOutput {
+    pub name: String,
+    pub address: String,
+    pub value_sats: u64,
+}
 
-pub use service::build_service;
+/// This struct will hold the cached data.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct CachedCoinbaseInfo {
+    pub outputs: Vec<CoinbaseOutput>,
+    pub total_block_reward: u64,
+}
+
+/// This is the type we will share across the application
+pub type SharedCoinbaseCache = Arc<RwLock<CachedCoinbaseInfo>>;

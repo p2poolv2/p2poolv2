@@ -401,6 +401,7 @@ where
 #[cfg(test)]
 mod stratum_server_tests {
     use super::*;
+    use crate::cache::{CachedCoinbaseInfo, SharedCoinbaseCache};
     use crate::shares::chain::chain_store::ChainStore;
     use crate::shares::share_block::ShareBlock;
     use crate::store::Store;
@@ -410,6 +411,7 @@ mod stratum_server_tests {
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::Arc;
+    use std::sync::RwLock;
     use tempfile::tempdir;
     use tokio::sync::mpsc;
 
@@ -422,9 +424,11 @@ mod stratum_server_tests {
 
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let metrics_handle =
+            metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string(), dummy_cache)
+                .await
+                .unwrap();
 
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
@@ -501,9 +505,11 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let metrics_handle =
+            metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string(), dummy_cache)
+                .await
+                .unwrap();
 
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
@@ -618,9 +624,11 @@ mod stratum_server_tests {
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let metrics_handle =
+            metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string(), dummy_cache)
+                .await
+                .unwrap();
 
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
@@ -689,9 +697,11 @@ mod stratum_server_tests {
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let metrics_handle =
+            metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string(), dummy_cache)
+                .await
+                .unwrap();
 
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
@@ -765,9 +775,11 @@ mod stratum_server_tests {
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let metrics_handle =
+            metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string(), dummy_cache)
+                .await
+                .unwrap();
 
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
@@ -861,9 +873,11 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let metrics_handle =
+            metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string(), dummy_cache)
+                .await
+                .unwrap();
 
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
@@ -976,9 +990,11 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let metrics_handle =
+            metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string(), dummy_cache)
+                .await
+                .unwrap();
 
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(

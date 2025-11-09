@@ -14,9 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 mod common;
 use p2poolv2_lib::accounting::stats::metrics;
+use p2poolv2_lib::cache::{CachedCoinbaseInfo, SharedCoinbaseCache};
 use p2poolv2_lib::shares::chain::chain_store::ChainStore;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::stratum::emission::Emission;
@@ -80,15 +81,28 @@ async fn test_three_nodes_connectivity() {
     let stats_dir1 = tempfile::tempdir().unwrap();
     let stats_dir2 = tempfile::tempdir().unwrap();
     let stats_dir3 = tempfile::tempdir().unwrap();
-    let metrics1 = metrics::start_metrics(stats_dir1.path().to_str().unwrap().to_string())
-        .await
-        .unwrap();
-    let metrics2 = metrics::start_metrics(stats_dir2.path().to_str().unwrap().to_string())
-        .await
-        .unwrap();
-    let metrics3 = metrics::start_metrics(stats_dir3.path().to_str().unwrap().to_string())
-        .await
-        .unwrap();
+
+    let dummy_cache1: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+    let dummy_cache2: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+    let dummy_cache3: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+    let metrics1 = metrics::start_metrics(
+        stats_dir1.path().to_str().unwrap().to_string(),
+        dummy_cache1,
+    )
+    .await
+    .unwrap();
+    let metrics2 = metrics::start_metrics(
+        stats_dir2.path().to_str().unwrap().to_string(),
+        dummy_cache2,
+    )
+    .await
+    .unwrap();
+    let metrics3 = metrics::start_metrics(
+        stats_dir3.path().to_str().unwrap().to_string(),
+        dummy_cache3,
+    )
+    .await
+    .unwrap();
 
     // Start three nodes
     let (node1_handle, _stop_rx1) = NodeHandle::new(config1, store1, shares_rx_1, metrics1)

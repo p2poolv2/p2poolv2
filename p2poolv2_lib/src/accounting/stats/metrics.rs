@@ -18,6 +18,7 @@ use crate::accounting::stats::pool_local_stats::load_pool_local_stats;
 use crate::accounting::stats::user::User;
 use crate::accounting::stats::worker::Worker;
 use crate::accounting::{simple_pplns::SimplePplnsShare, stats::pool_local_stats};
+use crate::cache::{CachedCoinbaseInfo, SharedCoinbaseCache};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
@@ -266,6 +267,7 @@ impl MetricsActor {
 #[derive(Clone)]
 pub struct MetricsHandle {
     sender: mpsc::Sender<MetricsMessage>,
+    pub(crate) coinbase_cache: SharedCoinbaseCache,
 }
 
 impl MetricsHandle {
@@ -379,16 +381,60 @@ impl MetricsHandle {
             .expect("Error setting last update");
         response_rx.await
     }
+    pub async fn get_prometheus_exposition(&self) -> String {
+        // Get existing share/worker metrics from the actor
+        let pool_metrics = self.get_metrics().await;
+
+        // Get the exposition string for those metrics
+        let mut exposition = pool_metrics.get_exposition();
+
+        // Generate new coinbase metrics
+        let coinbase_string = {
+            let cache_data = self.coinbase_cache.read().unwrap();
+            if cache_data.outputs.is_empty() {
+                String::new() // Don't add anything if cache is empty
+            } else {
+                let mut cb_metrics = String::new();
+                cb_metrics.push_str(
+                    "# HELP pool_coinbase_split The current coinbase reward split (as percentage)\n",
+                );
+                cb_metrics.push_str("# TYPE pool_coinbase_split gauge\n");
+
+                let total = cache_data.total_block_reward as f64;
+                if total > 0.0 {
+                    for output in &cache_data.outputs {
+                        let percentage = (output.value_sats as f64 / total) * 100.0;
+                        cb_metrics.push_str(&format!(
+                            "pool_coinbase_split{{name=\"{}\", address=\"{}\"}} {}\n",
+                            output.name, output.address, percentage
+                        ));
+                    }
+                }
+                cb_metrics
+            }
+        };
+
+        exposition.push('\n');
+        exposition.push_str(&coinbase_string);
+
+        exposition
+    }
 }
 
 /// Construct a new metrics actor with existing metrics and return its handle
-pub async fn start_metrics(log_dir: String) -> Result<MetricsHandle, std::io::Error> {
+pub async fn start_metrics(
+    log_dir: String,
+    coinbase_cache: SharedCoinbaseCache,
+) -> Result<MetricsHandle, std::io::Error> {
     let (sender, receiver) = mpsc::channel(METRICS_MESSAGE_BUFFER_SIZE);
     let actor = MetricsActor::with_existing_metrics(&log_dir, receiver)?;
     tokio::spawn(async move {
         actor.run().await;
     });
-    let handle = MetricsHandle { sender };
+    let handle = MetricsHandle {
+        sender,
+        coinbase_cache,
+    };
     match pool_local_stats::start_stats_saver(
         handle.clone(),
         METRICS_SAVE_INTERVAL,
@@ -410,6 +456,8 @@ mod tests {
     use crate::accounting::stats::pool_local_stats::save_pool_local_stats;
 
     use super::*;
+    use crate::cache::{CachedCoinbaseInfo, SharedCoinbaseCache};
+    use std::sync::{Arc, RwLock};
 
     #[test]
     fn test_pool_metrics_default() {
@@ -421,7 +469,8 @@ mod tests {
     #[tokio::test]
     async fn test_record_share_accepted() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string(), dummy_cache)
             .await
             .unwrap();
         let _ = handle
@@ -485,7 +534,8 @@ mod tests {
     #[tokio::test]
     async fn test_record_share_rejected() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string(), dummy_cache)
             .await
             .unwrap();
         let _ = handle.record_share_rejected().await;
@@ -496,7 +546,8 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn test_metrics_commit() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string(), dummy_cache)
             .await
             .unwrap();
 
@@ -556,7 +607,8 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn test_get_metrics_consistency() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string(), dummy_cache)
             .await
             .unwrap();
 
@@ -604,7 +656,8 @@ mod tests {
     #[tokio::test]
     async fn test_record_share_updates_user_stats() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string(), dummy_cache)
             .await
             .unwrap();
 
@@ -645,7 +698,8 @@ mod tests {
     #[tokio::test]
     async fn test_record_share_multiple_users_and_workers() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string(), dummy_cache)
             .await
             .unwrap();
 

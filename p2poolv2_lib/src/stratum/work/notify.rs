@@ -21,6 +21,7 @@ use super::gbt::build_merkle_branches_for_template;
 use super::tracker::{JobId, TrackerHandle};
 use crate::accounting::OutputPair;
 use crate::accounting::simple_pplns::payout::Payout;
+use crate::cache::{CachedCoinbaseInfo, CoinbaseOutput, SharedCoinbaseCache};
 use crate::config::StratumConfig;
 #[cfg(test)]
 #[mockall_double::double]
@@ -156,6 +157,7 @@ pub async fn start_notify(
     tracker_handle: TrackerHandle,
     config: &StratumConfig<crate::config::Parsed>,
     miner_pubkey: Option<PublicKey>,
+    coinbase_cache: SharedCoinbaseCache,
 ) {
     let mut latest_template: Option<Arc<BlockTemplate>> = None;
     let pool_signature = match config.pool_signature {
@@ -171,6 +173,34 @@ pub async fn start_notify(
                 let job_id = tracker_handle.get_next_job_id().await.unwrap();
                 let output_distribution =
                     build_output_distribution(&template, &chain_store, config).await;
+
+                let total_reward = template.coinbasevalue;
+
+                let cached_outputs: Vec<CoinbaseOutput> = output_distribution
+                    .iter()
+                    .map(|pair| {
+                        let address_str = pair.address.to_string();
+                        CoinbaseOutput {
+                            name: address_str.clone(),
+                            address: address_str,
+                            value_sats: pair.amount.to_sat(),
+                        }
+                    })
+                    .collect();
+
+                let new_cache_data = CachedCoinbaseInfo {
+                    outputs: cached_outputs,
+                    total_block_reward: total_reward,
+                };
+
+                match coinbase_cache.write() {
+                    Ok(mut cache_writer) => {
+                        *cache_writer = new_cache_data;
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to acquire write lock on coinbase cache: {:?}", e);
+                    }
+                }
                 let share_commitment =
                     match build_share_commitment(&chain_store, &template, miner_pubkey) {
                         Ok(commitment) => commitment,
@@ -287,6 +317,7 @@ pub async fn start_notify(
 mod tests {
     use super::*;
     use crate::accounting::simple_pplns::SimplePplnsShare;
+    use crate::cache::{CachedCoinbaseInfo, SharedCoinbaseCache};
     use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
     use crate::stratum::messages::{Response, SimpleRequest};
     use crate::stratum::session::Session;
@@ -294,6 +325,7 @@ mod tests {
     use crate::test_utils::genesis_for_tests;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use std::fs;
+    use std::sync::{Arc, RwLock};
     use std::time::SystemTime;
     use tokio::sync::mpsc;
 
@@ -443,6 +475,7 @@ mod tests {
                 .parse()
                 .unwrap();
 
+        let dummy_cache: SharedCoinbaseCache = Arc::new(RwLock::new(CachedCoinbaseInfo::default()));
         let task_handle = tokio::spawn(async move {
             start_notify(
                 notify_rx,
@@ -451,6 +484,7 @@ mod tests {
                 work_map_handle,
                 &stratum_config,
                 Some(miner_pubkey),
+                dummy_cache,
             )
             .await;
         });
