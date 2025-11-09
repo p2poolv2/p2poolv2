@@ -633,7 +633,7 @@ async fn test_metrics_endpoint_exposes_coinbase() -> Result<(), ApiError> {
         .text()
         .await
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
-        
+
     // Check that the body contains our new metrics
     assert!(
         body.contains("# HELP pool_coinbase_split"),
