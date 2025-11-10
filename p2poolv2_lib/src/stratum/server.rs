@@ -28,7 +28,7 @@ use crate::stratum::error::Error;
 use crate::stratum::message_handlers::handle_message;
 use crate::stratum::messages::Request;
 use crate::stratum::session::Session;
-use crate::stratum::timeout::{SessionTimeouts, check_session_timeouts};
+use crate::stratum::session_timeout::{SessionTimeouts, check_session_timeouts};
 use crate::stratum::work::notify::NotifyCmd;
 use crate::stratum::work::tracker::TrackerHandle;
 use bitcoindrpc::BitcoinRpcConfig;
