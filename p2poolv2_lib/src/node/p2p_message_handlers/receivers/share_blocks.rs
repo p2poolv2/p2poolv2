@@ -77,7 +77,7 @@ mod tests {
             .with(eq(bitcoin::BlockHash::all_zeros()))
             .returning(|_| Some(genesis_for_tests()));
 
-        let mut time_provider = TestTimeProvider(SystemTime::now());
+        let mut time_provider = TestTimeProvider::new(SystemTime::now());
         time_provider.set_time(
             bitcoin::absolute::Time::from_consensus(share_block.header.bitcoin_header.time)
                 .unwrap(),
@@ -92,7 +92,7 @@ mod tests {
         let store = ChainStore::default();
         let share_block = TestShareBlockBuilder::new().build();
 
-        let time_provider = TestTimeProvider(SystemTime::now());
+        let time_provider = TestTimeProvider::new(SystemTime::now());
 
         let result = handle_share_block(share_block, Arc::new(store), &time_provider).await;
         assert!(result.is_err());
@@ -118,7 +118,7 @@ mod tests {
             .with(eq(bitcoin::BlockHash::all_zeros()))
             .returning(|_| Some(genesis_for_tests()));
 
-        let mut time_provider = TestTimeProvider(SystemTime::now());
+        let mut time_provider = TestTimeProvider::new(SystemTime::now());
         time_provider.set_time(
             bitcoin::absolute::Time::from_consensus(share_block.header.bitcoin_header.time)
                 .unwrap(),

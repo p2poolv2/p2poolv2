@@ -24,11 +24,14 @@ use crate::accounting::stats::metrics;
 use crate::shares::chain::chain_store::ChainStore;
 use crate::stratum::difficulty_adjuster::{DifficultyAdjuster, DifficultyAdjusterTrait};
 use crate::stratum::emission::EmissionSender;
+use crate::stratum::error::Error;
 use crate::stratum::message_handlers::handle_message;
 use crate::stratum::messages::Request;
 use crate::stratum::session::Session;
+use crate::stratum::session_timeout::{self, check_session_timeouts};
 use crate::stratum::work::notify::NotifyCmd;
 use crate::stratum::work::tracker::TrackerHandle;
+use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoindrpc::BitcoinRpcConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -219,7 +222,7 @@ impl StratumServer {
                             // Spawn a new task for each connection
                             tokio::spawn(async move {
                                 // Handle the connection with graceful shutdown support
-                                if handle_connection(buf_reader, writer, addr, message_rx, shutdown_rx, version_mask, ctx).await.is_err() {
+                                if handle_connection(buf_reader, writer, addr, message_rx, shutdown_rx, version_mask, ctx, &SystemTimeProvider{}).await.is_err() {
                                         error!("Error occurred while handling connection {addr}. Closing connection.");
                                 }
                             });
@@ -254,7 +257,7 @@ pub(crate) struct StratumContext {
 /// Handles a single connection to the Stratum server.
 /// This function reads lines from the connection, processes them,
 /// and sends responses back to the client.
-async fn handle_connection<R, W>(
+async fn handle_connection<R, W, T: TimeProvider>(
     reader: R,
     mut writer: W,
     addr: SocketAddr,
@@ -262,6 +265,7 @@ async fn handle_connection<R, W>(
     mut shutdown_rx: oneshot::Receiver<()>,
     version_mask: i32,
     ctx: StratumContext,
+    time_provider: &T,
 ) -> Result<(), Box<dyn std::error::Error + Send>>
 where
     R: AsyncBufReadExt + Unpin,
@@ -278,6 +282,12 @@ where
         ctx.maximum_difficulty,
         version_mask,
     );
+
+    let mut monitor = tokio::time::interval(tokio::time::Duration::from_secs(
+        session_timeout::MONITOR_INTERVAL,
+    ));
+    monitor.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    monitor.tick().await;
 
     // Process each line as it arrives
     loop {
@@ -328,6 +338,19 @@ where
                     None => {
                         info!("Connection closed by client: {}", addr);
                         break; // End of stream
+                    }
+                }
+            }
+            _ = monitor.tick() => {
+                match check_session_timeouts::<T>(session, time_provider) {
+                    Ok(()) => {}
+                    Err(Error::TimeoutError) => {
+                        info!("{addr} inactive, disconnecting...");
+                        break;
+                    }
+                    Err(err) => {
+                        error!("Timeout monitor failed for {addr}: {err}");
+                        break;
                     }
                 }
             }
@@ -407,6 +430,7 @@ mod stratum_server_tests {
     use crate::stratum::messages::SimpleRequest;
     use crate::stratum::server;
     use crate::stratum::work::tracker::start_tracker_actor;
+    use crate::utils::time_provider::TestTimeProvider;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::Arc;
@@ -534,6 +558,7 @@ mod stratum_server_tests {
             shutdown_rx,
             0x1fffe000,
             ctx,
+            &SystemTimeProvider {},
         )
         .await;
 
@@ -651,6 +676,7 @@ mod stratum_server_tests {
             shutdown_rx,
             0x1fffe000,
             ctx,
+            &SystemTimeProvider {},
         )
         .await;
 
@@ -722,6 +748,7 @@ mod stratum_server_tests {
             shutdown_rx,
             0x1fffe000,
             ctx,
+            &SystemTimeProvider {},
         )
         .await;
 
@@ -798,6 +825,7 @@ mod stratum_server_tests {
             shutdown_rx,
             0x1fffe000,
             ctx,
+            &SystemTimeProvider {},
         )
         .await;
 
@@ -897,6 +925,7 @@ mod stratum_server_tests {
                 shutdown_rx,
                 0x1fffe000,
                 ctx,
+                &SystemTimeProvider {},
             )
             .await;
 
@@ -1012,6 +1041,7 @@ mod stratum_server_tests {
                 shutdown_rx,
                 0x1fffe000,
                 ctx,
+                &SystemTimeProvider {},
             )
             .await;
 
@@ -1058,5 +1088,172 @@ mod stratum_server_tests {
             subscribe_response.get("result").is_some(),
             "Subscribe response should have 'result' field"
         );
+    }
+
+    #[test]
+    fn test_handle_connection_first_share_timeout_should_timeout() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        runtime.block_on(async {
+            tokio::time::pause();
+
+            let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8083);
+            let mut writer = Vec::new();
+            let (_, message_rx) = mpsc::channel(10);
+            let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+            let (notify_tx, _notify_rx) = mpsc::channel(10);
+            let tracker_handle = start_tracker_actor();
+            let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+            let (shares_tx, _shares_rx) = mpsc::channel(10);
+            let stats_dir = tempfile::tempdir().unwrap();
+            let metrics_handle =
+                metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+                    .await
+                    .unwrap();
+
+            let temp_dir = tempdir().unwrap();
+            let store = Arc::new(ChainStore::new(
+                Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
+                ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+                bitcoin::Network::Signet,
+            ));
+
+            let ctx = StratumContext {
+                notify_tx,
+                tracker_handle,
+                bitcoinrpc_config,
+                metrics: metrics_handle,
+                start_difficulty: 10000,
+                minimum_difficulty: 1,
+                maximum_difficulty: Some(2),
+                shares_tx,
+                network: bitcoin::network::Network::Regtest,
+                store,
+            };
+
+            // wait for subscribe/authorize messages
+            let mut mock_reader = tokio_test::io::Builder::new()
+                .wait(tokio::time::Duration::from_secs(100_000))
+                .build();
+
+            let time_provider = TestTimeProvider::new(std::time::SystemTime::now());
+            let mut time_provider_cloned = time_provider.clone();
+
+            let handle = tokio::spawn(async move {
+                let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
+                handle_connection(
+                    buf_reader,
+                    &mut writer,
+                    addr,
+                    message_rx,
+                    shutdown_rx,
+                    0x1fffe000,
+                    ctx,
+                    &time_provider,
+                )
+                .await
+            });
+
+            // set time queried for timeout
+            time_provider_cloned.set_since_epoch(time_provider_cloned.seconds_since_epoch() + 901);
+            // push forward tokio time for triggering tick
+            tokio::time::advance(tokio::time::Duration::from_secs(901)).await;
+
+            let result = handle.await.unwrap();
+            assert!(result.is_ok());
+        });
+    }
+
+    #[test_log::test]
+    fn test_handle_connection_inactivity_timeout() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        runtime.block_on(async {
+            tokio::time::pause();
+
+            let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8084);
+            let mut writer = Vec::new();
+            let (_, message_rx) = mpsc::channel(10);
+            let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+            let (notify_tx, _notify_rx) = mpsc::channel(10);
+            let tracker_handle = start_tracker_actor();
+            let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+            let (shares_tx, _shares_rx) = mpsc::channel(10);
+            let stats_dir = tempfile::tempdir().unwrap();
+            let metrics_handle =
+                metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+                    .await
+                    .unwrap();
+
+            let temp_dir = tempdir().unwrap();
+            let store = Arc::new(ChainStore::new(
+                Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
+                ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+                bitcoin::Network::Signet,
+            ));
+
+            let ctx = StratumContext {
+                notify_tx,
+                tracker_handle,
+                bitcoinrpc_config,
+                metrics: metrics_handle,
+                start_difficulty: 10000,
+                minimum_difficulty: 1,
+                maximum_difficulty: Some(2),
+                shares_tx,
+                network: bitcoin::network::Network::Signet,
+                store,
+            };
+
+            let subscribe_message =
+                SimpleRequest::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+            let subscribe_str = serde_json::to_string(&subscribe_message).unwrap();
+
+            let authorize_message = SimpleRequest::new_authorize(
+                2,
+                "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
+                Some("test_password".to_string()),
+            );
+            let authorize_str = serde_json::to_string(&authorize_message).unwrap();
+
+            // Wait for a long while for new messages
+            let mut mock_reader = tokio_test::io::Builder::new()
+                .read(format!("{subscribe_str}\n").as_bytes())
+                .read(format!("{authorize_str}\n").as_bytes())
+                .wait(tokio::time::Duration::from_secs(100_000))
+                .build();
+
+            let time_provider = TestTimeProvider::new(std::time::SystemTime::now());
+            let mut time_provider_cloned = time_provider.clone();
+
+            let handle = tokio::spawn(async move {
+                let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
+                handle_connection(
+                    buf_reader,
+                    &mut writer,
+                    addr,
+                    message_rx,
+                    shutdown_rx,
+                    0x1fffe000,
+                    ctx,
+                    &time_provider,
+                )
+                .await
+            });
+
+            // set time queried for timeout
+            time_provider_cloned.set_since_epoch(time_provider_cloned.seconds_since_epoch() + 901);
+            // push forward tokio time for triggering tick
+            tokio::time::advance(tokio::time::Duration::from_secs(901)).await;
+
+            let result = handle.await.unwrap();
+            assert!(result.is_ok());
+        });
     }
 }

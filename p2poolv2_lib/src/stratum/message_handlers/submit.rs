@@ -127,6 +127,8 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         .await
         .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;
 
+    session.last_share_time = Some(SystemTime::now());
+
     let meets_session_difficulty =
         truediff >= session.difficulty_adjuster.get_current_difficulty() as u128;
 

@@ -152,7 +152,7 @@ mod tests {
         store.expect_clone().returning(|| ChainStore::default());
 
         // Create a TestTimeProvider with the current system time
-        let time_provider = TestTimeProvider(SystemTime::now());
+        let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Configure Tower RateLimitLayer: 2 requests per second
         let mut service = ServiceBuilder::new()
@@ -254,7 +254,7 @@ mod tests {
         let mut store = ChainStore::default();
         store.expect_clone().returning(|| ChainStore::default());
 
-        let time_provider = TestTimeProvider(SystemTime::now());
+        let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Wrap with rate limit (though here rate limit is not really triggered)
         let mut service = ServiceBuilder::new()
@@ -311,7 +311,7 @@ mod tests {
         let mut store = ChainStore::default();
         store.expect_clone().returning(|| ChainStore::default());
 
-        let time_provider = TestTimeProvider(SystemTime::now());
+        let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Create a config with a low rate limit
         let network_config = NetworkConfig {
@@ -396,7 +396,7 @@ mod tests {
         let mut store = ChainStore::default();
         store.expect_clone().returning(|| ChainStore::default());
 
-        let time_provider = TestTimeProvider(SystemTime::now());
+        let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Create a network_config with a low rate limit
         let network_config = NetworkConfig {

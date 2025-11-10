@@ -15,7 +15,7 @@
                 "files.watcherExclude": {
                     "**/target/**": true
                 },
-                "rust-analyzer.checkOnSave.command": "clippy",
+                "rust-analyzer.check.command": "clippy",
                 "rust-analyzer.cargo.allFeatures": true
             },
             "extensions": [
@@ -23,7 +23,7 @@
                 "mutantdino.resourcemonitor",
                 "rust-lang.rust-analyzer",
                 "tamasfe.even-better-toml",
-                "serayuzgur.crates"
+                "fill-labs.dependi"
             ]
         }
     },

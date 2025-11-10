@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use bitcoin::absolute::Time;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Trait to get current system time, allowing for mocking in tests
@@ -22,6 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub trait TimeProvider {
     fn now(&self) -> SystemTime;
     fn set_time(&mut self, time: Time);
+    fn set_since_epoch(&mut self, seconds: u64);
     fn seconds_since_epoch(&self) -> u64;
 }
 
@@ -38,6 +40,10 @@ impl TimeProvider for SystemTimeProvider {
         // No-op for production provider
     }
 
+    fn set_since_epoch(&mut self, _seconds: u64) {
+        // No-op for production provider
+    }
+
     fn seconds_since_epoch(&self) -> u64 {
         self.now().duration_since(UNIX_EPOCH).unwrap().as_secs()
     }
@@ -45,20 +51,37 @@ impl TimeProvider for SystemTimeProvider {
 
 /// Mock time provider for testing
 #[derive(Clone, Debug)]
-pub struct TestTimeProvider(pub SystemTime);
+pub struct TestTimeProvider {
+    time: Arc<Mutex<SystemTime>>,
+}
+
+impl TestTimeProvider {
+    pub fn new(time: SystemTime) -> Self {
+        Self {
+            time: Arc::new(Mutex::new(time)),
+        }
+    }
+}
 
 impl TimeProvider for TestTimeProvider {
     fn now(&self) -> SystemTime {
-        self.0
+        *self.time.lock().unwrap()
     }
 
     fn set_time(&mut self, time: Time) {
         let secs = time.to_consensus_u32() as u64;
-        self.0 = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        let mut time = self.time.lock().unwrap();
+        *time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+    }
+
+    fn set_since_epoch(&mut self, seconds: u64) {
+        let mut time = self.time.lock().unwrap();
+        *time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds);
     }
 
     fn seconds_since_epoch(&self) -> u64 {
-        self.0.duration_since(UNIX_EPOCH).unwrap().as_secs()
+        let time = self.time.lock().unwrap();
+        time.duration_since(UNIX_EPOCH).unwrap().as_secs()
     }
 }
 
@@ -77,7 +100,7 @@ mod test {
     #[test]
     fn test_mock_time_provider() {
         let fixed_time = UNIX_EPOCH + Duration::from_secs(1000);
-        let time_provider = TestTimeProvider(fixed_time);
+        let time_provider = TestTimeProvider::new(fixed_time);
         assert_eq!(time_provider.now(), fixed_time);
     }
 

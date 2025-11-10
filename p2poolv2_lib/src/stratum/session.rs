@@ -14,8 +14,12 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::stratum::difficulty_adjuster::DifficultyAdjusterTrait;
+use crate::utils::time_provider::SystemTimeProvider;
+use crate::{
+    stratum::difficulty_adjuster::DifficultyAdjusterTrait, utils::time_provider::TimeProvider,
+};
 use bitcoin::secp256k1::rand::{self, Rng};
+use std::time::SystemTime;
 
 /// Use 4 byte extranonce1
 pub const EXTRANONCE1_SIZE: usize = 4;
@@ -52,6 +56,10 @@ pub struct Session<D: DifficultyAdjusterTrait> {
     pub version_mask: i32,
     /// Difficulty suggested by the client
     pub suggested_difficulty: Option<u64>,
+    /// Instant when the session was created
+    pub connected_at: SystemTime,
+    /// Instant when the last valid share was submitted
+    pub last_share_time: Option<SystemTime>,
 }
 
 impl<D: DifficultyAdjusterTrait> Session<D> {
@@ -64,6 +72,7 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
     ) -> Self {
         let id = Session::<D>::generate_id();
         let enonce1 = id.to_le();
+        let now = SystemTimeProvider.now();
         Self {
             id: hex::encode(id.to_be_bytes()),
             enonce1,
@@ -78,6 +87,8 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
             difficulty_adjuster: D::new(start_difficulty, minimum_difficulty, maximum_difficulty),
             version_mask,
             suggested_difficulty: None,
+            connected_at: now,
+            last_share_time: None,
         }
     }
 
