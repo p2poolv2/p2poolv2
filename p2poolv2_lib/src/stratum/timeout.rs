@@ -15,14 +15,13 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::config::Config;
+use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
 use crate::stratum::error::Error;
 use crate::stratum::session::Session;
-use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 
 use std::time::Duration;
 use tracing::error;
-
 
 #[derive(Clone, Copy)]
 pub struct SessionTimeouts {
@@ -59,9 +58,8 @@ impl Default for SessionTimeouts {
     }
 }
 
-
 /// Checks for session timeouts based on initialization and inactivity periods
-/// 
+///
 /// This function evaluates the session's state to determine if it has exceeded
 /// the allowed time for completing the initialization (if not yet subscribed or
 /// authorized) or for remaining inactive after submitting a share
@@ -88,8 +86,8 @@ pub fn check_session_timeouts(
         Some(val) => val,
         None => {
             error!("Error retrieving the time of the last share sent");
-            return Err(Error::TimeoutError)
-        },
+            return Err(Error::TimeoutError);
+        }
     };
     let since_last_share = match now.duration_since(last_share_time) {
         Ok(since_last_share) => since_last_share,
@@ -108,7 +106,6 @@ pub fn check_session_timeouts(
 
     Ok(())
 }
-
 
 #[cfg(test)]
 mod timeout_test {
@@ -132,10 +129,7 @@ mod timeout_test {
             monitor_interval: Duration::from_secs(1),
         };
 
-        let result = check_session_timeouts(
-            &session,
-            &timeouts,
-        );
+        let result = check_session_timeouts(&session, &timeouts);
 
         assert!(matches!(result, Err(Error::TimeoutError)));
     }
@@ -155,12 +149,8 @@ mod timeout_test {
             monitor_interval: Duration::from_secs(1),
         };
 
-        let result = check_session_timeouts(
-            &session,
-            &timeouts,
-        );
+        let result = check_session_timeouts(&session, &timeouts);
 
         assert!(matches!(result, Err(Error::TimeoutError)));
     }
-
 }

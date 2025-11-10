@@ -14,8 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::{stratum::difficulty_adjuster::DifficultyAdjusterTrait, utils::time_provider::TimeProvider};
 use crate::utils::time_provider::SystemTimeProvider;
+use crate::{
+    stratum::difficulty_adjuster::DifficultyAdjusterTrait, utils::time_provider::TimeProvider,
+};
 use bitcoin::secp256k1::rand::{self, Rng};
 use std::time::SystemTime;
 

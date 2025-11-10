@@ -71,7 +71,6 @@ pub struct StratumConfig<State = Raw> {
     pub inactivity_timeout: u64,
     /// Interval for checking session timeouts
     pub monitor_interval: u64,
-    
 
     // Parsed addresses - only available when State = Parsed
     #[serde(skip)]
