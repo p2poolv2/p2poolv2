@@ -24,13 +24,13 @@ use crate::accounting::stats::metrics;
 use crate::shares::chain::chain_store::ChainStore;
 use crate::stratum::difficulty_adjuster::{DifficultyAdjuster, DifficultyAdjusterTrait};
 use crate::stratum::emission::EmissionSender;
+use crate::stratum::error::Error;
 use crate::stratum::message_handlers::handle_message;
 use crate::stratum::messages::Request;
 use crate::stratum::session::Session;
+use crate::stratum::timeout::{SessionTimeouts, check_session_timeouts};
 use crate::stratum::work::notify::NotifyCmd;
 use crate::stratum::work::tracker::TrackerHandle;
-use crate::stratum::timeout::{SessionTimeouts, check_session_timeouts};
-use crate::stratum::error::Error;
 use bitcoindrpc::BitcoinRpcConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -42,7 +42,6 @@ use tokio::time;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, LinesCodec};
 use tracing::{debug, error, info};
-
 
 // A struct to represent a Stratum server configuration
 // This struct contains the port and address of the Stratum server
@@ -75,7 +74,6 @@ pub struct StratumServerBuilder {
     shares_tx: Option<EmissionSender>,
     zmqpubhashblock: Option<String>,
     store: Option<Arc<ChainStore>>,
-    handshake_timeout: Option<Duration>,
     inactivity_timeout: Option<Duration>,
     monitor_interval: Option<Duration>,
 }
@@ -138,11 +136,6 @@ impl StratumServerBuilder {
 
     pub fn store(mut self, store: Arc<ChainStore>) -> Self {
         self.store = Some(store);
-        self
-    }
-
-    pub fn handshake_timeout(mut self, handshake_timeout: Duration) -> Self {
-        self.handshake_timeout = Some(handshake_timeout);
         self
     }
 
@@ -1103,7 +1096,7 @@ mod stratum_server_tests {
         );
     }
 
-        #[test]
+    #[test]
     fn test_handle_connection_first_share_timeout() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1122,18 +1115,14 @@ mod stratum_server_tests {
             let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
             let (shares_tx, _shares_rx) = mpsc::channel(10);
             let stats_dir = tempfile::tempdir().unwrap();
-            let metrics_handle = metrics::start_metrics(
-                stats_dir.path().to_str().unwrap().to_string(),
-            )
-            .await
-            .unwrap();
+            let metrics_handle =
+                metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+                    .await
+                    .unwrap();
 
             let temp_dir = tempdir().unwrap();
             let store = Arc::new(ChainStore::new(
-                Arc::new(
-                    Store::new(temp_dir.path().to_str().unwrap().to_string(), false)
-                        .unwrap(),
-                ),
+                Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
                 ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
                 bitcoin::Network::Signet,
             ));
@@ -1173,7 +1162,6 @@ mod stratum_server_tests {
         });
     }
 
-
     #[test]
     fn test_handle_connection_inactivity_timeout() {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1193,18 +1181,14 @@ mod stratum_server_tests {
             let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
             let (shares_tx, _shares_rx) = mpsc::channel(10);
             let stats_dir = tempfile::tempdir().unwrap();
-            let metrics_handle = metrics::start_metrics(
-                stats_dir.path().to_str().unwrap().to_string(),
-            )
-            .await
-            .unwrap();
+            let metrics_handle =
+                metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+                    .await
+                    .unwrap();
 
             let temp_dir = tempdir().unwrap();
             let store = Arc::new(ChainStore::new(
-                Arc::new(
-                    Store::new(temp_dir.path().to_str().unwrap().to_string(), false)
-                        .unwrap(),
-                ),
+                Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
                 ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
                 bitcoin::Network::Signet,
             ));
@@ -1222,12 +1206,8 @@ mod stratum_server_tests {
                 store,
             };
 
-            let subscribe_message = SimpleRequest::new_subscribe(
-                1,
-                "agent".to_string(),
-                "1.0".to_string(),
-                None,
-            );
+            let subscribe_message =
+                SimpleRequest::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
             let subscribe_str = serde_json::to_string(&subscribe_message).unwrap();
 
             let authorize_message = SimpleRequest::new_authorize(
