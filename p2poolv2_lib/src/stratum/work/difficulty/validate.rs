@@ -20,9 +20,20 @@ use crate::stratum::work::block_template::BlockTemplate;
 use crate::stratum::work::tracker::JobDetails;
 use bitcoin::blockdata::block::{Block, Header};
 use bitcoin::consensus::Decodable;
+use bitcoin::hex::DisplayHex;
 use hex::FromHex;
 use std::str::FromStr;
-use tracing::debug;
+use tracing::{debug, info};
+
+/// Share validation result
+///
+/// Captures the block and boolens to signal if block meets bitcoin and job difficult
+pub struct ValidationResult {
+    /// The block built with the share components
+    pub block: Block,
+    /// Does the block meet bitcoin difficulty
+    pub meets_bitcoin_difficulty: bool,
+}
 
 /// parse all transactions from block template with data and txid
 fn decode_txids(blocktemplate: &BlockTemplate) -> Result<Vec<bitcoin::Txid>, Error> {
@@ -80,13 +91,15 @@ fn apply_version_mask(
 /// We build the block header from received submission and the corresponding block template.
 /// Then we check if the header's difficulty meets the target specified in the block template.
 ///
-/// Returns result with optional header if the PoW is met. Else returns an error.
+/// Returns ValidationResult if validation was error free, else the error.
 pub fn validate_submission_difficulty(
     job: &JobDetails,
     submission: &SimpleRequest<'_>,
     enonce1_hex: &str,
     version_mask: i32,
-) -> Result<Block, Error> {
+    _session_difficulty: u64,
+    _network: bitcoin::Network,
+) -> Result<ValidationResult, Error> {
     let compact_target = bitcoin::CompactTarget::from_unprefixed_hex(&job.blocktemplate.bits)
         .map_err(|_| Error::InvalidParams("Failed to parse compact target".into()))?;
     let target = bitcoin::Target::from_compact(compact_target);
@@ -130,19 +143,26 @@ pub fn validate_submission_difficulty(
         prev_blockhash: bitcoin::BlockHash::from_str(&job.blocktemplate.previousblockhash).unwrap(),
         merkle_root,
         time: n_time,
-        bits: bitcoin::pow::CompactTarget::from_unprefixed_hex(&job.blocktemplate.bits).unwrap(),
+        bits: compact_target,
         nonce: u32::from_str_radix(submission.params[4].as_ref().unwrap(), 16).unwrap(),
     };
 
+    debug!(
+        "Header hex : {}",
+        bitcoin::consensus::serialize(&header).to_lower_hex_string()
+    );
     debug!("Header hash : {}", header.block_hash().to_string());
 
-    match header.validate_pow(target) {
-        Ok(_) => debug!("Header meets the target"),
+    let meets_bitcoin_difficulty = match header.validate_pow(target) {
+        Ok(_) => {
+            info!("Header meets current bitcoin target");
+            true
+        }
         Err(e) => {
             debug!("Header does not meet the target: {}", e);
-            return Err(Error::InsufficientWork);
+            false
         }
-    }
+    };
 
     // Decode transactions from the block template
     let transactions: Vec<bitcoin::transaction::Transaction> = job
@@ -163,5 +183,9 @@ pub fn validate_submission_difficulty(
         header,
         txdata: all_transactions,
     };
-    Ok(block)
+
+    Ok(ValidationResult {
+        block,
+        meets_bitcoin_difficulty,
+    })
 }

@@ -1,8 +1,16 @@
 [package]
 name = "bitcoindrpc"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.88"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description.workspace = true
+readme = "README.adoc"
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
 
 [lib]
 path = "src/lib.rs"

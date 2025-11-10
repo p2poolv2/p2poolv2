@@ -36,11 +36,8 @@ use std::time::Duration;
 use tracing::error;
 use tracing::info;
 
-/// Interval in seconds to poll for new block templates since the last blocknotify signal
+/// Interval in seconds to poll for new block templates since the last zmq event signal
 const GBT_POLL_INTERVAL: u64 = 10; // seconds
-
-/// Path to the Unix socket for receiving blocknotify signals from bitcoind
-pub const SOCKET_PATH: &str = "/tmp/p2pool_blocknotify.sock";
 
 /// Maximum number of pending shares from all clients connected to stratum server
 const STRATUM_SHARES_BUFFER_SIZE: usize = 1000;
@@ -100,6 +97,10 @@ async fn main() -> Result<(), String> {
     );
 
     let stratum_config = config.stratum.clone().parse().unwrap();
+    let miner_pubkey = match config.miner {
+        Some(ref miner_config) => Some(miner_config.pubkey.clone()),
+        None => None,
+    };
     let bitcoinrpc_config = config.bitcoinrpc.clone();
 
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
@@ -121,7 +122,6 @@ async fn main() -> Result<(), String> {
         if let Err(e) = start_gbt(
             bitcoinrpc_config_cloned,
             notify_tx_for_gbt,
-            SOCKET_PATH,
             GBT_POLL_INTERVAL,
             stratum_config.network,
             zmq_trigger_rx,
@@ -149,6 +149,7 @@ async fn main() -> Result<(), String> {
             store_for_notify,
             tracker_handle_cloned,
             &cloned_stratum_config,
+            miner_pubkey,
         )
         .await;
     });

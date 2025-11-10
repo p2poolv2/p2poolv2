@@ -15,9 +15,10 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::shares::genesis;
-use bitcoin::TxMerkleNode;
+use crate::shares::share_commitment::ShareCommitment;
 use bitcoin::hashes::Hash;
 use bitcoin::{Block, BlockHash, PublicKey, Transaction, block::Header};
+use bitcoin::{CompactTarget, TxMerkleNode};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 
@@ -38,12 +39,36 @@ pub struct ShareHeader {
     /// Compressed pubkey identifying the miner
     pub miner_pubkey: PublicKey,
     /// Share block transactions merkle root
-    pub merkle_root: TxMerkleNode,
+    pub merkle_root: Option<TxMerkleNode>,
     /// Bitcoin header the share is found for
     pub bitcoin_header: Header,
+    /// Share chain difficult as compact target
+    pub bits: CompactTarget,
+    /// Timestamp for the share, as set by the miner
+    pub time: u32,
 }
 
 impl ShareHeader {
+    /// Build a ShareHeader from a commitment and a bitcoin header
+    /// which contains a coinbase matching the commitment.
+    ///
+    /// We do not validate the commitment is actually present in the
+    /// bitcoin header. That happens at the receiving node.
+    pub(crate) fn from_commitment_and_header(
+        commitment: ShareCommitment,
+        bitcoin_header: Header,
+    ) -> Self {
+        Self {
+            prev_share_blockhash: commitment.prev_share_blockhash,
+            uncles: commitment.uncles,
+            miner_pubkey: commitment.miner_pubkey,
+            merkle_root: commitment.merkle_root,
+            bitcoin_header,
+            bits: commitment.bits,
+            time: commitment.time,
+        }
+    }
+
     /// Block hash for the share header
     pub fn block_hash(&self) -> BlockHash {
         let mut serialized = Vec::new();
@@ -66,6 +91,26 @@ impl ShareHeader {
             Ok(msg) => Ok(msg),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Generate a commitment hash serialized as CBOR bytes
+    ///
+    /// Serialize all fields in ShareHeader apart from bitcoin_header
+    /// and return a sha256d of the serialized bytes
+    pub fn commitment_hash(&self) -> Result<bitcoin::hashes::sha256d::Hash, Box<dyn Error>> {
+        let mut serialized = Vec::new();
+        ciborium::ser::into_writer(
+            &(
+                &self.prev_share_blockhash,
+                &self.uncles,
+                &self.miner_pubkey,
+                &self.merkle_root,
+                &self.bits,
+                self.time,
+            ),
+            &mut serialized,
+        )?;
+        Ok(bitcoin::hashes::sha256d::Hash::hash(&serialized))
     }
 }
 
@@ -115,8 +160,10 @@ impl ShareBlock {
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: vec![],
             miner_pubkey: public_key,
-            merkle_root: TxMerkleNode::all_zeros(),
+            merkle_root: None,
             bitcoin_header: block.header,
+            time: 1700000000u32,
+            bits: CompactTarget::from_consensus(0x207fffff),
         };
         Self {
             header,
@@ -142,19 +189,20 @@ impl ShareBlock {
         let coinbase = transactions::coinbase::create_coinbase_transaction(&miner_pubkey, network);
         let mut all_transactions = vec![coinbase];
         all_transactions.extend(transactions);
-        let merkle_root = match bitcoin::merkle_tree::calculate_root(
+        let merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
             all_transactions.iter().map(Transaction::compute_txid),
-        ) {
-            Some(root) => root.into(),
-            None => return Err("Failed to calculate merkle root for share block".into()),
-        };
+        )
+        .unwrap()
+        .into();
 
         let header = ShareHeader {
             prev_share_blockhash,
             uncles: uncles.to_vec(),
             miner_pubkey,
             bitcoin_header: bitcoin_block_header,
-            merkle_root,
+            merkle_root: Some(merkle_root),
+            time: 1700000000u32,
+            bits: CompactTarget::from_consensus(0x207fffff),
         };
         Ok(Self {
             header,
@@ -196,10 +244,10 @@ impl ShareBlock {
         )
         .unwrap()
         .into();
-        let block_hex = hex::decode(genesis_data.bitcoin_block_hex).unwrap();
+        let header_hex = hex::decode(genesis_data.bitcoin_header_hex).unwrap();
         // panic here, as if the genesis block is bad, we bail at the start of the process
-        let block: Block = match bitcoin::consensus::deserialize(&block_hex) {
-            Ok(b) => b,
+        let header: Header = match bitcoin::consensus::deserialize(&header_hex) {
+            Ok(header) => header,
             Err(e) => {
                 println!("Failed to deserialize genesis block: {e}");
                 panic!("Invalid genesis block data");
@@ -209,8 +257,10 @@ impl ShareBlock {
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: vec![],
             miner_pubkey: public_key,
-            bitcoin_header: block.header,
-            merkle_root,
+            bitcoin_header: header,
+            merkle_root: Some(merkle_root),
+            time: 1700000000u32,
+            bits: CompactTarget::from_consensus(0x207fffff),
         };
         Self {
             header,
@@ -431,7 +481,7 @@ mod tests {
         assert!(share_block.transactions[0].is_coinbase());
 
         // Verify merkle root is correctly calculated
-        let expected_merkle_root = bitcoin::merkle_tree::calculate_root(
+        let expected_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
             share_block
                 .transactions
                 .iter()
@@ -439,6 +489,82 @@ mod tests {
         )
         .unwrap()
         .into();
-        assert_eq!(share_block.header.merkle_root, expected_merkle_root);
+        assert_eq!(share_block.header.merkle_root, Some(expected_merkle_root));
+    }
+
+    #[test]
+    fn test_commitment_hash() {
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4".to_string(),
+            )
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .diff(1)
+            .build();
+
+        let hash = share.header.commitment_hash().unwrap();
+        assert_eq!(hash.to_string().len(), 64); // SHA256d hash is 64 hex chars
+    }
+
+    #[test]
+    fn test_commitment_hash_excludes_bitcoin_header() {
+        let bitcoin_header = TestShareBlockBuilder::new()
+            .diff(2)
+            .build()
+            .header
+            .bitcoin_header;
+
+        let prev_hash =
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4".to_string();
+        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202";
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(prev_hash.clone())
+            .miner_pubkey(pubkey)
+            .diff(1)
+            .build();
+
+        let mut share2 = share1.clone();
+        share2.header.bitcoin_header = bitcoin_header;
+
+        let hash1 = share1.header.commitment_hash().unwrap();
+        let hash2 = share2.header.commitment_hash().unwrap();
+
+        assert_eq!(
+            hash1, hash2,
+            "Commitment hash should be the same even with different bitcoin headers"
+        );
+    }
+
+    #[test]
+    fn test_from_commitment_and_header() {
+        let bitcoin_header = TestShareBlockBuilder::new().build().header.bitcoin_header;
+        let commitment = ShareCommitment {
+            prev_share_blockhash: BlockHash::from_str(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
+            )
+            .unwrap(),
+            uncles: vec![],
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse::<PublicKey>()
+                .unwrap(),
+            merkle_root: None,
+            bits: CompactTarget::from_consensus(0x207fffff),
+            time: 1700000000,
+        };
+
+        let cloned = commitment.clone();
+        let header = ShareHeader::from_commitment_and_header(commitment, bitcoin_header);
+
+        assert_eq!(header.prev_share_blockhash, cloned.prev_share_blockhash);
+        assert_eq!(header.uncles, cloned.uncles);
+        assert_eq!(header.miner_pubkey, cloned.miner_pubkey);
+        assert_eq!(header.merkle_root, cloned.merkle_root);
+        assert_eq!(header.bitcoin_header, bitcoin_header);
+        assert_eq!(header.bits, cloned.bits);
+        assert_eq!(header.time, cloned.time);
+
+        let hashed = cloned.hash();
+        assert_ne!(hashed, bitcoin::hashes::sha256::Hash::all_zeros());
     }
 }

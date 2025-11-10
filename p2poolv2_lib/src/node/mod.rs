@@ -87,7 +87,6 @@ struct Node {
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     swarm_rx: mpsc::Receiver<SwarmSend<ResponseChannel<Message>>>,
     store: std::sync::Arc<ChainStore>,
-    config: Config,
     service: BoxService<
         RequestContext<ResponseChannel<Message>, SystemTimeProvider>,
         (),
@@ -193,7 +192,6 @@ impl Node {
             swarm_tx,
             swarm_rx,
             store,
-            config: config.clone(),
             service,
         })
     }
@@ -511,11 +509,11 @@ mod tests {
             },
 
             stratum: StratumConfig::new_for_test_default(),
-            miner: MinerConfig {
+            miner: Some(MinerConfig {
                 pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                     .parse()
                     .unwrap(),
-            },
+            }),
             logging: LoggingConfig {
                 level: "info".to_string(),
                 file: Some("./p2pool.log".to_string()),

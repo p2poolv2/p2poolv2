@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::OutputPair;
+use crate::shares::share_commitment::ShareCommitment;
 use crate::stratum::session::{EXTRANONCE1_SIZE, EXTRANONCE2_SIZE};
 use crate::stratum::work::error::WorkError;
 use bitcoin::absolute::LockTime;
@@ -30,8 +31,6 @@ use std::str::FromStr;
 #[allow(dead_code)]
 const EXTRANONCE_SEPARATOR: [u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE] =
     [1u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE];
-
-const POOL_SIGNATURE: [u8; 8] = *b"P2Poolv2";
 
 // Parse Address from a string provided by the miner
 #[allow(dead_code)]
@@ -107,12 +106,14 @@ fn append_default_witness_commitment(
 /// 04 eba96d2d - enonce1 from tv_nsec ??
 /// 0c - 12, the length of the two nonces put together
 #[allow(dead_code)]
-pub fn build_coinbase_transaction(
+pub(crate) fn build_coinbase_transaction(
     version: Version,
     output_data: &[OutputPair],
     height: i64,
     aux_flags: PushBytesBuf,
     default_witness_commitment: Option<String>,
+    pool_signature: &[u8],
+    share_commitment: Option<ShareCommitment>,
 ) -> Result<Transaction, WorkError> {
     if output_data.is_empty() {
         return Err(WorkError {
@@ -122,15 +123,22 @@ pub fn build_coinbase_transaction(
     // Use timestamp for providing randomness to distribute search space along with enonce1 that will be used by the miners.
     let (secs, nsecs) = get_current_timestamp_bytes();
 
-    let coinbase_script = Builder::new()
-        .push_int(height)
+    let mut signature_buf = PushBytesBuf::with_capacity(pool_signature.len());
+    signature_buf.extend_from_slice(pool_signature).unwrap();
+
+    let mut coinbase_builder = Builder::new().push_int(height);
+    if let Some(commitment) = share_commitment {
+        let hash = commitment.hash();
+        coinbase_builder = coinbase_builder.push_slice(hash.as_byte_array());
+    };
+    let coinbase_script = coinbase_builder
         // ckpool pushes just bytes. The spec recommends using PUSH opcodes, so we do that.
         // resuling in us geting 0x0100 instead of ck's 0x00 for flags in the serialized script.
         .push_slice(aux_flags)
         .push_slice(secs.to_le_bytes())
         .push_slice(nsecs.to_le_bytes())
         .push_slice(EXTRANONCE_SEPARATOR)
-        .push_slice(POOL_SIGNATURE)
+        .push_slice(signature_buf)
         .into_script();
 
     let mut outputs = build_outputs(output_data);
@@ -180,10 +188,10 @@ pub fn split_coinbase(coinbase: &Transaction) -> Result<(String, String), WorkEr
 
 #[cfg(test)]
 mod tests {
-    use bitcoin::hex::DisplayHex;
+    use bitcoin::{CompactTarget, hex::DisplayHex};
 
     use super::*;
-    use crate::stratum::work::block_template::BlockTemplate;
+    use crate::{stratum::work::block_template::BlockTemplate, test_utils::genesis_for_tests};
     use std::fs;
 
     #[test]
@@ -243,6 +251,8 @@ mod tests {
             height,
             PushBytesBuf::from(&[0u8]),
             None,
+            &[],
+            None,
         )
         .unwrap();
 
@@ -294,6 +304,8 @@ mod tests {
             }],
             height,
             PushBytesBuf::from(&[0u8]),
+            None,
+            &[],
             None,
         )
         .unwrap();
@@ -356,6 +368,8 @@ mod tests {
             template.height as i64,
             PushBytesBuf::from(&[0u8]),
             template.default_witness_commitment.clone(),
+            b"P2Poolv2",
+            None,
         )
         .unwrap();
 
@@ -400,7 +414,120 @@ mod tests {
         assert_eq!(script_bytes[28], 8u8); // Pool signature length
         assert_eq!(
             &script_bytes[29..37],
-            POOL_SIGNATURE, // Check the pool signature
+            b"P2Poolv2", // Check the pool signature
+        );
+    }
+
+    #[test]
+    fn test_building_coinbase_with_share_commitment_should_include_the_commitment() {
+        // Load GBT and expected notify JSON
+        let gbt_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/test_data/gbt/regtest/ckpool/four-txns/gbt.json");
+        let data = fs::read_to_string(gbt_path).expect("Unable to read file");
+        let template: BlockTemplate = serde_json::from_str(&data).expect("Invalid JSON");
+
+        let notify_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/test_data/gbt/regtest/ckpool/four-txns/notify.json");
+        let data = fs::read_to_string(notify_path).expect("Unable to read file");
+        let _notify: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
+
+        // Address used in ckpool regtest conf
+        let address = parse_address(
+            "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr",
+            bitcoin::Network::Regtest,
+        )
+        .unwrap();
+
+        let donation_address = parse_address(
+            "bcrt1qlk935ze2fsu86zjp395uvtegztrkaezawxx0wf",
+            bitcoin::Network::Regtest,
+        )
+        .unwrap();
+
+        let genesis = genesis_for_tests();
+
+        let share_commitment = ShareCommitment {
+            prev_share_blockhash: genesis.block_hash(),
+            uncles: vec![],
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap(),
+            merkle_root: template.get_merkle_root_without_coinbase(),
+            bits: CompactTarget::from_consensus(0x207fffff),
+            time: 1700000000u32,
+        };
+
+        let share_commitment_cloned = share_commitment.clone();
+
+        let coinbase = build_coinbase_transaction(
+            Version(1), // ckpool uses version 1
+            &[
+                OutputPair {
+                    address: address.clone(),
+                    amount: Amount::from_str("49 BTC").unwrap(),
+                },
+                OutputPair {
+                    address: donation_address.clone(),
+                    amount: Amount::from_str("1 BTC").unwrap(), // ckpool uses 2% donation address. We replicate that for test.
+                },
+            ],
+            template.height as i64,
+            PushBytesBuf::from(&[0u8]),
+            template.default_witness_commitment.clone(),
+            b"P2Poolv2",
+            Some(share_commitment),
+        )
+        .unwrap();
+
+        assert_eq!(coinbase.version, Version(1));
+        assert_eq!(coinbase.lock_time, LockTime::ZERO);
+        assert_eq!(coinbase.input.len(), 1);
+        let input = &coinbase.input[0];
+        assert_eq!(
+            input.previous_output.txid,
+            sha256d::Hash::all_zeros().into()
+        );
+        assert_eq!(input.previous_output.vout, u32::MAX);
+        assert_eq!(input.sequence, Sequence::MAX);
+        assert_eq!(input.witness.len(), 0); // No witness data in this test
+        assert_eq!(coinbase.output.len(), 3);
+        let output1 = &coinbase.output[0];
+        let output2 = &coinbase.output[1];
+        let output3 = &coinbase.output[2];
+
+        assert_eq!(output1.value, Amount::from_str("49 BTC").unwrap());
+        assert_eq!(output1.script_pubkey, address.script_pubkey());
+
+        assert_eq!(output2.value, Amount::from_str("1 BTC").unwrap());
+        assert_eq!(output2.script_pubkey, donation_address.script_pubkey());
+
+        assert_eq!(output3.value, Amount::ZERO);
+        assert_eq!(
+            Some(output3.script_pubkey.to_hex_string()),
+            template.default_witness_commitment
+        );
+
+        // Check the coinbase input script to make sure we got the expected string
+        assert_eq!(coinbase.input[0].script_sig.len(), 70);
+        let script_bytes = coinbase.input[0].script_sig.as_bytes();
+        assert_eq!(script_bytes[0], 2);
+        assert_eq!(script_bytes[1..3].as_hex().to_string(), "fa01"); // Height 506 in little-endian
+        assert_eq!(
+            script_bytes[4..36].as_hex().to_string(),
+            share_commitment_cloned
+                .hash()
+                .as_byte_array()
+                .to_lower_hex_string()
+        ); // Share commitment
+        assert_eq!(script_bytes[36..38].as_hex().to_string(), "0100"); // Flags (empty in this case)
+        assert_eq!(script_bytes[38..39].as_hex().to_string(), "04"); // Timestamp length
+        assert_eq!(script_bytes[43..44].as_hex().to_string(), "04"); // Nanosecond timestamp length, don't check value as it changes with time
+        assert_eq!(script_bytes[48..49].as_hex().to_string(), "0c"); // extranonce length, don't check value as it changes with time
+        assert_eq!(script_bytes[49..61], EXTRANONCE_SEPARATOR); // Extranonce separator
+        assert_eq!(script_bytes[61], 8u8); // Pool signature length
+        assert_eq!(
+            &script_bytes[62..70],
+            b"P2Poolv2", // Check the pool signature
         );
     }
 }

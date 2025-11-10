@@ -18,9 +18,34 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 2,
+  "id": 3,
   "links": [],
   "panels": [
+    {
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 10,
+      "options": {
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "[Pool Stats](/d/ad4559x/pool) | [Users and Workers](/d/adnhx6x/users-and-workers) | [Hydrapool Github](https://github.com/256-Foundation/Hydra-Pool)\n\n",
+        "mode": "markdown"
+      },
+      "pluginVersion": "12.2.0",
+      "title": "Links",
+      "type": "text"
+    },
     {
       "datasource": {
         "type": "prometheus",
@@ -84,10 +109,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 14,
+        "h": 7,
         "w": 24,
         "x": 0,
-        "y": 0
+        "y": 2
       },
       "id": 1,
       "options": {
@@ -200,7 +225,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 14
+        "y": 9
       },
       "id": 6,
       "options": {
@@ -208,7 +233,7 @@
           "calcs": [],
           "displayMode": "list",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "tooltip": {
           "hideZeros": false,
@@ -225,7 +250,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "count without(worker) (sum_over_time(rate(worker_shares_valid_total[5m])[5m:]) > 0)",
+          "expr": "count((sum by (btcaddress) (rate(worker_shares_valid_total[5m])) > 0))",
           "instant": false,
           "legendFormat": "Users",
           "range": true,
@@ -300,7 +325,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 14
+        "y": 9
       },
       "id": 7,
       "options": {
@@ -308,7 +333,7 @@
           "calcs": [],
           "displayMode": "list",
           "placement": "bottom",
-          "showLegend": true
+          "showLegend": false
         },
         "tooltip": {
           "hideZeros": false,
@@ -321,7 +346,7 @@
         {
           "editorMode": "code",
           "exemplar": false,
-          "expr": "count without(user) (sum_over_time(rate(worker_shares_valid_total[5m])[5m:]) > 0)",
+          "expr": "count((sum by (btcaddress, workername) (rate(worker_shares_valid_total[5m])) > 0))",
           "instant": false,
           "legendFormat": "Workers",
           "range": true,
@@ -330,6 +355,73 @@
       ],
       "title": "Workers",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 6,
+        "x": 0,
+        "y": 17
+      },
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "12.2.0",
+      "targets": [
+        {
+          "editorMode": "builder",
+          "exemplar": false,
+          "expr": "time() - start_time_seconds",
+          "instant": true,
+          "legendFormat": "Uptime",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Uptime",
+      "type": "stat"
     },
     {
       "datasource": {
@@ -362,10 +454,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 6,
+        "h": 10,
         "w": 6,
-        "x": 0,
-        "y": 22
+        "x": 6,
+        "y": 17
       },
       "id": 4,
       "options": {
@@ -406,64 +498,61 @@
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
           },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
           },
-          "unit": "s"
+          "mappings": []
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 6,
-        "y": 22
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 17
       },
-      "id": 5,
+      "id": 9,
       "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "percentChangeColorMode": "standard",
+        "displayLabels": [],
+        "legend": {
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true,
+          "values": [
+            "percent"
+          ]
+        },
+        "pieType": "donut",
         "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
+          "calcs": [],
           "fields": "",
           "values": false
         },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
+        "sort": "desc",
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
       },
       "pluginVersion": "12.2.0",
       "targets": [
         {
-          "editorMode": "builder",
-          "exemplar": false,
-          "expr": "time() - start_time_seconds",
-          "instant": true,
-          "legendFormat": "Uptime",
-          "range": false,
+          "editorMode": "code",
+          "expr": "sum by (btcshort) (\n  label_replace(\n    worker_shares_valid_total,\n    \"btcshort\", \"$1...$2\", \"btcaddress\", \"^(....).*(........)$\"\n  )\n)\n",
+          "legendFormat": "__auto",
+          "range": true,
           "refId": "A"
         }
       ],
-      "title": "Uptime",
-      "type": "stat"
+      "title": "Hashrate Distribution",
+      "type": "piechart"
     },
     {
       "datasource": {
@@ -528,9 +617,9 @@
       },
       "gridPos": {
         "h": 6,
-        "w": 12,
-        "x": 12,
-        "y": 22
+        "w": 24,
+        "x": 0,
+        "y": 27
       },
       "id": 8,
       "options": {
@@ -580,5 +669,5 @@
   "timezone": "browser",
   "title": "Pool",
   "uid": "ad4559x",
-  "version": 23
+  "version": 5
 }

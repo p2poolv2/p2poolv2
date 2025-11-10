@@ -15,14 +15,14 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::simple_pplns::SimplePplnsShare;
-use crate::accounting::stats::metrics;
 use crate::stratum::difficulty_adjuster::DifficultyAdjusterTrait;
-use crate::stratum::emission::{Emission, EmissionSender};
+use crate::stratum::emission::Emission;
 use crate::stratum::error::Error;
 use crate::stratum::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
+use crate::stratum::server::StratumContext;
 use crate::stratum::session::Session;
 use crate::stratum::work::difficulty::validate::validate_submission_difficulty;
-use crate::stratum::work::tracker::{JobId, TrackerHandle};
+use crate::stratum::work::tracker::JobId;
 use bitcoin::blockdata::block::Block;
 use bitcoin::hashes::Hash;
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
@@ -45,13 +45,10 @@ use tracing::{debug, error, info};
 /// {"id": 1, "method": "mining.submit", "params": ["username", "4f", "fe36a31b", "504e86ed", "e9695791", "1fffe000"]}
 ///
 /// Handling version mask, we check mask is valid and then apply it to the block header
-pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
+pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     message: SimpleRequest<'a>,
     session: &mut Session<D>,
-    tracker_handle: TrackerHandle,
-    bitcoinrpc_config: BitcoinRpcConfig,
-    shares_tx: EmissionSender,
-    metrics: metrics::MetricsHandle,
+    stratum_context: StratumContext,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.submit message");
     if message.params.len() < 4 {
@@ -63,7 +60,7 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     let job_id =
         u64::from_str_radix(id, 16).map_err(|_| Error::InvalidParams("Invalid job_id".into()))?;
 
-    let job = match tracker_handle.get_job(JobId(job_id)).await {
+    let job = match stratum_context.tracker_handle.get_job(JobId(job_id)).await {
         Ok(Some(job)) => job,
         _ => {
             debug!("Job not found for job_id: {}", job_id);
@@ -78,21 +75,33 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     let version_mask = session.version_mask;
 
     // Validate the difficulty of the submitted share
-    let block =
-        match validate_submission_difficulty(&job, &message, &session.enonce1_hex, version_mask) {
-            Ok(block) => block,
-            Err(e) => {
-                info!("Share validation failed: {}", e);
-                let _ = metrics.record_share_rejected().await;
-                return Ok(vec![Message::Response(Response::new_ok(
-                    message.id,
-                    json!(false),
-                ))]);
-            }
-        };
+    let validation_result = match validate_submission_difficulty(
+        &job,
+        &message,
+        &session.enonce1_hex,
+        version_mask,
+        session.difficulty_adjuster.get_current_difficulty(),
+        stratum_context.network,
+    ) {
+        Ok(result) => result,
+        Err(e) => {
+            debug!("Share validation failed: {}", e);
+            // return error to asic client if our server is failing to run validation. They will know something is wrong.
+            return Ok(vec![Message::Response(Response::new_ok(
+                message.id,
+                json!(false),
+            ))]);
+        }
+    };
 
-    // Submit block asap, do difficulty adjustment after submission
-    submit_block(&block, bitcoinrpc_config).await;
+    if validation_result.meets_bitcoin_difficulty {
+        // Submit block asap, do difficulty adjustment after submission
+        submit_block(&validation_result.block, stratum_context.bitcoinrpc_config).await;
+    }
+
+    // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet
+    let truediff = get_true_difficulty(&validation_result.block.block_hash());
+    debug!("True difficulty: {}", truediff);
 
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -109,22 +118,28 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         message.params[4].as_ref().unwrap().to_string(),
     );
 
-    // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet
-    let block_hash = block.block_hash();
-    let truediff = get_true_difficulty(&block_hash);
-    debug!("True difficulty: {}", truediff);
-
-    shares_tx
+    stratum_context
+        .shares_tx
         .send(Emission {
             pplns: stratum_share.clone(),
-            block,
+            block: validation_result.block,
         })
         .await
         .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;
 
     session.last_share_time = Some(SystemTime::now());
 
-    let _ = metrics.record_share_accepted(stratum_share).await;
+    let meets_session_difficulty =
+        truediff >= session.difficulty_adjuster.get_current_difficulty() as u128;
+
+    if meets_session_difficulty {
+        let _ = stratum_context
+            .metrics
+            .record_share_accepted(stratum_share, truediff as u64)
+            .await;
+    } else {
+        let _ = stratum_context.metrics.record_share_rejected().await;
+    }
 
     let (new_difficulty, _is_first_share) = session.difficulty_adjuster.record_share_submission(
         truediff,
@@ -133,15 +148,18 @@ pub async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         SystemTime::now(),
     );
 
+    let mut response = vec![Message::Response(Response::new_ok(
+        message.id,
+        json!(meets_session_difficulty),
+    ))];
     match new_difficulty {
-        Some(difficulty) => Ok(vec![
-            Message::Response(Response::new_ok(message.id, json!(true))),
-            Message::SetDifficulty(SetDifficultyNotification::new(difficulty)),
-        ]),
-        None => Ok(vec![Message::Response(Response::new_ok(
-            message.id,
-            json!(true),
-        ))]),
+        Some(difficulty) => {
+            response.push(Message::SetDifficulty(SetDifficultyNotification::new(
+                difficulty,
+            )));
+            Ok(response)
+        }
+        None => Ok(response),
     }
 }
 
@@ -181,6 +199,10 @@ fn get_true_difficulty(hash: &bitcoin::BlockHash) -> u128 {
 #[cfg(test)]
 mod handle_submit_tests {
     use super::*;
+    use crate::accounting::stats::metrics;
+    use crate::shares::chain::chain_store::ChainStore;
+    use crate::shares::share_block::ShareBlock;
+    use crate::store::Store;
     use crate::stratum::difficulty_adjuster::{DifficultyAdjuster, MockDifficultyAdjusterTrait};
     use crate::stratum::messages::Id;
     use crate::stratum::messages::SetDifficultyNotification;
@@ -190,6 +212,7 @@ mod handle_submit_tests {
     use bitcoin::BlockHash;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use std::sync::Arc;
+    use tempfile::tempdir;
     use tokio::sync::mpsc;
 
     #[test]
@@ -237,16 +260,27 @@ mod handle_submit_tests {
             .await
             .unwrap();
 
-        let message = handle_submit(
-            submit,
-            &mut session,
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
+        let temp_dir = tempdir().unwrap();
+        let store = Arc::new(ChainStore::new(
+            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
+            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
+            bitcoin::network::Network::Signet,
+        ));
+        let ctx = StratumContext {
+            notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            start_difficulty: 10000,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
             shares_tx,
-            metrics_handle.clone(),
-        )
-        .await
-        .unwrap();
+            network: bitcoin::network::Network::Signet,
+            metrics: metrics_handle.clone(),
+            store,
+        };
+
+        let message = handle_submit(submit, &mut session, ctx).await.unwrap();
 
         let response = match &message[..] {
             [Message::Response(response)] => response,
@@ -261,7 +295,7 @@ mod handle_submit_tests {
         let share = shares_rx.try_recv().unwrap();
         assert_eq!(share.pplns.btcaddress, Some(session.btcaddress.unwrap()));
 
-        // Verify that the block was not submitted to the mock server
+        // Verify that the block is submitted to the mock server
         mock_server.verify().await;
 
         assert_eq!(metrics_handle.get_metrics().await.accepted_total, 1);
@@ -303,16 +337,27 @@ mod handle_submit_tests {
             .await
             .unwrap();
 
-        let response = handle_submit(
-            submit,
-            &mut session,
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
+        let temp_dir = tempdir().unwrap();
+        let store = Arc::new(ChainStore::new(
+            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
+            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
+            bitcoin::network::Network::Signet,
+        ));
+        let ctx = StratumContext {
+            notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            start_difficulty: 10000,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
             shares_tx,
-            metrics_handle.clone(),
-        )
-        .await
-        .unwrap();
+            network: bitcoin::network::Network::Signet,
+            metrics: metrics_handle.clone(),
+            store,
+        };
+
+        let response = handle_submit(submit, &mut session, ctx).await.unwrap();
 
         let response = match &response[..] {
             [Message::Response(response)] => response,
@@ -324,7 +369,7 @@ mod handle_submit_tests {
         // The response should indicate that the share met required difficulty
         assert_eq!(response.result, Some(json!(true)));
 
-        // Verify that the block was not submitted to the mock server
+        // Verify that the block is submitted to the mock server
         mock_server.verify().await;
 
         let stratum_share = shares_rx.recv().await.unwrap();
@@ -373,16 +418,27 @@ mod handle_submit_tests {
             .await
             .unwrap();
 
-        let response = handle_submit(
-            submit,
-            &mut session,
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
+        let temp_dir = tempdir().unwrap();
+        let store = Arc::new(ChainStore::new(
+            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
+            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
+            bitcoin::network::Network::Signet,
+        ));
+        let ctx = StratumContext {
+            notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            start_difficulty: 10000,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
             shares_tx,
-            metrics_handle.clone(),
-        )
-        .await
-        .unwrap();
+            network: bitcoin::network::Network::Signet,
+            metrics: metrics_handle.clone(),
+            store,
+        };
+
+        let response = handle_submit(submit, &mut session, ctx).await.unwrap();
 
         let response = match &response[..] {
             [Message::Response(response)] => response,
@@ -394,7 +450,7 @@ mod handle_submit_tests {
         // The response should indicate that the share met required difficulty
         assert_eq!(response.result, Some(json!(true)));
 
-        // Verify that the block was not submitted to the mock server
+        // Verify that the block is submitted to the mock server
         mock_server.verify().await;
 
         assert_eq!(metrics_handle.get_metrics().await.accepted_total, 1);
@@ -448,16 +504,28 @@ mod handle_submit_tests {
             .await
             .unwrap();
 
-        let message = handle_submit(
-            submit,
-            &mut session,
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
+
+        let temp_dir = tempdir().unwrap();
+        let store = Arc::new(ChainStore::new(
+            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
+            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
+            bitcoin::network::Network::Signet,
+        ));
+        let ctx = StratumContext {
+            notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            start_difficulty: 10000,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
             shares_tx,
-            metrics_handle.clone(),
-        )
-        .await
-        .unwrap();
+            network: bitcoin::network::Network::Signet,
+            metrics: metrics_handle.clone(),
+            store,
+        };
+
+        let message = handle_submit(submit, &mut session, ctx).await.unwrap();
 
         match &message[..] {
             [
@@ -501,16 +569,27 @@ mod handle_submit_tests {
             .await
             .unwrap();
 
-        let message = handle_submit(
-            submit,
-            &mut session,
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
+        let temp_dir = tempdir().unwrap();
+        let store = Arc::new(ChainStore::new(
+            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
+            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
+            bitcoin::network::Network::Signet,
+        ));
+        let ctx = StratumContext {
+            notify_tx,
             tracker_handle,
             bitcoinrpc_config,
+            start_difficulty: 10000,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
             shares_tx,
-            metrics_handle,
-        )
-        .await
-        .unwrap();
+            network: bitcoin::network::Network::Signet,
+            metrics: metrics_handle.clone(),
+            store,
+        };
+
+        let message = handle_submit(submit, &mut session, ctx).await.unwrap();
 
         let response = match &message[..] {
             [Message::Response(response)] => response,
@@ -519,5 +598,84 @@ mod handle_submit_tests {
 
         // Should return result false for unknown job_id
         assert_eq!(response.result, Some(json!(false)));
+    }
+
+    #[tokio::test]
+    async fn test_handle_submit_with_less_difficulty_than_session_even_if_we_meet_bitcoin_diff_should_increment_rejected()
+     {
+        let mut session = Session::<DifficultyAdjuster>::new(10_000, 10_000, None, 0x1fffe000);
+        let tracker_handle = start_tracker_actor();
+
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        mock_submit_block_with_any_body(&mock_server).await;
+
+        let (template, notify, submit, authorize_response) =
+            load_valid_stratum_work_components("../tests/test_data/validation/stratum/b/");
+
+        let enonce1 = authorize_response.result.unwrap()[1].clone();
+        let enonce1: &str = enonce1.as_str().unwrap();
+        session.enonce1 =
+            u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
+        session.enonce1_hex = enonce1.to_string();
+        session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
+        session.user_id = Some(1);
+
+        let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
+
+        let _ = tracker_handle
+            .insert_job(
+                Arc::new(template),
+                notify.params.coinbase1.to_string(),
+                notify.params.coinbase2.to_string(),
+                job_id,
+            )
+            .await;
+
+        let (shares_tx, mut shares_rx) = mpsc::channel(10);
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
+        let temp_dir = tempdir().unwrap();
+        let store = Arc::new(ChainStore::new(
+            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
+            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
+            bitcoin::network::Network::Signet,
+        ));
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle,
+            bitcoinrpc_config,
+            start_difficulty: 10000,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
+            shares_tx,
+            network: bitcoin::network::Network::Signet,
+            metrics: metrics_handle.clone(),
+            store,
+        };
+
+        let message = handle_submit(submit, &mut session, ctx).await.unwrap();
+
+        let response = match &message[..] {
+            [Message::Response(response)] => response,
+            _ => panic!("Expected a Response message"),
+        };
+
+        assert_eq!(response.id, Some(Id::Number(4)));
+
+        // The response should indicate that the share met required difficulty
+        assert_eq!(response.result, Some(json!(false)));
+
+        let share = shares_rx.try_recv().unwrap();
+        assert_eq!(share.pplns.btcaddress, Some(session.btcaddress.unwrap()));
+
+        // Verify that the block is submitted to the mock server
+        mock_server.verify().await;
+
+        assert_eq!(metrics_handle.get_metrics().await.accepted_total, 0);
+        assert_eq!(metrics_handle.get_metrics().await.rejected_total, 1);
     }
 }

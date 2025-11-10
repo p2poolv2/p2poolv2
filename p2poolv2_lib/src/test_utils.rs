@@ -24,7 +24,6 @@ use crate::stratum::messages::Response;
 #[cfg(test)]
 use crate::stratum::messages::SimpleRequest;
 use crate::stratum::work::block_template::BlockTemplate;
-use bitcoin::CompactTarget;
 #[cfg(test)]
 use bitcoin::PublicKey;
 #[cfg(test)]
@@ -32,7 +31,9 @@ use bitcoin::Transaction;
 #[cfg(test)]
 use bitcoin::block::{BlockHash, Header};
 use bitcoin::hashes::Hash;
+use bitcoin::{CompactTarget, TxMerkleNode};
 use rand;
+use std::collections::HashSet;
 use std::str::FromStr;
 
 pub fn genesis_for_tests() -> ShareBlock {
@@ -109,11 +110,13 @@ pub fn load_valid_stratum_work_components(
 
 #[cfg(test)]
 pub fn build_block_from_work_components(path: &str) -> ShareBlock {
+    use bitcoin::TxMerkleNode;
+
     let (template, _notify, submit, _authorize) = load_valid_stratum_work_components(path);
 
     let coinbase = test_coinbase_transaction();
 
-    let share_merkle_root =
+    let share_merkle_root: TxMerkleNode =
         bitcoin::merkle_tree::calculate_root([coinbase.clone()].iter().map(|tx| tx.compute_txid()))
             .unwrap()
             .into();
@@ -149,8 +152,10 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
             "020202020202020202020202020202020202020202020202020202020202020202",
         )
         .unwrap(),
-        merkle_root: share_merkle_root,
+        merkle_root: Some(share_merkle_root),
         bitcoin_header,
+        time: 1700000000u32,
+        bits: CompactTarget::from_consensus(0x207fffff),
     };
 
     ShareBlock {
@@ -298,8 +303,10 @@ fn test_share_block(
         prev_share_blockhash: BlockHash::from_str(prev_share_blockhash).unwrap(),
         uncles,
         miner_pubkey: PublicKey::from_str(miner_pubkey).unwrap(),
-        merkle_root: share_merkle_root,
+        merkle_root: Some(share_merkle_root),
         bitcoin_header,
+        time: 1700000000u32,
+        bits: CompactTarget::from_consensus(0x207fffff),
     };
 
     ShareBlock {
@@ -372,7 +379,7 @@ impl TestShareHeaderBuilder {
                 .into()
         };
 
-        let share_merkle_root = bitcoin::merkle_tree::calculate_root(
+        let share_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
             self.transactions.iter().map(|tx| tx.compute_txid()),
         )
         .unwrap()
@@ -382,7 +389,7 @@ impl TestShareHeaderBuilder {
             prev_share_blockhash: self.prev_share_blockhash.unwrap_or(BlockHash::all_zeros()),
             uncles: self.uncles,
             miner_pubkey: self.miner_pubkey.unwrap_or(default_pubkey),
-            merkle_root: share_merkle_root,
+            merkle_root: Some(share_merkle_root),
             bitcoin_header: Header {
                 version: bitcoin::block::Version::TWO,
                 prev_blockhash: BlockHash::all_zeros(),
@@ -391,6 +398,8 @@ impl TestShareHeaderBuilder {
                 bits: CompactTarget::from_consensus(0x207fffff),
                 nonce: 0,
             },
+            time: 1700000000u32,
+            bits: CompactTarget::from_consensus(0x207fffff),
         }
     }
 }

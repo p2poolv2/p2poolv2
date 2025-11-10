@@ -22,6 +22,9 @@ use bitcoindrpc::BitcoinRpcConfig;
 use serde::Deserialize;
 use std::marker::PhantomData;
 
+/// Max length for pool signature P2Poolv2 + 8 more bytes for users to add
+const MAX_POOL_SIGNATURE_LENGTH: usize = 16;
+
 /// Marker type for raw (unparsed) StratumConfig state
 #[derive(Debug, Clone, Default)]
 pub struct Raw;
@@ -65,6 +68,8 @@ pub struct StratumConfig<State = Raw> {
     pub version_mask: i32,
     /// The difficulty multiplier for dynamic difficulty adjustment
     pub difficulty_multiplier: f64,
+    /// Optional pool signature to include in coinbase
+    pub pool_signature: Option<String>,
 
     // Parsed addresses - only available when State = Parsed
     #[serde(skip)]
@@ -82,6 +87,12 @@ pub struct StratumConfig<State = Raw> {
 impl StratumConfig<Raw> {
     /// Parse and validate addresses, converting from Raw to Parsed state
     pub fn parse(self) -> Result<StratumConfig<Parsed>, WorkError> {
+        if self.pool_signature.clone().unwrap_or("".to_string()).len() > MAX_POOL_SIGNATURE_LENGTH {
+            return Err(WorkError {
+                message: format!("Pool signature length is limited to {MAX_POOL_SIGNATURE_LENGTH}"),
+            });
+        }
+
         let bootstrap_address_parsed = parse_address(&self.bootstrap_address, self.network)?;
 
         let donation_address_parsed = self
@@ -112,6 +123,7 @@ impl StratumConfig<Raw> {
             network: self.network,
             version_mask: self.version_mask,
             difficulty_multiplier: self.difficulty_multiplier,
+            pool_signature: self.pool_signature,
             bootstrap_address_parsed: Some(bootstrap_address_parsed),
             donation_address_parsed,
             fee_address_parsed,
@@ -160,6 +172,7 @@ impl StratumConfig<Raw> {
             network: bitcoin::Network::Signet,
             version_mask: 0x1fffe000,
             difficulty_multiplier: 1.0,
+            pool_signature: None,
             bootstrap_address_parsed: None,
             donation_address_parsed: None,
             fee_address_parsed: None,
@@ -248,6 +261,10 @@ fn default_pplns_ttl_days() -> u64 {
     7
 }
 
+/// Configuration for local miner on P2Pool node
+///
+/// This is optional in Config to support standalone pools that don't
+/// connect to p2poolv2.
 #[derive(Debug, Deserialize, Clone)]
 pub struct MinerConfig {
     pub pubkey: PublicKey,
@@ -285,6 +302,11 @@ pub struct ApiConfig {
     pub auth_token: Option<String>,
 }
 
+/// Config for p2poolv2 nodes
+///
+/// The network and miner configs switch to defaults if not
+/// provided. This is the case for standalone PPPLNS pools like
+/// Hydrapool.
 #[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
 pub struct Config {
@@ -292,7 +314,7 @@ pub struct Config {
     pub network: NetworkConfig,
     pub store: StoreConfig,
     pub stratum: StratumConfig,
-    pub miner: MinerConfig,
+    pub miner: Option<MinerConfig>,
     pub bitcoinrpc: BitcoinRpcConfig,
     pub logging: LoggingConfig,
     pub api: ApiConfig,
@@ -404,7 +426,9 @@ impl Config {
     }
 
     pub fn with_miner_pubkey(mut self, miner_pubkey: String) -> Self {
-        self.miner.pubkey = miner_pubkey.parse().unwrap();
+        self.miner = Some(MinerConfig {
+            pubkey: miner_pubkey.parse::<PublicKey>().unwrap(),
+        });
         self
     }
 
@@ -458,6 +482,7 @@ impl Config {
 mod tests {
     use super::*;
     use temp_env::with_var;
+    use tokio_test::assert_err;
 
     #[test]
     fn test_config_builder() {
@@ -523,7 +548,7 @@ mod tests {
         );
 
         assert_eq!(
-            config.miner.pubkey.to_string(),
+            config.miner.unwrap().pubkey.to_string(),
             "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
         );
         assert_eq!(config.bitcoinrpc.url, "http://localhost:8332");
@@ -578,5 +603,36 @@ mod tests {
     fn test_default_network_config() {
         let config = NetworkConfig::default();
         assert!(config.listen_address.is_empty());
+    }
+
+    #[test]
+    fn test_pool_signature_option() {
+        // Test with None
+        let config = StratumConfig::<Raw>::new_for_test_default();
+        assert_eq!(config.pool_signature, None);
+
+        // Test parsing preserves pool_signature
+        let parsed = config.parse().unwrap();
+        assert_eq!(parsed.pool_signature, None);
+
+        // Test with Some value
+        let mut config_with_sig = StratumConfig::<Raw>::new_for_test_default();
+        config_with_sig.pool_signature = Some("MyPool/1.0".to_string());
+        assert_eq!(
+            config_with_sig.pool_signature,
+            Some("MyPool/1.0".to_string())
+        );
+
+        // Test parsing preserves Some value
+        let parsed_with_sig = config_with_sig.parse().unwrap();
+        assert_eq!(
+            parsed_with_sig.pool_signature,
+            Some("MyPool/1.0".to_string())
+        );
+
+        // Test sig length limit
+        let mut config_with_sig = StratumConfig::<Raw>::new_for_test_default();
+        config_with_sig.pool_signature = Some("MyPool/1.0 and some more bytes....".to_string());
+        assert_err!(config_with_sig.parse());
     }
 }

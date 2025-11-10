@@ -33,6 +33,11 @@ version_mask = "1fffe000"
 # The difficulty multiplier defines the window size for calculating payout proportions
 # See https://github.com/p2poolv2/p2poolv2/wiki/Difficult-Multiplier on how to choose this
 difficulty_multiplier = 1.0
+# Add a pool signature, if you want. Comment out the line if you want
+# to mine anonymous blocks. This signature is only used to show others
+# how large your pool is, if you are running private, there is no need
+# to add a pool signature. Maximum length 16 bytes.
+pool_signature = "P2Poolv2"
 
 [miner]
 pubkey = "020202020202020202020202020202020202020202020202020202020202020202"

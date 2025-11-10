@@ -27,7 +27,7 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
       - ../prometheus/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./prometheus/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ../prometheus/grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "3000:3000"
     environment:
@@ -36,6 +36,7 @@ services:
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/pool.json
     restart: unless-stopped
     logging:
       driver: "json-file"

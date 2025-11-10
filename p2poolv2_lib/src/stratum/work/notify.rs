@@ -27,9 +27,11 @@ use crate::config::StratumConfig;
 use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::share_commitment::{ShareCommitment, build_share_commitment};
 use crate::stratum::messages::{Notify, NotifyParams};
 use crate::stratum::util::reverse_four_byte_chunks;
 use crate::stratum::util::to_be_hex;
+use bitcoin::PublicKey;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::Version;
 use std::net::SocketAddr;
@@ -73,7 +75,7 @@ async fn build_output_distribution(
     let total_difficulty = required_target.difficulty_float() * config.difficulty_multiplier;
 
     match payout
-        .get_output_distribution(store, total_difficulty, total_amount, config)
+        .get_output_distribution(&store, total_difficulty, total_amount, config)
         .await
     {
         Ok(distribution) => distribution,
@@ -91,6 +93,8 @@ pub fn build_notify(
     output_distribution: Vec<OutputPair>,
     job_id: JobId,
     clean_jobs: bool,
+    pool_signature: &[u8],
+    share_commitment: Option<ShareCommitment>,
 ) -> Result<Notify, WorkError> {
     let coinbase = build_coinbase_transaction(
         Version::TWO,
@@ -98,6 +102,8 @@ pub fn build_notify(
         template.height as i64,
         parse_flags(template.coinbaseaux.get("flags").cloned()),
         template.default_witness_commitment.clone(),
+        pool_signature,
+        share_commitment,
     )?;
 
     let (coinbase1, coinbase2) = split_coinbase(&coinbase)?;
@@ -127,6 +133,53 @@ pub fn build_notify(
     Ok(Notify::new_notify(params))
 }
 
+/// Helper function to build notify, build share commitment and insert
+/// job into tracker. We need to do all this for SendToAll and
+/// SendToClient. So we DRY it here.
+///
+/// Returns the serialized notify string on success.
+async fn build_notify_and_commitment(
+    template: &Arc<BlockTemplate>,
+    clean_jobs: bool,
+    chain_store: &Arc<ChainStore>,
+    config: &StratumConfig<crate::config::Parsed>,
+    miner_pubkey: Option<PublicKey>,
+    pool_signature: &[u8],
+    tracker_handle: &TrackerHandle,
+) -> Result<String, WorkError> {
+    let job_id = tracker_handle.get_next_job_id().await.unwrap();
+    let output_distribution = build_output_distribution(template, chain_store, config).await;
+
+    let share_commitment =
+        build_share_commitment(chain_store, template, miner_pubkey).map_err(|_| WorkError {
+            message: "Failed to build share commitment".to_string(),
+        })?;
+
+    let notify = build_notify(
+        template,
+        output_distribution,
+        job_id,
+        clean_jobs,
+        pool_signature,
+        share_commitment,
+    )?;
+
+    let serialized_notify =
+        serde_json::to_string(&notify).expect("Failed to serialize Notify message");
+
+    tracker_handle
+        .insert_job(
+            Arc::clone(template),
+            notify.params.coinbase1.to_string(),
+            notify.params.coinbase2.to_string(),
+            job_id,
+        )
+        .await
+        .unwrap();
+
+    Ok(serialized_notify)
+}
+
 /// NotifyCmd is used to send notify to all clients or a single client.
 pub enum NotifyCmd {
     SendToAll {
@@ -149,38 +202,38 @@ pub async fn start_notify(
     chain_store: Arc<ChainStore>,
     tracker_handle: TrackerHandle,
     config: &StratumConfig<crate::config::Parsed>,
+    miner_pubkey: Option<PublicKey>,
 ) {
     let mut latest_template: Option<Arc<BlockTemplate>> = None;
+    let pool_signature = match config.pool_signature {
+        Some(ref sig) => sig.as_bytes(),
+        None => &[],
+    };
     while let Some(cmd) = notifier_rx.recv().await {
         match cmd {
             NotifyCmd::SendToAll { template } => {
                 let clean_jobs = latest_template.is_none()
                     || latest_template.unwrap().previousblockhash != template.previousblockhash;
                 latest_template = Some(Arc::clone(&template));
-                let job_id = tracker_handle.get_next_job_id().await.unwrap();
-                let output_distribution =
-                    build_output_distribution(&template, &chain_store, config).await;
-                let notify_str =
-                    match build_notify(&template, output_distribution, job_id, clean_jobs) {
-                        Ok(notify) => {
-                            let serialized_notify = serde_json::to_string(&notify)
-                                .expect("Failed to serialize Notify message");
-                            tracker_handle
-                                .insert_job(
-                                    Arc::clone(&template),
-                                    notify.params.coinbase1.to_string(),
-                                    notify.params.coinbase2.to_string(),
-                                    job_id,
-                                )
-                                .await
-                                .unwrap();
-                            serialized_notify
-                        }
-                        Err(e) => {
-                            debug!("Error building notify: {}", e);
-                            continue; // Skip this iteration if notify cannot be built
-                        }
-                    };
+
+                let notify_str = match build_notify_and_commitment(
+                    &template,
+                    clean_jobs,
+                    &chain_store,
+                    config,
+                    miner_pubkey,
+                    pool_signature,
+                    &tracker_handle,
+                )
+                .await
+                {
+                    Ok(serialized) => serialized,
+                    Err(e) => {
+                        tracing::error!("Failed to build notify: {}. Skipping.", e);
+                        continue;
+                    }
+                };
+
                 connections.send_to_all(Arc::new(notify_str.clone())).await;
                 if chain_store.add_job(notify_str).is_err() {
                     tracing::warn!("Couldn't save job when sending to all");
@@ -195,40 +248,28 @@ pub async fn start_notify(
                         "No latest template available to send to client: {}",
                         client_address
                     );
-                    continue; // Skip if no latest template is available
+                    continue;
                 }
-                let job_id = tracker_handle.get_next_job_id().await.unwrap();
-                let output_distribution = build_output_distribution(
-                    latest_template.as_ref().unwrap(),
+
+                let template = latest_template.as_ref().unwrap();
+                let notify_str = match build_notify_and_commitment(
+                    template,
+                    clean_jobs,
                     &chain_store,
                     config,
+                    miner_pubkey,
+                    pool_signature,
+                    &tracker_handle,
                 )
-                .await;
-                let notify_str = match build_notify(
-                    latest_template.as_ref().unwrap(),
-                    output_distribution,
-                    job_id,
-                    clean_jobs,
-                ) {
-                    Ok(notify) => {
-                        let serialized_notify = serde_json::to_string(&notify)
-                            .expect("Failed to serialize Notify message");
-                        tracker_handle
-                            .insert_job(
-                                Arc::clone(latest_template.as_ref().unwrap()),
-                                notify.params.coinbase1.to_string(),
-                                notify.params.coinbase2.to_string(),
-                                job_id,
-                            )
-                            .await
-                            .unwrap();
-                        serialized_notify
-                    }
+                .await
+                {
+                    Ok(serialized) => serialized,
                     Err(e) => {
-                        debug!("Error building notify: {}", e);
-                        continue; // Skip this iteration if notify cannot be built
+                        tracing::error!("Failed to build notify: {}. Skipping.", e);
+                        continue;
                     }
                 };
+
                 connections
                     .send_to_client(client_address, Arc::new(notify_str.clone()))
                     .await;
@@ -248,6 +289,7 @@ mod tests {
     use crate::stratum::messages::{Response, SimpleRequest};
     use crate::stratum::session::Session;
     use crate::stratum::work::tracker::start_tracker_actor;
+    use crate::test_utils::genesis_for_tests;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use std::fs;
     use std::time::SystemTime;
@@ -300,7 +342,7 @@ mod tests {
         let output_distribution =
             build_output_distribution(&template, &Arc::new(store), &stratum_config).await;
         // Build Notify
-        let notify = build_notify(&template, output_distribution, job_id, false)
+        let notify = build_notify(&template, output_distribution, job_id, false, &[], None)
             .expect("Failed to build notify");
 
         // Compare all fields except job_id (random) coinbase which also have current time component
@@ -384,7 +426,20 @@ mod tests {
 
         store.expect_add_job().returning(|_| Ok(()));
 
+        store
+            .expect_get_current_target()
+            .returning(|| Ok(503543726));
+
+        let genesis = genesis_for_tests().block_hash();
+        store
+            .expect_get_chain_tip_and_uncles()
+            .returning(move || (genesis, std::collections::HashSet::new()));
+
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+        let miner_pubkey: PublicKey =
+            "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap();
 
         let task_handle = tokio::spawn(async move {
             start_notify(
@@ -393,6 +448,7 @@ mod tests {
                 Arc::new(store),
                 work_map_handle,
                 &stratum_config,
+                Some(miner_pubkey),
             )
             .await;
         });
@@ -504,7 +560,14 @@ mod tests {
         let output_distribution =
             build_output_distribution(&template, &Arc::new(store), &stratum_config).await;
 
-        let result = build_notify(&template, output_distribution, JobId(job_id), false);
+        let result = build_notify(
+            &template,
+            output_distribution,
+            JobId(job_id),
+            false,
+            &[],
+            None,
+        );
 
         assert_eq!(result.unwrap().params.prevhash, notify.params.prevhash);
     }

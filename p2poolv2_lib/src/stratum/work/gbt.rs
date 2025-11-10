@@ -83,12 +83,12 @@ async fn get_block_template(
             match serde_json::from_str::<BlockTemplate>(blocktemplate_json.as_str()) {
                 Ok(template) => Ok(template),
                 Err(e) => Err(Box::new(WorkError {
-                    message: format!("Failed to parse block template: {e}"),
+                    message: e.to_string(),
                 })),
             }
         }
         Err(e) => Err(Box::new(WorkError {
-            message: format!("Failed to get block template: {e}"),
+            message: e.to_string(),
         })),
     }
 }
@@ -108,12 +108,11 @@ async fn print_start_network_diff(bitcoin_config: &BitcoinRpcConfig) {
 
 /// Start a task to fetch block templates from bitcoind
 ///
-/// Listen to blocknotify signal from bitcoind.
+/// Listen to zmqpubhashblock from bitcoind.
 /// Otherwise, poll for new block templates every poll_interval seconds.
 pub async fn start_gbt(
     bitcoin_config: BitcoinRpcConfig,
     result_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
-    socket_path: &str,
     poll_interval: u64,
     network: bitcoin::Network,
     mut zmq_trigger_rx: tokio::sync::mpsc::Receiver<()>,
@@ -141,29 +140,6 @@ pub async fn start_gbt(
         info!("Failed to send block template to channel");
     }
 
-    // Remove the socket file if it exists to avoid "address already in use" error
-    if std::path::Path::new(socket_path).exists() {
-        debug!("Removing existing socket file at {}", socket_path);
-        if let Err(e) = std::fs::remove_file(socket_path) {
-            return Err(Box::new(WorkError {
-                message: format!("Failed to remove existing socket file: {e}"),
-            }));
-        }
-    }
-
-    // Setup Unix socket to receive updates from blocknotify_receiver
-    let listener = match tokio::net::UnixListener::bind(socket_path) {
-        Ok(listener) => {
-            info!("Listening for blocknotify signals on {}", socket_path);
-            listener
-        }
-        Err(_) => {
-            return Err(Box::new(WorkError {
-                message: format!("Failed to bind Unix socket at {socket_path}"),
-            }));
-        }
-    };
-
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(poll_interval));
 
@@ -178,26 +154,6 @@ pub async fn start_gbt(
                         }
                         Err(e) => {
                             info!("Error polling block template: {}", e);
-                        }
-                    }
-                }
-                result = listener.accept() => {
-                    match result {
-                        Ok(_) => {
-                            debug!("Received blocknotify signal");
-                            match get_block_template(&bitcoin_config, network).await {
-                                Ok(template) => {
-                                    if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
-                                        info!("Failed to send block template to channel");
-                                    }
-                                }
-                                Err(e) => {
-                                    info!("Error getting block template after notification: {}", e);
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            info!("Error accepting Unix socket connection: {}", e);
                         }
                     }
                 }
@@ -400,73 +356,7 @@ mod gbt_server_tests {
     use tokio::sync::mpsc;
 
     #[tokio::test]
-    async fn test_start_gbt_trigger_from_socket_event() {
-        let binding = tempfile::tempdir().unwrap();
-        let binding = binding.path().join("notify.sock");
-        let socket_path = binding.to_str().unwrap();
-
-        // Mock bitcoind RPC
-        let template = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/gbt/signet/gbt-no-transactions.json"),
-        )
-        .expect("Failed to read test fixture");
-
-        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
-        let params = serde_json::json!([{
-            "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
-            "rules": ["segwit", "signet"],
-        }]);
-        mock_method(&mock_server, "getblocktemplate", params, template).await;
-        mock_method(
-            &mock_server,
-            "getdifficulty",
-            serde_json::json!([]),
-            "1".into(),
-        )
-        .await;
-
-        let (_zmq_trigger_tx, zmq_trigger_rx) = mpsc::channel(1);
-
-        // Setup channel for receiving templates
-        let (template_tx, mut template_rx) = mpsc::channel(10);
-
-        // Start GBT server
-        let result = start_gbt(
-            bitcoinrpc_config,
-            template_tx,
-            socket_path,
-            60,
-            bitcoin::Network::Signet,
-            zmq_trigger_rx,
-        )
-        .await;
-
-        assert!(result.is_ok());
-
-        // Send a blocknotify signal
-        let _ = tokio::net::UnixStream::connect(socket_path).await;
-
-        // We should receive a template
-        let timeout =
-            tokio::time::timeout(std::time::Duration::from_secs(1), template_rx.recv()).await;
-
-        assert!(timeout.is_ok());
-        let cmd = timeout.unwrap().unwrap();
-        match cmd {
-            NotifyCmd::SendToAll { template } => {
-                assert_eq!(template.height, 108);
-            }
-            _ => panic!("Expected NotifyCmd::SendToAll"),
-        }
-    }
-
-    #[tokio::test]
     async fn test_start_gbt_trigger_from_timeout() {
-        let binding = tempfile::tempdir().unwrap();
-        let binding = binding.path().join("notify.sock");
-        let socket_path = binding.to_str().unwrap();
-
         // Mock bitcoind RPC
         let template = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -497,7 +387,6 @@ mod gbt_server_tests {
         let result = start_gbt(
             bitcoinrpc_config,
             template_tx,
-            socket_path,
             1,
             bitcoin::Network::Signet,
             zmq_trigger_rx,
@@ -522,10 +411,6 @@ mod gbt_server_tests {
 
     #[tokio::test]
     async fn test_start_gbt_trigger_from_zmq_event() {
-        let binding = tempfile::tempdir().unwrap();
-        let binding = binding.path().join("notify.sock");
-        let socket_path = binding.to_str().unwrap();
-
         // Mock bitcoind RPC
         let template = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -556,7 +441,6 @@ mod gbt_server_tests {
         let result = start_gbt(
             bitcoinrpc_config,
             template_tx,
-            socket_path,
             60,
             bitcoin::Network::Signet,
             zmq_trigger_rx,

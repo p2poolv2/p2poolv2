@@ -87,6 +87,7 @@ pub enum MetricsMessage {
         btcaddress: String,
         workername: String,
         difficulty: u64,
+        truediff: u64,
         response: oneshot::Sender<()>,
     },
     RecordShareRejected {
@@ -151,9 +152,10 @@ impl MetricsActor {
                 btcaddress,
                 workername,
                 difficulty,
+                truediff,
                 response,
             } => {
-                self.record_share_accepted(btcaddress, workername, difficulty);
+                self.record_share_accepted(btcaddress, workername, difficulty, truediff);
                 let _ = response.send(());
             }
             MetricsMessage::RecordShareRejected { response } => {
@@ -194,17 +196,23 @@ impl MetricsActor {
     }
 
     /// Update metrics from accepted share
-    fn record_share_accepted(&mut self, btcaddress: String, workername: String, difficulty: u64) {
+    fn record_share_accepted(
+        &mut self,
+        btcaddress: String,
+        workername: String,
+        difficulty: u64,
+        truediff: u64,
+    ) {
         let current_unix_timestamp = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
         self.metrics.accepted_total += difficulty;
         self.metrics.lastupdate = Some(current_unix_timestamp);
-        self.metrics.best_share = self.metrics.best_share.max(difficulty);
-        self.metrics.best_share_ever = self.metrics.best_share_ever.max(difficulty);
+        self.metrics.best_share = self.metrics.best_share.max(truediff);
+        self.metrics.best_share_ever = self.metrics.best_share_ever.max(truediff);
         if let Some(user) = self.metrics.users.get_mut(&btcaddress) {
-            user.record_share(&workername, difficulty, current_unix_timestamp);
+            user.record_share(&workername, difficulty, truediff, current_unix_timestamp);
         }
     }
 
@@ -218,7 +226,7 @@ impl MetricsActor {
         self.metrics
             .users
             .entry(btcaddress)
-            .or_insert_with(User::default)
+            .or_default()
             .workers
             .insert(workername, Worker::default());
     }
@@ -265,6 +273,7 @@ impl MetricsHandle {
     pub async fn record_share_accepted(
         &self,
         share: SimplePplnsShare,
+        truediff: u64,
     ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.sender
@@ -272,6 +281,7 @@ impl MetricsHandle {
                 btcaddress: share.btcaddress.unwrap_or_default(),
                 workername: share.workername.unwrap_or_default(),
                 difficulty: share.difficulty,
+                truediff,
                 response: response_tx,
             })
             .await
@@ -415,52 +425,61 @@ mod tests {
             .await
             .unwrap();
         let _ = handle
-            .record_share_accepted(SimplePplnsShare {
-                user_id: 1,
-                difficulty: 100,
-                btcaddress: Some("user1".to_string()),
-                workername: Some("worker1".to_string()),
-                n_time: 1000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            })
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 100,
+                    btcaddress: Some("user1".to_string()),
+                    workername: Some("worker1".to_string()),
+                    n_time: 1000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                110,
+            )
             .await;
 
         let metrics = handle.get_metrics().await;
         assert!(metrics.lastupdate.is_some());
-        assert_eq!(metrics.best_share, 100);
+        assert_eq!(metrics.best_share, 110);
 
         // Test that highest difficulty is updated correctly
         let _ = handle
-            .record_share_accepted(SimplePplnsShare {
-                user_id: 1,
-                difficulty: 50,
-                btcaddress: Some("user1".to_string()),
-                workername: Some("worker1".to_string()),
-                n_time: 1000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            })
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 50,
+                    btcaddress: Some("user1".to_string()),
+                    workername: Some("worker1".to_string()),
+                    n_time: 1000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                55,
+            )
             .await;
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.best_share, 100);
+        assert_eq!(metrics.best_share, 110);
 
         let _ = handle
-            .record_share_accepted(SimplePplnsShare {
-                user_id: 1,
-                difficulty: 200,
-                btcaddress: Some("user1".to_string()),
-                workername: Some("worker1".to_string()),
-                n_time: 1000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            })
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 200,
+                    btcaddress: Some("user1".to_string()),
+                    workername: Some("worker1".to_string()),
+                    n_time: 1000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                220,
+            )
             .await;
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.best_share, 200);
+        assert_eq!(metrics.best_share, 220);
     }
 
     #[tokio::test]
@@ -486,28 +505,34 @@ mod tests {
             .await;
 
         let _ = handle
-            .record_share_accepted(SimplePplnsShare {
-                user_id: 1,
-                difficulty: 1000,
-                btcaddress: Some("user1".to_string()),
-                workername: Some("worker1".to_string()),
-                n_time: 1000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            })
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 1000,
+                    btcaddress: Some("user1".to_string()),
+                    workername: Some("worker1".to_string()),
+                    n_time: 1000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                1100,
+            )
             .await;
         let _ = handle
-            .record_share_accepted(SimplePplnsShare {
-                user_id: 1,
-                difficulty: 2000,
-                btcaddress: Some("user1".to_string()),
-                workername: Some("worker1".to_string()),
-                n_time: 1000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            })
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 2000,
+                    btcaddress: Some("user1".to_string()),
+                    workername: Some("worker1".to_string()),
+                    n_time: 1000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                2200,
+            )
             .await;
         let _ = handle.record_share_rejected().await;
 
@@ -525,7 +550,7 @@ mod tests {
 
         let metrics = handle.get_metrics().await;
         // After commit, the metrics should be reset
-        assert_eq!(metrics.best_share, 2000);
+        assert_eq!(metrics.best_share, 2200);
     }
 
     #[test_log::test(tokio::test)]
@@ -536,16 +561,19 @@ mod tests {
             .unwrap();
 
         let _ = handle
-            .record_share_accepted(SimplePplnsShare {
-                user_id: 1,
-                difficulty: 123,
-                btcaddress: Some("user1".to_string()),
-                workername: Some("worker1".to_string()),
-                n_time: 1000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            })
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 123,
+                    btcaddress: Some("user1".to_string()),
+                    workername: Some("worker1".to_string()),
+                    n_time: 1000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                134,
+            )
             .await;
         let _ = handle.record_share_rejected().await;
         let _ = handle
@@ -588,16 +616,19 @@ mod tests {
             .await;
 
         let _ = handle
-            .record_share_accepted(SimplePplnsShare {
-                user_id: 1,
-                difficulty: 77,
-                btcaddress: Some(btcaddress.clone()),
-                workername: Some(workername.clone()),
-                n_time: 3000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            })
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 77,
+                    btcaddress: Some(btcaddress.clone()),
+                    workername: Some(workername.clone()),
+                    n_time: 3000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                84,
+            )
             .await;
 
         let metrics = handle.get_metrics().await;
@@ -607,7 +638,7 @@ mod tests {
         assert!(worker.active);
         // Check that user stats are updated
         assert_eq!(user.shares_valid_total, 77);
-        assert_eq!(user.best_share, 77);
+        assert_eq!(user.best_share, 84);
         assert!(user.last_share_at > 0);
     }
 
@@ -629,53 +660,62 @@ mod tests {
             .await;
 
         let _ = handle
-            .record_share_accepted(SimplePplnsShare {
-                user_id: 1,
-                difficulty: 10,
-                btcaddress: Some("userA".to_string()),
-                workername: Some("workerA1".to_string()),
-                n_time: 4000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            })
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 10,
+                    btcaddress: Some("userA".to_string()),
+                    workername: Some("workerA1".to_string()),
+                    n_time: 4000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                11,
+            )
             .await;
         let _ = handle
-            .record_share_accepted(SimplePplnsShare {
-                user_id: 1,
-                difficulty: 20,
-                btcaddress: Some("userA".to_string()),
-                workername: Some("workerA2".to_string()),
-                n_time: 5000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            })
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 20,
+                    btcaddress: Some("userA".to_string()),
+                    workername: Some("workerA2".to_string()),
+                    n_time: 5000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                22,
+            )
             .await;
         let _ = handle
-            .record_share_accepted(SimplePplnsShare {
-                user_id: 1,
-                difficulty: 30,
-                btcaddress: Some("userB".to_string()),
-                workername: Some("workerB1".to_string()),
-                n_time: 6000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            })
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 30,
+                    btcaddress: Some("userB".to_string()),
+                    workername: Some("workerB1".to_string()),
+                    n_time: 6000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                33,
+            )
             .await;
 
         let metrics = handle.get_metrics().await;
 
         let user_a = metrics.users.get("userA").unwrap();
         assert_eq!(user_a.shares_valid_total, 30);
-        assert_eq!(user_a.best_share, 20);
+        assert_eq!(user_a.best_share, 22);
         assert!(user_a.workers.contains_key("workerA1"));
         assert!(user_a.workers.contains_key("workerA2"));
 
         let user_b = metrics.users.get("userB").unwrap();
         assert_eq!(user_b.shares_valid_total, 30);
-        assert_eq!(user_b.best_share, 30);
+        assert_eq!(user_b.best_share, 33);
         assert!(user_b.workers.contains_key("workerB1"));
     }
 }
