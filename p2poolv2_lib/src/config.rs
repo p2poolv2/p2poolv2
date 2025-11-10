@@ -65,12 +65,6 @@ pub struct StratumConfig<State = Raw> {
     pub version_mask: i32,
     /// The difficulty multiplier for dynamic difficulty adjustment
     pub difficulty_multiplier: f64,
-    /// Timeout for receiving the first share from a client after connection
-    pub first_share_timeout: u64,
-    /// Timeout for client inactivity after submitting a share
-    pub inactivity_timeout: u64,
-    /// Interval for checking session timeouts
-    pub monitor_interval: u64,
 
     // Parsed addresses - only available when State = Parsed
     #[serde(skip)]
@@ -118,9 +112,6 @@ impl StratumConfig<Raw> {
             network: self.network,
             version_mask: self.version_mask,
             difficulty_multiplier: self.difficulty_multiplier,
-            first_share_timeout: self.first_share_timeout,
-            inactivity_timeout: self.inactivity_timeout,
-            monitor_interval: self.monitor_interval,
             bootstrap_address_parsed: Some(bootstrap_address_parsed),
             donation_address_parsed,
             fee_address_parsed,
@@ -169,9 +160,6 @@ impl StratumConfig<Raw> {
             network: bitcoin::Network::Signet,
             version_mask: 0x1fffe000,
             difficulty_multiplier: 1.0,
-            first_share_timeout: 900,
-            inactivity_timeout: 900,
-            monitor_interval: 10,
             bootstrap_address_parsed: None,
             donation_address_parsed: None,
             fee_address_parsed: None,

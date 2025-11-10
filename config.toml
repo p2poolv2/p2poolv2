@@ -44,17 +44,6 @@ version_mask = "1fffe000"
 # The difficulty multiplier defines the window size for calculating payout proportions
 # See https://github.com/p2poolv2/p2poolv2/wiki/Difficult-Multiplier on how to choose this
 difficulty_multiplier = 1.0
-# Timout for client when connected but not authorized and subscribed (seconds)
-# The client is disconnected if authorization and subscription takes longer
-# Default: 900 seconds (15 minutes)
-first_share_timeout = 900
-# Client inactivity timeout in seconds
-# Drop connections of clients who haven't submitted shares within this period
-# Default: 900 seconds (15 minutes)
-inactivity_timeout = 900
-# Interval for monitoring the initialization and inactivity timeouts
-# Default: 10 seconds
-monitor_interval = 10
 
 [miner]
 pubkey = "020202020202020202020202020202020202020202020202020202020202020202"

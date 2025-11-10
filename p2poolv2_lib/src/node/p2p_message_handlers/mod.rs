@@ -126,7 +126,7 @@ mod tests {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let peer_id = libp2p::PeerId::random();
-        let mut time_provider = TestTimeProvider(SystemTime::now());
+        let mut time_provider = TestTimeProvider::new(SystemTime::now());
 
         let _pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
             .parse::<bitcoin::PublicKey>()
@@ -173,7 +173,7 @@ mod tests {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let mut store = ChainStore::default();
-        let time_provider = TestTimeProvider(SystemTime::now());
+        let time_provider = TestTimeProvider::new(SystemTime::now());
 
         let share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
@@ -212,7 +212,7 @@ mod tests {
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
         let response_channel = 1u32;
         let mut store = ChainStore::default();
-        let time_provider = TestTimeProvider(SystemTime::now());
+        let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Mock the response headers
         let block1 = TestShareBlockBuilder::new().build();
@@ -256,7 +256,7 @@ mod tests {
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
         let (response_channel, _response_channel_rx) = oneshot::channel::<Message>();
         let mut store = ChainStore::default();
-        let time_provider = TestTimeProvider(SystemTime::now());
+        let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Create test blocks that will be returned
         let block1 = TestShareBlockBuilder::new().build();
@@ -301,7 +301,7 @@ mod tests {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let store = ChainStore::default();
-        let time_provider = TestTimeProvider(SystemTime::now());
+        let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Test BlockHashes inventory
         let block_hashes = vec![
@@ -334,7 +334,7 @@ mod tests {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let store = ChainStore::default();
-        let time_provider = TestTimeProvider(SystemTime::now());
+        let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Test TransactionHashes inventory
         let tx_hashes: Vec<bitcoin::Txid> = vec![
@@ -367,7 +367,7 @@ mod tests {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let store = ChainStore::default();
-        let time_provider = TestTimeProvider(SystemTime::now());
+        let time_provider = TestTimeProvider::new(SystemTime::now());
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -389,7 +389,7 @@ mod tests {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let store = ChainStore::default();
-        let time_provider = TestTimeProvider(SystemTime::now());
+        let time_provider = TestTimeProvider::new(SystemTime::now());
 
         let block_hash = "0000000000000000000000000000000000000000000000000000000000000001"
             .parse::<BlockHash>()
@@ -416,7 +416,7 @@ mod tests {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let store = ChainStore::default();
-        let time_provider = TestTimeProvider(SystemTime::now());
+        let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Test GetData message with txid
         let txid = "0000000000000000000000000000000000000000000000000000000000000001"
@@ -444,7 +444,7 @@ mod tests {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let store = ChainStore::default();
-        let time_provider = TestTimeProvider(SystemTime::now());
+        let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Create a test transaction
         let transaction = crate::test_utils::test_coinbase_transaction();
@@ -469,7 +469,7 @@ mod tests {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let mut store = ChainStore::default();
-        let time_provider = TestTimeProvider(SystemTime::now());
+        let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Create test share headers
         let block1 = TestShareBlockBuilder::new().build();

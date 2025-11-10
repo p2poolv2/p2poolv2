@@ -28,17 +28,16 @@ use crate::stratum::error::Error;
 use crate::stratum::message_handlers::handle_message;
 use crate::stratum::messages::Request;
 use crate::stratum::session::Session;
-use crate::stratum::session_timeout::{SessionTimeouts, check_session_timeouts};
+use crate::stratum::session_timeout::{self, check_session_timeouts};
 use crate::stratum::work::notify::NotifyCmd;
 use crate::stratum::work::tracker::TrackerHandle;
+use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoindrpc::BitcoinRpcConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
-use tokio::time;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, LinesCodec};
 use tracing::{debug, error, info};
@@ -74,8 +73,6 @@ pub struct StratumServerBuilder {
     shares_tx: Option<EmissionSender>,
     zmqpubhashblock: Option<String>,
     store: Option<Arc<ChainStore>>,
-    inactivity_timeout: Option<Duration>,
-    monitor_interval: Option<Duration>,
 }
 
 impl StratumServerBuilder {
@@ -136,16 +133,6 @@ impl StratumServerBuilder {
 
     pub fn store(mut self, store: Arc<ChainStore>) -> Self {
         self.store = Some(store);
-        self
-    }
-
-    pub fn inactivity_timeout(mut self, inactivity_timeout: Duration) -> Self {
-        self.inactivity_timeout = Some(inactivity_timeout);
-        self
-    }
-
-    pub fn monitor_interval(mut self, monitor_interval: Duration) -> Self {
-        self.monitor_interval = Some(monitor_interval);
         self
     }
 
@@ -235,7 +222,7 @@ impl StratumServer {
                             // Spawn a new task for each connection
                             tokio::spawn(async move {
                                 // Handle the connection with graceful shutdown support
-                                if handle_connection(buf_reader, writer, addr, message_rx, shutdown_rx, version_mask, ctx).await.is_err() {
+                                if handle_connection(buf_reader, writer, addr, message_rx, shutdown_rx, version_mask, ctx, &SystemTimeProvider{}).await.is_err() {
                                         error!("Error occurred while handling connection {addr}. Closing connection.");
                                 }
                             });
@@ -270,7 +257,7 @@ pub(crate) struct StratumContext {
 /// Handles a single connection to the Stratum server.
 /// This function reads lines from the connection, processes them,
 /// and sends responses back to the client.
-async fn handle_connection<R, W>(
+async fn handle_connection<R, W, T: TimeProvider>(
     reader: R,
     mut writer: W,
     addr: SocketAddr,
@@ -278,13 +265,12 @@ async fn handle_connection<R, W>(
     mut shutdown_rx: oneshot::Receiver<()>,
     version_mask: i32,
     ctx: StratumContext,
+    time_provider: &T,
 ) -> Result<(), Box<dyn std::error::Error + Send>>
 where
     R: AsyncBufReadExt + Unpin,
     W: AsyncWriteExt + Unpin,
 {
-    let timeouts = SessionTimeouts::new();
-
     // Create a LinesCodec with a maximum line length of 8KB
     // This prevents potential DoS attacks with extremely long lines
     const MAX_LINE_LENGTH: usize = 8 * 1024; // 8KB
@@ -297,8 +283,10 @@ where
         version_mask,
     );
 
-    let mut monitor = time::interval(timeouts.monitor_interval);
-    monitor.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+    let mut monitor = tokio::time::interval(tokio::time::Duration::from_secs(
+        session_timeout::MONITOR_INTERVAL,
+    ));
+    monitor.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     monitor.tick().await;
 
     // Process each line as it arrives
@@ -354,10 +342,10 @@ where
                 }
             }
             _ = monitor.tick() => {
-                match check_session_timeouts(session, &timeouts) {
+                match check_session_timeouts::<T>(session, time_provider) {
                     Ok(()) => {}
                     Err(Error::TimeoutError) => {
-                        info!("Disconnecting {addr}");
+                        info!("{addr} inactive, disconnecting...");
                         break;
                     }
                     Err(err) => {
@@ -442,10 +430,10 @@ mod stratum_server_tests {
     use crate::stratum::messages::SimpleRequest;
     use crate::stratum::server;
     use crate::stratum::work::tracker::start_tracker_actor;
+    use crate::utils::time_provider::TestTimeProvider;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::Arc;
-    use std::time::Duration;
     use tempfile::tempdir;
     use tokio::sync::mpsc;
 
@@ -570,6 +558,7 @@ mod stratum_server_tests {
             shutdown_rx,
             0x1fffe000,
             ctx,
+            &SystemTimeProvider {},
         )
         .await;
 
@@ -687,6 +676,7 @@ mod stratum_server_tests {
             shutdown_rx,
             0x1fffe000,
             ctx,
+            &SystemTimeProvider {},
         )
         .await;
 
@@ -758,6 +748,7 @@ mod stratum_server_tests {
             shutdown_rx,
             0x1fffe000,
             ctx,
+            &SystemTimeProvider {},
         )
         .await;
 
@@ -834,6 +825,7 @@ mod stratum_server_tests {
             shutdown_rx,
             0x1fffe000,
             ctx,
+            &SystemTimeProvider {},
         )
         .await;
 
@@ -933,6 +925,7 @@ mod stratum_server_tests {
                 shutdown_rx,
                 0x1fffe000,
                 ctx,
+                &SystemTimeProvider {},
             )
             .await;
 
@@ -1048,6 +1041,7 @@ mod stratum_server_tests {
                 shutdown_rx,
                 0x1fffe000,
                 ctx,
+                &SystemTimeProvider {},
             )
             .await;
 
@@ -1097,7 +1091,7 @@ mod stratum_server_tests {
     }
 
     #[test]
-    fn test_handle_connection_first_share_timeout() {
+    fn test_handle_connection_first_share_timeout_should_timeout() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1140,29 +1134,40 @@ mod stratum_server_tests {
                 store,
             };
 
-            let reader = BufReader::new(tokio::io::empty());
+            // wait for subscribe/authorize messages
+            let mut mock_reader = tokio_test::io::Builder::new()
+                .wait(tokio::time::Duration::from_secs(100_000))
+                .build();
+
+            let time_provider = TestTimeProvider::new(std::time::SystemTime::now());
+            let mut time_provider_cloned = time_provider.clone();
 
             let handle = tokio::spawn(async move {
+                let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
                 handle_connection(
-                    reader,
+                    buf_reader,
                     &mut writer,
                     addr,
                     message_rx,
                     shutdown_rx,
                     0x1fffe000,
                     ctx,
+                    &time_provider,
                 )
                 .await
             });
 
-            tokio::time::advance(Duration::from_secs(2)).await;
+            // set time queried for timeout
+            time_provider_cloned.set_since_epoch(time_provider_cloned.seconds_since_epoch() + 901);
+            // push forward tokio time for triggering tick
+            tokio::time::advance(tokio::time::Duration::from_secs(901)).await;
 
             let result = handle.await.unwrap();
             assert!(result.is_ok());
         });
     }
 
-    #[test]
+    #[test_log::test]
     fn test_handle_connection_inactivity_timeout() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1202,7 +1207,7 @@ mod stratum_server_tests {
                 minimum_difficulty: 1,
                 maximum_difficulty: Some(2),
                 shares_tx,
-                network: bitcoin::network::Network::Regtest,
+                network: bitcoin::network::Network::Signet,
                 store,
             };
 
@@ -1217,10 +1222,15 @@ mod stratum_server_tests {
             );
             let authorize_str = serde_json::to_string(&authorize_message).unwrap();
 
+            // Wait for a long while for new messages
             let mut mock_reader = tokio_test::io::Builder::new()
                 .read(format!("{subscribe_str}\n").as_bytes())
                 .read(format!("{authorize_str}\n").as_bytes())
+                .wait(tokio::time::Duration::from_secs(100_000))
                 .build();
+
+            let time_provider = TestTimeProvider::new(std::time::SystemTime::now());
+            let mut time_provider_cloned = time_provider.clone();
 
             let handle = tokio::spawn(async move {
                 let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
@@ -1232,11 +1242,15 @@ mod stratum_server_tests {
                     shutdown_rx,
                     0x1fffe000,
                     ctx,
+                    &time_provider,
                 )
                 .await
             });
 
-            tokio::time::advance(Duration::from_secs(2)).await;
+            // set time queried for timeout
+            time_provider_cloned.set_since_epoch(time_provider_cloned.seconds_since_epoch() + 901);
+            // push forward tokio time for triggering tick
+            tokio::time::advance(tokio::time::Duration::from_secs(901)).await;
 
             let result = handle.await.unwrap();
             assert!(result.is_ok());

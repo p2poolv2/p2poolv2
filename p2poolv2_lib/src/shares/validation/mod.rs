@@ -124,7 +124,7 @@ mod tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
-        let mut time_provider = TestTimeProvider(SystemTime::now());
+        let mut time_provider = TestTimeProvider::new(SystemTime::now());
         let share_timestamp = share.header.bitcoin_header.time as u64 - 120;
 
         time_provider
@@ -146,7 +146,7 @@ mod tests {
         let share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        let mut time_provider = TestTimeProvider(SystemTime::now());
+        let mut time_provider = TestTimeProvider::new(SystemTime::now());
         let future_time = share.header.bitcoin_header.time as u64 + 120;
         time_provider
             .set_time(bitcoin::absolute::Time::from_consensus(future_time as u32).unwrap());
@@ -163,7 +163,7 @@ mod tests {
         let share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        let mut time_provider = TestTimeProvider(SystemTime::now());
+        let mut time_provider = TestTimeProvider::new(SystemTime::now());
         time_provider.set_time(
             bitcoin::absolute::Time::from_consensus(share.header.bitcoin_header.time).unwrap(),
         );
@@ -350,7 +350,7 @@ mod tests {
             .expect_setup_share_for_chain()
             .returning(|share_block| share_block);
 
-        let mut time_provider = TestTimeProvider(SystemTime::now());
+        let mut time_provider = TestTimeProvider::new(SystemTime::now());
         time_provider.set_time(
             bitcoin::absolute::Time::from_consensus(share_block.header.bitcoin_header.time)
                 .unwrap(),
