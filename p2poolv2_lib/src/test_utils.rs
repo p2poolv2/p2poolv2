@@ -19,6 +19,7 @@ use crate::shares::share_block::{ShareBlock, ShareHeader};
 #[cfg(test)]
 use crate::shares::transactions::coinbase::create_coinbase_transaction;
 
+use crate::shares::share_commitment::ShareCommitment;
 use crate::stratum::messages::Notify;
 use crate::stratum::messages::Response;
 #[cfg(test)]
@@ -33,11 +34,27 @@ use bitcoin::block::{BlockHash, Header};
 use bitcoin::hashes::Hash;
 use bitcoin::{CompactTarget, TxMerkleNode};
 use rand;
-use std::collections::HashSet;
 use std::str::FromStr;
 
 pub fn genesis_for_tests() -> ShareBlock {
     TestShareBlockBuilder::new().build()
+}
+
+#[cfg(test)]
+pub fn create_test_commitment() -> ShareCommitment {
+    ShareCommitment {
+        prev_share_blockhash: BlockHash::from_str(
+            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
+        )
+        .unwrap(),
+        uncles: vec![],
+        miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+            .parse::<PublicKey>()
+            .unwrap(),
+        merkle_root: Some(TxMerkleNode::all_zeros()),
+        bits: CompactTarget::from_consensus(0x207fffff),
+        time: 1700000000,
+    }
 }
 
 #[cfg(test)]
