@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::shares::share_commitment::ShareCommitment;
 use bitcoin::Block;
 use tokio::sync::mpsc;
 
@@ -23,6 +24,7 @@ use tokio::sync::mpsc;
 pub struct Emission {
     pub pplns: SimplePplnsShare,
     pub block: Block,
+    pub share_commitment: Option<ShareCommitment>,
 }
 
 pub type EmissionSender = mpsc::Sender<Emission>;
