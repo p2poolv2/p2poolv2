@@ -175,7 +175,7 @@ async fn build_notify_and_commitment(
             Arc::clone(template),
             notify.params.coinbase1.to_string(),
             notify.params.coinbase2.to_string(),
-            None,
+            share_commitment.clone(),
             job_id,
         )
         .await
@@ -574,5 +574,98 @@ mod tests {
         );
 
         assert_eq!(result.unwrap().params.prevhash, notify.params.prevhash);
+    }
+
+    #[tokio::test]
+    async fn test_build_notify_and_commitment() {
+        // Load a sample block template
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json");
+        let data = fs::read_to_string(path).expect("Unable to read file");
+        let gbt_json: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
+        let template: BlockTemplate =
+            serde_json::from_value(gbt_json.clone()).expect("Failed to parse BlockTemplate");
+
+        // Setup mock chain store
+        let n_time = (SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - 60)
+            * 1_000_000;
+
+        let mut store = ChainStore::default();
+
+        let shares = vec![SimplePplnsShare {
+            user_id: 1,
+            difficulty: 100,
+            btcaddress: Some("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string()),
+            workername: Some("".to_string()),
+            n_time,
+            job_id: "test_job".to_string(),
+            extranonce2: "test_extra".to_string(),
+            nonce: "test_nonce".to_string(),
+        }];
+
+        store
+            .expect_get_pplns_shares_filtered()
+            .return_const(shares);
+
+        let genesis = genesis_for_tests().block_hash();
+        store
+            .expect_get_chain_tip_and_uncles()
+            .returning(move || (genesis, std::collections::HashSet::new()));
+
+        store
+            .expect_get_current_target()
+            .returning(|| Ok(503543726));
+
+        // Setup config and tracker
+        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+        let tracker_handle = start_tracker_actor();
+        let miner_pubkey: PublicKey =
+            "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap();
+        let pool_signature = b"test_pool";
+
+        // Call build_notify_and_commitment
+        let result = build_notify_and_commitment(
+            &Arc::new(template.clone()),
+            false,
+            &Arc::new(store),
+            &stratum_config,
+            Some(miner_pubkey),
+            pool_signature,
+            &tracker_handle,
+        )
+        .await;
+
+        // Verify the result
+        assert!(result.is_ok());
+        let (notify_str, share_commitment) = result.unwrap();
+
+        // Verify notify string is valid JSON
+        let notify: Notify = serde_json::from_str(&notify_str).expect("Invalid notify JSON");
+        assert_eq!(notify.params.version, "20000000");
+        assert_eq!(notify.params.nbits, "207fffff");
+        assert!(!notify.params.clean_jobs);
+
+        // Verify share commitment was created
+        assert!(share_commitment.is_some());
+        let commitment = share_commitment.unwrap();
+        assert_eq!(commitment.miner_pubkey, miner_pubkey);
+
+        // Verify the job was inserted in the tracker
+        let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
+        let job_details = tracker_handle.get_job(job_id).await.unwrap();
+        assert!(job_details.is_some());
+        let details = job_details.unwrap();
+
+        // Verify share_commitment is properly set in tracker
+        assert!(details.share_commitment.is_some());
+        let stored_commitment = details.share_commitment.unwrap();
+        assert_eq!(stored_commitment.miner_pubkey, miner_pubkey);
+        assert_eq!(stored_commitment.prev_share_blockhash, genesis);
     }
 }

@@ -352,12 +352,8 @@ pub fn start_tracker_actor() -> TrackerHandle {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_utils::create_test_commitment;
-    use bitcoin::hashes::Hash;
-    use bitcoin::{BlockHash, CompactTarget, PublicKey, TxMerkleNode};
-    use std::str::FromStr;
-
     use super::*;
+    use crate::test_utils::create_test_commitment;
 
     #[tokio::test]
     async fn test_job_id_generation() {
