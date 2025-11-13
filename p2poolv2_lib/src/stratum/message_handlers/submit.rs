@@ -123,6 +123,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         .send(Emission {
             pplns: stratum_share.clone(),
             block: validation_result.block,
+            share_commitment: job.share_commitment.clone(),
         })
         .await
         .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;
@@ -296,6 +297,14 @@ mod handle_submit_tests {
         let share = shares_rx.try_recv().unwrap();
         assert_eq!(share.pplns.btcaddress, Some(session.btcaddress.unwrap()));
 
+        // Verify share_commitment is properly set
+        assert!(share.share_commitment.is_some());
+        let commitment = share.share_commitment.unwrap();
+        assert_eq!(
+            commitment.miner_pubkey,
+            create_test_commitment().miner_pubkey
+        );
+
         // Verify that the block is submitted to the mock server
         mock_server.verify().await;
 
@@ -378,6 +387,14 @@ mod handle_submit_tests {
         assert_eq!(
             stratum_share.pplns.btcaddress,
             Some(session.btcaddress.unwrap())
+        );
+
+        // Verify share_commitment is properly set
+        assert!(stratum_share.share_commitment.is_some());
+        let commitment = stratum_share.share_commitment.unwrap();
+        assert_eq!(
+            commitment.miner_pubkey,
+            create_test_commitment().miner_pubkey
         );
 
         assert_eq!(metrics_handle.get_metrics().await.accepted_total, 1);
@@ -676,6 +693,14 @@ mod handle_submit_tests {
 
         let share = shares_rx.try_recv().unwrap();
         assert_eq!(share.pplns.btcaddress, Some(session.btcaddress.unwrap()));
+
+        // Verify share_commitment is properly set
+        assert!(share.share_commitment.is_some());
+        let commitment = share.share_commitment.unwrap();
+        assert_eq!(
+            commitment.miner_pubkey,
+            create_test_commitment().miner_pubkey
+        );
 
         // Verify that the block is submitted to the mock server
         mock_server.verify().await;
