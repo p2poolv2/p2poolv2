@@ -27,7 +27,7 @@ use crate::config::StratumConfig;
 use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store::ChainStore;
-use crate::shares::share_commitment::{ShareCommitment, build_share_commitment};
+use crate::shares::share_commitment::{self, ShareCommitment, build_share_commitment};
 use crate::stratum::messages::{Notify, NotifyParams};
 use crate::stratum::util::reverse_four_byte_chunks;
 use crate::stratum::util::to_be_hex;
@@ -94,7 +94,7 @@ pub fn build_notify(
     job_id: JobId,
     clean_jobs: bool,
     pool_signature: &[u8],
-    share_commitment: Option<ShareCommitment>,
+    commitment_hash: Option<bitcoin::hashes::sha256::Hash>,
 ) -> Result<Notify, WorkError> {
     let coinbase = build_coinbase_transaction(
         Version::TWO,
@@ -103,7 +103,7 @@ pub fn build_notify(
         parse_flags(template.coinbaseaux.get("flags").cloned()),
         template.default_witness_commitment.clone(),
         pool_signature,
-        share_commitment,
+        commitment_hash,
     )?;
 
     let (coinbase1, coinbase2) = split_coinbase(&coinbase)?;
@@ -146,7 +146,7 @@ async fn build_notify_and_commitment(
     miner_pubkey: Option<PublicKey>,
     pool_signature: &[u8],
     tracker_handle: &TrackerHandle,
-) -> Result<String, WorkError> {
+) -> Result<(String, Option<ShareCommitment>), WorkError> {
     let job_id = tracker_handle.get_next_job_id().await.unwrap();
     let output_distribution = build_output_distribution(template, chain_store, config).await;
 
@@ -154,6 +154,9 @@ async fn build_notify_and_commitment(
         build_share_commitment(chain_store, template, miner_pubkey).map_err(|_| WorkError {
             message: "Failed to build share commitment".to_string(),
         })?;
+    let commitment_hash = share_commitment
+        .as_ref()
+        .map(|commitment| commitment.hash());
 
     let notify = build_notify(
         template,
@@ -161,7 +164,7 @@ async fn build_notify_and_commitment(
         job_id,
         clean_jobs,
         pool_signature,
-        share_commitment,
+        commitment_hash,
     )?;
 
     let serialized_notify =
@@ -177,7 +180,7 @@ async fn build_notify_and_commitment(
         .await
         .unwrap();
 
-    Ok(serialized_notify)
+    Ok((serialized_notify, share_commitment))
 }
 
 /// NotifyCmd is used to send notify to all clients or a single client.
@@ -216,7 +219,7 @@ pub async fn start_notify(
                     || latest_template.unwrap().previousblockhash != template.previousblockhash;
                 latest_template = Some(Arc::clone(&template));
 
-                let notify_str = match build_notify_and_commitment(
+                let (notify_str, _share_commitment) = match build_notify_and_commitment(
                     &template,
                     clean_jobs,
                     &chain_store,
@@ -252,7 +255,7 @@ pub async fn start_notify(
                 }
 
                 let template = latest_template.as_ref().unwrap();
-                let notify_str = match build_notify_and_commitment(
+                let (notify_str, _share_commitment) = match build_notify_and_commitment(
                     template,
                     clean_jobs,
                     &chain_store,

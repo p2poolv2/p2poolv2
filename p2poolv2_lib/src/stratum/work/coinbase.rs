@@ -21,7 +21,7 @@ use crate::stratum::work::error::WorkError;
 use bitcoin::absolute::LockTime;
 use bitcoin::blockdata::script::{Builder, ScriptBuf};
 use bitcoin::consensus::serialize;
-use bitcoin::hashes::{Hash, sha256d};
+use bitcoin::hashes::{self, Hash, sha256d};
 use bitcoin::network::Network;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::{Sequence, Transaction, TxIn, TxOut, Version};
@@ -113,7 +113,7 @@ pub(crate) fn build_coinbase_transaction(
     aux_flags: PushBytesBuf,
     default_witness_commitment: Option<String>,
     pool_signature: &[u8],
-    share_commitment: Option<ShareCommitment>,
+    commitment_hash: Option<hashes::sha256::Hash>,
 ) -> Result<Transaction, WorkError> {
     if output_data.is_empty() {
         return Err(WorkError {
@@ -127,8 +127,7 @@ pub(crate) fn build_coinbase_transaction(
     signature_buf.extend_from_slice(pool_signature).unwrap();
 
     let mut coinbase_builder = Builder::new().push_int(height);
-    if let Some(commitment) = share_commitment {
-        let hash = commitment.hash();
+    if let Some(hash) = commitment_hash {
         coinbase_builder = coinbase_builder.push_slice(hash.as_byte_array());
     };
     let coinbase_script = coinbase_builder
@@ -475,7 +474,7 @@ mod tests {
             PushBytesBuf::from(&[0u8]),
             template.default_witness_commitment.clone(),
             b"P2Poolv2",
-            Some(share_commitment),
+            Some(share_commitment.hash()),
         )
         .unwrap();
 
