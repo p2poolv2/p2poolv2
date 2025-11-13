@@ -15,7 +15,6 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::OutputPair;
-use crate::shares::share_commitment::ShareCommitment;
 use crate::stratum::session::{EXTRANONCE1_SIZE, EXTRANONCE2_SIZE};
 use crate::stratum::work::error::WorkError;
 use bitcoin::absolute::LockTime;
@@ -187,6 +186,7 @@ pub fn split_coinbase(coinbase: &Transaction) -> Result<(String, String), WorkEr
 
 #[cfg(test)]
 mod tests {
+    use crate::shares::share_commitment::ShareCommitment;
     use bitcoin::{CompactTarget, hex::DisplayHex};
 
     use super::*;

@@ -101,27 +101,12 @@ mod tests {
     use super::*;
     use crate::shares::chain::chain_store::MockChainStore;
     use crate::stratum::work::block_template::BlockTemplate;
+    use crate::test_utils::create_test_commitment;
     use bitcoin::hashes::Hash;
     use std::collections::HashSet;
     use std::fs;
     use std::path::Path;
     use std::str::FromStr;
-
-    fn create_test_commitment() -> ShareCommitment {
-        ShareCommitment {
-            prev_share_blockhash: BlockHash::from_str(
-                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
-            )
-            .unwrap(),
-            uncles: vec![],
-            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                .parse::<PublicKey>()
-                .unwrap(),
-            merkle_root: Some(TxMerkleNode::all_zeros()),
-            bits: CompactTarget::from_consensus(0x207fffff),
-            time: 1700000000,
-        }
-    }
 
     #[test]
     fn test_hash_produces_valid_sha256() {

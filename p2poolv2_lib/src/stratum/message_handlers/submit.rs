@@ -208,7 +208,7 @@ mod handle_submit_tests {
     use crate::stratum::messages::SetDifficultyNotification;
     use crate::stratum::session::Session;
     use crate::stratum::work::tracker::start_tracker_actor;
-    use crate::test_utils::load_valid_stratum_work_components;
+    use crate::test_utils::{create_test_commitment, load_valid_stratum_work_components};
     use bitcoin::BlockHash;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use std::sync::Arc;
@@ -250,6 +250,7 @@ mod handle_submit_tests {
                 Arc::new(template),
                 notify.params.coinbase1.to_string(),
                 notify.params.coinbase2.to_string(),
+                Some(create_test_commitment()),
                 job_id,
             )
             .await;
@@ -327,6 +328,7 @@ mod handle_submit_tests {
                 Arc::new(template),
                 notify.params.coinbase1.to_string(),
                 notify.params.coinbase2.to_string(),
+                Some(create_test_commitment()),
                 job_id,
             )
             .await;
@@ -408,6 +410,7 @@ mod handle_submit_tests {
                 Arc::new(template),
                 notify.params.coinbase1.to_string(),
                 notify.params.coinbase2.to_string(),
+                Some(create_test_commitment()),
                 job_id,
             )
             .await;
@@ -494,6 +497,7 @@ mod handle_submit_tests {
                 Arc::new(template),
                 notify.params.coinbase1.to_string(),
                 notify.params.coinbase2.to_string(),
+                Some(create_test_commitment()),
                 job_id,
             )
             .await;
@@ -627,6 +631,7 @@ mod handle_submit_tests {
                 Arc::new(template),
                 notify.params.coinbase1.to_string(),
                 notify.params.coinbase2.to_string(),
+                Some(create_test_commitment()),
                 job_id,
             )
             .await;

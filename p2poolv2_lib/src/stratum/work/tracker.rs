@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::shares::share_commitment::ShareCommitment;
+
 use super::block_template::BlockTemplate;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,6 +52,7 @@ pub struct JobDetails {
     pub coinbase1: String,
     pub coinbase2: String,
     pub generation_timestamp: u64,
+    pub share_commitment: Option<ShareCommitment>,
 }
 
 /// A map that associates templates with job id
@@ -68,6 +71,7 @@ impl Tracker {
         block_template: Arc<BlockTemplate>,
         coinbase1: String,
         coinbase2: String,
+        share_commitment: Option<ShareCommitment>,
         job_id: JobId,
     ) -> JobId {
         self.job_details.insert(
@@ -80,6 +84,7 @@ impl Tracker {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs(),
+                share_commitment,
             },
         );
         job_id
@@ -133,6 +138,7 @@ pub enum Command {
         coinbase1: String,
         coinbase2: String,
         job_id: JobId,
+        share_commitment: Option<ShareCommitment>,
         resp: oneshot::Sender<JobId>,
     },
     /// Get job details by job id
@@ -164,6 +170,7 @@ impl TrackerHandle {
         block_template: Arc<BlockTemplate>,
         coinbase1: String,
         coinbase2: String,
+        share_commitment: Option<ShareCommitment>,
         job_id: JobId,
     ) -> Result<JobId, String> {
         let (resp_tx, resp_rx) = oneshot::channel();
@@ -174,6 +181,7 @@ impl TrackerHandle {
                 coinbase1,
                 coinbase2,
                 job_id,
+                share_commitment,
                 resp: resp_tx,
             })
             .await
@@ -278,11 +286,16 @@ impl TrackerActor {
                     coinbase1,
                     coinbase2,
                     job_id,
+                    share_commitment,
                     resp,
                 } => {
-                    let job_id =
-                        self.tracker
-                            .insert_job(block_template, coinbase1, coinbase2, job_id);
+                    let job_id = self.tracker.insert_job(
+                        block_template,
+                        coinbase1,
+                        coinbase2,
+                        share_commitment,
+                        job_id,
+                    );
                     let _ = resp.send(job_id);
                 }
                 Command::GetJob { job_id, resp } => {
@@ -339,6 +352,11 @@ pub fn start_tracker_actor() -> TrackerHandle {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_utils::create_test_commitment;
+    use bitcoin::hashes::Hash;
+    use bitcoin::{BlockHash, CompactTarget, PublicKey, TxMerkleNode};
+    use std::str::FromStr;
+
     use super::*;
 
     #[tokio::test]
@@ -398,6 +416,7 @@ mod tests {
                 Arc::new(template),
                 "cb1".to_string(),
                 "cb2".to_string(),
+                Some(create_test_commitment()),
                 JobId(1),
             )
             .await;
@@ -443,6 +462,7 @@ mod tests {
             Arc::new(template.clone()),
             "old_cb1".to_string(),
             "old_cb2".to_string(),
+            Some(create_test_commitment()),
             old_job_id,
         );
 
@@ -461,6 +481,7 @@ mod tests {
             Arc::new(template.clone()),
             "new_cb1".to_string(),
             "new_cb2".to_string(),
+            None,
             new_job_id,
         );
 
@@ -485,6 +506,7 @@ mod tests {
                 Arc::new(template.clone()),
                 "old_actor_cb1".to_string(),
                 "old_actor_cb2".to_string(),
+                None,
                 JobId(3),
             )
             .await
