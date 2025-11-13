@@ -17,9 +17,9 @@
 #[cfg(test)]
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 #[cfg(test)]
-use crate::shares::transactions::coinbase::create_coinbase_transaction;
-
 use crate::shares::share_commitment::ShareCommitment;
+#[cfg(test)]
+use crate::shares::transactions::coinbase::create_coinbase_transaction;
 use crate::stratum::messages::Notify;
 use crate::stratum::messages::Response;
 #[cfg(test)]
