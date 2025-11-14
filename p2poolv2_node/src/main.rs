@@ -154,7 +154,8 @@ async fn main() -> Result<(), String> {
         .await;
     });
 
-    let (shares_tx, shares_rx) = tokio::sync::mpsc::channel::<Emission>(STRATUM_SHARES_BUFFER_SIZE);
+    let (emissions_tx, emissions_rx) =
+        tokio::sync::mpsc::channel::<Emission>(STRATUM_SHARES_BUFFER_SIZE);
 
     let metrics_handle = match metrics::start_metrics(config.logging.stats_dir.clone()).await {
         Ok(handle) => handle,
@@ -169,7 +170,7 @@ async fn main() -> Result<(), String> {
         let mut stratum_server = StratumServerBuilder::default()
             .shutdown_rx(stratum_shutdown_rx)
             .connections_handle(connections_handle.clone())
-            .shares_tx(shares_tx)
+            .emissions_tx(emissions_tx)
             .hostname(stratum_config.hostname)
             .port(stratum_config.port)
             .start_difficulty(stratum_config.start_difficulty)
@@ -215,7 +216,7 @@ async fn main() -> Result<(), String> {
         config.api.hostname, config.api.port
     );
 
-    match NodeHandle::new(config, chain_store, shares_rx, metrics_handle).await {
+    match NodeHandle::new(config, chain_store, emissions_rx, metrics_handle).await {
         Ok((_node_handle, stopping_rx)) => {
             info!("Node started");
             if (stopping_rx.await).is_ok() {

@@ -54,7 +54,7 @@ pub struct StratumServer {
     pub version_mask: i32,
     shutdown_rx: oneshot::Receiver<()>,
     connections_handle: ClientConnectionsHandle,
-    shares_tx: EmissionSender,
+    emissions_tx: EmissionSender,
     store: Arc<ChainStore>,
 }
 
@@ -70,7 +70,7 @@ pub struct StratumServerBuilder {
     version_mask: Option<i32>,
     shutdown_rx: Option<oneshot::Receiver<()>>,
     connections_handle: Option<ClientConnectionsHandle>,
-    shares_tx: Option<EmissionSender>,
+    emissions_tx: Option<EmissionSender>,
     zmqpubhashblock: Option<String>,
     store: Option<Arc<ChainStore>>,
 }
@@ -121,8 +121,8 @@ impl StratumServerBuilder {
         self
     }
 
-    pub fn shares_tx(mut self, shares_tx: EmissionSender) -> Self {
-        self.shares_tx = Some(shares_tx);
+    pub fn emissions_tx(mut self, emissions_tx: EmissionSender) -> Self {
+        self.emissions_tx = Some(emissions_tx);
         self
     }
 
@@ -155,7 +155,7 @@ impl StratumServerBuilder {
             connections_handle: self
                 .connections_handle
                 .ok_or("connections_handle is required")?,
-            shares_tx: self.shares_tx.ok_or("shares_tx is required")?,
+            emissions_tx: self.emissions_tx.ok_or("shares_tx is required")?,
             store: self.store.ok_or("store is required")?,
         })
     }
@@ -213,7 +213,7 @@ impl StratumServer {
                                 start_difficulty: self.start_difficulty,
                                 minimum_difficulty: self.minimum_difficulty,
                                 maximum_difficulty: self.maximum_difficulty,
-                                shares_tx: self.shares_tx.clone(),
+                                emissions_tx: self.emissions_tx.clone(),
                                 network: self.network,
                                 metrics: metrics.clone(),
                                 store: self.store.clone(),
@@ -248,7 +248,7 @@ pub(crate) struct StratumContext {
     pub start_difficulty: u64,
     pub minimum_difficulty: u64,
     pub maximum_difficulty: Option<u64>,
-    pub shares_tx: EmissionSender,
+    pub emissions_tx: EmissionSender,
     pub network: bitcoin::network::Network,
     pub metrics: metrics::MetricsHandle,
     pub store: Arc<ChainStore>,
@@ -467,7 +467,7 @@ mod stratum_server_tests {
             .version_mask(0x1fffe000)
             .shutdown_rx(shutdown_rx)
             .connections_handle(connections_handle)
-            .shares_tx(shares_tx)
+            .emissions_tx(shares_tx)
             .store(store)
             .build()
             .await
@@ -523,7 +523,7 @@ mod stratum_server_tests {
         let (_shutdown_tx, shutdown_rx) = oneshot::channel();
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
-        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
@@ -544,7 +544,7 @@ mod stratum_server_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            shares_tx,
+            emissions_tx,
             network: bitcoin::network::Network::Regtest,
             store,
         };
@@ -641,7 +641,7 @@ mod stratum_server_tests {
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
-        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
@@ -662,7 +662,7 @@ mod stratum_server_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            shares_tx,
+            emissions_tx,
             network: bitcoin::network::Network::Regtest,
             store,
         };
@@ -713,7 +713,7 @@ mod stratum_server_tests {
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
-        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
@@ -733,7 +733,7 @@ mod stratum_server_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            shares_tx,
+            emissions_tx,
             metrics: metrics_handle,
             network: bitcoin::network::Network::Regtest,
             store,
@@ -790,7 +790,7 @@ mod stratum_server_tests {
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
-        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
@@ -810,7 +810,7 @@ mod stratum_server_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            shares_tx,
+            emissions_tx,
             network: bitcoin::network::Network::Regtest,
             metrics: metrics_handle,
             store,
@@ -887,7 +887,7 @@ mod stratum_server_tests {
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
-        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
@@ -907,7 +907,7 @@ mod stratum_server_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            shares_tx,
+            emissions_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
             store,
@@ -1003,7 +1003,7 @@ mod stratum_server_tests {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8082);
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let tracker_handle = start_tracker_actor();
-        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
@@ -1023,7 +1023,7 @@ mod stratum_server_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            shares_tx,
+            emissions_tx,
             network: bitcoin::network::Network::Regtest,
             metrics: metrics_handle,
             store,
@@ -1107,7 +1107,7 @@ mod stratum_server_tests {
             let (notify_tx, _notify_rx) = mpsc::channel(10);
             let tracker_handle = start_tracker_actor();
             let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
-            let (shares_tx, _shares_rx) = mpsc::channel(10);
+            let (emissions_tx, _emissions_rx) = mpsc::channel(10);
             let stats_dir = tempfile::tempdir().unwrap();
             let metrics_handle =
                 metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
@@ -1129,7 +1129,7 @@ mod stratum_server_tests {
                 start_difficulty: 10000,
                 minimum_difficulty: 1,
                 maximum_difficulty: Some(2),
-                shares_tx,
+                emissions_tx: emissions_tx,
                 network: bitcoin::network::Network::Regtest,
                 store,
             };
@@ -1184,7 +1184,7 @@ mod stratum_server_tests {
             let (notify_tx, _notify_rx) = mpsc::channel(10);
             let tracker_handle = start_tracker_actor();
             let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
-            let (shares_tx, _shares_rx) = mpsc::channel(10);
+            let (emissions_tx, _emissions_rx) = mpsc::channel(10);
             let stats_dir = tempfile::tempdir().unwrap();
             let metrics_handle =
                 metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
@@ -1206,7 +1206,7 @@ mod stratum_server_tests {
                 start_difficulty: 10000,
                 minimum_difficulty: 1,
                 maximum_difficulty: Some(2),
-                shares_tx,
+                emissions_tx,
                 network: bitcoin::network::Network::Signet,
                 store,
             };

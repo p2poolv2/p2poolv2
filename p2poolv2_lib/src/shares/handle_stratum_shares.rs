@@ -27,11 +27,11 @@ use tracing::info;
 /// Save share to database for persistence in case we need to recover from a crash
 /// Shares are saved with a TTL for 1 week or when we reach accumulated work required for 5 blocks at current difficulty.
 pub async fn handle_stratum_shares(
-    mut shares_rx: EmissionReceiver,
+    mut emissions_rx: EmissionReceiver,
     store: Arc<ChainStore>,
     _metrics: MetricsHandle,
 ) {
-    while let Some(emission) = shares_rx.recv().await {
+    while let Some(emission) = emissions_rx.recv().await {
         info!("Received share: {:?}", emission.pplns);
 
         let _ = store.add_pplns_share(emission.pplns);
