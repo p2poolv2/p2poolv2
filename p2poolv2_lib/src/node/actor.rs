@@ -47,7 +47,7 @@ impl NodeHandle {
     pub async fn new(
         config: Config,
         store: Arc<ChainStore>,
-        shares_rx: EmissionReceiver,
+        emissions_rx: EmissionReceiver,
         metrics: MetricsHandle,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
@@ -60,7 +60,7 @@ impl NodeHandle {
         let store_clone = store.clone();
         let metrics_clone = metrics.clone();
         tokio::spawn(async move {
-            handle_stratum_shares(shares_rx, store_clone, metrics_clone).await;
+            handle_stratum_shares(emissions_rx, store_clone, metrics_clone).await;
         });
 
         Ok((Self { command_tx }, stopping_rx))

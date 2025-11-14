@@ -69,7 +69,7 @@ async fn test_stratum_server_subscribe() {
     let mut server = StratumServerBuilder::default()
         .shutdown_rx(shutdown_rx)
         .connections_handle(connections_handle)
-        .shares_tx(share_block_tx)
+        .emissions_tx(share_block_tx)
         .hostname("127.0.0.1".to_string())
         .port(9999)
         .start_difficulty(1)

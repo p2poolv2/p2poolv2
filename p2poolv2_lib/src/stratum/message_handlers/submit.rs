@@ -119,7 +119,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     );
 
     stratum_context
-        .shares_tx
+        .emissions_tx
         .send(Emission {
             pplns: stratum_share.clone(),
             block: validation_result.block,
@@ -256,7 +256,7 @@ mod handle_submit_tests {
             )
             .await;
 
-        let (shares_tx, mut shares_rx) = mpsc::channel(10);
+        let (emissions_tx, mut emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
@@ -276,7 +276,7 @@ mod handle_submit_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            shares_tx,
+            emissions_tx,
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
             store,
@@ -294,7 +294,7 @@ mod handle_submit_tests {
         // The response should indicate that the share met required difficulty
         assert_eq!(response.result, Some(json!(true)));
 
-        let share = shares_rx.try_recv().unwrap();
+        let share = emissions_rx.try_recv().unwrap();
         assert_eq!(share.pplns.btcaddress, Some(session.btcaddress.unwrap()));
 
         // Verify share_commitment is properly set
@@ -342,7 +342,7 @@ mod handle_submit_tests {
             )
             .await;
 
-        let (shares_tx, mut shares_rx) = mpsc::channel(10);
+        let (emissions_tx, mut emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
@@ -362,7 +362,7 @@ mod handle_submit_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            shares_tx,
+            emissions_tx,
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
             store,
@@ -383,7 +383,7 @@ mod handle_submit_tests {
         // Verify that the block is submitted to the mock server
         mock_server.verify().await;
 
-        let stratum_share = shares_rx.recv().await.unwrap();
+        let stratum_share = emissions_rx.recv().await.unwrap();
         assert_eq!(
             stratum_share.pplns.btcaddress,
             Some(session.btcaddress.unwrap())
@@ -432,7 +432,7 @@ mod handle_submit_tests {
             )
             .await;
 
-        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
@@ -452,7 +452,7 @@ mod handle_submit_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            shares_tx,
+            emissions_tx,
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
             store,
@@ -519,7 +519,7 @@ mod handle_submit_tests {
             )
             .await;
 
-        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
@@ -540,7 +540,7 @@ mod handle_submit_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            shares_tx,
+            emissions_tx,
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
             store,
@@ -584,7 +584,7 @@ mod handle_submit_tests {
         session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
         session.user_id = Some(1);
 
-        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
@@ -604,7 +604,7 @@ mod handle_submit_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            shares_tx,
+            emissions_tx,
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
             store,
@@ -653,7 +653,7 @@ mod handle_submit_tests {
             )
             .await;
 
-        let (shares_tx, mut shares_rx) = mpsc::channel(10);
+        let (emissions_tx, mut emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
@@ -673,7 +673,7 @@ mod handle_submit_tests {
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            shares_tx,
+            emissions_tx,
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
             store,
@@ -691,7 +691,7 @@ mod handle_submit_tests {
         // The response should indicate that the share met required difficulty
         assert_eq!(response.result, Some(json!(false)));
 
-        let share = shares_rx.try_recv().unwrap();
+        let share = emissions_rx.try_recv().unwrap();
         assert_eq!(share.pplns.btcaddress, Some(session.btcaddress.unwrap()));
 
         // Verify share_commitment is properly set

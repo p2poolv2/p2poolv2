@@ -143,7 +143,7 @@ mod tests {
             Some("x".to_string()),
         );
         let (notify_tx, mut notify_rx) = mpsc::channel(1);
-        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
         let stats_dir = tempfile::tempdir().unwrap();
@@ -164,7 +164,7 @@ mod tests {
             start_difficulty: 1000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            shares_tx,
+            emissions_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
             store,
@@ -249,7 +249,7 @@ mod tests {
             Some("password".to_string()),
         );
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(1);
-        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
         let stats_dir = tempfile::tempdir().unwrap();
@@ -270,7 +270,7 @@ mod tests {
             start_difficulty: 1000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            shares_tx,
+            emissions_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
             store,
@@ -406,7 +406,7 @@ mod tests {
             Some("x".to_string()),
         );
         let (notify_tx, _notify_rx) = mpsc::channel(1);
-        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
         let stats_dir = tempfile::tempdir().unwrap();
@@ -428,7 +428,7 @@ mod tests {
             start_difficulty: 1000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
-            shares_tx,
+            emissions_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
             store,
