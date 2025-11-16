@@ -292,11 +292,16 @@ mod tests {
     use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
     use crate::stratum::messages::{Response, SimpleRequest};
     use crate::stratum::session::Session;
+    use crate::stratum::work::block_template::{BlockTemplate, TemplateTransaction};
+    use crate::stratum::work::coinbase::extract_outputs_from_coinbase2;
     use crate::stratum::work::tracker::start_tracker_actor;
     use crate::test_utils::genesis_for_tests;
     use bitcoin::CompressedPublicKey;
+    use bitcoin::{Amount, ScriptBuf, TxOut};
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
+    use std::collections::HashMap;
     use std::fs;
+    use std::str::FromStr;
     use std::time::SystemTime;
     use tokio::sync::mpsc;
 
@@ -668,5 +673,105 @@ mod tests {
         let stored_commitment = details.share_commitment.unwrap();
         assert_eq!(stored_commitment.miner_pubkey, miner_pubkey);
         assert_eq!(stored_commitment.prev_share_blockhash, genesis);
+    }
+
+    /// This test build_notify, parse then verify
+    #[tokio::test]
+    async fn test_build_notify_and_extract_outputs_integration() {
+        let template = BlockTemplate {
+            default_witness_commitment: Some(
+                "6a24aa21a9ed010000000000000000000000000000000000000000000000000000000000"
+                    .to_string(),
+            ),
+            height: 100,
+            version: 0x20000000,
+            previousblockhash: "0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
+            bits: "1d00ffff".to_string(),
+            curtime: 1234567890,
+            transactions: vec![TemplateTransaction {
+                data: "".to_string(),
+                txid: "0000000000000000000000000000000000000000000000000000000000000001"
+                    .to_string(),
+                hash: "".to_string(),
+                depends: vec![],
+                fee: 0,
+                sigops: 0,
+                weight: 0,
+            }],
+            coinbasevalue: 100000,
+            coinbaseaux: HashMap::new(),
+            rules: vec![],
+            vbavailable: HashMap::new(),
+            vbrequired: 0,
+            longpollid: "".to_string(),
+            target: "".to_string(),
+            mintime: 0,
+            mutable: vec![],
+            noncerange: "".to_string(),
+            sigoplimit: 0,
+            sizelimit: 0,
+            weightlimit: 0,
+        };
+
+        // We use OutputPair from accounting, but need to convert to TxOut for the check
+        let original_output_pairs = vec![
+            OutputPair {
+                address: bitcoin::Address::from_str("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr")
+                    .unwrap()
+                    .assume_checked(),
+                amount: Amount::from_sat(50000),
+            },
+            OutputPair {
+                address: bitcoin::Address::from_str("bcrt1qlk935ze2fsu86zjp395uvtegztrkaezawxx0wf")
+                    .unwrap()
+                    .assume_checked(),
+                amount: Amount::from_sat(12345),
+            },
+        ];
+
+        let job_id = JobId(123);
+        let pool_signature = b"test_sig";
+
+        // Generate the real `coinbase2`
+        let notify = build_notify(
+            &template,
+            original_output_pairs.clone(),
+            job_id,
+            true,
+            pool_signature,
+            None, // No commitment hash
+        )
+        .unwrap();
+
+        let coinbase2_hex = &notify.params.coinbase2;
+
+        // Run the parser
+        let extracted_txouts =
+            extract_outputs_from_coinbase2(coinbase2_hex, pool_signature.len()).unwrap();
+
+        // Verify: Check if the extracted data matches the original
+
+        // We must check against the *real* outputs, which includes the witness
+        let expected_txout_1 = TxOut {
+            value: original_output_pairs[0].amount,
+            script_pubkey: original_output_pairs[0].address.script_pubkey(),
+        };
+        let expected_txout_2 = TxOut {
+            value: original_output_pairs[1].amount,
+            script_pubkey: original_output_pairs[1].address.script_pubkey(),
+        };
+
+        let witness_script =
+            ScriptBuf::from(hex::decode(template.default_witness_commitment.unwrap()).unwrap());
+        let expected_txout_3 = TxOut {
+            value: Amount::ZERO,
+            script_pubkey: witness_script,
+        };
+
+        assert_eq!(extracted_txouts.len(), 3); // 2 payments + 1 witness
+        assert_eq!(extracted_txouts[0], expected_txout_1);
+        assert_eq!(extracted_txouts[1], expected_txout_2);
+        assert_eq!(extracted_txouts[2], expected_txout_3);
     }
 }
