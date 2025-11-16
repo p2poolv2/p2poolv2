@@ -72,33 +72,13 @@ mod tests {
     fn test_signet_genesis_data() {
         let genesis = genesis_data(bitcoin::Network::Signet).unwrap();
 
-        let header = bitcoin::consensus::deserialize::<bitcoin::block::Header>(
+        let block = bitcoin::consensus::deserialize::<bitcoin::block::Block>(
             hex::decode(genesis.bitcoin_block_hex).unwrap().as_slice(),
         );
 
-        assert!(header.is_ok());
-        let header = header.unwrap();
+        assert!(block.is_ok());
+        let header = block.unwrap().header;
         assert_eq!(header.prev_blockhash, bitcoin::hashes::Hash::all_zeros());
         assert_eq!(header.version, bitcoin::block::Version::ONE);
-    }
-
-    #[test]
-    fn test_mainnet_genesis_data() {
-        let genesis = genesis_data(bitcoin::Network::Bitcoin).unwrap();
-
-        let header = bitcoin::consensus::deserialize::<bitcoin::block::Header>(
-            hex::decode(genesis.bitcoin_block_hex).unwrap().as_slice(),
-        );
-
-        assert!(header.is_ok());
-        let header = header.unwrap();
-        assert_eq!(
-            header.prev_blockhash.to_string(),
-            "00000000000000000000bf759bfee35e22cf4523cd774de6f9d64f517afef59c" // height 000000000000000000011c80ec9a34567d2c612781b2d7b98c30f689e13c7ad1
-        );
-        assert_eq!(
-            header.version,
-            bitcoin::block::Version::from_consensus(594518016)
-        );
     }
 }

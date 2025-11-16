@@ -15,11 +15,12 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use async_trait::async_trait;
-use ciborium::{de::from_reader, ser::into_writer};
+use bitcoin::consensus::{Decodable, Encodable};
 use libp2p::futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::request_response::{Codec, OutboundFailure};
-use serde::{Serialize, de::DeserializeOwned};
 use std::io;
+
+use crate::node::messages::{Message, RawMessage, network_magic};
 
 // Protocol name for our request-response protocol
 #[derive(Debug, Clone)]
@@ -37,52 +38,83 @@ impl Default for P2PoolRequestResponseProtocol {
     }
 }
 
-// impl ProtocolName for P2PoolRequestResponseProtocol {
-//     const VERSION: &'static str = "1.0.0";
-
-//     fn protocol_name(&self) -> &[u8] {
-//         self.0.as_bytes()
-//     }
-// }
-
 impl AsRef<str> for P2PoolRequestResponseProtocol {
     fn as_ref(&self) -> &str {
         &self.0
     }
 }
 
-// CBOR codec implementation for request-response protocols
+// Consensus codec implementation using RawMessage for request-response protocols
 #[derive(Clone)]
-pub struct CborCodec<Request, Response> {
-    _phantom: std::marker::PhantomData<(Request, Response)>,
+pub struct ConsensusCodec {
+    magic: [u8; 4],
 }
 
-impl<Request, Response> Default for CborCodec<Request, Response> {
+impl ConsensusCodec {
+    pub fn new(magic: [u8; 4]) -> Self {
+        Self { magic }
+    }
+}
+
+impl Default for ConsensusCodec {
     fn default() -> Self {
         Self {
-            _phantom: std::marker::PhantomData,
+            magic: network_magic::REGTEST,
         }
     }
 }
 
+impl ConsensusCodec {
+    async fn read_message<T>(&self, io: &mut T) -> io::Result<Message>
+    where
+        T: AsyncRead + Unpin + Send,
+    {
+        // Read header: magic (4) + payload_len (4) + checksum (4) = 12 bytes
+        let mut header_bytes = [0u8; 12];
+        io.read_exact(&mut header_bytes).await?;
+
+        // Parse payload length from header
+        let payload_len = u32::from_le_bytes([
+            header_bytes[4],
+            header_bytes[5],
+            header_bytes[6],
+            header_bytes[7],
+        ]);
+
+        // Read exactly payload_len bytes
+        let mut payload_bytes = vec![0u8; payload_len as usize];
+        io.read_exact(&mut payload_bytes).await?;
+
+        let message = Message::consensus_decode(&mut &payload_bytes[..])
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+
+        Ok(message)
+    }
+
+    async fn write_message<T>(&self, io: &mut T, msg: Message) -> io::Result<()>
+    where
+        T: AsyncWrite + Unpin + Send,
+    {
+        let raw_msg = RawMessage::new(self.magic, msg);
+        let mut bytes = Vec::new();
+        raw_msg
+            .consensus_encode(&mut bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+        io.write_all(&bytes).await
+    }
+}
+
 #[async_trait]
-impl<Request, Response> Codec for CborCodec<Request, Response>
-where
-    Request: Serialize + DeserializeOwned + Send + 'static,
-    Response: Serialize + DeserializeOwned + Send + 'static,
-{
+impl Codec for ConsensusCodec {
     type Protocol = P2PoolRequestResponseProtocol;
-    type Request = Request;
-    type Response = Response;
+    type Request = Message;
+    type Response = Message;
 
     async fn read_request<T>(&mut self, _: &Self::Protocol, io: &mut T) -> io::Result<Self::Request>
     where
         T: AsyncRead + Unpin + Send,
     {
-        let mut bytes = Vec::new();
-        io.read_to_end(&mut bytes).await?;
-        from_reader(&bytes[..])
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+        self.read_message(io).await
     }
 
     async fn read_response<T>(
@@ -93,10 +125,7 @@ where
     where
         T: AsyncRead + Unpin + Send,
     {
-        let mut bytes = Vec::new();
-        io.read_to_end(&mut bytes).await?;
-        from_reader(&bytes[..])
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+        self.read_message(io).await
     }
 
     async fn write_request<T>(
@@ -108,10 +137,7 @@ where
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let mut bytes = Vec::new();
-        into_writer(&req, &mut bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-        io.write_all(&bytes).await
+        self.write_message(io, req).await
     }
 
     async fn write_response<T>(
@@ -123,18 +149,13 @@ where
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let mut bytes = Vec::new();
-        into_writer(&res, &mut bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-        io.write_all(&bytes).await
+        self.write_message(io, res).await
     }
 }
 
 // Helper type aliases for the request-response behavior
-pub type RequestResponseBehaviour<Request, Response> =
-    libp2p::request_response::Behaviour<CborCodec<Request, Response>>;
-pub type RequestResponseEvent<Request, Response> =
-    libp2p::request_response::Event<Request, Response>;
+pub type RequestResponseBehaviour = libp2p::request_response::Behaviour<ConsensusCodec>;
+pub type RequestResponseEvent = libp2p::request_response::Event<Message, Message>;
 
 // Error type for request-response failures
 #[derive(Debug, thiserror::Error)]

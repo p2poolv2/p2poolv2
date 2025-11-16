@@ -19,6 +19,7 @@
 pub enum ColumnFamily {
     Block,
     BlockTxids,
+    BitcoinTxids,
     Inputs,
     Outputs,
     Tx,
@@ -38,6 +39,7 @@ impl ColumnFamily {
         match self {
             ColumnFamily::Block => "block",
             ColumnFamily::BlockTxids => "block_txids",
+            ColumnFamily::BitcoinTxids => "bitcoin_txids",
             ColumnFamily::Inputs => "inputs",
             ColumnFamily::Outputs => "outputs",
             ColumnFamily::Tx => "tx",

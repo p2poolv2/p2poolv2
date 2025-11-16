@@ -24,11 +24,9 @@ tracing-subscriber = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
 hex = { workspace = true }
-ciborium = { workspace = true }
 rocksdb = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
-ciborium-io = { workspace = true }
 serde_json = { workspace = true }
 rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }

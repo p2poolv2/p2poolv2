@@ -17,7 +17,7 @@
 use crate::stratum::work::coinbase::parse_address;
 use crate::stratum::work::error::WorkError;
 use bitcoin::address::NetworkChecked;
-use bitcoin::{Address, PublicKey};
+use bitcoin::{Address, CompressedPublicKey};
 use bitcoindrpc::BitcoinRpcConfig;
 use serde::Deserialize;
 use std::marker::PhantomData;
@@ -267,7 +267,7 @@ fn default_pplns_ttl_days() -> u64 {
 /// connect to p2poolv2.
 #[derive(Debug, Deserialize, Clone)]
 pub struct MinerConfig {
-    pub pubkey: PublicKey,
+    pub pubkey: CompressedPublicKey,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -427,7 +427,7 @@ impl Config {
 
     pub fn with_miner_pubkey(mut self, miner_pubkey: String) -> Self {
         self.miner = Some(MinerConfig {
-            pubkey: miner_pubkey.parse::<PublicKey>().unwrap(),
+            pubkey: miner_pubkey.parse::<CompressedPublicKey>().unwrap(),
         });
         self
     }

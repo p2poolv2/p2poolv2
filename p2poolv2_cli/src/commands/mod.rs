@@ -82,7 +82,12 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                 .ok_or("Config file required for this command. Use --config")?;
             let config = Config::load(config_path)?;
 
-            let store = cli_commands::store::open_store(config.store.path.clone())?;
+            let store = match cli_commands::store::open_store(config.store.path.clone()) {
+                Ok(s) => s,
+                Err(e) => {
+                    panic!("Error opening store {e}");
+                }
+            };
             let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
             let chain = Arc::new(ChainStore::new(
                 Arc::new(store),

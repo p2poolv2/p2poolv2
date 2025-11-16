@@ -373,7 +373,7 @@ impl Node {
     /// Handle request-response events from the libp2p network
     async fn handle_request_response_event(
         &mut self,
-        request_response_event: RequestResponseEvent<Message, Message>,
+        request_response_event: RequestResponseEvent,
     ) -> Result<(), Box<dyn Error>> {
         if let RequestResponseEvent::Message {
             peer,
