@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use bitcoin::consensus::{Decodable, Encodable};
 use serde::{Deserialize, Serialize};
 
 pub mod payout;
@@ -86,5 +87,41 @@ impl SimplePplnsShare {
         let n_time = u64::from_be_bytes(key[0..8].try_into().unwrap());
         let user_id = u64::from_be_bytes(key[8..16].try_into().unwrap());
         (n_time, user_id)
+    }
+}
+
+/// Encode SimplePplnsShare
+/// Skip btcaddress and workername for space optimisation
+impl Encodable for SimplePplnsShare {
+    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+        &self,
+        w: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        let mut len = 0;
+        len += self.user_id.consensus_encode(w)?;
+        len += self.difficulty.consensus_encode(w)?;
+        len += self.n_time.consensus_encode(w)?;
+        len += self.job_id.consensus_encode(w)?;
+        len += self.extranonce2.consensus_encode(w)?;
+        len += self.nonce.consensus_encode(w)?;
+        Ok(len)
+    }
+}
+
+impl Decodable for SimplePplnsShare {
+    #[inline]
+    fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
+        r: &mut R,
+    ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        Ok(SimplePplnsShare {
+            user_id: u64::consensus_decode(r)?,
+            difficulty: u64::consensus_decode(r)?,
+            btcaddress: None, // Skip btcaddress - for space optimisation
+            workername: None, // Skip workername - for space optimisation
+            n_time: u64::consensus_decode(r)?,
+            job_id: String::consensus_decode(r)?,
+            extranonce2: String::consensus_decode(r)?,
+            nonce: String::consensus_decode(r)?,
+        })
     }
 }

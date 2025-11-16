@@ -22,7 +22,7 @@ use crate::shares::chain::chain_store::ChainStore;
 use crate::stratum::work::block_template::BlockTemplate;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoin::hashes::Hash;
-use bitcoin::{BlockHash, CompactTarget, PublicKey, TxMerkleNode, hashes};
+use bitcoin::{BlockHash, CompactTarget, CompressedPublicKey, TxMerkleNode, hashes};
 use serde::Serialize;
 use std::error::Error;
 use std::sync::Arc;
@@ -48,7 +48,7 @@ pub struct ShareCommitment {
     /// The uncles of the share
     pub uncles: Vec<BlockHash>,
     /// Pubkey identifying the miner mining the share
-    pub miner_pubkey: PublicKey,
+    pub miner_pubkey: CompressedPublicKey,
     /// Share block transactions merkle root. If there are no transactions, this is None.
     pub merkle_root: Option<TxMerkleNode>,
     /// Share chain difficult as compact target
@@ -73,7 +73,7 @@ impl ShareCommitment {
 pub(crate) fn build_share_commitment(
     chain_store: &Arc<ChainStore>,
     template: &Arc<BlockTemplate>,
-    miner_pubkey: Option<PublicKey>,
+    miner_pubkey: Option<CompressedPublicKey>,
 ) -> Result<Option<ShareCommitment>, Box<dyn Error + Send + Sync>> {
     let target = match chain_store.get_current_target() {
         Ok(target) => target,
@@ -154,7 +154,7 @@ mod tests {
 
         commitment2.miner_pubkey =
             "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
-                .parse::<PublicKey>()
+                .parse::<CompressedPublicKey>()
                 .unwrap();
 
         let hash1 = commitment1.hash();
@@ -233,7 +233,7 @@ mod tests {
         );
 
         let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<PublicKey>()
+            .parse::<CompressedPublicKey>()
             .unwrap();
 
         // Set up mock expectations
@@ -285,7 +285,7 @@ mod tests {
         );
 
         let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<PublicKey>()
+            .parse::<CompressedPublicKey>()
             .unwrap();
 
         // Set up mock expectations
@@ -332,7 +332,7 @@ mod tests {
         );
 
         let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<PublicKey>()
+            .parse::<CompressedPublicKey>()
             .unwrap();
 
         // Set up mock to return error

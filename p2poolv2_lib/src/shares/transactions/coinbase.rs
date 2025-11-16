@@ -14,13 +14,13 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use bitcoin::{Address, Network, PublicKey, Transaction, TxOut};
+use bitcoin::{Address, CompressedPublicKey, Network, Transaction, TxOut};
 
 const SHARE_VALUE: u64 = 1;
 
 /// Create a P2PKH coinbase transaction for the given public key and amount
 /// For now, all shares are equal value, so the amount is 1 unit share coin.
-pub fn create_coinbase_transaction(pubkey: &PublicKey, network: Network) -> Transaction {
+pub fn create_coinbase_transaction(pubkey: &CompressedPublicKey, network: Network) -> Transaction {
     // Create P2PKH address from public key
     let address = Address::p2pkh(pubkey, network);
 
@@ -57,7 +57,7 @@ mod tests {
     fn test_create_share_block_coinbase_transaction() {
         // Create a test public key
         let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<PublicKey>()
+            .parse::<CompressedPublicKey>()
             .unwrap();
 
         // Create coinbase transaction

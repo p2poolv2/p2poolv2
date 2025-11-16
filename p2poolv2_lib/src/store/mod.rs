@@ -15,15 +15,16 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::simple_pplns::SimplePplnsShare;
-use crate::shares::share_block::{ShareBlock, ShareHeader, StorageShareBlock};
+use crate::shares::share_block::{ShareBlock, ShareHeader, StorageShareBlock, Txids};
+use crate::store::block_tx_metadata::{BlockMetadata, TxMetadata};
 use crate::store::column_families::ColumnFamily;
 use crate::store::user::StoredUser;
 use crate::utils::snowflake_simplified::get_next_id;
-use bitcoin::BlockHash;
 use bitcoin::Transaction;
+use bitcoin::consensus::{Encodable, encode};
 use bitcoin::hashes::Hash;
+use bitcoin::{BlockHash, consensus};
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::sync::{Arc, RwLock};
@@ -31,28 +32,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 pub mod background_tasks;
+mod block_tx_metadata;
 pub mod column_families;
 mod pplns_shares;
 pub mod user;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct TxMetadata {
-    txid: bitcoin::Txid,
-    version: bitcoin::transaction::Version,
-    lock_time: bitcoin::absolute::LockTime,
-    input_count: u32,
-    output_count: u32,
-    spent_by: Option<bitcoin::Txid>,
-}
-
-/// ShareBlock metadata capturing if a share is valid and confirmed
-/// This is stored indexed by the blockhash, we can later optimise to internal key, if needed.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct BlockMetadata {
-    pub height: Option<u32>,
-    pub is_valid: bool,
-    pub is_confirmed: bool,
-}
 
 /// A store for share blocks.
 /// RocksDB as is used as the underlying database.
@@ -169,9 +152,9 @@ impl Store {
         // Create write batch for atomic operation
         let mut batch = rocksdb::WriteBatch::default();
 
-        // Store user data (key: user_id, value: CBOR serialized StoredUser)
+        // Store user data (key: user_id, value: serialized StoredUser)
         let mut serialized_user = Vec::new();
-        ciborium::ser::into_writer(&stored_user, &mut serialized_user)?;
+        stored_user.consensus_encode(&mut serialized_user);
         batch.put_cf(user_cf, user_id.to_be_bytes(), serialized_user);
 
         // Store index mapping (key: btcaddress, value: user_id)
@@ -187,9 +170,13 @@ impl Store {
     pub fn get_user_by_id(&self, user_id: u64) -> Result<Option<StoredUser>, Box<dyn Error>> {
         let user_cf = self.db.cf_handle(&ColumnFamily::User).unwrap();
 
-        if let Some(serialized_user) = self.db.get_cf(user_cf, user_id.to_be_bytes())? {
-            let stored_user: StoredUser = ciborium::de::from_reader(&serialized_user[..])?;
-            Ok(Some(stored_user))
+        if let Some(mut serialized_user) = self.db.get_cf(user_cf, user_id.to_be_bytes())? {
+            if let Ok(stored_user) = encode::deserialize(&mut serialized_user) {
+                Ok(Some(stored_user))
+            } else {
+                tracing::warn!("Error deserializing stored user. Database corrupted?");
+                Ok(None)
+            }
         } else {
             Ok(None)
         }
@@ -238,9 +225,8 @@ impl Store {
             .iter()
             .zip(users)
             .filter_map(|(user_id, result)| {
-                if let Ok(Some(serialized_user)) = result {
-                    if let Ok(stored_user) =
-                        ciborium::de::from_reader::<StoredUser, _>(&serialized_user[..])
+                if let Ok(Some(mut serialized_user)) = result {
+                    if let Ok(stored_user) = encode::deserialize::<StoredUser>(&mut serialized_user)
                     {
                         Some((*user_id, stored_user.btcaddress))
                     } else {
@@ -272,7 +258,7 @@ impl Store {
         // Store transactions and get their metadata
         let txs_metadata = self.add_txs(&share.transactions, &mut batch);
 
-        let txids = txs_metadata.iter().map(|t| t.txid).collect();
+        let txids = Txids(txs_metadata.iter().map(|t| t.txid).collect());
         // Store block -> txids index
         self.add_txids_to_block_index(&blockhash, &txids, &mut batch);
 
@@ -290,11 +276,9 @@ impl Store {
         // Add the share block itself
         let storage_share_block: StorageShareBlock = share.into();
         let block_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
-        batch.put_cf::<&[u8], Vec<u8>>(
-            block_cf,
-            blockhash.as_ref(),
-            storage_share_block.cbor_serialize().unwrap(),
-        );
+        let mut encoded_share_block = Vec::new();
+        storage_share_block.consensus_encode(&mut encoded_share_block);
+        batch.put_cf::<&[u8], Vec<u8>>(block_cf, blockhash.as_ref(), encoded_share_block);
 
         // Write the entire batch atomically
         self.db.write(batch).unwrap();
@@ -311,7 +295,7 @@ impl Store {
         let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
 
         let mut serialized = Vec::new();
-        ciborium::ser::into_writer(&pplns_share, &mut serialized).unwrap();
+        pplns_share.consensus_encode(&mut serialized);
 
         let n_time = pplns_share.n_time * 1_000_000;
         let key = SimplePplnsShare::make_key(n_time, pplns_share.user_id, get_next_id());
@@ -383,10 +367,15 @@ impl Store {
             .db
             .get_cf::<&[u8]>(block_index_cf, blockhash_bytes.as_ref())
         {
-            Ok(Some(existing)) => {
-                let existing_blockhashes: Vec<BlockHash> =
-                    ciborium::de::from_reader(existing.as_slice()).unwrap();
-                existing_blockhashes.into_iter().collect()
+            Ok(Some(mut existing)) => {
+                if let Ok(existing_blockhashes) =
+                    encode::deserialize::<Vec<BlockHash>>(&mut existing)
+                {
+                    existing_blockhashes.into_iter().collect()
+                } else {
+                    tracing::warn!("Failed to deseriliaze child blockhash");
+                    Vec::new()
+                }
             }
             Ok(None) | Err(_) => Vec::new(),
         }
@@ -411,10 +400,7 @@ impl Store {
 
         // Serialize the updated set
         let mut serialized_children = Vec::new();
-        match ciborium::ser::into_writer(
-            &existing_children.into_iter().collect::<Vec<_>>(),
-            &mut serialized_children,
-        ) {
+        match existing_children.consensus_encode(&mut serialized_children) {
             Ok(_) => (),
             Err(e) => return Err(Box::new(e)),
         };
@@ -449,7 +435,7 @@ impl Store {
             for (i, input) in tx.input.iter().enumerate() {
                 let input_key = format!("{txid}:{i}");
                 let mut serialized = Vec::new();
-                ciborium::ser::into_writer(&input, &mut serialized).unwrap();
+                input.consensus_encode(&mut serialized);
                 batch.put_cf::<&[u8], Vec<u8>>(inputs_cf, input_key.as_ref(), serialized);
             }
 
@@ -457,7 +443,7 @@ impl Store {
             for (i, output) in tx.output.iter().enumerate() {
                 let output_key = format!("{txid}:{i}");
                 let mut serialized = Vec::new();
-                ciborium::ser::into_writer(&output, &mut serialized).unwrap();
+                output.consensus_encode(&mut serialized);
                 batch.put_cf::<&[u8], Vec<u8>>(outputs_cf, output_key.as_ref(), serialized);
             }
         }
@@ -482,7 +468,7 @@ impl Store {
 
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
         let mut tx_metadata_serialized = Vec::new();
-        ciborium::ser::into_writer(&tx_metadata, &mut tx_metadata_serialized).unwrap();
+        tx_metadata.consensus_encode(&mut tx_metadata_serialized);
         batch.put_cf::<&[u8], Vec<u8>>(tx_cf, txid.as_ref(), tx_metadata_serialized);
         tx_metadata
     }
@@ -492,21 +478,21 @@ impl Store {
     fn add_txids_to_block_index(
         &self,
         blockhash: &BlockHash,
-        txids: &Vec<bitcoin::Txid>,
+        txids: &Txids,
         batch: &mut rocksdb::WriteBatch,
     ) {
         let mut blockhash_bytes = bitcoin::consensus::serialize(blockhash);
         blockhash_bytes.extend_from_slice(b"_txids");
 
         let mut serialized_txids = Vec::new();
-        ciborium::ser::into_writer(&txids, &mut serialized_txids).unwrap();
+        txids.consensus_encode(&mut serialized_txids);
         let block_txids_cf = self.db.cf_handle(&ColumnFamily::BlockTxids).unwrap();
         batch.put_cf::<&[u8], Vec<u8>>(block_txids_cf, blockhash_bytes.as_ref(), serialized_txids);
     }
 
     /// Get all transaction IDs for a given block hash
     /// Returns a vector of transaction IDs that were included in the block
-    fn get_txids_for_blockhash(&self, blockhash: &BlockHash) -> Vec<bitcoin::Txid> {
+    fn get_txids_for_blockhash(&self, blockhash: &BlockHash) -> Txids {
         let mut blockhash_bytes = bitcoin::consensus::serialize(blockhash);
         blockhash_bytes.extend_from_slice(b"_txids");
 
@@ -515,12 +501,14 @@ impl Store {
             .db
             .get_cf::<&[u8]>(block_txids_cf, blockhash_bytes.as_ref())
         {
-            Ok(Some(serialized_txids)) => {
-                let txids: Vec<bitcoin::Txid> =
-                    ciborium::de::from_reader(&serialized_txids[..]).unwrap_or_default();
-                txids
-            }
-            _ => Vec::new(),
+            Ok(Some(mut serialized_txids)) => match encode::deserialize(&mut serialized_txids) {
+                Ok(t) => t,
+                Err(_) => {
+                    tracing::warn!("Error reading txids for blockhash");
+                    Txids(Vec::new())
+                }
+            },
+            _ => Txids(Vec::new()),
         }
     }
 
@@ -537,12 +525,12 @@ impl Store {
         if tx_metadata.is_none() {
             return Err("Transaction not found".into());
         }
-        let tx_metadata = tx_metadata.unwrap();
-        let mut tx_metadata: TxMetadata =
-            ciborium::de::from_reader(tx_metadata.as_slice()).unwrap();
+        let mut tx_metadata_serialized = tx_metadata.unwrap();
+        let mut tx_metadata: TxMetadata = encode::deserialize(&mut tx_metadata_serialized)?;
         tx_metadata.spent_by = spent_by;
+
         let mut serialized = Vec::new();
-        ciborium::ser::into_writer(&tx_metadata, &mut serialized).unwrap();
+        tx_metadata.consensus_encode(&mut serialized)?;
         self.db
             .put_cf::<&[u8], Vec<u8>>(tx_cf, txid.as_ref(), serialized)
             .unwrap();
@@ -553,10 +541,14 @@ impl Store {
     pub fn get_tx_metadata(&self, txid: &bitcoin::Txid) -> Option<TxMetadata> {
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
         let tx_metadata = self.db.get_cf::<&[u8]>(tx_cf, txid.as_ref()).unwrap();
-        if let Some(tx_metadata) = tx_metadata {
-            let tx_metadata: TxMetadata =
-                ciborium::de::from_reader(tx_metadata.as_slice()).unwrap();
-            Some(tx_metadata)
+        if let Some(mut tx_metadata) = tx_metadata {
+            match encode::deserialize(&mut tx_metadata) {
+                Ok(metadata) => Some(metadata),
+                Err(_) => {
+                    tracing::warn!("Error reading tx metadata");
+                    None
+                }
+            }
         } else {
             None
         }
@@ -650,11 +642,11 @@ impl Store {
     pub fn get_share(&self, blockhash: &BlockHash) -> Option<ShareBlock> {
         debug!("Getting share from store: {:?}", blockhash);
         let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
-        let share = match self.db.get_cf::<&[u8]>(share_cf, blockhash.as_ref()) {
+        let mut share = match self.db.get_cf::<&[u8]>(share_cf, blockhash.as_ref()) {
             Ok(Some(share)) => share,
             Ok(None) | Err(_) => return None,
         };
-        let share = match StorageShareBlock::cbor_deserialize(&share) {
+        let share: StorageShareBlock = match encode::deserialize(&mut share) {
             Ok(share) => share,
             Err(_) => return None,
         };
@@ -675,8 +667,8 @@ impl Store {
         let share_headers = shares
             .into_iter()
             .map(|v| {
-                if let Ok(Some(v)) = v {
-                    if let Ok(storage_share) = StorageShareBlock::cbor_deserialize(&v) {
+                if let Ok(Some(mut v)) = v {
+                    if let Ok(storage_share) = encode::deserialize::<StorageShareBlock>(&mut v) {
                         Some(storage_share.header)
                     } else {
                         None
@@ -812,8 +804,8 @@ impl Store {
             .iter()
             .zip(shares)
             .filter_map(|(blockhash, result)| {
-                if let Ok(Some(data)) = result {
-                    if let Ok(storage_share) = StorageShareBlock::cbor_deserialize(&data) {
+                if let Ok(Some(mut data)) = result {
+                    if let Ok(storage_share) = encode::deserialize::<StorageShareBlock>(&mut data) {
                         let txids = self.get_txids_for_blockhash(blockhash);
                         let transactions = txids
                             .iter()
@@ -842,6 +834,7 @@ impl Store {
     pub fn get_txs_for_block(&self, blockhash: &BlockHash) -> Vec<Transaction> {
         let txids = self.get_txids_for_blockhash(blockhash);
         txids
+            .0
             .iter()
             .map(|txid| self.get_tx(txid).unwrap())
             .collect()
@@ -867,12 +860,12 @@ impl Store {
 
         for i in 0..tx_metadata.input_count {
             let input_key = format!("{txid}:{i}");
-            let input = self
+            let mut input = self
                 .db
                 .get_cf::<&[u8]>(inputs_cf, input_key.as_ref())
                 .unwrap()
                 .unwrap();
-            let input: bitcoin::TxIn = match ciborium::de::from_reader(input.as_slice()) {
+            let input: bitcoin::TxIn = match encode::deserialize(&mut input) {
                 Ok(input) => input,
                 Err(e) => {
                     tracing::error!("Error deserializing input: {e:?}");
@@ -883,12 +876,12 @@ impl Store {
         }
         for i in 0..tx_metadata.output_count {
             let output_key = format!("{txid}:{i}");
-            let output = self
+            let mut output = self
                 .db
                 .get_cf::<&[u8]>(outputs_cf, output_key.as_ref())
                 .unwrap()
                 .unwrap();
-            let output: bitcoin::TxOut = match ciborium::de::from_reader(output.as_slice()) {
+            let output: bitcoin::TxOut = match encode::deserialize(&mut output) {
                 Ok(output) => output,
                 Err(e) => {
                     tracing::error!("Error deserializing output: {e:?}");
@@ -972,7 +965,7 @@ impl Store {
             .db
             .get_cf::<&[u8]>(column_family, height_bytes.as_ref())
         {
-            Ok(Some(existing)) => ciborium::de::from_reader(&existing[..]).unwrap_or_default(),
+            Ok(Some(mut existing)) => encode::deserialize(&mut existing).unwrap_or_default(),
             Ok(None) | Err(_) => Vec::new(),
         };
 
@@ -982,7 +975,7 @@ impl Store {
 
             // Serialize the updated vector of blockhashes
             let mut serialized = Vec::new();
-            ciborium::ser::into_writer(&blockhashes, &mut serialized).unwrap();
+            blockhashes.consensus_encode(&mut serialized);
 
             // Store the updated vector
             batch.put_cf(column_family, height_bytes, serialized);
@@ -997,9 +990,7 @@ impl Store {
             .db
             .get_cf::<&[u8]>(column_family, height_bytes.as_ref())
         {
-            Ok(Some(blockhashes)) => {
-                ciborium::de::from_reader(&blockhashes[..]).unwrap_or_default()
-            }
+            Ok(Some(mut blockhashes)) => encode::deserialize(&mut blockhashes).unwrap_or_default(),
             Ok(None) | Err(_) => vec![],
         }
     }
@@ -1018,8 +1009,9 @@ impl Store {
         metadata_key.extend_from_slice(b"_md");
 
         match self.db.get_cf::<&[u8]>(block_metadata_cf, &metadata_key) {
-            Ok(Some(metadata)) => {
-                let metadata: BlockMetadata = match ciborium::de::from_reader(metadata.as_slice()) {
+            Ok(Some(mut metadata_serialized)) => {
+                let metadata: BlockMetadata = match consensus::deserialize(&mut metadata_serialized)
+                {
                     Ok(metadata) => metadata,
                     Err(e) => {
                         tracing::error!("Error deserializing block metadata: {:?}", e);
@@ -1063,7 +1055,7 @@ impl Store {
         metadata_key.extend_from_slice(b"_md");
 
         let mut serialized = Vec::new();
-        ciborium::ser::into_writer(metadata, &mut serialized)?;
+        metadata.consensus_encode(&mut serialized);
 
         if let Some(batch) = batch {
             batch.put_cf(block_metadata_cf, &metadata_key, serialized);
@@ -2258,7 +2250,7 @@ mod tests {
     }
 
     #[test]
-    fn test_user_cbor_serialization() {
+    fn test_user_serialization() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 

@@ -16,6 +16,7 @@
 
 use super::{Store, column_families::ColumnFamily};
 use crate::accounting::simple_pplns::SimplePplnsShare;
+use bitcoin::consensus::encode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const INITIAL_SHARE_VEC_CAPACITY: usize = 100_000;
@@ -62,8 +63,8 @@ impl Store {
         let use_limit = limit.unwrap_or(INITIAL_SHARE_VEC_CAPACITY);
         let mut shares: Vec<SimplePplnsShare> = Vec::with_capacity(use_limit);
 
-        for (_key, value) in iter.take(use_limit).flatten() {
-            if let Ok(share) = ciborium::de::from_reader(&value[..]) {
+        for (_key, mut value) in iter.take(use_limit).flatten() {
+            if let Ok(share) = encode::deserialize::<SimplePplnsShare>(&mut value) {
                 shares.push(share);
             }
         }

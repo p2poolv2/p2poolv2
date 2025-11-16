@@ -31,7 +31,7 @@ use crate::shares::share_commitment::{ShareCommitment, build_share_commitment};
 use crate::stratum::messages::{Notify, NotifyParams};
 use crate::stratum::util::reverse_four_byte_chunks;
 use crate::stratum::util::to_be_hex;
-use bitcoin::PublicKey;
+use bitcoin::CompressedPublicKey;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::Version;
 use std::net::SocketAddr;
@@ -143,7 +143,7 @@ async fn build_notify_and_commitment(
     clean_jobs: bool,
     chain_store: &Arc<ChainStore>,
     config: &StratumConfig<crate::config::Parsed>,
-    miner_pubkey: Option<PublicKey>,
+    miner_pubkey: Option<CompressedPublicKey>,
     pool_signature: &[u8],
     tracker_handle: &TrackerHandle,
 ) -> Result<(String, Option<ShareCommitment>), WorkError> {
@@ -206,7 +206,7 @@ pub async fn start_notify(
     chain_store: Arc<ChainStore>,
     tracker_handle: TrackerHandle,
     config: &StratumConfig<crate::config::Parsed>,
-    miner_pubkey: Option<PublicKey>,
+    miner_pubkey: Option<CompressedPublicKey>,
 ) {
     let mut latest_template: Option<Arc<BlockTemplate>> = None;
     let pool_signature = match config.pool_signature {
@@ -294,6 +294,7 @@ mod tests {
     use crate::stratum::session::Session;
     use crate::stratum::work::tracker::start_tracker_actor;
     use crate::test_utils::genesis_for_tests;
+    use bitcoin::CompressedPublicKey;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use std::fs;
     use std::time::SystemTime;
@@ -440,7 +441,7 @@ mod tests {
             .returning(move || (genesis, std::collections::HashSet::new()));
 
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
-        let miner_pubkey: PublicKey =
+        let miner_pubkey: CompressedPublicKey =
             "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap();
@@ -623,7 +624,7 @@ mod tests {
         // Setup config and tracker
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
         let tracker_handle = start_tracker_actor();
-        let miner_pubkey: PublicKey =
+        let miner_pubkey: CompressedPublicKey =
             "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap();
