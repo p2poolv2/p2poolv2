@@ -14,13 +14,13 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::accounting::stats::metrics::MetricsHandle;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store::ChainStore;
 use crate::stratum::emission::EmissionReceiver;
+use crate::{accounting::stats::metrics::MetricsHandle, shares::share_block::ShareHeader};
 use std::sync::Arc;
 use tracing::info;
 
@@ -35,7 +35,15 @@ pub async fn handle_stratum_shares(
         info!("Received share: {:?}", emission.pplns);
 
         let _ = store.add_pplns_share(emission.pplns);
+        // TODO: Send block as Message::ShareBlock to peers. It should include the block as compact block.
+        if emission.share_commitment.is_none() {
+            info!("No share commitment emitted by stratum. Won't send share to peers");
+            return;
+        }
+        let share_header = ShareHeader::from_commitment_and_header(
+            emission.share_commitment.unwrap(),
+            emission.block.header,
+        );
     }
-    // TODO: Send block as Message::ShareBlock to peers. It should include the block as compact block.
     info!("Shares channel closed, stopping share handler.");
 }

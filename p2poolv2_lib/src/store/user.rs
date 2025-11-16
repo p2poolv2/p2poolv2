@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use bitcoin::consensus::encode::{Decodable, Encodable};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -41,5 +42,31 @@ impl StoredUser {
             btcaddress,
             created_at,
         }
+    }
+}
+
+impl Encodable for StoredUser {
+    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+        &self,
+        w: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        let mut len = 0;
+        len += self.user_id.consensus_encode(w)?;
+        len += self.btcaddress.consensus_encode(w)?;
+        len += self.created_at.consensus_encode(w)?;
+        Ok(len)
+    }
+}
+
+impl Decodable for StoredUser {
+    #[inline]
+    fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
+        r: &mut R,
+    ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        Ok(StoredUser {
+            user_id: u64::consensus_decode(r)?,
+            btcaddress: String::consensus_decode(r)?,
+            created_at: u64::consensus_decode(r)?,
+        })
     }
 }
