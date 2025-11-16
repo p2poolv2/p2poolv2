@@ -20,10 +20,10 @@ use crate::store::block_tx_metadata::{BlockMetadata, TxMetadata};
 use crate::store::column_families::ColumnFamily;
 use crate::store::user::StoredUser;
 use crate::utils::snowflake_simplified::get_next_id;
+use bitcoin::BlockHash;
 use bitcoin::Transaction;
 use bitcoin::consensus::{Encodable, encode};
 use bitcoin::hashes::Hash;
-use bitcoin::{BlockHash, consensus};
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -61,7 +61,7 @@ pub struct Store {
 #[allow(dead_code)]
 impl Store {
     /// Create a new share store
-    pub fn new(path: String, read_only: bool) -> Result<Self, Box<dyn Error>> {
+    pub fn new(path: String, read_only: bool) -> Result<Self, Box<dyn Error + Send + Sync>> {
         // for now we use default options for all column families, we can tweak this later based on performance testing
         let block_cf = ColumnFamilyDescriptor::new(ColumnFamily::Block, RocksDbOptions::default());
         let block_txids_cf =
@@ -75,6 +75,8 @@ impl Store {
             ColumnFamilyDescriptor::new(ColumnFamily::BlockIndex, RocksDbOptions::default());
         let block_height_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::BlockHeight, RocksDbOptions::default());
+        let bitcoin_txids_cf =
+            ColumnFamilyDescriptor::new(ColumnFamily::BitcoinTxids, RocksDbOptions::default());
 
         let job_cf = ColumnFamilyDescriptor::new(ColumnFamily::Job, RocksDbOptions::default());
         let share_cf = ColumnFamilyDescriptor::new(ColumnFamily::Share, RocksDbOptions::default());
@@ -92,6 +94,7 @@ impl Store {
             tx_cf,
             block_index_cf,
             block_height_cf,
+            bitcoin_txids_cf,
             job_cf,
             share_cf,
             user_cf,
@@ -121,7 +124,7 @@ impl Store {
     }
 
     /// Store a user by btcaddress, returns the user ID
-    pub fn add_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error>> {
+    pub fn add_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error + Send + Sync>> {
         let user_cf = self.db.cf_handle(&ColumnFamily::User).unwrap();
         let user_index_cf = self.db.cf_handle(&ColumnFamily::UserIndex).unwrap();
 
@@ -154,7 +157,7 @@ impl Store {
 
         // Store user data (key: user_id, value: serialized StoredUser)
         let mut serialized_user = Vec::new();
-        stored_user.consensus_encode(&mut serialized_user);
+        stored_user.consensus_encode(&mut serialized_user)?;
         batch.put_cf(user_cf, user_id.to_be_bytes(), serialized_user);
 
         // Store index mapping (key: btcaddress, value: user_id)
@@ -167,11 +170,14 @@ impl Store {
     }
 
     /// Get user by user ID
-    pub fn get_user_by_id(&self, user_id: u64) -> Result<Option<StoredUser>, Box<dyn Error>> {
+    pub fn get_user_by_id(
+        &self,
+        user_id: u64,
+    ) -> Result<Option<StoredUser>, Box<dyn Error + Send + Sync>> {
         let user_cf = self.db.cf_handle(&ColumnFamily::User).unwrap();
 
-        if let Some(mut serialized_user) = self.db.get_cf(user_cf, user_id.to_be_bytes())? {
-            if let Ok(stored_user) = encode::deserialize(&mut serialized_user) {
+        if let Some(serialized_user) = self.db.get_cf(user_cf, user_id.to_be_bytes())? {
+            if let Ok(stored_user) = encode::deserialize(&serialized_user) {
                 Ok(Some(stored_user))
             } else {
                 tracing::warn!("Error deserializing stored user. Database corrupted?");
@@ -186,7 +192,7 @@ impl Store {
     pub fn get_user_by_btcaddress(
         &self,
         btcaddress: &str,
-    ) -> Result<Option<StoredUser>, Box<dyn Error>> {
+    ) -> Result<Option<StoredUser>, Box<dyn Error + Send + Sync>> {
         let user_index_cf = self.db.cf_handle(&ColumnFamily::UserIndex).unwrap();
 
         if let Some(user_id_bytes) = self.db.get_cf(user_index_cf, btcaddress)? {
@@ -208,7 +214,7 @@ impl Store {
     pub fn get_btcaddresses_for_user_ids(
         &self,
         user_ids: &[u64],
-    ) -> Result<Vec<(u64, String)>, Box<dyn Error>> {
+    ) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>> {
         let user_cf = self.db.cf_handle(&ColumnFamily::User).unwrap();
 
         // Build keys for multi_get_cf: (column_family, key_bytes)
@@ -225,9 +231,8 @@ impl Store {
             .iter()
             .zip(users)
             .filter_map(|(user_id, result)| {
-                if let Ok(Some(mut serialized_user)) = result {
-                    if let Ok(stored_user) = encode::deserialize::<StoredUser>(&mut serialized_user)
-                    {
+                if let Ok(Some(serialized_user)) = result {
+                    if let Ok(stored_user) = encode::deserialize::<StoredUser>(&serialized_user) {
                         Some((*user_id, stored_user.btcaddress))
                     } else {
                         None
@@ -244,7 +249,11 @@ impl Store {
     /// Add a share to the store
     /// We use StorageShareBlock to serialize the share so that we do not store transactions serialized with the block.
     /// Transactions are stored separately. All writes are done in a single atomic batch.
-    pub fn add_share(&self, share: ShareBlock, height: u32) {
+    pub fn add_share(
+        &self,
+        share: ShareBlock,
+        height: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let blockhash = share.block_hash();
         debug!(
             "Adding share to store with {} txs: {:?}",
@@ -256,20 +265,42 @@ impl Store {
         let mut batch = rocksdb::WriteBatch::default();
 
         // Store transactions and get their metadata
-        let txs_metadata = self.add_txs(&share.transactions, &mut batch);
+        let txs_metadata = self.add_txs(&share.transactions, &mut batch)?;
 
         let txids = Txids(txs_metadata.iter().map(|t| t.txid).collect());
         // Store block -> txids index
-        self.add_txids_to_block_index(&blockhash, &txids, &mut batch);
+        self.add_txids_to_block_index(
+            &blockhash,
+            &txids,
+            &mut batch,
+            b"_txids",
+            ColumnFamily::BlockTxids,
+        )?;
+
+        let bitcoin_txids = Txids(
+            share
+                .bitcoin_transactions
+                .iter()
+                .map(|tx| tx.compute_txid())
+                .collect(),
+        );
+        // Store block -> bitcoin txids index
+        self.add_txids_to_block_index(
+            &blockhash,
+            &bitcoin_txids,
+            &mut batch,
+            b"_bitcoin_txids",
+            ColumnFamily::BitcoinTxids,
+        )?;
 
         if let Err(e) =
             self.update_block_index(&share.header.prev_share_blockhash, &blockhash, &mut batch)
         {
             tracing::error!("Failed to update block index: {:?}", e);
-            return;
+            return Err(e);
         }
 
-        self.set_height_to_blockhash(&blockhash, height, &mut batch);
+        self.set_height_to_blockhash(&blockhash, height, &mut batch)?;
         self.set_block_height_in_metadata(&blockhash, Some(height), Some(&mut batch))
             .unwrap();
 
@@ -277,11 +308,14 @@ impl Store {
         let storage_share_block: StorageShareBlock = share.into();
         let block_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
         let mut encoded_share_block = Vec::new();
-        storage_share_block.consensus_encode(&mut encoded_share_block);
+        storage_share_block.consensus_encode(&mut encoded_share_block)?;
         batch.put_cf::<&[u8], Vec<u8>>(block_cf, blockhash.as_ref(), encoded_share_block);
 
         // Write the entire batch atomically
-        self.db.write(batch).unwrap();
+        match self.db.write(batch) {
+            Ok(()) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Add PPLNS Share to pplns_share_cf
@@ -295,7 +329,7 @@ impl Store {
         let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
 
         let mut serialized = Vec::new();
-        pplns_share.consensus_encode(&mut serialized);
+        pplns_share.consensus_encode(&mut serialized)?;
 
         let n_time = pplns_share.n_time * 1_000_000;
         let key = SimplePplnsShare::make_key(n_time, pplns_share.user_id, get_next_id());
@@ -367,10 +401,8 @@ impl Store {
             .db
             .get_cf::<&[u8]>(block_index_cf, blockhash_bytes.as_ref())
         {
-            Ok(Some(mut existing)) => {
-                if let Ok(existing_blockhashes) =
-                    encode::deserialize::<Vec<BlockHash>>(&mut existing)
-                {
+            Ok(Some(existing)) => {
+                if let Ok(existing_blockhashes) = encode::deserialize::<Vec<BlockHash>>(&existing) {
                     existing_blockhashes.into_iter().collect()
                 } else {
                     tracing::warn!("Failed to deseriliaze child blockhash");
@@ -388,7 +420,7 @@ impl Store {
         prev_blockhash: &BlockHash,
         next_blockhash: &BlockHash,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let block_index_cf = self.db.cf_handle(&ColumnFamily::BlockIndex).unwrap();
         let mut prev_blockhash_bytes = bitcoin::consensus::serialize(prev_blockhash);
         prev_blockhash_bytes.extend_from_slice(b"_bi");
@@ -422,20 +454,20 @@ impl Store {
         &self,
         transactions: &[Transaction],
         batch: &mut rocksdb::WriteBatch,
-    ) -> Vec<TxMetadata> {
+    ) -> Result<Vec<TxMetadata>, Box<dyn Error + Send + Sync>> {
         let inputs_cf = self.db.cf_handle(&ColumnFamily::Inputs).unwrap();
         let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
         let mut txs_metadata = Vec::new();
         for tx in transactions {
             let txid = tx.compute_txid();
-            let metadata = self.add_tx_metadata(txid, tx, batch);
+            let metadata = self.add_tx_metadata(txid, tx, batch)?;
             txs_metadata.push(metadata);
 
             // Store each input for the transaction
             for (i, input) in tx.input.iter().enumerate() {
                 let input_key = format!("{txid}:{i}");
                 let mut serialized = Vec::new();
-                input.consensus_encode(&mut serialized);
+                input.consensus_encode(&mut serialized)?;
                 batch.put_cf::<&[u8], Vec<u8>>(inputs_cf, input_key.as_ref(), serialized);
             }
 
@@ -443,11 +475,11 @@ impl Store {
             for (i, output) in tx.output.iter().enumerate() {
                 let output_key = format!("{txid}:{i}");
                 let mut serialized = Vec::new();
-                output.consensus_encode(&mut serialized);
+                output.consensus_encode(&mut serialized)?;
                 batch.put_cf::<&[u8], Vec<u8>>(outputs_cf, output_key.as_ref(), serialized);
             }
         }
-        txs_metadata
+        Ok(txs_metadata)
     }
 
     /// Store transaction metadata
@@ -456,7 +488,7 @@ impl Store {
         txid: bitcoin::Txid,
         tx: &Transaction,
         batch: &mut rocksdb::WriteBatch,
-    ) -> TxMetadata {
+    ) -> Result<TxMetadata, Box<dyn Error + Send + Sync>> {
         let tx_metadata = TxMetadata {
             txid,
             version: tx.version,
@@ -468,9 +500,9 @@ impl Store {
 
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
         let mut tx_metadata_serialized = Vec::new();
-        tx_metadata.consensus_encode(&mut tx_metadata_serialized);
+        tx_metadata.consensus_encode(&mut tx_metadata_serialized)?;
         batch.put_cf::<&[u8], Vec<u8>>(tx_cf, txid.as_ref(), tx_metadata_serialized);
-        tx_metadata
+        Ok(tx_metadata)
     }
 
     /// Add the list of transaction IDs to the batch
@@ -480,28 +512,36 @@ impl Store {
         blockhash: &BlockHash,
         txids: &Txids,
         batch: &mut rocksdb::WriteBatch,
-    ) {
+        bytes_suffix: &[u8],
+        column_family: ColumnFamily,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let mut blockhash_bytes = bitcoin::consensus::serialize(blockhash);
-        blockhash_bytes.extend_from_slice(b"_txids");
+        blockhash_bytes.extend_from_slice(bytes_suffix);
 
         let mut serialized_txids = Vec::new();
-        txids.consensus_encode(&mut serialized_txids);
-        let block_txids_cf = self.db.cf_handle(&ColumnFamily::BlockTxids).unwrap();
+        txids.consensus_encode(&mut serialized_txids)?;
+        let block_txids_cf = self.db.cf_handle(&column_family).unwrap();
         batch.put_cf::<&[u8], Vec<u8>>(block_txids_cf, blockhash_bytes.as_ref(), serialized_txids);
+        Ok(())
     }
 
     /// Get all transaction IDs for a given block hash
     /// Returns a vector of transaction IDs that were included in the block
-    fn get_txids_for_blockhash(&self, blockhash: &BlockHash) -> Txids {
+    fn get_txids_for_blockhash(&self, blockhash: &BlockHash, column_family: ColumnFamily) -> Txids {
         let mut blockhash_bytes = bitcoin::consensus::serialize(blockhash);
-        blockhash_bytes.extend_from_slice(b"_txids");
+        let suffix_bytes: &[u8] = if column_family == ColumnFamily::BlockTxids {
+            b"_txids"
+        } else {
+            b"_bitcoin_txids"
+        };
+        blockhash_bytes.extend_from_slice(suffix_bytes);
 
-        let block_txids_cf = self.db.cf_handle(&ColumnFamily::BlockTxids).unwrap();
+        let block_txids_cf = self.db.cf_handle(&column_family).unwrap();
         match self
             .db
             .get_cf::<&[u8]>(block_txids_cf, blockhash_bytes.as_ref())
         {
-            Ok(Some(mut serialized_txids)) => match encode::deserialize(&mut serialized_txids) {
+            Ok(Some(serialized_txids)) => match encode::deserialize(&serialized_txids) {
                 Ok(t) => t,
                 Err(_) => {
                     tracing::warn!("Error reading txids for blockhash");
@@ -519,14 +559,14 @@ impl Store {
         &self,
         txid: &bitcoin::Txid,
         spent_by: Option<bitcoin::Txid>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
         let tx_metadata = self.db.get_cf::<&[u8]>(tx_cf, txid.as_ref()).unwrap();
         if tx_metadata.is_none() {
             return Err("Transaction not found".into());
         }
-        let mut tx_metadata_serialized = tx_metadata.unwrap();
-        let mut tx_metadata: TxMetadata = encode::deserialize(&mut tx_metadata_serialized)?;
+        let tx_metadata_serialized = tx_metadata.unwrap();
+        let mut tx_metadata: TxMetadata = encode::deserialize(&tx_metadata_serialized)?;
         tx_metadata.spent_by = spent_by;
 
         let mut serialized = Vec::new();
@@ -541,8 +581,8 @@ impl Store {
     pub fn get_tx_metadata(&self, txid: &bitcoin::Txid) -> Option<TxMetadata> {
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
         let tx_metadata = self.db.get_cf::<&[u8]>(tx_cf, txid.as_ref()).unwrap();
-        if let Some(mut tx_metadata) = tx_metadata {
-            match encode::deserialize(&mut tx_metadata) {
+        if let Some(tx_metadata) = tx_metadata {
+            match encode::deserialize(&tx_metadata) {
                 Ok(metadata) => Some(metadata),
                 Err(_) => {
                     tracing::warn!("Error reading tx metadata");
@@ -642,16 +682,22 @@ impl Store {
     pub fn get_share(&self, blockhash: &BlockHash) -> Option<ShareBlock> {
         debug!("Getting share from store: {:?}", blockhash);
         let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
-        let mut share = match self.db.get_cf::<&[u8]>(share_cf, blockhash.as_ref()) {
+        let share = match self.db.get_cf::<&[u8]>(share_cf, blockhash.as_ref()) {
             Ok(Some(share)) => share,
             Ok(None) | Err(_) => return None,
         };
-        let share: StorageShareBlock = match encode::deserialize(&mut share) {
+        let share: StorageShareBlock = match encode::deserialize(&share) {
             Ok(share) => share,
             Err(_) => return None,
         };
-        let transactions = self.get_txs_for_block(blockhash);
-        let share = share.into_share_block_with_transactions(transactions);
+        let transactions = self.get_txs_for_blockhash(blockhash, ColumnFamily::BlockTxids);
+        let bitcoin_transactions =
+            self.get_txs_for_blockhash(blockhash, ColumnFamily::BitcoinTxids);
+        let share = ShareBlock {
+            header: share.header,
+            transactions,
+            bitcoin_transactions,
+        };
         Some(share)
     }
 
@@ -667,8 +713,8 @@ impl Store {
         let share_headers = shares
             .into_iter()
             .map(|v| {
-                if let Ok(Some(mut v)) = v {
-                    if let Ok(storage_share) = encode::deserialize::<StorageShareBlock>(&mut v) {
+                if let Ok(Some(v)) = v {
+                    if let Ok(storage_share) = encode::deserialize::<StorageShareBlock>(&v) {
                         Some(storage_share.header)
                     } else {
                         None
@@ -804,16 +850,19 @@ impl Store {
             .iter()
             .zip(shares)
             .filter_map(|(blockhash, result)| {
-                if let Ok(Some(mut data)) = result {
-                    if let Ok(storage_share) = encode::deserialize::<StorageShareBlock>(&mut data) {
-                        let txids = self.get_txids_for_blockhash(blockhash);
-                        let transactions = txids
-                            .iter()
-                            .map(|txid| self.get_tx(txid).unwrap())
-                            .collect::<Vec<_>>();
+                if let Ok(Some(data)) = result {
+                    if let Ok(storage_share) = encode::deserialize::<StorageShareBlock>(&data) {
+                        let transactions =
+                            self.get_txs_for_blockhash(blockhash, ColumnFamily::BlockTxids);
+                        let bitcoin_transactions =
+                            self.get_txs_for_blockhash(blockhash, ColumnFamily::BitcoinTxids);
                         Some((
                             *blockhash,
-                            storage_share.into_share_block_with_transactions(transactions),
+                            ShareBlock {
+                                header: storage_share.header,
+                                transactions,
+                                bitcoin_transactions,
+                            },
                         ))
                     } else {
                         tracing::warn!(
@@ -831,8 +880,12 @@ impl Store {
 
     /// Get transactions for a blockhash
     /// First look up the txids from the blockhash_txids index, then get the transactions from the txids
-    pub fn get_txs_for_block(&self, blockhash: &BlockHash) -> Vec<Transaction> {
-        let txids = self.get_txids_for_blockhash(blockhash);
+    pub fn get_txs_for_blockhash(
+        &self,
+        blockhash: &BlockHash,
+        column_family: ColumnFamily,
+    ) -> Vec<Transaction> {
+        let txids = self.get_txids_for_blockhash(blockhash, column_family);
         txids
             .0
             .iter()
@@ -846,7 +899,10 @@ impl Store {
     /// - Load outputs
     /// - Deserialize inputs and outputs
     /// - Return transaction
-    pub fn get_tx(&self, txid: &bitcoin::Txid) -> Result<Transaction, Box<dyn Error>> {
+    pub fn get_tx(
+        &self,
+        txid: &bitcoin::Txid,
+    ) -> Result<Transaction, Box<dyn Error + Send + Sync>> {
         let tx_metadata = self
             .get_tx_metadata(txid)
             .ok_or_else(|| format!("Transaction metadata not found for txid: {txid}"))?;
@@ -860,12 +916,12 @@ impl Store {
 
         for i in 0..tx_metadata.input_count {
             let input_key = format!("{txid}:{i}");
-            let mut input = self
+            let input = self
                 .db
                 .get_cf::<&[u8]>(inputs_cf, input_key.as_ref())
                 .unwrap()
                 .unwrap();
-            let input: bitcoin::TxIn = match encode::deserialize(&mut input) {
+            let input: bitcoin::TxIn = match encode::deserialize(&input) {
                 Ok(input) => input,
                 Err(e) => {
                     tracing::error!("Error deserializing input: {e:?}");
@@ -876,12 +932,12 @@ impl Store {
         }
         for i in 0..tx_metadata.output_count {
             let output_key = format!("{txid}:{i}");
-            let mut output = self
+            let output = self
                 .db
                 .get_cf::<&[u8]>(outputs_cf, output_key.as_ref())
                 .unwrap()
                 .unwrap();
-            let output: bitcoin::TxOut = match encode::deserialize(&mut output) {
+            let output: bitcoin::TxOut = match encode::deserialize(&output) {
                 Ok(output) => output,
                 Err(e) => {
                     tracing::error!("Error deserializing output: {e:?}");
@@ -955,7 +1011,7 @@ impl Store {
         blockhash: &BlockHash,
         height: u32,
         batch: &mut rocksdb::WriteBatch,
-    ) {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let column_family = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         // Convert height to big-endian bytes - this is our key
         let height_bytes = height.to_be_bytes();
@@ -965,7 +1021,7 @@ impl Store {
             .db
             .get_cf::<&[u8]>(column_family, height_bytes.as_ref())
         {
-            Ok(Some(mut existing)) => encode::deserialize(&mut existing).unwrap_or_default(),
+            Ok(Some(existing)) => encode::deserialize(&existing).unwrap_or_default(),
             Ok(None) | Err(_) => Vec::new(),
         };
 
@@ -975,11 +1031,12 @@ impl Store {
 
             // Serialize the updated vector of blockhashes
             let mut serialized = Vec::new();
-            blockhashes.consensus_encode(&mut serialized);
+            blockhashes.consensus_encode(&mut serialized)?;
 
             // Store the updated vector
             batch.put_cf(column_family, height_bytes, serialized);
         }
+        Ok(())
     }
 
     /// Get the blockhashes for a specific height
@@ -990,7 +1047,7 @@ impl Store {
             .db
             .get_cf::<&[u8]>(column_family, height_bytes.as_ref())
         {
-            Ok(Some(mut blockhashes)) => encode::deserialize(&mut blockhashes).unwrap_or_default(),
+            Ok(Some(blockhashes)) => encode::deserialize(&blockhashes).unwrap_or_default(),
             Ok(None) | Err(_) => vec![],
         }
     }
@@ -1009,9 +1066,8 @@ impl Store {
         metadata_key.extend_from_slice(b"_md");
 
         match self.db.get_cf::<&[u8]>(block_metadata_cf, &metadata_key) {
-            Ok(Some(mut metadata_serialized)) => {
-                let metadata: BlockMetadata = match consensus::deserialize(&mut metadata_serialized)
-                {
+            Ok(Some(metadata_serialized)) => {
+                let metadata: BlockMetadata = match encode::deserialize(&metadata_serialized) {
                     Ok(metadata) => metadata,
                     Err(e) => {
                         tracing::error!("Error deserializing block metadata: {:?}", e);
@@ -1048,14 +1104,14 @@ impl Store {
         blockhash: &BlockHash,
         metadata: &BlockMetadata,
         batch: Option<&mut rocksdb::WriteBatch>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let block_metadata_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
 
         let mut metadata_key = bitcoin::consensus::serialize(blockhash);
         metadata_key.extend_from_slice(b"_md");
 
         let mut serialized = Vec::new();
-        metadata.consensus_encode(&mut serialized);
+        metadata.consensus_encode(&mut serialized)?;
 
         if let Some(batch) = batch {
             batch.put_cf(block_metadata_cf, &metadata_key, serialized);
@@ -1072,7 +1128,7 @@ impl Store {
         blockhash: &BlockHash,
         valid: bool,
         batch: Option<&mut rocksdb::WriteBatch>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let metadata = self.get_block_metadata(blockhash).unwrap_or(BlockMetadata {
             is_valid: false,
             is_confirmed: false,
@@ -1094,7 +1150,7 @@ impl Store {
         blockhash: &BlockHash,
         confirmed: bool,
         batch: Option<&mut rocksdb::WriteBatch>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let metadata = self.get_block_metadata(blockhash).unwrap_or(BlockMetadata {
             is_valid: false,
             is_confirmed: false,
@@ -1115,7 +1171,7 @@ impl Store {
         blockhash: &BlockHash,
         height: Option<u32>,
         batch: Option<&mut rocksdb::WriteBatch>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let metadata = self.get_block_metadata(blockhash).unwrap_or(BlockMetadata {
             is_valid: false,
             is_confirmed: false,
@@ -1187,7 +1243,7 @@ impl Store {
         &self,
         genesis_hash: BlockHash,
         network: bitcoin::Network,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         // Set genesis block hash
         self.set_genesis_block_hash(genesis_hash);
 
@@ -1268,13 +1324,13 @@ mod tests {
             .build();
 
         // Add all shares to store
-        store.add_share(share1.clone(), 0);
-        store.add_share(uncle1_share2.clone(), 1);
-        store.add_share(uncle2_share2.clone(), 1);
-        store.add_share(share2.clone(), 1);
-        store.add_share(uncle1_share3.clone(), 2);
-        store.add_share(uncle2_share3.clone(), 2);
-        store.add_share(share3.clone(), 2);
+        store.add_share(share1.clone(), 0).unwrap();
+        store.add_share(uncle1_share2.clone(), 1).unwrap();
+        store.add_share(uncle2_share2.clone(), 1).unwrap();
+        store.add_share(share2.clone(), 1).unwrap();
+        store.add_share(uncle1_share3.clone(), 2).unwrap();
+        store.add_share(uncle2_share3.clone(), 2).unwrap();
+        store.add_share(share3.clone(), 2).unwrap();
 
         // Get chain up to share3
         let chain = store.get_chain_upto(&share3.block_hash());
@@ -1415,7 +1471,7 @@ mod tests {
         // Store the transaction
         let txid = tx.compute_txid();
         let mut batch = rocksdb::WriteBatch::default();
-        let txs_metadata = store.add_txs(&[tx.clone()], &mut batch);
+        let txs_metadata = store.add_txs(&[tx.clone()], &mut batch).unwrap();
         store.db.write(batch).unwrap();
 
         assert_eq!(txs_metadata.len(), 1);
@@ -1457,7 +1513,7 @@ mod tests {
         // Store the transaction
         let txid = tx.compute_txid();
         let mut batch = rocksdb::WriteBatch::default();
-        store.add_txs(&[tx.clone()], &mut batch);
+        store.add_txs(&[tx.clone()], &mut batch).unwrap();
         store.db.write(batch).unwrap();
 
         // Initially status should be None
@@ -1532,13 +1588,23 @@ mod tests {
         let blockhash = share.block_hash();
 
         // Store the txids for the blockhash
-        let txids = vec![txid1, txid2];
+        let txids = Txids(vec![txid1, txid2]);
         let mut batch = rocksdb::WriteBatch::default();
-        store.add_txids_to_block_index(&blockhash, &txids, &mut batch);
+        store
+            .add_txids_to_block_index(
+                &blockhash,
+                &txids,
+                &mut batch,
+                b"_txids",
+                ColumnFamily::BlockTxids,
+            )
+            .unwrap();
         store.db.write(batch).unwrap();
 
         // Get txids for the blockhash
-        let retrieved_txids = store.get_txids_for_blockhash(&blockhash);
+        let retrieved_txids = store
+            .get_txids_for_blockhash(&blockhash, ColumnFamily::BlockTxids)
+            .0;
 
         // Verify we got back the same txids in the same order
         assert_eq!(retrieved_txids.len(), 2);
@@ -1550,8 +1616,9 @@ mod tests {
             "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6"
                 .parse::<BlockHash>()
                 .unwrap();
-        let empty_txids = store.get_txids_for_blockhash(&non_existent_blockhash);
-        assert!(empty_txids.is_empty());
+        let empty_txids =
+            store.get_txids_for_blockhash(&non_existent_blockhash, ColumnFamily::BlockTxids);
+        assert!(empty_txids.0.is_empty());
     }
 
     #[test]
@@ -1584,11 +1651,12 @@ mod tests {
             .build();
 
         // Store the share block
-        store.add_share(share.clone(), 0);
+        store.add_share(share.clone(), 0).unwrap();
         assert_eq!(share.transactions.len(), 3);
 
         // Retrieve transactions for the block hash
-        let retrieved_txs = store.get_txs_for_block(&share.block_hash());
+        let retrieved_txs =
+            store.get_txs_for_blockhash(&share.block_hash(), ColumnFamily::BlockTxids);
 
         // Verify transactions were stored and can be retrieved
         assert_eq!(retrieved_txs.len(), 3);
@@ -1618,7 +1686,7 @@ mod tests {
 
         let txid = tx.compute_txid();
         let mut batch = rocksdb::WriteBatch::default();
-        let res = store.add_tx_metadata(txid, &tx, &mut batch);
+        let res = store.add_tx_metadata(txid, &tx, &mut batch).unwrap();
         store.db.write(batch).unwrap();
 
         assert_eq!(res.txid, txid);
@@ -1660,7 +1728,7 @@ mod tests {
 
         let txid = tx.compute_txid();
         let mut batch = rocksdb::WriteBatch::default();
-        let res = store.add_txs(&[tx.clone()], &mut batch);
+        let res = store.add_txs(&[tx.clone()], &mut batch).unwrap();
         store.db.write(batch).unwrap();
 
         assert_eq!(res[0].txid, txid);
@@ -1709,7 +1777,7 @@ mod tests {
 
         // Add transactions to store
         let mut batch = rocksdb::WriteBatch::default();
-        store.add_txs(&transactions, &mut batch);
+        store.add_txs(&transactions, &mut batch).unwrap();
         store.db.write(batch).unwrap();
 
         // Verify transactions were stored correctly by retrieving them by txid
@@ -1732,7 +1800,7 @@ mod tests {
             .build();
 
         // Add share to store
-        store.add_share(share.clone(), 0);
+        store.add_share(share.clone(), 0).unwrap();
 
         // Get share header from store
         let read_share = store.get_share(&share.block_hash()).unwrap();
@@ -1810,11 +1878,11 @@ mod tests {
             .build();
 
         // Add all shares to store
-        store.add_share(share1.clone(), 0);
-        store.add_share(uncle1_share2.clone(), 1);
-        store.add_share(uncle2_share2.clone(), 1);
-        store.add_share(share2.clone(), 1);
-        store.add_share(share3.clone(), 2);
+        store.add_share(share1.clone(), 0).unwrap();
+        store.add_share(uncle1_share2.clone(), 1).unwrap();
+        store.add_share(uncle2_share2.clone(), 1).unwrap();
+        store.add_share(share2.clone(), 1).unwrap();
+        store.add_share(share3.clone(), 2).unwrap();
 
         // Verify children of share1
         let children_share1 = store.get_children_blockhashes(&share1.block_hash());
@@ -1870,11 +1938,11 @@ mod tests {
             .build();
 
         // Add all shares to store
-        store.add_share(share1.clone(), 0);
-        store.add_share(uncle1_share2.clone(), 1);
-        store.add_share(uncle2_share2.clone(), 1);
-        store.add_share(share2.clone(), 1);
-        store.add_share(share3.clone(), 2);
+        store.add_share(share1.clone(), 0).unwrap();
+        store.add_share(uncle1_share2.clone(), 1).unwrap();
+        store.add_share(uncle2_share2.clone(), 1).unwrap();
+        store.add_share(share2.clone(), 1).unwrap();
+        store.add_share(share3.clone(), 2).unwrap();
 
         // Verify descendants of share1
         let descendants_share1 =
@@ -1926,7 +1994,7 @@ mod tests {
                 builder = builder.prev_share_blockhash(prev);
             }
             let block = builder.build();
-            store.add_share(block.clone(), height);
+            store.add_share(block.clone(), height).unwrap();
 
             hashes.push(block.block_hash());
         }
@@ -1962,7 +2030,7 @@ mod tests {
             }
             let block = builder.build();
             blocks.push(block.clone());
-            store.add_share(block.clone(), height as u32);
+            store.add_share(block.clone(), height as u32).unwrap();
             hashes.push(block.block_hash());
         }
 
@@ -2000,7 +2068,7 @@ mod tests {
             }
             let block = builder.build();
             blocks.push(block.clone());
-            store.add_share(block, height as u32);
+            store.add_share(block, height as u32).unwrap();
         }
 
         let stop_block = store.get_blockhashes_for_height(2)[0];
@@ -2024,7 +2092,7 @@ mod tests {
         let share = TestShareBlockBuilder::new().build();
 
         // Add share to store
-        store.add_share(share.clone(), 0);
+        store.add_share(share.clone(), 0).unwrap();
         let blockhash = share.block_hash();
 
         // Initially, block should not be valid or confirmed
@@ -2087,8 +2155,8 @@ mod tests {
             .build();
 
         // Add shares to store
-        store.add_share(share1.clone(), 0);
-        store.add_share(share2.clone(), 1);
+        store.add_share(share1.clone(), 0).unwrap();
+        store.add_share(share2.clone(), 1).unwrap();
 
         let blockhash1 = share1.block_hash();
         let blockhash2 = share2.block_hash();
@@ -2128,7 +2196,7 @@ mod tests {
         let blockhash = share.block_hash();
 
         // Add share to store without setting height in metadata
-        store.add_share(share.clone(), 0);
+        store.add_share(share.clone(), 0).unwrap();
 
         // Height should be set during add_share
         let metadata = store.get_block_metadata(&blockhash).unwrap();
@@ -2354,9 +2422,9 @@ mod tests {
             .build();
 
         // Store shares in linear chain 0 -> 1 -> 2
-        store.add_share(share1.clone(), 0);
-        store.add_share(share2.clone(), 1);
-        store.add_share(share3.clone(), 2);
+        store.add_share(share1.clone(), 0).unwrap();
+        store.add_share(share2.clone(), 1).unwrap();
+        store.add_share(share3.clone(), 2).unwrap();
 
         let genesis_hash = share1.block_hash();
 

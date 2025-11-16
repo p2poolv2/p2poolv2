@@ -85,11 +85,26 @@ impl ShareHeader {
     /// Generate a commitment hash serialized using consensus encode
     ///
     /// Serialize all fields in ShareHeader apart from bitcoin_header
-    /// and return a sha256d of the serialized bytes
-    pub fn commitment_hash(&self) -> Result<bitcoin::hashes::sha256d::Hash, Box<dyn Error>> {
-        let mut serialized = Vec::new();
-        self.consensus_encode(&mut serialized);
-        Ok(bitcoin::hashes::sha256d::Hash::hash(&serialized))
+    /// and return a sha256 of the serialized bytes
+    pub fn commitment_hash(&self) -> Result<bitcoin::hashes::sha256::Hash, Box<dyn Error>> {
+        let mut serialized_without_bitcoin_header = Vec::new();
+        self.prev_share_blockhash
+            .consensus_encode(&mut serialized_without_bitcoin_header)?;
+        self.uncles
+            .consensus_encode(&mut serialized_without_bitcoin_header)?;
+        self.miner_pubkey
+            .write_into(&mut serialized_without_bitcoin_header)?;
+        self.merkle_root
+            .unwrap()
+            .consensus_encode(&mut serialized_without_bitcoin_header)?;
+        self.bits
+            .consensus_encode(&mut serialized_without_bitcoin_header)?;
+        self.time
+            .consensus_encode(&mut serialized_without_bitcoin_header)?;
+
+        Ok(bitcoin::hashes::sha256::Hash::hash(
+            &serialized_without_bitcoin_header,
+        ))
     }
 }
 
@@ -323,7 +338,7 @@ impl Decodable for ShareBlock {
 
 /// A new type for vector of txids.
 /// We then provide Encodable/Decodable for this.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Txids(pub Vec<Txid>);
 
 impl Encodable for Txids {
@@ -367,7 +382,7 @@ impl Decodable for Txids {
 }
 
 /// A variant of ShareBlock used for storage that excludes transactions
-#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct StorageShareBlock {
     /// The header of the share block
     pub header: ShareHeader,
@@ -385,34 +400,20 @@ impl From<ShareBlock> for StorageShareBlock {
     fn from(block: ShareBlock) -> Self {
         Self {
             header: block.header,
-            txids: block
-                .transactions
-                .iter()
-                .map(|tx| tx.compute_txid())
-                .collect(),
-            bitcoin_txids: vec![],
-        }
-    }
-}
-
-#[allow(dead_code)]
-impl StorageShareBlock {
-    /// Convert back to ShareBlock with empty transactions and block
-    pub fn into_share_block(self) -> ShareBlock {
-        ShareBlock {
-            header: self.header,
-            // TODO: Fetch transactions using txid vector
-            transactions: vec![],
-            bitcoin_transactions: vec![],
-        }
-    }
-
-    /// Convert back to ShareBlock with provided transactions
-    pub fn into_share_block_with_transactions(self, transactions: Vec<Transaction>) -> ShareBlock {
-        ShareBlock {
-            header: self.header,
-            transactions,
-            bitcoin_transactions: vec![],
+            txids: Txids(
+                block
+                    .transactions
+                    .iter()
+                    .map(|tx| tx.compute_txid())
+                    .collect(),
+            ),
+            bitcoin_txids: Txids(
+                block
+                    .bitcoin_transactions
+                    .iter()
+                    .map(|tx| tx.compute_txid())
+                    .collect(),
+            ),
         }
     }
 }
@@ -518,16 +519,6 @@ mod tests {
 
         // Verify header and miner_share are preserved
         assert_eq!(storage_share.header, share.header);
-
-        // Test conversion back to ShareBlock with empty transactions
-        let recovered_share = storage_share.clone().into_share_block();
-        assert_eq!(recovered_share.header, share.header);
-        assert!(recovered_share.transactions.is_empty());
-
-        // Test conversion back with original transactions
-        let recovered_share =
-            storage_share.into_share_block_with_transactions(share.transactions.clone());
-        assert_eq!(recovered_share, share);
     }
 
     #[test]

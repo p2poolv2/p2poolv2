@@ -29,9 +29,7 @@ use bitcoin::CompressedPublicKey;
 #[cfg(test)]
 use bitcoin::hashes::Hash;
 #[cfg(test)]
-use bitcoin::{
-    Block, BlockHash, CompactTarget, PublicKey, Transaction, TxMerkleNode, block::Header,
-};
+use bitcoin::{Block, BlockHash, CompactTarget, Transaction, TxMerkleNode, block::Header};
 use rand;
 use std::str::FromStr;
 
@@ -165,7 +163,7 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
     let share_header = ShareHeader {
         prev_share_blockhash: BlockHash::all_zeros(),
         uncles: vec![],
-        miner_pubkey: PublicKey::from_str(
+        miner_pubkey: CompressedPublicKey::from_str(
             "020202020202020202020202020202020202020202020202020202020202020202",
         )
         .unwrap(),
@@ -324,7 +322,7 @@ fn test_share_block(
     let header = ShareHeader {
         prev_share_blockhash: BlockHash::from_str(prev_share_blockhash).unwrap(),
         uncles,
-        miner_pubkey: PublicKey::from_str(miner_pubkey).unwrap(),
+        miner_pubkey: CompressedPublicKey::from_str(miner_pubkey).unwrap(),
         merkle_root: Some(share_merkle_root),
         bitcoin_header,
         time: 1700000000u32,
@@ -343,7 +341,7 @@ fn test_share_block(
 pub struct TestShareHeaderBuilder {
     prev_share_blockhash: Option<BlockHash>,
     uncles: Vec<BlockHash>,
-    miner_pubkey: Option<PublicKey>,
+    miner_pubkey: Option<CompressedPublicKey>,
     transactions: Vec<Transaction>,
 }
 
@@ -380,7 +378,7 @@ impl TestShareHeaderBuilder {
         self
     }
 
-    pub fn miner_pubkey(mut self, miner_pubkey: PublicKey) -> Self {
+    pub fn miner_pubkey(mut self, miner_pubkey: CompressedPublicKey) -> Self {
         self.miner_pubkey = Some(miner_pubkey);
         self
     }
@@ -392,7 +390,7 @@ impl TestShareHeaderBuilder {
 
     pub fn build(self) -> ShareHeader {
         let default_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<PublicKey>()
+            .parse::<CompressedPublicKey>()
             .unwrap();
 
         let default_merkle_root = {

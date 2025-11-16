@@ -84,7 +84,7 @@ impl ChainStore {
             share.block_hash(),
             height
         );
-        self.store.add_share(share.clone(), height);
+        self.store.add_share(share.clone(), height)?;
 
         // handle new chain by setting tip and total difficulty
         if tips.is_empty() {
@@ -372,12 +372,12 @@ impl ChainStore {
         self.store.get_jobs(start_time, end_time, limit)
     }
 
-    pub fn add_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error>> {
+    pub fn add_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error + Send + Sync>> {
         self.store.add_user(btcaddress)
     }
 
     /// Get the target for the tip share block
-    pub fn get_current_target(&self) -> Result<u32, Box<dyn Error>> {
+    pub fn get_current_target(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
         let tip = self.store.get_chain_tip();
         let headers = self.get_share_headers(&[tip]);
         match headers.first() {
@@ -414,8 +414,8 @@ mock! {
         pub fn get_tip_height(&self) -> Option<u32>;
         pub fn add_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn get_jobs(&self, start_time: Option<u64>, end_time: Option<u64>, limit: usize) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>>;
-        pub fn add_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error>>;
-        pub fn get_current_target(&self) -> Result<u32, Box<dyn Error>>;
+        pub fn add_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error + Send + Sync>>;
+        pub fn get_current_target(&self) -> Result<u32, Box<dyn Error + Send + Sync>>;
     }
 
 

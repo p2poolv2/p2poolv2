@@ -21,7 +21,9 @@ use crate::shares::chain::chain_store::ChainStore;
 use crate::shares::chain::chain_store::ChainStore;
 use crate::stratum::work::block_template::BlockTemplate;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
+use bitcoin::consensus::{Decodable, Encodable};
 use bitcoin::hashes::Hash;
+use bitcoin::io::{Read, Write};
 use bitcoin::{BlockHash, CompactTarget, CompressedPublicKey, TxMerkleNode, hashes};
 use serde::Serialize;
 use std::error::Error;
@@ -58,11 +60,71 @@ pub struct ShareCommitment {
 }
 
 impl ShareCommitment {
-    /// Make a SHA256 hash for commitment
+    /// Make a SHA256 hash for commitment using consensus encoding
     pub fn hash(&self) -> hashes::sha256::Hash {
         let mut serialized = Vec::new();
-        ciborium::ser::into_writer(&self, &mut serialized).unwrap();
+        self.consensus_encode(&mut serialized)
+            .expect("encoding commitment should never fail");
         bitcoin::hashes::sha256::Hash::hash(&serialized)
+    }
+}
+
+impl Encodable for ShareCommitment {
+    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, bitcoin::io::Error> {
+        let mut len = 0;
+        len += self.prev_share_blockhash.consensus_encode(w)?;
+        len += self.uncles.consensus_encode(w)?;
+
+        // Encode CompressedPublicKey using write_into
+        self.miner_pubkey.write_into(w)?;
+        len += 33;
+
+        // Encode Option<TxMerkleNode> manually
+        match &self.merkle_root {
+            Some(root) => {
+                len += true.consensus_encode(w)?;
+                len += root.consensus_encode(w)?;
+            }
+            None => {
+                len += false.consensus_encode(w)?;
+            }
+        }
+
+        len += self.bits.consensus_encode(w)?;
+        len += self.time.consensus_encode(w)?;
+        Ok(len)
+    }
+}
+
+impl Decodable for ShareCommitment {
+    fn consensus_decode<R: Read + ?Sized>(
+        r: &mut R,
+    ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        let prev_share_blockhash = BlockHash::consensus_decode(r)?;
+        let uncles = Vec::<BlockHash>::consensus_decode(r)?;
+
+        // Decode CompressedPublicKey using read_from
+        let miner_pubkey = CompressedPublicKey::read_from(r)?;
+
+        // Decode Option<TxMerkleNode> manually
+        let has_merkle_root = bool::consensus_decode(r)?;
+        let merkle_root = if has_merkle_root {
+            Some(TxMerkleNode::consensus_decode(r)?)
+        } else {
+            None
+        };
+
+        let bits = CompactTarget::consensus_decode(r)?;
+        let time = u32::consensus_decode(r)?;
+
+        Ok(ShareCommitment {
+            prev_share_blockhash,
+            uncles,
+            miner_pubkey,
+            merkle_root,
+            bits,
+            time,
+        })
     }
 }
 
@@ -181,11 +243,9 @@ mod tests {
         let commitment = create_test_commitment();
 
         let mut serialized = Vec::new();
-        ciborium::ser::into_writer(&commitment, &mut serialized).unwrap();
+        commitment.consensus_encode(&mut serialized).unwrap();
 
-        // Should produce valid CBOR bytes
         assert!(!serialized.is_empty());
-        // CBOR typically starts with a map indicator
         assert!(serialized[0] >= 0xa0 && serialized[0] <= 0xbf || serialized[0] == 0xbf);
     }
 
@@ -195,9 +255,8 @@ mod tests {
         commitment.merkle_root = None;
 
         let mut serialized = Vec::new();
-        ciborium::ser::into_writer(&commitment, &mut serialized).unwrap();
+        commitment.consensus_encode(&mut serialized).unwrap();
 
-        // Should produce valid CBOR bytes
         assert!(!serialized.is_empty());
     }
 
@@ -214,9 +273,8 @@ mod tests {
         );
 
         let mut serialized = Vec::new();
-        ciborium::ser::into_writer(&commitment, &mut serialized).unwrap();
+        commitment.consensus_encode(&mut serialized).unwrap();
 
-        // Should produce valid CBOR bytes
         assert!(!serialized.is_empty());
     }
 

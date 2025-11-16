@@ -97,10 +97,10 @@ async fn main() -> Result<(), String> {
     );
 
     let stratum_config = config.stratum.clone().parse().unwrap();
-    let miner_pubkey = match config.miner {
-        Some(ref miner_config) => Some(miner_config.pubkey.clone()),
-        None => None,
-    };
+    let miner_pubkey = config
+        .miner
+        .as_ref()
+        .map(|miner_config| miner_config.pubkey);
     let bitcoinrpc_config = config.bitcoinrpc.clone();
 
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();

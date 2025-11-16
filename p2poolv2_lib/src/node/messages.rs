@@ -18,7 +18,7 @@ use crate::shares::share_block::{ShareBlock, ShareHeader, Txids};
 use bitcoin::consensus::{Decodable, Encodable, encode};
 use bitcoin::hashes::{Hash, sha256d};
 use bitcoin::io::{Read, Write};
-use bitcoin::{BlockHash, Txid, VarInt, block::Header};
+use bitcoin::{BlockHash, Txid, VarInt};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
@@ -145,42 +145,48 @@ impl Display for Message {
     }
 }
 
-struct HeaderSerializationWrapper<'a>(&'a Vec<Header>);
+struct ShareHeaderSerializationWrapper<'a>(&'a Vec<ShareHeader>);
 
-impl<'a> Encodable for HeaderSerializationWrapper<'a> {
+impl<'a> Encodable for ShareHeaderSerializationWrapper<'a> {
     #[inline]
     fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, bitcoin::io::Error> {
         let mut len = 0;
         len += VarInt::from(self.0.len()).consensus_encode(w)?;
-        for header in self.0.iter() {
-            len += header.consensus_encode(w)?;
+        for share_header in self.0.iter() {
+            len += share_header.consensus_encode(w)?;
             len += 0u8.consensus_encode(w)?;
         }
         Ok(len)
     }
 }
 
-impl<'a> Decodable for HeaderSerializationWrapper<'a> {
+struct ShareHeaderDeserializationWrapper(Vec<ShareHeader>);
+
+impl Decodable for ShareHeaderDeserializationWrapper {
     #[inline]
-    fn consensus_decode_from_finite_reader<R: bitcoin::io::Read + ?Sized>(
+    fn consensus_decode_from_finite_reader<R: Read + ?Sized>(
         r: &mut R,
-    ) -> Result<Self, bitcoin::consensus::encode::Error> {
-        let len = VarInt::consensus_decode_from_finite_reader(r)?.0;
-        // Do not allocate upfront more items than if the sequence of type
-        // occupied roughly quarter a block. This should never be the case
-        // for normal data, but even if that's not true - `push` will just
-        // reallocate.
-        // Note: OOM protection relies on reader eventually running out of
-        // data to feed us.
-        let max_capacity =
-            bitcoin::consensus::encode::MAX_VEC_SIZE / 4 / core::mem::size_of::<Header>();
-        let headers = Vec::<Header>::with_capacity(core::cmp::min(len as usize, max_capacity));
-        let mut ret = HeaderSerializationWrapper(&headers);
+    ) -> Result<Self, encode::Error> {
+        let len = VarInt::consensus_decode(r)?.0;
+        // should be above usual number of items to avoid
+        // allocation
+        let mut ret = Vec::with_capacity(core::cmp::min(1024 * 16, len as usize));
         for _ in 0..len {
-            ret.0
-                .push(Decodable::consensus_decode_from_finite_reader(r)?);
+            ret.push(Decodable::consensus_decode(r)?);
+            if u8::consensus_decode(r)? != 0u8 {
+                return Err(encode::Error::ParseFailed(
+                    "Headers message should not contain transactions",
+                ));
+            }
         }
-        Ok(ret)
+        Ok(ShareHeaderDeserializationWrapper(ret))
+    }
+
+    #[inline]
+    fn consensus_decode<R: Read + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
+        Self::consensus_decode_from_finite_reader(
+            &mut r.take(bitcoin::p2p::message::MAX_MSG_SIZE as u64),
+        )
     }
 }
 
@@ -208,7 +214,7 @@ impl Encodable for Message {
             }
             Message::ShareHeaders(headers) => {
                 let mut len = SHARE_HEADERS.consensus_encode(w)?;
-                len += headers.consensus_encode(w)?;
+                len += ShareHeaderSerializationWrapper(headers).consensus_encode(w)?;
                 Ok(len)
             }
             Message::ShareBlock(block) => {
@@ -245,9 +251,9 @@ impl Decodable for Message {
                 Vec::<BlockHash>::consensus_decode(r)?,
                 BlockHash::consensus_decode(r)?,
             )),
-            SHARE_HEADERS => Ok(Message::ShareHeaders(Vec::<ShareHeader>::consensus_decode(
-                r,
-            )?)),
+            SHARE_HEADERS => Ok(Message::ShareHeaders(
+                ShareHeaderDeserializationWrapper::consensus_decode(r)?.0,
+            )),
             SHARE_BLOCK => Ok(Message::ShareBlock(ShareBlock::consensus_decode(r)?)),
             GET_DATA => Ok(Message::GetData(GetData::consensus_decode(r)?)),
             TRANSACTION => Ok(Message::Transaction(
@@ -271,9 +277,6 @@ impl Encodable for RawMessage {
 
 impl Decodable for RawMessage {
     fn consensus_decode<R: Read + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
-        use bitcoin::hashes::{Hash, sha256d};
-        use bitcoin::io::Read as _;
-
         // Read header
         let magic: [u8; 4] = Decodable::consensus_decode(r)?;
         let payload_len: u32 = Decodable::consensus_decode(r)?;
@@ -290,15 +293,13 @@ impl Decodable for RawMessage {
             return Err(encode::Error::ParseFailed("Checksum mismatch"));
         }
 
-        // Decode payload
-        let mut payload_reader = &payload_bytes[..];
-        let payload = Message::consensus_decode(&mut payload_reader)?;
+        let payload = Message::consensus_decode(&mut &payload_bytes[..])?;
 
         Ok(RawMessage {
             magic,
-            payload,
             payload_len,
             checksum: expected_checksum,
+            payload,
         })
     }
 }
@@ -407,7 +408,7 @@ mod tests {
 
         // Test serialization
         let mut serialized = Vec::new();
-        msg.consensus_encode(&mut serialized);
+        msg.consensus_encode(&mut serialized).unwrap();
 
         // Test deserialization
         let deserialized = encode::deserialize::<Message>(&mut serialized).unwrap();
@@ -433,10 +434,10 @@ mod tests {
                 .unwrap(),
         ));
         let mut serialized = Vec::new();
-        block_msg.consensus_encode(&mut serialized);
+        block_msg.consensus_encode(&mut serialized).unwrap();
 
         // Test deserialization
-        let deserialized = encode::deserialize::<Message>(&mut serialized).unwrap();
+        let deserialized = encode::deserialize::<Message>(&serialized).unwrap();
 
         match deserialized {
             Message::GetData(GetData::Block(hash)) => {
@@ -454,8 +455,9 @@ mod tests {
                 .unwrap(),
         ));
         let mut serialized = Vec::new();
-        tx_msg.consensus_encode(&mut serialized);
-        let deserialized = encode::deserialize::<Message>(&mut serialized).unwrap();
+        tx_msg.consensus_encode(&mut serialized).unwrap();
+
+        let deserialized = encode::deserialize::<Message>(&serialized).unwrap();
         match deserialized {
             Message::GetData(GetData::Txid(hash)) => {
                 assert_eq!(

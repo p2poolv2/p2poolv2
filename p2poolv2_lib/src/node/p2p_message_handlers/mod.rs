@@ -107,6 +107,7 @@ mod tests {
     use crate::node::SwarmSend;
     #[mockall_double::double]
     use crate::shares::chain::chain_store::ChainStore;
+    use crate::shares::share_block::Txids;
     use crate::test_utils::{
         TestShareBlockBuilder, build_block_from_work_components, genesis_for_tests,
     };
@@ -345,7 +346,7 @@ mod tests {
                 .parse()
                 .unwrap(),
         ];
-        let inventory = InventoryMessage::TransactionHashes(tx_hashes);
+        let inventory = InventoryMessage::TransactionHashes(Txids(tx_hashes));
 
         let ctx = RequestContext {
             peer: peer_id,

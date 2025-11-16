@@ -16,7 +16,7 @@
 
 pub mod request_response;
 use crate::config::Config;
-use crate::node::messages::Message;
+use crate::node::messages::network_magic;
 use libp2p::connection_limits;
 use libp2p::request_response::ProtocolSupport;
 use libp2p::{
@@ -25,7 +25,7 @@ use libp2p::{
     kad::{self, store::MemoryStore},
     swarm::NetworkBehaviour,
 };
-use request_response::P2PoolRequestResponseProtocol;
+use request_response::{ConsensusCodec, P2PoolRequestResponseProtocol};
 use request_response::{RequestResponseBehaviour, RequestResponseEvent};
 use std::error::Error;
 use void;
@@ -36,7 +36,7 @@ use void;
 pub struct P2PoolBehaviour {
     pub kademlia: kad::Behaviour<MemoryStore>,
     pub identify: identify::Behaviour,
-    pub request_response: RequestResponseBehaviour<Message, Message>,
+    pub request_response: RequestResponseBehaviour,
     pub limits: connection_limits::Behaviour,
 }
 
@@ -50,7 +50,7 @@ const HEARTBEAT_INTERVAL: u64 = 15;
 pub enum P2PoolBehaviourEvent {
     Kademlia(kad::Event),
     Identify(identify::Event),
-    RequestResponse(RequestResponseEvent<Message, Message>),
+    RequestResponse(RequestResponseEvent),
 }
 
 #[allow(dead_code)]
@@ -78,11 +78,23 @@ impl P2PoolBehaviour {
             .with_max_established_per_peer(Some(config.network.max_established_per_peer));
         let limits = connection_limits::Behaviour::new(limits_config);
 
+        // Select the appropriate network magic based on the bitcoin network
+        let magic = match config.stratum.network {
+            bitcoin::Network::Bitcoin => network_magic::MAINNET,
+            bitcoin::Network::Testnet => network_magic::TESTNET,
+            bitcoin::Network::Signet => network_magic::SIGNET,
+            bitcoin::Network::Regtest => network_magic::REGTEST,
+            _ => network_magic::REGTEST, // Default to regtest for unknown networks
+        };
+
+        let codec = ConsensusCodec::new(magic);
+
         let behaviour = P2PoolBehaviour {
             kademlia: kademlia_behaviour,
             identify: identify_behaviour,
-            request_response: RequestResponseBehaviour::new(
-                [(P2PoolRequestResponseProtocol::new(), ProtocolSupport::Full)],
+            request_response: RequestResponseBehaviour::with_codec(
+                codec,
+                std::iter::once((P2PoolRequestResponseProtocol::new(), ProtocolSupport::Full)),
                 libp2p::request_response::Config::default(),
             ),
             limits,
@@ -115,8 +127,8 @@ impl From<identify::Event> for P2PoolBehaviourEvent {
     }
 }
 
-impl From<RequestResponseEvent<Message, Message>> for P2PoolBehaviourEvent {
-    fn from(event: RequestResponseEvent<Message, Message>) -> Self {
+impl From<RequestResponseEvent> for P2PoolBehaviourEvent {
+    fn from(event: RequestResponseEvent) -> Self {
         P2PoolBehaviourEvent::RequestResponse(event)
     }
 }

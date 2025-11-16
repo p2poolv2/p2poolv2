@@ -23,7 +23,7 @@ pub mod store {
     use std::error::Error;
 
     /// Open a store from the given path
-    pub fn open_store(store_path: String) -> Result<Store, Box<dyn Error>> {
+    pub fn open_store(store_path: String) -> Result<Store, Box<dyn Error + Send + Sync>> {
         tracing::info!("Opening store in read-only mode: {:?}", store_path);
 
         Store::new(store_path, true).map_err(|e| {
