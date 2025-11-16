@@ -19,13 +19,54 @@ use crate::stratum::session::{EXTRANONCE1_SIZE, EXTRANONCE2_SIZE};
 use crate::stratum::work::error::WorkError;
 use bitcoin::absolute::LockTime;
 use bitcoin::blockdata::script::{Builder, ScriptBuf};
-use bitcoin::consensus::serialize;
+use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::hashes::{self, Hash, sha256d};
 use bitcoin::network::Network;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::{Sequence, Transaction, TxIn, TxOut, Version};
 use bitcoin::{Address, Amount};
+use hex::FromHex;
+use std::fmt;
 use std::str::FromStr;
+
+/// Custom error for coinbase parsing
+#[derive(Debug)]
+pub enum CoinbaseError {
+    /// Error decoding hex string
+    Hex(hex::FromHexError),
+    /// Error deserializing bitcoin consensus data
+    Deserialize(bitcoin::consensus::encode::Error),
+    /// The coinbase2 string was too short to parse
+    UnexpectedEof,
+}
+
+// Implement standard error traits
+impl fmt::Display for CoinbaseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CoinbaseError::Hex(e) => write!(f, "Hex decoding error: {}", e),
+            CoinbaseError::Deserialize(e) => {
+                write!(f, "Bitcoin consensus deserialize error: {}", e)
+            }
+            CoinbaseError::UnexpectedEof => write!(f, "Coinbase2 data was shorter than expected"),
+        }
+    }
+}
+impl std::error::Error for CoinbaseError {}
+
+// Implement From<T> for easier `?` usage
+
+impl From<hex::FromHexError> for CoinbaseError {
+    fn from(e: hex::FromHexError) -> Self {
+        CoinbaseError::Hex(e)
+    }
+}
+
+impl From<bitcoin::consensus::encode::Error> for CoinbaseError {
+    fn from(e: bitcoin::consensus::encode::Error) -> Self {
+        CoinbaseError::Deserialize(e)
+    }
+}
 
 #[allow(dead_code)]
 const EXTRANONCE_SEPARATOR: [u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE] =
@@ -182,6 +223,44 @@ pub fn split_coinbase(coinbase: &Transaction) -> Result<(String, String), WorkEr
         &deserialized_coinbase[separator_pos + (EXTRANONCE1_SIZE + EXTRANONCE2_SIZE)..],
     );
     Ok((coinbase1, coinbase2))
+}
+
+/// Parses the `coinbase2` hex string to extract the transaction outputs.
+///
+/// Based on `build_coinbase_transaction` and `split_coinbase`, `coinbase2`
+/// has the following structure:
+///
+///  `script_sig_part_2` (pushed pool signature: `[len_byte] + [data]`)
+///  `sequence` (4 bytes)
+///  `output_count` (CompactSize)
+///  `outputs` (serialized `Vec<TxOut>`)
+///  `lock_time` (4 bytes)
+///
+/// This function parses this structure to return the `Vec<TxOut>`.
+pub fn extract_outputs_from_coinbase2(
+    coinbase2_hex: &str,
+    pool_signature_len: usize,
+) -> Result<Vec<TxOut>, CoinbaseError> {
+    let coinbase2_bytes = Vec::from_hex(coinbase2_hex)?;
+
+    let script_sig_part_2_len = 1 + pool_signature_len;
+
+    let sequence_len = 4;
+
+    let output_data_start_index = script_sig_part_2_len + sequence_len;
+
+    let lock_time_len = 4;
+
+    if coinbase2_bytes.len() < output_data_start_index + lock_time_len {
+        return Err(CoinbaseError::UnexpectedEof);
+    }
+    let output_data_end_index = coinbase2_bytes.len() - lock_time_len;
+
+    let output_data = &coinbase2_bytes[output_data_start_index..output_data_end_index];
+
+    let outputs: Vec<TxOut> = deserialize(output_data)?;
+
+    Ok(outputs)
 }
 
 #[cfg(test)]
@@ -528,5 +607,71 @@ mod tests {
             &script_bytes[62..70],
             b"P2Poolv2", // Check the pool signature
         );
+    }
+
+    #[test]
+    fn test_extract_outputs_from_coinbase2_integration() {
+        // This Test builds splits then parse
+
+        let gbt_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/test_data/gbt/regtest/ckpool/four-txns/gbt.json");
+        let data = fs::read_to_string(gbt_path).expect("Unable to read file");
+        let template: BlockTemplate = serde_json::from_str(&data).expect("Invalid JSON");
+
+        let address = parse_address(
+            "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr",
+            bitcoin::Network::Regtest,
+        )
+        .unwrap();
+        let donation_address = parse_address(
+            "bcrt1qlk935ze2fsu86zjp395uvtegztrkaezawxx0wf",
+            bitcoin::Network::Regtest,
+        )
+        .unwrap();
+
+        let output_pairs = vec![
+            OutputPair {
+                address: address.clone(),
+                amount: Amount::from_str("49 BTC").unwrap(),
+            },
+            OutputPair {
+                address: donation_address.clone(),
+                amount: Amount::from_str("1 BTC").unwrap(),
+            },
+        ];
+
+        let pool_sig = b"P2Poolv2";
+        //  Build and Split
+        let coinbase_tx = build_coinbase_transaction(
+            Version(1),
+            &output_pairs,
+            template.height as i64,
+            PushBytesBuf::from(&[0u8]),
+            template.default_witness_commitment.clone(),
+            pool_sig,
+            None,
+        )
+        .unwrap();
+
+        let expected_outputs = coinbase_tx.output.clone();
+        assert_eq!(expected_outputs.len(), 3); // 2 payments + 1 witness
+
+        let (_coinbase1, coinbase2_hex) = split_coinbase(&coinbase_tx).unwrap();
+
+        //  Parse
+        let extracted_outputs =
+            extract_outputs_from_coinbase2(&coinbase2_hex, pool_sig.len()).unwrap();
+
+        //  Verify
+        assert_eq!(extracted_outputs, expected_outputs);
+        assert_eq!(
+            extracted_outputs[0].value,
+            Amount::from_str("49 BTC").unwrap()
+        );
+        assert_eq!(
+            extracted_outputs[1].value,
+            Amount::from_str("1 BTC").unwrap()
+        );
+        assert_eq!(extracted_outputs[2].value, Amount::ZERO); // Witness
     }
 }
