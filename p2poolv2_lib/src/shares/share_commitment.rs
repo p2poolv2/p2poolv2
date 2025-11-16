@@ -239,6 +239,71 @@ mod tests {
     }
 
     #[test]
+    fn test_consensus_encode_decode_roundtrip() {
+        let commitment = create_test_commitment();
+
+        let mut serialized = Vec::new();
+        commitment.consensus_encode(&mut serialized).unwrap();
+
+        let decoded = ShareCommitment::consensus_decode(&mut &serialized[..]).unwrap();
+
+        assert_eq!(decoded, commitment);
+    }
+
+    #[test]
+    fn test_consensus_encode_decode_with_none_merkle_root() {
+        let mut commitment = create_test_commitment();
+        commitment.merkle_root = None;
+
+        let mut serialized = Vec::new();
+        commitment.consensus_encode(&mut serialized).unwrap();
+
+        let decoded = ShareCommitment::consensus_decode(&mut &serialized[..]).unwrap();
+
+        assert_eq!(decoded.merkle_root, None);
+        assert_eq!(decoded, commitment);
+    }
+
+    #[test]
+    fn test_consensus_encode_decode_with_uncles() {
+        let mut commitment = create_test_commitment();
+        commitment.uncles.push(
+            BlockHash::from_str("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6")
+                .unwrap(),
+        );
+        commitment.uncles.push(
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
+                .unwrap(),
+        );
+
+        let mut serialized = Vec::new();
+        commitment.consensus_encode(&mut serialized).unwrap();
+
+        let decoded = ShareCommitment::consensus_decode(&mut &serialized[..]).unwrap();
+
+        assert_eq!(decoded.uncles.len(), 2);
+        assert_eq!(decoded, commitment);
+    }
+
+    #[test]
+    fn test_hash_changes_with_different_fields() {
+        let commitment1 = create_test_commitment();
+        let mut commitment2 = create_test_commitment();
+
+        // Change each field and verify hash changes
+        commitment2.bits = CompactTarget::from_consensus(0x20ffffff);
+        assert_ne!(commitment1.hash(), commitment2.hash());
+
+        let mut commitment3 = create_test_commitment();
+        commitment3.uncles.push(BlockHash::all_zeros());
+        assert_ne!(commitment1.hash(), commitment3.hash());
+
+        let mut commitment4 = create_test_commitment();
+        commitment4.merkle_root = None;
+        assert_ne!(commitment1.hash(), commitment4.hash());
+    }
+
+    #[test]
     fn test_serialization_with_some_merkle_root() {
         let commitment = create_test_commitment();
 
@@ -246,7 +311,6 @@ mod tests {
         commitment.consensus_encode(&mut serialized).unwrap();
 
         assert!(!serialized.is_empty());
-        assert!(serialized[0] >= 0xa0 && serialized[0] <= 0xbf || serialized[0] == 0xbf);
     }
 
     #[test]

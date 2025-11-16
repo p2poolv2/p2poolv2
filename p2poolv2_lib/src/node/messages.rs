@@ -388,7 +388,192 @@ impl Decodable for GetData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::consensus::encode;
     use std::str::FromStr;
+
+    #[test]
+    fn test_raw_message_roundtrip() {
+        let block_hashes = vec![
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap(),
+        ];
+        let msg = Message::Inventory(InventoryMessage::BlockHashes(block_hashes.clone()));
+        let raw = RawMessage::new(network_magic::REGTEST, msg.clone());
+
+        // Test encoding
+        let mut encoded = Vec::new();
+        raw.consensus_encode(&mut encoded).unwrap();
+
+        // Test decoding
+        let decoded = RawMessage::consensus_decode(&mut &encoded[..]).unwrap();
+
+        assert_eq!(decoded.magic, network_magic::REGTEST);
+        assert_eq!(decoded.payload, msg);
+        assert_eq!(decoded.payload_len, raw.payload_len);
+        assert_eq!(decoded.checksum, raw.checksum);
+    }
+
+    #[test]
+    fn test_raw_message_checksum_verification() {
+        let msg = Message::NotFound(());
+        let raw = RawMessage::new(network_magic::MAINNET, msg);
+
+        let mut encoded = Vec::new();
+        raw.consensus_encode(&mut encoded).unwrap();
+
+        // Corrupt the checksum
+        encoded[8] ^= 0xFF;
+
+        // Decoding should fail
+        let result = RawMessage::consensus_decode(&mut &encoded[..]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_raw_message_different_networks() {
+        let msg = Message::NotFound(());
+
+        let raw_mainnet = RawMessage::new(network_magic::MAINNET, msg.clone());
+        let raw_testnet = RawMessage::new(network_magic::TESTNET, msg.clone());
+        let raw_signet = RawMessage::new(network_magic::SIGNET, msg.clone());
+        let raw_regtest = RawMessage::new(network_magic::REGTEST, msg);
+
+        assert_eq!(raw_mainnet.magic, network_magic::MAINNET);
+        assert_eq!(raw_testnet.magic, network_magic::TESTNET);
+        assert_eq!(raw_signet.magic, network_magic::SIGNET);
+        assert_eq!(raw_regtest.magic, network_magic::REGTEST);
+    }
+
+    #[test]
+    fn test_message_not_found_roundtrip() {
+        let msg = Message::NotFound(());
+        let mut encoded = Vec::new();
+        msg.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = Message::consensus_decode(&mut &encoded[..]).unwrap();
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn test_message_get_share_headers_roundtrip() {
+        let hashes = vec![
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap(),
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
+                .unwrap(),
+        ];
+        let stop = BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
+            .unwrap();
+
+        let msg = Message::GetShareHeaders(hashes.clone(), stop);
+        let mut encoded = Vec::new();
+        msg.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = Message::consensus_decode(&mut &encoded[..]).unwrap();
+        match decoded {
+            Message::GetShareHeaders(decoded_hashes, decoded_stop) => {
+                assert_eq!(decoded_hashes, hashes);
+                assert_eq!(decoded_stop, stop);
+            }
+            _ => panic!("Expected GetShareHeaders variant"),
+        }
+    }
+
+    #[test]
+    fn test_message_get_share_blocks_roundtrip() {
+        let hashes = vec![
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap(),
+        ];
+        let stop = BlockHash::all_zeros();
+
+        let msg = Message::GetShareBlocks(hashes.clone(), stop);
+        let mut encoded = Vec::new();
+        msg.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = Message::consensus_decode(&mut &encoded[..]).unwrap();
+        match decoded {
+            Message::GetShareBlocks(decoded_hashes, decoded_stop) => {
+                assert_eq!(decoded_hashes, hashes);
+                assert_eq!(decoded_stop, stop);
+            }
+            _ => panic!("Expected GetShareBlocks variant"),
+        }
+    }
+
+    #[test]
+    fn test_inventory_message_block_hashes_roundtrip() {
+        let hashes = vec![
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap(),
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
+                .unwrap(),
+        ];
+
+        let inv = InventoryMessage::BlockHashes(hashes.clone());
+        let mut encoded = Vec::new();
+        inv.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = InventoryMessage::consensus_decode(&mut &encoded[..]).unwrap();
+        match decoded {
+            InventoryMessage::BlockHashes(decoded_hashes) => {
+                assert_eq!(decoded_hashes, hashes);
+            }
+            _ => panic!("Expected BlockHashes variant"),
+        }
+    }
+
+    #[test]
+    fn test_get_data_block_roundtrip() {
+        let hash = BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+            .unwrap();
+
+        let get_data = GetData::Block(hash);
+        let mut encoded = Vec::new();
+        get_data.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = GetData::consensus_decode(&mut &encoded[..]).unwrap();
+        assert_eq!(decoded, get_data);
+    }
+
+    #[test]
+    fn test_get_data_txid_roundtrip() {
+        let txid = Txid::from_str("d2528fc2d7a4f95ace97860f157c895b6098667df0e43912b027cfe58edf304e")
+            .unwrap();
+
+        let get_data = GetData::Txid(txid);
+        let mut encoded = Vec::new();
+        get_data.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = GetData::consensus_decode(&mut &encoded[..]).unwrap();
+        assert_eq!(decoded, get_data);
+    }
+
+    #[test]
+    fn test_message_discriminants_unique() {
+        use message_discriminants::*;
+        let discriminants = vec![
+            INVENTORY,
+            NOT_FOUND,
+            GET_SHARE_HEADERS,
+            GET_SHARE_BLOCKS,
+            SHARE_HEADERS,
+            SHARE_BLOCK,
+            GET_DATA,
+            TRANSACTION,
+        ];
+
+        // Check all discriminants are unique
+        for i in 0..discriminants.len() {
+            for j in (i + 1)..discriminants.len() {
+                assert_ne!(
+                    discriminants[i], discriminants[j],
+                    "Discriminants at positions {} and {} are not unique",
+                    i, j
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_inventory_message_serde() {
