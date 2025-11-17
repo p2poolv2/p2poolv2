@@ -39,7 +39,8 @@ pub async fn handle_mining_message<C>(
 ) -> Result<(), Box<dyn Error>> {
     let share_block = store.setup_share_for_chain(share_block);
     let share_block_clone = share_block.clone();
-    if let Err(e) = store.add_share(share_block) {
+    // Share we found, always goes to main chain
+    if let Err(e) = store.add_share(share_block, true) {
         error!("Failed to add share: {}", e);
         return Err("Error adding share to chain".into());
     }
@@ -67,7 +68,10 @@ mod tests {
         let mut mock_chain = ChainStore::default();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(1);
         // Setup expectations
-        mock_chain.expect_add_share().times(1).returning(|_| Ok(()));
+        mock_chain
+            .expect_add_share()
+            .times(1)
+            .returning(|_, _| Ok(()));
 
         mock_chain
             .expect_setup_share_for_chain()
@@ -131,7 +135,7 @@ mod tests {
         mock_chain
             .expect_add_share()
             .times(1)
-            .returning(|_| Err("Failed to add share".into()));
+            .returning(|_, _| Err("Failed to add share".into()));
 
         mock_chain
             .expect_setup_share_for_chain()
@@ -191,7 +195,10 @@ mod tests {
         drop(swarm_rx);
 
         // Setup expectations
-        mock_chain.expect_add_share().times(1).returning(|_| Ok(()));
+        mock_chain
+            .expect_add_share()
+            .times(1)
+            .returning(|_, _| Ok(()));
 
         mock_chain
             .expect_setup_share_for_chain()

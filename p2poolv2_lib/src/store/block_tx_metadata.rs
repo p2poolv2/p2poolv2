@@ -24,6 +24,8 @@ pub struct TxMetadata {
     pub lock_time: bitcoin::absolute::LockTime,
     pub input_count: u32,
     pub output_count: u32,
+    /// Transaction has been validated - all input scripts are valid, is not double spending etc.
+    pub validated: bool,
 }
 
 impl Encodable for TxMetadata {
@@ -38,6 +40,7 @@ impl Encodable for TxMetadata {
         len += self.lock_time.consensus_encode(w)?;
         len += self.input_count.consensus_encode(w)?;
         len += self.output_count.consensus_encode(w)?;
+        len += self.validated.consensus_encode(w)?;
         Ok(len)
     }
 }
@@ -52,6 +55,7 @@ impl Decodable for TxMetadata {
         let lock_time = bitcoin::absolute::LockTime::consensus_decode(r)?;
         let input_count = u32::consensus_decode(r)?;
         let output_count = u32::consensus_decode(r)?;
+        let validated = bool::consensus_decode(r)?;
 
         Ok(TxMetadata {
             txid,
@@ -59,6 +63,7 @@ impl Decodable for TxMetadata {
             lock_time,
             input_count,
             output_count,
+            validated,
         })
     }
 }

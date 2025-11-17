@@ -257,6 +257,7 @@ impl Store {
         &self,
         share: ShareBlock,
         height: u32,
+        on_main_chain: bool,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let blockhash = share.block_hash();
         debug!(
@@ -269,7 +270,8 @@ impl Store {
         let mut batch = rocksdb::WriteBatch::default();
 
         // Store transactions and get their metadata
-        let txs_metadata = self.add_txs(&share.transactions, &mut batch)?;
+        let txs_metadata =
+            self.add_sharechain_txs(&share.transactions, on_main_chain, &mut batch)?;
 
         let txids = Txids(txs_metadata.iter().map(|t| t.txid).collect());
         // Store block -> txids index
@@ -454,9 +456,10 @@ impl Store {
     /// Store inputs and outputs for each transaction in separate column families
     /// Store txid -> transaction metadata in the tx column family
     /// The block -> txids store is done in add_txids_to_block_index. This function lets us store transactions outside of a block context
-    fn add_txs(
+    fn add_sharechain_txs(
         &self,
         transactions: &[Transaction],
+        confirmed: bool,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<Vec<TxMetadata>, Box<dyn Error + Send + Sync>> {
         let inputs_cf = self.db.cf_handle(&ColumnFamily::Inputs).unwrap();
@@ -464,7 +467,7 @@ impl Store {
         let mut txs_metadata = Vec::new();
         for tx in transactions {
             let txid = tx.compute_txid();
-            let metadata = self.add_tx_metadata(txid, tx, batch)?;
+            let metadata = self.add_tx_metadata(txid, tx, false, batch)?;
             txs_metadata.push(metadata);
 
             // Store each input for the transaction
@@ -473,6 +476,10 @@ impl Store {
                 let mut serialized = Vec::new();
                 input.consensus_encode(&mut serialized)?;
                 batch.put_cf::<&[u8], Vec<u8>>(inputs_cf, input_key.as_ref(), serialized);
+
+                if confirmed {
+                    self.confirm_transaction(tx, batch)?;
+                }
             }
 
             // Store each output for the transaction
@@ -482,17 +489,75 @@ impl Store {
                 output.consensus_encode(&mut serialized)?;
                 batch.put_cf::<&[u8], Vec<u8>>(outputs_cf, output_key.as_ref(), serialized);
 
-                self.add_to_unspent_outputs(txid, i, batch)?;
+                // part of batch write, so we make individual calls
+                self.add_to_unspent_outputs(&txid, i as u32, batch)?;
             }
         }
         Ok(txs_metadata)
     }
 
+    /// Marks the transaction as successfully validated, this prevents us validating it again.
+    /// We only validate what is dependent on the chain state. Once valid, the txid is never made invalid.
+    fn mark_transaction_valid(
+        &self,
+        txid: &Txid,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<TxMetadata, Box<dyn Error + Send + Sync>> {
+        // mark tx metadata as validated
+        let mut tx_metadata = self.get_tx_metadata(txid)?;
+        tx_metadata.validated = true;
+
+        let mut serialized = Vec::new();
+        tx_metadata.consensus_encode(&mut serialized)?;
+        let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
+        batch.put_cf::<&[u8], Vec<u8>>(tx_cf, txid.as_ref(), serialized);
+
+        Ok(tx_metadata)
+    }
+
+    /// Transaction confirmation means it has been validated and is part of a block in the main chain.
+    /// Adds the outputs to unspent output set
+    /// Validated status remains unchanged, the script is still valid etc
+    fn confirm_transaction(
+        &self,
+        transaction: &Transaction,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        // Remove all input prevouts from unspent outputs
+        for txin in transaction.input.iter() {
+            self.remove_from_unspent_outputs(
+                &txin.previous_output.txid,
+                txin.previous_output.vout,
+                batch,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Marking transaction as unconfirmed means it has been removed from the main chain as a result of a reorg
+    /// Removes the outputs to unspent output set
+    /// Validated status remains unchanged, the script is still valid etc
+    fn unconfirm_transaction(
+        &self,
+        transaction: &Transaction,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        // Add all input prevouts from unspent outputs
+        for txin in transaction.input.iter() {
+            self.add_to_unspent_outputs(
+                &txin.previous_output.txid,
+                txin.previous_output.vout,
+                batch,
+            )?;
+        }
+        Ok(())
+    }
+
     /// An the txid, index as an unspent output
     fn add_to_unspent_outputs(
         &self,
-        txid: Txid,
-        index: usize,
+        txid: &Txid,
+        index: u32,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let utxo_cf = self.db.cf_handle(&ColumnFamily::UnspentOutputs).unwrap();
@@ -504,7 +569,7 @@ impl Store {
     /// Remove txid, index from unspent outputs
     fn remove_from_unspent_outputs(
         &self,
-        txid: Txid,
+        txid: &Txid,
         index: u32,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -537,6 +602,7 @@ impl Store {
         &self,
         txid: bitcoin::Txid,
         tx: &Transaction,
+        validated: bool,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<TxMetadata, Box<dyn Error + Send + Sync>> {
         debug!("Adding tx metdata for txid {txid}");
@@ -546,6 +612,7 @@ impl Store {
             lock_time: tx.lock_time,
             input_count: tx.input.len() as u32,
             output_count: tx.output.len() as u32,
+            validated,
         };
 
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
@@ -1352,13 +1419,13 @@ mod tests {
             .build();
 
         // Add all shares to store
-        store.add_share(share1.clone(), 0).unwrap();
-        store.add_share(uncle1_share2.clone(), 1).unwrap();
-        store.add_share(uncle2_share2.clone(), 1).unwrap();
-        store.add_share(share2.clone(), 1).unwrap();
-        store.add_share(uncle1_share3.clone(), 2).unwrap();
-        store.add_share(uncle2_share3.clone(), 2).unwrap();
-        store.add_share(share3.clone(), 2).unwrap();
+        store.add_share(share1.clone(), 0, true).unwrap();
+        store.add_share(uncle1_share2.clone(), 1, true).unwrap();
+        store.add_share(uncle2_share2.clone(), 1, true).unwrap();
+        store.add_share(share2.clone(), 1, true).unwrap();
+        store.add_share(uncle1_share3.clone(), 2, true).unwrap();
+        store.add_share(uncle2_share3.clone(), 2, true).unwrap();
+        store.add_share(share3.clone(), 2, true).unwrap();
 
         // Get chain up to share3
         let chain = store.get_chain_upto(&share3.block_hash());
@@ -1499,7 +1566,9 @@ mod tests {
         // Store the transaction
         let txid = tx.compute_txid();
         let mut batch = rocksdb::WriteBatch::default();
-        let txs_metadata = store.add_txs(&[tx.clone()], &mut batch).unwrap();
+        let txs_metadata = store
+            .add_sharechain_txs(&[tx.clone()], true, &mut batch)
+            .unwrap();
         store.db.write(batch).unwrap();
 
         assert_eq!(txs_metadata.len(), 1);
@@ -1623,7 +1692,7 @@ mod tests {
             .build();
 
         // Store the share block
-        store.add_share(share.clone(), 0).unwrap();
+        store.add_share(share.clone(), 0, true).unwrap();
         assert_eq!(share.transactions.len(), 3);
 
         // Retrieve transactions for the block hash
@@ -1658,7 +1727,7 @@ mod tests {
 
         let txid = tx.compute_txid();
         let mut batch = rocksdb::WriteBatch::default();
-        let res = store.add_tx_metadata(txid, &tx, &mut batch).unwrap();
+        let res = store.add_tx_metadata(txid, &tx, false, &mut batch).unwrap();
         store.db.write(batch).unwrap();
 
         assert_eq!(res.txid, txid);
@@ -1668,6 +1737,7 @@ mod tests {
         assert_eq!(tx_metadata.lock_time, tx.lock_time);
         assert_eq!(tx_metadata.input_count, 0);
         assert_eq!(tx_metadata.output_count, 0);
+        assert!(!tx_metadata.validated);
     }
 
     #[test]
@@ -1700,7 +1770,9 @@ mod tests {
 
         let txid = tx.compute_txid();
         let mut batch = rocksdb::WriteBatch::default();
-        let res = store.add_txs(&[tx.clone()], &mut batch).unwrap();
+        let res = store
+            .add_sharechain_txs(&[tx.clone()], true, &mut batch)
+            .unwrap();
         store.db.write(batch).unwrap();
 
         assert_eq!(res[0].txid, txid);
@@ -1749,7 +1821,9 @@ mod tests {
 
         // Add transactions to store
         let mut batch = rocksdb::WriteBatch::default();
-        store.add_txs(&transactions, &mut batch).unwrap();
+        store
+            .add_sharechain_txs(&transactions, true, &mut batch)
+            .unwrap();
         store.db.write(batch).unwrap();
 
         // Verify transactions were stored correctly by retrieving them by txid
@@ -1772,7 +1846,7 @@ mod tests {
             .build();
 
         // Add share to store
-        store.add_share(share.clone(), 0).unwrap();
+        store.add_share(share.clone(), 0, true).unwrap();
 
         // Get share header from store
         let read_share = store.get_share(&share.block_hash()).unwrap();
@@ -1850,11 +1924,11 @@ mod tests {
             .build();
 
         // Add all shares to store
-        store.add_share(share1.clone(), 0).unwrap();
-        store.add_share(uncle1_share2.clone(), 1).unwrap();
-        store.add_share(uncle2_share2.clone(), 1).unwrap();
-        store.add_share(share2.clone(), 1).unwrap();
-        store.add_share(share3.clone(), 2).unwrap();
+        store.add_share(share1.clone(), 0, true).unwrap();
+        store.add_share(uncle1_share2.clone(), 1, true).unwrap();
+        store.add_share(uncle2_share2.clone(), 1, true).unwrap();
+        store.add_share(share2.clone(), 1, true).unwrap();
+        store.add_share(share3.clone(), 2, true).unwrap();
 
         // Verify children of share1
         let children_share1 = store.get_children_blockhashes(&share1.block_hash());
@@ -1910,11 +1984,11 @@ mod tests {
             .build();
 
         // Add all shares to store
-        store.add_share(share1.clone(), 0).unwrap();
-        store.add_share(uncle1_share2.clone(), 1).unwrap();
-        store.add_share(uncle2_share2.clone(), 1).unwrap();
-        store.add_share(share2.clone(), 1).unwrap();
-        store.add_share(share3.clone(), 2).unwrap();
+        store.add_share(share1.clone(), 0, true).unwrap();
+        store.add_share(uncle1_share2.clone(), 1, true).unwrap();
+        store.add_share(uncle2_share2.clone(), 1, true).unwrap();
+        store.add_share(share2.clone(), 1, true).unwrap();
+        store.add_share(share3.clone(), 2, true).unwrap();
 
         // Verify descendants of share1
         let descendants_share1 =
@@ -1966,7 +2040,7 @@ mod tests {
                 builder = builder.prev_share_blockhash(prev);
             }
             let block = builder.build();
-            store.add_share(block.clone(), height).unwrap();
+            store.add_share(block.clone(), height, true).unwrap();
 
             hashes.push(block.block_hash());
         }
@@ -2002,7 +2076,7 @@ mod tests {
             }
             let block = builder.build();
             blocks.push(block.clone());
-            store.add_share(block.clone(), height as u32).unwrap();
+            store.add_share(block.clone(), height as u32, true).unwrap();
             hashes.push(block.block_hash());
         }
 
@@ -2040,7 +2114,7 @@ mod tests {
             }
             let block = builder.build();
             blocks.push(block.clone());
-            store.add_share(block, height as u32).unwrap();
+            store.add_share(block, height as u32, true).unwrap();
         }
 
         let stop_block = store.get_blockhashes_for_height(2)[0];
@@ -2064,7 +2138,7 @@ mod tests {
         let share = TestShareBlockBuilder::new().build();
 
         // Add share to store
-        store.add_share(share.clone(), 0).unwrap();
+        store.add_share(share.clone(), 0, true).unwrap();
         let blockhash = share.block_hash();
 
         // Initially, block should not be valid or confirmed
@@ -2127,8 +2201,8 @@ mod tests {
             .build();
 
         // Add shares to store
-        store.add_share(share1.clone(), 0).unwrap();
-        store.add_share(share2.clone(), 1).unwrap();
+        store.add_share(share1.clone(), 0, true).unwrap();
+        store.add_share(share2.clone(), 1, true).unwrap();
 
         let blockhash1 = share1.block_hash();
         let blockhash2 = share2.block_hash();
@@ -2168,7 +2242,7 @@ mod tests {
         let blockhash = share.block_hash();
 
         // Add share to store without setting height in metadata
-        store.add_share(share.clone(), 0).unwrap();
+        store.add_share(share.clone(), 0, true).unwrap();
 
         // Height should be set during add_share
         let metadata = store.get_block_metadata(&blockhash).unwrap();
@@ -2394,9 +2468,9 @@ mod tests {
             .build();
 
         // Store shares in linear chain 0 -> 1 -> 2
-        store.add_share(share1.clone(), 0).unwrap();
-        store.add_share(share2.clone(), 1).unwrap();
-        store.add_share(share3.clone(), 2).unwrap();
+        store.add_share(share1.clone(), 0, true).unwrap();
+        store.add_share(share2.clone(), 1, true).unwrap();
+        store.add_share(share3.clone(), 2, true).unwrap();
 
         let genesis_hash = share1.block_hash();
 
@@ -2599,7 +2673,7 @@ mod tests {
         // Add to unspent outputs
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_to_unspent_outputs(txid, index, &mut batch)
+            .add_to_unspent_outputs(&txid, index, &mut batch)
             .unwrap();
         store.db.write(batch).unwrap();
 
@@ -2618,7 +2692,7 @@ mod tests {
         // Add to unspent outputs
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_to_unspent_outputs(txid, index as usize, &mut batch)
+            .add_to_unspent_outputs(&txid, index, &mut batch)
             .unwrap();
         store.db.write(batch).unwrap();
 
@@ -2628,7 +2702,7 @@ mod tests {
         // Remove from unspent outputs
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .remove_from_unspent_outputs(txid, index, &mut batch)
+            .remove_from_unspent_outputs(&txid, index, &mut batch)
             .unwrap();
         store.db.write(batch).unwrap();
 
@@ -2649,7 +2723,7 @@ mod tests {
         // Add txid1:index1
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_to_unspent_outputs(txid1, index1 as usize, &mut batch)
+            .add_to_unspent_outputs(&txid1, index1, &mut batch)
             .unwrap();
         store.db.write(batch).unwrap();
 
@@ -2662,7 +2736,7 @@ mod tests {
         // Add txid2:index2
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_to_unspent_outputs(txid2, index2 as usize, &mut batch)
+            .add_to_unspent_outputs(&txid2, index2, &mut batch)
             .unwrap();
         store.db.write(batch).unwrap();
 
@@ -2671,5 +2745,156 @@ mod tests {
         assert!(!store.is_in_unspent_outputs(txid1, index2).unwrap());
         assert!(!store.is_in_unspent_outputs(txid2, index1).unwrap());
         assert!(store.is_in_unspent_outputs(txid2, index2).unwrap());
+    }
+
+    #[test]
+    fn test_mark_transaction_valid() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create a transaction
+        let tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+
+        let txid = tx.compute_txid();
+
+        // Add transaction metadata with validated = false
+        let mut batch = rocksdb::WriteBatch::default();
+        let metadata = store.add_tx_metadata(txid, &tx, false, &mut batch).unwrap();
+        store.db.write(batch).unwrap();
+
+        // Verify initially not validated
+        assert!(!metadata.validated);
+        let stored_metadata = store.get_tx_metadata(&txid).unwrap();
+        assert!(!stored_metadata.validated);
+
+        // Mark transaction as valid
+        let mut batch = rocksdb::WriteBatch::default();
+        let updated_metadata = store.mark_transaction_valid(&txid, &mut batch).unwrap();
+        store.db.write(batch).unwrap();
+
+        // Verify it's now validated
+        assert!(updated_metadata.validated);
+        let stored_metadata = store.get_tx_metadata(&txid).unwrap();
+        assert!(stored_metadata.validated);
+    }
+
+    #[test]
+    fn test_confirm_transaction() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create a previous transaction with outputs
+        let prev_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(1000000),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(2000000),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
+            ],
+        };
+
+        let prev_txid = prev_tx.compute_txid();
+
+        // Add the previous transaction and its outputs to unspent set
+        let mut batch = rocksdb::WriteBatch::default();
+        store.add_tx_metadata(prev_txid, &prev_tx, false, &mut batch).unwrap();
+        store.add_to_unspent_outputs(&prev_txid, 0, &mut batch).unwrap();
+        store.add_to_unspent_outputs(&prev_txid, 1, &mut batch).unwrap();
+        store.db.write(batch).unwrap();
+
+        // Verify outputs are in unspent set
+        assert!(store.is_in_unspent_outputs(prev_txid, 0).unwrap());
+        assert!(store.is_in_unspent_outputs(prev_txid, 1).unwrap());
+
+        // Create a new transaction that spends the previous outputs
+        let tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![
+                bitcoin::TxIn {
+                    previous_output: bitcoin::OutPoint::new(prev_txid, 0),
+                    script_sig: bitcoin::ScriptBuf::new(),
+                    sequence: bitcoin::Sequence::MAX,
+                    witness: bitcoin::Witness::new(),
+                },
+                bitcoin::TxIn {
+                    previous_output: bitcoin::OutPoint::new(prev_txid, 1),
+                    script_sig: bitcoin::ScriptBuf::new(),
+                    sequence: bitcoin::Sequence::MAX,
+                    witness: bitcoin::Witness::new(),
+                },
+            ],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(2900000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+
+        // Confirm the transaction (should remove inputs from unspent set)
+        let mut batch = rocksdb::WriteBatch::default();
+        store.confirm_transaction(&tx, &mut batch).unwrap();
+        store.db.write(batch).unwrap();
+
+        // Verify the previous outputs are no longer in unspent set
+        assert!(!store.is_in_unspent_outputs(prev_txid, 0).unwrap());
+        assert!(!store.is_in_unspent_outputs(prev_txid, 1).unwrap());
+    }
+
+    #[test]
+    fn test_unconfirm_transaction() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create a previous transaction
+        let prev_txid = Txid::from_byte_array([5u8; 32]);
+
+        // Create a transaction that spends outputs
+        let tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![
+                bitcoin::TxIn {
+                    previous_output: bitcoin::OutPoint::new(prev_txid, 0),
+                    script_sig: bitcoin::ScriptBuf::new(),
+                    sequence: bitcoin::Sequence::MAX,
+                    witness: bitcoin::Witness::new(),
+                },
+                bitcoin::TxIn {
+                    previous_output: bitcoin::OutPoint::new(prev_txid, 1),
+                    script_sig: bitcoin::ScriptBuf::new(),
+                    sequence: bitcoin::Sequence::MAX,
+                    witness: bitcoin::Witness::new(),
+                },
+            ],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(2900000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+
+        // Verify outputs are not in unspent set initially
+        assert!(!store.is_in_unspent_outputs(prev_txid, 0).unwrap());
+        assert!(!store.is_in_unspent_outputs(prev_txid, 1).unwrap());
+
+        // Unconfirm the transaction (should add inputs back to unspent set)
+        let mut batch = rocksdb::WriteBatch::default();
+        store.unconfirm_transaction(&tx, &mut batch).unwrap();
+        store.db.write(batch).unwrap();
+
+        // Verify the previous outputs are now in unspent set
+        assert!(store.is_in_unspent_outputs(prev_txid, 0).unwrap());
+        assert!(store.is_in_unspent_outputs(prev_txid, 1).unwrap());
     }
 }

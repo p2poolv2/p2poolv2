@@ -49,7 +49,7 @@ impl ChainStore {
 
         // Initialize chain state if needed
         if genesis_in_store.is_none() {
-            chain.add_share(genesis_block).unwrap();
+            chain.add_share(genesis_block, true).unwrap();
         } else {
             // Initialize chain state from existing store data
             let _ = chain
@@ -60,7 +60,11 @@ impl ChainStore {
     }
 
     /// Add a share to the chain and update the tips and total difficulty
-    pub fn add_share(&self, share: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub fn add_share(
+        &self,
+        share: ShareBlock,
+        on_main_chain: bool,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         debug!("Adding share to chain: {:?}", share);
 
         let tips = self.store.get_tips();
@@ -84,7 +88,7 @@ impl ChainStore {
             share.block_hash(),
             height
         );
-        self.store.add_share(share.clone(), height)?;
+        self.store.add_share(share.clone(), height, on_main_chain)?;
 
         // handle new chain by setting tip and total difficulty
         if tips.is_empty() {
@@ -308,7 +312,7 @@ impl ChainStore {
 
     /// Set up the share to use chain_tip as the previous blockhash and other tips as uncles
     /// This should be used only when the share is being for the local miner.
-    /// Shares received from peers should not be modified``.
+    /// Shares received from peers should not be modified.
     pub fn setup_share_for_chain(&self, mut share_block: ShareBlock) -> ShareBlock {
         let (chain_tip, tips) = self.get_chain_tip_and_uncles();
         tracing::debug!(
@@ -397,7 +401,7 @@ mock! {
         pub fn get_tips(&self) -> HashSet<BlockHash>;
         pub fn reorg(&self, share_block: ShareBlock, total_difficulty_upto_prev_share_blockhash: u128) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn is_confirmed(&self, share_block: ShareBlock) -> Result<bool, Box<dyn Error + Send + Sync>>;
-        pub fn add_share(&self, share_block: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>>;
+        pub fn add_share(&self, share_block: ShareBlock, on_main_chain: bool) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn get_chain_tip(&self) -> Option<BlockHash>;
         pub fn get_chain_tip_and_uncles(&self) -> (BlockHash, HashSet<BlockHash>);
@@ -453,7 +457,7 @@ mod chain_tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
-        chain.add_share(share1.clone()).unwrap();
+        chain.add_share(share1.clone(), true).unwrap();
 
         let mut expected_tips = HashSet::new();
         expected_tips.insert(share1.block_hash());
@@ -475,7 +479,7 @@ mod chain_tests {
             .build();
 
         // first orphan is a tip
-        chain.add_share(uncle1_share2.clone()).unwrap();
+        chain.add_share(uncle1_share2.clone(), true).unwrap();
         expected_tips.clear();
         expected_tips.insert(uncle1_share2.block_hash());
         assert_eq!(chain.store.get_tips(), expected_tips);
@@ -483,7 +487,7 @@ mod chain_tests {
         assert_eq!(chain.store.get_chain_tip(), uncle1_share2.block_hash());
 
         // second orphan is also a tip
-        chain.add_share(uncle2_share2.clone()).unwrap();
+        chain.add_share(uncle2_share2.clone(), true).unwrap();
         expected_tips.clear();
         expected_tips.insert(uncle1_share2.block_hash());
         expected_tips.insert(uncle2_share2.block_hash());
@@ -500,7 +504,7 @@ mod chain_tests {
             .diff(2)
             .build();
 
-        chain.add_share(share2.clone()).unwrap();
+        chain.add_share(share2.clone(), true).unwrap();
 
         // two tips that will be future uncles and the chain tip
         expected_tips.clear();
@@ -523,7 +527,7 @@ mod chain_tests {
             .diff(1)
             .build();
 
-        chain.add_share(uncle1_share3.clone()).unwrap();
+        chain.add_share(uncle1_share3.clone(), true).unwrap();
         expected_tips.clear();
         expected_tips.insert(uncle1_share3.block_hash());
 
@@ -532,7 +536,7 @@ mod chain_tests {
         assert_eq!(chain.store.get_total_difficulty(), 6); // genesis (1) + share1 (2) + share2 (2) + uncle1_share3 (1)
         assert_eq!(chain.store.get_chain_tip(), uncle1_share3.block_hash());
 
-        chain.add_share(uncle2_share3.clone()).unwrap();
+        chain.add_share(uncle2_share3.clone(), true).unwrap();
         expected_tips.clear();
         expected_tips.insert(uncle1_share3.block_hash());
         expected_tips.insert(uncle2_share3.block_hash());
@@ -549,7 +553,7 @@ mod chain_tests {
             .diff(3)
             .build();
 
-        chain.add_share(share3.clone()).unwrap();
+        chain.add_share(share3.clone(), true).unwrap();
 
         expected_tips.clear();
         expected_tips.insert(share3.block_hash());
@@ -612,7 +616,7 @@ mod chain_tests {
                 .build();
 
             blocks.push(share.clone());
-            chain.add_share(share.clone()).unwrap();
+            chain.add_share(share.clone(), true).unwrap();
             blockhash_strings.push(share.block_hash().to_string());
             prev_hash = Some(blockhash_strings.last().unwrap().as_str().into());
 
@@ -647,7 +651,7 @@ mod chain_tests {
             .diff(1)
             .build();
 
-        chain.add_share(share1.clone()).unwrap();
+        chain.add_share(share1.clone(), true).unwrap();
 
         // Test when blockhash is chain tip
         assert_eq!(chain.get_depth(&share1.block_hash()), Some(0));
@@ -659,7 +663,7 @@ mod chain_tests {
             .diff(1)
             .build();
 
-        chain.add_share(share2.clone()).unwrap();
+        chain.add_share(share2.clone(), true).unwrap();
 
         // Test depth of first share when it's not the tip
         assert_eq!(chain.get_depth(&share2.block_hash()), Some(0));
@@ -713,11 +717,11 @@ mod chain_tests {
             .build();
 
         // Add shares to chain
-        chain.add_share(share1.clone()).unwrap();
-        chain.add_share(share2.clone()).unwrap();
-        chain.add_share(share3.clone()).unwrap();
-        chain.add_share(share4.clone()).unwrap();
-        chain.add_share(share5.clone()).unwrap();
+        chain.add_share(share1.clone(), true).unwrap();
+        chain.add_share(share2.clone(), true).unwrap();
+        chain.add_share(share3.clone(), true).unwrap();
+        chain.add_share(share4.clone(), true).unwrap();
+        chain.add_share(share5.clone(), true).unwrap();
 
         // Test 1: Get headers starting from share1 up to share3
         let locator = vec![share1.block_hash()];
@@ -775,7 +779,7 @@ mod chain_tests {
             .prev_share_blockhash(genesis_for_tests().block_hash().to_string());
         let block = block_builder.build();
         blocks.push(block.clone());
-        chain.add_share(block.clone()).unwrap();
+        chain.add_share(block.clone(), true).unwrap();
 
         assert_eq!(chain.store.get_chain_tip(), block.block_hash());
 
@@ -785,7 +789,7 @@ mod chain_tests {
                 .prev_share_blockhash(blocks[i - 1].block_hash().to_string())
                 .build();
             blocks.push(block.clone());
-            chain.add_share(block.clone()).unwrap();
+            chain.add_share(block.clone(), true).unwrap();
             assert_eq!(chain.store.get_chain_tip(), block.block_hash());
         }
 
@@ -824,7 +828,7 @@ mod chain_tests {
             }
             let block = block_builder.build();
             blocks.push(block.clone());
-            chain.add_share(block).unwrap();
+            chain.add_share(block, true).unwrap();
         }
 
         let locator = chain.build_locator();
@@ -865,7 +869,7 @@ mod chain_tests {
             .diff(2)
             .build();
 
-        chain.add_share(share1.clone()).unwrap();
+        chain.add_share(share1.clone(), true).unwrap();
 
         // Get current target should now return share1's target (the new tip)
         let new_target = chain.get_current_target().unwrap();
