@@ -489,6 +489,7 @@ impl Store {
         tx: &Transaction,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<TxMetadata, Box<dyn Error + Send + Sync>> {
+        debug!("Adding tx metdata for txid {txid}");
         let tx_metadata = TxMetadata {
             txid,
             version: tx.version,
@@ -560,17 +561,12 @@ impl Store {
         txid: &bitcoin::Txid,
         spent_by: Option<bitcoin::Txid>,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
-        let tx_metadata = self.db.get_cf::<&[u8]>(tx_cf, txid.as_ref()).unwrap();
-        if tx_metadata.is_none() {
-            return Err("Transaction not found".into());
-        }
-        let tx_metadata_serialized = tx_metadata.unwrap();
-        let mut tx_metadata: TxMetadata = encode::deserialize(&tx_metadata_serialized)?;
+        let mut tx_metadata = self.get_tx_metadata(txid)?;
         tx_metadata.spent_by = spent_by;
 
         let mut serialized = Vec::new();
         tx_metadata.consensus_encode(&mut serialized)?;
+        let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
         self.db
             .put_cf::<&[u8], Vec<u8>>(tx_cf, txid.as_ref(), serialized)
             .unwrap();
@@ -578,19 +574,15 @@ impl Store {
     }
 
     /// Get the validation status of a transaction from the store
-    pub fn get_tx_metadata(&self, txid: &bitcoin::Txid) -> Option<TxMetadata> {
+    pub fn get_tx_metadata(
+        &self,
+        txid: &bitcoin::Txid,
+    ) -> Result<TxMetadata, Box<dyn Error + Send + Sync>> {
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
-        let tx_metadata = self.db.get_cf::<&[u8]>(tx_cf, txid.as_ref()).unwrap();
-        if let Some(tx_metadata) = tx_metadata {
-            match encode::deserialize(&tx_metadata) {
-                Ok(metadata) => Some(metadata),
-                Err(_) => {
-                    tracing::warn!("Error reading tx metadata");
-                    None
-                }
-            }
-        } else {
-            None
+        match self.db.get_cf::<&[u8]>(tx_cf, txid.as_ref())? {
+            Some(tx_metadata) => encode::deserialize(&tx_metadata)
+                .map_err(|_| "Failed to seralize tx metadata".into()),
+            None => Err(format!("Transaction metadata not found for txid: {txid}").into()),
         }
     }
 
@@ -903,9 +895,7 @@ impl Store {
         &self,
         txid: &bitcoin::Txid,
     ) -> Result<Transaction, Box<dyn Error + Send + Sync>> {
-        let tx_metadata = self
-            .get_tx_metadata(txid)
-            .ok_or_else(|| format!("Transaction metadata not found for txid: {txid}"))?;
+        let tx_metadata = self.get_tx_metadata(txid)?;
 
         debug!("Transaction metadata: {:?}", tx_metadata);
 

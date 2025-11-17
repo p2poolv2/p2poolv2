@@ -95,9 +95,9 @@ mod tests {
 
     #[test]
     fn test_short_ids_with_prefilled_txs_roundtrip() {
-        use bitcoin::{Transaction, TxIn, TxOut, ScriptBuf, Amount, Sequence, Witness};
         use bitcoin::absolute::LockTime;
         use bitcoin::transaction::Version;
+        use bitcoin::{Amount, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
 
         let tx = Transaction {
             version: Version::TWO,
@@ -122,10 +122,7 @@ mod tests {
                     idx: 0,
                     tx: tx.clone(),
                 },
-                PrefilledTransaction {
-                    idx: 2,
-                    tx: tx,
-                },
+                PrefilledTransaction { idx: 2, tx: tx },
             ],
         };
 
