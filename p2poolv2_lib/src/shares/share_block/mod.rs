@@ -15,7 +15,9 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod short_ids;
+pub mod storage_share_block;
 
+use super::transactions;
 use crate::shares::genesis;
 use crate::shares::share_commitment::ShareCommitment;
 use bitcoin::{
@@ -27,8 +29,7 @@ use bitcoin::{
 use core::mem;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
-
-use super::transactions;
+pub use storage_share_block::StorageShareBlock;
 
 /// Header for the share chain block.
 ///
@@ -358,70 +359,6 @@ impl Decodable for Txids {
     }
 }
 
-/// A variant of ShareBlock used for storage that excludes transactions
-#[derive(Clone, PartialEq, Debug)]
-pub struct StorageShareBlock {
-    /// The header of the share block
-    pub header: ShareHeader,
-    /// List of txids. Full transactions are stored separately in transactions cf.
-    pub txids: Txids,
-    /// List of bitcoin transaction ids, bitcoin transactions are
-    /// stored separately in bitcoin transactions cf.
-    ///
-    /// Different shares will include the same transactions. Avoiding
-    /// duplicate storage of these transactions is important here.
-    pub bitcoin_txids: Txids,
-}
-
-impl From<ShareBlock> for StorageShareBlock {
-    fn from(block: ShareBlock) -> Self {
-        Self {
-            header: block.header,
-            txids: Txids(
-                block
-                    .transactions
-                    .iter()
-                    .map(|tx| tx.compute_txid())
-                    .collect(),
-            ),
-            bitcoin_txids: Txids(
-                block
-                    .bitcoin_transactions
-                    .iter()
-                    .map(|tx| tx.compute_txid())
-                    .collect(),
-            ),
-        }
-    }
-}
-
-impl Encodable for StorageShareBlock {
-    #[inline]
-    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
-        &self,
-        w: &mut W,
-    ) -> Result<usize, bitcoin::io::Error> {
-        let mut len = 0;
-        len += self.header.consensus_encode(w)?;
-        len += self.txids.consensus_encode(w)?;
-        len += self.bitcoin_txids.consensus_encode(w)?;
-        Ok(len)
-    }
-}
-
-impl Decodable for StorageShareBlock {
-    #[inline]
-    fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
-        r: &mut R,
-    ) -> Result<Self, bitcoin::consensus::encode::Error> {
-        Ok(StorageShareBlock {
-            header: ShareHeader::consensus_decode(r)?,
-            txids: Txids::consensus_decode(r)?,
-            bitcoin_txids: Txids::consensus_decode(r)?,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,23 +416,6 @@ mod tests {
         // Verify the output script is P2PKH for the miner's pubkey
         let expected_address = bitcoin::Address::p2pkh(pubkey, bitcoin::Network::Regtest);
         assert_eq!(output.script_pubkey, expected_address.script_pubkey());
-    }
-
-    #[test]
-    fn test_storage_share_block_conversion() {
-        let share = TestShareBlockBuilder::new()
-            .prev_share_blockhash(
-                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4".into(),
-            )
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .diff(1)
-            .build();
-
-        // Test conversion to StorageShareBlock
-        let storage_share: StorageShareBlock = share.clone().into();
-
-        // Verify header and miner_share are preserved
-        assert_eq!(storage_share.header, share.header);
     }
 
     #[test]
