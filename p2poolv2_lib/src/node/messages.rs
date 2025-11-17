@@ -462,8 +462,9 @@ mod tests {
             BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
                 .unwrap(),
         ];
-        let stop = BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
-            .unwrap();
+        let stop =
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
+                .unwrap();
 
         let msg = Message::GetShareHeaders(hashes.clone(), stop);
         let mut encoded = Vec::new();
@@ -525,8 +526,9 @@ mod tests {
 
     #[test]
     fn test_get_data_block_roundtrip() {
-        let hash = BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
-            .unwrap();
+        let hash =
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap();
 
         let get_data = GetData::Block(hash);
         let mut encoded = Vec::new();
@@ -538,8 +540,9 @@ mod tests {
 
     #[test]
     fn test_get_data_txid_roundtrip() {
-        let txid = Txid::from_str("d2528fc2d7a4f95ace97860f157c895b6098667df0e43912b027cfe58edf304e")
-            .unwrap();
+        let txid =
+            Txid::from_str("d2528fc2d7a4f95ace97860f157c895b6098667df0e43912b027cfe58edf304e")
+                .unwrap();
 
         let get_data = GetData::Txid(txid);
         let mut encoded = Vec::new();
