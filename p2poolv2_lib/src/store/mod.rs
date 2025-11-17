@@ -2809,9 +2809,15 @@ mod tests {
 
         // Add the previous transaction and its outputs to unspent set
         let mut batch = rocksdb::WriteBatch::default();
-        store.add_tx_metadata(prev_txid, &prev_tx, false, &mut batch).unwrap();
-        store.add_to_unspent_outputs(&prev_txid, 0, &mut batch).unwrap();
-        store.add_to_unspent_outputs(&prev_txid, 1, &mut batch).unwrap();
+        store
+            .add_tx_metadata(prev_txid, &prev_tx, false, &mut batch)
+            .unwrap();
+        store
+            .add_to_unspent_outputs(&prev_txid, 0, &mut batch)
+            .unwrap();
+        store
+            .add_to_unspent_outputs(&prev_txid, 1, &mut batch)
+            .unwrap();
         store.db.write(batch).unwrap();
 
         // Verify outputs are in unspent set
