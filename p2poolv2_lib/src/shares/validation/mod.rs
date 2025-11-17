@@ -339,8 +339,11 @@ mod tests {
         // Set up mock expectations
         store
             .expect_add_share()
-            .with(mockall::predicate::eq(share_block.clone()))
-            .returning(|_| Ok(()));
+            .with(
+                mockall::predicate::eq(share_block.clone()),
+                mockall::predicate::eq(true),
+            )
+            .returning(|_, _| Ok(()));
         store
             .expect_get_share()
             .with(eq(bitcoin::BlockHash::all_zeros()))

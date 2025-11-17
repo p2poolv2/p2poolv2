@@ -138,8 +138,8 @@ mod tests {
 
         store
             .expect_add_share()
-            .with(eq(share_block.clone()))
-            .returning(|_| Ok(()));
+            .with(eq(share_block.clone()), eq(true))
+            .returning(|_, _| Ok(()));
         store
             .expect_get_share()
             .with(eq(bitcoin::BlockHash::all_zeros()))
@@ -182,8 +182,8 @@ mod tests {
 
         store
             .expect_add_share()
-            .with(eq(share_block.clone()))
-            .returning(|_| Err("Failed to add share".into()));
+            .with(eq(share_block.clone()), eq(true))
+            .returning(|_, _| Err("Failed to add share".into()));
 
         store
             .expect_setup_share_for_chain()

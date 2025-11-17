@@ -41,7 +41,8 @@ pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
         error!("Share block validation failed: {}", e);
         return Err("Share block validation failed".into());
     }
-    if let Err(e) = store.add_share(share_block.clone()) {
+    // TODO: Check if this will be an uncle, for now add to main chain
+    if let Err(e) = store.add_share(share_block.clone(), true) {
         error!("Failed to add share: {}", e);
         return Err("Error adding share to chain".into());
     }
@@ -70,8 +71,8 @@ mod tests {
         // Set up mock expectations
         store
             .expect_add_share()
-            .with(eq(share_block.clone()))
-            .returning(|_| Ok(()));
+            .with(eq(share_block.clone()), eq(true))
+            .returning(|_, _| Ok(()));
         store
             .expect_get_share()
             .with(eq(bitcoin::BlockHash::all_zeros()))
@@ -111,8 +112,8 @@ mod tests {
         // Set up mock expectations
         store
             .expect_add_share()
-            .with(eq(share_block.clone()))
-            .returning(|_| Err("Failed to add share".into()));
+            .with(eq(share_block.clone()), eq(true))
+            .returning(|_, _| Err("Failed to add share".into()));
         store
             .expect_get_share()
             .with(eq(bitcoin::BlockHash::all_zeros()))
