@@ -20,10 +20,10 @@ use crate::store::block_tx_metadata::{BlockMetadata, TxMetadata};
 use crate::store::column_families::ColumnFamily;
 use crate::store::user::StoredUser;
 use crate::utils::snowflake_simplified::get_next_id;
-use bitcoin::BlockHash;
-use bitcoin::Transaction;
 use bitcoin::consensus::{Encodable, encode};
 use bitcoin::hashes::Hash;
+use bitcoin::{BlockHash, OutPoint};
+use bitcoin::{Transaction, Txid};
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -86,6 +86,9 @@ impl Store {
         let metadata_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::Metadata, RocksDbOptions::default());
 
+        let unspent_outputs_cf =
+            ColumnFamilyDescriptor::new(ColumnFamily::UnspentOutputs, RocksDbOptions::default());
+
         let cfs = vec![
             block_cf,
             block_txids_cf,
@@ -100,6 +103,7 @@ impl Store {
             user_cf,
             user_index_cf,
             metadata_cf,
+            unspent_outputs_cf,
         ];
 
         // for the db too, we use default options for now
@@ -477,9 +481,55 @@ impl Store {
                 let mut serialized = Vec::new();
                 output.consensus_encode(&mut serialized)?;
                 batch.put_cf::<&[u8], Vec<u8>>(outputs_cf, output_key.as_ref(), serialized);
+
+                self.add_to_unspent_outputs(txid, i, batch)?;
             }
         }
         Ok(txs_metadata)
+    }
+
+    /// An the txid, index as an unspent output
+    fn add_to_unspent_outputs(
+        &self,
+        txid: Txid,
+        index: usize,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let utxo_cf = self.db.cf_handle(&ColumnFamily::UnspentOutputs).unwrap();
+        let key = format!("{txid}:{index}");
+        batch.put_cf(utxo_cf, key.as_str(), []);
+        Ok(())
+    }
+
+    /// Remove txid, index from unspent outputs
+    fn remove_from_unspent_outputs(
+        &self,
+        txid: Txid,
+        index: u32,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let utxo_cf = self.db.cf_handle(&ColumnFamily::UnspentOutputs).unwrap();
+        let key = format!("{txid}:{index}");
+        batch.delete_cf(utxo_cf, key.as_str());
+        Ok(())
+    }
+
+    /// Check if txid, index is in unspent outputs
+    fn is_in_unspent_outputs(
+        &self,
+        txid: Txid,
+        index: u32,
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
+        let utxo_cf = self.db.cf_handle(&ColumnFamily::UnspentOutputs).unwrap();
+        let key = format!("{txid}:{index}");
+        // Most of the time OutPoint will NOT exist in unspent txs,
+        // and key may exist will definitely return false in that case
+        let mut exists = self.db.key_may_exist_cf(utxo_cf, key.as_str());
+        // Check if exists for sure, if we a false positive
+        if exists {
+            exists = self.db.get_pinned_cf(utxo_cf, key.as_str())?.is_some();
+        }
+        Ok(exists)
     }
 
     /// Store transaction metadata
@@ -496,7 +546,6 @@ impl Store {
             lock_time: tx.lock_time,
             input_count: tx.input.len() as u32,
             output_count: tx.output.len() as u32,
-            spent_by: None,
         };
 
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
@@ -553,23 +602,12 @@ impl Store {
         }
     }
 
-    /// Update a transaction's validation and spent status in the tx metadata store
-    /// The status is stored separately from the transaction using txid + "_status" as key
-    /// We read the transaction from the store, update spent_by and write back to the store.
-    pub fn update_transaction_spent_status(
+    /// Mark output as spent,
+    pub fn remove_output_from_unspent(
         &self,
-        txid: &bitcoin::Txid,
-        spent_by: Option<bitcoin::Txid>,
+        output_point: OutPoint,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let mut tx_metadata = self.get_tx_metadata(txid)?;
-        tx_metadata.spent_by = spent_by;
-
-        let mut serialized = Vec::new();
-        tx_metadata.consensus_encode(&mut serialized)?;
-        let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
-        self.db
-            .put_cf::<&[u8], Vec<u8>>(tx_cf, txid.as_ref(), serialized)
-            .unwrap();
+        // TODO - implement
         Ok(())
     }
 
@@ -1485,62 +1523,6 @@ mod tests {
             .parse()
             .unwrap();
         assert!(store.get_tx(&fake_txid).is_err());
-    }
-
-    #[test]
-    fn test_transaction_spent_by_should_succeed() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        // Create a test transaction
-        let tx = bitcoin::Transaction {
-            version: bitcoin::transaction::Version(1),
-            lock_time: bitcoin::absolute::LockTime::ZERO,
-            input: vec![],
-            output: vec![],
-        };
-
-        // Store the transaction
-        let txid = tx.compute_txid();
-        let mut batch = rocksdb::WriteBatch::default();
-        store.add_txs(&[tx.clone()], &mut batch).unwrap();
-        store.db.write(batch).unwrap();
-
-        // Initially status should be None
-        let initial_spent_by = store.get_tx_metadata(&txid).unwrap().spent_by;
-        assert!(initial_spent_by.is_none());
-
-        // Update status to validated but not spent
-        let batch = rocksdb::WriteBatch::default();
-        store.update_transaction_spent_status(&txid, None).unwrap();
-        store.db.write(batch).unwrap();
-        let status = store.get_tx_metadata(&txid).unwrap().spent_by;
-        assert_eq!(status, None);
-
-        // Create another transaction that spends this one
-        let spending_tx = bitcoin::Transaction {
-            version: bitcoin::transaction::Version(1),
-            lock_time: bitcoin::absolute::LockTime::ZERO,
-            input: vec![],
-            output: vec![],
-        };
-        let spending_txid = spending_tx.compute_txid();
-
-        // Update status to spent
-        let batch = rocksdb::WriteBatch::default();
-        store
-            .update_transaction_spent_status(&txid, Some(spending_txid))
-            .unwrap();
-        store.db.write(batch).unwrap();
-        let status = store.get_tx_metadata(&txid).unwrap().spent_by;
-        assert_eq!(status, Some(spending_txid));
-
-        // Update status back to unspent
-        let batch = rocksdb::WriteBatch::default();
-        store.update_transaction_spent_status(&txid, None).unwrap();
-        store.db.write(batch).unwrap();
-        let status = store.get_tx_metadata(&txid).unwrap().spent_by;
-        assert_eq!(status, None);
     }
 
     #[test]
@@ -2604,5 +2586,90 @@ mod tests {
         assert_eq!(jobs.len(), 2);
         assert_eq!(jobs[0].0, job3_time);
         assert_eq!(jobs[1].0, job2_time);
+    }
+
+    #[test]
+    fn test_add_to_unspent_outputs() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let txid = Txid::from_byte_array([1u8; 32]);
+        let index = 0;
+
+        // Add to unspent outputs
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_to_unspent_outputs(txid, index, &mut batch)
+            .unwrap();
+        store.db.write(batch).unwrap();
+
+        // Verify it was added
+        assert!(store.is_in_unspent_outputs(txid, index as u32).unwrap());
+    }
+
+    #[test]
+    fn test_remove_from_unspent_outputs() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let txid = Txid::from_byte_array([2u8; 32]);
+        let index = 1u32;
+
+        // Add to unspent outputs
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_to_unspent_outputs(txid, index as usize, &mut batch)
+            .unwrap();
+        store.db.write(batch).unwrap();
+
+        // Verify it was added
+        assert!(store.is_in_unspent_outputs(txid, index).unwrap());
+
+        // Remove from unspent outputs
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .remove_from_unspent_outputs(txid, index, &mut batch)
+            .unwrap();
+        store.db.write(batch).unwrap();
+
+        // Verify it was removed
+        assert!(!store.is_in_unspent_outputs(txid, index).unwrap());
+    }
+
+    #[test]
+    fn test_is_in_unspent_outputs() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let txid1 = Txid::from_byte_array([3u8; 32]);
+        let txid2 = Txid::from_byte_array([4u8; 32]);
+        let index1 = 0u32;
+        let index2 = 1u32;
+
+        // Add txid1:index1
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_to_unspent_outputs(txid1, index1 as usize, &mut batch)
+            .unwrap();
+        store.db.write(batch).unwrap();
+
+        // Check presence
+        assert!(store.is_in_unspent_outputs(txid1, index1).unwrap());
+        assert!(!store.is_in_unspent_outputs(txid1, index2).unwrap());
+        assert!(!store.is_in_unspent_outputs(txid2, index1).unwrap());
+        assert!(!store.is_in_unspent_outputs(txid2, index2).unwrap());
+
+        // Add txid2:index2
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_to_unspent_outputs(txid2, index2 as usize, &mut batch)
+            .unwrap();
+        store.db.write(batch).unwrap();
+
+        // Check presence again
+        assert!(store.is_in_unspent_outputs(txid1, index1).unwrap());
+        assert!(!store.is_in_unspent_outputs(txid1, index2).unwrap());
+        assert!(!store.is_in_unspent_outputs(txid2, index1).unwrap());
+        assert!(store.is_in_unspent_outputs(txid2, index2).unwrap());
     }
 }

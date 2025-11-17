@@ -24,7 +24,6 @@ pub struct TxMetadata {
     pub lock_time: bitcoin::absolute::LockTime,
     pub input_count: u32,
     pub output_count: u32,
-    pub spent_by: Option<bitcoin::Txid>,
 }
 
 impl Encodable for TxMetadata {
@@ -39,17 +38,6 @@ impl Encodable for TxMetadata {
         len += self.lock_time.consensus_encode(w)?;
         len += self.input_count.consensus_encode(w)?;
         len += self.output_count.consensus_encode(w)?;
-
-        // Encode Option<Txid> as: bool (has_value) + optional value
-        match &self.spent_by {
-            Some(txid) => {
-                len += true.consensus_encode(w)?;
-                len += txid.consensus_encode(w)?;
-            }
-            None => {
-                len += false.consensus_encode(w)?;
-            }
-        }
         Ok(len)
     }
 }
@@ -65,20 +53,12 @@ impl Decodable for TxMetadata {
         let input_count = u32::consensus_decode(r)?;
         let output_count = u32::consensus_decode(r)?;
 
-        // Decode Option<Txid>
-        let spent_by = if bool::consensus_decode(r)? {
-            Some(bitcoin::Txid::consensus_decode(r)?)
-        } else {
-            None
-        };
-
         Ok(TxMetadata {
             txid,
             version,
             lock_time,
             input_count,
             output_count,
-            spent_by,
         })
     }
 }
