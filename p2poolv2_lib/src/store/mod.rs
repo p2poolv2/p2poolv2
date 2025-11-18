@@ -24,7 +24,7 @@ use bitcoin::consensus::{Encodable, encode};
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, OutPoint, Transaction, Txid, Work};
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1075,6 +1075,48 @@ impl Store {
             self.get_share(&share.header.prev_share_blockhash)
         })
         .collect()
+    }
+
+    /// Get the main chain and the uncles from the tips to the provided blockhash
+    /// All shares are collected in a single vector
+    /// Returns an error if blockhash is not found
+    pub fn get_shares_from_tip_to_blockhash(
+        &self,
+        blockhash: &BlockHash,
+    ) -> Result<Vec<ShareBlock>, Box<dyn Error + Send + Sync>> {
+        let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
+        if !self
+            .db
+            .key_may_exist_cf::<&[u8]>(share_cf, blockhash.as_ref())
+        {
+            return Err("Blockhash {blockhash} not found in chain".into());
+        };
+
+        let tips = self.get_tips();
+        let mut all_shares = Vec::new();
+        let mut visited = HashSet::new();
+        let mut to_visit: VecDeque<BlockHash> = tips.into_iter().collect();
+
+        while let Some(hash) = to_visit.pop_front() {
+            if visited.contains(&hash) {
+                continue;
+            }
+
+            if let Some(share) = self.get_share(&hash) {
+                visited.insert(hash);
+                all_shares.push(share.clone());
+
+                if hash != *blockhash {
+                    to_visit.push_back(share.header.prev_share_blockhash);
+                    // Also traverse uncles
+                    for uncle_hash in share.header.uncles.iter() {
+                        to_visit.push_back(*uncle_hash);
+                    }
+                }
+            }
+        }
+
+        Ok(all_shares)
     }
 
     /// Get common ancestor of two blockhashes
@@ -2893,5 +2935,263 @@ mod tests {
         // Verify the previous outputs are now in unspent set
         assert!(store.is_in_unspent_outputs(prev_txid, 0).unwrap());
         assert!(store.is_in_unspent_outputs(prev_txid, 1).unwrap());
+    }
+
+    #[test]
+    fn test_get_shares_from_tip_to_blockhash_linear_chain() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create linear chain: share1 -> share2 -> share3
+        let share1 = TestShareBlockBuilder::new().build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .build();
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .build();
+
+        store.add_share(share1.clone(), 0, true).unwrap();
+        store.add_share(share2.clone(), 1, true).unwrap();
+        store.add_share(share3.clone(), 2, true).unwrap();
+
+        // Set share3 as the tip
+        store.add_tip(share3.block_hash());
+
+        // Get chain from tip to share1
+        let chain = store
+            .get_shares_from_tip_to_blockhash(&share1.block_hash())
+            .unwrap();
+
+        // Should contain all three shares
+        assert_eq!(chain.len(), 3);
+        let chain_hashes: Vec<BlockHash> = chain.iter().map(|s| s.block_hash()).collect();
+        assert!(chain_hashes.contains(&share1.block_hash()));
+        assert!(chain_hashes.contains(&share2.block_hash()));
+        assert!(chain_hashes.contains(&share3.block_hash()));
+    }
+
+    #[test_log::test]
+    fn test_get_shares_from_tip_to_blockhash_with_uncles() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create initial share
+        let share1 = TestShareBlockBuilder::new().build();
+
+        // Create uncles for share2
+        let uncle1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(100)
+            .build();
+
+        let uncle2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(200)
+            .build();
+
+        // Create share2 with uncles
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .uncles(vec![uncle1.block_hash(), uncle2.block_hash()])
+            .build();
+
+        store.add_share(share1.clone(), 0, true).unwrap();
+        store.add_share(uncle1.clone(), 1, true).unwrap();
+        store.add_share(uncle2.clone(), 1, true).unwrap();
+        store.add_share(share2.clone(), 1, true).unwrap();
+
+        // Set share2 as the tip
+        store.add_tip(share2.block_hash());
+
+        // Get chain from tip to share1
+        let chain = store
+            .get_shares_from_tip_to_blockhash(&share1.block_hash())
+            .unwrap();
+
+        // Should contain share2, share1, and both uncles
+        assert_eq!(chain.len(), 4);
+        let chain_hashes: Vec<BlockHash> = chain.iter().map(|s| s.block_hash()).collect();
+        assert!(chain_hashes.contains(&share1.block_hash()));
+        assert!(chain_hashes.contains(&share2.block_hash()));
+        assert!(chain_hashes.contains(&uncle1.block_hash()));
+        assert!(chain_hashes.contains(&uncle2.block_hash()));
+    }
+
+    #[test]
+    fn test_get_shares_from_tip_to_blockhash_multiple_tips() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create a chain that splits into two tips
+        let share1 = TestShareBlockBuilder::new().build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .build();
+
+        // Two competing tips at height 2
+        let tip1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(100)
+            .build();
+
+        let tip2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(200)
+            .build();
+
+        store.add_share(share1.clone(), 0, true).unwrap();
+        store.add_share(share2.clone(), 1, true).unwrap();
+        store.add_share(tip1.clone(), 2, true).unwrap();
+        store.add_share(tip2.clone(), 2, true).unwrap();
+
+        // Set both as tips
+        store.add_tip(tip1.block_hash());
+        store.add_tip(tip2.block_hash());
+
+        // Get chain from tips to share1
+        let chain = store
+            .get_shares_from_tip_to_blockhash(&share1.block_hash())
+            .unwrap();
+
+        // Should contain all shares from both tips down to share1
+        assert_eq!(chain.len(), 4);
+        let chain_hashes: Vec<BlockHash> = chain.iter().map(|s| s.block_hash()).collect();
+        assert!(chain_hashes.contains(&share1.block_hash()));
+        assert!(chain_hashes.contains(&share2.block_hash()));
+        assert!(chain_hashes.contains(&tip1.block_hash()));
+        assert!(chain_hashes.contains(&tip2.block_hash()));
+    }
+
+    #[test]
+    fn test_get_shares_from_tip_to_blockhash_nonexistent() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share1 = TestShareBlockBuilder::new().build();
+        store.add_share(share1.clone(), 0, true).unwrap();
+        store.add_tip(share1.block_hash());
+
+        // Try to get chain to a non-existent blockhash
+        let nonexistent_hash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+            .parse::<BlockHash>()
+            .unwrap();
+
+        let result = store.get_shares_from_tip_to_blockhash(&nonexistent_hash);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_shares_from_tip_to_blockhash_stops_at_target() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create chain: share1 -> share2 -> share3 -> share4
+        let share1 = TestShareBlockBuilder::new().build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .build();
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .build();
+        let share4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share3.block_hash().to_string())
+            .build();
+
+        store.add_share(share1.clone(), 0, true).unwrap();
+        store.add_share(share2.clone(), 1, true).unwrap();
+        store.add_share(share3.clone(), 2, true).unwrap();
+        store.add_share(share4.clone(), 3, true).unwrap();
+
+        store.add_tip(share4.block_hash());
+
+        // Get chain from tip to share2 (should stop at share2)
+        let chain = store
+            .get_shares_from_tip_to_blockhash(&share2.block_hash())
+            .unwrap();
+
+        // Should contain share4, share3, and share2, but not share1
+        assert_eq!(chain.len(), 3);
+        let chain_hashes: Vec<BlockHash> = chain.iter().map(|s| s.block_hash()).collect();
+        assert!(chain_hashes.contains(&share2.block_hash()));
+        assert!(chain_hashes.contains(&share3.block_hash()));
+        assert!(chain_hashes.contains(&share4.block_hash()));
+        assert!(!chain_hashes.contains(&share1.block_hash()));
+    }
+
+    #[test]
+    fn test_get_shares_from_tip_to_blockhash_no_tips() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share1 = TestShareBlockBuilder::new().build();
+        store.add_share(share1.clone(), 0, true).unwrap();
+
+        // Don't set any tips - should return empty vector
+        let chain = store
+            .get_shares_from_tip_to_blockhash(&share1.block_hash())
+            .unwrap();
+        assert_eq!(chain.len(), 0);
+    }
+
+    #[test]
+    fn test_get_shares_from_tip_to_blockhash_complex_uncle_tree() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create a more complex tree with multiple levels of uncles
+        let share1 = TestShareBlockBuilder::new().build();
+
+        // Level 1 uncles
+        let uncle1_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(100)
+            .build();
+
+        let uncle1_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(200)
+            .build();
+
+        // Share2 with uncles
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .uncles(vec![uncle1_1.block_hash(), uncle1_2.block_hash()])
+            .build();
+
+        // Level 2 uncles
+        let uncle2_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .build();
+
+        // Share3 with uncle
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .uncles(vec![uncle2_1.block_hash()])
+            .build();
+
+        store.add_share(share1.clone(), 0, true).unwrap();
+        store.add_share(uncle1_1.clone(), 1, true).unwrap();
+        store.add_share(uncle1_2.clone(), 1, true).unwrap();
+        store.add_share(share2.clone(), 1, true).unwrap();
+        store.add_share(uncle2_1.clone(), 2, true).unwrap();
+        store.add_share(share3.clone(), 2, true).unwrap();
+
+        store.add_tip(share3.block_hash());
+
+        // Get all shares from tip to share1
+        let chain = store
+            .get_shares_from_tip_to_blockhash(&share1.block_hash())
+            .unwrap();
+
+        // Should contain all 6 shares
+        assert_eq!(chain.len(), 6);
+        let chain_hashes: Vec<BlockHash> = chain.iter().map(|s| s.block_hash()).collect();
+        assert!(chain_hashes.contains(&share1.block_hash()));
+        assert!(chain_hashes.contains(&share2.block_hash()));
+        assert!(chain_hashes.contains(&share3.block_hash()));
+        assert!(chain_hashes.contains(&uncle1_1.block_hash()));
+        assert!(chain_hashes.contains(&uncle1_2.block_hash()));
+        assert!(chain_hashes.contains(&uncle2_1.block_hash()));
     }
 }
