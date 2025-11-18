@@ -17,8 +17,8 @@
 use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
-use bitcoin::BlockHash;
 use bitcoin::hashes::Hash;
+use bitcoin::{BlockHash, Work};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::sync::Arc;
@@ -52,9 +52,7 @@ impl ChainStore {
             chain.add_share(genesis_block, true).unwrap();
         } else {
             // Initialize chain state from existing store data
-            let _ = chain
-                .store
-                .init_chain_state_from_store(genesis_block_hash, network);
+            let _ = chain.store.init_chain_state_from_store(genesis_block_hash);
         }
         chain
     }
@@ -73,10 +71,13 @@ impl ChainStore {
         }
         let blockhash = share.block_hash();
         let prev_share_blockhash = share.header.prev_share_blockhash;
-        debug!("Bitcoin network: {:?}", self.network);
-        debug!("Bitcoin bits: {:?}", share.header.bitcoin_header.bits);
-        debug!("Bitcoin target: {:?}", share.header.bitcoin_header.target());
-        let share_difficulty = share.header.bitcoin_header.difficulty(self.network);
+        let share_work = share.header.get_work();
+        debug!("Share work: {:?}", share_work);
+        debug!(
+            "ADDING SHARE {} WITH WORK {:?}",
+            share.header.block_hash(),
+            share_work,
+        );
 
         let height = match self.get_height_for_prevhash(prev_share_blockhash) {
             Some(prev_height) => prev_height + 1,
@@ -94,7 +95,7 @@ impl ChainStore {
         if tips.is_empty() {
             info!("New chain: {:?}", blockhash);
             self.store.add_tip(blockhash);
-            self.store.set_total_difficulty(share_difficulty);
+            self.store.set_total_work(share_work);
             self.store.set_chain_tip(blockhash);
             return Ok(());
         }
@@ -114,18 +115,18 @@ impl ChainStore {
         // get total difficulty up to prev_share_blockhash
         tracing::info!("Checking for reorgs at share: {:?}", prev_share_blockhash);
         let chain_upto_prev_share_blockhash = self.store.get_chain_upto(&prev_share_blockhash);
-        let total_difficulty_upto_prev_share_blockhash = chain_upto_prev_share_blockhash
+        let total_work_upto_prev_share_blockhash = chain_upto_prev_share_blockhash
             .iter()
-            .map(|share| share.get_difficulty(self.network))
-            .sum::<u128>();
-        let current_total_difficulty = self.store.get_total_difficulty();
+            .fold(Work::from_le_bytes([0u8; 32]), |acc, share| {
+                acc + share.header.get_work()
+            });
+        let current_total_work = self.store.get_total_work();
         debug!(
-            "Total difficulty up to prev share blockhash: {:?}. Current total difficulty: {:?}",
-            total_difficulty_upto_prev_share_blockhash, current_total_difficulty
+            "Total work up to prev share blockhash: {:?}. Current total work: {:?}",
+            total_work_upto_prev_share_blockhash, current_total_work
         );
-        if total_difficulty_upto_prev_share_blockhash + share_difficulty > current_total_difficulty
-        {
-            let reorg_result = self.reorg(share, total_difficulty_upto_prev_share_blockhash);
+        if total_work_upto_prev_share_blockhash + share_work > current_total_work {
+            let reorg_result = self.reorg(share, total_work_upto_prev_share_blockhash);
             if reorg_result.is_err() {
                 error!("Failed to reorg chain for share: {:?}", blockhash);
                 return Err(reorg_result.err().unwrap());
@@ -180,12 +181,11 @@ impl ChainStore {
     pub fn reorg(
         &self,
         share: ShareBlock,
-        total_difficulty_upto_prev_share_blockhash: u128,
+        total_work_upto_prev_share_blockhash: Work,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         info!("Reorging chain to share: {:?}", share.block_hash());
-        self.store.set_total_difficulty(
-            total_difficulty_upto_prev_share_blockhash + share.get_difficulty(self.network),
-        );
+        self.store
+            .set_total_work(total_work_upto_prev_share_blockhash + share.header.get_work());
         self.store.set_chain_tip(share.block_hash());
         Ok(())
     }
@@ -298,8 +298,8 @@ impl ChainStore {
     }
 
     /// Get the total difficulty of the chain
-    pub fn get_total_difficulty(&self) -> u128 {
-        self.store.get_total_difficulty()
+    pub fn get_total_work(&self) -> Work {
+        self.store.get_total_work()
     }
 
     /// Get the chain tip and uncles
@@ -435,25 +435,26 @@ mod chain_tests {
     use super::*;
     use crate::test_utils::TestShareBlockBuilder;
     use crate::test_utils::genesis_for_tests;
+    use crate::test_utils::multiplied_compact_target_as_work;
     use std::collections::HashSet;
     use std::str::FromStr;
     use tempfile::tempdir;
 
-    #[test_log::test]
+    #[test]
     /// Setup a test chain with 3 shares on the main chain, where shares 2 and 3 have two uncles each
     fn test_chain_add_shares() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let chain = ChainStore::new(
-            Arc::new(store),
-            genesis_for_tests(),
-            bitcoin::Network::Signet,
-        );
+        let genesis = genesis_for_tests();
+
+        let chain = ChainStore::new(Arc::new(store), genesis.clone(), bitcoin::Network::Signet);
+
+        let genesis_work = genesis.header.get_work();
 
         // Create initial share (1)
         let share1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis_for_tests().block_hash().to_string())
-            .diff(2)
+            .work(2)
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
@@ -462,7 +463,10 @@ mod chain_tests {
         let mut expected_tips = HashSet::new();
         expected_tips.insert(share1.block_hash());
         assert_eq!(chain.store.get_tips().len(), 1);
-        assert_eq!(chain.store.get_total_difficulty(), 3); // genesis (1) + share1 (2)
+        assert_eq!(
+            chain.store.get_total_work(),
+            genesis_work + multiplied_compact_target_as_work(0x01e0377ae, 2)
+        ); // genesis (1) + share1 (2)
         assert_eq!(chain.store.get_chain_tip(), share1.block_hash());
 
         // Create uncles for share2
@@ -483,7 +487,10 @@ mod chain_tests {
         expected_tips.clear();
         expected_tips.insert(uncle1_share2.block_hash());
         assert_eq!(chain.store.get_tips(), expected_tips);
-        assert_eq!(chain.store.get_total_difficulty(), 4); // genesis (1) + share1 (2) + uncle1_share2 (1)
+        assert_eq!(
+            chain.store.get_total_work(),
+            genesis_work + multiplied_compact_target_as_work(0x01e0377ae, 2) + genesis_work
+        ); // genesis (1) + share1 (2) + uncle1_share2 (1)
         assert_eq!(chain.store.get_chain_tip(), uncle1_share2.block_hash());
 
         // second orphan is also a tip
@@ -492,7 +499,10 @@ mod chain_tests {
         expected_tips.insert(uncle1_share2.block_hash());
         expected_tips.insert(uncle2_share2.block_hash());
         assert_eq!(chain.store.get_tips(), expected_tips);
-        assert_eq!(chain.store.get_total_difficulty(), 4); // genesis (1) + share1 (2) + uncle1_share2 (1) [same diff uncles, only one is counted]
+        assert_eq!(
+            chain.store.get_total_work(),
+            genesis_work + multiplied_compact_target_as_work(0x01e0377ae, 2) + genesis_work
+        ); // genesis (1) + share1 (2) + uncle1_share2 (1) [same diff uncles, only one is counted]
         // chain tip doesn't change as uncle2_share2 has same difficulty as uncle1_share2
         assert_eq!(chain.store.get_chain_tip(), uncle1_share2.block_hash());
 
@@ -501,7 +511,7 @@ mod chain_tests {
             .prev_share_blockhash(share1.block_hash().to_string())
             .uncles(vec![uncle1_share2.block_hash(), uncle2_share2.block_hash()])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .diff(2)
+            .work(2)
             .build();
 
         chain.add_share(share2.clone(), true).unwrap();
@@ -510,21 +520,26 @@ mod chain_tests {
         expected_tips.clear();
         expected_tips.insert(share2.block_hash());
         assert_eq!(chain.store.get_tips(), expected_tips);
-        assert_eq!(chain.store.get_total_difficulty(), 5); // genesis (1) + share1 (2) + share2 (2) [both uncles not counted as they are removed from main chain]
+        assert_eq!(
+            chain.store.get_total_work(),
+            genesis_work
+                + multiplied_compact_target_as_work(0x01e0377ae, 2)
+                + multiplied_compact_target_as_work(0x01e0377ae, 2)
+        ); // genesis (1) + share1 (2) + share2 (2) [both uncles not counted as they are removed from main chain]
         assert_eq!(chain.store.get_chain_tip(), share2.block_hash());
         // Create uncles for share3
         let uncle1_share3 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share2.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .nonce(0xe9695793)
-            .diff(1)
+            .work(1)
             .build();
 
         let uncle2_share3 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share2.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .nonce(0xe9695794)
-            .diff(1)
+            .work(1)
             .build();
 
         chain.add_share(uncle1_share3.clone(), true).unwrap();
@@ -533,7 +548,13 @@ mod chain_tests {
 
         assert_eq!(chain.store.get_tips(), expected_tips);
         // we only look at total difficulty for the highest work chain, which now is 1, 2, 3.1
-        assert_eq!(chain.store.get_total_difficulty(), 6); // genesis (1) + share1 (2) + share2 (2) + uncle1_share3 (1)
+        assert_eq!(
+            chain.store.get_total_work(),
+            genesis_work
+                + multiplied_compact_target_as_work(0x01e0377ae, 2)
+                + multiplied_compact_target_as_work(0x01e0377ae, 2)
+                + genesis_work
+        ); // genesis (1) + share1 (2) + share2 (2) + uncle1_share3 (1)
         assert_eq!(chain.store.get_chain_tip(), uncle1_share3.block_hash());
 
         chain.add_share(uncle2_share3.clone(), true).unwrap();
@@ -542,15 +563,21 @@ mod chain_tests {
         expected_tips.insert(uncle2_share3.block_hash());
 
         assert_eq!(chain.store.get_tips(), expected_tips);
-        // we only look at total difficulty for the highest work chain, which now is 1, 2, 3.1 (not 3.2)
-        assert_eq!(chain.store.get_total_difficulty(), 6); // genesis (1) + share1 (2) + share2 (2) + uncle1_share3 (1)
+        // we only look at total work for the highest work chain, which now is 1, 2, 3.1 (not 3.2)
+        assert_eq!(
+            chain.store.get_total_work(),
+            genesis_work
+                + multiplied_compact_target_as_work(0x01e0377ae, 2)
+                + multiplied_compact_target_as_work(0x01e0377ae, 2)
+                + genesis_work
+        ); // genesis (1) + share1 (2) + share2 (2) + uncle1_share3 (1)
         assert_eq!(chain.store.get_chain_tip(), uncle1_share3.block_hash());
         // Create share3 with its uncles
         let share3 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share2.block_hash().to_string())
             .uncles(vec![uncle1_share3.block_hash(), uncle2_share3.block_hash()])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .diff(3)
+            .work(3)
             .build();
 
         chain.add_share(share3.clone(), true).unwrap();
@@ -560,7 +587,13 @@ mod chain_tests {
 
         assert_eq!(chain.store.get_tips(), expected_tips);
         // we only look at total difficulty for the highest work chain, which now is 1, 2, 3
-        assert_eq!(chain.store.get_total_difficulty(), 8); // genesis (1) + share1 (2) + share2 (2) + share3 (3)
+        assert_eq!(
+            chain.store.get_total_work(),
+            genesis_work
+                + multiplied_compact_target_as_work(0x01e0377ae, 2)
+                + multiplied_compact_target_as_work(0x01e0377ae, 2)
+                + multiplied_compact_target_as_work(0x01e0377ae, 3)
+        ); // genesis (1) + share1 (2) + share2 (2) + share3 (3)
         assert_eq!(chain.store.get_chain_tip(), share3.block_hash());
 
         // Verify heights of all shares
@@ -612,7 +645,7 @@ mod chain_tests {
 
             let share = share_builder
                 .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-                .diff(1)
+                .work(1)
                 .build();
 
             blocks.push(share.clone());
@@ -648,7 +681,7 @@ mod chain_tests {
         let share1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis_for_tests().block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .diff(1)
+            .work(1)
             .build();
 
         chain.add_share(share1.clone(), true).unwrap();
@@ -660,7 +693,7 @@ mod chain_tests {
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .diff(1)
+            .work(1)
             .build();
 
         chain.add_share(share2.clone(), true).unwrap();
@@ -689,31 +722,31 @@ mod chain_tests {
         // Create a chain of 5 shares
         let share1 = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .diff(1)
+            .work(1)
             .build();
 
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .diff(1)
+            .work(1)
             .build();
 
         let share3 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share2.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .diff(1)
+            .work(1)
             .build();
 
         let share4 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share3.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .diff(1)
+            .work(1)
             .build();
 
         let share5 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share4.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .diff(1)
+            .work(1)
             .build();
 
         // Add shares to chain
@@ -866,7 +899,7 @@ mod chain_tests {
         let share1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis_for_tests().block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .diff(2)
+            .work(2)
             .build();
 
         chain.add_share(share1.clone(), true).unwrap();

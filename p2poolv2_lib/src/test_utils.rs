@@ -188,7 +188,7 @@ pub struct TestShareBlockBuilder {
     uncles: Vec<BlockHash>,
     miner_pubkey: Option<String>,
     transactions: Vec<Transaction>,
-    diff_multiplier: Option<u32>,
+    work: Option<u32>,
     nonce: Option<u32>,
 }
 
@@ -201,7 +201,7 @@ impl TestShareBlockBuilder {
             uncles: Vec::new(),
             miner_pubkey: None,
             transactions: Vec::new(),
-            diff_multiplier: None,
+            work: None,
             nonce: None,
         }
     }
@@ -236,8 +236,8 @@ impl TestShareBlockBuilder {
         self
     }
 
-    pub fn diff(mut self, diff_multiplier: u32) -> Self {
-        self.diff_multiplier = Some(diff_multiplier);
+    pub fn work(mut self, work: u32) -> Self {
+        self.work = Some(work);
         self
     }
 
@@ -266,24 +266,15 @@ impl TestShareBlockBuilder {
                 )
                 .as_str(),
             all_transactions,
-            self.diff_multiplier,
+            self.work,
             self.nonce,
         )
     }
 }
 
 #[cfg(test)]
-fn multiply_difficulty(bits: u32, multiplier: u32) -> CompactTarget {
-    // Extract mantissa and exponent
-    let mantissa = bits & 0x00FFFFFF;
-    let exponent = (bits >> 24) & 0xFF;
-
-    // Divide the mantissa to multiply the difficulty
-    let new_mantissa = mantissa / multiplier;
-
-    // Reconstruct the bits
-    let new_bits = (exponent << 24) | new_mantissa;
-    CompactTarget::from_consensus(new_bits)
+pub fn multiplied_compact_target_as_work(bits: u32, multiplier: u32) -> bitcoin::Work {
+    bitcoin::Target::from_compact(CompactTarget::from_consensus(bits * multiplier)).to_work()
 }
 
 #[cfg(test)]
@@ -293,16 +284,15 @@ fn test_share_block(
     uncles: Vec<BlockHash>,
     miner_pubkey: &str,
     transactions: Vec<Transaction>,
-    diff_multiplier: Option<u32>,
+    work: Option<u32>,
     nonce: Option<u32>,
 ) -> ShareBlock {
     let coinbase = test_coinbase_transaction();
 
-    let share_merkle_root = bitcoin::merkle_tree::calculate_root(
-        vec![coinbase.clone()].iter().map(|tx| tx.compute_txid()),
-    )
-    .unwrap()
-    .into();
+    let share_merkle_root =
+        bitcoin::merkle_tree::calculate_root([coinbase.clone()].iter().map(|tx| tx.compute_txid()))
+            .unwrap()
+            .into();
 
     let (bitcoin_header, bitcoin_transactions) = match bitcoin_block {
         Some(block) => (block.header, block.txdata),
@@ -312,7 +302,7 @@ fn test_share_block(
                 prev_blockhash: BlockHash::all_zeros(),
                 merkle_root: share_merkle_root,
                 time: 0x01e0377ae,
-                bits: multiply_difficulty(0x1e0377ae, diff_multiplier.unwrap_or(1)),
+                bits: CompactTarget::from_consensus(0x01e0377ae),
                 nonce: nonce.unwrap_or(0xe9695791),
             },
             vec![coinbase], // list of transactions with a copy of the pool coinbase, just to provide some test data
@@ -326,7 +316,7 @@ fn test_share_block(
         merkle_root: Some(share_merkle_root),
         bitcoin_header,
         time: 1700000000u32,
-        bits: CompactTarget::from_consensus(0x207fffff),
+        bits: CompactTarget::from_consensus(0x01e0377ae * work.unwrap_or(1)),
     };
 
     ShareBlock {
