@@ -21,7 +21,8 @@ use super::transactions;
 use crate::shares::genesis;
 use crate::shares::share_commitment::ShareCommitment;
 use bitcoin::{
-    Block, BlockHash, CompactTarget, CompressedPublicKey, Transaction, TxMerkleNode, Txid, VarInt,
+    Block, BlockHash, CompactTarget, CompressedPublicKey, Target, Transaction, TxMerkleNode, Txid,
+    VarInt,
     block::Header,
     consensus::{Decodable, Encodable},
     hashes::Hash,
@@ -56,6 +57,16 @@ pub struct ShareHeader {
 }
 
 impl ShareHeader {
+    /// Get the work defined by the bits field
+    pub(crate) fn get_work(&self) -> bitcoin::Work {
+        Target::from_compact(self.bits).to_work()
+    }
+
+    /// Get the target defined by the bits field
+    pub(crate) fn get_target(&self) -> bitcoin::Target {
+        Target::from_compact(self.bits)
+    }
+
     /// Build a ShareHeader from a commitment and a bitcoin header
     /// which contains a coinbase matching the commitment.
     ///
@@ -459,7 +470,7 @@ mod tests {
                 "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4".to_string(),
             )
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .diff(1)
+            .work(1)
             .build();
 
         let hash = share.header.commitment_hash().unwrap();
@@ -469,7 +480,7 @@ mod tests {
     #[test]
     fn test_commitment_hash_excludes_bitcoin_header() {
         let bitcoin_header = TestShareBlockBuilder::new()
-            .diff(2)
+            .work(2)
             .build()
             .header
             .bitcoin_header;
@@ -481,7 +492,7 @@ mod tests {
         let share1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(prev_hash.clone())
             .miner_pubkey(pubkey)
-            .diff(1)
+            .work(1)
             .build();
 
         let mut share2 = share1.clone();

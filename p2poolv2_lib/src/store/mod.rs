@@ -22,8 +22,7 @@ use crate::store::user::StoredUser;
 use crate::utils::snowflake_simplified::get_next_id;
 use bitcoin::consensus::{Encodable, encode};
 use bitcoin::hashes::Hash;
-use bitcoin::{BlockHash, OutPoint};
-use bitcoin::{Transaction, Txid};
+use bitcoin::{BlockHash, OutPoint, Transaction, Txid, Work};
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -53,7 +52,7 @@ pub struct Store {
     genesis_block_hash: Arc<RwLock<Option<BlockHash>>>,
     chain_tip: Arc<RwLock<BlockHash>>,
     tips: Arc<RwLock<HashSet<BlockHash>>>,
-    total_difficulty: Arc<RwLock<u128>>,
+    total_work: Arc<RwLock<Work>>,
 }
 
 /// A rocksdb based store for share blocks.
@@ -122,7 +121,7 @@ impl Store {
             genesis_block_hash: Arc::new(RwLock::new(None)),
             chain_tip: Arc::new(RwLock::new(BlockHash::all_zeros())),
             tips: Arc::new(RwLock::new(HashSet::new())),
-            total_difficulty: Arc::new(RwLock::new(0u128)),
+            total_work: Arc::new(RwLock::new(Work::from_le_bytes([0u8; 32]))),
         };
         Ok(store)
     }
@@ -261,9 +260,10 @@ impl Store {
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let blockhash = share.block_hash();
         debug!(
-            "Adding share to store with {} txs: {:?}",
+            "Adding share to store with {} txs: {:?} work: {:?}",
             share.transactions.len(),
-            blockhash
+            blockhash,
+            share.header.get_work()
         );
 
         // Create a new write batch
@@ -350,49 +350,46 @@ impl Store {
 
     /// Iterate over the store from provided start blockhash
     /// Gather all highest work blocks and return as main chain
-    pub fn get_main_chain(
-        &self,
-        genesis: BlockHash,
-        network: bitcoin::Network,
-    ) -> (Vec<BlockHash>, u128) {
+    pub fn get_main_chain(&self, genesis: BlockHash) -> (Vec<BlockHash>, Work) {
         let mut current = Some(genesis);
         let mut main_chain = vec![];
-        let mut total_difficulty: u128 = 0;
+        let mut total_work = Work::from_le_bytes([0u8; 32]);
 
         while current.is_some() {
             main_chain.push(current.unwrap());
             let children = self.get_children_blockhashes(&current.unwrap());
             if children.is_empty() {
-                // Add genesis difficulty
+                // Add genesis work
                 if let Some(genesis_share) = self.get_share(&genesis) {
-                    total_difficulty += genesis_share.header.bitcoin_header.difficulty(network);
+                    total_work = total_work + genesis_share.header.get_work();
                 }
                 break;
             }
 
-            // Find the child with the highest difficulty
-            let hash_and_difficulties = children.iter().filter_map(|child_hash| {
+            // Find the child with the most work
+            let hash_and_work = children.iter().filter_map(|child_hash| {
                 if let Some(share) = self.get_share(child_hash) {
-                    Some((child_hash, share.header.bitcoin_header.difficulty(network)))
+                    Some((child_hash, share.header.get_work()))
                 } else {
                     None
                 }
             });
 
-            let max_difficulty_child = hash_and_difficulties
+            let max_work_child = hash_and_work
                 .clone()
                 .max_by(|a, b| a.1.cmp(&b.1))
-                .map(|(hash, diff)| (*hash, diff));
+                .map(|(hash, work)| (*hash, work));
 
-            total_difficulty += max_difficulty_child.map_or(0, |(_, diff)| diff);
+            total_work = total_work
+                + max_work_child.map_or(Work::from_le_bytes([0u8; 32]), |(_, work)| work);
 
-            if let Some((next_blockhash, _diff)) = max_difficulty_child {
+            if let Some((next_blockhash, _work)) = max_work_child {
                 current = Some(next_blockhash);
             } else {
                 current = None;
             }
         }
-        (main_chain, total_difficulty)
+        (main_chain, total_work)
     }
 
     /// Load children BlockHashes for a blockhash from the block index
@@ -1322,14 +1319,14 @@ impl Store {
         self.tips.write().unwrap().remove(hash)
     }
 
-    /// Get total difficulty from chain state
-    pub fn get_total_difficulty(&self) -> u128 {
-        *self.total_difficulty.read().unwrap()
+    /// Get total work from chain state
+    pub fn get_total_work(&self) -> Work {
+        *self.total_work.read().unwrap()
     }
 
-    /// Set total difficulty in chain state
-    pub fn set_total_difficulty(&self, difficulty: u128) {
-        *self.total_difficulty.write().unwrap() = difficulty;
+    /// Set total work in chain state
+    pub fn set_total_work(&self, work: Work) {
+        *self.total_work.write().unwrap() = work;
     }
 
     /// Initialize chain state from existing data in the store
@@ -1337,17 +1334,16 @@ impl Store {
     pub fn init_chain_state_from_store(
         &self,
         genesis_hash: BlockHash,
-        network: bitcoin::Network,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         // Set genesis block hash
         self.set_genesis_block_hash(genesis_hash);
 
-        // Load main chain and total difficulty
-        let (main_chain, total_diff) = self.get_main_chain(genesis_hash, network);
+        // Load main chain and total work
+        let (main_chain, total_work) = self.get_main_chain(genesis_hash);
         if !main_chain.is_empty() {
             // Set chain tip to last block in main chain
             self.set_chain_tip(*main_chain.last().unwrap());
-            self.set_total_difficulty(total_diff);
+            self.set_total_work(total_work);
 
             // Load tips from the highest height
             let height = main_chain.len() as u32 - 1;
@@ -1356,9 +1352,9 @@ impl Store {
             self.update_tips(tips);
 
             debug!(
-                "Initialized chain state: tip={:?}, difficulty={}, tips_count={}",
+                "Initialized chain state: tip={:?}, work={}, tips_count={}",
                 self.get_chain_tip(),
-                self.get_total_difficulty(),
+                self.get_total_work(),
                 self.get_tips().len()
             );
         }
@@ -1371,6 +1367,7 @@ impl Store {
 mod tests {
     use super::*;
     use crate::test_utils::TestShareBlockBuilder;
+    use crate::test_utils::multiplied_compact_target_as_work;
     use std::collections::HashSet;
     use tempfile::tempdir;
 
@@ -1865,14 +1862,8 @@ mod tests {
             share.header.bitcoin_header.nonce
         );
         assert_eq!(
-            read_share
-                .header
-                .bitcoin_header
-                .difficulty(bitcoin::Network::Signet),
-            share
-                .header
-                .bitcoin_header
-                .difficulty(bitcoin::Network::Signet)
+            read_share.header.bitcoin_header.work(),
+            share.header.bitcoin_header.work()
         );
         assert_eq!(
             read_share.header.bitcoin_header.time,
@@ -2459,12 +2450,12 @@ mod tests {
 
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
-            .diff(2)
+            .work(2)
             .build();
 
         let share3 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share2.block_hash().to_string())
-            .diff(3)
+            .work(3)
             .build();
 
         // Store shares in linear chain 0 -> 1 -> 2
@@ -2492,13 +2483,8 @@ mod tests {
         store.remove_tip(&share2.block_hash());
         assert!(!store.get_tips().contains(&share2.block_hash()));
 
-        store.set_total_difficulty(6);
-        assert_eq!(store.get_total_difficulty(), 6);
-
         // Test initialization from store
-        store
-            .init_chain_state_from_store(genesis_hash, bitcoin::network::Network::Signet)
-            .unwrap();
+        store.init_chain_state_from_store(genesis_hash).unwrap();
 
         // After initialization, tip should be set to last block in main chain
         assert_eq!(store.get_chain_tip(), share3.block_hash());
@@ -2510,8 +2496,13 @@ mod tests {
         assert_eq!(tips_after_init.len(), 1);
         assert!(tips_after_init.contains(&share3.block_hash()));
 
-        // Total difficulty should reflect sum of difficulties from main chain
-        assert_eq!(store.get_total_difficulty(), 6); // 1 + 2 + 3 = 6
+        // Total work should reflect sum of work from main chain
+        assert_eq!(
+            store.get_total_work(),
+            multiplied_compact_target_as_work(0x01e0377ae, 1)
+                + multiplied_compact_target_as_work(0x01e0377ae, 2)
+                + multiplied_compact_target_as_work(0x01e0377ae, 3)
+        ); // 1 + 2 + 3 = 6
     }
 
     #[test]

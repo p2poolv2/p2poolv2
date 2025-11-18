@@ -93,7 +93,7 @@ mod tests {
                 "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4".into(),
             )
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .diff(1)
+            .work(1)
             .build();
 
         // Test conversion to StorageShareBlock

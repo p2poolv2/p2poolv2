@@ -44,7 +44,7 @@ pub fn execute(chain: Arc<ChainStore>) -> Result<(), Box<dyn Error>> {
     let chain_tip_blockhash = format!("{:?}", chain.store.get_chain_tip());
 
     // Get total work (difficulty)
-    let total_work = format!("{:?}", chain.store.get_total_difficulty());
+    let total_work = format!("{:?}", chain.store.get_total_work());
 
     // Count total number of shares in the chain
     let mut total_shares = 0;

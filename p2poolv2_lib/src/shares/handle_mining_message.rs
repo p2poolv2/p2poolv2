@@ -102,7 +102,7 @@ mod tests {
                 .unwrap(),
             ])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .diff(1)
+            .work(1)
             .build();
 
         let result = handle_mining_message::<mpsc::Sender<Message>>(
@@ -166,7 +166,7 @@ mod tests {
                 .unwrap(),
             ])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .diff(1)
+            .work(1)
             .build();
 
         let result = handle_mining_message::<mpsc::Sender<Message>>(
@@ -229,7 +229,7 @@ mod tests {
                 .unwrap(),
             ])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .diff(1)
+            .work(1)
             .build();
 
         let result = handle_mining_message::<mpsc::Sender<Message>>(
