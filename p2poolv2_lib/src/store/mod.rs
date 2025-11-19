@@ -52,7 +52,6 @@ pub struct Store {
     genesis_block_hash: Arc<RwLock<Option<BlockHash>>>,
     chain_tip: Arc<RwLock<BlockHash>>,
     tips: Arc<RwLock<HashSet<BlockHash>>>,
-    total_work: Arc<RwLock<Work>>,
 }
 
 /// A rocksdb based store for share blocks.
@@ -121,7 +120,6 @@ impl Store {
             genesis_block_hash: Arc::new(RwLock::new(None)),
             chain_tip: Arc::new(RwLock::new(BlockHash::all_zeros())),
             tips: Arc::new(RwLock::new(HashSet::new())),
-            total_work: Arc::new(RwLock::new(Work::from_le_bytes([0u8; 32]))),
         };
         Ok(store)
     }
@@ -355,19 +353,14 @@ impl Store {
 
     /// Iterate over the store from provided start blockhash
     /// Gather all highest work blocks and return as main chain
-    pub fn get_main_chain(&self, genesis: BlockHash) -> (Vec<BlockHash>, Work) {
+    pub fn get_main_chain(&self, genesis: BlockHash) -> Vec<BlockHash> {
         let mut current = Some(genesis);
         let mut main_chain = vec![];
-        let mut total_work = Work::from_le_bytes([0u8; 32]);
 
         while current.is_some() {
             main_chain.push(current.unwrap());
             let children = self.get_children_blockhashes(&current.unwrap());
             if children.is_empty() {
-                // Add genesis work
-                if let Some(genesis_share) = self.get_share(&genesis) {
-                    total_work = total_work + genesis_share.header.get_work();
-                }
                 break;
             }
 
@@ -385,16 +378,13 @@ impl Store {
                 .max_by(|a, b| a.1.cmp(&b.1))
                 .map(|(hash, work)| (*hash, work));
 
-            total_work = total_work
-                + max_work_child.map_or(Work::from_le_bytes([0u8; 32]), |(_, work)| work);
-
             if let Some((next_blockhash, _work)) = max_work_child {
                 current = Some(next_blockhash);
             } else {
                 current = None;
             }
         }
-        (main_chain, total_work)
+        main_chain
     }
 
     /// Load children BlockHashes for a blockhash from the block index
@@ -1352,13 +1342,9 @@ impl Store {
     }
 
     /// Get total work from chain state
-    pub fn get_total_work(&self) -> Work {
-        *self.total_work.read().unwrap()
-    }
-
-    /// Set total work in chain state
-    pub fn set_total_work(&self, work: Work) {
-        *self.total_work.write().unwrap() = work;
+    pub fn get_total_work(&self) -> Result<Work, Box<dyn Error + Send + Sync>> {
+        let tip = self.get_block_metadata(&self.chain_tip.read().unwrap())?;
+        Ok(tip.chain_work)
     }
 
     /// Initialize chain state from existing data in the store
@@ -1371,11 +1357,10 @@ impl Store {
         self.set_genesis_block_hash(genesis_hash);
 
         // Load main chain and total work
-        let (main_chain, total_work) = self.get_main_chain(genesis_hash);
+        let main_chain = self.get_main_chain(genesis_hash);
         if !main_chain.is_empty() {
             // Set chain tip to last block in main chain
             self.set_chain_tip(*main_chain.last().unwrap());
-            self.set_total_work(total_work);
 
             // Load tips from the highest height
             let height = main_chain.len() as u32 - 1;
@@ -1386,7 +1371,7 @@ impl Store {
             debug!(
                 "Initialized chain state: tip={:?}, work={}, tips_count={}",
                 self.get_chain_tip(),
-                self.get_total_work(),
+                self.get_total_work()?,
                 self.get_tips().len()
             );
         }
@@ -2530,7 +2515,7 @@ mod tests {
 
         // Total work should reflect sum of work from main chain
         assert_eq!(
-            store.get_total_work(),
+            store.get_total_work().unwrap(),
             multiplied_compact_target_as_work(0x01e0377ae, 1)
                 + multiplied_compact_target_as_work(0x01e0377ae, 2)
                 + multiplied_compact_target_as_work(0x01e0377ae, 3)

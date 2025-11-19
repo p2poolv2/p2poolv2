@@ -62,11 +62,6 @@ impl ShareHeader {
         Target::from_compact(self.bits).to_work()
     }
 
-    /// Get the target defined by the bits field
-    pub(crate) fn get_target(&self) -> bitcoin::Target {
-        Target::from_compact(self.bits)
-    }
-
     /// Build a ShareHeader from a commitment and a bitcoin header
     /// which contains a coinbase matching the commitment.
     ///

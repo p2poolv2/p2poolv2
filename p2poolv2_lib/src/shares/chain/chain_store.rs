@@ -17,8 +17,8 @@
 use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
+use bitcoin::BlockHash;
 use bitcoin::hashes::Hash;
-use bitcoin::{BlockHash, Work};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::sync::Arc;
@@ -81,10 +81,10 @@ impl ChainStore {
             share_work,
         );
 
-        let height = match self.get_height_for_prevhash(prev_share_blockhash) {
-            Some(prev_height) => prev_height + 1,
-            None => 0, // If there's no previous height, this is height 0
-        };
+        let prev_metadata = self.store.get_block_metadata(&prev_share_blockhash)?;
+        let height = prev_metadata.height.unwrap_or_default() + 1;
+        let prev_chain_work = prev_metadata.chain_work + share_work;
+
         // save to share to store for all cases
         tracing::debug!(
             "Adding share to store: {:?} at height: {}",
@@ -97,7 +97,6 @@ impl ChainStore {
         if tips.is_empty() {
             info!("New chain: {:?}", blockhash);
             self.store.add_tip(blockhash);
-            self.store.set_total_work(share_work);
             self.store.set_chain_tip(blockhash);
             return Ok(());
         }
@@ -113,22 +112,17 @@ impl ChainStore {
         }
         // add the new share as a tip
         self.store.add_tip(blockhash);
+
         // handle potential reorgs
         // get total difficulty up to prev_share_blockhash
         tracing::info!("Checking for reorgs at share: {:?}", prev_share_blockhash);
-        let chain_upto_prev_share_blockhash = self.store.get_chain_upto(&prev_share_blockhash);
-        let total_work_upto_prev_share_blockhash = chain_upto_prev_share_blockhash
-            .iter()
-            .fold(Work::from_le_bytes([0u8; 32]), |acc, share| {
-                acc + share.header.get_work()
-            });
-        let current_total_work = self.store.get_total_work();
+        let current_total_work = self.store.get_total_work()?;
         debug!(
-            "Total work up to prev share blockhash: {:?}. Current total work: {:?}",
-            total_work_upto_prev_share_blockhash, current_total_work
+            "prev chain work: {}, share work {} Current total work: {}",
+            prev_chain_work, share_work, current_total_work
         );
-        if total_work_upto_prev_share_blockhash + share_work > current_total_work {
-            let reorg_result = self.reorg(share, total_work_upto_prev_share_blockhash);
+        if prev_chain_work + share_work > current_total_work {
+            let reorg_result = self.reorg(share);
             if reorg_result.is_err() {
                 error!("Failed to reorg chain for share: {:?}", blockhash);
                 return Err(reorg_result.err().unwrap());
@@ -156,14 +150,6 @@ impl ChainStore {
             .get_pplns_shares_filtered(limit, start_time, end_time)
     }
 
-    /// Get height for the previous blockhash
-    fn get_height_for_prevhash(&self, hash: BlockHash) -> Option<u32> {
-        match self.store.get_block_metadata(&hash) {
-            Ok(metadata) => metadata.height,
-            Err(_) => None, // If prev not found in index, treat as genesis
-        }
-    }
-
     /// Remove a blockhash from the tips set
     /// If the blockhash is not in the tips set, this is a no-op
     pub fn remove_from_tips(&self, blockhash: &BlockHash) {
@@ -180,14 +166,8 @@ impl ChainStore {
     /// We do not explicitly mark any blocks as unconfirmed or transactions as unconfirmed. This is because we don't cache the status of the blocks or transactions.
     /// By changing the tips we are effectively marking all the blocks and transactions that were on the old tips as unconfirmed.
     /// When a share is being traded, if it is not on the main chain, it will not be accepted for the trade.
-    pub fn reorg(
-        &self,
-        share: ShareBlock,
-        total_work_upto_prev_share_blockhash: Work,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub fn reorg(&self, share: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>> {
         info!("Reorging chain to share: {:?}", share.block_hash());
-        self.store
-            .set_total_work(total_work_upto_prev_share_blockhash + share.header.get_work());
         self.store.set_chain_tip(share.block_hash());
         Ok(())
     }
@@ -299,11 +279,6 @@ impl ChainStore {
         locator
     }
 
-    /// Get the total difficulty of the chain
-    pub fn get_total_work(&self) -> Work {
-        self.store.get_total_work()
-    }
-
     /// Get the chain tip and uncles
     pub fn get_chain_tip_and_uncles(&self) -> (BlockHash, HashSet<BlockHash>) {
         let mut uncles = self.store.get_tips();
@@ -401,7 +376,7 @@ mock! {
     pub ChainStore {
         pub fn new(store_path: String, genesis_block: ShareBlock) -> Self;
         pub fn get_tips(&self) -> HashSet<BlockHash>;
-        pub fn reorg(&self, share_block: ShareBlock, total_difficulty_upto_prev_share_blockhash: u128) -> Result<(), Box<dyn Error + Send + Sync>>;
+        pub fn reorg(&self, share_block: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn is_confirmed(&self, share_block: ShareBlock) -> Result<bool, Box<dyn Error + Send + Sync>>;
         pub fn add_share(&self, share_block: ShareBlock, on_main_chain: bool) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), Box<dyn Error + Send + Sync>>;
@@ -466,7 +441,7 @@ mod chain_tests {
         expected_tips.insert(share1.block_hash());
         assert_eq!(chain.store.get_tips().len(), 1);
         assert_eq!(
-            chain.store.get_total_work(),
+            chain.store.get_total_work().unwrap(),
             genesis_work + multiplied_compact_target_as_work(0x01e0377ae, 2)
         ); // genesis (1) + share1 (2)
         assert_eq!(chain.store.get_chain_tip(), share1.block_hash());
@@ -490,7 +465,7 @@ mod chain_tests {
         expected_tips.insert(uncle1_share2.block_hash());
         assert_eq!(chain.store.get_tips(), expected_tips);
         assert_eq!(
-            chain.store.get_total_work(),
+            chain.store.get_total_work().unwrap(),
             genesis_work + multiplied_compact_target_as_work(0x01e0377ae, 2) + genesis_work
         ); // genesis (1) + share1 (2) + uncle1_share2 (1)
         assert_eq!(chain.store.get_chain_tip(), uncle1_share2.block_hash());
@@ -502,7 +477,7 @@ mod chain_tests {
         expected_tips.insert(uncle2_share2.block_hash());
         assert_eq!(chain.store.get_tips(), expected_tips);
         assert_eq!(
-            chain.store.get_total_work(),
+            chain.store.get_total_work().unwrap(),
             genesis_work + multiplied_compact_target_as_work(0x01e0377ae, 2) + genesis_work
         ); // genesis (1) + share1 (2) + uncle1_share2 (1) [same diff uncles, only one is counted]
         // chain tip doesn't change as uncle2_share2 has same difficulty as uncle1_share2
@@ -523,7 +498,7 @@ mod chain_tests {
         expected_tips.insert(share2.block_hash());
         assert_eq!(chain.store.get_tips(), expected_tips);
         assert_eq!(
-            chain.store.get_total_work(),
+            chain.store.get_total_work().unwrap(),
             genesis_work
                 + multiplied_compact_target_as_work(0x01e0377ae, 2)
                 + multiplied_compact_target_as_work(0x01e0377ae, 2)
@@ -551,7 +526,7 @@ mod chain_tests {
         assert_eq!(chain.store.get_tips(), expected_tips);
         // we only look at total difficulty for the highest work chain, which now is 1, 2, 3.1
         assert_eq!(
-            chain.store.get_total_work(),
+            chain.store.get_total_work().unwrap(),
             genesis_work
                 + multiplied_compact_target_as_work(0x01e0377ae, 2)
                 + multiplied_compact_target_as_work(0x01e0377ae, 2)
@@ -567,7 +542,7 @@ mod chain_tests {
         assert_eq!(chain.store.get_tips(), expected_tips);
         // we only look at total work for the highest work chain, which now is 1, 2, 3.1 (not 3.2)
         assert_eq!(
-            chain.store.get_total_work(),
+            chain.store.get_total_work().unwrap(),
             genesis_work
                 + multiplied_compact_target_as_work(0x01e0377ae, 2)
                 + multiplied_compact_target_as_work(0x01e0377ae, 2)
@@ -590,7 +565,7 @@ mod chain_tests {
         assert_eq!(chain.store.get_tips(), expected_tips);
         // we only look at total difficulty for the highest work chain, which now is 1, 2, 3
         assert_eq!(
-            chain.store.get_total_work(),
+            chain.store.get_total_work().unwrap(),
             genesis_work
                 + multiplied_compact_target_as_work(0x01e0377ae, 2)
                 + multiplied_compact_target_as_work(0x01e0377ae, 2)

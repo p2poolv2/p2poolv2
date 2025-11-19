@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use bitcoin::Work;
 use bitcoin::consensus::{Decodable, Encodable};
 use serde::{Deserialize, Serialize};
 
@@ -72,9 +73,14 @@ impl Decodable for TxMetadata {
 /// This is stored indexed by the blockhash, we can later optimise to internal key, if needed.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BlockMetadata {
+    /// Height of the block, this is also tracked in BlockHeight index
     pub height: Option<u32>,
+    /// Validation status of the block in the share chain
     pub is_valid: bool,
+    /// Confirmation status of the block in the share chain
     pub is_confirmed: bool,
+    /// Total chain work up to the share block
+    pub chain_work: Work,
 }
 
 impl Encodable for BlockMetadata {
@@ -98,6 +104,7 @@ impl Encodable for BlockMetadata {
 
         len += self.is_valid.consensus_encode(w)?;
         len += self.is_confirmed.consensus_encode(w)?;
+        len += self.chain_work.to_le_bytes().consensus_encode(w)?;
         Ok(len)
     }
 }
@@ -116,11 +123,13 @@ impl Decodable for BlockMetadata {
 
         let is_valid = bool::consensus_decode(r)?;
         let is_confirmed = bool::consensus_decode(r)?;
+        let chain_work = Work::from_le_bytes(<[u8; 32]>::consensus_decode(r)?);
 
         Ok(BlockMetadata {
             height,
             is_valid,
             is_confirmed,
+            chain_work,
         })
     }
 }
