@@ -307,8 +307,13 @@ impl Store {
         }
 
         self.set_height_to_blockhash(&blockhash, height, &mut batch)?;
-        self.set_block_height_in_metadata(&blockhash, Some(height), Some(&mut batch))
-            .unwrap();
+        let block_metadata = BlockMetadata {
+            height: Some(height),
+            is_confirmed: false,
+            is_valid: false,
+            chain_work: share.header.get_work(),
+        };
+        self.set_block_metadata(&blockhash, &block_metadata, Some(&mut batch))?;
 
         // Add the share block itself
         let storage_share_block: StorageShareBlock = share.into();
@@ -1193,27 +1198,21 @@ impl Store {
     }
 
     /// Get the block metadata for a blockhash
-    pub fn get_block_metadata(&self, blockhash: &BlockHash) -> Option<BlockMetadata> {
+    pub fn get_block_metadata(
+        &self,
+        blockhash: &BlockHash,
+    ) -> Result<BlockMetadata, Box<dyn Error + Send + Sync>> {
         let block_metadata_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
 
         let mut metadata_key = bitcoin::consensus::serialize(blockhash);
         metadata_key.extend_from_slice(b"_md");
 
         match self.db.get_cf::<&[u8]>(block_metadata_cf, &metadata_key) {
-            Ok(Some(metadata_serialized)) => {
-                let metadata: BlockMetadata = match encode::deserialize(&metadata_serialized) {
-                    Ok(metadata) => metadata,
-                    Err(e) => {
-                        tracing::error!("Error deserializing block metadata: {:?}", e);
-                        return None;
-                    }
-                };
-                Some(metadata)
-            }
-            Ok(None) | Err(_) => {
-                debug!("No metadata found for blockhash: {:?}", blockhash);
-                None
-            }
+            Ok(Some(metadata_serialized)) => match encode::deserialize(&metadata_serialized) {
+                Ok(metadata) => Ok(metadata),
+                Err(_) => Err("Error deserializing block metadata: {e}".into()),
+            },
+            Ok(None) | Err(_) => Err("No metadata found for blockhash: {blockhash}".into()),
         }
     }
 
@@ -1263,16 +1262,13 @@ impl Store {
         valid: bool,
         batch: Option<&mut rocksdb::WriteBatch>,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let metadata = self.get_block_metadata(blockhash).unwrap_or(BlockMetadata {
-            is_valid: false,
-            is_confirmed: false,
-            height: None,
-        });
+        let metadata = self.get_block_metadata(blockhash)?;
 
         let updated_metadata = BlockMetadata {
             is_valid: valid,
             is_confirmed: metadata.is_confirmed,
             height: metadata.height,
+            chain_work: metadata.chain_work,
         };
 
         self.set_block_metadata(blockhash, &updated_metadata, batch)
@@ -1285,16 +1281,13 @@ impl Store {
         confirmed: bool,
         batch: Option<&mut rocksdb::WriteBatch>,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let metadata = self.get_block_metadata(blockhash).unwrap_or(BlockMetadata {
-            is_valid: false,
-            is_confirmed: false,
-            height: None,
-        });
+        let metadata = self.get_block_metadata(blockhash)?;
 
         let updated_metadata = BlockMetadata {
             is_valid: metadata.is_valid,
             is_confirmed: confirmed,
             height: metadata.height,
+            chain_work: metadata.chain_work,
         };
 
         self.set_block_metadata(blockhash, &updated_metadata, batch)
@@ -1306,16 +1299,13 @@ impl Store {
         height: Option<u32>,
         batch: Option<&mut rocksdb::WriteBatch>,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let metadata = self.get_block_metadata(blockhash).unwrap_or(BlockMetadata {
-            is_valid: false,
-            is_confirmed: false,
-            height,
-        });
+        let metadata = self.get_block_metadata(blockhash)?;
 
         let updated_metadata = BlockMetadata {
             is_valid: metadata.is_valid,
             is_confirmed: metadata.is_confirmed,
             height,
+            chain_work: metadata.chain_work,
         };
         debug!("Setting block metadata: {:?}", updated_metadata);
         self.set_block_metadata(blockhash, &updated_metadata, batch)
@@ -2218,7 +2208,7 @@ mod tests {
 
         // Status checks should return false for non-existent blocks
         let metadata = store.get_block_metadata(&nonexistent_blockhash);
-        assert!(metadata.is_none());
+        assert!(metadata.is_err());
     }
 
     #[test]

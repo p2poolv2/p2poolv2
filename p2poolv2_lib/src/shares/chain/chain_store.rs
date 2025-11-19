@@ -49,7 +49,9 @@ impl ChainStore {
 
         // Initialize chain state if needed
         if genesis_in_store.is_none() {
-            chain.add_share(genesis_block, true).unwrap();
+            chain
+                .add_share(genesis_block, true)
+                .expect("Should be able to save genesis to create store");
         } else {
             // Initialize chain state from existing store data
             let _ = chain.store.init_chain_state_from_store(genesis_block_hash);
@@ -157,8 +159,8 @@ impl ChainStore {
     /// Get height for the previous blockhash
     fn get_height_for_prevhash(&self, hash: BlockHash) -> Option<u32> {
         match self.store.get_block_metadata(&hash) {
-            Some(metadata) => metadata.height,
-            None => None, // If prev not found in index, treat as genesis
+            Ok(metadata) => metadata.height,
+            Err(_) => None, // If prev not found in index, treat as genesis
         }
     }
 
