@@ -328,15 +328,20 @@ impl ChainStore {
             return Some(0);
         }
 
-        // Get chain from tip to given blockhash
-        let chain = self.store.get_chain_upto(blockhash);
-        // If chain is empty, blockhash not found
-        if chain.is_empty() {
+        // Get shares from tip to given blockhash (traverses from tips downward)
+        // This is faster for recent blocks since we start from the tip
+        let shares = self
+            .store
+            .get_shares_from_tip_to_blockhash(blockhash)
+            .ok()?;
+
+        // If shares is empty, blockhash not found
+        if shares.is_empty() {
             return None;
         }
 
-        // Return length of chain minus 1 (since chain includes the blockhash)
-        Some(chain.len() - 1)
+        // Return length of shares minus 1 (since shares includes the blockhash)
+        Some(shares.len() - 1)
     }
 
     /// Save a job with timestamp-prefixed key
