@@ -180,14 +180,13 @@ impl ChainStore {
     }
 
     /// Check if a share is confirmed according to the minimum confirmation depth
+    /// Genesis is always confirmed - detected from prev share blockhash == null
+    /// Get depth and check it is greater than min confirmation depth
     pub fn is_confirmed(&self, share: ShareBlock) -> bool {
         if share.header.prev_share_blockhash == BlockHash::all_zeros() {
             return true;
         }
-        self.store
-            .get_chain_upto(&share.header.prev_share_blockhash)
-            .len()
-            > MIN_CONFIRMATION_DEPTH
+        self.get_depth(&share.block_hash()).unwrap_or_default() > MIN_CONFIRMATION_DEPTH
     }
 
     /// Get a share from the chain given a share hash
@@ -625,12 +624,12 @@ mod chain_tests {
             bitcoin::Network::Signet,
         );
 
-        // Create initial chain of MIN_CONFIRMATION_DEPTH + 1 blocks
+        // Create initial chain of MIN_CONFIRMATION_DEPTH + 10 blocks
         let mut prev_hash = None;
         let mut blocks = vec![];
 
-        // Generate blocks
-        for i in 0..=MIN_CONFIRMATION_DEPTH + 1 {
+        // Generate blocks first
+        for i in 0..=MIN_CONFIRMATION_DEPTH + 10 {
             let mut share_builder = TestShareBlockBuilder::new();
             if prev_hash.is_some() {
                 share_builder = share_builder.prev_share_blockhash(prev_hash.unwrap());
@@ -645,11 +644,31 @@ mod chain_tests {
             blocks.push(share.clone());
             chain.add_share(share.clone(), true).unwrap();
             prev_hash = Some(share.block_hash().to_string());
+        }
 
-            if i > MIN_CONFIRMATION_DEPTH || i == 0 {
-                assert!(chain.is_confirmed(share));
+        // Now check confirmations: genesis (i=0) is always confirmed
+        // Shares with depth > MIN_CONFIRMATION_DEPTH should be confirmed
+        for (i, share) in blocks.iter().enumerate() {
+            let depth = chain.get_depth(&share.block_hash()).unwrap_or(0);
+
+            if i == 0 {
+                // Genesis is always confirmed
+                assert!(
+                    chain.is_confirmed(share.clone()),
+                    "Genesis should always be confirmed"
+                );
+            } else if depth > MIN_CONFIRMATION_DEPTH {
+                // Shares with depth > MIN_CONFIRMATION_DEPTH should be confirmed
+                assert!(
+                    chain.is_confirmed(share.clone()),
+                    "Share at index {i} with depth {depth} should be confirmed (MIN_CONFIRMATION_DEPTH={MIN_CONFIRMATION_DEPTH})"
+                );
             } else {
-                assert!(!chain.is_confirmed(share));
+                // Shares with depth <= MIN_CONFIRMATION_DEPTH should not be confirmed
+                assert!(
+                    !chain.is_confirmed(share.clone()),
+                    "Share at index {i} with depth {depth} should NOT be confirmed (MIN_CONFIRMATION_DEPTH={MIN_CONFIRMATION_DEPTH})"
+                );
             }
         }
     }
