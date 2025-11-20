@@ -254,6 +254,7 @@ impl Store {
         &self,
         share: ShareBlock,
         height: u32,
+        chain_work: Work,
         on_main_chain: bool,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let blockhash = share.block_hash();
@@ -309,7 +310,7 @@ impl Store {
             height: Some(height),
             is_confirmed: false,
             is_valid: false,
-            chain_work: share.header.get_work(),
+            chain_work,
         };
         self.set_block_metadata(&blockhash, &block_metadata, Some(&mut batch))?;
 
@@ -1202,7 +1203,9 @@ impl Store {
                 Ok(metadata) => Ok(metadata),
                 Err(_) => Err("Error deserializing block metadata: {e}".into()),
             },
-            Ok(None) | Err(_) => Err("No metadata found for blockhash: {blockhash}".into()),
+            Ok(None) | Err(_) => {
+                Err(format!("No metadata found for blockhash: {blockhash}").into())
+            }
         }
     }
 
@@ -1347,6 +1350,18 @@ impl Store {
         Ok(tip.chain_work)
     }
 
+    /// Setup genesis block for the store
+    /// Returns an error, if store already has even a single block
+    pub fn setup_genesis(&self, genesis: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let blockhash = genesis.block_hash();
+        let genesis_work = genesis.header.get_work();
+        self.add_share(genesis, 0, genesis_work, true)?;
+        *self.genesis_block_hash.write().unwrap() = Some(blockhash);
+        self.add_tip(blockhash);
+        self.set_chain_tip(blockhash);
+        Ok(())
+    }
+
     /// Initialize chain state from existing data in the store
     /// This should be called after opening an existing store to load cached state
     pub fn init_chain_state_from_store(
@@ -1432,14 +1447,45 @@ mod tests {
             .nonce(0xe9695797)
             .build();
 
+        let genesis_work = share1.header.get_work();
+
         // Add all shares to store
-        store.add_share(share1.clone(), 0, true).unwrap();
-        store.add_share(uncle1_share2.clone(), 1, true).unwrap();
-        store.add_share(uncle2_share2.clone(), 1, true).unwrap();
-        store.add_share(share2.clone(), 1, true).unwrap();
-        store.add_share(uncle1_share3.clone(), 2, true).unwrap();
-        store.add_share(uncle2_share3.clone(), 2, true).unwrap();
-        store.add_share(share3.clone(), 2, true).unwrap();
+        store
+            .add_share(share1.clone(), 0, genesis_work, true)
+            .unwrap();
+        store
+            .add_share(uncle1_share2.clone(), 1, genesis_work + genesis_work, true)
+            .unwrap();
+        store
+            .add_share(uncle2_share2.clone(), 1, genesis_work + genesis_work, true)
+            .unwrap();
+        store
+            .add_share(share2.clone(), 1, genesis_work + genesis_work, true)
+            .unwrap();
+        store
+            .add_share(
+                uncle1_share3.clone(),
+                2,
+                genesis_work + genesis_work + genesis_work,
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                uncle2_share3.clone(),
+                2,
+                genesis_work + genesis_work + genesis_work,
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                share3.clone(),
+                2,
+                genesis_work + genesis_work + genesis_work,
+                true,
+            )
+            .unwrap();
 
         // Get chain up to share3
         let chain = store.get_chain_upto(&share3.block_hash());
@@ -1706,7 +1752,9 @@ mod tests {
             .build();
 
         // Store the share block
-        store.add_share(share.clone(), 0, true).unwrap();
+        store
+            .add_share(share.clone(), 0, share.header.get_work(), true)
+            .unwrap();
         assert_eq!(share.transactions.len(), 3);
 
         // Retrieve transactions for the block hash
@@ -1860,7 +1908,9 @@ mod tests {
             .build();
 
         // Add share to store
-        store.add_share(share.clone(), 0, true).unwrap();
+        store
+            .add_share(share.clone(), 0, share.header.get_work(), true)
+            .unwrap();
 
         // Get share header from store
         let read_share = store.get_share(&share.block_hash()).unwrap();
@@ -1932,11 +1982,41 @@ mod tests {
             .build();
 
         // Add all shares to store
-        store.add_share(share1.clone(), 0, true).unwrap();
-        store.add_share(uncle1_share2.clone(), 1, true).unwrap();
-        store.add_share(uncle2_share2.clone(), 1, true).unwrap();
-        store.add_share(share2.clone(), 1, true).unwrap();
-        store.add_share(share3.clone(), 2, true).unwrap();
+        store
+            .add_share(share1.clone(), 0, share1.header.get_work(), true)
+            .unwrap();
+        store
+            .add_share(
+                uncle1_share2.clone(),
+                1,
+                share1.header.get_work() + uncle1_share2.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                uncle2_share2.clone(),
+                1,
+                share1.header.get_work() + uncle2_share2.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                share2.clone(),
+                1,
+                share1.header.get_work() + share2.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                share3.clone(),
+                2,
+                share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
+                true,
+            )
+            .unwrap();
 
         // Verify children of share1
         let children_share1 = store.get_children_blockhashes(&share1.block_hash());
@@ -1991,12 +2071,44 @@ mod tests {
             .prev_share_blockhash(share2.block_hash().to_string())
             .build();
 
+        let genesis_work = share1.header.get_work();
+
         // Add all shares to store
-        store.add_share(share1.clone(), 0, true).unwrap();
-        store.add_share(uncle1_share2.clone(), 1, true).unwrap();
-        store.add_share(uncle2_share2.clone(), 1, true).unwrap();
-        store.add_share(share2.clone(), 1, true).unwrap();
-        store.add_share(share3.clone(), 2, true).unwrap();
+        store
+            .add_share(share1.clone(), 0, genesis_work, true)
+            .unwrap();
+        store
+            .add_share(
+                uncle1_share2.clone(),
+                1,
+                genesis_work + uncle1_share2.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                uncle2_share2.clone(),
+                1,
+                genesis_work + uncle2_share2.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                share2.clone(),
+                1,
+                genesis_work + share2.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                share3.clone(),
+                2,
+                genesis_work + share2.header.get_work() + share3.header.get_work(),
+                true,
+            )
+            .unwrap();
 
         // Verify descendants of share1
         let descendants_share1 =
@@ -2048,7 +2160,9 @@ mod tests {
                 builder = builder.prev_share_blockhash(prev);
             }
             let block = builder.build();
-            store.add_share(block.clone(), height, true).unwrap();
+            store
+                .add_share(block.clone(), height, block.header.get_work(), true)
+                .unwrap();
 
             hashes.push(block.block_hash());
         }
@@ -2084,7 +2198,9 @@ mod tests {
             }
             let block = builder.build();
             blocks.push(block.clone());
-            store.add_share(block.clone(), height as u32, true).unwrap();
+            store
+                .add_share(block.clone(), height as u32, block.header.get_work(), true)
+                .unwrap();
             hashes.push(block.block_hash());
         }
 
@@ -2109,7 +2225,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
-        let mut blocks = Vec::new();
+        let mut block_hashes = Vec::new();
 
         let num_blockhashes = 5;
 
@@ -2121,8 +2237,9 @@ mod tests {
                 );
             }
             let block = builder.build();
-            blocks.push(block.clone());
-            store.add_share(block, height as u32, true).unwrap();
+            block_hashes.push(block.block_hash());
+            let work = block.header.get_work();
+            store.add_share(block, height as u32, work, true).unwrap();
         }
 
         let stop_block = store.get_blockhashes_for_height(2)[0];
@@ -2133,8 +2250,8 @@ mod tests {
         let result = store.get_blockhashes_for_locator(locator.as_slice(), &stop_block, 10);
 
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0], blocks[1].block_hash());
-        assert_eq!(result[1], blocks[2].block_hash());
+        assert_eq!(result[0], block_hashes[1]);
+        assert_eq!(result[1], block_hashes[2]);
     }
 
     #[test]
@@ -2146,7 +2263,9 @@ mod tests {
         let share = TestShareBlockBuilder::new().build();
 
         // Add share to store
-        store.add_share(share.clone(), 0, true).unwrap();
+        store
+            .add_share(share.clone(), 0, share.header.get_work(), true)
+            .unwrap();
         let blockhash = share.block_hash();
 
         // Initially, block should not be valid or confirmed
@@ -2209,8 +2328,17 @@ mod tests {
             .build();
 
         // Add shares to store
-        store.add_share(share1.clone(), 0, true).unwrap();
-        store.add_share(share2.clone(), 1, true).unwrap();
+        store
+            .add_share(share1.clone(), 0, share1.header.get_work(), true)
+            .unwrap();
+        store
+            .add_share(
+                share2.clone(),
+                1,
+                share1.header.get_work() + share2.header.get_work(),
+                true,
+            )
+            .unwrap();
 
         let blockhash1 = share1.block_hash();
         let blockhash2 = share2.block_hash();
@@ -2250,7 +2378,9 @@ mod tests {
         let blockhash = share.block_hash();
 
         // Add share to store without setting height in metadata
-        store.add_share(share.clone(), 0, true).unwrap();
+        store
+            .add_share(share.clone(), 0, share.header.get_work(), true)
+            .unwrap();
 
         // Height should be set during add_share
         let metadata = store.get_block_metadata(&blockhash).unwrap();
@@ -2476,9 +2606,25 @@ mod tests {
             .build();
 
         // Store shares in linear chain 0 -> 1 -> 2
-        store.add_share(share1.clone(), 0, true).unwrap();
-        store.add_share(share2.clone(), 1, true).unwrap();
-        store.add_share(share3.clone(), 2, true).unwrap();
+        store
+            .add_share(share1.clone(), 0, share1.header.get_work(), true)
+            .unwrap();
+        store
+            .add_share(
+                share2.clone(),
+                1,
+                share1.header.get_work() + share2.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                share3.clone(),
+                2,
+                share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
+                true,
+            )
+            .unwrap();
 
         let genesis_hash = share1.block_hash();
 
@@ -2926,9 +3072,25 @@ mod tests {
             .prev_share_blockhash(share2.block_hash().to_string())
             .build();
 
-        store.add_share(share1.clone(), 0, true).unwrap();
-        store.add_share(share2.clone(), 1, true).unwrap();
-        store.add_share(share3.clone(), 2, true).unwrap();
+        store
+            .add_share(share1.clone(), 0, share1.header.get_work(), true)
+            .unwrap();
+        store
+            .add_share(
+                share2.clone(),
+                1,
+                share1.header.get_work() + share2.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                share3.clone(),
+                2,
+                share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
+                true,
+            )
+            .unwrap();
 
         // Set share3 as the tip
         store.add_tip(share3.block_hash());
@@ -2971,10 +3133,33 @@ mod tests {
             .uncles(vec![uncle1.block_hash(), uncle2.block_hash()])
             .build();
 
-        store.add_share(share1.clone(), 0, true).unwrap();
-        store.add_share(uncle1.clone(), 1, true).unwrap();
-        store.add_share(uncle2.clone(), 1, true).unwrap();
-        store.add_share(share2.clone(), 1, true).unwrap();
+        store
+            .add_share(share1.clone(), 0, share1.header.get_work(), true)
+            .unwrap();
+        store
+            .add_share(
+                uncle1.clone(),
+                1,
+                share1.header.get_work() + uncle1.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                uncle2.clone(),
+                1,
+                share1.header.get_work() + uncle2.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                share2.clone(),
+                1,
+                share1.header.get_work() + share2.header.get_work(),
+                true,
+            )
+            .unwrap();
 
         // Set share2 as the tip
         store.add_tip(share2.block_hash());
@@ -3015,10 +3200,33 @@ mod tests {
             .nonce(200)
             .build();
 
-        store.add_share(share1.clone(), 0, true).unwrap();
-        store.add_share(share2.clone(), 1, true).unwrap();
-        store.add_share(tip1.clone(), 2, true).unwrap();
-        store.add_share(tip2.clone(), 2, true).unwrap();
+        store
+            .add_share(share1.clone(), 0, share1.header.get_work(), true)
+            .unwrap();
+        store
+            .add_share(
+                share2.clone(),
+                1,
+                share1.header.get_work() + share2.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                tip1.clone(),
+                2,
+                share1.header.get_work() + share2.header.get_work() + tip1.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                tip2.clone(),
+                2,
+                share1.header.get_work() + share2.header.get_work() + tip1.header.get_work(),
+                true,
+            )
+            .unwrap();
 
         // Set both as tips
         store.add_tip(tip1.block_hash());
@@ -3044,7 +3252,9 @@ mod tests {
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         let share1 = TestShareBlockBuilder::new().build();
-        store.add_share(share1.clone(), 0, true).unwrap();
+        store
+            .add_share(share1.clone(), 0, share1.header.get_work(), true)
+            .unwrap();
         store.add_tip(share1.block_hash());
 
         // Try to get chain to a non-existent blockhash
@@ -3073,10 +3283,36 @@ mod tests {
             .prev_share_blockhash(share3.block_hash().to_string())
             .build();
 
-        store.add_share(share1.clone(), 0, true).unwrap();
-        store.add_share(share2.clone(), 1, true).unwrap();
-        store.add_share(share3.clone(), 2, true).unwrap();
-        store.add_share(share4.clone(), 3, true).unwrap();
+        store
+            .add_share(share1.clone(), 0, share1.header.get_work(), true)
+            .unwrap();
+        store
+            .add_share(
+                share2.clone(),
+                1,
+                share1.header.get_work() + share2.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                share3.clone(),
+                2,
+                share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                share4.clone(),
+                3,
+                share1.header.get_work()
+                    + share2.header.get_work()
+                    + share3.header.get_work()
+                    + share4.header.get_work(),
+                true,
+            )
+            .unwrap();
 
         store.add_tip(share4.block_hash());
 
@@ -3100,7 +3336,9 @@ mod tests {
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         let share1 = TestShareBlockBuilder::new().build();
-        store.add_share(share1.clone(), 0, true).unwrap();
+        store
+            .add_share(share1.clone(), 0, share1.header.get_work(), true)
+            .unwrap();
 
         // Don't set any tips - should return empty vector
         let chain = store
@@ -3145,12 +3383,49 @@ mod tests {
             .uncles(vec![uncle2_1.block_hash()])
             .build();
 
-        store.add_share(share1.clone(), 0, true).unwrap();
-        store.add_share(uncle1_1.clone(), 1, true).unwrap();
-        store.add_share(uncle1_2.clone(), 1, true).unwrap();
-        store.add_share(share2.clone(), 1, true).unwrap();
-        store.add_share(uncle2_1.clone(), 2, true).unwrap();
-        store.add_share(share3.clone(), 2, true).unwrap();
+        store
+            .add_share(share1.clone(), 0, share1.header.get_work(), true)
+            .unwrap();
+        store
+            .add_share(
+                uncle1_1.clone(),
+                1,
+                share1.header.get_work() + uncle1_1.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                uncle1_2.clone(),
+                1,
+                share1.header.get_work() + uncle1_2.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                share2.clone(),
+                1,
+                share1.header.get_work() + share2.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                uncle2_1.clone(),
+                2,
+                share1.header.get_work() + share2.header.get_work() + uncle2_1.header.get_work(),
+                true,
+            )
+            .unwrap();
+        store
+            .add_share(
+                share3.clone(),
+                2,
+                share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
+                true,
+            )
+            .unwrap();
 
         store.add_tip(share3.block_hash());
 

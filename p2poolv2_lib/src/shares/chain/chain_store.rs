@@ -60,6 +60,12 @@ impl ChainStore {
     }
 
     /// Add a share to the chain and update the tips and total difficulty
+    ///
+    /// Figures out the height and the chain work to associate with
+    /// the share and then uses store's add share to store the
+    /// metadata and the transactions
+    ///
+    /// Handles the first block as genesis if chain is empty
     pub fn add_share(
         &self,
         share: ShareBlock,
@@ -67,39 +73,40 @@ impl ChainStore {
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         debug!("Adding share to chain: {:?}", share);
 
-        let tips = self.store.get_tips();
-        if tips.is_empty() {
-            self.store.set_genesis_block_hash(share.block_hash());
-        }
         let blockhash = share.block_hash();
         let prev_share_blockhash = share.header.prev_share_blockhash;
         let share_work = share.header.get_work();
         debug!("Share work: {:?}", share_work);
         debug!(
-            "ADDING SHARE {} WITH WORK {:?}",
+            "ADDING SHARE {} WITH WORK {}",
             share.header.block_hash(),
             share_work,
         );
 
-        let prev_metadata = self.store.get_block_metadata(&prev_share_blockhash)?;
-        let height = prev_metadata.height.unwrap_or_default() + 1;
-        let prev_chain_work = prev_metadata.chain_work + share_work;
+        let tips = self.store.get_tips();
+
+        if tips.is_empty() {
+            return self.store.setup_genesis(share);
+        }
+
+        let (new_height, new_chain_work) =
+            match self.store.get_block_metadata(&prev_share_blockhash) {
+                Ok(prev_metadata) => {
+                    let prev_height = prev_metadata.height.unwrap_or_default();
+                    let new_chain_work = prev_metadata.chain_work + share_work;
+                    (prev_height + 1, new_chain_work)
+                }
+                Err(_) => (1, share_work),
+            };
 
         // save to share to store for all cases
         tracing::debug!(
             "Adding share to store: {:?} at height: {}",
             share.block_hash(),
-            height
+            new_height
         );
-        self.store.add_share(share.clone(), height, on_main_chain)?;
-
-        // handle new chain by setting tip and total difficulty
-        if tips.is_empty() {
-            info!("New chain: {:?}", blockhash);
-            self.store.add_tip(blockhash);
-            self.store.set_chain_tip(blockhash);
-            return Ok(());
-        }
+        self.store
+            .add_share(share.clone(), new_height, new_chain_work, on_main_chain)?;
 
         // remove the previous blockhash from tips
         self.store.remove_tip(&prev_share_blockhash);
@@ -118,10 +125,10 @@ impl ChainStore {
         tracing::info!("Checking for reorgs at share: {:?}", prev_share_blockhash);
         let current_total_work = self.store.get_total_work()?;
         debug!(
-            "prev chain work: {}, share work {} Current total work: {}",
-            prev_chain_work, share_work, current_total_work
+            "new chain work: {}, Current total work: {}",
+            new_chain_work, current_total_work
         );
-        if prev_chain_work + share_work > current_total_work {
+        if new_chain_work > current_total_work {
             let reorg_result = self.reorg(share);
             if reorg_result.is_err() {
                 error!("Failed to reorg chain for share: {:?}", blockhash);
@@ -428,6 +435,11 @@ mod chain_tests {
 
         let genesis_work = genesis.header.get_work();
 
+        assert_eq!(
+            chain.store.get_total_work().unwrap().to_string(),
+            genesis_work.to_string()
+        );
+
         // Create initial share (1)
         let share1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis_for_tests().block_hash().to_string())
@@ -441,8 +453,8 @@ mod chain_tests {
         expected_tips.insert(share1.block_hash());
         assert_eq!(chain.store.get_tips().len(), 1);
         assert_eq!(
-            chain.store.get_total_work().unwrap(),
-            genesis_work + multiplied_compact_target_as_work(0x01e0377ae, 2)
+            chain.store.get_total_work().unwrap().to_string(),
+            (genesis_work + multiplied_compact_target_as_work(0x01e0377ae, 2)).to_string()
         ); // genesis (1) + share1 (2)
         assert_eq!(chain.store.get_chain_tip(), share1.block_hash());
 
@@ -611,7 +623,6 @@ mod chain_tests {
         // Create initial chain of MIN_CONFIRMATION_DEPTH + 1 blocks
         let mut prev_hash = None;
         let mut blocks = vec![];
-        let mut blockhash_strings = Vec::new(); // Add this to store strings
 
         // Generate blocks
         for i in 0..=MIN_CONFIRMATION_DEPTH + 1 {
@@ -622,13 +633,13 @@ mod chain_tests {
 
             let share = share_builder
                 .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+                .nonce(i as u32)
                 .work(1)
                 .build();
 
             blocks.push(share.clone());
             chain.add_share(share.clone(), true).unwrap();
-            blockhash_strings.push(share.block_hash().to_string());
-            prev_hash = Some(blockhash_strings.last().unwrap().as_str().into());
+            prev_hash = Some(share.block_hash().to_string());
 
             if i > MIN_CONFIRMATION_DEPTH || i == 0 {
                 assert!(chain.is_confirmed(share));
