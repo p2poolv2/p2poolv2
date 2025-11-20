@@ -181,7 +181,7 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
 }
 
 #[cfg(test)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TestShareBlockBuilder {
     bitcoin_block: Option<Block>,
     prev_share_blockhash: Option<String>,
@@ -195,15 +195,7 @@ pub struct TestShareBlockBuilder {
 #[cfg(test)]
 impl TestShareBlockBuilder {
     pub fn new() -> Self {
-        Self {
-            bitcoin_block: None,
-            prev_share_blockhash: None,
-            uncles: Vec::new(),
-            miner_pubkey: None,
-            transactions: Vec::new(),
-            work: None,
-            nonce: None,
-        }
+        Self::default()
     }
 
     pub fn bitcoin_header(mut self, bitcoin_block: Block) -> Self {
