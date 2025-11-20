@@ -1201,7 +1201,7 @@ impl Store {
         match self.db.get_cf::<&[u8]>(block_metadata_cf, &metadata_key) {
             Ok(Some(metadata_serialized)) => match encode::deserialize(&metadata_serialized) {
                 Ok(metadata) => Ok(metadata),
-                Err(_) => Err("Error deserializing block metadata: {e}".into()),
+                Err(e) => Err(format!("Error deserializing block metadata: {e}").into()),
             },
             Ok(None) | Err(_) => {
                 Err(format!("No metadata found for blockhash: {blockhash}").into())
@@ -3223,7 +3223,7 @@ mod tests {
             .add_share(
                 tip2.clone(),
                 2,
-                share1.header.get_work() + share2.header.get_work() + tip1.header.get_work(),
+                share1.header.get_work() + share2.header.get_work() + tip2.header.get_work(),
                 true,
             )
             .unwrap();
