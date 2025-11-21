@@ -157,7 +157,12 @@ async fn main() -> Result<(), String> {
     let (emissions_tx, emissions_rx) =
         tokio::sync::mpsc::channel::<Emission>(STRATUM_SHARES_BUFFER_SIZE);
 
-    let metrics_handle = match metrics::start_metrics(config.logging.stats_dir.clone()).await {
+    let metrics_handle = match metrics::start_metrics(
+        config.logging.stats_dir.clone(),
+        tracker_handle.clone(),
+    )
+    .await
+    {
         Ok(handle) => handle,
         Err(e) => {
             return Err(format!("Failed to start metrics: {e}"));
@@ -198,10 +203,18 @@ async fn main() -> Result<(), String> {
         info!("Stratum server stopped");
     });
 
+    let pool_sig_len = config
+        .stratum
+        .pool_signature
+        .as_ref()
+        .map(|s| s.len())
+        .unwrap_or(8);
     let api_shutdown_tx = match start_api_server(
         config.api.clone(),
         chain_store.clone(),
         metrics_handle.clone(),
+        pool_sig_len,
+        config.stratum.network,
     )
     .await
     {
