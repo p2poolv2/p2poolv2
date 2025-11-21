@@ -34,7 +34,9 @@ pub async fn send_blocks_inventory<C: 'static>(
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error>> {
     info!("Sending inventory update to peer: {:?}", peer_id);
-    let locator = store.build_locator();
+    let locator = store
+        .build_locator()
+        .map_err(|e| format!("Failed to build locator {e}"))?;
     let inventory_message = Message::Inventory(InventoryMessage::BlockHashes(locator));
     swarm_tx
         .send(SwarmSend::Request(peer_id, inventory_message))
@@ -68,7 +70,7 @@ mod tests {
         store
             .expect_build_locator()
             .times(1)
-            .returning(move || cloned_expected_hashes.clone());
+            .returning(move || Ok(cloned_expected_hashes.clone()));
 
         // Send inventory
         let result = send_blocks_inventory(peer_id, Arc::new(store), swarm_tx).await;

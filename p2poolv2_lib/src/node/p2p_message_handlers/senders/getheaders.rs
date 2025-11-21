@@ -32,8 +32,8 @@ pub async fn send_getheaders<C: 'static>(
     peer_id: libp2p::PeerId,
     store: std::sync::Arc<ChainStore>,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
-) -> Result<(), Box<dyn Error>> {
-    let locator = store.build_locator();
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let locator = store.build_locator()?;
     let stop_block_hash: BlockHash = BlockHash::all_zeros();
     let getheaders_request = Message::GetShareHeaders(locator.clone(), stop_block_hash);
     if let Err(e) = swarm_tx
@@ -68,7 +68,7 @@ mod tests {
         store
             .expect_build_locator()
             .times(1)
-            .return_once(move || test_locator_clone);
+            .return_once(move || Ok(test_locator_clone));
 
         let send_result = send_getheaders(peer_id, Arc::new(store), swarm_tx).await;
         assert!(send_result.is_ok());
@@ -107,7 +107,7 @@ mod tests {
         store
             .expect_build_locator()
             .times(1)
-            .return_once(move || test_locator.clone());
+            .return_once(move || Ok(test_locator.clone()));
 
         let swarm_tx_clone = swarm_tx.clone();
 
