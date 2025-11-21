@@ -316,11 +316,11 @@ impl Store {
         self.set_height_to_blockhash(&blockhash, height, batch)?;
         let block_metadata = BlockMetadata {
             height: Some(height),
-            is_confirmed: false,
+            is_on_main_chain: false,
             is_valid: false,
             chain_work,
         };
-        self.set_block_metadata(&blockhash, &block_metadata, Some(batch))?;
+        self.set_block_metadata(&blockhash, &block_metadata, batch)?;
 
         // Add the share block itself
         let storage_share_block: StorageShareBlock = share.into();
@@ -1233,7 +1233,7 @@ impl Store {
         &self,
         blockhash: &BlockHash,
         metadata: &BlockMetadata,
-        batch: Option<&mut rocksdb::WriteBatch>,
+        batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let block_metadata_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
 
@@ -1243,12 +1243,7 @@ impl Store {
         let mut serialized = Vec::new();
         metadata.consensus_encode(&mut serialized)?;
 
-        if let Some(batch) = batch {
-            batch.put_cf(block_metadata_cf, &metadata_key, serialized);
-        } else {
-            self.db
-                .put_cf(block_metadata_cf, &metadata_key, serialized)?;
-        }
+        batch.put_cf(block_metadata_cf, &metadata_key, serialized);
         Ok(())
     }
 
@@ -1257,13 +1252,13 @@ impl Store {
         &self,
         blockhash: &BlockHash,
         valid: bool,
-        batch: Option<&mut rocksdb::WriteBatch>,
+        batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let metadata = self.get_block_metadata(blockhash)?;
 
         let updated_metadata = BlockMetadata {
             is_valid: valid,
-            is_confirmed: metadata.is_confirmed,
+            is_on_main_chain: metadata.is_on_main_chain,
             height: metadata.height,
             chain_work: metadata.chain_work,
         };
@@ -1272,17 +1267,17 @@ impl Store {
     }
 
     /// Mark a block as confirmed in the store
-    pub fn set_block_confirmed(
+    pub fn set_block_on_main_chain(
         &self,
         blockhash: &BlockHash,
-        confirmed: bool,
-        batch: Option<&mut rocksdb::WriteBatch>,
+        on_main_chain: bool,
+        batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let metadata = self.get_block_metadata(blockhash)?;
 
         let updated_metadata = BlockMetadata {
             is_valid: metadata.is_valid,
-            is_confirmed: confirmed,
+            is_on_main_chain: on_main_chain,
             height: metadata.height,
             chain_work: metadata.chain_work,
         };
@@ -1294,13 +1289,13 @@ impl Store {
         &self,
         blockhash: &BlockHash,
         height: Option<u32>,
-        batch: Option<&mut rocksdb::WriteBatch>,
+        batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let metadata = self.get_block_metadata(blockhash)?;
 
         let updated_metadata = BlockMetadata {
             is_valid: metadata.is_valid,
-            is_confirmed: metadata.is_confirmed,
+            is_on_main_chain: metadata.is_on_main_chain,
             height,
             chain_work: metadata.chain_work,
         };
@@ -2365,7 +2360,7 @@ mod tests {
         let mut batch = rocksdb::WriteBatch::default();
 
         for height in 0..num_blockhashes {
-            let mut builder =
+            let builder =
                 TestShareBlockBuilder::new().prev_share_blockhash(prev_blockhash.to_string());
             let block = builder.build();
             let blockhash = block.block_hash();
@@ -2413,32 +2408,50 @@ mod tests {
         // Initially, block should not be valid or confirmed
         let metadata = store.get_block_metadata(&blockhash).unwrap();
         assert!(!metadata.is_valid);
-        assert!(!metadata.is_confirmed);
+        assert!(!metadata.is_on_main_chain);
         assert_eq!(metadata.height, Some(0));
 
+        let mut batch = rocksdb::WriteBatch::default();
         // Set block as valid
-        store.set_block_valid(&blockhash, true, None).unwrap();
+        store.set_block_valid(&blockhash, true, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
         let metadata = store.get_block_metadata(&blockhash).unwrap();
         assert!(metadata.is_valid);
-        assert!(!metadata.is_confirmed);
+        assert!(!metadata.is_on_main_chain);
 
+        let mut batch = rocksdb::WriteBatch::default();
         // Set block as confirmed
-        store.set_block_confirmed(&blockhash, true, None).unwrap();
+        store
+            .set_block_on_main_chain(&blockhash, true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
         let metadata = store.get_block_metadata(&blockhash).unwrap();
         assert!(metadata.is_valid);
-        assert!(metadata.is_confirmed);
+        assert!(metadata.is_on_main_chain);
 
+        let mut batch = rocksdb::WriteBatch::default();
         // Reset block's valid status
-        store.set_block_valid(&blockhash, false, None).unwrap();
-        let metadata = store.get_block_metadata(&blockhash).unwrap();
-        assert!(!metadata.is_valid);
-        assert!(metadata.is_confirmed);
+        store
+            .set_block_valid(&blockhash, false, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
 
-        // Reset block's confirmed status
-        store.set_block_confirmed(&blockhash, false, None).unwrap();
         let metadata = store.get_block_metadata(&blockhash).unwrap();
         assert!(!metadata.is_valid);
-        assert!(!metadata.is_confirmed);
+        assert!(metadata.is_on_main_chain);
+
+        let mut batch = rocksdb::WriteBatch::default();
+        // Reset block's confirmed status
+        store
+            .set_block_on_main_chain(&blockhash, false, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let metadata = store.get_block_metadata(&blockhash).unwrap();
+        assert!(!metadata.is_valid);
+        assert!(!metadata.is_on_main_chain);
     }
 
     #[test]
@@ -2496,28 +2509,40 @@ mod tests {
         let blockhash1 = share1.block_hash();
         let blockhash2 = share2.block_hash();
 
+        let mut batch = rocksdb::WriteBatch::default();
         // Set status
-        assert!(store.set_block_valid(&blockhash1, true, None).is_ok());
-        assert!(store.set_block_confirmed(&blockhash2, true, None).is_ok());
+        store
+            .set_block_valid(&blockhash1, true, &mut batch)
+            .unwrap();
+        store
+            .set_block_on_main_chain(&blockhash2, true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
 
         // Verify each block has the correct status
         let metadata1 = store.get_block_metadata(&blockhash1).unwrap();
         let metadata2 = store.get_block_metadata(&blockhash2).unwrap();
         assert!(metadata1.is_valid);
-        assert!(!metadata1.is_confirmed);
+        assert!(!metadata1.is_on_main_chain);
         assert!(!metadata2.is_valid);
-        assert!(metadata2.is_confirmed);
+        assert!(metadata2.is_on_main_chain);
 
+        let mut batch = rocksdb::WriteBatch::default();
         // Update statuses
-        store.set_block_valid(&blockhash1, false, None).unwrap();
-        store.set_block_confirmed(&blockhash2, false, None).unwrap();
+        store
+            .set_block_valid(&blockhash1, false, &mut batch)
+            .unwrap();
+        store
+            .set_block_on_main_chain(&blockhash2, false, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
 
         let updated_metadata1 = store.get_block_metadata(&blockhash1).unwrap();
         let updated_metadata2 = store.get_block_metadata(&blockhash2).unwrap();
 
         // Verify updated statuses
         assert!(!updated_metadata1.is_valid);
-        assert!(!updated_metadata2.is_confirmed);
+        assert!(!updated_metadata2.is_on_main_chain);
     }
 
     #[test]
@@ -2543,19 +2568,23 @@ mod tests {
         let metadata = store.get_block_metadata(&blockhash).unwrap();
         assert_eq!(metadata.height, Some(0));
 
+        let mut batch = rocksdb::WriteBatch::default();
         // Update the height to a different value
         store
-            .set_block_height_in_metadata(&blockhash, Some(42), None)
+            .set_block_height_in_metadata(&blockhash, Some(42), &mut batch)
             .unwrap();
+        store.commit_batch(batch).unwrap();
 
         // Verify height is updated correctly
         let updated_metadata = store.get_block_metadata(&blockhash).unwrap();
         assert_eq!(updated_metadata.height, Some(42));
 
+        let mut batch = rocksdb::WriteBatch::default();
         // Remove height by setting to None
         store
-            .set_block_height_in_metadata(&blockhash, None, None)
+            .set_block_height_in_metadata(&blockhash, None, &mut batch)
             .unwrap();
+        store.commit_batch(batch).unwrap();
 
         // Verify height is removed
         let metadata_without_height = store.get_block_metadata(&blockhash).unwrap();
@@ -2564,7 +2593,7 @@ mod tests {
         // Test with batch operation
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .set_block_height_in_metadata(&blockhash, Some(100), Some(&mut batch))
+            .set_block_height_in_metadata(&blockhash, Some(100), &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
