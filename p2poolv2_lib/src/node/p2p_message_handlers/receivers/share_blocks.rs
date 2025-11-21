@@ -33,19 +33,21 @@ use tracing::{error, info};
 /// Share blocks are gossiped using the libp2p gossipsub protocol.
 pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
     share_block: ShareBlock,
-    store: Arc<ChainStore>,
+    chain_store: Arc<ChainStore>,
     time_provider: &T,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Received share block: {:?}", share_block);
-    if let Err(e) = validation::validate(&share_block, store.clone(), time_provider).await {
+    if let Err(e) = validation::validate(&share_block, chain_store.clone(), time_provider).await {
         error!("Share block validation failed: {}", e);
         return Err("Share block validation failed".into());
     }
+
     // TODO: Check if this will be an uncle, for now add to main chain
-    if let Err(e) = store.add_share(share_block.clone(), true) {
+    if let Err(e) = chain_store.add_share(share_block.clone(), true) {
         error!("Failed to add share: {}", e);
         return Err("Error adding share to chain".into());
     }
+
     info!("Successfully added share blocks to chain");
     Ok(())
 }

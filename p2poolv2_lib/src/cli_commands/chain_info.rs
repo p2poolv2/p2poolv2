@@ -38,7 +38,9 @@ pub fn execute(chain: Arc<ChainStore>) -> Result<(), Box<dyn Error>> {
         .map(|hash| format!("{hash:?}"));
 
     // Get chain tip height
-    let chain_tip_height = chain.get_tip_height();
+    let chain_tip_height = chain
+        .get_tip_height()
+        .map_err(|e| format!("Error getting chain tip {e}"))?;
 
     // Get chain tip blockhash
     let chain_tip_blockhash = format!("{:?}", chain.store.get_chain_tip());

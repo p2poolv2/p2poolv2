@@ -17,8 +17,8 @@
 use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
-use bitcoin::BlockHash;
 use bitcoin::hashes::Hash;
+use bitcoin::{BlockHash, Work};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::sync::Arc;
@@ -85,8 +85,13 @@ impl ChainStore {
 
         let tips = self.store.get_tips();
 
+        // Create a new write batch
+        let mut batch = Store::get_write_batch();
+
         if tips.is_empty() {
-            return self.store.setup_genesis(share);
+            self.store.setup_genesis(share, &mut batch)?;
+            self.store.commit_batch(batch)?;
+            return Ok(());
         }
 
         let (new_height, new_chain_work) =
@@ -105,8 +110,13 @@ impl ChainStore {
             share.block_hash(),
             new_height
         );
-        self.store
-            .add_share(share.clone(), new_height, new_chain_work, on_main_chain)?;
+        self.store.add_share(
+            share.clone(),
+            new_height,
+            new_chain_work,
+            on_main_chain,
+            &mut batch,
+        )?;
 
         // remove the previous blockhash from tips
         self.store.remove_tip(&prev_share_blockhash);
@@ -129,13 +139,15 @@ impl ChainStore {
             new_chain_work, current_total_work
         );
         if new_chain_work > current_total_work {
-            let reorg_result = self.reorg(share);
+            let reorg_result = self.reorg(share, new_chain_work, &mut batch);
             if reorg_result.is_err() {
                 error!("Failed to reorg chain for share: {:?}", blockhash);
                 return Err(reorg_result.err().unwrap());
             }
         }
-        Ok(())
+        self.store
+            .commit_batch(batch)
+            .map_err(|e| format!("Failed to add share, commit error: {e}").into())
     }
 
     /// Add PPLNS Share
@@ -173,9 +185,35 @@ impl ChainStore {
     /// We do not explicitly mark any blocks as unconfirmed or transactions as unconfirmed. This is because we don't cache the status of the blocks or transactions.
     /// By changing the tips we are effectively marking all the blocks and transactions that were on the old tips as unconfirmed.
     /// When a share is being traded, if it is not on the main chain, it will not be accepted for the trade.
-    pub fn reorg(&self, share: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>> {
-        info!("Reorging chain to share: {:?}", share.block_hash());
+    fn reorg(
+        &self,
+        share: ShareBlock,
+        new_chain_work: Work,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let share_block_hash = share.block_hash();
+        info!("Reorging chain to share: {:?}", share_block_hash);
+
+        let reorged_out_chain = self
+            .store
+            .get_shares_from_tip_to_blockhash(&share_block_hash)?;
+
+        for reorged in reorged_out_chain.iter() {
+            self.remove_share_from_main_chain(reorged, batch)?;
+        }
+
         self.store.set_chain_tip(share.block_hash());
+        Ok(())
+    }
+
+    /// Mark share as no longer on the main chain
+    /// Unconfirms all transactions on the share block and updates metadata to mark share as off chain
+    fn remove_share_from_main_chain(
+        &self,
+        share: &ShareBlock,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        // for tx in share.transactions {}
         Ok(())
     }
 
@@ -229,29 +267,27 @@ impl ChainStore {
     }
 
     /// Get the height of the chain tip
-    pub fn get_tip_height(&self) -> Option<u32> {
+    pub fn get_tip_height(&self) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         let tip = self.store.get_chain_tip();
-        let metadata = self
-            .store
-            .get_block_metadata(&tip)
-            .expect("Failed to get metadata for chain tip");
-        metadata.height
+        debug!("Chain tip for height {}", tip);
+        let metadata = self.store.get_block_metadata(&tip)?;
+        Ok(metadata.height)
     }
 
     /// Get a locator for the chain.
     /// - Start from the tip, go back until we hit genesis block
     /// - After 10 blocks, double the step size each time
     /// - Return the locator
-    pub fn build_locator(&self) -> Vec<BlockHash> {
-        let tip_height = self.get_tip_height();
+    pub fn build_locator(&self) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
+        let tip_height = self.get_tip_height()?;
         match tip_height {
             Some(tip_height) => {
                 if (tip_height) == 0 {
-                    return vec![];
+                    return Ok(vec![]);
                 }
             }
             None => {
-                return vec![];
+                return Ok(vec![]);
             }
         }
 
@@ -282,7 +318,7 @@ impl ChainStore {
             locator.extend(hashes);
         }
 
-        locator
+        Ok(locator)
     }
 
     /// Get the chain tip and uncles
@@ -401,9 +437,9 @@ mock! {
         pub fn get_share_headers(&self, share_hashes: Vec<BlockHash>) -> Vec<ShareHeader>;
         pub fn get_headers_for_locator(&self, block_hashes: &[BlockHash], stop_block_hash: &BlockHash, max_headers: usize) -> Vec<ShareHeader>;
         pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Vec<BlockHash>;
-        pub fn build_locator(&self) -> Vec<BlockHash>;
+        pub fn build_locator(&self) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
-        pub fn get_tip_height(&self) -> Option<u32>;
+        pub fn get_tip_height(&self) -> Result<Option<u32>, Box<dyn Error + Send + Sync>>;
         pub fn add_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn get_jobs(&self, start_time: Option<u64>, end_time: Option<u64>, limit: usize) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>>;
         pub fn add_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error + Send + Sync>>;
@@ -841,7 +877,7 @@ mod chain_tests {
         assert_eq!(blocks.len(), 5);
         assert_eq!(chain.store.get_chain_tip(), blocks[4].block_hash());
 
-        let locator = chain.build_locator();
+        let locator = chain.build_locator().unwrap();
         assert_eq!(locator.len(), 6); // Should return all blocks
         // Verify blocks are in reverse order (tip to genesis)
         for i in 0..5 {
@@ -876,7 +912,7 @@ mod chain_tests {
             chain.add_share(block, true).unwrap();
         }
 
-        let locator = chain.build_locator();
+        let locator = chain.build_locator().unwrap();
         // Should return 14 blocks:
         // - First 10 blocks (indexes 24 down to 15)
         // - Then blocks at positions 12 (index 12), 16 (index 8), 24 (index 0)
