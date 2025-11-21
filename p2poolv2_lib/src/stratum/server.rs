@@ -446,9 +446,12 @@ mod stratum_server_tests {
 
         let (shares_tx, _shares_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let metrics_handle = metrics::start_metrics(
+            stats_dir.path().to_str().unwrap().to_string(),
+            tracker_handle.clone(),
+        )
+        .await
+        .unwrap();
 
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
@@ -487,7 +490,7 @@ mod stratum_server_tests {
                 .start(
                     Some(ready_tx),
                     notify_tx,
-                    tracker_handle,
+                    tracker_handle.clone(),
                     bitcoinrpc_config,
                     metrics_handle,
                 )
@@ -525,9 +528,12 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let metrics_handle = metrics::start_metrics(
+            stats_dir.path().to_str().unwrap().to_string(),
+            tracker_handle.clone(),
+        )
+        .await
+        .unwrap();
 
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
@@ -538,7 +544,7 @@ mod stratum_server_tests {
 
         let ctx = StratumContext {
             notify_tx,
-            tracker_handle,
+            tracker_handle: tracker_handle.clone(),
             bitcoinrpc_config,
             metrics: metrics_handle,
             start_difficulty: 10000,
@@ -643,9 +649,12 @@ mod stratum_server_tests {
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let metrics_handle = metrics::start_metrics(
+            stats_dir.path().to_str().unwrap().to_string(),
+            tracker_handle.clone(),
+        )
+        .await
+        .unwrap();
 
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
@@ -656,7 +665,7 @@ mod stratum_server_tests {
 
         let ctx = StratumContext {
             notify_tx,
-            tracker_handle,
+            tracker_handle: tracker_handle.clone(),
             bitcoinrpc_config,
             metrics: metrics_handle,
             start_difficulty: 10000,
@@ -715,9 +724,12 @@ mod stratum_server_tests {
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let metrics_handle = metrics::start_metrics(
+            stats_dir.path().to_str().unwrap().to_string(),
+            tracker_handle.clone(),
+        )
+        .await
+        .unwrap();
 
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
@@ -728,7 +740,7 @@ mod stratum_server_tests {
 
         let ctx = StratumContext {
             notify_tx,
-            tracker_handle,
+            tracker_handle: tracker_handle.clone(),
             bitcoinrpc_config,
             start_difficulty: 10000,
             minimum_difficulty: 1,
@@ -792,9 +804,12 @@ mod stratum_server_tests {
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let metrics_handle = metrics::start_metrics(
+            stats_dir.path().to_str().unwrap().to_string(),
+            tracker_handle.clone(),
+        )
+        .await
+        .unwrap();
 
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
@@ -805,7 +820,7 @@ mod stratum_server_tests {
 
         let ctx = StratumContext {
             notify_tx,
-            tracker_handle,
+            tracker_handle: tracker_handle.clone(),
             bitcoinrpc_config,
             start_difficulty: 10000,
             minimum_difficulty: 1,
@@ -889,9 +904,12 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let metrics_handle = metrics::start_metrics(
+            stats_dir.path().to_str().unwrap().to_string(),
+            tracker_handle.clone(),
+        )
+        .await
+        .unwrap();
 
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
@@ -902,7 +920,7 @@ mod stratum_server_tests {
 
         let ctx = StratumContext {
             notify_tx,
-            tracker_handle,
+            tracker_handle: tracker_handle.clone(),
             bitcoinrpc_config,
             start_difficulty: 10000,
             minimum_difficulty: 1,
@@ -1005,9 +1023,12 @@ mod stratum_server_tests {
         let tracker_handle = start_tracker_actor();
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let metrics_handle = metrics::start_metrics(
+            stats_dir.path().to_str().unwrap().to_string(),
+            tracker_handle.clone(),
+        )
+        .await
+        .unwrap();
 
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
@@ -1018,7 +1039,7 @@ mod stratum_server_tests {
 
         let ctx = StratumContext {
             notify_tx,
-            tracker_handle,
+            tracker_handle: tracker_handle.clone(),
             bitcoinrpc_config,
             start_difficulty: 10000,
             minimum_difficulty: 1,
@@ -1109,10 +1130,12 @@ mod stratum_server_tests {
             let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
             let (emissions_tx, _emissions_rx) = mpsc::channel(10);
             let stats_dir = tempfile::tempdir().unwrap();
-            let metrics_handle =
-                metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-                    .await
-                    .unwrap();
+            let metrics_handle = metrics::start_metrics(
+                stats_dir.path().to_str().unwrap().to_string(),
+                tracker_handle.clone(),
+            )
+            .await
+            .unwrap();
 
             let temp_dir = tempdir().unwrap();
             let store = Arc::new(ChainStore::new(
@@ -1123,7 +1146,7 @@ mod stratum_server_tests {
 
             let ctx = StratumContext {
                 notify_tx,
-                tracker_handle,
+                tracker_handle: tracker_handle.clone(),
                 bitcoinrpc_config,
                 metrics: metrics_handle,
                 start_difficulty: 10000,
@@ -1186,10 +1209,12 @@ mod stratum_server_tests {
             let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
             let (emissions_tx, _emissions_rx) = mpsc::channel(10);
             let stats_dir = tempfile::tempdir().unwrap();
-            let metrics_handle =
-                metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-                    .await
-                    .unwrap();
+            let metrics_handle = metrics::start_metrics(
+                stats_dir.path().to_str().unwrap().to_string(),
+                tracker_handle.clone(),
+            )
+            .await
+            .unwrap();
 
             let temp_dir = tempdir().unwrap();
             let store = Arc::new(ChainStore::new(
@@ -1200,7 +1225,7 @@ mod stratum_server_tests {
 
             let ctx = StratumContext {
                 notify_tx,
-                tracker_handle,
+                tracker_handle: tracker_handle.clone(),
                 bitcoinrpc_config,
                 metrics: metrics_handle,
                 start_difficulty: 10000,

@@ -147,9 +147,11 @@ mod tests {
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let tracker = start_tracker_actor();
+        let metrics_handle =
+            metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string(), tracker)
+                .await
+                .unwrap();
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
@@ -253,9 +255,12 @@ mod tests {
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let metrics_handle = metrics::start_metrics(
+            stats_dir.path().to_str().unwrap().to_string(),
+            tracker_handle.clone(),
+        )
+        .await
+        .unwrap();
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
@@ -410,9 +415,12 @@ mod tests {
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
+        let metrics_handle = metrics::start_metrics(
+            stats_dir.path().to_str().unwrap().to_string(),
+            tracker_handle.clone(),
+        )
+        .await
+        .unwrap();
 
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
