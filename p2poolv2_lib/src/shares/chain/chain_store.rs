@@ -17,8 +17,8 @@
 use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
+use bitcoin::BlockHash;
 use bitcoin::hashes::Hash;
-use bitcoin::{BlockHash, Work};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::sync::Arc;
@@ -139,7 +139,7 @@ impl ChainStore {
             new_chain_work, current_total_work
         );
         if new_chain_work > current_total_work {
-            let reorg_result = self.reorg(share, new_chain_work, &mut batch);
+            let reorg_result = self.reorg(share, &mut batch);
             if reorg_result.is_err() {
                 error!("Failed to reorg chain for share: {:?}", blockhash);
                 return Err(reorg_result.err().unwrap());
@@ -189,7 +189,6 @@ impl ChainStore {
     fn reorg(
         &self,
         share: ShareBlock,
-        new_chain_work: Work,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let share_block_hash = share.block_hash();
@@ -200,21 +199,11 @@ impl ChainStore {
             .get_shares_from_tip_to_blockhash(&share.header.prev_share_blockhash)?;
 
         for reorged in reorged_out_chain.iter() {
-            self.remove_share_from_main_chain(reorged, batch)?;
+            self.store
+                .set_block_on_main_chain(&reorged.block_hash(), false, batch)?;
         }
 
         self.store.set_chain_tip(share.block_hash());
-        Ok(())
-    }
-
-    /// Mark share as no longer on the main chain
-    /// Unconfirms all transactions on the share block and updates metadata to mark share as off chain
-    fn remove_share_from_main_chain(
-        &self,
-        share: &ShareBlock,
-        batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        // for tx in share.transactions {}
         Ok(())
     }
 

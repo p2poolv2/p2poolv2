@@ -77,8 +77,8 @@ pub struct BlockMetadata {
     pub height: Option<u32>,
     /// Validation status of the block in the share chain
     pub is_valid: bool,
-    /// Confirmation status of the block in the share chain
-    pub is_confirmed: bool,
+    /// Is the block on the main chain or not
+    pub is_on_main_chain: bool,
     /// Total chain work up to the share block
     pub chain_work: Work,
 }
@@ -103,7 +103,7 @@ impl Encodable for BlockMetadata {
         }
 
         len += self.is_valid.consensus_encode(w)?;
-        len += self.is_confirmed.consensus_encode(w)?;
+        len += self.is_on_main_chain.consensus_encode(w)?;
         len += self.chain_work.to_le_bytes().consensus_encode(w)?;
         Ok(len)
     }
@@ -122,13 +122,13 @@ impl Decodable for BlockMetadata {
         };
 
         let is_valid = bool::consensus_decode(r)?;
-        let is_confirmed = bool::consensus_decode(r)?;
+        let on_main_chain = bool::consensus_decode(r)?;
         let chain_work = Work::from_le_bytes(<[u8; 32]>::consensus_decode(r)?);
 
         Ok(BlockMetadata {
             height,
             is_valid,
-            is_confirmed,
+            is_on_main_chain: on_main_chain,
             chain_work,
         })
     }
