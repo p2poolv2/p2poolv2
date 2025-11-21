@@ -20,6 +20,7 @@ use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::shares::chain::chain_store::ChainStore;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::stratum::emission::Emission;
+use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
 use p2poolv2_lib::{node::actor::NodeHandle, shares::share_block::ShareBlock};
 
 use std::time::Duration;
@@ -80,15 +81,27 @@ async fn test_three_nodes_connectivity() {
     let stats_dir1 = tempfile::tempdir().unwrap();
     let stats_dir2 = tempfile::tempdir().unwrap();
     let stats_dir3 = tempfile::tempdir().unwrap();
-    let metrics1 = metrics::start_metrics(stats_dir1.path().to_str().unwrap().to_string())
-        .await
-        .unwrap();
-    let metrics2 = metrics::start_metrics(stats_dir2.path().to_str().unwrap().to_string())
-        .await
-        .unwrap();
-    let metrics3 = metrics::start_metrics(stats_dir3.path().to_str().unwrap().to_string())
-        .await
-        .unwrap();
+    let tracker_handle1 = start_tracker_actor();
+    let tracker_handle2 = start_tracker_actor();
+    let tracker_handle3 = start_tracker_actor();
+    let metrics1 = metrics::start_metrics(
+        stats_dir1.path().to_str().unwrap().to_string(),
+        tracker_handle1,
+    )
+    .await
+    .unwrap();
+    let metrics2 = metrics::start_metrics(
+        stats_dir2.path().to_str().unwrap().to_string(),
+        tracker_handle2,
+    )
+    .await
+    .unwrap();
+    let metrics3 = metrics::start_metrics(
+        stats_dir3.path().to_str().unwrap().to_string(),
+        tracker_handle3,
+    )
+    .await
+    .unwrap();
 
     // Start three nodes
     let (node1_handle, _stop_rx1) = NodeHandle::new(config1, store1, shares_rx_1, metrics1)
