@@ -145,6 +145,7 @@ impl ChainStore {
                 return Err(reorg_result.err().unwrap());
             }
         }
+
         self.store
             .commit_batch(batch)
             .map_err(|e| format!("Failed to add share, commit error: {e}").into())
@@ -196,7 +197,7 @@ impl ChainStore {
 
         let reorged_out_chain = self
             .store
-            .get_shares_from_tip_to_blockhash(&share_block_hash)?;
+            .get_shares_from_tip_to_blockhash(&share.header.prev_share_blockhash)?;
 
         for reorged in reorged_out_chain.iter() {
             self.remove_share_from_main_chain(reorged, batch)?;

@@ -1089,7 +1089,7 @@ impl Store {
             .db
             .key_may_exist_cf::<&[u8]>(share_cf, blockhash.as_ref())
         {
-            return Err("Blockhash {blockhash} not found in chain".into());
+            return Err(format!("Blockhash {blockhash} not found in chain").into());
         };
 
         let tips = self.get_tips();
@@ -1482,7 +1482,6 @@ mod tests {
         let genesis_work = share1.header.get_work();
 
         let mut batch = rocksdb::WriteBatch::default();
-
         // Add all shares to store
         store
             .add_share(share1.clone(), 0, genesis_work, true, &mut batch)
@@ -1496,6 +1495,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 uncle2_share2.clone(),
@@ -1505,6 +1507,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 share2.clone(),
@@ -1514,6 +1519,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 uncle1_share3.clone(),
@@ -1523,6 +1531,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 uncle2_share3.clone(),
@@ -1532,6 +1543,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 share3.clone(),
@@ -1541,6 +1555,8 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+
+        store.commit_batch(batch).unwrap();
 
         // Get chain up to share3
         let chain = store.get_chain_upto(&share3.block_hash());
@@ -1807,11 +1823,12 @@ mod tests {
             .build();
 
         let mut batch = rocksdb::WriteBatch::default();
-
         // Store the share block
         store
             .add_share(share.clone(), 0, share.header.get_work(), true, &mut batch)
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
         assert_eq!(share.transactions.len(), 3);
 
         // Retrieve transactions for the block hash
@@ -1965,11 +1982,11 @@ mod tests {
             .build();
 
         let mut batch = rocksdb::WriteBatch::default();
-
         // Add share to store
         store
             .add_share(share.clone(), 0, share.header.get_work(), true, &mut batch)
             .unwrap();
+        store.commit_batch(batch).unwrap();
 
         // Get share header from store
         let read_share = store.get_share(&share.block_hash()).unwrap();
@@ -2041,7 +2058,6 @@ mod tests {
             .build();
 
         let mut batch = rocksdb::WriteBatch::default();
-
         // Add all shares to store
         store
             .add_share(
@@ -2052,6 +2068,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 uncle1_share2.clone(),
@@ -2061,6 +2080,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 uncle2_share2.clone(),
@@ -2070,6 +2092,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 share2.clone(),
@@ -2079,6 +2104,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 share3.clone(),
@@ -2088,6 +2116,8 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+
+        store.commit_batch(batch).unwrap();
 
         // Verify children of share1
         let children_share1 = store.get_children_blockhashes(&share1.block_hash());
@@ -2145,7 +2175,6 @@ mod tests {
         let genesis_work = share1.header.get_work();
 
         let mut batch = rocksdb::WriteBatch::default();
-
         // Add all shares to store
         store
             .add_share(share1.clone(), 0, genesis_work, true, &mut batch)
@@ -2159,6 +2188,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 uncle2_share2.clone(),
@@ -2168,6 +2200,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 share2.clone(),
@@ -2177,6 +2212,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 share3.clone(),
@@ -2186,6 +2224,8 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+
+        store.commit_batch(batch).unwrap();
 
         // Verify descendants of share1
         let descendants_share1 =
@@ -2229,15 +2269,12 @@ mod tests {
 
         let num_blockhashes = 5;
         let mut hashes: Vec<BlockHash> = vec![];
-
-        let mut batch = rocksdb::WriteBatch::default();
+        let mut prev_blockhash = BlockHash::all_zeros();
 
         for height in 0..num_blockhashes {
-            let mut builder = TestShareBlockBuilder::new();
-            if height > 0 {
-                let prev = store.get_blockhashes_for_height(height - 1)[0].to_string();
-                builder = builder.prev_share_blockhash(prev);
-            }
+            let mut batch = rocksdb::WriteBatch::default();
+            let builder =
+                TestShareBlockBuilder::new().prev_share_blockhash(prev_blockhash.to_string());
             let block = builder.build();
             store
                 .add_share(
@@ -2248,8 +2285,10 @@ mod tests {
                     &mut batch,
                 )
                 .unwrap();
+            store.commit_batch(batch).unwrap();
 
-            hashes.push(block.block_hash());
+            prev_blockhash = block.block_hash();
+            hashes.push(prev_blockhash);
         }
 
         let stop_block = store.get_blockhashes_for_height(2)[0];
@@ -2274,15 +2313,12 @@ mod tests {
         let num_blockhashes = 3;
         let mut hashes: Vec<BlockHash> = vec![];
 
-        let mut batch = rocksdb::WriteBatch::default();
+        let mut prev_blockhash = BlockHash::all_zeros();
 
         for height in 0..num_blockhashes {
-            let mut builder = TestShareBlockBuilder::new();
-            if height > 0 {
-                builder = builder.prev_share_blockhash(
-                    store.get_blockhashes_for_height(height as u32 - 1)[0].to_string(),
-                );
-            }
+            let mut batch = rocksdb::WriteBatch::default();
+            let builder =
+                TestShareBlockBuilder::new().prev_share_blockhash(prev_blockhash.to_string());
             let block = builder.build();
             blocks.push(block.clone());
             store
@@ -2294,7 +2330,9 @@ mod tests {
                     &mut batch,
                 )
                 .unwrap();
-            hashes.push(block.block_hash());
+            prev_blockhash = block.block_hash();
+            hashes.push(prev_blockhash);
+            store.commit_batch(batch).unwrap();
         }
 
         locator.push(blocks[0].block_hash()); // locator = tip
@@ -2322,22 +2360,24 @@ mod tests {
 
         let num_blockhashes = 5;
 
+        let mut prev_blockhash = BlockHash::all_zeros();
+
         let mut batch = rocksdb::WriteBatch::default();
 
         for height in 0..num_blockhashes {
-            let mut builder = TestShareBlockBuilder::new();
-            if height > 0 {
-                builder = builder.prev_share_blockhash(
-                    store.get_blockhashes_for_height(height as u32 - 1)[0].to_string(),
-                );
-            }
+            let mut builder =
+                TestShareBlockBuilder::new().prev_share_blockhash(prev_blockhash.to_string());
             let block = builder.build();
-            block_hashes.push(block.block_hash());
+            let blockhash = block.block_hash();
+            block_hashes.push(blockhash);
             let work = block.header.get_work();
             store
                 .add_share(block, height as u32, work, true, &mut batch)
                 .unwrap();
+            prev_blockhash = blockhash;
         }
+
+        store.commit_batch(batch).unwrap();
 
         let stop_block = store.get_blockhashes_for_height(2)[0];
 
@@ -2365,6 +2405,9 @@ mod tests {
         store
             .add_share(share.clone(), 0, share.header.get_work(), true, &mut batch)
             .unwrap();
+
+        store.commit_batch(batch).unwrap();
+
         let blockhash = share.block_hash();
 
         // Initially, block should not be valid or confirmed
@@ -2448,6 +2491,8 @@ mod tests {
             )
             .unwrap();
 
+        store.commit_batch(batch).unwrap();
+
         let blockhash1 = share1.block_hash();
         let blockhash2 = share2.block_hash();
 
@@ -2492,6 +2537,8 @@ mod tests {
             .add_share(share.clone(), 0, share.header.get_work(), true, &mut batch)
             .unwrap();
 
+        store.commit_batch(batch).unwrap();
+
         // Height should be set during add_share
         let metadata = store.get_block_metadata(&blockhash).unwrap();
         assert_eq!(metadata.height, Some(0));
@@ -2519,7 +2566,7 @@ mod tests {
         store
             .set_block_height_in_metadata(&blockhash, Some(100), Some(&mut batch))
             .unwrap();
-        store.db.write(batch).unwrap();
+        store.commit_batch(batch).unwrap();
 
         // Verify batch operation worked
         let batch_updated_metadata = store.get_block_metadata(&blockhash).unwrap();
@@ -2697,7 +2744,7 @@ mod tests {
         assert!(!mixed_map.contains_key(&9999));
     }
 
-    #[test]
+    #[test_log::test]
     fn test_chain_state_management() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
@@ -2745,6 +2792,8 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+
+        store.commit_batch(batch).unwrap();
 
         let genesis_hash = share1.block_hash();
 
@@ -3193,7 +3242,6 @@ mod tests {
             .build();
 
         let mut batch = rocksdb::WriteBatch::default();
-
         store
             .add_share(
                 share1.clone(),
@@ -3203,6 +3251,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 share2.clone(),
@@ -3212,6 +3263,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 share3.clone(),
@@ -3221,6 +3275,7 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
 
         // Set share3 as the tip
         store.add_tip(share3.block_hash());
@@ -3264,7 +3319,6 @@ mod tests {
             .build();
 
         let mut batch = rocksdb::WriteBatch::default();
-
         store
             .add_share(
                 share1.clone(),
@@ -3274,6 +3328,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 uncle1.clone(),
@@ -3283,6 +3340,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 uncle2.clone(),
@@ -3292,6 +3352,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 share2.clone(),
@@ -3301,6 +3364,7 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
 
         // Set share2 as the tip
         store.add_tip(share2.block_hash());
@@ -3342,7 +3406,6 @@ mod tests {
             .build();
 
         let mut batch = rocksdb::WriteBatch::default();
-
         store
             .add_share(
                 share1.clone(),
@@ -3352,6 +3415,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 share2.clone(),
@@ -3361,6 +3427,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 tip1.clone(),
@@ -3370,6 +3439,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 tip2.clone(),
@@ -3379,6 +3451,7 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
 
         // Set both as tips
         store.add_tip(tip1.block_hash());
@@ -3444,7 +3517,6 @@ mod tests {
             .build();
 
         let mut batch = rocksdb::WriteBatch::default();
-
         store
             .add_share(
                 share1.clone(),
@@ -3454,6 +3526,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 share2.clone(),
@@ -3463,6 +3538,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 share3.clone(),
@@ -3472,6 +3550,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 share4.clone(),
@@ -3484,6 +3565,7 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
 
         store.add_tip(share4.block_hash());
 
@@ -3518,6 +3600,7 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
 
         // Don't set any tips - should return empty vector
         let chain = store
@@ -3563,7 +3646,6 @@ mod tests {
             .build();
 
         let mut batch = rocksdb::WriteBatch::default();
-
         store
             .add_share(
                 share1.clone(),
@@ -3573,6 +3655,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 uncle1_1.clone(),
@@ -3582,6 +3667,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 uncle1_2.clone(),
@@ -3591,6 +3679,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 share2.clone(),
@@ -3600,6 +3691,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 uncle2_1.clone(),
@@ -3609,6 +3703,9 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
         store
             .add_share(
                 share3.clone(),
@@ -3618,6 +3715,7 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
+        store.commit_batch(batch).unwrap();
 
         store.add_tip(share3.block_hash());
 
