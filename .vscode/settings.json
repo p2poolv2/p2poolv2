@@ -8,5 +8,6 @@
     "task.quickOpen.showAll": true,
     "rust-analyzer.cargo.extraEnv": {
         "RUST_LOG": "debug"
-    }
+    },
+    "tlaplus.tlc.modelChecker.options": "-workers 1 -coverage 1"
 }
