@@ -27,6 +27,9 @@ use tracing::{debug, error, info};
 /// The minimum number of shares that must be on the chain for a share to be considered confirmed
 const MIN_CONFIRMATION_DEPTH: usize = 100;
 
+/// The maximum depth up to which we include the uncles in the chain
+const MAX_UNCLE_DEPTH: usize = 3;
+
 /// A datastructure representing the main share chain
 /// The share chain reorgs when a share is found that has a higher total PoW than the current tip
 /// Chain state is now managed by the Store itself
@@ -312,8 +315,12 @@ impl ChainStore {
     }
 
     /// Get the chain tip and uncles
+    /// Limit the uncles to up to max uncle depth from the tip
     pub fn get_chain_tip_and_uncles(&self) -> (BlockHash, HashSet<BlockHash>) {
         let mut uncles = self.store.get_tips();
+        uncles.retain(|uncle| {
+            self.get_depth(uncle).unwrap_or(MAX_UNCLE_DEPTH + 1) <= MAX_UNCLE_DEPTH
+        });
         let chain_tip = self.store.get_chain_tip();
         uncles.remove(&chain_tip);
         (chain_tip, uncles)
@@ -345,28 +352,26 @@ impl ChainStore {
     /// Returns None if blockhash is not found in chain
     /// Returns 0 if blockhash is the chain tip
     pub fn get_depth(&self, blockhash: &BlockHash) -> Option<usize> {
-        // If chain tip is None, return None
-        let tip = self.store.get_chain_tip();
-
         // If blockhash is chain tip, return 0
+        let tip = self.store.get_chain_tip();
         if tip == *blockhash {
             return Some(0);
         }
 
-        // Get shares from tip to given blockhash (traverses from tips downward)
-        // This is faster for recent blocks since we start from the tip
-        let shares = self
-            .store
-            .get_shares_from_tip_to_blockhash(blockhash)
-            .ok()?;
+        // Get the height of the chain tip
+        let tip_metadata = self.store.get_block_metadata(&tip).ok()?;
+        let tip_height = tip_metadata.height?;
 
-        // If shares is empty, blockhash not found
-        if shares.is_empty() {
-            return None;
+        // Get the height of the target blockhash
+        let block_metadata = self.store.get_block_metadata(blockhash).ok()?;
+        let block_height = block_metadata.height?;
+
+        // Depth is the difference in heights
+        if tip_height >= block_height {
+            Some((tip_height - block_height) as usize)
+        } else {
+            None
         }
-
-        // Return length of shares minus 1 (since shares includes the blockhash)
-        Some(shares.len() - 1)
     }
 
     /// Save a job with timestamp-prefixed key
@@ -948,5 +953,92 @@ mod chain_tests {
 
         // Verify that chain tip has changed
         assert_eq!(chain.store.get_chain_tip(), share1.block_hash());
+    }
+
+    #[test]
+    fn test_get_chain_tip_and_uncles_with_deep_tips() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = genesis_for_tests();
+
+        let chain = ChainStore::new(Arc::new(store), genesis.clone(), bitcoin::Network::Signet);
+
+        // Build a main chain of MAX_UNCLE_DEPTH + 2 shares (3 + 2 = 5)
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .work(2)
+            .build();
+        chain.add_share(share1.clone(), true).unwrap();
+
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .work(2)
+            .build();
+        chain.add_share(share2.clone(), true).unwrap();
+
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .work(2)
+            .build();
+        chain.add_share(share3.clone(), true).unwrap();
+
+        let share4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share3.block_hash().to_string())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .work(2)
+            .build();
+        chain.add_share(share4.clone(), true).unwrap();
+
+        let share5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share4.block_hash().to_string())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .work(2)
+            .build();
+        chain.add_share(share5.clone(), true).unwrap();
+
+        // Create an uncle at genesis (will be at depth 5 from share5, which is > MAX_UNCLE_DEPTH=3)
+        let deep_uncle = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .nonce(0xdeadbeef)
+            .work(1)
+            .build();
+        chain.add_share(deep_uncle.clone(), false).unwrap();
+
+        // Create an uncle at share3 (will be at depth 1 from share5, which is <= MAX_UNCLE_DEPTH=3)
+        let shallow_uncle = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share3.block_hash().to_string())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .nonce(0xbeefdead)
+            .work(1)
+            .build();
+        chain.add_share(shallow_uncle.clone(), false).unwrap();
+
+        // Verify both are in tips before calling get_chain_tip_and_uncles
+        let all_tips = chain.store.get_tips();
+        assert!(all_tips.contains(&deep_uncle.block_hash()));
+        assert!(all_tips.contains(&shallow_uncle.block_hash()));
+        assert!(all_tips.contains(&share5.block_hash()));
+
+        // Verify depths (depth = tip_height - block_height)
+        // share5 is at height 5, shallow_uncle at height 4, deep_uncle at height 1
+        assert_eq!(chain.get_depth(&share5.block_hash()), Some(0)); // chain tip
+        assert_eq!(chain.get_depth(&shallow_uncle.block_hash()), Some(1)); // 5 - 4 = 1, within MAX_UNCLE_DEPTH
+        assert_eq!(chain.get_depth(&deep_uncle.block_hash()), Some(4)); // 5 - 1 = 4, beyond MAX_UNCLE_DEPTH=3
+
+        // Get chain tip and uncles - deep_uncle should be filtered out
+        let (tip, uncles) = chain.get_chain_tip_and_uncles();
+
+        // Verify the tip is share5
+        assert_eq!(tip, share5.block_hash());
+
+        // Verify only shallow_uncle is included in uncles (deep_uncle should be filtered out)
+        assert_eq!(uncles.len(), 1);
+        assert!(uncles.contains(&shallow_uncle.block_hash()));
+        assert!(!uncles.contains(&deep_uncle.block_hash()));
+        assert!(!uncles.contains(&share5.block_hash())); // chain tip should not be in uncles
     }
 }
