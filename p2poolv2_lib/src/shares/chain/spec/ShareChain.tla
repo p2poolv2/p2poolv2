@@ -17,6 +17,8 @@ VARIABLES
     height,          \* Height of each share in the chain at each process
     share_queue     \* Queue of shares that have been generated but not yet sent/received
 
+vars == <<shares, chain_tip, seqNo, share_queue, uncles, parent, chain_work, height>>
+
 Genesis == [process |-> CHOOSE p \in Processes: TRUE, seq |-> 0, work |-> 1]
 
 NoHeight == -1
@@ -88,14 +90,17 @@ UnclesFor(p, s) ==
         /\ u # chain_tip[p]
         /\ u \notin MainChain(p, chain_tip[p])
         /\ height[p, s] - height[p, u] <= 3
+        /\ CommonAncestor(p, u, chain_tip[p])
         /\ u \notin UNION {uncles[x]: x \in shares[p]} \* u is not an uncle for any share tracked on p
-        /\ CommonAncestor(p, u, chain_tip[p])}
+    }
 
-\* Host process generates a new share
-\* - Creates a share with the next sequence number and work
-\* - Track parent for the new share as the current chain tip
-\* - Update tips to include the new share and remove the chain tip
-\* - Increment sequence number for the process
+(****************************************************************************)
+(* Host process generates a new share *)
+(* - Creates a share with the next sequence number and work *)
+(* - Track parent for the new share as the current chain tip *)
+(* - Update tips to include the new share and remove the chain tip *)
+(* - Increment sequence number for the process *)
+(****************************************************************************)
 GenerateShare(p, work) ==
     /\ Cardinality(shares[p]) < MaxShares \* Limit total shares
     /\ work \in Work
@@ -120,34 +125,36 @@ GenerateShare(p, work) ==
            /\ height' = [height EXCEPT ![p, newShare] = height[p, chain_tip[p]] + 1]
            \* Enqueue the new share for sending to other processes
            /\ share_queue' = Append(share_queue, newShare)
-           /\ UNCHANGED << >>
 
-\* Receive a share from another process
-\* The receiving node's tips will be changed, the uncles and parent relationships remain unchanged.
-ReceiveShare ==
+(****************************************************************************)
+(* Receive a share from another process *)
+(* The receiving node's tips will be changed, the uncles and parent relationships remain unchanged. *)
+(****************************************************************************)
+ReceiveShare(p) ==
     /\ share_queue # << >>
     /\ LET s == Head(share_queue)
        IN
-           /\ \A p \in Processes :
-               \* Add to shares
-               /\ shares' = [shares EXCEPT ![p] = @ \cup {s}]
-                \* Update height to be parent's height + 1
-               /\ height' = [height EXCEPT ![p, s] = height[p, parent[s]] + 1]
-                \* Update chain work to be parent's chain work + s.work
-               /\ chain_work' = [chain_work EXCEPT ![p, s] = chain_work[p, parent[s]] + s.work]
-               /\ IF chain_work[p, parent[s]] + s.work > chain_work[p, chain_tip[p]] THEN \* New share becomes the new tip if it exceeds current tip's work
-                   /\ chain_tip' = [chain_tip EXCEPT ![p] = s]
-                   /\ UNCHANGED <<seqNo, parent, uncles >>
-                  ELSE
-                   /\ UNCHANGED <<chain_tip, seqNo, parent, uncles>>
-           /\ share_queue' = Tail(share_queue)
+        \* Add to shares
+        /\ shares' = [shares EXCEPT ![p] = @ \cup {s}]
+        \* Update height to be parent's height + 1
+        /\ height' = [height EXCEPT ![p, s] = height[p, parent[s]] + 1]
+        \* Update chain work to be parent's chain work + s.work
+        /\ chain_work' = [chain_work EXCEPT ![p, s] = chain_work[p, parent[s]] + s.work]
+        /\ IF chain_work[p, parent[s]] + s.work > chain_work[p, chain_tip[p]] THEN \* New share becomes the new tip if it exceeds current tip's work
+            /\ chain_tip' = [chain_tip EXCEPT ![p] = s]
+            /\ UNCHANGED <<seqNo, parent, uncles >>
+            ELSE
+            /\ UNCHANGED <<chain_tip, seqNo, parent, uncles>>
+    /\ share_queue' = Tail(share_queue)
 
 Next ==
-    \E p \in Processes,
+    \/ \E p \in Processes,
         work \in Work : GenerateShare(p, work)
-    \/ ReceiveShare
+    \/ \E p \in Processes : ReceiveShare(p)
 
-Spec == Init /\ [][Next]_<<shares, chain_tip, seqNo>>
+Fairness == WF_vars(\E p \in Processes: ReceiveShare(p))
+
+Spec == Init /\ [][Next]_vars /\ Fairness
 
 THEOREM Spec => []TypeOK
 
