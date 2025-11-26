@@ -2,19 +2,19 @@
 EXTENDS Naturals, Sequences, TLC, FiniteSets, Integers
 
 CONSTANTS 
-    Processes,      \* Set of processes that generate sharesunclesFor(p) ==
+    Processes,      \* Set of processes that generate shares ==
 
     MaxShares,      \* Maximum number of shares per process
-    Work           \* Work/difficulty parameter for shares
+    Work            \* Work/difficulty parameter for shares
 
 VARIABLES
     shares,         \* Set of all shares across all processes
     chain_tip,      \* Current tip of the chain per process
     seqNo,          \* Sequence number tracker per process
-    parent,        \* Parent references for each share
+    parent,         \* Parent references for each share
     uncles,         \* Uncle references for each share
     chain_work,     \* Total work accumulated up to each share on each process
-    height,          \* Height of each share in the chain at each process
+    height,         \* Height of each share in the chain at each process
     share_queue     \* Queue of shares that have been generated but not yet sent/received
 
 vars == <<shares, chain_tip, seqNo, share_queue, uncles, parent, chain_work, height>>
