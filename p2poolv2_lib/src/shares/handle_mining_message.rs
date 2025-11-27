@@ -33,14 +33,14 @@ use tracing::error;
 /// we assume it is valid and add it to the chain.
 pub async fn handle_mining_message<C>(
     share_block: ShareBlock,
-    store: Arc<ChainStore>,
+    chain_store: Arc<ChainStore>,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     _miner_pubkey: PublicKey,
 ) -> Result<(), Box<dyn Error>> {
-    let share_block = store.setup_share_for_chain(share_block);
+    let share_block = chain_store.setup_share_for_chain(share_block);
     let share_block_clone = share_block.clone();
     // Share we found, always goes to main chain
-    if let Err(e) = store.add_share(share_block, true) {
+    if let Err(e) = chain_store.add_share(share_block, true) {
         error!("Failed to add share: {}", e);
         return Err("Error adding share to chain".into());
     }

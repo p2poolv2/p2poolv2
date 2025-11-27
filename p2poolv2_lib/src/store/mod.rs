@@ -1066,9 +1066,11 @@ impl Store {
         uncle_blocks.into_values().collect()
     }
 
-    /// Get entire chain from earliest known block to given blockhash, excluding the given blockhash
-    /// When we prune the chain, the oldest share in the chain will be marked as root, by removing it's prev_share_blockhash
-    /// We can't use get_shares as we need to get a share, then find it's prev_share_blockhash, then get the share again, etc.
+    /// Get entire chain from earliest known block to given blockhash,
+    /// excluding the given blockhash
+    ///
+    /// We can't use get_shares as we need to get a share, then find
+    /// it's prev_share_blockhash, then get the share again, etc.
     pub fn get_chain_upto(&self, blockhash: &BlockHash) -> Vec<ShareBlock> {
         debug!("Getting chain upto: {:?}", blockhash);
         std::iter::successors(self.get_share(blockhash), |share| {

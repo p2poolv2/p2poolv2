@@ -125,11 +125,10 @@ impl ChainStore {
         self.store.remove_tip(&prev_share_blockhash);
 
         // remove uncles from tips
-        if !share.header.uncles.is_empty() {
-            for uncle in &share.header.uncles {
-                self.store.remove_tip(uncle);
-            }
+        for uncle in &share.header.uncles {
+            self.store.remove_tip(uncle);
         }
+
         // add the new share as a tip
         self.store.add_tip(blockhash);
 
@@ -316,6 +315,9 @@ impl ChainStore {
 
     /// Get the chain tip and uncles
     /// Limit the uncles to up to max uncle depth from the tip
+    ///
+    /// Uncles: By picking tips, we make sure we are picking uncles
+    /// that haven't been included as an uncle yet.
     pub fn get_chain_tip_and_uncles(&self) -> (BlockHash, HashSet<BlockHash>) {
         let mut uncles = self.store.get_tips();
         uncles.retain(|uncle| {
@@ -329,6 +331,9 @@ impl ChainStore {
     /// Set up the share to use chain_tip as the previous blockhash and other tips as uncles
     /// This should be used only when the share is being for the local miner.
     /// Shares received from peers should not be modified.
+    ///
+    /// The caller will call ChainStore::add_share and it is then that
+    /// the uncles are removed from the tip.
     pub fn setup_share_for_chain(&self, mut share_block: ShareBlock) -> ShareBlock {
         let (chain_tip, tips) = self.get_chain_tip_and_uncles();
         tracing::debug!(
