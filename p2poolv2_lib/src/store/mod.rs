@@ -357,23 +357,45 @@ impl Store {
     }
 
     /// Iterate over the store from provided start blockhash
-    /// Gather all shares along all branches from the genesis
-    pub fn load_chain(&self, genesis: BlockHash) -> Vec<BlockHash> {
+    ///
+    /// Returns all shares along all branches from the genesis into
+    /// chain and all the shares without children as tips
+    pub fn load_chain(
+        &self,
+        genesis: BlockHash,
+    ) -> Result<(Vec<BlockHash>, HashSet<BlockHash>), Box<dyn Error + Send + Sync>> {
         let mut chain = vec![];
+        let mut tips = HashSet::new();
+        let mut to_visit = VecDeque::new();
+        to_visit.push_back(genesis);
 
-        let children = self.get_children_blockhashes(&genesis);
-        for child in children.iter() {
-            if *child != genesis {
-                chain.push(*child);
+        while !to_visit.is_empty() {
+            if let Some(current) = to_visit.pop_front() {
+                match self.get_children_blockhashes(&current)? {
+                    Some(children) => {
+                        for child in children.iter() {
+                            if !to_visit.contains(child) {
+                                to_visit.push_back(*child);
+                            }
+                            chain.push(*child);
+                        }
+                    }
+                    None => {
+                        tips.insert(current);
+                    }
+                }
             }
         }
-        chain
+        Ok((chain, tips))
     }
 
     /// Load children BlockHashes for a blockhash from the block index
     /// These are tracked in a separate index in rocksdb as relations from
     /// blockhash -> next blockhashes
-    fn get_children_blockhashes(&self, blockhash: &BlockHash) -> Vec<BlockHash> {
+    fn get_children_blockhashes(
+        &self,
+        blockhash: &BlockHash,
+    ) -> Result<Option<Vec<BlockHash>>, Box<dyn Error + Send + Sync>> {
         let block_index_cf = self.db.cf_handle(&ColumnFamily::BlockIndex).unwrap();
         let mut blockhash_bytes = bitcoin::consensus::serialize(blockhash);
         blockhash_bytes.extend_from_slice(b"_bi");
@@ -386,18 +408,23 @@ impl Store {
                 debug!("Found existing");
                 if let Ok(existing_blockhashes) = encode::deserialize::<Vec<BlockHash>>(&existing) {
                     debug!("Found existing blockhashes {:?}", existing_blockhashes);
-                    existing_blockhashes
+                    Ok(Some(existing_blockhashes))
                 } else {
                     tracing::warn!("Failed to deseriliaze child blockhash");
-                    Vec::new()
+                    Err("Failed to deseriliaze child blockhash".into())
                 }
             }
-            Ok(None) | Err(_) => Vec::new(),
+            Ok(None) => Ok(None),
+            Err(e) => {
+                tracing::error!("Error querying existing children shares");
+                Err(e.into())
+            }
         }
     }
 
     /// Update the block index so that we can easily find all the children of a block
     /// We store the next blockhashes for a block in a separate column family
+    // TODO - Use merge operator here
     fn update_block_index(
         &self,
         prev_blockhash: &BlockHash,
@@ -413,29 +440,53 @@ impl Store {
         let mut prev_blockhash_bytes = bitcoin::consensus::serialize(prev_blockhash);
         prev_blockhash_bytes.extend_from_slice(b"_bi");
 
-        let mut existing_children = self.get_children_blockhashes(prev_blockhash);
+        match self.get_children_blockhashes(prev_blockhash)? {
+            Some(mut existing_children) => {
+                debug!(
+                    "Found existing children for {}: {:?}",
+                    prev_blockhash, existing_children
+                );
+                if !existing_children.contains(next_blockhash) {
+                    // Add the new child blockhash
+                    existing_children.push(*next_blockhash);
+                    debug!(
+                        "Added {} to existing children, now {:?}",
+                        next_blockhash, existing_children
+                    );
+                }
+                // Serialize the updated set
+                let mut serialized_children = Vec::new();
+                match existing_children.consensus_encode(&mut serialized_children) {
+                    Ok(_) => (),
+                    Err(e) => return Err(Box::new(e)),
+                };
 
-        if !existing_children.contains(next_blockhash) {
-            // Add the new prev blockhash
-            existing_children.push(*next_blockhash);
+                // Store the updated set
+                batch.put_cf::<&[u8], Vec<u8>>(
+                    &block_index_cf,
+                    prev_blockhash_bytes.as_ref(),
+                    serialized_children,
+                );
+                Ok(())
+            }
+            None => {
+                debug!("No existing children for {}, creating new entry", prev_blockhash);
+                // Create new entry with this child
+                let children = vec![*next_blockhash];
+                let mut serialized_children = Vec::new();
+                match children.consensus_encode(&mut serialized_children) {
+                    Ok(_) => (),
+                    Err(e) => return Err(Box::new(e)),
+                };
+                batch.put_cf::<&[u8], Vec<u8>>(
+                    &block_index_cf,
+                    prev_blockhash_bytes.as_ref(),
+                    serialized_children,
+                );
+                debug!("Created new entry {} -> [{}]", prev_blockhash, next_blockhash);
+                Ok(())
+            }
         }
-
-        debug!("New children {:?}", &existing_children);
-
-        // Serialize the updated set
-        let mut serialized_children = Vec::new();
-        match existing_children.consensus_encode(&mut serialized_children) {
-            Ok(_) => (),
-            Err(e) => return Err(Box::new(e)),
-        };
-
-        // Store the updated set
-        batch.put_cf::<&[u8], Vec<u8>>(
-            &block_index_cf,
-            prev_blockhash_bytes.as_ref(),
-            serialized_children,
-        );
-        Ok(())
     }
 
     /// Store transactions in the store
@@ -785,7 +836,10 @@ impl Store {
     }
 
     /// Get a share headers matching the vector of blockhashes
-    pub fn get_share_headers(&self, blockhashes: &[BlockHash]) -> Vec<ShareHeader> {
+    pub fn get_share_headers(
+        &self,
+        blockhashes: &[BlockHash],
+    ) -> Result<Vec<ShareHeader>, Box<dyn Error + Send + Sync>> {
         debug!("Getting share headers from store: {:?}", blockhashes);
         let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
         let keys = blockhashes
@@ -807,7 +861,7 @@ impl Store {
                 }
             })
             .collect::<Vec<_>>();
-        share_headers.into_iter().flatten().collect()
+        Ok(share_headers.into_iter().flatten().collect())
     }
 
     // Find the first blockhash that exists by checking key existence
@@ -830,26 +884,30 @@ impl Store {
         blockhash: &BlockHash,
         stop_blockhash: &BlockHash,
         limit: usize,
-    ) -> Vec<BlockHash> {
+    ) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
         let mut blockhashes = Vec::with_capacity(limit);
-        let mut next_children = vec![];
-        let mut current_blockhash = *blockhash;
+        let mut next_children = VecDeque::new();
+        next_children.push_back(*blockhash);
 
-        while blockhashes.len() < limit && current_blockhash != *stop_blockhash {
-            let children = self.get_children_blockhashes(&current_blockhash);
-            for child in children {
-                if blockhashes.len() < limit {
-                    blockhashes.push(child);
-                    next_children.push(child);
+        while !next_children.is_empty() && blockhashes.len() < limit {
+            match next_children.pop_front() {
+                Some(current) => {
+                    if current == *stop_blockhash {
+                        break;
+                    }
+                    if let Some(children) = self.get_children_blockhashes(&current)? {
+                        for child in children {
+                            if blockhashes.len() < limit {
+                                blockhashes.push(child);
+                                next_children.push_back(child);
+                            }
+                        }
+                    }
                 }
+                None => break, // no more in next_children
             }
-
-            if next_children.is_empty() {
-                break;
-            }
-            current_blockhash = next_children.remove(0);
         }
-        blockhashes
+        Ok(blockhashes)
     }
 
     /// Get the genesis blockhash, as the first blockhash in the chain
@@ -867,12 +925,12 @@ impl Store {
         locator: &[BlockHash],
         stop_blockhash: &BlockHash,
         limit: usize,
-    ) -> Vec<BlockHash> {
+    ) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
         let start_blockhash = self.get_first_existing_blockhash(locator);
         // If no blockhash found, return vector with genesis block
         let start_blockhash = match start_blockhash {
             Some(hash) => hash,
-            None => return vec![self.get_genesis_blockhash()],
+            None => return Ok(vec![self.get_genesis_blockhash()]),
         };
 
         self.get_descendant_blockhashes(&start_blockhash, stop_blockhash, limit)
@@ -884,8 +942,8 @@ impl Store {
         locator: &[BlockHash],
         stop_blockhash: &BlockHash,
         limit: usize,
-    ) -> Vec<ShareHeader> {
-        let blockhashes = self.get_blockhashes_for_locator(locator, stop_blockhash, limit);
+    ) -> Result<Vec<ShareHeader>, Box<dyn Error + Send + Sync>> {
+        let blockhashes = self.get_blockhashes_for_locator(locator, stop_blockhash, limit)?;
         self.get_share_headers(&blockhashes)
     }
 
@@ -896,17 +954,18 @@ impl Store {
         share: BlockHash,
         stop_blockhash: &BlockHash,
         limit: usize,
-    ) -> Vec<ShareHeader> {
+    ) -> Result<Vec<ShareHeader>, Box<dyn Error + Send + Sync>> {
         let mut descendants = Vec::with_capacity(limit);
 
         let mut next_children = vec![];
         let mut current_blockhash = share;
         while descendants.len() < limit && current_blockhash != *stop_blockhash {
-            let children = self.get_children_blockhashes(&current_blockhash);
-            for child in children {
-                if descendants.len() < limit {
-                    descendants.push(child);
-                    next_children.push(child);
+            if let Ok(Some(children)) = self.get_children_blockhashes(&current_blockhash) {
+                for child in children {
+                    if descendants.len() < limit {
+                        descendants.push(child);
+                        next_children.push(child);
+                    }
                 }
             }
             current_blockhash = match next_children.pop() {
@@ -1131,6 +1190,7 @@ impl Store {
 
     /// Set the height for the blockhash, storing it in a vector of blockhashes for that height
     /// We are fine with Vector instead of HashSet as we are not going to have a lot of blockhashes at the same height
+    // TODO - Use merge operator here
     pub fn set_height_to_blockhash(
         &self,
         blockhash: &BlockHash,
@@ -1366,25 +1426,30 @@ impl Store {
         self.set_genesis_block_hash(genesis_hash);
 
         // Load main chain and total work
-        let chain = self.load_chain(genesis_hash);
+        let (chain, tips) = self.load_chain(genesis_hash)?;
         if !chain.is_empty() {
-            // Set chain tip to last block in main chain
-            self.set_chain_tip(*chain.last().unwrap());
+            let metadatas: Vec<BlockMetadata> = tips
+                .iter()
+                .map(|tip| self.get_block_metadata(tip))
+                .collect::<Result<Vec<_>, _>>()?;
 
-            // Load tips from the highest height
-            let height = chain.len() as u32 - 1;
-            let tips_shares = self.get_shares_at_height(height);
-            let tips: HashSet<BlockHash> = tips_shares.keys().cloned().collect();
+            // Find tip with maximum chain work
+            let chain_tip = tips
+                .iter()
+                .zip(metadatas.iter())
+                .max_by_key(|(_, metadata)| metadata.chain_work)
+                .map(|(hash, _)| *hash)
+                .expect("No tips found in a non-empty chain");
+
+            self.set_chain_tip(chain_tip);
             self.update_tips(tips);
-
-            debug!(
-                "Initialized chain state: tip={:?}, work={}, tips_count={}",
-                self.get_chain_tip(),
-                self.get_total_work()?,
-                self.get_tips().len()
-            );
         }
-
+        debug!(
+            "Initialized chain state: tip={:?}, work={}, tips_count={}",
+            self.get_chain_tip(),
+            self.get_total_work()?,
+            self.get_tips().len()
+        );
         Ok(())
     }
 }
@@ -2031,10 +2096,12 @@ mod tests {
         // Create uncles for share2
         let uncle1_share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(100)
             .build();
 
         let uncle2_share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(200)
             .build();
 
         // Create share2 with uncles
@@ -2111,28 +2178,40 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // Verify children of share1
-        let children_share1 = store.get_children_blockhashes(&share1.block_hash());
+        let children_share1 = store
+            .get_children_blockhashes(&share1.block_hash())
+            .unwrap()
+            .unwrap();
         assert_eq!(children_share1.len(), 3);
         assert!(children_share1.contains(&share2.block_hash()));
         assert!(children_share1.contains(&uncle1_share2.block_hash()));
         assert!(children_share1.contains(&uncle2_share2.block_hash()));
 
         // Verify children of share2
-        let children_share2 = store.get_children_blockhashes(&share2.block_hash());
+        let children_share2 = store
+            .get_children_blockhashes(&share2.block_hash())
+            .unwrap()
+            .unwrap();
         assert_eq!(children_share2.len(), 1);
         assert!(children_share2.contains(&share3.block_hash()));
 
         // Verify children of share3
-        let children_share3 = store.get_children_blockhashes(&share3.block_hash());
-        assert!(children_share3.is_empty());
+        let children_share3 = store
+            .get_children_blockhashes(&share3.block_hash())
+            .unwrap();
+        assert!(children_share3.is_none());
 
         // Verify children of uncle1_share2
-        let children_uncle1_share2 = store.get_children_blockhashes(&uncle1_share2.block_hash());
-        assert!(children_uncle1_share2.is_empty());
+        let children_uncle1_share2 = store
+            .get_children_blockhashes(&uncle1_share2.block_hash())
+            .unwrap();
+        assert!(children_uncle1_share2.is_none());
 
         // Verify children of uncle2_share2
-        let children_uncle2_share2 = store.get_children_blockhashes(&uncle2_share2.block_hash());
-        assert!(children_uncle2_share2.is_empty());
+        let children_uncle2_share2 = store
+            .get_children_blockhashes(&uncle2_share2.block_hash())
+            .unwrap();
+        assert!(children_uncle2_share2.is_none());
     }
 
     #[test]
@@ -2146,10 +2225,12 @@ mod tests {
         // Create uncles for share2
         let uncle1_share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(100)
             .build();
 
         let uncle2_share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(200)
             .build();
 
         // Create share2 with uncles
@@ -2219,8 +2300,9 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // Verify descendants of share1
-        let descendants_share1 =
-            store.get_descendants(share1.block_hash(), &share3.block_hash(), 10);
+        let descendants_share1 = store
+            .get_descendants(share1.block_hash(), &share3.block_hash(), 10)
+            .unwrap();
         assert_eq!(descendants_share1.len(), 4);
         assert!(descendants_share1.contains(&share2.header));
         assert!(descendants_share1.contains(&share3.header));
@@ -2228,25 +2310,29 @@ mod tests {
         assert!(descendants_share1.contains(&uncle2_share2.header));
 
         // Verify descendants of share2
-        let descendants_share2 =
-            store.get_descendants(share2.block_hash(), &share3.block_hash(), 10);
+        let descendants_share2 = store
+            .get_descendants(share2.block_hash(), &share3.block_hash(), 10)
+            .unwrap();
         assert_eq!(descendants_share2.len(), 1);
         assert_eq!(descendants_share2[0], share3.header);
 
         // Verify no descendants for share3
-        let descendants_share3 =
-            store.get_descendants(share3.block_hash(), &share3.block_hash(), 10);
+        let descendants_share3 = store
+            .get_descendants(share3.block_hash(), &share3.block_hash(), 10)
+            .unwrap();
         assert!(descendants_share3.is_empty());
 
         // Verify descendants with limit
-        let descendants_with_limit =
-            store.get_descendants(share1.block_hash(), &share3.block_hash(), 1);
+        let descendants_with_limit = store
+            .get_descendants(share1.block_hash(), &share3.block_hash(), 1)
+            .unwrap();
         assert_eq!(descendants_with_limit.len(), 1);
         assert_eq!(descendants_with_limit[0], uncle1_share2.header);
 
         // Verify descendants with stop blockhash
-        let descendants_with_limit =
-            store.get_descendants(share1.block_hash(), &share2.block_hash(), 10);
+        let descendants_with_limit = store
+            .get_descendants(share1.block_hash(), &share2.block_hash(), 10)
+            .unwrap();
         assert_eq!(descendants_with_limit.len(), 3);
         assert!(descendants_with_limit.contains(&share2.header));
         assert!(descendants_with_limit.contains(&uncle1_share2.header));
@@ -2286,7 +2372,9 @@ mod tests {
         let locator = store.get_blockhashes_for_height(0);
 
         // Call handle_getblocks
-        let result = store.get_headers_for_locator(locator.as_slice(), &stop_block, 10);
+        let result = store
+            .get_headers_for_locator(locator.as_slice(), &stop_block, 10)
+            .unwrap();
 
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].block_hash(), hashes[1]);
@@ -2335,7 +2423,9 @@ mod tests {
                 .unwrap();
 
         // Call get_headers_for_block_locator with non-existent stop block
-        let result = store.get_headers_for_locator(&locator, &non_existent_stop_block, 10);
+        let result = store
+            .get_headers_for_locator(&locator, &non_existent_stop_block, 10)
+            .unwrap();
         assert_eq!(result.len(), 2);
         // start block not in response
         assert_eq!(result[0], blocks[1].header);
@@ -2375,7 +2465,9 @@ mod tests {
         let locator = store.get_blockhashes_for_height(0);
 
         // Call handle_getblocks
-        let result = store.get_blockhashes_for_locator(locator.as_slice(), &stop_block, 10);
+        let result = store
+            .get_blockhashes_for_locator(locator.as_slice(), &stop_block, 10)
+            .unwrap();
 
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], block_hashes[1]);
@@ -3758,5 +3850,107 @@ mod tests {
         assert!(chain_hashes.contains(&uncle1_1.block_hash()));
         assert!(chain_hashes.contains(&uncle1_2.block_hash()));
         assert!(chain_hashes.contains(&uncle2_1.block_hash()));
+    }
+
+    #[test]
+    fn test_get_descendant_blockhashes_with_fork() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create four shares: a -> b -> c and b -> d (fork at b)
+        let share_a = TestShareBlockBuilder::new().build();
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .build();
+        let share_c = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_b.block_hash().to_string())
+            .nonce(100)
+            .build();
+        let share_d = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_b.block_hash().to_string())
+            .nonce(200)
+            .build();
+
+        // Add share a
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share_a.clone(),
+                0,
+                share_a.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Add share b
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share_b.clone(),
+                1,
+                share_a.header.get_work() + share_b.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Add share c
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share_c.clone(),
+                2,
+                share_a.header.get_work() + share_b.header.get_work() + share_c.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Add share d (fork from b)
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share_d.clone(),
+                2,
+                share_a.header.get_work() + share_b.header.get_work() + share_d.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Test getting all descendants from a (should get b, c, d)
+        let descendants = store
+            .get_descendant_blockhashes(&share_a.block_hash(), &BlockHash::all_zeros(), 10)
+            .unwrap();
+        assert_eq!(descendants.len(), 3);
+        assert!(descendants.contains(&share_b.block_hash()));
+        assert!(descendants.contains(&share_c.block_hash()));
+        assert!(descendants.contains(&share_d.block_hash()));
+
+        // Test getting descendants from b (should get c and d)
+        let descendants = store
+            .get_descendant_blockhashes(&share_b.block_hash(), &BlockHash::all_zeros(), 10)
+            .unwrap();
+        assert_eq!(descendants.len(), 2);
+        assert!(descendants.contains(&share_c.block_hash()));
+        assert!(descendants.contains(&share_d.block_hash()));
+
+        // Test with limit
+        let descendants = store
+            .get_descendant_blockhashes(&share_a.block_hash(), &BlockHash::all_zeros(), 2)
+            .unwrap();
+        assert_eq!(descendants.len(), 2);
+
+        // Test with stop_blockhash - should return just share_b
+        let descendants = store
+            .get_descendant_blockhashes(&share_a.block_hash(), &share_b.block_hash(), 10)
+            .unwrap();
+        assert_eq!(descendants.len(), 1);
+        assert!(descendants.contains(&share_b.block_hash()));
     }
 }

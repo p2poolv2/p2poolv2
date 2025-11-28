@@ -41,7 +41,7 @@ pub async fn handle_getheaders<C: 'static + Send + Sync>(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Received getheaders: {:?}", block_hashes);
     let response_headers =
-        store.get_headers_for_locator(&block_hashes, &stop_block_hash, MAX_HEADERS);
+        store.get_headers_for_locator(&block_hashes, &stop_block_hash, MAX_HEADERS)?;
     let headers_message = Message::ShareHeaders(response_headers);
     // Send response and handle errors by logging them before returning
     if let Err(err) = swarm_tx
@@ -82,7 +82,7 @@ mod tests {
         // Set up mock expectations
         store
             .expect_get_headers_for_locator()
-            .returning(move |_, _, _| response_headers.clone());
+            .returning(move |_, _, _| Ok(response_headers.clone()));
 
         let _result = handle_getheaders(
             block_hashes,
@@ -121,7 +121,7 @@ mod tests {
         // Set up mock expectations
         store
             .expect_get_headers_for_locator()
-            .returning(move |_, _, _| Vec::new());
+            .returning(move |_, _, _| Ok(Vec::new()));
 
         // Drop the receiver to simulate send failure
         drop(swarm_rx);

@@ -226,7 +226,7 @@ mod tests {
 
         store
             .expect_get_headers_for_locator()
-            .returning(move |_, _, _| response_headers.clone());
+            .returning(move |_, _, _| Ok(response_headers.clone()));
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -269,7 +269,7 @@ mod tests {
         // Set up mock expectations
         store
             .expect_get_blockhashes_for_locator()
-            .returning(move |_, _, _| vec![block1.block_hash(), block2.block_hash()]);
+            .returning(move |_, _, _| Ok(vec![block1.block_hash(), block2.block_hash()]));
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -481,7 +481,7 @@ mod tests {
         // Set up mock expectations for processing headers
         store
             .expect_get_headers_for_locator()
-            .returning(|_, _, _| vec![]);
+            .returning(|_, _, _| Ok(vec![]));
 
         let ctx = RequestContext {
             peer: peer_id,

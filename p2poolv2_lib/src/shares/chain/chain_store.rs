@@ -230,7 +230,10 @@ impl ChainStore {
     }
 
     /// Get a share header from the chain given a share hash
-    pub fn get_share_headers(&self, share_hashes: &[BlockHash]) -> Vec<ShareHeader> {
+    pub fn get_share_headers(
+        &self,
+        share_hashes: &[BlockHash],
+    ) -> Result<Vec<ShareHeader>, Box<dyn Error + Send + Sync>> {
         self.store.get_share_headers(share_hashes)
     }
 
@@ -241,7 +244,7 @@ impl ChainStore {
         block_hashes: &[BlockHash],
         stop_block_hash: &BlockHash,
         limit: usize,
-    ) -> Vec<ShareHeader> {
+    ) -> Result<Vec<ShareHeader>, Box<dyn Error + Send + Sync>> {
         self.store
             .get_headers_for_locator(block_hashes, stop_block_hash, limit)
     }
@@ -253,7 +256,7 @@ impl ChainStore {
         locator: &[BlockHash],
         stop_block_hash: &BlockHash,
         max_blockhashes: usize,
-    ) -> Vec<BlockHash> {
+    ) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
         self.store
             .get_blockhashes_for_locator(locator, stop_block_hash, max_blockhashes)
     }
@@ -407,7 +410,7 @@ impl ChainStore {
     /// Get the target for the tip share block
     pub fn get_current_target(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
         let tip = self.store.get_chain_tip();
-        let headers = self.get_share_headers(&[tip]);
+        let headers = self.get_share_headers(&[tip]).unwrap();
         match headers.first() {
             None => Err("No tips found".into()),
             Some(header) => Ok(header.bits.to_consensus()),
@@ -434,9 +437,9 @@ mock! {
         pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock>;
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
         pub fn get_shares_at_height(&self, height: u32) -> HashMap<BlockHash, ShareBlock>;
-        pub fn get_share_headers(&self, share_hashes: Vec<BlockHash>) -> Vec<ShareHeader>;
-        pub fn get_headers_for_locator(&self, block_hashes: &[BlockHash], stop_block_hash: &BlockHash, max_headers: usize) -> Vec<ShareHeader>;
-        pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Vec<BlockHash>;
+        pub fn get_share_headers(&self, share_hashes: Vec<BlockHash>) -> Result<Vec<ShareHeader>, Box<dyn Error + Send + Sync>>;
+        pub fn get_headers_for_locator(&self, block_hashes: &[BlockHash], stop_block_hash: &BlockHash, max_headers: usize) -> Result<Vec<ShareHeader>, Box<dyn Error + Send + Sync>>;
+        pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>>;
         pub fn build_locator(&self) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
         pub fn get_tip_height(&self) -> Result<Option<u32>, Box<dyn Error + Send + Sync>>;
@@ -807,13 +810,17 @@ mod chain_tests {
         // Test 1: Get headers starting from share1 up to share3
         let locator = vec![share1.block_hash()];
         let stop_hash = share3.block_hash();
-        let headers = chain.get_headers_for_locator(&locator, &stop_hash, 500);
+        let headers = chain
+            .get_headers_for_locator(&locator, &stop_hash, 500)
+            .unwrap();
         assert_eq!(headers.len(), 2); // Should return share2 and share3
         assert_eq!(headers[0], share2.header);
         assert_eq!(headers[1], share3.header);
 
         // Test 2: Get headers with limit
-        let headers = chain.get_headers_for_locator(&locator, &share5.block_hash(), 2);
+        let headers = chain
+            .get_headers_for_locator(&locator, &share5.block_hash(), 2)
+            .unwrap();
         assert_eq!(headers.len(), 2); // Should only return 2 headers due to limit
         assert_eq!(headers[0], share2.header);
         assert_eq!(headers[1], share3.header);
@@ -822,7 +829,9 @@ mod chain_tests {
         let non_existent =
             BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
                 .unwrap();
-        let headers = chain.get_headers_for_locator(&[non_existent], &share5.block_hash(), 500);
+        let headers = chain
+            .get_headers_for_locator(&[non_existent], &share5.block_hash(), 500)
+            .unwrap();
         assert_eq!(headers.len(), 1); // Should return genesis when no match found
 
         // Test 4: Multiple locator hashes, results should start from first found
@@ -832,13 +841,17 @@ mod chain_tests {
             share2.block_hash(),
             share1.block_hash(),
         ];
-        let headers = chain.get_headers_for_locator(&locator, &share5.block_hash(), 500);
+        let headers = chain
+            .get_headers_for_locator(&locator, &share5.block_hash(), 500)
+            .unwrap();
         assert_eq!(headers.len(), 2); // Should return share4 and share5
         assert_eq!(headers[0], share4.header);
         assert_eq!(headers[1], share5.header);
 
         // Test 5: Get blockhashes for locator
-        let blockhashes = chain.get_blockhashes_for_locator(&locator, &share5.block_hash(), 500);
+        let blockhashes = chain
+            .get_blockhashes_for_locator(&locator, &share5.block_hash(), 500)
+            .unwrap();
         assert_eq!(blockhashes.len(), 2); // Should return share4 and share5
         assert_eq!(blockhashes[0], share4.block_hash());
         assert_eq!(blockhashes[1], share5.block_hash());
