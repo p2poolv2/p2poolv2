@@ -80,7 +80,7 @@ impl Store {
         // Use RocksDB range delete for efficient bulk deletion
         // delete_range_cf deletes all keys in [start_key, end_key)
         self.db
-            .delete_range_cf(pplns_share_cf, &start_key, &end_key)?;
+            .delete_range_cf(&pplns_share_cf, &start_key, &end_key)?;
 
         info!("Deleted PPLNS shares older than cutoff time");
 
@@ -114,7 +114,7 @@ impl Store {
 
         // Use RocksDB range delete for efficient bulk deletion
         // delete_range_cf deletes all keys in [start_key, end_key)
-        self.db.delete_range_cf(job_cf, &start_key, &end_key)?;
+        self.db.delete_range_cf(&job_cf, &start_key, &end_key)?;
 
         info!("Deleted jobs older than cutoff time");
 

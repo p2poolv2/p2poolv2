@@ -55,7 +55,7 @@ impl Store {
         let end_key = SimplePplnsShare::make_key(effective_end_time, u64::MAX, u64::MAX);
 
         let iter = self.db.iterator_cf_opt(
-            pplns_share_cf,
+            &pplns_share_cf,
             read_opts,
             rocksdb::IteratorMode::From(&end_key, rocksdb::Direction::Reverse),
         );
