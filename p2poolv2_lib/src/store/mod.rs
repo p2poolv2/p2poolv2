@@ -141,7 +141,7 @@ impl Store {
         let user_index_cf = self.db.cf_handle(&ColumnFamily::UserIndex).unwrap();
 
         // Check if user already exists via index
-        if let Some(existing_id_bytes) = self.db.get_cf(user_index_cf, &btcaddress)? {
+        if let Some(existing_id_bytes) = self.db.get_cf(&user_index_cf, &btcaddress)? {
             let user_id = u64::from_be_bytes(
                 existing_id_bytes
                     .try_into()
@@ -170,10 +170,10 @@ impl Store {
         // Store user data (key: user_id, value: serialized StoredUser)
         let mut serialized_user = Vec::new();
         stored_user.consensus_encode(&mut serialized_user)?;
-        batch.put_cf(user_cf, user_id.to_be_bytes(), serialized_user);
+        batch.put_cf(&user_cf, user_id.to_be_bytes(), serialized_user);
 
         // Store index mapping (key: btcaddress, value: user_id)
-        batch.put_cf(user_index_cf, btcaddress, user_id.to_be_bytes());
+        batch.put_cf(&user_index_cf, btcaddress, user_id.to_be_bytes());
 
         // Write batch atomically
         self.db.write(batch)?;
@@ -188,7 +188,7 @@ impl Store {
     ) -> Result<Option<StoredUser>, Box<dyn Error + Send + Sync>> {
         let user_cf = self.db.cf_handle(&ColumnFamily::User).unwrap();
 
-        if let Some(serialized_user) = self.db.get_cf(user_cf, user_id.to_be_bytes())? {
+        if let Some(serialized_user) = self.db.get_cf(&user_cf, user_id.to_be_bytes())? {
             if let Ok(stored_user) = encode::deserialize(&serialized_user) {
                 Ok(Some(stored_user))
             } else {
@@ -207,7 +207,7 @@ impl Store {
     ) -> Result<Option<StoredUser>, Box<dyn Error + Send + Sync>> {
         let user_index_cf = self.db.cf_handle(&ColumnFamily::UserIndex).unwrap();
 
-        if let Some(user_id_bytes) = self.db.get_cf(user_index_cf, btcaddress)? {
+        if let Some(user_id_bytes) = self.db.get_cf(&user_index_cf, btcaddress)? {
             let user_id = u64::from_be_bytes(
                 user_id_bytes
                     .try_into()
@@ -232,7 +232,7 @@ impl Store {
         // Build keys for multi_get_cf: (column_family, key_bytes)
         let keys: Vec<_> = user_ids
             .iter()
-            .map(|user_id| (user_cf, user_id.to_be_bytes()))
+            .map(|user_id| (&user_cf, user_id.to_be_bytes()))
             .collect();
 
         // Batch fetch all users in a single multi_get_cf call
@@ -327,7 +327,7 @@ impl Store {
         let block_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
         let mut encoded_share_block = Vec::new();
         storage_share_block.consensus_encode(&mut encoded_share_block)?;
-        batch.put_cf::<&[u8], Vec<u8>>(block_cf, blockhash.as_ref(), encoded_share_block);
+        batch.put_cf::<&[u8], Vec<u8>>(&block_cf, blockhash.as_ref(), encoded_share_block);
 
         Ok(())
     }
@@ -347,7 +347,7 @@ impl Store {
 
         let n_time = pplns_share.n_time * 1_000_000;
         let key = SimplePplnsShare::make_key(n_time, pplns_share.user_id, get_next_id());
-        self.db.put_cf(pplns_share_cf, key, serialized)?;
+        self.db.put_cf(&pplns_share_cf, key, serialized)?;
         Ok(())
     }
 
@@ -380,7 +380,7 @@ impl Store {
 
         match self
             .db
-            .get_cf::<&[u8]>(block_index_cf, blockhash_bytes.as_ref())
+            .get_cf::<&[u8]>(&block_index_cf, blockhash_bytes.as_ref())
         {
             Ok(Some(existing)) => {
                 debug!("Found existing");
@@ -431,7 +431,7 @@ impl Store {
 
         // Store the updated set
         batch.put_cf::<&[u8], Vec<u8>>(
-            block_index_cf,
+            &block_index_cf,
             prev_blockhash_bytes.as_ref(),
             serialized_children,
         );
@@ -461,7 +461,7 @@ impl Store {
                 let input_key = format!("{txid}:{i}");
                 let mut serialized = Vec::new();
                 input.consensus_encode(&mut serialized)?;
-                batch.put_cf::<&[u8], Vec<u8>>(inputs_cf, input_key.as_ref(), serialized);
+                batch.put_cf::<&[u8], Vec<u8>>(&inputs_cf, input_key.as_ref(), serialized);
 
                 if confirmed {
                     self.confirm_transaction(tx, batch)?;
@@ -473,7 +473,7 @@ impl Store {
                 let output_key = format!("{txid}:{i}");
                 let mut serialized = Vec::new();
                 output.consensus_encode(&mut serialized)?;
-                batch.put_cf::<&[u8], Vec<u8>>(outputs_cf, output_key.as_ref(), serialized);
+                batch.put_cf::<&[u8], Vec<u8>>(&outputs_cf, output_key.as_ref(), serialized);
 
                 // part of batch write, so we make individual calls
                 self.add_to_unspent_outputs(&txid, i as u32, batch)?;
@@ -496,7 +496,7 @@ impl Store {
         let mut serialized = Vec::new();
         tx_metadata.consensus_encode(&mut serialized)?;
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
-        batch.put_cf::<&[u8], Vec<u8>>(tx_cf, txid.as_ref(), serialized);
+        batch.put_cf::<&[u8], Vec<u8>>(&tx_cf, txid.as_ref(), serialized);
 
         Ok(tx_metadata)
     }
@@ -548,7 +548,7 @@ impl Store {
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let utxo_cf = self.db.cf_handle(&ColumnFamily::UnspentOutputs).unwrap();
         let key = format!("{txid}:{index}");
-        batch.put_cf(utxo_cf, key.as_str(), []);
+        batch.put_cf(&utxo_cf, key.as_str(), []);
         Ok(())
     }
 
@@ -561,7 +561,7 @@ impl Store {
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let utxo_cf = self.db.cf_handle(&ColumnFamily::UnspentOutputs).unwrap();
         let key = format!("{txid}:{index}");
-        batch.delete_cf(utxo_cf, key.as_str());
+        batch.delete_cf(&utxo_cf, key.as_str());
         Ok(())
     }
 
@@ -575,10 +575,10 @@ impl Store {
         let key = format!("{txid}:{index}");
         // Most of the time OutPoint will NOT exist in unspent txs,
         // and key may exist will definitely return false in that case
-        let mut exists = self.db.key_may_exist_cf(utxo_cf, key.as_str());
+        let mut exists = self.db.key_may_exist_cf(&utxo_cf, key.as_str());
         // Check if exists for sure, if we a false positive
         if exists {
-            exists = self.db.get_pinned_cf(utxo_cf, key.as_str())?.is_some();
+            exists = self.db.get_pinned_cf(&utxo_cf, key.as_str())?.is_some();
         }
         Ok(exists)
     }
@@ -604,7 +604,7 @@ impl Store {
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
         let mut tx_metadata_serialized = Vec::new();
         tx_metadata.consensus_encode(&mut tx_metadata_serialized)?;
-        batch.put_cf::<&[u8], Vec<u8>>(tx_cf, txid.as_ref(), tx_metadata_serialized);
+        batch.put_cf::<&[u8], Vec<u8>>(&tx_cf, txid.as_ref(), tx_metadata_serialized);
         Ok(tx_metadata)
     }
 
@@ -624,7 +624,7 @@ impl Store {
         let mut serialized_txids = Vec::new();
         txids.consensus_encode(&mut serialized_txids)?;
         let block_txids_cf = self.db.cf_handle(&column_family).unwrap();
-        batch.put_cf::<&[u8], Vec<u8>>(block_txids_cf, blockhash_bytes.as_ref(), serialized_txids);
+        batch.put_cf::<&[u8], Vec<u8>>(&block_txids_cf, blockhash_bytes.as_ref(), serialized_txids);
         Ok(())
     }
 
@@ -642,7 +642,7 @@ impl Store {
         let block_txids_cf = self.db.cf_handle(&column_family).unwrap();
         match self
             .db
-            .get_cf::<&[u8]>(block_txids_cf, blockhash_bytes.as_ref())
+            .get_cf::<&[u8]>(&block_txids_cf, blockhash_bytes.as_ref())
         {
             Ok(Some(serialized_txids)) => match encode::deserialize(&serialized_txids) {
                 Ok(t) => t,
@@ -670,7 +670,7 @@ impl Store {
         txid: &bitcoin::Txid,
     ) -> Result<TxMetadata, Box<dyn Error + Send + Sync>> {
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
-        match self.db.get_cf::<&[u8]>(tx_cf, txid.as_ref())? {
+        match self.db.get_cf::<&[u8]>(&tx_cf, txid.as_ref())? {
             Some(tx_metadata) => encode::deserialize(&tx_metadata)
                 .map_err(|_| "Failed to seralize tx metadata".into()),
             None => Err(format!("Transaction metadata not found for txid: {txid}").into()),
@@ -686,7 +686,7 @@ impl Store {
         debug!("Saving job to store with key: {:?}", timestamp);
         let job_cf = self.db.cf_handle(&ColumnFamily::Job).unwrap();
         self.db.put_cf(
-            job_cf,
+            &job_cf,
             timestamp.to_be_bytes(),
             serialized_notify.as_bytes(),
         )?;
@@ -726,7 +726,7 @@ impl Store {
 
         // Start iterating from end_time in reverse order to get newest first
         let iter = self.db.iterator_cf_opt(
-            job_cf,
+            &job_cf,
             read_opts,
             rocksdb::IteratorMode::From(
                 &effective_end_time.to_be_bytes(),
@@ -765,7 +765,7 @@ impl Store {
     pub fn get_share(&self, blockhash: &BlockHash) -> Option<ShareBlock> {
         debug!("Getting share from store: {:?}", blockhash);
         let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
-        let share = match self.db.get_cf::<&[u8]>(share_cf, blockhash.as_ref()) {
+        let share = match self.db.get_cf::<&[u8]>(&share_cf, blockhash.as_ref()) {
             Ok(Some(share)) => share,
             Ok(None) | Err(_) => return None,
         };
@@ -790,7 +790,7 @@ impl Store {
         let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
         let keys = blockhashes
             .iter()
-            .map(|h| (share_cf, bitcoin::consensus::serialize(h)))
+            .map(|h| (&share_cf, bitcoin::consensus::serialize(h)))
             .collect::<Vec<_>>();
         let shares = self.db.multi_get_cf(keys);
         let share_headers = shares
@@ -816,7 +816,7 @@ impl Store {
         for blockhash in locator {
             if self
                 .db
-                .key_may_exist_cf(block_cf, bitcoin::consensus::serialize(blockhash))
+                .key_may_exist_cf(&block_cf, bitcoin::consensus::serialize(blockhash))
             {
                 return Some(*blockhash);
             }
@@ -924,7 +924,7 @@ impl Store {
         let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
         let keys = blockhashes
             .iter()
-            .map(|h| (share_cf, bitcoin::consensus::serialize(h)))
+            .map(|h| (&share_cf, bitcoin::consensus::serialize(h)))
             .collect::<Vec<_>>();
         let shares = self.db.multi_get_cf(keys);
         // iterate over the blockhashes and shares, filter out the ones that are not found or can't be deserialized
@@ -999,7 +999,7 @@ impl Store {
             let input_key = format!("{txid}:{i}");
             let input = self
                 .db
-                .get_cf::<&[u8]>(inputs_cf, input_key.as_ref())
+                .get_cf::<&[u8]>(&inputs_cf, input_key.as_ref())
                 .unwrap()
                 .unwrap();
             let input: bitcoin::TxIn = match encode::deserialize(&input) {
@@ -1015,7 +1015,7 @@ impl Store {
             let output_key = format!("{txid}:{i}");
             let output = self
                 .db
-                .get_cf::<&[u8]>(outputs_cf, output_key.as_ref())
+                .get_cf::<&[u8]>(&outputs_cf, output_key.as_ref())
                 .unwrap()
                 .unwrap();
             let output: bitcoin::TxOut = match encode::deserialize(&output) {
@@ -1078,7 +1078,7 @@ impl Store {
         let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
         if !self
             .db
-            .key_may_exist_cf::<&[u8]>(share_cf, blockhash.as_ref())
+            .key_may_exist_cf::<&[u8]>(&share_cf, blockhash.as_ref())
         {
             return Err(format!("Blockhash {blockhash} not found in chain").into());
         };
@@ -1144,7 +1144,7 @@ impl Store {
         // Get any existing blockhashes for this height
         let mut blockhashes: Vec<BlockHash> = match self
             .db
-            .get_cf::<&[u8]>(column_family, height_bytes.as_ref())
+            .get_cf::<&[u8]>(&column_family, height_bytes.as_ref())
         {
             Ok(Some(existing)) => encode::deserialize(&existing).unwrap_or_default(),
             Ok(None) | Err(_) => Vec::new(),
@@ -1159,7 +1159,7 @@ impl Store {
             blockhashes.consensus_encode(&mut serialized)?;
 
             // Store the updated vector
-            batch.put_cf(column_family, height_bytes, serialized);
+            batch.put_cf(&column_family, height_bytes, serialized);
         }
         Ok(())
     }
@@ -1170,7 +1170,7 @@ impl Store {
         let height_bytes = height.to_be_bytes();
         match self
             .db
-            .get_cf::<&[u8]>(column_family, height_bytes.as_ref())
+            .get_cf::<&[u8]>(&column_family, height_bytes.as_ref())
         {
             Ok(Some(blockhashes)) => encode::deserialize(&blockhashes).unwrap_or_default(),
             Ok(None) | Err(_) => vec![],
@@ -1193,7 +1193,7 @@ impl Store {
         let mut metadata_key = bitcoin::consensus::serialize(blockhash);
         metadata_key.extend_from_slice(b"_md");
 
-        match self.db.get_cf::<&[u8]>(block_metadata_cf, &metadata_key) {
+        match self.db.get_cf::<&[u8]>(&block_metadata_cf, &metadata_key) {
             Ok(Some(metadata_serialized)) => match encode::deserialize(&metadata_serialized) {
                 Ok(metadata) => Ok(metadata),
                 Err(e) => Err(format!("Error deserializing block metadata: {e}").into()),
@@ -1213,7 +1213,7 @@ impl Store {
             .filter(|&hash| {
                 !self
                     .db
-                    .key_may_exist_cf(block_cf, bitcoin::consensus::serialize(hash))
+                    .key_may_exist_cf(&block_cf, bitcoin::consensus::serialize(hash))
             })
             .cloned()
             .collect()
@@ -1234,7 +1234,7 @@ impl Store {
         let mut serialized = Vec::new();
         metadata.consensus_encode(&mut serialized)?;
 
-        batch.put_cf(block_metadata_cf, &metadata_key, serialized);
+        batch.put_cf(&block_metadata_cf, &metadata_key, serialized);
         Ok(())
     }
 
