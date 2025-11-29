@@ -54,6 +54,34 @@ pub struct Store {
     tips: Arc<RwLock<HashSet<BlockHash>>>,
 }
 
+/// Merge operator for appending BlockHashes to a Vec<BlockHash>
+/// This allows atomic append operations without read-modify-write cycles
+fn blockhash_list_merge(
+    _key: &[u8],
+    existing_val: Option<&[u8]>,
+    operands: &rocksdb::MergeOperands,
+) -> Option<Vec<u8>> {
+    // Deserialize existing vector or start with empty
+    let mut blockhashes: Vec<BlockHash> = existing_val
+        .and_then(|bytes| encode::deserialize(bytes).ok())
+        .unwrap_or_default();
+
+    // Process each merge operand (each is a single BlockHash to append)
+    for op in operands {
+        if let Ok(new_hash) = encode::deserialize::<BlockHash>(op) {
+            // Only add if not already present
+            if !blockhashes.contains(&new_hash) {
+                blockhashes.push(new_hash);
+            }
+        }
+    }
+
+    // Serialize the result
+    let mut result = Vec::new();
+    blockhashes.consensus_encode(&mut result).ok()?;
+    Some(result)
+}
+
 /// A rocksdb based store for share blocks.
 /// We use column families to store different types of data, so that compactions are independent for each type.
 #[allow(dead_code)]
@@ -71,8 +99,14 @@ impl Store {
         let tx_cf = ColumnFamilyDescriptor::new(ColumnFamily::Tx, RocksDbOptions::default());
         let block_index_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::BlockIndex, RocksDbOptions::default());
+
+        // Configure BlockHeight column family with merge operator for efficient appends
+        let mut block_height_opts = RocksDbOptions::default();
+        block_height_opts
+            .set_merge_operator_associative("blockhash_list_merge", blockhash_list_merge);
         let block_height_cf =
-            ColumnFamilyDescriptor::new(ColumnFamily::BlockHeight, RocksDbOptions::default());
+            ColumnFamilyDescriptor::new(ColumnFamily::BlockHeight, block_height_opts);
+
         let bitcoin_txids_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::BitcoinTxids, RocksDbOptions::default());
 
@@ -1221,7 +1255,7 @@ impl Store {
 
     /// Set the height for the blockhash, storing it in a vector of blockhashes for that height
     /// We are fine with Vector instead of HashSet as we are not going to have a lot of blockhashes at the same height
-    // TODO - Use merge operator here
+    /// Uses merge operator for atomic append without read-modify-write
     pub fn set_height_to_blockhash(
         &self,
         blockhash: &BlockHash,
@@ -1229,29 +1263,14 @@ impl Store {
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let column_family = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
-        // Convert height to big-endian bytes - this is our key
         let height_bytes = height.to_be_bytes();
 
-        // Get any existing blockhashes for this height
-        let mut blockhashes: Vec<BlockHash> = match self
-            .db
-            .get_cf::<&[u8]>(&column_family, height_bytes.as_ref())
-        {
-            Ok(Some(existing)) => encode::deserialize(&existing).unwrap_or_default(),
-            Ok(None) | Err(_) => Vec::new(),
-        };
+        // Serialize the single BlockHash to merge
+        let mut serialized = Vec::new();
+        blockhash.consensus_encode(&mut serialized)?;
 
-        // Add the new blockhash if not already present
-        if !blockhashes.contains(blockhash) {
-            blockhashes.push(*blockhash);
-
-            // Serialize the updated vector of blockhashes
-            let mut serialized = Vec::new();
-            blockhashes.consensus_encode(&mut serialized)?;
-
-            // Store the updated vector
-            batch.put_cf(&column_family, height_bytes, serialized);
-        }
+        // Use merge operator to atomically append
+        batch.merge_cf(&column_family, height_bytes, serialized);
         Ok(())
     }
 
@@ -3754,5 +3773,131 @@ mod tests {
             .unwrap();
         assert_eq!(descendants.len(), 1);
         assert!(descendants.contains(&share_b.block_hash()));
+    }
+
+    #[test]
+    fn test_merge_operator_for_block_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let height = 100u32;
+
+        // Create three different blockhashes
+        let hash1 = BlockHash::from_byte_array([1u8; 32]);
+        let hash2 = BlockHash::from_byte_array([2u8; 32]);
+        let hash3 = BlockHash::from_byte_array([3u8; 32]);
+
+        // Add hash1 at height 100
+        let mut batch = Store::get_write_batch();
+        store
+            .set_height_to_blockhash(&hash1, height, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Verify hash1 is stored
+        let hashes = store.get_blockhashes_for_height(height);
+        assert_eq!(hashes.len(), 1);
+        assert!(hashes.contains(&hash1));
+
+        // Add hash2 at the same height using merge operator
+        let mut batch = Store::get_write_batch();
+        store
+            .set_height_to_blockhash(&hash2, height, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Verify both hash1 and hash2 are stored
+        let hashes = store.get_blockhashes_for_height(height);
+        assert_eq!(hashes.len(), 2);
+        assert!(hashes.contains(&hash1));
+        assert!(hashes.contains(&hash2));
+
+        // Add hash3 at the same height
+        let mut batch = Store::get_write_batch();
+        store
+            .set_height_to_blockhash(&hash3, height, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Verify all three hashes are stored
+        let hashes = store.get_blockhashes_for_height(height);
+        assert_eq!(hashes.len(), 3);
+        assert!(hashes.contains(&hash1));
+        assert!(hashes.contains(&hash2));
+        assert!(hashes.contains(&hash3));
+
+        // Test deduplication - add hash1 again
+        let mut batch = Store::get_write_batch();
+        store
+            .set_height_to_blockhash(&hash1, height, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Should still have only 3 hashes (no duplicate)
+        let hashes = store.get_blockhashes_for_height(height);
+        assert_eq!(hashes.len(), 3);
+        assert!(hashes.contains(&hash1));
+        assert!(hashes.contains(&hash2));
+        assert!(hashes.contains(&hash3));
+    }
+
+    #[test]
+    fn test_merge_operator_multiple_batches() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let height = 200u32;
+
+        let hash1 = BlockHash::from_byte_array([10u8; 32]);
+        let hash2 = BlockHash::from_byte_array([20u8; 32]);
+        let hash3 = BlockHash::from_byte_array([30u8; 32]);
+
+        // Add multiple hashes in a single batch
+        let mut batch = Store::get_write_batch();
+        store
+            .set_height_to_blockhash(&hash1, height, &mut batch)
+            .unwrap();
+        store
+            .set_height_to_blockhash(&hash2, height, &mut batch)
+            .unwrap();
+        store
+            .set_height_to_blockhash(&hash3, height, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Verify all hashes are stored correctly
+        let hashes = store.get_blockhashes_for_height(height);
+        assert_eq!(hashes.len(), 3);
+        assert!(hashes.contains(&hash1));
+        assert!(hashes.contains(&hash2));
+        assert!(hashes.contains(&hash3));
+    }
+
+    #[test]
+    fn test_merge_operator_different_heights() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let hash1 = BlockHash::from_byte_array([100u8; 32]);
+        let hash2 = BlockHash::from_byte_array([200u8; 32]);
+
+        // Add hash1 at height 100 and hash2 at height 200
+        let mut batch = Store::get_write_batch();
+        store
+            .set_height_to_blockhash(&hash1, 100, &mut batch)
+            .unwrap();
+        store
+            .set_height_to_blockhash(&hash2, 200, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Verify hashes are stored at correct heights
+        let hashes_100 = store.get_blockhashes_for_height(100);
+        assert_eq!(hashes_100.len(), 1);
+        assert!(hashes_100.contains(&hash1));
+
+        let hashes_200 = store.get_blockhashes_for_height(200);
+        assert_eq!(hashes_200.len(), 1);
+        assert!(hashes_200.contains(&hash2));
     }
 }
