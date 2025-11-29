@@ -185,9 +185,8 @@ impl ChainStore {
     }
 
     /// Reorg the chain to the new share
-    /// We do not explicitly mark any blocks as unconfirmed or transactions as unconfirmed. This is because we don't cache the status of the blocks or transactions.
-    /// By changing the tips we are effectively marking all the blocks and transactions that were on the old tips as unconfirmed.
-    /// When a share is being traded, if it is not on the main chain, it will not be accepted for the trade.
+    /// Changes tip and updates metadata for shares to update the is_on_main_chain flag
+    /// TODO: Update metadata flag
     fn reorg(
         &self,
         share: ShareBlock,
