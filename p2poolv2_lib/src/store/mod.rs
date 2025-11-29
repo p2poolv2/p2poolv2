@@ -97,8 +97,13 @@ impl Store {
         let outputs_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::Outputs, RocksDbOptions::default());
         let tx_cf = ColumnFamilyDescriptor::new(ColumnFamily::Tx, RocksDbOptions::default());
+
+        // Configure BlockIndex column family with merge operator for efficient appends
+        let mut block_index_opts = RocksDbOptions::default();
+        block_index_opts
+            .set_merge_operator_associative("blockhash_list_merge", blockhash_list_merge);
         let block_index_cf =
-            ColumnFamilyDescriptor::new(ColumnFamily::BlockIndex, RocksDbOptions::default());
+            ColumnFamilyDescriptor::new(ColumnFamily::BlockIndex, block_index_opts);
 
         // Configure BlockHeight column family with merge operator for efficient appends
         let mut block_height_opts = RocksDbOptions::default();
@@ -459,7 +464,7 @@ impl Store {
 
     /// Update the block index so that we can easily find all the children of a block
     /// We store the next blockhashes for a block in a separate column family
-    // TODO - Use merge operator here
+    /// Uses merge operator for atomic append without read-modify-write
     fn update_block_index(
         &self,
         prev_blockhash: &BlockHash,
@@ -475,59 +480,18 @@ impl Store {
         let mut prev_blockhash_bytes = bitcoin::consensus::serialize(prev_blockhash);
         prev_blockhash_bytes.extend_from_slice(b"_bi");
 
-        match self.get_children_blockhashes(prev_blockhash)? {
-            Some(mut existing_children) => {
-                debug!(
-                    "Found existing children for {}: {:?}",
-                    prev_blockhash, existing_children
-                );
-                if !existing_children.contains(next_blockhash) {
-                    // Add the new child blockhash
-                    existing_children.push(*next_blockhash);
-                    debug!(
-                        "Added {} to existing children, now {:?}",
-                        next_blockhash, existing_children
-                    );
-                }
-                // Serialize the updated set
-                let mut serialized_children = Vec::new();
-                match existing_children.consensus_encode(&mut serialized_children) {
-                    Ok(_) => (),
-                    Err(e) => return Err(Box::new(e)),
-                };
+        // Serialize the single BlockHash to merge
+        let mut serialized = Vec::new();
+        next_blockhash.consensus_encode(&mut serialized)?;
 
-                // Store the updated set
-                batch.put_cf::<&[u8], Vec<u8>>(
-                    &block_index_cf,
-                    prev_blockhash_bytes.as_ref(),
-                    serialized_children,
-                );
-                Ok(())
-            }
-            None => {
-                debug!(
-                    "No existing children for {}, creating new entry",
-                    prev_blockhash
-                );
-                // Create new entry with this child
-                let children = vec![*next_blockhash];
-                let mut serialized_children = Vec::new();
-                match children.consensus_encode(&mut serialized_children) {
-                    Ok(_) => (),
-                    Err(e) => return Err(Box::new(e)),
-                };
-                batch.put_cf::<&[u8], Vec<u8>>(
-                    &block_index_cf,
-                    prev_blockhash_bytes.as_ref(),
-                    serialized_children,
-                );
-                debug!(
-                    "Created new entry {} -> [{}]",
-                    prev_blockhash, next_blockhash
-                );
-                Ok(())
-            }
-        }
+        // Use merge operator to atomically append
+        batch.merge_cf(&block_index_cf, prev_blockhash_bytes, serialized);
+
+        debug!(
+            "Queued merge operation: {} -> {}",
+            prev_blockhash, next_blockhash
+        );
+        Ok(())
     }
 
     /// Store transactions in the store
