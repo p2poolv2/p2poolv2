@@ -346,6 +346,7 @@ impl ChainStore {
             tips
         );
         share_block.header.prev_share_blockhash = chain_tip;
+        // TODO: Limit tips to uncles to BLOCK MAX DEPTH depth
         share_block.header.uncles = tips.into_iter().collect();
         share_block
     }
@@ -503,13 +504,13 @@ mod chain_tests {
 
         // Create uncles for share2
         let uncle1_share2 = TestShareBlockBuilder::new()
-            .prev_share_blockhash(share1.block_hash().to_string())
+            .prev_share_blockhash(genesis.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .nonce(0xe9695792)
             .build();
 
         let uncle2_share2 = TestShareBlockBuilder::new()
-            .prev_share_blockhash(share1.block_hash().to_string())
+            .prev_share_blockhash(genesis.block_hash().to_string())
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .nonce(0xe9695793)
             .build();
@@ -517,26 +518,25 @@ mod chain_tests {
         // first orphan is a tip
         chain.add_share(uncle1_share2.clone(), true).unwrap();
         expected_tips.clear();
+        expected_tips.insert(share1.block_hash());
         expected_tips.insert(uncle1_share2.block_hash());
         assert_eq!(chain.store.get_tips(), expected_tips);
         assert_eq!(
             chain.store.get_total_work().unwrap(),
-            genesis_work + multiplied_compact_target_as_work(0x01e0377ae, 2) + genesis_work
-        ); // genesis (1) + share1 (2) + uncle1_share2 (1)
-        assert_eq!(chain.store.get_chain_tip(), uncle1_share2.block_hash());
+            genesis_work + multiplied_compact_target_as_work(0x01e0377ae, 2)
+        ); // genesis (1) + share1 (2)
+        assert_eq!(chain.store.get_chain_tip(), share1.block_hash());
 
         // second orphan is also a tip
         chain.add_share(uncle2_share2.clone(), true).unwrap();
-        expected_tips.clear();
-        expected_tips.insert(uncle1_share2.block_hash());
         expected_tips.insert(uncle2_share2.block_hash());
         assert_eq!(chain.store.get_tips(), expected_tips);
         assert_eq!(
             chain.store.get_total_work().unwrap(),
-            genesis_work + multiplied_compact_target_as_work(0x01e0377ae, 2) + genesis_work
-        ); // genesis (1) + share1 (2) + uncle1_share2 (1) [same diff uncles, only one is counted]
-        // chain tip doesn't change as uncle2_share2 has same difficulty as uncle1_share2
-        assert_eq!(chain.store.get_chain_tip(), uncle1_share2.block_hash());
+            genesis_work + multiplied_compact_target_as_work(0x01e0377ae, 2)
+        ); // genesis (1) + share1 (2)
+        // chain tip doesn't change as uncle2_share2 is an uncle of the tip
+        assert_eq!(chain.store.get_chain_tip(), share1.block_hash());
 
         // Create share2 with its uncles
         let share2 = TestShareBlockBuilder::new()
@@ -548,7 +548,7 @@ mod chain_tests {
 
         chain.add_share(share2.clone(), true).unwrap();
 
-        // two tips that will be future uncles and the chain tip
+        // share2 removes uncles as tips
         expected_tips.clear();
         expected_tips.insert(share2.block_hash());
         assert_eq!(chain.store.get_tips(), expected_tips);
@@ -559,55 +559,11 @@ mod chain_tests {
                 + multiplied_compact_target_as_work(0x01e0377ae, 2)
         ); // genesis (1) + share1 (2) + share2 (2) [both uncles not counted as they are removed from main chain]
         assert_eq!(chain.store.get_chain_tip(), share2.block_hash());
-        // Create uncles for share3
-        let uncle1_share3 = TestShareBlockBuilder::new()
-            .prev_share_blockhash(share2.block_hash().to_string())
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .nonce(0xe9695793)
-            .work(1)
-            .build();
 
-        let uncle2_share3 = TestShareBlockBuilder::new()
-            .prev_share_blockhash(share2.block_hash().to_string())
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .nonce(0xe9695794)
-            .work(1)
-            .build();
-
-        chain.add_share(uncle1_share3.clone(), true).unwrap();
-        expected_tips.clear();
-        expected_tips.insert(uncle1_share3.block_hash());
-
-        assert_eq!(chain.store.get_tips(), expected_tips);
-        // we only look at total difficulty for the highest work chain, which now is 1, 2, 3.1
-        assert_eq!(
-            chain.store.get_total_work().unwrap(),
-            genesis_work
-                + multiplied_compact_target_as_work(0x01e0377ae, 2)
-                + multiplied_compact_target_as_work(0x01e0377ae, 2)
-                + genesis_work
-        ); // genesis (1) + share1 (2) + share2 (2) + uncle1_share3 (1)
-        assert_eq!(chain.store.get_chain_tip(), uncle1_share3.block_hash());
-
-        chain.add_share(uncle2_share3.clone(), true).unwrap();
-        expected_tips.clear();
-        expected_tips.insert(uncle1_share3.block_hash());
-        expected_tips.insert(uncle2_share3.block_hash());
-
-        assert_eq!(chain.store.get_tips(), expected_tips);
-        // we only look at total work for the highest work chain, which now is 1, 2, 3.1 (not 3.2)
-        assert_eq!(
-            chain.store.get_total_work().unwrap(),
-            genesis_work
-                + multiplied_compact_target_as_work(0x01e0377ae, 2)
-                + multiplied_compact_target_as_work(0x01e0377ae, 2)
-                + genesis_work
-        ); // genesis (1) + share1 (2) + share2 (2) + uncle1_share3 (1)
-        assert_eq!(chain.store.get_chain_tip(), uncle1_share3.block_hash());
-        // Create share3 with its uncles
+        // Create share3 without uncles
         let share3 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share2.block_hash().to_string())
-            .uncles(vec![uncle1_share3.block_hash(), uncle2_share3.block_hash()])
+            .uncles(vec![])
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .work(3)
             .build();
@@ -628,29 +584,253 @@ mod chain_tests {
         ); // genesis (1) + share1 (2) + share2 (2) + share3 (3)
         assert_eq!(chain.store.get_chain_tip(), share3.block_hash());
 
+        // Create uncles for share4
+        let uncle1_share4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .nonce(0xe9695793)
+            .work(1)
+            .build();
+
+        let uncle2_share4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .nonce(0xe9695794)
+            .work(1)
+            .build();
+
+        chain.add_share(uncle1_share4.clone(), true).unwrap();
+        expected_tips.clear();
+        expected_tips.insert(uncle1_share4.block_hash());
+        expected_tips.insert(share3.block_hash());
+
+        assert_eq!(chain.store.get_tips(), expected_tips);
+        // we only look at total difficulty for the highest work chain, which now is 1, 2, 3.1
+        assert_eq!(
+            chain.store.get_total_work().unwrap(),
+            genesis_work
+                + multiplied_compact_target_as_work(0x01e0377ae, 2)
+                + multiplied_compact_target_as_work(0x01e0377ae, 2)
+                + multiplied_compact_target_as_work(0x01e0377ae, 3)
+        ); // genesis (1) + share1 (2) + share2 (2) + share3 (3)
+        assert_eq!(chain.store.get_chain_tip(), share3.block_hash());
+
+        chain.add_share(uncle2_share4.clone(), true).unwrap();
+        expected_tips.clear();
+        expected_tips.insert(uncle1_share4.block_hash());
+        expected_tips.insert(uncle2_share4.block_hash());
+        expected_tips.insert(share3.block_hash());
+
+        assert_eq!(chain.store.get_tips(), expected_tips);
+        // we only look at total work for the highest work chain, which now is 1, 2, 3.1 (not 3.2)
+        assert_eq!(
+            chain.store.get_total_work().unwrap(),
+            genesis_work
+                + multiplied_compact_target_as_work(0x01e0377ae, 2)
+                + multiplied_compact_target_as_work(0x01e0377ae, 2)
+                + multiplied_compact_target_as_work(0x01e0377ae, 3)
+        ); // genesis (1) + share1 (2) + share2 (2) + share3 (3)
+        assert_eq!(chain.store.get_chain_tip(), share3.block_hash());
+
+        // Get chain up to share1 - the entire chain
+        let (loaded_chain, loaded_tips) = chain.store.load_chain(genesis.block_hash()).unwrap();
+
+        // Chain should contain share3, share2, share1 and all uncles
+        assert_eq!(loaded_chain.len(), 8);
+        assert_eq!(loaded_tips.len(), 3);
+        assert!(loaded_chain.contains(&genesis.block_hash()));
+        assert!(loaded_chain.contains(&share1.block_hash()));
+        assert!(loaded_chain.contains(&uncle1_share2.block_hash()));
+        assert!(loaded_chain.contains(&uncle2_share2.block_hash()));
+        assert!(loaded_chain.contains(&share2.block_hash()));
+
+        assert!(loaded_tips.contains(&share3.block_hash()));
+        assert!(loaded_tips.contains(&uncle1_share4.block_hash()));
+        assert!(loaded_tips.contains(&uncle2_share4.block_hash()));
+
+        // Create share3 with uncles
+        let share4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share3.block_hash().to_string())
+            .uncles(vec![uncle1_share4.block_hash(), uncle2_share4.block_hash()])
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .work(4)
+            .build();
+
+        chain.add_share(share4.clone(), true).unwrap();
+        expected_tips.clear();
+        expected_tips.insert(share4.block_hash());
+
+        assert_eq!(chain.store.get_tips(), expected_tips);
+        // we only look at total work for the highest work chain, which now is 1, 2, 3.1 (not 3.2)
+        assert_eq!(
+            chain.store.get_total_work().unwrap(),
+            genesis_work
+                + multiplied_compact_target_as_work(0x01e0377ae, 2)
+                + multiplied_compact_target_as_work(0x01e0377ae, 2)
+                + multiplied_compact_target_as_work(0x01e0377ae, 3)
+                + multiplied_compact_target_as_work(0x01e0377ae, 4)
+        ); // genesis (1) + share1 (2) + share2 (2) + share3 (3) + share4 (4) 
+        assert_eq!(chain.store.get_chain_tip(), share4.block_hash());
+
         // Verify heights of all shares
         assert_eq!(
             chain.store.get_blockhashes_for_height(1),
-            vec![share1.block_hash()]
+            vec![
+                share1.block_hash(),
+                uncle1_share2.block_hash(),
+                uncle2_share2.block_hash()
+            ]
         );
 
         assert_eq!(
             chain.store.get_blockhashes_for_height(2),
-            vec![
-                uncle1_share2.block_hash(),
-                uncle2_share2.block_hash(),
-                share2.block_hash(),
-            ]
+            vec![share2.block_hash(),]
         );
 
         assert_eq!(
             chain.store.get_blockhashes_for_height(3),
             vec![
-                uncle1_share3.block_hash(),
-                uncle2_share3.block_hash(),
-                share3.block_hash()
+                share3.block_hash(),
+                uncle1_share4.block_hash(),
+                uncle2_share4.block_hash()
             ]
         );
+
+        assert_eq!(
+            chain.store.get_blockhashes_for_height(4),
+            vec![share4.block_hash(),]
+        );
+
+        // HERE
+
+        // Get chain up to share1 - the entire chain
+        let (loaded_chain, loaded_tips) = chain.store.load_chain(genesis.block_hash()).unwrap();
+
+        // Chain should contain share3, share2, share1 and all uncles
+        assert_eq!(loaded_chain.len(), 9);
+        assert_eq!(loaded_tips.len(), 1);
+        assert!(loaded_chain.contains(&share1.block_hash()));
+        assert!(loaded_chain.contains(&share2.block_hash()));
+        assert!(loaded_chain.contains(&share3.block_hash()));
+        assert!(loaded_chain.contains(&share4.block_hash()));
+        assert!(loaded_chain.contains(&uncle1_share2.block_hash()));
+        assert!(loaded_chain.contains(&uncle2_share2.block_hash()));
+
+        assert!(loaded_tips.contains(&share4.block_hash()));
+
+        // Get common ancestor of share3 and share2
+        let common_ancestor = chain
+            .store
+            .get_common_ancestor(&share3.block_hash(), &share2.block_hash());
+        assert_eq!(common_ancestor, Some(share1.block_hash()));
+
+        // Get common ancestor of share4 and uncle1_share2
+        let common_ancestor = chain
+            .store
+            .get_common_ancestor(&share3.block_hash(), &uncle1_share2.block_hash());
+        assert_eq!(common_ancestor, Some(genesis.block_hash()));
+
+        // Get chain up to genesis
+        let chain_to_uncle = chain
+            .store
+            .get_shares_from_tip_to_blockhash(&genesis.block_hash())
+            .unwrap();
+        assert_eq!(chain_to_uncle.len(), 9);
+
+        // Get chain up to share2 - should get share4, share3, uncle1_share4 and uncle2_share4
+        let chain_to_uncle = chain
+            .store
+            .get_shares_from_tip_to_blockhash(&share2.block_hash())
+            .unwrap();
+        assert_eq!(chain_to_uncle.len(), 5);
+        assert!(chain_to_uncle.contains(&share4));
+        assert!(chain_to_uncle.contains(&share3));
+        assert!(chain_to_uncle.contains(&share2));
+        assert!(chain_to_uncle.contains(&uncle1_share4));
+        assert!(chain_to_uncle.contains(&uncle2_share4));
+
+        // Verify uncles of share2
+        let uncles_share2 = chain.store.get_uncles(&share2.block_hash());
+        assert_eq!(uncles_share2.len(), 2);
+        assert!(
+            uncles_share2
+                .iter()
+                .any(|u| u.header.bitcoin_header.block_hash()
+                    == uncle1_share2.header.bitcoin_header.block_hash())
+        );
+        assert!(
+            uncles_share2
+                .iter()
+                .any(|u| u.header.bitcoin_header.block_hash()
+                    == uncle2_share2.header.bitcoin_header.block_hash())
+        );
+
+        // Verify uncles of share4
+        let uncles_share4 = chain.store.get_uncles(&share4.block_hash());
+        assert_eq!(uncles_share4.len(), 2);
+        assert!(
+            uncles_share4
+                .iter()
+                .any(|u| u.header.bitcoin_header.block_hash()
+                    == uncle1_share4.header.bitcoin_header.block_hash())
+        );
+        assert!(
+            uncles_share4
+                .iter()
+                .any(|u| u.header.bitcoin_header.block_hash()
+                    == uncle2_share4.header.bitcoin_header.block_hash())
+        );
+
+        // Verify children of genesis
+        let children_genesis = chain
+            .store
+            .get_children_blockhashes(&genesis.block_hash())
+            .unwrap()
+            .unwrap();
+        assert_eq!(children_genesis.len(), 3);
+        assert!(children_genesis.contains(&share1.block_hash()));
+        assert!(children_genesis.contains(&uncle1_share2.block_hash()));
+        assert!(children_genesis.contains(&uncle2_share2.block_hash()));
+
+        // Verify children of share2
+        let children_share2 = chain
+            .store
+            .get_children_blockhashes(&share2.block_hash())
+            .unwrap()
+            .unwrap();
+        assert_eq!(children_share2.len(), 3);
+        assert!(children_share2.contains(&share3.block_hash()));
+        assert!(children_share2.contains(&uncle1_share4.block_hash()));
+        assert!(children_share2.contains(&uncle2_share4.block_hash()));
+
+        // Verify children of share3
+        let children_share3 = chain
+            .store
+            .get_children_blockhashes(&share3.block_hash())
+            .unwrap()
+            .unwrap();
+        assert_eq!(children_share3.len(), 1);
+        assert!(children_share3.contains(&share4.block_hash()));
+
+        // Verify children of uncle1_share2
+        let children_uncle1_share2 = chain
+            .store
+            .get_children_blockhashes(&uncle1_share2.block_hash())
+            .unwrap()
+            .unwrap();
+        assert_eq!(children_uncle1_share2.len(), 1);
+        assert!(children_uncle1_share2.contains(&share2.block_hash()));
+
+        // Verify children of uncle2_share2
+        let children_uncle2_share2 = chain
+            .store
+            .get_children_blockhashes(&uncle2_share2.block_hash())
+            .unwrap()
+            .unwrap();
+        assert_eq!(children_uncle2_share2.len(), 1);
+        assert!(children_uncle2_share2.contains(&share2.block_hash()));
+
+        // HERE END
     }
 
     #[test]
