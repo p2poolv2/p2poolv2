@@ -23,6 +23,7 @@ use p2poolv2_lib::config::ApiConfig;
 use p2poolv2_lib::shares::chain::chain_store::ChainStore;
 use p2poolv2_lib::shares::share_block::ShareBlock;
 use p2poolv2_lib::store::Store;
+use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
 use reqwest::{Client, header};
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -42,10 +43,14 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
         bitcoin::Network::Signet,
     ));
 
+    let tracker_handle = start_tracker_actor();
     // Start metrics actor
-    let metrics_handle = start_metrics(temp_dir.path().to_str().unwrap().to_string())
-        .await
-        .map_err(|e| ApiError::ServerError(e.to_string()))?;
+    let metrics_handle = start_metrics(
+        temp_dir.path().to_str().unwrap().to_string(),
+        tracker_handle,
+    )
+    .await
+    .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
     let api_config = ApiConfig {
         hostname: "127.0.0.1".into(),
@@ -55,9 +60,15 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
     };
 
     // Start API server with the new signature
-    let shutdown_tx = start_api_server(api_config.clone(), chain_store.clone(), metrics_handle)
-        .await
-        .map_err(|e| ApiError::ServerError(e.to_string()))?;
+    let shutdown_tx = start_api_server(
+        api_config.clone(),
+        chain_store.clone(),
+        metrics_handle,
+        8,
+        bitcoin::Network::Signet,
+    )
+    .await
+    .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
     // Give server a moment to start
     sleep(Duration::from_millis(500)).await;
@@ -113,11 +124,14 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
         genesis_block,
         bitcoin::Network::Signet,
     ));
-
+    let tracker_handle = start_tracker_actor();
     // Start metrics actor
-    let metrics_handle = start_metrics(temp_dir.path().to_str().unwrap().to_string())
-        .await
-        .map_err(|e| ApiError::ServerError(e.to_string()))?;
+    let metrics_handle = start_metrics(
+        temp_dir.path().to_str().unwrap().to_string(),
+        tracker_handle,
+    )
+    .await
+    .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
     // Known test credentials from gen_auth with fixed salt
     // Generated with: gen_auth testuser testpassword
@@ -137,9 +151,15 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
     };
 
     // Start API server with authentication
-    let shutdown_tx = start_api_server(api_config.clone(), chain_store.clone(), metrics_handle)
-        .await
-        .map_err(|e| ApiError::ServerError(e.to_string()))?;
+    let shutdown_tx = start_api_server(
+        api_config.clone(),
+        chain_store.clone(),
+        metrics_handle,
+        8,
+        bitcoin::Network::Signet,
+    )
+    .await
+    .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
     // Give server a moment to start
     sleep(Duration::from_millis(500)).await;
@@ -236,9 +256,12 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
         bitcoin::Network::Signet,
     ));
 
+    // Start tracker actor
+    let tracker_handle = start_tracker_actor();
     // Start metrics actor
     let metrics_handle = p2poolv2_lib::accounting::stats::metrics::start_metrics(
         temp_dir.path().to_str().unwrap().to_string(),
+        tracker_handle,
     )
     .await
     .map_err(|e| ApiError::ServerError(e.to_string()))?;
@@ -252,10 +275,15 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
     };
 
     // Start API server
-    let shutdown_tx =
-        p2poolv2_api::start_api_server(api_config.clone(), chain_store.clone(), metrics_handle)
-            .await
-            .map_err(|e| ApiError::ServerError(e.to_string()))?;
+    let shutdown_tx = p2poolv2_api::start_api_server(
+        api_config.clone(),
+        chain_store.clone(),
+        metrics_handle,
+        8,
+        bitcoin::Network::Signet,
+    )
+    .await
+    .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
     sleep(Duration::from_millis(500)).await;
 
@@ -347,9 +375,12 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
         bitcoin::Network::Signet,
     ));
 
+    // Start tracker actor
+    let tracker_handle = start_tracker_actor();
     // Start metrics actor
     let metrics_handle = p2poolv2_lib::accounting::stats::metrics::start_metrics(
         temp_dir.path().to_str().unwrap().to_string(),
+        tracker_handle,
     )
     .await
     .map_err(|e| ApiError::ServerError(e.to_string()))?;
@@ -363,10 +394,15 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
     };
 
     // Start API server
-    let shutdown_tx =
-        p2poolv2_api::start_api_server(api_config.clone(), chain_store.clone(), metrics_handle)
-            .await
-            .map_err(|e| ApiError::ServerError(e.to_string()))?;
+    let shutdown_tx = p2poolv2_api::start_api_server(
+        api_config.clone(),
+        chain_store.clone(),
+        metrics_handle,
+        8,
+        bitcoin::Network::Signet,
+    )
+    .await
+    .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
     sleep(Duration::from_millis(500)).await;
 
@@ -454,9 +490,11 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
         bitcoin::Network::Signet,
     ));
 
+    let tracker_handle = start_tracker_actor();
     // Start metrics actor
     let metrics_handle = p2poolv2_lib::accounting::stats::metrics::start_metrics(
         temp_dir.path().to_str().unwrap().to_string(),
+        tracker_handle,
     )
     .await
     .map_err(|e| ApiError::ServerError(e.to_string()))?;
@@ -470,10 +508,15 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
     };
 
     // Start API server
-    let shutdown_tx =
-        p2poolv2_api::start_api_server(api_config.clone(), chain_store.clone(), metrics_handle)
-            .await
-            .map_err(|e| ApiError::ServerError(e.to_string()))?;
+    let shutdown_tx = p2poolv2_api::start_api_server(
+        api_config.clone(),
+        chain_store.clone(),
+        metrics_handle,
+        8,
+        bitcoin::Network::Signet,
+    )
+    .await
+    .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
     sleep(Duration::from_millis(500)).await;
 
