@@ -1162,7 +1162,9 @@ impl Store {
     }
 
     /// Find the shares from the given share up to depth from that share
-    /// Returns a chain of blockhashes from start going backward (newest to oldest)
+    ///
+    /// Returns a chain of blockhashes starting from start and going
+    /// backward up to depth ancestors (newest to oldest)
     fn find_chain_for_depth(
         &self,
         start: &BlockHash,
@@ -1172,9 +1174,6 @@ impl Store {
         let mut current = *start;
         let mut remaining_depth = depth;
 
-        // Add the start block
-        results.push(current);
-
         // Walk backward through the parent chain
         while remaining_depth > 0 {
             // Get the share to find its parent
@@ -1182,12 +1181,13 @@ impl Store {
                 Some(share) => {
                     let parent = share.header.prev_share_blockhash;
 
+                    results.push(current);
+
                     // Check if we've reached genesis (parent is all zeros)
                     if parent == BlockHash::all_zeros() {
                         break;
                     }
 
-                    results.push(parent);
                     current = parent;
                     remaining_depth -= 1;
                 }
@@ -3661,14 +3661,13 @@ mod tests {
         // Test finding chain from tip with depth 5
         let chain = store.find_chain_for_depth(&blocks[9], 5).unwrap();
 
-        // Should return blocks 9, 8, 7, 6, 5, 4 (from newest to oldest)
-        assert_eq!(chain.len(), 6);
+        // Should return blocks 9, 8, 7, 6, 5 (from newest to oldest)
+        assert_eq!(chain.len(), 5);
         assert_eq!(chain[0], blocks[9]);
         assert_eq!(chain[1], blocks[8]);
         assert_eq!(chain[2], blocks[7]);
         assert_eq!(chain[3], blocks[6]);
         assert_eq!(chain[4], blocks[5]);
-        assert_eq!(chain[5], blocks[4]);
 
         // Test finding chain with depth greater than chain length
         let chain = store.find_chain_for_depth(&blocks[5], 10).unwrap();
