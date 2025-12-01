@@ -36,7 +36,7 @@ pub mod column_families;
 mod pplns_shares;
 pub mod user;
 
-const COMMON_ANCESTOR_DEPTH: u32 = 2160; // 6 shares per minuted * 60 * 6 hours.
+const COMMON_ANCESTOR_DEPTH: u32 = 2160; // 6 shares per minute * 60 * 6 hours.
 
 /// A store for share blocks.
 /// RocksDB as is used as the underlying database.
