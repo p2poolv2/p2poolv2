@@ -439,7 +439,7 @@ impl Store {
         blockhash: &BlockHash,
     ) -> Result<Option<Vec<BlockHash>>, Box<dyn Error + Send + Sync>> {
         let block_index_cf = self.db.cf_handle(&ColumnFamily::BlockIndex).unwrap();
-        let mut blockhash_bytes = bitcoin::consensus::serialize(blockhash);
+        let mut blockhash_bytes = consensus::serialize(blockhash);
         blockhash_bytes.extend_from_slice(b"_bi");
 
         match self
@@ -477,7 +477,7 @@ impl Store {
         );
 
         let block_index_cf = self.db.cf_handle(&ColumnFamily::BlockIndex).unwrap();
-        let mut prev_blockhash_bytes = bitcoin::consensus::serialize(prev_blockhash);
+        let mut prev_blockhash_bytes = consensus::serialize(prev_blockhash);
         prev_blockhash_bytes.extend_from_slice(b"_bi");
 
         // Serialize the single BlockHash to merge
@@ -674,7 +674,7 @@ impl Store {
         bytes_suffix: &[u8],
         column_family: ColumnFamily,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let mut blockhash_bytes = bitcoin::consensus::serialize(blockhash);
+        let mut blockhash_bytes = consensus::serialize(blockhash);
         blockhash_bytes.extend_from_slice(bytes_suffix);
 
         let mut serialized_txids = Vec::new();
@@ -687,7 +687,7 @@ impl Store {
     /// Get all transaction IDs for a given block hash
     /// Returns a vector of transaction IDs that were included in the block
     fn get_txids_for_blockhash(&self, blockhash: &BlockHash, column_family: ColumnFamily) -> Txids {
-        let mut blockhash_bytes = bitcoin::consensus::serialize(blockhash);
+        let mut blockhash_bytes = consensus::serialize(blockhash);
         let suffix_bytes: &[u8] = if column_family == ColumnFamily::BlockTxids {
             b"_txids"
         } else {
@@ -849,7 +849,7 @@ impl Store {
         let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
         let keys = blockhashes
             .iter()
-            .map(|h| (&share_cf, bitcoin::consensus::serialize(h)))
+            .map(|h| (&share_cf, consensus::serialize(h)))
             .collect::<Vec<_>>();
         let shares = self.db.multi_get_cf(keys);
         let share_headers = shares
@@ -875,7 +875,7 @@ impl Store {
         for blockhash in locator {
             if self
                 .db
-                .key_may_exist_cf(&block_cf, bitcoin::consensus::serialize(blockhash))
+                .key_may_exist_cf(&block_cf, consensus::serialize(blockhash))
             {
                 return Some(*blockhash);
             }
@@ -988,7 +988,7 @@ impl Store {
         let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
         let keys = blockhashes
             .iter()
-            .map(|h| (&share_cf, bitcoin::consensus::serialize(h)))
+            .map(|h| (&share_cf, consensus::serialize(h)))
             .collect::<Vec<_>>();
         let shares = self.db.multi_get_cf(keys);
         // iterate over the blockhashes and shares, filter out the ones that are not found or can't be deserialized
@@ -1273,7 +1273,7 @@ impl Store {
     ) -> Result<BlockMetadata, Box<dyn Error + Send + Sync>> {
         let block_metadata_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
 
-        let mut metadata_key = bitcoin::consensus::serialize(blockhash);
+        let mut metadata_key = consensus::serialize(blockhash);
         metadata_key.extend_from_slice(b"_md");
 
         match self.db.get_cf::<&[u8]>(&block_metadata_cf, &metadata_key) {
@@ -1296,7 +1296,7 @@ impl Store {
             .filter(|&hash| {
                 !self
                     .db
-                    .key_may_exist_cf(&block_cf, bitcoin::consensus::serialize(hash))
+                    .key_may_exist_cf(&block_cf, consensus::serialize(hash))
             })
             .cloned()
             .collect()
@@ -1311,7 +1311,7 @@ impl Store {
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let block_metadata_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
 
-        let mut metadata_key = bitcoin::consensus::serialize(blockhash);
+        let mut metadata_key = consensus::serialize(blockhash);
         metadata_key.extend_from_slice(b"_md");
 
         let mut serialized = Vec::new();
