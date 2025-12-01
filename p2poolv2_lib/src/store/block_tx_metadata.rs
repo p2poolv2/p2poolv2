@@ -75,10 +75,6 @@ impl Decodable for TxMetadata {
 pub struct BlockMetadata {
     /// Height of the block, this is also tracked in BlockHeight index
     pub height: Option<u32>,
-    /// Validation status of the block in the share chain
-    pub is_valid: bool,
-    /// Is the block on the main chain or not
-    pub is_on_main_chain: bool,
     /// Total chain work up to the share block
     pub chain_work: Work,
 }
@@ -102,8 +98,6 @@ impl Encodable for BlockMetadata {
             }
         }
 
-        len += self.is_valid.consensus_encode(w)?;
-        len += self.is_on_main_chain.consensus_encode(w)?;
         len += self.chain_work.to_le_bytes().consensus_encode(w)?;
         Ok(len)
     }
@@ -121,15 +115,8 @@ impl Decodable for BlockMetadata {
             None
         };
 
-        let is_valid = bool::consensus_decode(r)?;
-        let on_main_chain = bool::consensus_decode(r)?;
         let chain_work = Work::from_le_bytes(<[u8; 32]>::consensus_decode(r)?);
 
-        Ok(BlockMetadata {
-            height,
-            is_valid,
-            is_on_main_chain: on_main_chain,
-            chain_work,
-        })
+        Ok(BlockMetadata { height, chain_work })
     }
 }

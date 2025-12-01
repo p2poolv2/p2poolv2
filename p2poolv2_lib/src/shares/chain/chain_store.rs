@@ -72,7 +72,7 @@ impl ChainStore {
     pub fn add_share(
         &self,
         share: ShareBlock,
-        on_main_chain: bool,
+        confirm_txs: bool,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         debug!("Adding share to chain: {:?}", share);
 
@@ -117,7 +117,7 @@ impl ChainStore {
             share.clone(),
             new_height,
             new_chain_work,
-            on_main_chain,
+            confirm_txs,
             &mut batch,
         )?;
 
@@ -185,7 +185,7 @@ impl ChainStore {
     }
 
     /// Reorg the chain to the new share
-    /// Changes tip and updates metadata for shares to update the is_on_main_chain flag
+    /// Changes tip
     /// TODO: Update metadata flag
     fn reorg(
         &self,
@@ -198,11 +198,6 @@ impl ChainStore {
         let reorged_out_chain = self
             .store
             .get_shares_from_tip_to_blockhash(&share.header.prev_share_blockhash)?;
-
-        for reorged in reorged_out_chain.iter() {
-            self.store
-                .set_block_on_main_chain(&reorged.block_hash(), false, batch)?;
-        }
 
         self.store.set_chain_tip(share.block_hash());
         Ok(())
@@ -345,7 +340,6 @@ impl ChainStore {
             tips
         );
         share_block.header.prev_share_blockhash = chain_tip;
-        // TODO: Limit tips to uncles to BLOCK MAX DEPTH depth
         share_block.header.uncles = tips.into_iter().collect();
         share_block
     }
@@ -428,7 +422,7 @@ mock! {
         pub fn get_tips(&self) -> HashSet<BlockHash>;
         pub fn reorg(&self, share_block: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn is_confirmed(&self, share_block: ShareBlock) -> Result<bool, Box<dyn Error + Send + Sync>>;
-        pub fn add_share(&self, share_block: ShareBlock, on_main_chain: bool) -> Result<(), Box<dyn Error + Send + Sync>>;
+        pub fn add_share(&self, share_block: ShareBlock, confirm_txs: bool) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub fn get_chain_tip(&self) -> Option<BlockHash>;
         pub fn get_chain_tip_and_uncles(&self) -> (BlockHash, HashSet<BlockHash>);
@@ -720,13 +714,15 @@ mod chain_tests {
         // Get common ancestor of share3 and share2
         let common_ancestor = chain
             .store
-            .get_common_ancestor(&share3.block_hash(), &share2.block_hash());
-        assert_eq!(common_ancestor, Some(share1.block_hash()));
+            .get_common_ancestor(&share3.block_hash(), &share2.block_hash())
+            .unwrap();
+        assert_eq!(common_ancestor, Some(share2.block_hash()));
 
         // Get common ancestor of share4 and uncle1_share2
         let common_ancestor = chain
             .store
-            .get_common_ancestor(&share3.block_hash(), &uncle1_share2.block_hash());
+            .get_common_ancestor(&share3.block_hash(), &uncle1_share2.block_hash())
+            .unwrap();
         assert_eq!(common_ancestor, Some(genesis.block_hash()));
 
         // Get chain up to genesis
