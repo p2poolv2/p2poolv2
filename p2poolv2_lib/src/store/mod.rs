@@ -20,7 +20,7 @@ use crate::store::block_tx_metadata::{BlockMetadata, TxMetadata};
 use crate::store::column_families::ColumnFamily;
 use crate::store::user::StoredUser;
 use crate::utils::snowflake_simplified::get_next_id;
-use bitcoin::consensus::{Encodable, encode};
+use bitcoin::consensus::{self, Encodable, encode};
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, OutPoint, Transaction, Txid, Work};
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
@@ -35,6 +35,8 @@ mod block_tx_metadata;
 pub mod column_families;
 mod pplns_shares;
 pub mod user;
+
+const COMMON_ANCESTOR_DEPTH: u32 = 2160; // 6 shares per minuted * 60 * 6 hours.
 
 /// A store for share blocks.
 /// RocksDB as is used as the underlying database.
@@ -305,7 +307,7 @@ impl Store {
         share: ShareBlock,
         height: u32,
         chain_work: Work,
-        on_main_chain: bool,
+        confirm_txs: bool,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let blockhash = share.block_hash();
@@ -317,7 +319,7 @@ impl Store {
         );
 
         // Store transactions and get their metadata
-        let txs_metadata = self.add_sharechain_txs(&share.transactions, on_main_chain, batch)?;
+        let txs_metadata = self.add_sharechain_txs(&share.transactions, confirm_txs, batch)?;
 
         let txids = Txids(txs_metadata.iter().map(|t| t.txid).collect());
         // Store block -> txids index
@@ -356,8 +358,6 @@ impl Store {
         self.set_height_to_blockhash(&blockhash, height, batch)?;
         let block_metadata = BlockMetadata {
             height: Some(height),
-            is_on_main_chain: on_main_chain,
-            is_valid: false,
             chain_work,
         };
         self.set_block_metadata(&blockhash, &block_metadata, batch)?;
@@ -1161,60 +1161,69 @@ impl Store {
         Ok(all_shares)
     }
 
-    /// Find the first ancestor of a blockhash that is on the main chain
-    /// Returns the blockhash and its height, or None if no ancestor is on main chain
-    fn find_main_chain_ancestor(&self, start: &BlockHash) -> (Option<BlockHash>, Option<u32>) {
-        let mut current = Some(*start);
-        let mut height_found: Option<u32> = None;
+    /// Find the shares from the given share up to depth from that share
+    /// Returns a chain of blockhashes from start going backward (newest to oldest)
+    fn find_chain_for_depth(
+        &self,
+        start: &BlockHash,
+        depth: u32,
+    ) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
+        let mut results = Vec::new();
+        let mut current = *start;
+        let mut remaining_depth = depth;
 
-        while let Some(blockhash) = current
-            && height_found.is_none()
-        {
-            match self.get_block_metadata(&blockhash) {
-                Ok(metadata) => {
-                    if metadata.is_on_main_chain {
-                        if let Some(height) = metadata.height {
-                            height_found = Some(height);
-                        } else {
-                            break;
-                        }
+        // Add the start block
+        results.push(current);
+
+        // Walk backward through the parent chain
+        while remaining_depth > 0 {
+            // Get the share to find its parent
+            match self.get_share(&current) {
+                Some(share) => {
+                    let parent = share.header.prev_share_blockhash;
+
+                    // Check if we've reached genesis (parent is all zeros)
+                    if parent == BlockHash::all_zeros() {
+                        break;
                     }
-                    // Get parent and continue searching
-                    current = self
-                        .get_share(&blockhash)
-                        .map(|share| share.header.prev_share_blockhash);
+
+                    results.push(parent);
+                    current = parent;
+                    remaining_depth -= 1;
                 }
-                Err(e) => {
+                None => {
+                    // Can't find share, stop here
                     break;
                 }
             }
         }
-        (current, height_found)
+
+        Ok(results)
     }
 
     /// Get common ancestor of two blockhashes
+    /// We first find chain from each blockhashes provided and then find the common ancestor
     pub fn get_common_ancestor(
         &self,
         blockhash1: &BlockHash,
         blockhash2: &BlockHash,
-    ) -> Option<BlockHash> {
-        // Find first ancestor of each blockhash on main chain
-        let (hash1, height1) = self.find_main_chain_ancestor(blockhash1);
-        let (hash2, height2) = self.find_main_chain_ancestor(blockhash2);
+    ) -> Result<Option<BlockHash>, Box<dyn Error + Send + Sync>> {
+        // Get chains up to COMMON_ANCESTOR_DEPTH (ordered from newest to oldest)
+        let chain1 = self.find_chain_for_depth(blockhash1, COMMON_ANCESTOR_DEPTH)?;
+        let chain2 = self.find_chain_for_depth(blockhash2, COMMON_ANCESTOR_DEPTH)?;
 
-        debug!(
-            "Ancestor1: {:?} at height {:?}, Ancestor2: {:?} at height {:?}",
-            hash1, height1, hash2, height2
-        );
+        // Build a set from chain1 for O(1) lookup
+        let chain1_set: HashSet<BlockHash> = chain1.into_iter().collect();
 
-        // Return the one with lower height
-        if height1.is_none() && height2.is_none() {
-            None
-        } else if height1 <= height2 {
-            hash1
-        } else {
-            hash2
+        // Find first common blockhash by iterating chain2
+        // chain2 is ordered from newest to oldest, so first match is the most recent common ancestor
+        for blockhash in chain2 {
+            if chain1_set.contains(&blockhash) {
+                return Ok(Some(blockhash));
+            }
         }
+
+        Ok(None)
     }
 
     /// Set the height for the blockhash, storing it in a vector of blockhashes for that height
@@ -1319,53 +1328,7 @@ impl Store {
         valid: bool,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let metadata = self.get_block_metadata(blockhash)?;
-
-        let updated_metadata = BlockMetadata {
-            is_valid: valid,
-            is_on_main_chain: metadata.is_on_main_chain,
-            height: metadata.height,
-            chain_work: metadata.chain_work,
-        };
-
-        self.set_block_metadata(blockhash, &updated_metadata, batch)
-    }
-
-    /// Mark a block as confirmed in the store
-    pub fn set_block_on_main_chain(
-        &self,
-        blockhash: &BlockHash,
-        on_main_chain: bool,
-        batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let metadata = self.get_block_metadata(blockhash)?;
-
-        let updated_metadata = BlockMetadata {
-            is_valid: metadata.is_valid,
-            is_on_main_chain: on_main_chain,
-            height: metadata.height,
-            chain_work: metadata.chain_work,
-        };
-
-        self.set_block_metadata(blockhash, &updated_metadata, batch)
-    }
-
-    pub fn set_block_height_in_metadata(
-        &self,
-        blockhash: &BlockHash,
-        height: Option<u32>,
-        batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let metadata = self.get_block_metadata(blockhash)?;
-
-        let updated_metadata = BlockMetadata {
-            is_valid: metadata.is_valid,
-            is_on_main_chain: metadata.is_on_main_chain,
-            height,
-            chain_work: metadata.chain_work,
-        };
-        debug!("Setting block metadata: {:?}", updated_metadata);
-        self.set_block_metadata(blockhash, &updated_metadata, batch)
+        Ok(()) // TODO
     }
 
     /// Get genesis block hash from chain state
@@ -2260,74 +2223,6 @@ mod tests {
     }
 
     #[test]
-    fn test_block_status_operations() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        // Create test block
-        let share = TestShareBlockBuilder::new().build();
-
-        let mut batch = rocksdb::WriteBatch::default();
-
-        // Add share to store
-        store
-            .add_share(share.clone(), 0, share.header.get_work(), false, &mut batch)
-            .unwrap();
-
-        store.commit_batch(batch).unwrap();
-
-        let blockhash = share.block_hash();
-
-        // Initially, block should not be valid or confirmed
-        let metadata = store.get_block_metadata(&blockhash).unwrap();
-        assert!(!metadata.is_valid);
-        assert!(!metadata.is_on_main_chain);
-        assert_eq!(metadata.height, Some(0));
-
-        let mut batch = rocksdb::WriteBatch::default();
-        // Set block as valid
-        store.set_block_valid(&blockhash, true, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-
-        let metadata = store.get_block_metadata(&blockhash).unwrap();
-        assert!(metadata.is_valid);
-        assert!(!metadata.is_on_main_chain);
-
-        let mut batch = rocksdb::WriteBatch::default();
-        // Set block as confirmed
-        store
-            .set_block_on_main_chain(&blockhash, true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        let metadata = store.get_block_metadata(&blockhash).unwrap();
-        assert!(metadata.is_valid);
-        assert!(metadata.is_on_main_chain);
-
-        let mut batch = rocksdb::WriteBatch::default();
-        // Reset block's valid status
-        store
-            .set_block_valid(&blockhash, false, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        let metadata = store.get_block_metadata(&blockhash).unwrap();
-        assert!(!metadata.is_valid);
-        assert!(metadata.is_on_main_chain);
-
-        let mut batch = rocksdb::WriteBatch::default();
-        // Reset block's confirmed status
-        store
-            .set_block_on_main_chain(&blockhash, false, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        let metadata = store.get_block_metadata(&blockhash).unwrap();
-        assert!(!metadata.is_valid);
-        assert!(!metadata.is_on_main_chain);
-    }
-
-    #[test]
     fn test_block_status_for_nonexistent_block() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
@@ -2341,138 +2236,6 @@ mod tests {
         // Status checks should return false for non-existent blocks
         let metadata = store.get_block_metadata(&nonexistent_blockhash);
         assert!(metadata.is_err());
-    }
-
-    #[test]
-    fn test_multiple_block_status_updates() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        // Create multiple test blocks
-        let share1 = TestShareBlockBuilder::new().build();
-
-        let share2 = TestShareBlockBuilder::new()
-            .prev_share_blockhash(share1.block_hash().to_string())
-            .build();
-
-        let mut batch = rocksdb::WriteBatch::default();
-
-        // Add shares to store
-        store
-            .add_share(
-                share1.clone(),
-                0,
-                share1.header.get_work(),
-                false,
-                &mut batch,
-            )
-            .unwrap();
-        store
-            .add_share(
-                share2.clone(),
-                1,
-                share1.header.get_work() + share2.header.get_work(),
-                true,
-                &mut batch,
-            )
-            .unwrap();
-
-        store.commit_batch(batch).unwrap();
-
-        let blockhash1 = share1.block_hash();
-        let blockhash2 = share2.block_hash();
-
-        let mut batch = rocksdb::WriteBatch::default();
-        // Set status
-        store
-            .set_block_valid(&blockhash1, true, &mut batch)
-            .unwrap();
-        store
-            .set_block_on_main_chain(&blockhash2, true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Verify each block has the correct status
-        let metadata1 = store.get_block_metadata(&blockhash1).unwrap();
-        let metadata2 = store.get_block_metadata(&blockhash2).unwrap();
-        assert!(metadata1.is_valid);
-        assert!(!metadata1.is_on_main_chain);
-        assert!(!metadata2.is_valid);
-        assert!(metadata2.is_on_main_chain);
-
-        let mut batch = rocksdb::WriteBatch::default();
-        // Update statuses
-        store
-            .set_block_valid(&blockhash1, false, &mut batch)
-            .unwrap();
-        store
-            .set_block_on_main_chain(&blockhash2, false, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        let updated_metadata1 = store.get_block_metadata(&blockhash1).unwrap();
-        let updated_metadata2 = store.get_block_metadata(&blockhash2).unwrap();
-
-        // Verify updated statuses
-        assert!(!updated_metadata1.is_valid);
-        assert!(!updated_metadata2.is_on_main_chain);
-    }
-
-    #[test]
-    fn test_set_and_get_block_height_in_metadata() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        // Create a test block
-        let share = TestShareBlockBuilder::new().build();
-
-        let blockhash = share.block_hash();
-
-        let mut batch = rocksdb::WriteBatch::default();
-
-        // Add share to store without setting height in metadata
-        store
-            .add_share(share.clone(), 0, share.header.get_work(), true, &mut batch)
-            .unwrap();
-
-        store.commit_batch(batch).unwrap();
-
-        // Height should be set during add_share
-        let metadata = store.get_block_metadata(&blockhash).unwrap();
-        assert_eq!(metadata.height, Some(0));
-
-        let mut batch = rocksdb::WriteBatch::default();
-        // Update the height to a different value
-        store
-            .set_block_height_in_metadata(&blockhash, Some(42), &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Verify height is updated correctly
-        let updated_metadata = store.get_block_metadata(&blockhash).unwrap();
-        assert_eq!(updated_metadata.height, Some(42));
-
-        let mut batch = rocksdb::WriteBatch::default();
-        // Remove height by setting to None
-        store
-            .set_block_height_in_metadata(&blockhash, None, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Verify height is removed
-        let metadata_without_height = store.get_block_metadata(&blockhash).unwrap();
-        assert_eq!(metadata_without_height.height, None);
-
-        // Test with batch operation
-        let mut batch = rocksdb::WriteBatch::default();
-        store
-            .set_block_height_in_metadata(&blockhash, Some(100), &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Verify batch operation worked
-        let batch_updated_metadata = store.get_block_metadata(&blockhash).unwrap();
-        assert_eq!(batch_updated_metadata.height, Some(100));
     }
 
     #[test]
@@ -3863,5 +3626,269 @@ mod tests {
         let hashes_200 = store.get_blockhashes_for_height(200);
         assert_eq!(hashes_200.len(), 1);
         assert!(hashes_200.contains(&hash2));
+    }
+
+    #[test]
+    fn test_find_chain_for_depth_linear_chain() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create a linear chain of 10 blocks
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(genesis.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut prev_hash = genesis.block_hash();
+        let mut blocks = vec![genesis.block_hash()];
+
+        for i in 1..10 {
+            let share = TestShareBlockBuilder::new()
+                .prev_share_blockhash(prev_hash.to_string())
+                .nonce(0xe9695791 + i)
+                .build();
+
+            let mut batch = Store::get_write_batch();
+            store
+                .add_share(share.clone(), i, share.header.get_work(), true, &mut batch)
+                .unwrap();
+            store.commit_batch(batch).unwrap();
+
+            blocks.push(share.block_hash());
+            prev_hash = share.block_hash();
+        }
+
+        // Test finding chain from tip with depth 5
+        let chain = store.find_chain_for_depth(&blocks[9], 5).unwrap();
+
+        // Should return blocks 9, 8, 7, 6, 5, 4 (from newest to oldest)
+        assert_eq!(chain.len(), 6);
+        assert_eq!(chain[0], blocks[9]);
+        assert_eq!(chain[1], blocks[8]);
+        assert_eq!(chain[2], blocks[7]);
+        assert_eq!(chain[3], blocks[6]);
+        assert_eq!(chain[4], blocks[5]);
+        assert_eq!(chain[5], blocks[4]);
+
+        // Test finding chain with depth greater than chain length
+        let chain = store.find_chain_for_depth(&blocks[5], 10).unwrap();
+
+        // Should return blocks 5, 4, 3, 2, 1, 0 (6 blocks total)
+        assert_eq!(chain.len(), 6);
+        assert_eq!(chain[0], blocks[5]);
+        assert_eq!(chain[5], blocks[0]);
+
+        // Test finding chain from genesis
+        let chain = store.find_chain_for_depth(&blocks[0], 5).unwrap();
+
+        // Should return only genesis (height 0, depth 0)
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0], blocks[0]);
+    }
+
+    #[test]
+    fn test_get_common_ancestor_linear_chain() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create a linear chain: genesis -> share1 -> share2 -> share3
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(genesis.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                share1.clone(),
+                1,
+                share1.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                share2.clone(),
+                2,
+                share2.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                share3.clone(),
+                3,
+                share3.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Test common ancestor of share3 and share2
+        let ancestor = store
+            .get_common_ancestor(&share3.block_hash(), &share2.block_hash())
+            .unwrap();
+        assert_eq!(ancestor, Some(share2.block_hash()));
+
+        // Test common ancestor of share3 and share1
+        let ancestor = store
+            .get_common_ancestor(&share3.block_hash(), &share1.block_hash())
+            .unwrap();
+        assert_eq!(ancestor, Some(share1.block_hash()));
+
+        // Test common ancestor of share3 and genesis
+        let ancestor = store
+            .get_common_ancestor(&share3.block_hash(), &genesis.block_hash())
+            .unwrap();
+        assert_eq!(ancestor, Some(genesis.block_hash()));
+
+        // Test common ancestor of share2 and share1
+        let ancestor = store
+            .get_common_ancestor(&share2.block_hash(), &share1.block_hash())
+            .unwrap();
+        assert_eq!(ancestor, Some(share1.block_hash()));
+    }
+
+    #[test]
+    fn test_get_common_ancestor_with_fork() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create a chain with a fork:
+        //        genesis
+        //         /  \
+        //    share1  uncle1
+        //      |
+        //    share2
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(genesis.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                share1.clone(),
+                1,
+                share1.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let uncle1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                uncle1.clone(),
+                1,
+                uncle1.header.get_work(),
+                false,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                share2.clone(),
+                2,
+                share2.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Test common ancestor of share2 and uncle1 (should be genesis)
+        let ancestor = store
+            .get_common_ancestor(&share2.block_hash(), &uncle1.block_hash())
+            .unwrap();
+        assert_eq!(ancestor, Some(genesis.block_hash()));
+
+        // Test common ancestor of share1 and uncle1 (should be genesis)
+        let ancestor = store
+            .get_common_ancestor(&share1.block_hash(), &uncle1.block_hash())
+            .unwrap();
+        assert_eq!(ancestor, Some(genesis.block_hash()));
+
+        // Test common ancestor of share2 and share1 (should be share1)
+        let ancestor = store
+            .get_common_ancestor(&share2.block_hash(), &share1.block_hash())
+            .unwrap();
+        assert_eq!(ancestor, Some(share1.block_hash()));
+    }
+
+    #[test]
+    fn test_get_common_ancestor_no_common_within_depth() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create two separate chains (only for testing - wouldn't happen in real usage)
+        let genesis1 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                genesis1.clone(),
+                0,
+                genesis1.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let genesis2 = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                genesis2.clone(),
+                0,
+                genesis2.header.get_work(),
+                false,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Test common ancestor of two different genesis blocks (should be None)
+        let ancestor = store
+            .get_common_ancestor(&genesis1.block_hash(), &genesis2.block_hash())
+            .unwrap();
+        assert_eq!(ancestor, None);
     }
 }
