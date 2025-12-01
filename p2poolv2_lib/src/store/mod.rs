@@ -647,7 +647,7 @@ impl Store {
         validated: bool,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<TxMetadata, Box<dyn Error + Send + Sync>> {
-        debug!("Adding tx metdata for txid {txid}");
+        debug!("Adding tx metadata for txid {txid}");
         let tx_metadata = TxMetadata {
             txid,
             version: tx.version,
