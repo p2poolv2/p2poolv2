@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::shares::chain::chain_store::COMMON_ANCESTOR_DEPTH;
 use crate::shares::share_block::{ShareBlock, ShareHeader, StorageShareBlock, Txids};
 use crate::store::block_tx_metadata::{BlockMetadata, TxMetadata};
 use crate::store::column_families::ColumnFamily;
@@ -35,8 +36,6 @@ mod block_tx_metadata;
 pub mod column_families;
 mod pplns_shares;
 pub mod user;
-
-const COMMON_ANCESTOR_DEPTH: u32 = 2160; // 6 shares per minute * 60 * 6 hours.
 
 /// A store for share blocks.
 /// RocksDB as is used as the underlying database.
@@ -840,6 +839,12 @@ impl Store {
         Some(share)
     }
 
+    /// Get current chain tip and find the ShareBlock for it
+    pub fn get_share_at_tip(&self) -> Option<ShareBlock> {
+        let tip = self.get_chain_tip();
+        self.get_share(&tip)
+    }
+
     /// Get a share headers matching the vector of blockhashes
     pub fn get_share_headers(
         &self,
@@ -983,7 +988,10 @@ impl Store {
 
     /// Get multiple shares from the store
     /// TODO: Refactor to use get_share
-    pub fn get_shares(&self, blockhashes: &[BlockHash]) -> HashMap<BlockHash, ShareBlock> {
+    pub fn get_shares(
+        &self,
+        blockhashes: &[BlockHash],
+    ) -> Result<HashMap<BlockHash, ShareBlock>, Box<dyn Error + Send + Sync>> {
         debug!("Getting shares from store: {:?}", blockhashes);
         let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
         let keys = blockhashes
@@ -993,7 +1001,7 @@ impl Store {
         let shares = self.db.multi_get_cf(keys);
         // iterate over the blockhashes and shares, filter out the ones that are not found or can't be deserialized
         // then convert the storage share to share block and return as a hashmap
-        blockhashes
+        let found_shares = blockhashes
             .iter()
             .zip(shares)
             .filter_map(|(blockhash, result)| {
@@ -1022,7 +1030,8 @@ impl Store {
                     None
                 }
             })
-            .collect()
+            .collect();
+        Ok(found_shares)
     }
 
     /// Get transactions for a blockhash
@@ -1109,14 +1118,17 @@ impl Store {
 
     /// Get the uncles of a share as a vector of ShareBlocks
     /// Panics if an uncle hash is not found in the store
-    pub fn get_uncles(&self, blockhash: &BlockHash) -> Vec<ShareBlock> {
+    pub fn get_uncles(
+        &self,
+        blockhash: &BlockHash,
+    ) -> Result<Vec<ShareBlock>, Box<dyn Error + Send + Sync>> {
         let share = self.get_share(blockhash);
         if share.is_none() {
-            return vec![];
+            return Ok(vec![]);
         }
         let share = share.unwrap();
-        let uncle_blocks = self.get_shares(&share.header.uncles);
-        uncle_blocks.into_values().collect()
+        let uncle_blocks = self.get_shares(&share.header.uncles)?;
+        Ok(uncle_blocks.into_values().collect())
     }
 
     /// Get the main chain and the uncles from the tips to the provided blockhash
@@ -1164,32 +1176,35 @@ impl Store {
     /// Find the shares from the given share up to depth from that share
     ///
     /// Returns a chain of blockhashes starting from start and going
-    /// backward up to depth ancestors (newest to oldest)
-    fn find_chain_for_depth(
+    /// backward up to depth ancestors (newest to oldest). Include
+    /// parents and uncles.
+    pub(crate) fn get_dag_for_depth(
         &self,
         start: &BlockHash,
-        depth: u32,
+        depth: usize,
     ) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
-        let mut results = Vec::new();
-        let mut current = *start;
+        let mut to_visit = VecDeque::with_capacity(depth);
+        to_visit.push_back(*start);
+
+        let mut results = Vec::with_capacity(depth);
         let mut remaining_depth = depth;
 
-        // Walk backward through the parent chain
-        while remaining_depth > 0 {
+        // Walk backward through parents and uncles
+        while let Some(next) = to_visit.pop_front() {
             // Get the share to find its parent
-            match self.get_share(&current) {
-                Some(share) => {
-                    let parent = share.header.prev_share_blockhash;
-
-                    results.push(current);
-
-                    // Check if we've reached genesis (parent is all zeros)
-                    if parent == BlockHash::all_zeros() {
-                        break;
+            match self.get_share(&next) {
+                Some(next_share) => {
+                    to_visit.push_back(next_share.header.prev_share_blockhash);
+                    for uncle in next_share.header.uncles.iter() {
+                        to_visit.push_back(*uncle);
                     }
 
-                    current = parent;
+                    results.push(next_share.block_hash());
+
                     remaining_depth -= 1;
+                    if remaining_depth == 0 {
+                        break;
+                    }
                 }
                 None => {
                     // Can't find share, stop here
@@ -1203,14 +1218,18 @@ impl Store {
 
     /// Get common ancestor of two blockhashes
     /// We first find chain from each blockhashes provided and then find the common ancestor
+    ///
+    /// If one of the blockhashes is an ancestor of the other, it is
+    /// returned as the common ancestor
     pub fn get_common_ancestor(
         &self,
         blockhash1: &BlockHash,
         blockhash2: &BlockHash,
     ) -> Result<Option<BlockHash>, Box<dyn Error + Send + Sync>> {
+        debug!("Looking for common ancestor between {blockhash1} and {blockhash2}");
         // Get chains up to COMMON_ANCESTOR_DEPTH (ordered from newest to oldest)
-        let chain1 = self.find_chain_for_depth(blockhash1, COMMON_ANCESTOR_DEPTH)?;
-        let chain2 = self.find_chain_for_depth(blockhash2, COMMON_ANCESTOR_DEPTH)?;
+        let chain1 = self.get_dag_for_depth(blockhash1, COMMON_ANCESTOR_DEPTH)?;
+        let chain2 = self.get_dag_for_depth(blockhash2, COMMON_ANCESTOR_DEPTH)?;
 
         // Build a set from chain1 for O(1) lookup
         let chain1_set: HashSet<BlockHash> = chain1.into_iter().collect();
@@ -1261,7 +1280,10 @@ impl Store {
     }
 
     /// Get the shares for a specific height
-    pub fn get_shares_at_height(&self, height: u32) -> HashMap<BlockHash, ShareBlock> {
+    pub fn get_shares_at_height(
+        &self,
+        height: u32,
+    ) -> Result<HashMap<BlockHash, ShareBlock>, Box<dyn Error + Send + Sync>> {
         let blockhashes = self.get_blockhashes_for_height(height);
         self.get_shares(&blockhashes)
     }
@@ -1324,9 +1346,9 @@ impl Store {
     /// Mark a block as valid in the store
     pub fn set_block_valid(
         &self,
-        blockhash: &BlockHash,
-        valid: bool,
-        batch: &mut rocksdb::WriteBatch,
+        _blockhash: &BlockHash,
+        _valid: bool,
+        _batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(()) // TODO
     }
@@ -3659,7 +3681,7 @@ mod tests {
         }
 
         // Test finding chain from tip with depth 5
-        let chain = store.find_chain_for_depth(&blocks[9], 5).unwrap();
+        let chain = store.get_dag_for_depth(&blocks[9], 5).unwrap();
 
         // Should return blocks 9, 8, 7, 6, 5 (from newest to oldest)
         assert_eq!(chain.len(), 5);
@@ -3670,7 +3692,7 @@ mod tests {
         assert_eq!(chain[4], blocks[5]);
 
         // Test finding chain with depth greater than chain length
-        let chain = store.find_chain_for_depth(&blocks[5], 10).unwrap();
+        let chain = store.get_dag_for_depth(&blocks[5], 10).unwrap();
 
         // Should return blocks 5, 4, 3, 2, 1, 0 (6 blocks total)
         assert_eq!(chain.len(), 6);
@@ -3678,7 +3700,7 @@ mod tests {
         assert_eq!(chain[5], blocks[0]);
 
         // Test finding chain from genesis
-        let chain = store.find_chain_for_depth(&blocks[0], 5).unwrap();
+        let chain = store.get_dag_for_depth(&blocks[0], 5).unwrap();
 
         // Should return only genesis (height 0, depth 0)
         assert_eq!(chain.len(), 1);

@@ -17,8 +17,8 @@
 use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
-use bitcoin::BlockHash;
 use bitcoin::hashes::Hash;
+use bitcoin::{BlockHash, Work};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::sync::Arc;
@@ -29,6 +29,13 @@ const MIN_CONFIRMATION_DEPTH: usize = 100;
 
 /// The maximum depth up to which we include the uncles in the chain
 const MAX_UNCLE_DEPTH: usize = 3;
+
+/// Common ancestor depth we look at when finding common ancestors
+/// For now it is the same as PPLNS window
+pub(crate) const COMMON_ANCESTOR_DEPTH: usize = 2160; // 6 shares per minute * 60 * 6 hours.
+
+/// PPLNS window in shares
+const PPLNS_WINDOW: usize = 2160; // 6 shares per minute * 60 * 6 hours.
 
 /// A datastructure representing the main share chain
 /// The share chain reorgs when a share is found that has a higher total PoW than the current tip
@@ -79,12 +86,8 @@ impl ChainStore {
         let blockhash = share.block_hash();
         let prev_share_blockhash = share.header.prev_share_blockhash;
         let share_work = share.header.get_work();
-        debug!("Share work: {:?}", share_work);
-        debug!(
-            "ADDING SHARE {} WITH WORK {}",
-            share.header.block_hash(),
-            share_work,
-        );
+        debug!("Share work: {}", share_work);
+        debug!("ADDING SHARE {} WITH WORK {}", blockhash, share_work,);
 
         let tips = self.store.get_tips();
 
@@ -110,7 +113,7 @@ impl ChainStore {
         // save to share to store for all cases
         tracing::debug!(
             "Adding share to store: {:?} at height: {}",
-            share.block_hash(),
+            blockhash,
             new_height
         );
         self.store.add_share(
@@ -121,36 +124,79 @@ impl ChainStore {
             &mut batch,
         )?;
 
-        // remove the previous blockhash from tips
-        self.store.remove_tip(&prev_share_blockhash);
+        self.store.commit_batch(batch)?;
 
-        // remove uncles from tips
+        self.reorg(share, new_chain_work)
+    }
+
+    /// Reorg the chain to the new share
+    /// Conditions for reorg:
+    /// If common ancestor with current tip - compare chain work at share and tip
+    /// Else, i.e. if disjoint chains - compare work over last PPLNS window shares
+    /// Changes on reorg:
+    /// Change chain tip to new share
+    /// Remove uncles and prev share from tips
+    fn reorg(
+        &self,
+        share: ShareBlock,
+        new_chain_work: Work,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let share_block_hash = share.block_hash();
+        info!("Reorging chain to share: {:?}", share_block_hash);
+
+        // handle potential reorgs
+        // get total difficulty up to prev_share_blockhash
+        tracing::info!(
+            "Checking for reorgs at share: {:?}",
+            &share.header.prev_share_blockhash
+        );
+        let current_total_work = self.store.get_total_work()?;
+        debug!(
+            "new chain work: {}, Current total work: {}. New greater? {}",
+            new_chain_work,
+            current_total_work,
+            new_chain_work > current_total_work
+        );
+
+        let tip = &self.store.get_chain_tip();
+
+        match self.store.get_common_ancestor(&share_block_hash, tip)? {
+            Some(common_ancestor) => {
+                debug!("Found common ancestor {common_ancestor}");
+                if new_chain_work > current_total_work {
+                    self.store.set_chain_tip(share_block_hash);
+                }
+                self.add_to_tips(share_block_hash);
+            }
+            None => {
+                debug!("No common ancestor found");
+                let old_chain_work = self.work_over_pplns_window(tip)?;
+                let mut new_chain_work = self.work_over_pplns_window(&share_block_hash)?;
+                if new_chain_work == Work::from_hex("0x00")? {
+                    new_chain_work = share.header.get_work();
+                }
+                debug!(
+                    "new chain work {}, old chain work {}. New greater? {}",
+                    new_chain_work,
+                    old_chain_work,
+                    new_chain_work > old_chain_work
+                );
+                if new_chain_work > old_chain_work {
+                    self.store.set_chain_tip(share_block_hash);
+                }
+                self.add_to_tips(share_block_hash);
+            }
+        }
+
+        // A. Always remove the previous block hash and uncles from tips
+        // A.1. remove the previous blockhash from tips, if prev share blockhash was a tip
+        self.store.remove_tip(&share.header.prev_share_blockhash);
+        // A.2. remove uncles from tips in all cases
         for uncle in &share.header.uncles {
             self.store.remove_tip(uncle);
         }
 
-        // add the new share as a tip
-        self.store.add_tip(blockhash);
-
-        // handle potential reorgs
-        // get total difficulty up to prev_share_blockhash
-        tracing::info!("Checking for reorgs at share: {:?}", prev_share_blockhash);
-        let current_total_work = self.store.get_total_work()?;
-        debug!(
-            "new chain work: {}, Current total work: {}",
-            new_chain_work, current_total_work
-        );
-        if new_chain_work > current_total_work {
-            let reorg_result = self.reorg(share, &mut batch);
-            if reorg_result.is_err() {
-                error!("Failed to reorg chain for share: {:?}", blockhash);
-                return Err(reorg_result.err().unwrap());
-            }
-        }
-
-        self.store
-            .commit_batch(batch)
-            .map_err(|e| format!("Failed to add share, commit error: {e}").into())
+        Ok(())
     }
 
     /// Add PPLNS Share
@@ -184,23 +230,23 @@ impl ChainStore {
         self.store.add_tip(blockhash);
     }
 
-    /// Reorg the chain to the new share
-    /// Changes tip
-    /// TODO: Update metadata flag
-    fn reorg(
+    /// Get chain starting from start blockhash up to pplns window
+    /// depth and return total work over that part of the chain
+    fn work_over_pplns_window(
         &self,
-        share: ShareBlock,
-        batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let share_block_hash = share.block_hash();
-        info!("Reorging chain to share: {:?}", share_block_hash);
-
-        let reorged_out_chain = self
+        start_blockhash: &BlockHash,
+    ) -> Result<Work, Box<dyn Error + Send + Sync>> {
+        let chain_blockhashes = self
             .store
-            .get_shares_from_tip_to_blockhash(&share.header.prev_share_blockhash)?;
+            .get_dag_for_depth(start_blockhash, PPLNS_WINDOW)?;
 
-        self.store.set_chain_tip(share.block_hash());
-        Ok(())
+        let chain = self.store.get_shares(&chain_blockhashes)?;
+
+        let zero_work = Work::from_hex("0x00")?;
+        let sum = chain
+            .iter()
+            .fold(zero_work, |acc, (_, share)| acc + share.header.get_work());
+        Ok(sum)
     }
 
     /// Check if a share is confirmed according to the minimum confirmation depth
@@ -219,7 +265,10 @@ impl ChainStore {
     }
 
     /// Get a share from the chain given a height
-    pub fn get_shares_at_height(&self, height: u32) -> HashMap<BlockHash, ShareBlock> {
+    pub fn get_shares_at_height(
+        &self,
+        height: u32,
+    ) -> Result<HashMap<BlockHash, ShareBlock>, Box<dyn Error + Send + Sync>> {
         self.store.get_shares_at_height(height)
     }
 
@@ -430,7 +479,7 @@ mock! {
         pub fn setup_share_for_chain(&self, share_block: ShareBlock) -> ShareBlock;
         pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock>;
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
-        pub fn get_shares_at_height(&self, height: u32) -> HashMap<BlockHash, ShareBlock>;
+        pub fn get_shares_at_height(&self, height: u32) -> Result<HashMap<BlockHash, ShareBlock>, Box<dyn Error + Send + Sync>>;
         pub fn get_share_headers(&self, share_hashes: Vec<BlockHash>) -> Result<Vec<ShareHeader>, Box<dyn Error + Send + Sync>>;
         pub fn get_headers_for_locator(&self, block_hashes: &[BlockHash], stop_block_hash: &BlockHash, max_headers: usize) -> Result<Vec<ShareHeader>, Box<dyn Error + Send + Sync>>;
         pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>>;
@@ -461,7 +510,7 @@ mod chain_tests {
     use std::str::FromStr;
     use tempfile::tempdir;
 
-    #[test]
+    #[test_log::test]
     /// Setup a test chain with 3 shares on the main chain, where shares 2 and 3 have two uncles each
     fn test_chain_add_shares() {
         let temp_dir = tempdir().unwrap();
@@ -489,6 +538,7 @@ mod chain_tests {
         let mut expected_tips = HashSet::new();
         expected_tips.insert(share1.block_hash());
         assert_eq!(chain.store.get_tips().len(), 1);
+        assert_eq!(chain.store.get_tips(), expected_tips);
         assert_eq!(
             chain.store.get_total_work().unwrap().to_string(),
             (genesis_work + multiplied_compact_target_as_work(0x01e0377ae, 2)).to_string()
@@ -723,7 +773,7 @@ mod chain_tests {
             .store
             .get_common_ancestor(&share3.block_hash(), &uncle1_share2.block_hash())
             .unwrap();
-        assert_eq!(common_ancestor, Some(genesis.block_hash()));
+        assert_eq!(common_ancestor, Some(uncle1_share2.block_hash()));
 
         // Get chain up to genesis
         let chain_to_uncle = chain
@@ -745,7 +795,7 @@ mod chain_tests {
         assert!(chain_to_uncle.contains(&uncle2_share4));
 
         // Verify uncles of share2
-        let uncles_share2 = chain.store.get_uncles(&share2.block_hash());
+        let uncles_share2 = chain.store.get_uncles(&share2.block_hash()).unwrap();
         assert_eq!(uncles_share2.len(), 2);
         assert!(
             uncles_share2
@@ -761,7 +811,7 @@ mod chain_tests {
         );
 
         // Verify uncles of share4
-        let uncles_share4 = chain.store.get_uncles(&share4.block_hash());
+        let uncles_share4 = chain.store.get_uncles(&share4.block_hash()).unwrap();
         assert_eq!(uncles_share4.len(), 2);
         assert!(
             uncles_share4
