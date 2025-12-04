@@ -11,7 +11,6 @@ CONSTANTS
 VARIABLES
     shares,         \* Set of all shares across all processes
     chain_tip,      \* Current tip of the chain per process
-    seqNo,          \* Sequence number tracker per process
     parent,         \* Parent references for each share
     uncles,         \* Uncle references for each share
     chain_work,     \* Total work accumulated up to each share on each process
@@ -19,9 +18,9 @@ VARIABLES
     share_queue,    \* Queue of shares that have been generated but not yet sent/received,
     bitcoin_height  \* Bitcoin network height associated with each share
 
-vars == <<shares, chain_tip, seqNo, share_queue, uncles, parent, chain_work, height, bitcoin_height>>
+vars == <<shares, chain_tip, share_queue, uncles, parent, chain_work, height, bitcoin_height>>
 
-Genesis == [process |-> CHOOSE p \in Processes: TRUE, seq |-> 0, work |-> 1]
+Genesis == [process |-> CHOOSE p \in Processes: TRUE, work |-> 1]
 
 NoHeight == -1
 
@@ -33,7 +32,6 @@ NoHeight == -1
 (****************************************************************************)
 Share == [
     process: Processes,
-    seq: (0..MaxShares),
     work: Work,
     bitcoin_height: (0..MaxBitcoinHeight)
 ]
@@ -41,7 +39,6 @@ Share == [
         
 TypeOK ==
     /\ shares \in [Processes -> Share]
-    /\ seqNo \in [Processes -> (0..MaxShares)]
     /\ chain_tip \in [Processes -> {Share} \cup {Genesis}]
     /\ parent \in [Share -> Share \cup {Genesis}]
     /\ uncles \in [Share -> Share \cup {Genesis}]
@@ -52,7 +49,6 @@ TypeOK ==
 
 Init ==
     /\ shares = [p \in Processes |-> {Genesis}]  \* All processes start with genesis share
-    /\ seqNo = [p \in Processes |-> 0]
     /\ chain_tip = [p \in Processes |-> Genesis]
     /\ parent = [s \in Share \cup {Genesis} |-> {}]
     /\ uncles = [s \in Share \cup {Genesis} |-> {}]
@@ -123,10 +119,9 @@ UnclesFor(p, s) ==
 
 (****************************************************************************)
 (* Host process generates a new share                                       *)
-(* - Creates a share with the next sequence number and work                 *)
+(* - Creates a share with some work                                         *)
 (* - Track parent for the new share as the current chain tip                *)
 (* - Update tips to include the new share and remove the chain tip          *)
-(* - Increment sequence number for the process                              *)
 (****************************************************************************)
 GenerateShare(p, work) ==
     /\ Cardinality(shares[p]) < MaxShares \* Limit total shares
@@ -135,7 +130,6 @@ GenerateShare(p, work) ==
         bitcoin_height_p == CHOOSE h \in (0..MaxBitcoinHeight) : h > bitcoin_height[p]
         newShare == [
             process |-> p,
-            seq |-> seqNo[p] + 1,
             work |-> work,
             bitcoin_height |-> bitcoin_height_p
         ]
@@ -145,8 +139,6 @@ GenerateShare(p, work) ==
            /\ parent' = [parent EXCEPT ![newShare] = chain_tip[p]]
             \* select uncles for the new share
            /\ uncles' = [uncles EXCEPT ![newShare] = UnclesFor(p, newShare)]
-            \* When generating a new share, new share always supercedes the current tip - remove chain tip from tips and add new share as a tip
-           /\ seqNo' = [seqNo EXCEPT ![p] = @ + 1]
            \* Update chain tip to the new share
            /\ chain_tip' = [chain_tip EXCEPT ![p] = newShare]
            \* The total work for the new share is the previous chain tip's total work plus the new share's work
@@ -195,16 +187,16 @@ ReceiveShare(p) ==
             \* New share becomes the new tip if it exceeds current tip's work
             /\ IF chain_work[p, parent[s]] + s.work > chain_work[p, chain_tip[p]] THEN
                 /\ chain_tip' = [chain_tip EXCEPT ![p] = s]
-                /\ UNCHANGED <<seqNo, parent, uncles, bitcoin_height >>
+                /\ UNCHANGED <<parent, uncles, bitcoin_height >>
                 ELSE
-                /\ UNCHANGED <<chain_tip, seqNo, parent, uncles, bitcoin_height>>
+                /\ UNCHANGED <<chain_tip, parent, uncles, bitcoin_height>>
           ELSE
             \* For disjoint chains, the new share becomes the tip only if its total work over PPLNS window exceeds current tip's
             /\ IF TotalWorkOverPPLNSWindow(p, s) > TotalWorkOverPPLNSWindow(p, chain_tip[p]) THEN
                 /\ chain_tip' = [chain_tip EXCEPT ![p] = s]
-                /\ UNCHANGED <<seqNo, parent, uncles, bitcoin_height >>
+                /\ UNCHANGED <<parent, uncles, bitcoin_height >>
                ELSE
-                /\ UNCHANGED <<chain_tip, seqNo, parent, uncles, bitcoin_height>>
+                /\ UNCHANGED <<chain_tip, parent, uncles, bitcoin_height>>
     /\ share_queue' = Tail(share_queue)
 
 Next ==
