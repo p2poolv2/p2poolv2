@@ -14,11 +14,11 @@ VARIABLES
     parent,         \* Parent references for each share
     uncles,         \* Uncle references for each share
     chain_work,     \* Total work accumulated up to each share on each process
-    height,         \* Height of each share in the chain at each process
+    confirmed_height,         \* confirmed_height of each share in the chain at each process
     share_queue,    \* Queue of shares that have been generated but not yet sent/received,
     bitcoin_height  \* Bitcoin network height associated with each share
 
-vars == <<shares, chain_tip, share_queue, uncles, parent, chain_work, height, bitcoin_height>>
+vars == <<shares, chain_tip, share_queue, uncles, parent, chain_work, confirmed_height, bitcoin_height>>
 
 Genesis == [process |-> CHOOSE p \in Processes: TRUE, work |-> 1]
 
@@ -43,7 +43,7 @@ TypeOK ==
     /\ parent \in [Share -> Share \cup {Genesis}]
     /\ uncles \in [Share -> Share \cup {Genesis}]
     /\ chain_work \in [Processes \X Share -> Nat]
-    /\ height \in [Processes \X Share -> Nat \cup {NoHeight}]
+    /\ confirmed_height \in [Processes \X Share -> Nat \cup {NoHeight}]
     /\ share_queue \in Seq(Share)
     /\ bitcoin_height \in [Processes -> (0..MaxBitcoinHeight)]
 
@@ -53,7 +53,7 @@ Init ==
     /\ parent = [s \in Share \cup {Genesis} |-> {}]
     /\ uncles = [s \in Share \cup {Genesis} |-> {}]
     /\ chain_work = [p \in Processes, s \in Share \cup {Genesis} |-> IF s = Genesis THEN 1 ELSE 0] \* Genesis share has work of 1
-    /\ height = [p \in Processes, s \in Share \cup {Genesis} |-> IF s = Genesis THEN 0 ELSE NoHeight] \* Genesis share has height 0
+    /\ confirmed_height = [p \in Processes, s \in Share \cup {Genesis} |-> IF s = Genesis THEN 0 ELSE NoHeight] \* Genesis share has confirmed_height 0
     /\ bitcoin_height = [p \in Processes |-> 0]
     /\ share_queue = << >>
 
@@ -88,7 +88,7 @@ CommonAncestorWithinRange(p, s1, s2) ==
     \E a \in shares[p] :
         /\ a \in ChainFromShare(p, s1)
         /\ a \in ChainFromShare(p, s2)
-        /\ height[p, chain_tip[p]] - height[p, a] >= MaxUnclesDepth
+        /\ confirmed_height[p, chain_tip[p]] - confirmed_height[p, a] >= MaxUnclesDepth
 
 (****************************************************************************)
 (* Check if two shares have a common ancestor on process p                  *)
@@ -112,7 +112,7 @@ UnclesFor(p, s) ==
         /\ u # s
         /\ u # chain_tip[p]
         /\ u \notin ChainFromShare(p, chain_tip[p])
-        /\ height[p, s] - height[p, u] <= MaxUnclesDepth
+        /\ confirmed_height[p, s] - confirmed_height[p, u] <= MaxUnclesDepth
         /\ CommonAncestorWithinRange(p, u, chain_tip[p])
         /\ u \notin UNION {uncles[x]: x \in shares[p]} \* u is not an uncle for any share tracked on p
     }
@@ -143,8 +143,8 @@ GenerateShare(p, work) ==
            /\ chain_tip' = [chain_tip EXCEPT ![p] = newShare]
            \* The total work for the new share is the previous chain tip's total work plus the new share's work
            /\ chain_work' = [chain_work EXCEPT ![p, newShare] = chain_work[p, chain_tip[p]] + work]
-           \* Height is previous chain tip's height plus one
-           /\ height' = [height EXCEPT ![p, newShare] = height[p, chain_tip[p]] + 1]
+           \* confirmed_height is previous chain tip's confirmed_height plus one
+           /\ confirmed_height' = [confirmed_height EXCEPT ![p, newShare] = confirmed_height[p, chain_tip[p]] + 1]
            \* Enqueue the new share for sending to other processes
            /\ share_queue' = Append(share_queue, newShare)
            \* Set bitcoin height for the new share, it can be any valid height
@@ -179,8 +179,8 @@ ReceiveShare(p) ==
         /\ bitcoin_height[p] - s.bitcoin_height <= 1 \* Share should be recent enough
         \* Add to shares
         /\ shares' = [shares EXCEPT ![p] = @ \cup {s}]
-        \* Update height to be parent's height + 1
-        /\ height' = [height EXCEPT ![p, s] = height[p, parent[s]] + 1]
+        \* Update confirmed_height to be parent's confirmed_height + 1
+        /\ confirmed_height' = [confirmed_height EXCEPT ![p, s] = confirmed_height[p, parent[s]] + 1]
         \* Update chain work to be parent's chain work + s.work
         /\ chain_work' = [chain_work EXCEPT ![p, s] = chain_work[p, parent[s]] + s.work]
         /\ IF CommonAncestor(p, s, chain_tip[p]) THEN
