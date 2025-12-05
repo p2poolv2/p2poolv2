@@ -18,6 +18,7 @@ use crate::accounting::stats::pool_local_stats::load_pool_local_stats;
 use crate::accounting::stats::user::User;
 use crate::accounting::stats::worker::Worker;
 use crate::accounting::{simple_pplns::SimplePplnsShare, stats::pool_local_stats};
+use crate::stratum::work::tracker::TrackerHandle;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
@@ -266,6 +267,7 @@ impl MetricsActor {
 #[derive(Clone)]
 pub struct MetricsHandle {
     sender: mpsc::Sender<MetricsMessage>,
+    pub tracker: TrackerHandle,
 }
 
 impl MetricsHandle {
@@ -382,13 +384,16 @@ impl MetricsHandle {
 }
 
 /// Construct a new metrics actor with existing metrics and return its handle
-pub async fn start_metrics(log_dir: String) -> Result<MetricsHandle, std::io::Error> {
+pub async fn start_metrics(
+    log_dir: String,
+    tracker: TrackerHandle,
+) -> Result<MetricsHandle, std::io::Error> {
     let (sender, receiver) = mpsc::channel(METRICS_MESSAGE_BUFFER_SIZE);
     let actor = MetricsActor::with_existing_metrics(&log_dir, receiver)?;
     tokio::spawn(async move {
         actor.run().await;
     });
-    let handle = MetricsHandle { sender };
+    let handle = MetricsHandle { sender, tracker };
     match pool_local_stats::start_stats_saver(
         handle.clone(),
         METRICS_SAVE_INTERVAL,
@@ -407,9 +412,9 @@ pub async fn start_metrics(log_dir: String) -> Result<MetricsHandle, std::io::Er
 
 #[cfg(test)]
 mod tests {
-    use crate::accounting::stats::pool_local_stats::save_pool_local_stats;
-
     use super::*;
+    use crate::accounting::stats::pool_local_stats::save_pool_local_stats;
+    use crate::stratum::work::tracker::start_tracker_actor;
 
     #[test]
     fn test_pool_metrics_default() {
@@ -421,7 +426,8 @@ mod tests {
     #[tokio::test]
     async fn test_record_share_accepted() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+        let tracker = start_tracker_actor();
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string(), tracker)
             .await
             .unwrap();
         let _ = handle
@@ -485,7 +491,8 @@ mod tests {
     #[tokio::test]
     async fn test_record_share_rejected() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+        let tracker = start_tracker_actor();
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string(), tracker)
             .await
             .unwrap();
         let _ = handle.record_share_rejected().await;
@@ -496,7 +503,8 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn test_metrics_commit() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+        let tracker = start_tracker_actor();
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string(), tracker)
             .await
             .unwrap();
 
@@ -556,7 +564,8 @@ mod tests {
     #[test_log::test(tokio::test)]
     async fn test_get_metrics_consistency() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+        let tracker = start_tracker_actor();
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string(), tracker)
             .await
             .unwrap();
 
@@ -604,7 +613,8 @@ mod tests {
     #[tokio::test]
     async fn test_record_share_updates_user_stats() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+        let tracker = start_tracker_actor();
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string(), tracker)
             .await
             .unwrap();
 
@@ -645,7 +655,8 @@ mod tests {
     #[tokio::test]
     async fn test_record_share_multiple_users_and_workers() {
         let log_dir = tempfile::tempdir().unwrap();
-        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+        let tracker = start_tracker_actor();
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string(), tracker)
             .await
             .unwrap();
 
