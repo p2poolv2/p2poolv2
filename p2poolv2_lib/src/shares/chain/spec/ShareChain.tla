@@ -1,24 +1,31 @@
 ---- MODULE ShareChain ----
-EXTENDS Naturals, Sequences, TLC, FiniteSets, Integers
+EXTENDS Naturals, Sequences, TLC, FiniteSets, Integers, SequencesExt
 
 CONSTANTS 
-    Processes,       \* Set of processes that generate shares
-    MaxShares,       \* Maximum number of shares per process
-    Work,            \* Work/difficulty parameter for shares
-    MaxUnclesDepth,  \* Maximum depth for uncles included in a share
-    MaxBitcoinHeight \* Current Bitcoin network height for validating received shares
+    Processes,                  \* Set of processes that generate shares
+    MaxShares,                  \* Maximum number of shares per process
+    Work,                       \* Work/difficulty parameter for shares
+    MaxUnclesDepth,             \* Maximum depth for uncles included in a share
+    MaxBitcoinHeight            \* Current Bitcoin network height for validating received shares
 
 VARIABLES
-    shares,         \* Set of all shares across all processes
-    chain_tip,      \* Current tip of the chain per process
-    parent,         \* Parent references for each share
-    uncles,         \* Uncle references for each share
-    chain_work,     \* Total work accumulated up to each share on each process
-    confirmed_height,         \* confirmed_height of each share in the chain at each process
-    share_queue,    \* Queue of shares that have been generated but not yet sent/received,
-    bitcoin_height  \* Bitcoin network height associated with each share
+    shares,                     \* Set of all shares across all processes
+    chain_tip,                  \* Current tip of the chain per process
+    parent,                     \* Parent references for each share
+    uncles,                     \* Uncle references for each share
+    chain_work,                 \* Total work accumulated up to each share on each process
+    confirmed_height,           \* confirmed_height of each share in the chain at each process
+    candidate_height,           \* candidate_height of each share in the chain at each process
+    received_shares,            \* Set of shares received from other processes, but not validated yet
+    validation_status,          \* Validation status of received shares
+    share_queue,                \* Queue of shares that have been generated but not yet sent/received,
+    bitcoin_height,              \* Bitcoin network height associated with each share
+    spend_dependencies          \* Dependency Share -> Share. The key share is spending the value share.
+vars == <<shares, chain_tip, share_queue, uncles, parent, chain_work, bitcoin_height, confirmed_height, candidate_height, received_shares, validation_status, spend_dependencies>>
 
-vars == <<shares, chain_tip, share_queue, uncles, parent, chain_work, confirmed_height, bitcoin_height>>
+(****************************************************************************)
+(* Genesis share definition                                                *)
+(****************************************************************************)
 
 Genesis == [process |-> CHOOSE p \in Processes: TRUE, work |-> 1]
 
@@ -44,8 +51,12 @@ TypeOK ==
     /\ uncles \in [Share -> Share \cup {Genesis}]
     /\ chain_work \in [Processes \X Share -> Nat]
     /\ confirmed_height \in [Processes \X Share -> Nat \cup {NoHeight}]
+    /\ candidate_height \in [Processes \X Share -> Nat \cup {NoHeight}]
+    /\ received_shares \in [Processes -> Seq(Share)]
+    /\ validation_status \in [Processes \X Share -> {"None", "Pending", "Valid", "Invalid"}]
     /\ share_queue \in Seq(Share)
     /\ bitcoin_height \in [Processes -> (0..MaxBitcoinHeight)]
+    /\ spend_dependencies \in [Share -> SUBSET Share]
 
 Init ==
     /\ shares = [p \in Processes |-> {Genesis}]  \* All processes start with genesis share
@@ -54,8 +65,12 @@ Init ==
     /\ uncles = [s \in Share \cup {Genesis} |-> {}]
     /\ chain_work = [p \in Processes, s \in Share \cup {Genesis} |-> IF s = Genesis THEN 1 ELSE 0] \* Genesis share has work of 1
     /\ confirmed_height = [p \in Processes, s \in Share \cup {Genesis} |-> IF s = Genesis THEN 0 ELSE NoHeight] \* Genesis share has confirmed_height 0
+    /\ candidate_height = [p \in Processes, s \in Share \cup {Genesis} |-> NoHeight] \* Empty
+    /\ received_shares = [p \in Processes |-> << >>]
+    /\ validation_status = [p \in Processes, s \in Share |-> "None"]
     /\ bitcoin_height = [p \in Processes |-> 0]
     /\ share_queue = << >>
+    /\ spend_dependencies = [s \in Share |-> {}]
 
 
 (****************************************************************************)
@@ -84,19 +99,21 @@ DAG(p, s) ==
 (* Check if two shares have a common ancestor on process p within max uncle *)
 (* depth                                                                    *)
 (****************************************************************************)
-CommonAncestorWithinRange(p, s1, s2) ==
+ConfirmedCommonAncestorWithinRange(p, s1, s2) ==
     \E a \in shares[p] :
         /\ a \in ChainFromShare(p, s1)
         /\ a \in ChainFromShare(p, s2)
+        /\ confirmed_height[p, a] # NoHeight
         /\ confirmed_height[p, chain_tip[p]] - confirmed_height[p, a] >= MaxUnclesDepth
 
 (****************************************************************************)
 (* Check if two shares have a common ancestor on process p                  *)
 (****************************************************************************)
-CommonAncestor(p, s1, s2) ==
+ConfirmedCommonAncestor(p, s1, s2) ==
     \E a \in shares[p] :
         /\ a \in ChainFromShare(p, s1)
         /\ a \in ChainFromShare(p, s2)
+        /\ confirmed_height[p, a] # NoHeight
 
 (****************************************************************************)
 (* Get uncles for a share s generated by process p.                         *)
@@ -113,7 +130,7 @@ UnclesFor(p, s) ==
         /\ u # chain_tip[p]
         /\ u \notin ChainFromShare(p, chain_tip[p])
         /\ confirmed_height[p, s] - confirmed_height[p, u] <= MaxUnclesDepth
-        /\ CommonAncestorWithinRange(p, u, chain_tip[p])
+        /\ ConfirmedCommonAncestorWithinRange(p, u, chain_tip[p])
         /\ u \notin UNION {uncles[x]: x \in shares[p]} \* u is not an uncle for any share tracked on p
     }
 
@@ -149,6 +166,7 @@ GenerateShare(p, work) ==
            /\ share_queue' = Append(share_queue, newShare)
            \* Set bitcoin height for the new share, it can be any valid height
            /\ bitcoin_height' = [bitcoin_height EXCEPT ![p] = bitcoin_height_p + 1]
+           /\ UNCHANGED << received_shares, candidate_height, validation_status, spend_dependencies >>
 
 (****************************************************************************)
 (* Sum the chain work for a set of shares                                  *)
@@ -167,11 +185,32 @@ TotalWorkOverPPLNSWindow(p, s) ==
         IN  SumWork(p, dag)
 
 (****************************************************************************)
-(* Receive a share from another process                                     *)
+(* Receive a share on process p                                             *)
+(* The share is added to the shares set, but not  made candidate or         *)
+(* confirmed yet                                                            *)
+(****************************************************************************)
+ReceiveShare(p) ==
+    /\ share_queue # << >>
+    /\ LET s == Head(share_queue)
+       IN
+        /\ \/ Contains(received_shares[p], s) # TRUE \* Only process share if not already received
+           \/ s \notin shares[p] \* Only process share if not already present in stored shares
+        /\ bitcoin_height[p] - s.bitcoin_height <= 1 \* Share should be recent enough
+        \* Add to received shares
+        /\ received_shares' = [received_shares EXCEPT ![p] = Append(@, s)]
+    /\ share_queue' = Tail(share_queue)
+    /\ UNCHANGED << chain_tip, parent, uncles, chain_work, confirmed_height, candidate_height, bitcoin_height, validation_status, shares, spend_dependencies >>
+    
+\* MakeShareCandidate(p)
+\* MakeShareConfirmed(p)
+\* UnconfirmShare(p)
+
+(****************************************************************************)
+(* Confirm a share on process p                                             *)
 (* The receiving node's tips will be changed, the uncles and parent         *)
 (* relationships remain unchanged.                                          *)
 (****************************************************************************)
-ReceiveShare(p) ==
+ConfirmShare(p) ==
     /\ share_queue # << >>
     /\ LET s == Head(share_queue)
        IN
@@ -183,29 +222,31 @@ ReceiveShare(p) ==
         /\ confirmed_height' = [confirmed_height EXCEPT ![p, s] = confirmed_height[p, parent[s]] + 1]
         \* Update chain work to be parent's chain work + s.work
         /\ chain_work' = [chain_work EXCEPT ![p, s] = chain_work[p, parent[s]] + s.work]
-        /\ IF CommonAncestor(p, s, chain_tip[p]) THEN
+        /\ IF ConfirmedCommonAncestor(p, s, chain_tip[p]) THEN
             \* New share becomes the new tip if it exceeds current tip's work
             /\ IF chain_work[p, parent[s]] + s.work > chain_work[p, chain_tip[p]] THEN
                 /\ chain_tip' = [chain_tip EXCEPT ![p] = s]
-                /\ UNCHANGED <<parent, uncles, bitcoin_height >>
+                /\ UNCHANGED <<parent, uncles, bitcoin_height, received_shares, candidate_height, validation_status, spend_dependencies>>
                 ELSE
-                /\ UNCHANGED <<chain_tip, parent, uncles, bitcoin_height>>
+                /\ UNCHANGED <<chain_tip, parent, uncles, bitcoin_height, received_shares, candidate_height, validation_status, spend_dependencies>>
           ELSE
             \* For disjoint chains, the new share becomes the tip only if its total work over PPLNS window exceeds current tip's
             /\ IF TotalWorkOverPPLNSWindow(p, s) > TotalWorkOverPPLNSWindow(p, chain_tip[p]) THEN
                 /\ chain_tip' = [chain_tip EXCEPT ![p] = s]
-                /\ UNCHANGED <<parent, uncles, bitcoin_height >>
+                /\ UNCHANGED <<parent, uncles, bitcoin_height, received_shares, candidate_height, validation_status, spend_dependencies>>
                ELSE
-                /\ UNCHANGED <<chain_tip, parent, uncles, bitcoin_height>>
+                /\ UNCHANGED <<chain_tip, parent, uncles, bitcoin_height, received_shares, candidate_height, validation_status, spend_dependencies>>
     /\ share_queue' = Tail(share_queue)
 
 Next ==
     \/ \E p \in Processes,
         work \in Work : GenerateShare(p, work)
     \/ \E p \in Processes : ReceiveShare(p)
+    \/ \E p \in Processes : ConfirmShare(p)
 
-Fairness == WF_vars(\E p \in Processes: ReceiveShare(p))
-
+Fairness == /\ WF_vars(\E p \in Processes: ConfirmShare(p))
+            /\ WF_vars(\E p \in Processes: ReceiveShare(p))
+            
 Spec == Init /\ [][Next]_vars /\ Fairness
 
 THEOREM Spec => []TypeOK
