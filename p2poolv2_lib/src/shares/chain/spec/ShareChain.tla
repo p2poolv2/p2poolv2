@@ -200,8 +200,39 @@ ReceiveShare(p) ==
         /\ received_shares' = [received_shares EXCEPT ![p] = Append(@, s)]
     /\ share_queue' = Tail(share_queue)
     /\ UNCHANGED << chain_tip, parent, uncles, chain_work, confirmed_height, candidate_height, bitcoin_height, validation_status, shares, spend_dependencies >>
+
+
+(****************************************************************************)
+(* Validate a received share so it can be confirmed later                   *)
+(* Validation is indepdent of parent's status                               *)
+(* We could get into modeling txs, but that is not relevant to chain        *)
+(* organisation                                                             *)
+(****************************************************************************)
+ValidateShare(p) ==
+    /\ received_shares[p] # << >>
+    /\ LET s == Head(received_shares[p])
+       IN
+        /\ \/ validation_status[p, s] = "None"
+           \/ validation_status[p, s] = "Pending" 
+        /\ validation_status' = [validation_status EXCEPT ![p, s] = "Valid"]
+    /\ UNCHANGED << shares, chain_tip, parent, uncles, chain_work, confirmed_height, candidate_height, bitcoin_height, received_shares, share_queue, spend_dependencies >>
     
-\* MakeShareCandidate(p)
+(****************************************************************************)
+(* Make a received share into a candidate share                             *)
+(* - parent has to be a candidate or confirmed share                        *)
+(* - candidate_height is parent's candidate_height + 1                      *)
+(****************************************************************************)
+MakeShareCandidate(p) == 
+    /\ received_shares[p] # << >>
+    /\ LET s == Head(received_shares[p])
+       IN
+        /\  \/ candidate_height[p, parent[s]] # NoHeight \* Parent must be candidate or confirmed
+            \/ confirmed_height[p, parent[s]] # NoHeight
+        /\ validation_status[p, s] = "Valid" \* Only make candidate if share is valid
+        /\ candidate_height' = [candidate_height EXCEPT ![p, s] = candidate_height[p, parent[s]] + 1]
+        /\ received_shares' = [received_shares EXCEPT ![p] = Tail(@)]
+    /\ UNCHANGED << shares, chain_tip, parent, uncles, chain_work, confirmed_height, bitcoin_height, share_queue, validation_status, spend_dependencies >>
+    
 \* MakeShareConfirmed(p)
 \* UnconfirmShare(p)
 
@@ -242,11 +273,15 @@ Next ==
     \/ \E p \in Processes,
         work \in Work : GenerateShare(p, work)
     \/ \E p \in Processes : ReceiveShare(p)
+    \/ \E p \in Processes : ValidateShare(p)
+    \/ \E p \in Processes : MakeShareCandidate(p)
     \/ \E p \in Processes : ConfirmShare(p)
 
 Fairness == /\ WF_vars(\E p \in Processes: ConfirmShare(p))
             /\ WF_vars(\E p \in Processes: ReceiveShare(p))
-            
+            /\ WF_vars(\E p \in Processes: ValidateShare(p))
+            /\ WF_vars(\E p \in Processes: MakeShareCandidate(p))
+
 Spec == Init /\ [][Next]_vars /\ Fairness
 
 THEOREM Spec => []TypeOK
