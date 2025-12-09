@@ -227,36 +227,38 @@ CandidateUnclesFor(p, s) ==
 (* - candidate_work is parent's candidate_work + s.work                     *)
 (****************************************************************************)
 PushToCandidate(p, s) ==
-    \* Push only if parent is at the top of candidate
-    /\ parent[s] = TopCandidate(p)
-    /\
-        LET parentShare == parent[s]
-            parent_work == IF parentShare = NoShare \/ parentShare = Genesis THEN 1 ELSE candidate_work[p, parentShare]
-        IN
-            /\ candidate_height' = 
-                [candidate_height EXCEPT ![p] = Append(@, s)]
-            /\ candidate_work' = 
-                [candidate_work EXCEPT ![p, s] = parent_work + s.work]
+    LET parentShare == parent[s]
+        parent_work == IF parentShare = NoShare \/ parentShare = Genesis THEN 1 ELSE candidate_work[p, parentShare]
+    IN
+        /\ candidate_height' = 
+            [candidate_height EXCEPT ![p] = Append(@, s)]
+        /\ candidate_work' = 
+            [candidate_work EXCEPT ![p, s] = parent_work + s.work]
 
 (****************************************************************************)
 (* Push a share s onto the candidate uncles for process p                   *)
 (* - candidate_uncles_height is parent's candidate_height + 1               *)
 (****************************************************************************)
 PushToCandidateUncles(p, s) ==
-    \* Push only if parent is not at the top of candidate
-    /\ parent[s] # TopCandidate(p)
     \* Parent must be in candidate height
-    /\ GetCandidateHeight(p, parent[s]) # NoHeight
+    /\ 
+        \/ GetCandidateHeight(p, parent[s]) # NoHeight
+        \/ parent[s] = Genesis
     \* Parent must be no deeper than 3 from candidate top
     /\ Len(candidate_height[p]) - GetCandidateHeight(p, parent[s]) <= 3
     /\
         LET parentShare == parent[s]
             parent_height == GetCandidateHeight(p, parentShare)
+            parent_work == IF parentShare = NoShare \/ parentShare = Genesis THEN 1 ELSE candidate_work[p, parentShare]
         IN  
-            /\ candidate_uncles_height' = 
-                [candidate_uncles_height EXCEPT ![p][parent_height + 1] = @ \cup {s}]
+            /\ IF parent_height = Len(candidate_uncles_height[p]) THEN 
+                candidate_uncles_height' = 
+                    [candidate_uncles_height EXCEPT ![p] = Append(@, {s})]
+               ELSE
+                candidate_uncles_height' = 
+                    [candidate_uncles_height EXCEPT ![p][parent_height + 1] = @ \cup {s}]
             /\ candidate_work' = 
-                [candidate_work EXCEPT ![p, s] = candidate_work[p, parentShare] + s.work]
+                [candidate_work EXCEPT ![p, s] = parent_work + s.work]
 
 (****************************************************************************)
 (* Push a share s onto the confirmed chain for process p                    *)
@@ -387,15 +389,16 @@ ValidateShare(p) ==
 MakeShareCandidate(p) == 
     /\ received_shares[p] # << >>
     /\ LET s == Head(received_shares[p])
-           candidate_height_s == GetCandidateHeight(p, parent[s])
-           confirmed_height_s == GetConfirmedHeight(p, parent[s])
        IN
-        /\ \/ candidate_height_s # NoHeight
-           \/ confirmed_height_s # NoHeight
         /\ validation_status[p, s] = "Valid"
+        /\ \/ /\ Len(candidate_height[p]) = 0   \* Candidate chain is empty
+              /\ parent[s] = Genesis            \* Parent must Genesis
+           \/ /\ Len(candidate_height[p]) > 0   \* Candidate chain exists
+              /\ parent[s] = TopCandidate(p)    \* Parent must be top of candidate
         /\ PushToCandidate(p, s)
+        /\ PushToCandidateUncles(p, s)
         /\ received_shares' = [received_shares EXCEPT ![p] = Tail(@)]
-    /\ UNCHANGED << shares, parent, uncles, confirmed_work, confirmed_height, bitcoin_height, share_queue, validation_status, spend_dependencies, confirmed_uncles_height, candidate_uncles_height >>
+    /\ UNCHANGED << shares, parent, uncles, confirmed_work, confirmed_height, bitcoin_height, share_queue, validation_status, spend_dependencies, confirmed_uncles_height >>
 
 (****************************************************************************)
 (* Mark a share as confirmed on process p                                   *)
