@@ -346,10 +346,9 @@ MakeShareCandidate(p) ==
         /\ expected_height[p, s] # NoHeight                 \* Share must have expected height set
         /\ expected_height[p, s] = Len(candidates[p]) + 1   \* Expected height must be next in candidate chain
         /\ validation_status[p, s] = "Valid"
-        /\ \/ /\ Len(candidates[p]) = 0                     \* Candidate chain is empty
-              /\ parent[s] = Genesis                        \* Parent must Genesis
-           \/ /\ Len(candidates[p]) > 0                     \* Candidate chain exists
-              /\ parent[s] = TopCandidate(p)                \* Parent must be top of candidate
+        \* Parent must be in candidate or confirmed chain
+        /\  \/ Contains(candidates[p], parent[s]) 
+            \/ Contains(confirmed[p], parent[s])
         /\ PushToCandidate(p, s)
         /\ PushToCandidateUncles(p, s)
         /\ received_shares' = [received_shares EXCEPT ![p] = Tail(@)]
