@@ -15,16 +15,16 @@ VARIABLES
     confirmed_work,             \* Total work accumulated up to each confirmed height on each process
     candidate_work,             \* Total work accumulated up to each candidate height, if any
     expected_height,            \* expected height of each share in the chain at each process. Shares may or may not candidate or confirm to this height
-    candidates,           \* candidates of each share in the chain at each process
-    confirmed,           \* confirmed of each share in the chain at each process
-    candidate_uncles,     \* candidate uncles height of each share in the chain at each process
-    confirmed_uncles,    \* confirmed uncles height of each share in the chain at each process
+    candidates,                 \* candidates of each share in the chain at each process
+    confirmed,                  \* confirmed of each share in the chain at each process
+    candidate_uncles,           \* candidate uncles height of each share in the chain at each process
+    confirmed_uncles,           \* confirmed uncles height of each share in the chain at each process
     received_shares,            \* Queue of shares received from other processes, but not validated yet
     validation_status,          \* Validation status of received shares
     share_queue,                \* Queue of shares that have been generated but not yet sent to peers,
     bitcoin_height,             \* Bitcoin network height associated with each share
     spend_dependencies          \* Dependency Share -> Share. The key share is spending the value share.
-vars == <<shares, share_queue, uncles, parent, confirmed_work, bitcoin_height, confirmed, candidates, received_shares, validation_status, spend_dependencies>>
+vars == <<shares, share_queue, uncles, parent, confirmed_work, bitcoin_height, confirmed, candidates, received_shares, validation_status, spend_dependencies, candidate_work, confirmed_uncles, candidate_uncles, expected_height>>
 
 (****************************************************************************)
 (* Genesis share definition                                                 *)
@@ -314,6 +314,27 @@ ValidateShare(p) ==
     /\ UNCHANGED << shares, parent, uncles, confirmed_work, confirmed, candidates, bitcoin_height, received_shares, share_queue, spend_dependencies, candidate_work, confirmed_uncles, candidate_uncles, expected_height >>
 
 (****************************************************************************)
+(* Set expected height for a share s on process p based on parent's         *)
+(* expected height                                                          *)
+(* We should do this only if share has valid PoW                            *)
+(* Setting a height implies all parents of a share have been received       *)
+(****************************************************************************)
+SetHeight(p) ==
+    /\ \E s \in Share:
+        \* Share has been received
+        /\ Contains(received_shares[p], s) = TRUE
+        \* Share must not already have expected height set
+        /\ expected_height[p, s] = NoHeight
+        \* Parent has been assigned an expected height 
+        /\ expected_height[p, parent[s]] # NoHeight
+        /\
+            LET parentShare == parent[s]
+                parent_height == IF parentShare = NoShare \/ parentShare = Genesis THEN 1 ELSE expected_height[p, parentShare] + 1
+            IN
+                /\ expected_height' = [expected_height EXCEPT ![p, s] = parent_height]
+        /\ UNCHANGED << shares, parent, uncles, confirmed_work, confirmed, candidates, bitcoin_height, received_shares, share_queue, validation_status, spend_dependencies, candidate_work, confirmed_uncles, candidate_uncles >>
+
+(****************************************************************************)
 (* Make a received share into a candidate share                             *)
 (* - parent has to be a candidate or confirmed share                        *)
 (* - candidates is parent's candidates + 1                                  *)
@@ -322,11 +343,13 @@ MakeShareCandidate(p) ==
     /\ received_shares[p] # << >>
     /\ LET s == Head(received_shares[p])
        IN
+        /\ expected_height[p, s] # NoHeight                 \* Share must have expected height set
+        /\ expected_height[p, s] = Len(candidates[p]) + 1   \* Expected height must be next in candidate chain
         /\ validation_status[p, s] = "Valid"
-        /\ \/ /\ Len(candidates[p]) = 0   \* Candidate chain is empty
-              /\ parent[s] = Genesis            \* Parent must Genesis
-           \/ /\ Len(candidates[p]) > 0   \* Candidate chain exists
-              /\ parent[s] = TopCandidate(p)    \* Parent must be top of candidate
+        /\ \/ /\ Len(candidates[p]) = 0                     \* Candidate chain is empty
+              /\ parent[s] = Genesis                        \* Parent must Genesis
+           \/ /\ Len(candidates[p]) > 0                     \* Candidate chain exists
+              /\ parent[s] = TopCandidate(p)                \* Parent must be top of candidate
         /\ PushToCandidate(p, s)
         /\ PushToCandidateUncles(p, s)
         /\ received_shares' = [received_shares EXCEPT ![p] = Tail(@)]
@@ -337,6 +360,7 @@ Next ==
     \/ \E p \in Processes,
         work \in Work : GenerateShare(p, work)
     \/ \E p \in Processes : ReceiveShare(p)
+    \/ \E p \in Processes : SetHeight(p)
     \/ \E p \in Processes : ValidateShare(p)
     \/ \E p \in Processes : MakeShareCandidate(p)
     \* \/ \E p \in Processes : ConfirmShare(p)
