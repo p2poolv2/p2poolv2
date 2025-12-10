@@ -130,61 +130,6 @@ GetConfirmedHeight(p, s) ==
     SelectInSeq(confirmed_height[p], LAMBDA v: v = s)
 
 (****************************************************************************)
-(* Get the chain starting from given share for process p                    *)
-(****************************************************************************)
-RECURSIVE ChainFromShare(_, _)
-ChainFromShare(p, s) ==
-    IF s = Genesis THEN {}
-    ELSE
-        LET parentShare == parent[s]
-        IN  {s} \cup ChainFromShare(p, parentShare)
-
-(****************************************************************************)
-(* Get the chain from share for process p - including uncles                *)
-(****************************************************************************)
-RECURSIVE DAG(_, _)
-DAG(p, s) ==
-    IF s = Genesis THEN {}
-    ELSE
-        LET parentShare == parent[s]
-        IN  {s}
-            \cup DAG(p, parentShare) 
-            \cup {DAG(p, u) : u \in uncles[parentShare]}
-
-(****************************************************************************)
-(* Get the chain from share for process p - including uncles                *)
-(****************************************************************************)
-RECURSIVE DAGBetween(_, _, _)
-DAGBetween(p, s, t) ==
-    IF \/ t = Genesis
-       \/ s = t THEN {}
-    ELSE
-        LET parentShare == parent[t]
-        IN  {t}
-            \cup DAGBetween(p, s, parentShare) 
-            \cup {DAGBetween(p, s, u) : u \in uncles[parentShare]}
-
-(****************************************************************************)
-(* Check if two shares have a common ancestor on process p within max uncle *)
-(* depth                                                                    *)
-(****************************************************************************)
-ConfirmedCommonAncestorWithinRange(p, s1, s2) ==
-    \E a \in shares[p] :
-        /\ a \in ChainFromShare(p, s1)
-        /\ a \in ChainFromShare(p, s2)
-        /\ confirmed_height[p, a] # NoHeight
-        /\ confirmed_height[p, TopConfirmed(p)] - confirmed_height[p, a] >= MaxUnclesDepth
-
-(****************************************************************************)
-(* Check if two shares have a common ancestor on process p                  *)
-(****************************************************************************)
-ConfirmedCommonAncestor(p, s1, s2) ==
-    \E a \in shares[p] :
-        /\ a \in ChainFromShare(p, s1)
-        /\ a \in ChainFromShare(p, s2)
-        /\ confirmed_height[p, a] # NoHeight
-
-(****************************************************************************)
 (* Recursively collect uncles from highest to lowest height, limiting to 3  *)
 (****************************************************************************)
 RECURSIVE CollectUncles(_, _, _, _, _)
@@ -333,22 +278,6 @@ GenerateShare(p, work) ==
            /\ UNCHANGED << received_shares, candidate_height, validation_status, spend_dependencies, candidate_work, confirmed_uncles_height, candidate_uncles_height>>
 
 (****************************************************************************)
-(* Sum the chain work for a set of shares                                  *)
-(****************************************************************************)
-RECURSIVE SumWork(_, _)
-SumWork(p, shareSet) ==
-    IF shareSet = { } THEN 0
-    ELSE LET s == CHOOSE x \in shareSet : TRUE
-         IN confirmed_work[p, s] + SumWork(p, shareSet \ {s})
-
-(****************************************************************************)
-(* Calculate total work over PPLNS window for process p and share s        *)
-(****************************************************************************)
-TotalWorkOverPPLNSWindow(p, s) ==
-    LET dag == DAG(p, s)
-        IN  SumWork(p, dag)
-
-(****************************************************************************)
 (* Receive a share on process p                                             *)
 (* The share is added to the shares set, but not  made candidate or         *)
 (* confirmed yet                                                            *)
@@ -400,68 +329,6 @@ MakeShareCandidate(p) ==
         /\ received_shares' = [received_shares EXCEPT ![p] = Tail(@)]
     /\ UNCHANGED << shares, parent, uncles, confirmed_work, confirmed_height, bitcoin_height, share_queue, validation_status, spend_dependencies, confirmed_uncles_height >>
 
-(****************************************************************************)
-(* Mark a share as confirmed on process p                                   *)
-(* Preconditions:                                                           *)
-(* - parent should be confirmed                                             *)
-(* - identify fork point                                                    *)
-(* - all spend dependencies should be confirmable all the way to this share *) 
-(*   from fork point                                                        *)
-(* - candidate chain up to this share should be longer than confirmed chain *)
-(* Changes:                                                                 *)
-(*   - unconfirm all above the fork point in confirmed chain                *)
-(*   - confirm all in the candidate chain up to this share                  *)
-(* We avoid having to check for spending dependencies by following the      *)
-(* libbitcoin pop, then push protocol                                       *)
-(****************************************************************************)
-\* ConfirmCandidates(p, s) ==
-\*     /\
-
-(****************************************************************************)
-(* Unconfirm all shares between top and bottom inclusive                    *)
-(* The shares from top to bottom should all be confirmed in sequence        *)
-(* The above says they form a consecytive DAG                               *)
-(****************************************************************************)
-\* UnconfirmRange(p, top, bottom) ==
-\*     /\ confirmed_height[p, top] > confirmed_height[p, bottom]       \* top height > bottom height
-\*     /\ bottom \in DAG(p, top) \* DAG from top to genesis has bottom in it
-\*     /\ \A s \in DAGBetween(p, top, bottom): 
-\*             confirmed_height' = [confirmed_height EXCEPT ![p, s] = NoHeight]
-\*     /\ UNCHANGED << shares, parent, uncles, confirmed_work, bitcoin_height, share_queue, validation_status, spend_dependencies, validation_status, received_shares >>
-
-
-(****************************************************************************)
-(* Confirm a share on process p                                             *)
-(* The receiving node's tips will be changed, the uncles and parent         *)
-(* relationships remain unchanged.                                          *)
-(****************************************************************************)
-\* ConfirmShare(p) ==
-\*     /\ share_queue # << >>
-\*     /\ LET s == Head(share_queue)
-\*        IN
-\*         /\ s \notin shares[p] \* Only process share if not already present
-\*         /\ bitcoin_height[p] - s.bitcoin_height <= 1 \* Share should be recent enough
-\*         \* Add to shares
-\*         /\ shares' = [shares EXCEPT ![p] = @ \cup {s}]
-\*         \* Update confirmed_height to be parent's confirmed_height + 1
-\*         /\ confirmed_height' = [confirmed_height EXCEPT ![p, s] = confirmed_height[p, parent[s]] + 1]
-\*         \* Update chain work to be parent's chain work + s.work
-\*         /\ confirmed_work' = [confirmed_work EXCEPT ![p, s] = confirmed_work[p, parent[s]] + s.work]
-\*         /\ IF ConfirmedCommonAncestor(p, s, chain_tip[p]) THEN
-\*             \* New share becomes the new tip if it exceeds current tip's work
-\*             /\ IF confirmed_work[p, parent[s]] + s.work > confirmed_work[p, chain_tip[p]] THEN
-\*                 /\ chain_tip' = [chain_tip EXCEPT ![p] = s]
-\*                 /\ UNCHANGED <<parent, uncles, bitcoin_height, received_shares, candidate_height, validation_status, spend_dependencies>>
-\*                 ELSE
-\*                 /\ UNCHANGED <<chain_tip, parent, uncles, bitcoin_height, received_shares, candidate_height, validation_status, spend_dependencies>>
-\*           ELSE
-\*             \* For disjoint chains, the new share becomes the tip only if its total work over PPLNS window exceeds current tip's
-\*             /\ IF TotalWorkOverPPLNSWindow(p, s) > TotalWorkOverPPLNSWindow(p, chain_tip[p]) THEN
-\*                 /\ chain_tip' = [chain_tip EXCEPT ![p] = s]
-\*                 /\ UNCHANGED <<parent, uncles, bitcoin_height, received_shares, candidate_height, validation_status, spend_dependencies>>
-\*                ELSE
-\*                 /\ UNCHANGED <<chain_tip, parent, uncles, bitcoin_height, received_shares, candidate_height, validation_status, spend_dependencies>>
-\*     /\ share_queue' = Tail(share_queue)
 
 Next ==
     \/ \E p \in Processes,
