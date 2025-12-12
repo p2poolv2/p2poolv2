@@ -359,16 +359,16 @@ MarkShareAsCandidate(p, s) ==
 (* candidate                                                                *)
 (* Note the chain is not explicity required to be stored anywhere, it is    *)
 (* constructed by following parent links recursively                        *)
+(* Returns Seq << branch point .. s >>                                      *)
 (****************************************************************************)
 RECURSIVE CandidateBranch(_, _)
 CandidateBranch(p, s) ==
     IF \/ s = Genesis                                       \* We hit genesis as end of candidate chain
-        THEN << >>
-    ELSE
-        IF Contains(candidates[p], s) THEN << s >>          \* We found ancestor in candidate chain 
-        ELSE CandidateBranch(p, parent[s]) \o << s >>       \* Recur to parent to continue down the chain
-
-\* KP: Next we can get candidates from TopCandidate to Head of CandidateBranch as the current candidate chain to reorg
+       \/ Contains(candidates[p], s)                        \* We found ancestor in candidate chain
+    THEN 
+        << s >>
+    ELSE 
+        CandidateBranch(p, parent[s]) \o << s >>       \* Recur to parent to continue down the chain
 
 (****************************************************************************)
 (* For a share with Candidate status and more work than top, reorg          *)
