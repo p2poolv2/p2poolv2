@@ -260,14 +260,13 @@ ReceiveShare(p) ==
     /\ share_queue # << >>
     /\ LET s == Head(share_queue)
        IN
-        /\ \/ Contains(received_shares[p], s) # TRUE \* Only process share if not already received
-           \/ s \notin shares[p] \* Only process share if not already present in stored shares
-        /\ bitcoin_height[p] - s.bitcoin_height <= 1 \* Share should be recent enough
+        /\ \/ ~Contains(received_shares[p], s)                  \* Only process share if not already received
+           \/ s \notin shares[p]                                \* Only process share if not already present in stored shares
+        /\ bitcoin_height[p] - s.bitcoin_height <= 1            \* Share should be recent enough
         \* Add to received shares
         /\ received_shares' = [received_shares EXCEPT ![p] = Append(@, s)]
     /\ share_queue' = Tail(share_queue)
     /\ UNCHANGED << parent, uncles, confirmed, candidates, bitcoin_height, validation_status, shares, spend_dependencies, chain_work, confirmed_uncles, candidate_uncles, expected_height, share_status>>
-
 
 (****************************************************************************)
 (* Validate a received share so it can be confirmed later                   *)
@@ -326,6 +325,32 @@ AppendShareToCandidates(p, s) ==
     /\ PushToCandidateUncles(p, s)
     /\ received_shares' = [received_shares EXCEPT ![p] = Tail(@)]
     /\ UNCHANGED << shares, parent, uncles, confirmed, bitcoin_height, share_queue, validation_status, spend_dependencies, confirmed_uncles, expected_height, share_status, chain_work >>
+
+(****************************************************************************)
+(* Make a received share into an orphan share                               *)
+(* - parent has to be in confirmed chain, but not top confirmed share       *)
+(* - the chain work for the share should be less than or equal to top       *)
+(*   confirmed                                                              *)   
+(* - share is removed from received shares queue                            *)
+(* - orphans/uncles are never confirmed as we don't consider the            *)
+(*   included in these. Uncles are only used for share accounting           *)
+(* - These orphans are potentially added as uncles when a peer generates a  *)
+(*   share that includes them as uncles                                     *)
+(* - The status is left as Candidate, for any potential future candidate    *)
+(*   reorgs                                                                 *)
+(****************************************************************************)
+MarkShareAsOrphan(p, s) ==
+    /\ received_shares[p] # << >>
+    /\ s = Head(received_shares[p])
+    /\ expected_height[p, s] # NoHeight                     \* Share must have expected height set
+    /\ validation_status[p, s] = "Valid"
+    /\ share_status[p, s] = "Candidate"                     \* Share must be marked as candidate
+    /\ Contains(confirmed[p], parent[s])                    \* Parent must be in confirmed chain
+    /\ chain_work[p, s] <= chain_work[p, TopConfirmed(p)]   \* Share must have less or equal work than top confirmed
+    /\ parent[s] # TopConfirmed(p)                         \* Share's parent must not be top confirmed
+    /\ received_shares' = [received_shares EXCEPT ![p] = Tail(@)]
+    /\ UNCHANGED << shares, parent, uncles, confirmed, candidates, bitcoin_height, share_queue, validation_status, spend_dependencies, chain_work, confirmed_uncles, candidate_uncles, expected_height, share_status >>
+
 
 (****************************************************************************)
 (* Mark a received share as candidate without appending to candidate chain  *)
@@ -444,6 +469,7 @@ Next ==
     \/ \E p \in Processes, s \in Share : MarkShareAsCandidate(p, s)
     \/ \E p \in Processes, s \in Share : ReorgCandidateChain(p, s)
     \/ \E p \in Processes : ConfirmCandidateChain(p)
+    \/ \E p \in Processes, s \in Share: MarkShareAsOrphan(p, s)
 
 Fairness == 
     /\ WF_vars(\E p \in Processes: ReceiveShare(p))
@@ -453,6 +479,7 @@ Fairness ==
     /\ WF_vars(\E p \in Processes, s \in Share: MarkShareAsCandidate(p, s))
     /\ WF_vars(\E p \in Processes, s \in Share: ReorgCandidateChain(p, s))
     /\ WF_vars(\E p \in Processes: ConfirmCandidateChain(p))
+    /\ WF_vars(\E p \in Processes, s \in Share: MarkShareAsOrphan(p, s))
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
