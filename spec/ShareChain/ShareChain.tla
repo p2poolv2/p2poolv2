@@ -6,10 +6,11 @@ CONSTANTS
     MaxShares,                  \* Maximum number of shares per process
     Work,                       \* Work/difficulty parameter for shares
     MaxUnclesDepth,             \* Maximum depth for uncles included in a share
+    MaxUncles,                  \* Maximum number of uncles included in a share
     MaxBitcoinHeight            \* Current Bitcoin network height for validating received shares
 
 VARIABLES
-    shares,                     \* Set of all shares across all processes
+    stored_shares,              \* Set of all shares across all processes
     parent,                     \* Parent references for each share
     uncles,                     \* Uncle references for each share
     chain_work,                 \* Total work accumulated up to each candidate height, if any
@@ -23,22 +24,29 @@ VARIABLES
     share_queue,                \* Queue of shares that have been generated but not yet sent to peers,
     bitcoin_height,             \* Bitcoin network height associated with each share
     spend_dependencies          \* Dependency Share -> Share. The key share is spending the value share.
-vars == <<shares, share_queue, uncles, parent, bitcoin_height, 
+vars == <<stored_shares, share_queue, uncles, parent, bitcoin_height, 
           confirmed, candidates, received_shares, validation_status, 
           spend_dependencies, chain_work, expected_height, share_status>>
 
 (****************************************************************************)
 (* Genesis share definition                                                 *)
 (****************************************************************************)
-
 Genesis == [process |-> CHOOSE p \in Processes: TRUE, work |-> 1, bitcoin_height |-> 0]
 
-\* Use NoHeight to indicate share not found in height sequences, aligns with sequence indexed from 1
+(****************************************************************************)
+(* Use NoHeight to indicate share not found in height sequences             *)
+(* Sequences are indexed from 1                                             *)
+(****************************************************************************)
 NoHeight == 0
 
+(****************************************************************************)
+(* Total shares across all processes                                        *)
+(****************************************************************************)
 TotalShares == MaxShares * Cardinality(Processes)
 
-\* Genesis height is 1, aligns with sequence indexed from 1
+(****************************************************************************)
+(* Genesis height is 1, aligns with sequence indexed from 1                 *)
+(****************************************************************************)
 Height == (1..TotalShares)
 
 (****************************************************************************)
@@ -53,14 +61,20 @@ Share == [
     bitcoin_height: (-1..MaxBitcoinHeight)
 ]
 
+(****************************************************************************)
+(* Define NoShare to indicate absence of a share                            *)
+(****************************************************************************)
 NoShare == [process |-> CHOOSE p \in Processes: TRUE, work |-> 0, bitcoin_height |-> -1]
-        
+
+(****************************************************************************)
+(* Type definitions for all variables                                       *)
+(****************************************************************************)
 TypeOK ==
-    /\ shares \in [Processes -> Share]
+    /\ stored_shares \in [Processes -> SUBSET Share]
     /\ parent \in [Share -> Share \cup {Genesis} \cup {NoShare}]
     /\ uncles \in [Share -> Share \cup {Genesis} \cup {NoShare}]
     /\ chain_work \in [Processes \X (Share \cup {Genesis}) -> Nat]
-    /\ expected_height \in [Processes \X Share -> Height \cup {NoHeight}]
+    /\ expected_height \in [Processes \X Share \cup {Genesis} -> Height \cup {NoHeight}]
     /\ candidates \in [Processes -> Seq(Share)]
     /\ confirmed \in [Processes -> Seq(Share)]
     /\ received_shares \in [Processes -> Seq(Share)]
@@ -70,9 +84,12 @@ TypeOK ==
     /\ bitcoin_height \in [Processes -> (0..MaxBitcoinHeight)]
     /\ spend_dependencies \in [Share -> SUBSET Share]
 
+(****************************************************************************)
+(* Initial state definition                                                 *)
+(****************************************************************************)
 Init ==
     \* All processes start with genesis share
-    /\ shares = [p \in Processes |-> {Genesis}] 
+    /\ stored_shares = [p \in Processes |-> {Genesis}] 
     /\ parent = [s \in Share \cup {Genesis} |-> NoShare]
     /\ uncles = [s \in Share \cup {Genesis} |-> {}]
     \* Candidate chain is empty at the start
@@ -80,7 +97,7 @@ Init ==
     /\ expected_height = [p \in Processes, s \in Share |-> 
                             IF s = Genesis THEN 1 ELSE NoHeight]
     /\ candidates = [p \in Processes |-> << >> ]            \* Empty
-    /\ confirmed = [p \in Processes |->  << Genesis >> ]    \* Genesis at height 0
+    /\ confirmed = [p \in Processes |->  << Genesis >> ]    \* Genesis at height 1
     /\ received_shares = [p \in Processes |-> << >>]
     /\ validation_status = [p \in Processes, s \in Share |-> "None"]
     /\ share_status = [p \in Processes, s \in Share |-> "None"]
@@ -89,13 +106,12 @@ Init ==
     /\ spend_dependencies = [s \in Share |-> {}]
 
 (****************************************************************************)
-(* Get the candidate top height for process p                               *)
+(* Get the top confirmed share for process p                               *)
 (****************************************************************************)
-TopConfirmed(p) ==
-    confirmed[p][Len(confirmed[p])]
+TopConfirmed(p) == confirmed[p][Len(confirmed[p])]
 
 (****************************************************************************)
-(* Get the candidate top height for process p                               *)
+(* Get the top candidate share for process p                                *)
 (****************************************************************************)
 TopCandidate(p) ==
     IF Len(candidates[p]) = 0 THEN NoShare
@@ -105,20 +121,18 @@ TopCandidate(p) ==
 (****************************************************************************)
 (* Get the candidate height of a share s on process p                       *)
 (* returns NoHeight if not found                                            *)
-(* In implementaion we replace these scans with more efficient              *)
+(* In implementation we replace these scans with more efficient             *)
 (* indexing of heights stored as "expected height derived from parent"      *)
 (****************************************************************************)
-GetCandidateHeight(p, s) ==
-    SelectInSeq(candidates[p], LAMBDA v: v = s)
+GetCandidateHeight(p, s) == SelectInSeq(candidates[p], LAMBDA v: v = s)
 
 (****************************************************************************)
 (* Get the confirmed height of a share s on process p                       *)
 (* returns NoHeight if not found                                            *)
-(* In implementaion we replace these scans with more efficient              *)
+(* In implementation we replace these scans with more efficient             *)
 (* indexing of heights stored as "expected height derived from parent"      *)
 (****************************************************************************)
-GetConfirmedHeight(p, s) ==
-    SelectInSeq(confirmed[p], LAMBDA v: v = s)
+GetConfirmedHeight(p, s) == SelectInSeq(confirmed[p], LAMBDA v: v = s)
 
 (****************************************************************************)
 (* Get uncles for a share s generated by process p.                         *)
@@ -133,21 +147,21 @@ GetConfirmedHeight(p, s) ==
 (****************************************************************************)
 UnclesFor(p, s) ==
     LET parent_confirmed_height == GetConfirmedHeight(p, parent[s])
-        min_depth == IF parent_confirmed_height > 3
-                     THEN parent_confirmed_height - 3 
+        min_depth == IF parent_confirmed_height > MaxUnclesDepth
+                     THEN parent_confirmed_height - MaxUnclesDepth
                      ELSE 1
         \* Get all shares that have parents in confirmed chain within depth range
         all_uncles == UNION {uncles[sh] : sh \in DOMAIN uncles}
-        potential_uncles == {u \in shares[p] : 
+        potential_uncles == {u \in stored_shares[p] : 
             /\ u # s
             /\ GetConfirmedHeight(p, parent[u]) # NoHeight
             /\ GetConfirmedHeight(p, parent[u]) >= min_depth
             /\ GetConfirmedHeight(p, parent[u]) < parent_confirmed_height
             /\ u \notin all_uncles}
-    \* Select up to 3 uncles
-    IN IF Cardinality(potential_uncles) <= 3 
+    \* Select up to MaxUncles uncles
+    IN IF Cardinality(potential_uncles) <= MaxUncles 
        THEN potential_uncles
-       ELSE CHOOSE subset \in SUBSET potential_uncles : Cardinality(subset) = 3
+       ELSE CHOOSE subset \in SUBSET potential_uncles : Cardinality(subset) = MaxUncles
     
 
 (****************************************************************************)
@@ -157,8 +171,8 @@ UnclesFor(p, s) ==
 (* - Update tips to include the new share and remove the chain tip          *)
 (****************************************************************************)
 GenerateShare(p, work) ==
-    /\ Cardinality(shares[p]) < MaxShares           \* Limit total shares
-    /\ Len(confirmed[p]) > 0                        \* Ensure genesis is present
+    /\ Cardinality(stored_shares[p]) < MaxShares           \* Limit total shares
+    /\ Len(confirmed[p]) > 0                               \* Ensure genesis is present
     /\ work \in Work
     /\ LET
         bitcoin_height_p == CHOOSE h \in (0..MaxBitcoinHeight) : 
@@ -169,7 +183,7 @@ GenerateShare(p, work) ==
             bitcoin_height |-> bitcoin_height_p
         ]
        IN  \* Add new share to the process's shares
-           /\ shares' = [shares EXCEPT ![p] = @ \cup {newShare}]
+           /\ stored_shares' = [stored_shares EXCEPT ![p] = @ \cup {newShare}]
             \* parent is the current chain tip
            /\ parent' = [parent EXCEPT ![newShare] = TopConfirmed(p)]
             \* Immediately confirm the new share
@@ -184,44 +198,42 @@ GenerateShare(p, work) ==
            \* Enqueue the new share for sending to other processes
            /\ share_queue' = Append(share_queue, newShare)
            \* Set bitcoin height for the new share, it can be any valid height
-           /\ bitcoin_height' = [bitcoin_height EXCEPT ![p] = 
-                                    bitcoin_height_p + 1]
+           /\ bitcoin_height' = [bitcoin_height EXCEPT ![p] = bitcoin_height_p]
            /\ UNCHANGED << received_shares, candidates, validation_status, 
                            spend_dependencies, expected_height, share_status >>
 
 (****************************************************************************)
 (* Receive a share on process p                                             *)
-(* The share is added to the shares set, but not  made candidate or         *)
+(* The share is added to the stored_shares set, but not  made candidate or  *)
 (* confirmed yet                                                            *)
 (****************************************************************************)
 ReceiveShare(p) ==
     /\ share_queue # << >>
     /\ LET s == Head(share_queue)
        IN
-        /\ \/ ~Contains(received_shares[p], s)                  \* Only process share if not already received
-           \/ s \notin shares[p]                                \* Only process share if not already present in stored shares
+        /\ /\ ~Contains(received_shares[p], s)                  \* Only process share if not already received
+           /\ s \notin stored_shares[p]                         \* and not already present in stored shares
         /\ bitcoin_height[p] - s.bitcoin_height <= 1            \* Share should be recent enough
         \* Add to received shares
         /\ received_shares' = [received_shares EXCEPT ![p] = Append(@, s)]
     /\ share_queue' = Tail(share_queue)
     /\ UNCHANGED << parent, uncles, confirmed, candidates, bitcoin_height, 
-                    validation_status, shares, spend_dependencies, chain_work,
+                    validation_status, stored_shares, spend_dependencies, chain_work,
                     expected_height, share_status>>
 
 (****************************************************************************)
 (* Validate a received share so it can be confirmed later                   *)
-(* Validation is indepdent of parent's status                               *)
+(* Validation is independent of parent's status                             *)
 (* We could get into modeling txs, but that is not relevant to chain        *)
 (* organisation                                                             *)
 (****************************************************************************)
-ValidateShare(p) ==
+ValidateShare(p, s) ==
     /\ received_shares[p] # << >>
-    /\ LET s == Head(received_shares[p])
-       IN
-        /\ \/ validation_status[p, s] = "None"
-           \/ validation_status[p, s] = "Pending" 
-        /\ validation_status' = [validation_status EXCEPT ![p, s] = "Valid"]
-    /\ UNCHANGED << shares, parent, uncles, confirmed, candidates, bitcoin_height,
+    /\ Contains(received_shares[p], s)
+    /\ \/ validation_status[p, s] = "None"
+        \/ validation_status[p, s] = "Pending" 
+    /\ validation_status' = [validation_status EXCEPT ![p, s] = "Valid"]
+    /\ UNCHANGED << stored_shares, parent, uncles, confirmed, candidates, bitcoin_height,
                     received_shares, share_queue, spend_dependencies, chain_work,
                     expected_height, share_status >>
 
@@ -231,30 +243,62 @@ ValidateShare(p) ==
 (* We should do this only if share has valid PoW                            *)
 (* Setting a height implies all parents of a share have been received       *)
 (****************************************************************************)
-SetHeight(p) ==
-    /\ \E s \in Share:
-        \* Share has been received
-        /\ Contains(received_shares[p], s) = TRUE
-        \* Share must not already have expected height set
-        /\ expected_height[p, s] = NoHeight
-        \* Parent has been assigned an expected height 
-        /\ expected_height[p, parent[s]] # NoHeight
-        /\
-            LET parentShare == parent[s]
-                parent_height == IF parentShare = NoShare \/ parentShare = Genesis
-                                 THEN 1 
-                                 ELSE expected_height[p, parentShare] + 1
-            IN
-                /\ expected_height' = [expected_height EXCEPT ![p, s] = parent_height]
-        /\ UNCHANGED << shares, parent, uncles, confirmed, candidates, bitcoin_height, 
-                        received_shares, share_queue, validation_status,
-                        spend_dependencies, chain_work, share_status >>
+StoreShareAndSetExpectedHeight(p, s) ==
+    \* Share has been received
+    /\ Contains(received_shares[p], s)
+    \* Share must not already have expected height set
+    /\ expected_height[p, s] = NoHeight
+    \* Parent has been assigned an expected height 
+    /\ expected_height[p, parent[s]] # NoHeight
+    /\
+        LET parentShare == parent[s]
+            parent_height == IF parentShare = NoShare \/ parentShare = Genesis
+                                THEN 1 
+                                ELSE expected_height[p, parentShare]
+        IN
+            /\ stored_shares' = [stored_shares EXCEPT ![p] = @ \cup {s}]
+                \* Set expected height for the share
+            /\ expected_height' = [expected_height EXCEPT ![p, s] = parent_height + 1]
+    /\ UNCHANGED << parent, uncles, confirmed, candidates, bitcoin_height, 
+                    received_shares, share_queue, validation_status,
+                    spend_dependencies, chain_work, share_status >>
 
 (****************************************************************************)
-(* Make a received share into a candidate share                             *)
+(* Mark a received share as candidate without appending to candidate chain  *)
+(* or marking it as an orphan share                                         *)
+(* - parent has to be a candidate or confirmed share but not at top         *)
+(* - share is not added to candidate chain                                  *)
+(* - share status is updated to "Candidate"                                 *)
+(* - candidate work is updated for the share                                *)
+(* - share is not removed from received shares queue                        *)
+(****************************************************************************)
+MarkShareAsCandidate(p, s) ==
+    /\ received_shares[p] # << >>
+    /\ s = Head(received_shares[p])
+    \* Share must have expected height set
+    /\ expected_height[p, s] # NoHeight
+    \* Share must be valid
+    /\ validation_status[p, s] = "Valid"
+    \* Share must not already be candidate or confirmed
+    /\ share_status[p, s] = "None"
+    \* Share must not already be candidate or confirmed
+    /\ /\ ~Contains(candidates[p], s)
+       /\ ~Contains(confirmed[p], s)
+    \* Parent must be in candidate or confirmed chain
+    /\ \/ Contains(candidates[p], parent[s])
+       \/ Contains(confirmed[p], parent[s])
+    /\ share_status' = [share_status EXCEPT ![p, s] = "Candidate"]
+    /\ chain_work' = [chain_work EXCEPT ![p, s] = 
+            IF parent[s] = Genesis \/ parent[s] = NoShare THEN 1 
+            ELSE chain_work[p, parent[s]] + s.work]
+    /\ UNCHANGED << stored_shares, parent, uncles, confirmed, candidates,
+                    bitcoin_height, share_queue, validation_status,
+                    spend_dependencies, expected_height, received_shares >>
+
+(****************************************************************************)
+(* Append a received share to the top of candidates                         *)
 (* - parent has to be top candidate or top confirmed share                  *)
 (* - candidate is added to index at the top                                 *)
-(* - uncles are added to candidate uncles index                             *)
 (* - share is removed from received shares queue                            *)
 (****************************************************************************)
 AppendShareToCandidates(p, s) == 
@@ -262,28 +306,33 @@ AppendShareToCandidates(p, s) ==
     /\ s = Head(received_shares[p])
     \* Share must have expected height set
     /\ expected_height[p, s] # NoHeight
-    \* Expected height must be next in candidate chain
-    /\ expected_height[p, s] = Len(candidates[p]) + 1
+    \* Share must be valid
     /\ validation_status[p, s] = "Valid"
     \* Share must have Candidate status
     /\ share_status[p, s] = "Candidate"
-    \* Parent must be in candidate or confirmed chain
-    /\ \/ TopCandidate(p) = parent[s]
-        \/ TopConfirmed(p) = parent[s]
+    \* Parent must be top candidate or top confirmed share
+    \* include other sanity checks for height and work
+    /\ \/ (/\ TopCandidate(p) = parent[s]
+           /\ expected_height[p, s] = Len(candidates[p]) + 1 
+           /\ chain_work[p, s] > chain_work[p, TopCandidate(p)])
+       \/ (/\ TopConfirmed(p) = parent[s]
+           /\ expected_height[p, s] = Len(confirmed[p]) + 1 
+           /\ chain_work[p, s] > chain_work[p, TopConfirmed(p)])
     /\ candidates' = [candidates EXCEPT ![p] = Append(@, s)]
     /\ received_shares' = [received_shares EXCEPT ![p] = Tail(@)]
-    /\ UNCHANGED << shares, parent, uncles, confirmed, bitcoin_height,
+    /\ UNCHANGED << stored_shares, parent, uncles, confirmed, bitcoin_height,
                     share_queue, validation_status, spend_dependencies,
                     expected_height, share_status, chain_work >>
 
 (****************************************************************************)
-(* Make a received share into an orphan share                               *)
+(* Make a received share into an orphan share - it can't go to top of       *) 
+(* candidates.                                                              *)
 (* - parent has to be in confirmed chain, but not top confirmed share       *)
 (* - the chain work for the share should be less than or equal to top       *)
 (*   confirmed                                                              *)   
 (* - share is removed from received shares queue                            *)
 (* - orphans/uncles are never confirmed as we don't consider the            *)
-(*   included in these. Uncles are only used for share accounting           *)
+(*   included tx in them. Uncles are only used for share accounting.        *)
 (* - These orphans are potentially added as uncles when a peer generates a  *)
 (*   share that includes them as uncles                                     *)
 (* - The status is left as Candidate, for any potential future candidate    *)
@@ -300,48 +349,15 @@ MarkShareAsOrphan(p, s) ==
     \* Share must have less or equal work than top confirmed
     /\ chain_work[p, s] <= chain_work[p, TopConfirmed(p)]
     /\ received_shares' = [received_shares EXCEPT ![p] = Tail(@)]
-    /\ UNCHANGED << shares, parent, uncles, confirmed, candidates,
+    /\ UNCHANGED << stored_shares, parent, uncles, confirmed, candidates,
                     bitcoin_height, share_queue, validation_status,
-                    spend_dependencies, chain_work, expected_height, 
-                    share_status >>
-
-
-(****************************************************************************)
-(* Mark a received share as candidate without appending to candidate chain  *)
-(* - parent has to be a candidate or confirmed share                        *)
-(* - share is not added to candidate chain                                  *)
-(* - share status is updated to "Candidate"                                 *)
-(* - candidate work is updated for the share                                *)
-(* - share is not removed from received shares queue                        *)
-(****************************************************************************)
-MarkShareAsCandidate(p, s) ==
-    /\ received_shares[p] # << >>
-    /\ s = Head(received_shares[p])
-    \* Share must have expected height set
-    /\ expected_height[p, s] # NoHeight
-    \* Share must be valid
-    /\ validation_status[p, s] = "Valid"
-    \* Share must not already be candidate or confirmed
-    /\ share_status[p, s] = "None"
-    \* Share must not already be candidate or confirmed
-    /\ \/ ~Contains(candidates[p], s)
-        \/ ~Contains(confirmed[p], s)
-    \* Parent must be in candidate or confirmed chain
-    /\ \/ Contains(candidates[p], parent[s])
-        \/ Contains(confirmed[p], parent[s])
-    /\ share_status' = [share_status EXCEPT ![p, s] = "Candidate"]
-    /\ chain_work' = [chain_work EXCEPT ![p, s] = 
-            IF parent[s] = Genesis \/ parent[s] = NoShare THEN 1 
-            ELSE chain_work[p, parent[s]] + s.work]
-    /\ UNCHANGED << shares, parent, uncles, confirmed, candidates,
-                    bitcoin_height, share_queue, validation_status,
-                    spend_dependencies, expected_height, received_shares >>
-
+                    spend_dependencies, expected_height, 
+                    share_status, chain_work>>
 
 (****************************************************************************)
 (* Get the chain starting from given share for process p to the first       *)
-(* candidate                                                                *)
-(* Note the chain is not explicity required to be stored anywhere, it is    *)
+(* candidate (branch point) - in reverse                                    *)
+(* Note the chain is not explicitly required to be stored anywhere, it is   *)
 (* constructed by following parent links recursively                        *)
 (* Returns Seq << branch point .. s >>                                      *)
 (****************************************************************************)
@@ -365,7 +381,7 @@ CandidateBranch(p, s) ==
 (* - push chain from branch point to the new share on to candidate index    *)
 (****************************************************************************)
 ReorgCandidateChain(p, s) ==
-    /\ Contains(received_shares[p], s)
+    \* /\ Contains(received_shares[p], s)
     \* Share must not be in candidate chain
     /\ ~Contains(candidates[p], s)
     \* Share must have Candidate status
@@ -383,15 +399,15 @@ ReorgCandidateChain(p, s) ==
             branchPoint == Head(candidate_branch)
             reorged_out_chain == 
                 SubSeq(candidates[p],
-                       GetCandidateHeight(p, TopCandidate(p)), 
-                    GetCandidateHeight(p, branchPoint))
+                    GetCandidateHeight(p, branchPoint),
+                    GetCandidateHeight(p, TopCandidate(p))) 
         IN  
             /\ \* Replace candidates chain with new chain from genesis -> branch point -> new tip
                 candidates' = 
                 [candidates EXCEPT ![p] = 
                     SubSeq(@,1, GetCandidateHeight(p, parent[branchPoint])) \o candidate_branch]
     /\ received_shares' = [received_shares EXCEPT ![p] = Tail(@)]
-    /\ UNCHANGED << shares, parent, uncles, confirmed, bitcoin_height,
+    /\ UNCHANGED << stored_shares, parent, uncles, confirmed, bitcoin_height,
                     share_queue, validation_status, spend_dependencies,
                     chain_work, expected_height, share_status >>
 
@@ -400,7 +416,8 @@ ReorgCandidateChain(p, s) ==
 (* - Require that no shares in the candidate chain have spending dependency *)
 (*   on a share in the future                                               *)
 (* - Move all candidates to confirmed chain                                 *)
-(* - TODO: Confirm candidate uncles too?                                    *) 
+(* - Note: We don't track candidate/confirmation state of uncles. The state *)
+(*   of their parent on the candidate/confirmed chain is what matters       *) 
 (****************************************************************************)
 ConfirmCandidateChain(p) ==
     /\ Len(candidates[p]) > 0
@@ -413,30 +430,32 @@ ConfirmCandidateChain(p) ==
         /\ confirmed' = [confirmed EXCEPT ![p] = confirmed[p] \o new_confirmed]
         \* Clear candidates
         /\ candidates' = [candidates EXCEPT ![p] = << >>]
-    /\ UNCHANGED << shares, parent, uncles, bitcoin_height, share_queue,
+    /\ UNCHANGED << stored_shares, parent, uncles, bitcoin_height, share_queue,
                     received_shares, validation_status, spend_dependencies,
                     chain_work, expected_height, share_status >>
 
 (****************************************************************************)
 (* Next-state relation                                                      *)
 (****************************************************************************)
-
 Next ==
     \/ \E p \in Processes,
         work \in Work : GenerateShare(p, work)
     \/ \E p \in Processes : ReceiveShare(p)
-    \/ \E p \in Processes : SetHeight(p)
-    \/ \E p \in Processes : ValidateShare(p)
+    \/ \E p \in Processes, s \in Share : StoreShareAndSetExpectedHeight(p, s)
+    \/ \E p \in Processes, s \in Share : ValidateShare(p, s)
     \/ \E p \in Processes, s \in Share : AppendShareToCandidates(p, s)
     \/ \E p \in Processes, s \in Share : MarkShareAsCandidate(p, s)
     \/ \E p \in Processes, s \in Share : ReorgCandidateChain(p, s)
     \/ \E p \in Processes : ConfirmCandidateChain(p)
     \/ \E p \in Processes, s \in Share: MarkShareAsOrphan(p, s)
 
+(****************************************************************************)
+(* Fairness constraints that must be met by the spec                        *)
+(****************************************************************************)
 Fairness == 
     /\ WF_vars(\E p \in Processes: ReceiveShare(p))
-    /\ WF_vars(\E p \in Processes: ValidateShare(p))
-    /\ SF_vars(\E p \in Processes: received_shares[p] # << >> => ValidateShare(p))
+    /\ WF_vars(\E p \in Processes, s \in Share: ValidateShare(p, s))
+    /\ WF_vars(\E p \in Processes, s \in Share: StoreShareAndSetExpectedHeight(p, s))
     /\ WF_vars(\E p \in Processes, s \in Share: AppendShareToCandidates(p, s))
     /\ WF_vars(\E p \in Processes, s \in Share: MarkShareAsCandidate(p, s))
     /\ WF_vars(\E p \in Processes, s \in Share: ReorgCandidateChain(p, s))
