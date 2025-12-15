@@ -9,5 +9,5 @@
     "rust-analyzer.cargo.extraEnv": {
         "RUST_LOG": "debug"
     },
-    "tlaplus.tlc.modelChecker.options": "-workers 1 -coverage 1"
+    "tlaplus.tlc.modelChecker.options": "-workers 16 -coverage 1"
 }

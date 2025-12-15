@@ -7,3 +7,10 @@ tools/log_dashboard/stats.json*
 tools/log_dashboard/agent_logs/
 tools/log_dashboard/last_processed.txt
 config-dev.toml
+spec/**/*pdf
+spec/**/*dvi
+spec/**/*tex
+spec/**/*aux
+spec/**/*log
+spec/**/*out
+spec/**/*ps
