@@ -1,0 +1,27 @@
+ = TLA+ Specifications for P2Poolv2 Protocols
+
+It is easiest to use the https://github.com/tlaplus/vscode-tlaplus[VSCode TLA+ extension] to view and work with these specifications. Or you can use the https://lamport.azurewebsites.net/tla/toolbox.html[TLA+ Toolbox] (slightly more involved).
+
+List of TLA+ specification files included in this directory:
+
+- ShareChain.tla:
+    Specification of the ShareChain's handling of shares generation, validation, and maintaining the longest share chain.
+    The module also handles uncle shares when a new share is generated and later received and organised into the share chain.
+ 
+== Building and Running the Specifications
+
+I recommend using the VSCode TLA+ extension as it ships with community modules we use in these specifications.
+
+Once you have downloaded the vscode extension you can then run the model checker or generate PDF of the specification from the integrated tool or from the command line as follows:
+
+=== Run model checker from command line
+
+```
+java -cp ~/.vscode/extensions/tlaplus.vscode-ide-2025.12.32241/tools/tla2tools.jar -XX:+UseParallelGC -DTLA-Library= -Dtlc2.TLC.ide=vscode tlc2.TLC ShareChain.tla -tool -modelcheck -config ShareChain.cfg -workers 16 -coverage 1
+```
+
+=== Generate PDF of the specification
+
+```
+java -cp ~/.vscode/extensions/tlaplus.vscode-ide-2025.12.32241/tools/tla2tools.jar tla2tex.TLA -shade -number -latexCommand pdflatex ShareChain.tla
+```
