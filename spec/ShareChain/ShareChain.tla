@@ -72,7 +72,7 @@ NoShare == [process |-> CHOOSE p \in Processes: TRUE, work |-> 0, bitcoin_height
 TypeOK ==
     /\ stored_shares \in [Processes -> SUBSET Share]
     /\ parent \in [Share -> Share \cup {Genesis} \cup {NoShare}]
-    /\ uncles \in [Share -> Share \cup {Genesis} \cup {NoShare}]
+    /\ uncles \in [Share -> SUBSET {Share \cup {Genesis} \cup {NoShare}}]
     /\ chain_work \in [Processes \X (Share \cup {Genesis}) -> Nat]
     /\ expected_height \in [Processes \X Share \cup {Genesis} -> Height \cup {NoHeight}]
     /\ candidates \in [Processes -> Seq(Share)]
@@ -249,7 +249,9 @@ StoreShareAndSetExpectedHeight(p, s) ==
     \* Share must not already have expected height set
     /\ expected_height[p, s] = NoHeight
     \* Parent has been assigned an expected height 
-    /\ expected_height[p, parent[s]] # NoHeight
+    /\ \/ parent[s] = Genesis
+       \/ parent[s] = NoShare
+       \/ expected_height[p, parent[s]] # NoHeight
     /\
         LET parentShare == parent[s]
             parent_height == IF parentShare = NoShare \/ parentShare = Genesis
