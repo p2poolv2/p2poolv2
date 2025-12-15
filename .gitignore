@@ -14,3 +14,4 @@ spec/**/*aux
 spec/**/*log
 spec/**/*out
 spec/**/*ps
+spec/**/states
