@@ -208,8 +208,9 @@ GenerateShare(p, work) ==
 
 (****************************************************************************)
 (* Receive a share on process p                                             *)
-(* The share is added to the stored_shares set, but not  made candidate or  *)
-(* confirmed yet                                                            *)
+(* The share is added to received_shares, but not made candidate or         *)
+(* confirmed yet. Share is only removed from queue when all processes have  *)
+(* either received or stored it.                                            *)
 (****************************************************************************)
 ReceiveShare(p) ==
     /\ share_queue # << >>
@@ -220,7 +221,14 @@ ReceiveShare(p) ==
         /\ bitcoin_height[p] - s.bitcoin_height <= 1            \* Share should be recent enough
         \* Add to received shares
         /\ received_shares' = [received_shares EXCEPT ![p] = Append(@, s)]
-    /\ share_queue' = Tail(share_queue)
+        \* Remove from queue only if ALL processes have now received or stored it
+        /\ LET allProcessesHaveShare == 
+                \A proc \in Processes:
+                    \/ Contains(received_shares'[proc], s)
+                    \/ s \in stored_shares[proc]
+           IN share_queue' = IF allProcessesHaveShare
+                             THEN Tail(share_queue)
+                             ELSE share_queue
     /\ UNCHANGED << parent, uncles, confirmed, candidates, bitcoin_height, 
                     validation_status, stored_shares, spend_dependencies, chain_work,
                     expected_height, share_status>>
