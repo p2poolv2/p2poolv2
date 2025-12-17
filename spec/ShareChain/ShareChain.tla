@@ -303,6 +303,8 @@ MarkShareAsCandidate(p, s) ==
     \* Parent must be in candidate or confirmed chain
     /\ \/ Contains(candidates[p], parent[s])
        \/ Contains(confirmed[p], parent[s])
+    \* /\ parent[s] # TopCandidate(p)
+    \* /\ parent[s] # TopConfirmed(p)
     /\ share_status' = [share_status EXCEPT ![p, s] = "Candidate"]
     /\ chain_work' = [chain_work EXCEPT ![p, s] = chain_work[p, parent[s]] + s.work]
     /\ UNCHANGED << stored_shares, parent, uncles, confirmed, candidates,
@@ -333,6 +335,7 @@ AppendShareToCandidates(p, s) ==
        \/ (/\ TopConfirmed(p) = parent[s]
            /\ expected_height[p, s] = Len(confirmed[p]) + 1 
            /\ chain_work[p, s] > chain_work[p, TopConfirmed(p)])
+       \/ Len(candidates[p]) = 0
     /\ candidates' = [candidates EXCEPT ![p] = Append(@, s)]
     /\ UNCHANGED << stored_shares, parent, uncles, confirmed, bitcoin_height,
                     share_queue, validation_status, spend_dependencies,
@@ -345,14 +348,14 @@ AppendShareToCandidates(p, s) ==
 (* constructed by following parent links recursively                        *)
 (* Returns Seq << branch point .. s >>                                      *)
 (****************************************************************************)
-RECURSIVE CandidateBranch(_, _)
-CandidateBranch(p, s) ==
+RECURSIVE GetBranchInIndex(_, _, _)
+GetBranchInIndex(p, s, index) ==
     IF \/ s = Genesis                  \* genesis as end of candidate chain
-       \/ Contains(candidates[p], s)   \* ancestor in candidate chain
+       \/ Contains(index[p], s)        \* ancestor in candidate chain
     THEN 
         << s >>
     ELSE 
-        CandidateBranch(p, parent[s]) \o << s >>
+        GetBranchInIndex(p, parent[s], index) \o << s >>
 
 (****************************************************************************)
 (* For a share with Candidate status and more work than top, reorg          *)
@@ -365,8 +368,8 @@ CandidateBranch(p, s) ==
 (* - push chain from branch point to the new share on to candidate index    *)
 (****************************************************************************)
 ReorgCandidateChain(p, s) ==
-    \* Share must not be in candidate chain
-    /\ ~Contains(candidates[p], s)
+    \* \* Share must not be in candidate chain
+    \* /\ ~Contains(candidates[p], s)
     \* Share must have Candidate status
     /\ share_status[p, s] = "Candidate"
     \* Share must be valid
@@ -378,7 +381,7 @@ ReorgCandidateChain(p, s) ==
     \* Share must have more work than top candidate. With same work, we don't reorg
     /\ chain_work[p, s] > chain_work[p, TopCandidate(p)]
     \* Find branch point
-    /\ LET  candidate_branch == CandidateBranch(p, s)
+    /\ LET  candidate_branch == GetBranchInIndex(p, s, candidates)
             branchPoint == Head(candidate_branch)
             reorged_out_chain == 
                 SubSeq(candidates[p],
@@ -387,12 +390,65 @@ ReorgCandidateChain(p, s) ==
         IN  
             /\ \* Replace candidates chain with new chain from genesis -> branch point -> new tip
                 candidates' = 
-                [candidates EXCEPT ![p] = 
-                    SubSeq(@,1, GetCandidateHeight(p, parent[branchPoint])) \o candidate_branch]
+                    [candidates EXCEPT ![p] = 
+                        SubSeq(@,1, GetCandidateHeight(p, parent[branchPoint])) \o candidate_branch]
     /\ UNCHANGED << stored_shares, parent, uncles, confirmed, bitcoin_height,
                     share_queue, validation_status, spend_dependencies,
                     chain_work, expected_height, share_status, received_shares >>
 
+(****************************************************************************)
+(* For a share with Candidate status and more work than top confirmed,      *)
+(* reorg confirmed chain to include the new share                           *)
+(* - get a share that has more work than top confirmed, is marked Candidate *)
+(*   but not yet in confirmed chain                                         *)
+(* - find common ancestor between top confirmed and the new share, call it  *)
+(*   fork point                                                             *)
+(* - remove old chain, the chain from top confirmed to fork point from the  *)
+(*   confirmed index                                                        *)
+(* - push chain from fork point to the new share on to confirmed index      *)
+(****************************************************************************)
+ReorgConfirmedChain(p, s) ==
+    \* Chain tip being reorged in must be candidate
+    /\ share_status[p, s] = "Candidate"
+    \* Share is not direct child of current confirmed tip
+    /\ parent[s] # TopConfirmed(p)
+    \* Chain tip being reorged must have more work than current confirmed tip
+    /\ chain_work[p, s] > chain_work[p, TopConfirmed(p)]
+    \* Share must be in the candidate index
+    /\ Contains(candidates[p], s)
+    \* Find branch point from chain tip being reorged in to confirmed chain
+    /\ LET  confirmed_branch == GetBranchInIndex(p, s, confirmed)
+            forkPoint == Head(confirmed_branch)
+            reorged_out_chain == 
+                SubSeq(confirmed[p],
+                    GetConfirmedHeight(p, forkPoint),
+                    GetConfirmedHeight(p, TopConfirmed(p)))
+        IN  
+            \* spend conditions in the confirmed_branch are not violated
+            /\ \A i \in 1..Len(confirmed_branch) :
+                \A dep \in spend_dependencies[confirmed_branch[i]] :
+                    GetConfirmedHeight(p, dep) < GetConfirmedHeight(p, confirmed_branch[i])
+            \* Replace confirmed chain with new chain from genesis -> fork point -> new tip
+            /\ confirmed' =
+                [confirmed EXCEPT ![p] = 
+                    SubSeq(@,1, GetConfirmedHeight(p, parent[forkPoint])) \o confirmed_branch]
+            \* Clear out the reorged out chain from candidates
+            /\ candidates' = 
+                [candidates EXCEPT ![p] = 
+                    SubSeq(candidates[p], 1, GetCandidateHeight(p, forkPoint))]
+            \* Update share status for reorged out chain and confirmed branch
+            /\ share_status' = 
+                [share_status EXCEPT 
+                    ![p, s] = [sh \in Share |-> 
+                        IF sh \in {reorged_out_chain[i] : i \in 1..Len(reorged_out_chain)}
+                        THEN "Candidate"
+                        ELSE IF sh \in {confirmed_branch[i] : i \in 1..Len(confirmed_branch)}
+                        THEN "Confirmed"
+                        ELSE share_status[p, sh]][s]]
+    /\ UNCHANGED << stored_shares, parent, uncles, bitcoin_height,
+                    share_queue, validation_status, spend_dependencies,
+                    chain_work, expected_height, received_shares >>
+            
 (****************************************************************************)
 (* Confirm the candidate chain up to top candidate                          *)
 (* - Require that no shares in the candidate chain have spending dependency *)
@@ -403,18 +459,21 @@ ReorgCandidateChain(p, s) ==
 (****************************************************************************)
 ConfirmCandidateChain(p) ==
     /\ Len(candidates[p]) > 0
+    \* Confirm candidates can only extend from current confirmed tip
+    \* Otherwise we reorg chain
+    /\ TopConfirmed(p) = parent[candidates[p][1]]
     /\ \A i \in 1..Len(candidates[p]) :
         \A dep \in spend_dependencies[candidates[p][i]] :
             GetCandidateHeight(p, dep) < GetCandidateHeight(p, candidates[p][i])
-    /\ LET new_confirmed == candidates[p]
-       IN  
-       \* Make candidate chain the new confirmed chain
-        /\ confirmed' = [confirmed EXCEPT ![p] = confirmed[p] \o new_confirmed]
-        \* Clear candidates
-        /\ candidates' = [candidates EXCEPT ![p] = << >>]
+    /\ \A i \in 1..Len(candidates[p]) :
+        share_status' = [share_status EXCEPT ![p, candidates[p][i]] = "Confirmed"]
+    \* Make candidate chain the new confirmed chain
+    /\ confirmed' = [confirmed EXCEPT ![p] = confirmed[p] \o candidates[p]]
+    \* Clear candidates
+    /\ candidates' = [candidates EXCEPT ![p] = << >>]
     /\ UNCHANGED << stored_shares, parent, uncles, bitcoin_height, share_queue,
                     received_shares, validation_status, spend_dependencies,
-                    chain_work, expected_height, share_status >>
+                    chain_work, expected_height >>
 
 (****************************************************************************)
 (* Next-state relation                                                      *)
@@ -428,6 +487,7 @@ Next ==
     \/ \E p \in Processes, s \in Share : AppendShareToCandidates(p, s)
     \/ \E p \in Processes, s \in Share : MarkShareAsCandidate(p, s)
     \/ \E p \in Processes, s \in Share : ReorgCandidateChain(p, s)
+    \/ \E p \in Processes, s \in Share : ReorgConfirmedChain(p, s)
     \/ \E p \in Processes : ConfirmCandidateChain(p)
 
 (****************************************************************************)
@@ -440,13 +500,28 @@ Fairness ==
     /\ WF_vars(\E p \in Processes, s \in Share: AppendShareToCandidates(p, s))
     /\ WF_vars(\E p \in Processes, s \in Share: MarkShareAsCandidate(p, s))
     /\ WF_vars(\E p \in Processes, s \in Share: ReorgCandidateChain(p, s))
+    /\ WF_vars(\E p \in Processes, s \in Share: ReorgConfirmedChain(p, s))
     /\ WF_vars(\E p \in Processes: ConfirmCandidateChain(p))
 
-\* If two processes have the same shares with same work, they eventually converge
+\* All received shares are eventually processed (not stuck in queue)
 NoStuckShares ==
     \A p \in Processes:
         [](Len(received_shares[p]) > 0 => 
             <>(Len(received_shares[p]) = 0))
+
+\* Share queue eventually gets drained
+ShareQueueDrained ==
+    [](Len(share_queue) > 0 => <>(Len(share_queue) = 0))
+
+\* Convergence: Eventually nodes have confirmed chains with same work
+Convergence ==
+    []((
+        /\ \A p \in Processes: Len(received_shares[p]) = 0
+        /\ Len(share_queue) = 0
+        /\ \A p \in Processes: Len(confirmed[p]) = MaxShares                
+    ) => <>(\A p1, p2 \in Processes: 
+            chain_work[p1, TopConfirmed(p1)] = chain_work[p2, TopConfirmed(p2)]))
+
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
