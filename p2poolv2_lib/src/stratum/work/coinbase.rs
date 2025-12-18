@@ -641,4 +641,31 @@ mod tests {
         );
         assert_eq!(extracted_outputs[2].value, Amount::ZERO); // Witness
     }
+
+    #[test]
+    fn test_extract_outputs_from_coinbase2_bounds_checking() {
+        // Test empty input
+        let result = extract_outputs_from_coinbase2("", 8);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("too short"));
+
+        // Test input that's too short for the expected structure
+        // With pool_signature_len=8, min_len = 1 + 8 + 4 + 4 = 17 bytes = 34 hex chars
+        let short_hex = "00112233445566778899aabbccddeeff"; // 16 bytes = 32 hex chars
+        let result = extract_outputs_from_coinbase2(short_hex, 8);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("too short"));
+
+        // Test exactly at minimum length (should fail on deserialize, not bounds)
+        let min_hex = "00112233445566778899aabbccddeeff00"; // 17 bytes = 34 hex chars
+        let result = extract_outputs_from_coinbase2(min_hex, 8);
+        assert!(result.is_err());
+        // This should fail on deserialize, not bounds check
+        assert!(result.unwrap_err().message.contains("Bad outputs"));
+
+        // Test invalid hex
+        let result = extract_outputs_from_coinbase2("not_valid_hex!", 8);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("parsing coinbase hex"));
+    }
 }
