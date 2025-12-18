@@ -26,51 +26,17 @@ use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::{Sequence, Transaction, TxIn, TxOut, Version};
 use bitcoin::{Address, Amount};
 use hex::FromHex;
-use std::fmt;
 use std::str::FromStr;
-
-/// Custom error for coinbase parsing
-#[derive(Debug)]
-pub enum CoinbaseError {
-    /// Error decoding hex string
-    Hex(hex::FromHexError),
-    /// Error deserializing bitcoin consensus data
-    Deserialize(bitcoin::consensus::encode::Error),
-    /// The coinbase2 string was too short to parse
-    UnexpectedEof,
-}
-
-// Implement standard error traits
-impl fmt::Display for CoinbaseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CoinbaseError::Hex(e) => write!(f, "Hex decoding error: {}", e),
-            CoinbaseError::Deserialize(e) => {
-                write!(f, "Bitcoin consensus deserialize error: {}", e)
-            }
-            CoinbaseError::UnexpectedEof => write!(f, "Coinbase2 data was shorter than expected"),
-        }
-    }
-}
-impl std::error::Error for CoinbaseError {}
-
-// Implement From<T> for easier `?` usage
-
-impl From<hex::FromHexError> for CoinbaseError {
-    fn from(e: hex::FromHexError) -> Self {
-        CoinbaseError::Hex(e)
-    }
-}
-
-impl From<bitcoin::consensus::encode::Error> for CoinbaseError {
-    fn from(e: bitcoin::consensus::encode::Error) -> Self {
-        CoinbaseError::Deserialize(e)
-    }
-}
 
 #[allow(dead_code)]
 const EXTRANONCE_SEPARATOR: [u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE] =
     [1u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE];
+
+/// Length of the sequence bytes in coinbase
+const SEQUENCE_LENGTH: usize = 4;
+
+/// Length of the lock time bytes in coinbase
+const LOCKTIME_LENGTH: usize = 4;
 
 // Parse Address from a string provided by the miner
 #[allow(dead_code)]
@@ -240,27 +206,27 @@ pub fn split_coinbase(coinbase: &Transaction) -> Result<(String, String), WorkEr
 pub fn extract_outputs_from_coinbase2(
     coinbase2_hex: &str,
     pool_signature_len: usize,
-) -> Result<Vec<TxOut>, CoinbaseError> {
-    let coinbase2_bytes = Vec::from_hex(coinbase2_hex)?;
+) -> Result<Vec<TxOut>, WorkError> {
+    let coinbase2_bytes = match Vec::from_hex(coinbase2_hex) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return Err(WorkError {
+                message: "Error parsing coinbase hex".into(),
+            });
+        }
+    };
 
-    let script_sig_part_2_len = 1 + pool_signature_len;
-
-    let sequence_len = 4;
-
-    let output_data_start_index = script_sig_part_2_len + sequence_len;
-
-    let lock_time_len = 4;
-
-    if coinbase2_bytes.len() < output_data_start_index + lock_time_len {
-        return Err(CoinbaseError::UnexpectedEof);
-    }
-    let output_data_end_index = coinbase2_bytes.len() - lock_time_len;
-
+    let script_sig_part2_len = 1 + pool_signature_len;
+    let output_data_start_index = script_sig_part2_len + SEQUENCE_LENGTH;
+    let output_data_end_index = coinbase2_bytes.len() - LOCKTIME_LENGTH;
     let output_data = &coinbase2_bytes[output_data_start_index..output_data_end_index];
 
-    let outputs: Vec<TxOut> = deserialize(output_data)?;
-
-    Ok(outputs)
+    match deserialize::<Vec<TxOut>>(output_data) {
+        Ok(outs) => Ok(outs),
+        Err(_) => Err(WorkError {
+            message: "Bad outputs in coinbase2".into(),
+        }),
+    }
 }
 
 #[cfg(test)]
