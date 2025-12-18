@@ -207,26 +207,27 @@ pub fn extract_outputs_from_coinbase2(
     coinbase2_hex: &str,
     pool_signature_len: usize,
 ) -> Result<Vec<TxOut>, WorkError> {
-    let coinbase2_bytes = match Vec::from_hex(coinbase2_hex) {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            return Err(WorkError {
-                message: "Error parsing coinbase hex".into(),
-            });
-        }
-    };
+    let coinbase2_bytes = Vec::from_hex(coinbase2_hex).map_err(|_| WorkError {
+        message: "Error parsing coinbase hex".into(),
+    })?;
 
     let script_sig_part2_len = 1 + pool_signature_len;
     let output_data_start_index = script_sig_part2_len + SEQUENCE_LENGTH;
+
+    // Bounds check: need at least start_index + LOCKTIME_LENGTH bytes
+    let min_len = output_data_start_index + LOCKTIME_LENGTH;
+    if coinbase2_bytes.len() < min_len {
+        return Err(WorkError {
+            message: "coinbase2 too short".into(),
+        });
+    }
+
     let output_data_end_index = coinbase2_bytes.len() - LOCKTIME_LENGTH;
     let output_data = &coinbase2_bytes[output_data_start_index..output_data_end_index];
 
-    match deserialize::<Vec<TxOut>>(output_data) {
-        Ok(outs) => Ok(outs),
-        Err(_) => Err(WorkError {
-            message: "Bad outputs in coinbase2".into(),
-        }),
-    }
+    deserialize::<Vec<TxOut>>(output_data).map_err(|_| WorkError {
+        message: "Bad outputs in coinbase2".into(),
+    })
 }
 
 #[cfg(test)]
