@@ -3132,6 +3132,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "bitcoin",
  "chrono",
  "hex",
  "hmac",
@@ -3139,6 +3140,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
