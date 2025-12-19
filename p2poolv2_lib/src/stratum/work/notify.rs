@@ -75,7 +75,7 @@ async fn build_output_distribution(
     let total_difficulty = required_target.difficulty_float() * config.difficulty_multiplier;
 
     match payout
-        .get_output_distribution(&store, total_difficulty, total_amount, config)
+        .get_output_distribution(store, total_difficulty, total_amount, config)
         .await
     {
         Ok(distribution) => distribution,

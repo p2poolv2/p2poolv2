@@ -713,7 +713,7 @@ impl Store {
     /// Mark output as spent,
     pub fn remove_output_from_unspent(
         &self,
-        output_point: OutPoint,
+        _output_point: OutPoint,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         // TODO - implement
         Ok(())
