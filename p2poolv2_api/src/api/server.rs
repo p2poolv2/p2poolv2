@@ -14,14 +14,14 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::api::auth::auth_middleware;
 use crate::api::error::ApiError;
 use axum::{
-    Json, Router,
-    extract::{Query, State},
+    Extension, Json, Router,
+    extract::{FromRef, Query, State},
     middleware::{self},
     routing::get,
 };
-use bitcoin::{Address, Network};
 use chrono::DateTime;
 use p2poolv2_lib::stratum::work::coinbase::extract_outputs_from_coinbase2;
 use p2poolv2_lib::{
@@ -34,16 +34,28 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
 use tracing::info;
 
-use crate::api::auth::auth_middleware;
-
 #[derive(Clone)]
 pub(crate) struct AppState {
+    pub(crate) app_config: AppConfig,
     pub(crate) chain_store: Arc<ChainStore>,
     pub(crate) metrics_handle: MetricsHandle,
     pub(crate) auth_user: Option<String>,
     pub(crate) auth_token: Option<String>,
-    pub(crate) pool_signature_len: usize,
-    pub(crate) network: Network,
+}
+
+/// Stores application config values that don't change across requests
+/// Used with Extension axum framework
+#[derive(Clone)]
+pub struct AppConfig {
+    pub pool_signature_length: usize,
+    pub network: bitcoin::Network,
+}
+
+/// Get AppConfig from AppState ref
+impl FromRef<AppState> for AppConfig {
+    fn from_ref(state: &AppState) -> Self {
+        state.app_config.clone()
+    }
 }
 
 #[derive(Deserialize)]
@@ -58,16 +70,20 @@ pub async fn start_api_server(
     config: ApiConfig,
     chain_store: Arc<ChainStore>,
     metrics_handle: MetricsHandle,
-    pool_signature_len: usize,
-    network: Network,
+    network: bitcoin::Network,
+    pool_signature: Option<String>,
 ) -> Result<oneshot::Sender<()>, std::io::Error> {
+    let app_config = AppConfig {
+        pool_signature_length: pool_signature.unwrap_or_default().len(),
+        network,
+    };
+
     let app_state = Arc::new(AppState {
+        app_config: app_config.clone(),
         chain_store,
         metrics_handle,
         auth_user: config.auth_user.clone(),
         auth_token: config.auth_token.clone(),
-        pool_signature_len,
-        network,
     });
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -83,6 +99,7 @@ pub async fn start_api_server(
             app_state.clone(),
             auth_middleware,
         ))
+        .layer(Extension(app_config))
         .with_state(app_state);
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
@@ -126,11 +143,10 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
     if let Some(job) = job_details {
         //  Parse the coinbase2
         // We use the length stored in AppState
-        match extract_outputs_from_coinbase2(&job.coinbase2, state.pool_signature_len) {
+        match extract_outputs_from_coinbase2(&job.coinbase2, state.app_config.pool_signature_length)
+        {
             Ok(outputs) => {
                 let total_value = job.blocktemplate.coinbasevalue;
-
-                let network = state.network;
 
                 for tx_out in outputs.iter() {
                     let value_sats = tx_out.value;
@@ -141,14 +157,17 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
                         0.0
                     };
 
-                    let address = Address::from_script(&tx_out.script_pubkey, network)
-                        .map(|a| a.to_string())
-                        .unwrap_or_else(|_| "unknown_script".to_string());
-
-                    exposition.push_str(&format!(
-                        "p2pool_coinbase_split{{address=\"{}\"}} {:.2}\n",
-                        address, percentage
-                    ));
+                    match bitcoin::Address::from_script(
+                        &tx_out.script_pubkey,
+                        state.app_config.network,
+                    )
+                    .map(|a| a.to_string())
+                    {
+                        Ok(address) => exposition.push_str(&format!(
+                            "p2pool_coinbase_split{{address=\"{address}\"}} {percentage:.2}\n",
+                        )),
+                        Err(_) => tracing::error!("Error parsing address from coinbase"),
+                    }
                 }
             }
             Err(e) => {
@@ -206,9 +225,6 @@ async fn pplns_shares(
 mod tests {
     use super::*;
     use axum::extract::State;
-    use bitcoin::consensus::serialize;
-    use bitcoin::script::PushBytesBuf;
-    use bitcoin::transaction::Version;
     use bitcoin::{Amount, Network, TxOut};
     use p2poolv2_lib::accounting::OutputPair;
     use p2poolv2_lib::accounting::stats::metrics;
@@ -216,12 +232,11 @@ mod tests {
     use p2poolv2_lib::shares::share_block::ShareBlock;
     use p2poolv2_lib::store::Store;
     use p2poolv2_lib::stratum::work::block_template::BlockTemplate;
-    use p2poolv2_lib::stratum::work::coinbase::{parse_address, split_coinbase};
-    use p2poolv2_lib::stratum::work::tracker::{JobId, start_tracker_actor};
+    use p2poolv2_lib::stratum::work::coinbase::parse_address;
+    use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
-    use tempfile::tempdir;
 
     #[tokio::test]
     async fn test_metrics_endpoint_exposes_coinbase_split() {
@@ -247,18 +262,6 @@ mod tests {
             Network::Signet,
         )
         .unwrap();
-
-        // 50 BTC Total: 49 to miner, 1 to pool
-        let output_pairs = vec![
-            OutputPair {
-                address: address.clone(),
-                amount: Amount::from_str("49 BTC").unwrap(),
-            },
-            OutputPair {
-                address: donation_address.clone(),
-                amount: Amount::from_str("1 BTC").unwrap(),
-            },
-        ];
 
         let template = BlockTemplate {
             default_witness_commitment: Some(
@@ -334,17 +337,17 @@ mod tests {
 
         //  Prepare AppState
         let state = Arc::new(AppState {
+            app_config: AppConfig {
+                pool_signature_length: 8,
+                network: bitcoin::Network::Signet,
+            },
             chain_store,
             metrics_handle,
             auth_user: None,
             auth_token: None,
-            pool_signature_len: pool_signature.len(),
-            network: Network::Signet,
         });
 
         let response_body = metrics(State(state)).await;
-
-        println!("Metrics Response:\n{}", response_body);
 
         //  Verify Output
         assert!(response_body.contains(

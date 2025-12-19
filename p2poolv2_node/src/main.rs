@@ -203,18 +203,12 @@ async fn main() -> Result<(), String> {
         info!("Stratum server stopped");
     });
 
-    let pool_sig_len = config
-        .stratum
-        .pool_signature
-        .as_ref()
-        .map(|s| s.len())
-        .unwrap_or(8);
     let api_shutdown_tx = match start_api_server(
         config.api.clone(),
         chain_store.clone(),
         metrics_handle.clone(),
-        pool_sig_len,
-        config.stratum.network,
+        stratum_config.network,
+        stratum_config.pool_signature,
     )
     .await
     {

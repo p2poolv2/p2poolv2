@@ -64,8 +64,8 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
         api_config.clone(),
         chain_store.clone(),
         metrics_handle,
-        8,
         bitcoin::Network::Signet,
+        Some("p2poolv2".to_string()),
     )
     .await
     .map_err(|e| ApiError::ServerError(e.to_string()))?;
@@ -155,8 +155,8 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
         api_config.clone(),
         chain_store.clone(),
         metrics_handle,
-        8,
         bitcoin::Network::Signet,
+        Some("p2poolv2".to_string()),
     )
     .await
     .map_err(|e| ApiError::ServerError(e.to_string()))?;
@@ -279,8 +279,8 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
         api_config.clone(),
         chain_store.clone(),
         metrics_handle,
-        8,
         bitcoin::Network::Signet,
+        Some("p2poolv2".to_string()),
     )
     .await
     .map_err(|e| ApiError::ServerError(e.to_string()))?;
@@ -398,8 +398,8 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
         api_config.clone(),
         chain_store.clone(),
         metrics_handle,
-        8,
         bitcoin::Network::Signet,
+        Some("p2poolv2".to_string()),
     )
     .await
     .map_err(|e| ApiError::ServerError(e.to_string()))?;
@@ -512,8 +512,8 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
         api_config.clone(),
         chain_store.clone(),
         metrics_handle,
-        8,
         bitcoin::Network::Signet,
+        Some("p2poolv2".to_string()),
     )
     .await
     .map_err(|e| ApiError::ServerError(e.to_string()))?;
