@@ -65,7 +65,26 @@ async fn build_output_distribution(
     store: &Arc<ChainStore>,
     config: &StratumConfig<crate::config::Parsed>,
 ) -> Vec<OutputPair> {
-    const DEFAULT_STEP_SIZE_SECONDS: u64 = 24 * 60 * 60; // 1 day
+    // New: Try file mode if path set
+    if let Some(ref path) = config.payout_file_path {
+        match load_payouts_from_file(path, template.coinbasevalue, config).await {
+            Ok(dist) => {
+                // Debug for file mode
+                for output in &dist {
+                    debug!("Payout: {} -> {} sats", output.address, output.amount.to_sat());
+                }
+                let total_sat = dist.iter().map(|o| o.amount.to_sat()).sum::<u64>();
+                debug!("Total distribution (file): {} sats (out of {} available)", total_sat, template.coinbasevalue);
+                return dist;
+            }
+            Err(e) => {
+                debug!("File payout load failed ({}): {}; falling back to PPLNS", path, e);
+            }
+        }
+    }
+
+    // Original PPLNS fallback (unchanged)
+    const DEFAULT_STEP_SIZE_SECONDS: u64 = 24 * 60 * 60;
     let payout = Payout::new(DEFAULT_STEP_SIZE_SECONDS);
     let total_amount = bitcoin::Amount::from_sat(template.coinbasevalue);
 
@@ -74,19 +93,90 @@ async fn build_output_distribution(
 
     let total_difficulty = required_target.difficulty_float() * config.difficulty_multiplier;
 
-    match payout
+    let distribution = match payout
         .get_output_distribution(store, total_difficulty, total_amount, config)
         .await
     {
-        Ok(distribution) => distribution,
+        Ok(distribution) => {
+            // Debug for PPLNS mode
+            for output in &distribution {
+                debug!("Payout: {} -> {} sats", output.address, output.amount.to_sat());
+            }
+            let total_sat = distribution.iter().map(|o| o.amount.to_sat()).sum::<u64>();
+            debug!("Total distribution (PPLNS): {} sats (out of {} available)", total_sat, total_amount.to_sat());
+            distribution
+        }
         Err(e) => {
             // Log error and return empty distribution
             debug!("PPLNS accounting failed: {}", e);
             Vec::new()
         }
-    }
+    };
+
+    distribution
 }
 
+// New helper: Synchronous file load + parse (no async needed for fs::read)
+async fn load_payouts_from_file(
+    path: &str,
+    coinbase_sats: u64,
+    config: &StratumConfig<crate::config::Parsed>,
+) -> Result<Vec<OutputPair>, Box<dyn std::error::Error>> {
+    let content = fs::read_to_string(path)?;
+    let json: Value = serde_json::from_str(&content)?;
+
+    // 1. Updated Key: extract "payouts" instead of "WinnersList"
+    // 2. Renamed variable: 'winners' -> 'external_payouts'
+    let external_payouts: Vec<OutputPair> = json["payouts"]
+        .as_array()
+        .ok_or("Missing or invalid 'payouts' list")?
+        .iter()
+        .map(|entry| {
+            let addr_str = entry["Address"].as_str().ok_or("Missing Address")?.to_string();
+            let value_sat: u64 = entry["Value"].as_u64().ok_or("Invalid Value")?;
+
+            // Assuming parse_address is available in scope as per your previous code
+            let addr = parse_address(&addr_str, config.network)
+                .map_err(|e| format!("Parse error for '{}': {}", addr_str, e.message))?;
+
+            Ok::<_, Box<dyn std::error::Error>>(OutputPair {
+                address: addr,
+                amount: bitcoin::Amount::from_sat(value_sat),
+            })
+        })
+        .collect::<Result<Vec<OutputPair>, _>>()?;
+
+    if external_payouts.is_empty() {
+        return Err("No payouts found in file".into());
+    }
+
+    // Pre-allocate vector with space for payouts + 1 potential bootstrap output
+    let mut distribution: Vec<OutputPair> = Vec::with_capacity(external_payouts.len() + 1);
+
+    // Calculate sums
+    let sum_payouts_sat: u64 = external_payouts.iter().map(|OutputPair { amount: a, .. }| a.to_sat()).sum();
+    
+    if sum_payouts_sat > coinbase_sats {
+        return Err(format!("Payouts sum {} > coinbase total {} sats", sum_payouts_sat, coinbase_sats).into());
+    }
+
+    // 3. Logic Change: Calculate leftover and insert it FIRST
+    let leftover_sat = coinbase_sats.saturating_sub(sum_payouts_sat);
+
+    if leftover_sat > 0 {
+        distribution.push(OutputPair {
+            address: config.bootstrap_address().clone(),
+            amount: bitcoin::Amount::from_sat(leftover_sat),
+        });
+    }
+
+    // 4. Append the external payouts after the bootstrap transaction
+    distribution.extend(external_payouts);
+
+    Ok(distribution)
+}
+
+#[allow(dead_code)]
 pub fn build_notify(
     template: &BlockTemplate,
     output_distribution: Vec<OutputPair>,
