@@ -15,12 +15,12 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::shares::share_commitment::ShareCommitment;
-
 use super::block_template::BlockTemplate;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
+pub mod parse_coinbase;
 
 const MAX_JOB_AGE_SECS: u64 = 15 * 60; // 15 minutes
 

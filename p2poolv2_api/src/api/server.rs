@@ -24,7 +24,8 @@ use axum::{
 };
 use chrono::DateTime;
 use p2poolv2_lib::stratum::work::{
-    coinbase::extract_outputs_from_coinbase2, tracker::TrackerHandle,
+    coinbase::extract_outputs_from_coinbase2,
+    tracker::{TrackerHandle, parse_coinbase},
 };
 use p2poolv2_lib::{
     accounting::{simple_pplns::SimplePplnsShare, stats::metrics::MetricsHandle},
@@ -133,55 +134,25 @@ async fn health_check() -> String {
     "OK".into()
 }
 
+/// Returns pool metrics in grafana exposition format
+///
+/// The exposition also includes parsed coinbase outputs for showing
+/// the current coinbase payout distribution
 async fn metrics(State(state): State<Arc<AppState>>) -> String {
     //  Get base metrics
     let pool_metrics = state.metrics_handle.get_metrics().await;
     let mut exposition = pool_metrics.get_exposition();
 
-    //  Get Tracker and Latest Job
-    let tracker = &state.tracker_handle;
-    let job_details = match tracker.get_latest_job_id().await {
-        Ok(job_id) => tracker.get_job(job_id).await.ok().flatten(),
-        _ => None,
-    };
-
-    if let Some(job) = job_details {
-        //  Parse the coinbase2
-        // We use the length stored in AppState
-        match extract_outputs_from_coinbase2(&job.coinbase2, state.app_config.pool_signature_length)
-        {
-            Ok(outputs) => {
-                let total_value = job.blocktemplate.coinbasevalue;
-
-                for tx_out in outputs.iter() {
-                    let value_sats = tx_out.value;
-                    // Avoid division by zero
-                    let percentage = if total_value > 0 {
-                        (value_sats.to_sat() as f64 / total_value as f64) * 100.0
-                    } else {
-                        0.0
-                    };
-
-                    match bitcoin::Address::from_script(
-                        &tx_out.script_pubkey,
-                        state.app_config.network,
-                    )
-                    .map(|a| a.to_string())
-                    {
-                        Ok(address) => exposition.push_str(&format!(
-                            "p2pool_coinbase_split{{address=\"{address}\"}} {percentage:.2}\n",
-                        )),
-                        Err(_) => tracing::error!("Error parsing address from coinbase"),
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to parse coinbase for metrics: {}", e);
-                exposition.push_str("# p2pool_coinbase_split: error parsing coinbase\n");
-            }
-        }
+    if let Some(coinbase_distribution) = parse_coinbase::get_distribution(
+        &state.tracker_handle,
+        state.app_config.pool_signature_length,
+        state.app_config.network,
+    )
+    .await
+    {
+        exposition.push_str("# HELP coinbase_rewards_distribution Current coinbase rewards distribution between users\n");
+        exposition.push_str(&coinbase_distribution);
     }
-
     exposition
 }
 
@@ -242,7 +213,7 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_metrics_endpoint_exposes_coinbase_split() {
         let tracker_handle = start_tracker_actor();
 
@@ -351,12 +322,14 @@ mod tests {
 
         let response_body = metrics(State(state)).await;
 
+        println!("{}", response_body);
+
         //  Verify Output
         assert!(response_body.contains(
-            "p2pool_coinbase_split{address=\"tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d\"} 98.00"
+            "coinbase_output{address=\"tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d\"} 4900000000"
         ));
         assert!(response_body.contains(
-            "p2pool_coinbase_split{address=\"tb1q0afww6y0kgl4tyjjyv6xlttvfwdfqxvrfzz35f\"} 2.00"
+            "coinbase_output{address=\"tb1q0afww6y0kgl4tyjjyv6xlttvfwdfqxvrfzz35f\"} 100000000"
         ));
     }
 }
