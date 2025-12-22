@@ -56,3 +56,227 @@ pub async fn get_distribution(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stratum::work::block_template::BlockTemplate;
+    use crate::stratum::work::coinbase::parse_address;
+    use crate::stratum::work::tracker::start_tracker_actor;
+    use bitcoin::{Amount, Network, TxOut};
+    use std::collections::HashMap;
+    use std::str::FromStr;
+    use std::sync::Arc;
+
+    fn create_test_template() -> BlockTemplate {
+        BlockTemplate {
+            default_witness_commitment: None,
+            height: 100,
+            version: 0x20000000,
+            previousblockhash: "0".repeat(64),
+            bits: "1d00ffff".to_string(),
+            curtime: 1234567890,
+            transactions: vec![],
+            coinbasevalue: 5_000_000_000,
+            coinbaseaux: HashMap::new(),
+            rules: vec![],
+            vbavailable: HashMap::new(),
+            vbrequired: 0,
+            longpollid: "".to_string(),
+            target: "".to_string(),
+            mintime: 0,
+            mutable: vec![],
+            noncerange: "".to_string(),
+            sigoplimit: 0,
+            sizelimit: 0,
+            weightlimit: 0,
+        }
+    }
+
+    fn create_valid_coinbase2(pool_sig: &[u8], outputs: &[TxOut]) -> String {
+        let mut coinbase2_bytes = Vec::new();
+        coinbase2_bytes.push(pool_sig.len() as u8);
+        coinbase2_bytes.extend_from_slice(pool_sig);
+        coinbase2_bytes.extend_from_slice(&[0xff, 0xff, 0xff, 0xff]); // Sequence
+        coinbase2_bytes.extend_from_slice(&bitcoin::consensus::serialize(&outputs.to_vec()));
+        coinbase2_bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // LockTime
+        hex::encode(coinbase2_bytes)
+    }
+
+    #[tokio::test]
+    async fn test_get_distribution_success() {
+        let tracker = start_tracker_actor();
+
+        let address = parse_address(
+            "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d",
+            Network::Signet,
+        )
+        .unwrap();
+
+        let outputs = vec![TxOut {
+            value: Amount::from_str("49 BTC").unwrap(),
+            script_pubkey: address.script_pubkey(),
+        }];
+
+        let coinbase2 = create_valid_coinbase2(b"P2Poolv2", &outputs);
+
+        let job_id = tracker.get_next_job_id().await.unwrap();
+        tracker
+            .insert_job(
+                Arc::new(create_test_template()),
+                "".to_string(),
+                coinbase2,
+                None,
+                job_id,
+            )
+            .await
+            .unwrap();
+
+        let result = get_distribution(&tracker, 8, Network::Signet).await;
+
+        assert!(result.is_some());
+        let exposition = result.unwrap();
+        assert!(exposition.contains(
+            "coinbase_output{address=\"tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d\"} 4900000000"
+        ));
+        assert!(exposition.contains("coinbase_total 5000000000"));
+    }
+
+    #[tokio::test]
+    async fn test_get_distribution_no_jobs_returns_none() {
+        let tracker = start_tracker_actor();
+
+        // Don't insert any jobs
+        let result = get_distribution(&tracker, 8, Network::Signet).await;
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_distribution_invalid_coinbase2_returns_none() {
+        let tracker = start_tracker_actor();
+
+        // Insert job with invalid coinbase2 (too short)
+        let job_id = tracker.get_next_job_id().await.unwrap();
+        tracker
+            .insert_job(
+                Arc::new(create_test_template()),
+                "".to_string(),
+                "deadbeef".to_string(), // Invalid coinbase2
+                None,
+                job_id,
+            )
+            .await
+            .unwrap();
+
+        let result = get_distribution(&tracker, 8, Network::Signet).await;
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_distribution_multiple_outputs() {
+        let tracker = start_tracker_actor();
+
+        let addr1 = parse_address(
+            "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d",
+            Network::Signet,
+        )
+        .unwrap();
+        let addr2 = parse_address(
+            "tb1q0afww6y0kgl4tyjjyv6xlttvfwdfqxvrfzz35f",
+            Network::Signet,
+        )
+        .unwrap();
+
+        let outputs = vec![
+            TxOut {
+                value: Amount::from_str("48 BTC").unwrap(),
+                script_pubkey: addr1.script_pubkey(),
+            },
+            TxOut {
+                value: Amount::from_str("2 BTC").unwrap(),
+                script_pubkey: addr2.script_pubkey(),
+            },
+        ];
+
+        let coinbase2 = create_valid_coinbase2(b"P2Poolv2", &outputs);
+
+        let job_id = tracker.get_next_job_id().await.unwrap();
+        tracker
+            .insert_job(
+                Arc::new(create_test_template()),
+                "".to_string(),
+                coinbase2,
+                None,
+                job_id,
+            )
+            .await
+            .unwrap();
+
+        let result = get_distribution(&tracker, 8, Network::Signet).await;
+
+        assert!(result.is_some());
+        let exposition = result.unwrap();
+        assert!(exposition.contains(
+            "coinbase_output{address=\"tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d\"} 4800000000"
+        ));
+        assert!(exposition.contains(
+            "coinbase_output{address=\"tb1q0afww6y0kgl4tyjjyv6xlttvfwdfqxvrfzz35f\"} 200000000"
+        ));
+        assert!(exposition.contains("coinbase_total 5000000000"));
+    }
+
+    #[tokio::test]
+    async fn test_get_distribution_unparseable_script_skips_output() {
+        let tracker = start_tracker_actor();
+
+        // Create an output with a valid address and one with an unparseable script
+        let addr = parse_address(
+            "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d",
+            Network::Signet,
+        )
+        .unwrap();
+
+        // OP_RETURN script - can't be converted to an address
+        let op_return_script =
+            bitcoin::ScriptBuf::from_bytes(vec![0x6a, 0x04, 0xde, 0xad, 0xbe, 0xef]);
+
+        let outputs = vec![
+            TxOut {
+                value: Amount::from_str("49 BTC").unwrap(),
+                script_pubkey: addr.script_pubkey(),
+            },
+            TxOut {
+                value: Amount::ZERO,
+                script_pubkey: op_return_script,
+            },
+        ];
+
+        let coinbase2 = create_valid_coinbase2(b"P2Poolv2", &outputs);
+
+        let job_id = tracker.get_next_job_id().await.unwrap();
+        tracker
+            .insert_job(
+                Arc::new(create_test_template()),
+                "".to_string(),
+                coinbase2,
+                None,
+                job_id,
+            )
+            .await
+            .unwrap();
+
+        let result = get_distribution(&tracker, 8, Network::Signet).await;
+
+        // Should still return Some, just without the unparseable output
+        assert!(result.is_some());
+        let exposition = result.unwrap();
+        assert!(exposition.contains(
+            "coinbase_output{address=\"tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d\"} 4900000000"
+        ));
+        // OP_RETURN output should be skipped (no coinbase_output line for it)
+        assert!(!exposition.contains("OP_RETURN"));
+        assert!(exposition.contains("coinbase_total 5000000000"));
+    }
+}
