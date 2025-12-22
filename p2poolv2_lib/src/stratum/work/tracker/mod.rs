@@ -14,8 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::shares::share_commitment::ShareCommitment;
 use super::block_template::BlockTemplate;
+use crate::shares::share_commitment::ShareCommitment;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
