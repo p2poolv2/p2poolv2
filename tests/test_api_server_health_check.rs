@@ -45,12 +45,9 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
 
     let tracker_handle = start_tracker_actor();
     // Start metrics actor
-    let metrics_handle = start_metrics(
-        temp_dir.path().to_str().unwrap().to_string(),
-        tracker_handle,
-    )
-    .await
-    .map_err(|e| ApiError::ServerError(e.to_string()))?;
+    let metrics_handle = start_metrics(temp_dir.path().to_str().unwrap().to_string())
+        .await
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
     let api_config = ApiConfig {
         hostname: "127.0.0.1".into(),
@@ -64,6 +61,7 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
         api_config.clone(),
         chain_store.clone(),
         metrics_handle,
+        tracker_handle,
         bitcoin::Network::Signet,
         Some("p2poolv2".to_string()),
     )
@@ -126,12 +124,9 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
     ));
     let tracker_handle = start_tracker_actor();
     // Start metrics actor
-    let metrics_handle = start_metrics(
-        temp_dir.path().to_str().unwrap().to_string(),
-        tracker_handle,
-    )
-    .await
-    .map_err(|e| ApiError::ServerError(e.to_string()))?;
+    let metrics_handle = start_metrics(temp_dir.path().to_str().unwrap().to_string())
+        .await
+        .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
     // Known test credentials from gen_auth with fixed salt
     // Generated with: gen_auth testuser testpassword
@@ -155,6 +150,7 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
         api_config.clone(),
         chain_store.clone(),
         metrics_handle,
+        tracker_handle,
         bitcoin::Network::Signet,
         Some("p2poolv2".to_string()),
     )
@@ -261,7 +257,6 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
     // Start metrics actor
     let metrics_handle = p2poolv2_lib::accounting::stats::metrics::start_metrics(
         temp_dir.path().to_str().unwrap().to_string(),
-        tracker_handle,
     )
     .await
     .map_err(|e| ApiError::ServerError(e.to_string()))?;
@@ -279,6 +274,7 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
         api_config.clone(),
         chain_store.clone(),
         metrics_handle,
+        tracker_handle,
         bitcoin::Network::Signet,
         Some("p2poolv2".to_string()),
     )
@@ -380,7 +376,6 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
     // Start metrics actor
     let metrics_handle = p2poolv2_lib::accounting::stats::metrics::start_metrics(
         temp_dir.path().to_str().unwrap().to_string(),
-        tracker_handle,
     )
     .await
     .map_err(|e| ApiError::ServerError(e.to_string()))?;
@@ -398,6 +393,7 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
         api_config.clone(),
         chain_store.clone(),
         metrics_handle,
+        tracker_handle,
         bitcoin::Network::Signet,
         Some("p2poolv2".to_string()),
     )
@@ -494,7 +490,6 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
     // Start metrics actor
     let metrics_handle = p2poolv2_lib::accounting::stats::metrics::start_metrics(
         temp_dir.path().to_str().unwrap().to_string(),
-        tracker_handle,
     )
     .await
     .map_err(|e| ApiError::ServerError(e.to_string()))?;
@@ -512,6 +507,7 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
         api_config.clone(),
         chain_store.clone(),
         metrics_handle,
+        tracker_handle,
         bitcoin::Network::Signet,
         Some("p2poolv2".to_string()),
     )

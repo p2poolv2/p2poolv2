@@ -145,19 +145,17 @@ mod tests {
         let (notify_tx, mut notify_rx) = mpsc::channel(1);
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
-        let tracker_handle = start_tracker_actor();
         let stats_dir = tempfile::tempdir().unwrap();
-        let tracker = start_tracker_actor();
-        let metrics_handle =
-            metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string(), tracker)
-                .await
-                .unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
             ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
             bitcoin::Network::Signet,
         ));
+        let tracker_handle = start_tracker_actor();
 
         let ctx = StratumContext {
             notify_tx,
@@ -255,12 +253,9 @@ mod tests {
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(
-            stats_dir.path().to_str().unwrap().to_string(),
-            tracker_handle.clone(),
-        )
-        .await
-        .unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(
             Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
@@ -415,12 +410,9 @@ mod tests {
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(
-            stats_dir.path().to_str().unwrap().to_string(),
-            tracker_handle.clone(),
-        )
-        .await
-        .unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let temp_dir = tempdir().unwrap();
         let store = Arc::new(ChainStore::new(

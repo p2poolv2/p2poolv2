@@ -157,12 +157,7 @@ async fn main() -> Result<(), String> {
     let (emissions_tx, emissions_rx) =
         tokio::sync::mpsc::channel::<Emission>(STRATUM_SHARES_BUFFER_SIZE);
 
-    let metrics_handle = match metrics::start_metrics(
-        config.logging.stats_dir.clone(),
-        tracker_handle.clone(),
-    )
-    .await
-    {
+    let metrics_handle = match metrics::start_metrics(config.logging.stats_dir.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
             return Err(format!("Failed to start metrics: {e}"));
@@ -170,6 +165,7 @@ async fn main() -> Result<(), String> {
     };
     let metrics_cloned = metrics_handle.clone();
     let store_for_stratum = chain_store.clone();
+    let tracker_handle_cloned = tracker_handle.clone();
 
     tokio::spawn(async move {
         let mut stratum_server = StratumServerBuilder::default()
@@ -192,7 +188,7 @@ async fn main() -> Result<(), String> {
             .start(
                 None,
                 notify_tx,
-                tracker_handle,
+                tracker_handle_cloned,
                 bitcoinrpc_config,
                 metrics_cloned,
             )
@@ -207,6 +203,7 @@ async fn main() -> Result<(), String> {
         config.api.clone(),
         chain_store.clone(),
         metrics_handle.clone(),
+        tracker_handle,
         stratum_config.network,
         stratum_config.pool_signature,
     )
