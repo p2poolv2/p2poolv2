@@ -258,12 +258,9 @@ mod handle_submit_tests {
 
         let (emissions_tx, mut emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(
-            stats_dir.path().to_str().unwrap().to_string(),
-            tracker_handle.clone(),
-        )
-        .await
-        .unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let temp_dir = tempdir().unwrap();
@@ -347,12 +344,9 @@ mod handle_submit_tests {
 
         let (emissions_tx, mut emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(
-            stats_dir.path().to_str().unwrap().to_string(),
-            tracker_handle.clone(),
-        )
-        .await
-        .unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let temp_dir = tempdir().unwrap();
@@ -440,12 +434,9 @@ mod handle_submit_tests {
 
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(
-            stats_dir.path().to_str().unwrap().to_string(),
-            tracker_handle.clone(),
-        )
-        .await
-        .unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let temp_dir = tempdir().unwrap();
@@ -530,12 +521,9 @@ mod handle_submit_tests {
 
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(
-            stats_dir.path().to_str().unwrap().to_string(),
-            tracker_handle.clone(),
-        )
-        .await
-        .unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
 
@@ -598,12 +586,9 @@ mod handle_submit_tests {
 
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(
-            stats_dir.path().to_str().unwrap().to_string(),
-            tracker_handle.clone(),
-        )
-        .await
-        .unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let temp_dir = tempdir().unwrap();
@@ -670,12 +655,9 @@ mod handle_submit_tests {
 
         let (emissions_tx, mut emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(
-            stats_dir.path().to_str().unwrap().to_string(),
-            tracker_handle.clone(),
-        )
-        .await
-        .unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
         let temp_dir = tempdir().unwrap();

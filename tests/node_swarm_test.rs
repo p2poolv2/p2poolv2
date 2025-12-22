@@ -84,24 +84,15 @@ async fn test_three_nodes_connectivity() {
     let tracker_handle1 = start_tracker_actor();
     let tracker_handle2 = start_tracker_actor();
     let tracker_handle3 = start_tracker_actor();
-    let metrics1 = metrics::start_metrics(
-        stats_dir1.path().to_str().unwrap().to_string(),
-        tracker_handle1,
-    )
-    .await
-    .unwrap();
-    let metrics2 = metrics::start_metrics(
-        stats_dir2.path().to_str().unwrap().to_string(),
-        tracker_handle2,
-    )
-    .await
-    .unwrap();
-    let metrics3 = metrics::start_metrics(
-        stats_dir3.path().to_str().unwrap().to_string(),
-        tracker_handle3,
-    )
-    .await
-    .unwrap();
+    let metrics1 = metrics::start_metrics(stats_dir1.path().to_str().unwrap().to_string())
+        .await
+        .unwrap();
+    let metrics2 = metrics::start_metrics(stats_dir2.path().to_str().unwrap().to_string())
+        .await
+        .unwrap();
+    let metrics3 = metrics::start_metrics(stats_dir3.path().to_str().unwrap().to_string())
+        .await
+        .unwrap();
 
     // Start three nodes
     let (node1_handle, _stop_rx1) = NodeHandle::new(config1, store1, shares_rx_1, metrics1)

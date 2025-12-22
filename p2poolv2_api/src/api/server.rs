@@ -23,7 +23,9 @@ use axum::{
     routing::get,
 };
 use chrono::DateTime;
-use p2poolv2_lib::stratum::work::coinbase::extract_outputs_from_coinbase2;
+use p2poolv2_lib::stratum::work::{
+    coinbase::extract_outputs_from_coinbase2, tracker::TrackerHandle,
+};
 use p2poolv2_lib::{
     accounting::{simple_pplns::SimplePplnsShare, stats::metrics::MetricsHandle},
     config::ApiConfig,
@@ -39,6 +41,7 @@ pub(crate) struct AppState {
     pub(crate) app_config: AppConfig,
     pub(crate) chain_store: Arc<ChainStore>,
     pub(crate) metrics_handle: MetricsHandle,
+    pub(crate) tracker_handle: TrackerHandle,
     pub(crate) auth_user: Option<String>,
     pub(crate) auth_token: Option<String>,
 }
@@ -70,6 +73,7 @@ pub async fn start_api_server(
     config: ApiConfig,
     chain_store: Arc<ChainStore>,
     metrics_handle: MetricsHandle,
+    tracker_handle: TrackerHandle,
     network: bitcoin::Network,
     pool_signature: Option<String>,
 ) -> Result<oneshot::Sender<()>, std::io::Error> {
@@ -82,6 +86,7 @@ pub async fn start_api_server(
         app_config: app_config.clone(),
         chain_store,
         metrics_handle,
+        tracker_handle,
         auth_user: config.auth_user.clone(),
         auth_token: config.auth_token.clone(),
     });
@@ -134,7 +139,7 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
     let mut exposition = pool_metrics.get_exposition();
 
     //  Get Tracker and Latest Job
-    let tracker = &state.metrics_handle.tracker;
+    let tracker = &state.tracker_handle;
     let job_details = match tracker.get_latest_job_id().await {
         Ok(job_id) => tracker.get_job(job_id).await.ok().flatten(),
         _ => None,
@@ -226,7 +231,6 @@ mod tests {
     use super::*;
     use axum::extract::State;
     use bitcoin::{Amount, Network, TxOut};
-    use p2poolv2_lib::accounting::OutputPair;
     use p2poolv2_lib::accounting::stats::metrics;
     use p2poolv2_lib::shares::chain::chain_store::ChainStore;
     use p2poolv2_lib::shares::share_block::ShareBlock;
@@ -243,12 +247,9 @@ mod tests {
         let tracker_handle = start_tracker_actor();
 
         let temp_dir = tempfile::tempdir().unwrap();
-        let metrics_handle = metrics::start_metrics(
-            temp_dir.path().to_str().unwrap().to_string(),
-            tracker_handle.clone(),
-        )
-        .await
-        .unwrap();
+        let metrics_handle = metrics::start_metrics(temp_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
 
         //  Use Signet Addresses
         let address = parse_address(
@@ -343,6 +344,7 @@ mod tests {
             },
             chain_store,
             metrics_handle,
+            tracker_handle,
             auth_user: None,
             auth_token: None,
         });

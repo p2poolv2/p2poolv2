@@ -55,13 +55,9 @@ async fn test_stratum_server_subscribe() {
 
     let (share_block_tx, _share_block_rx) = tokio::sync::mpsc::channel(10);
     let stats_dir = tempfile::tempdir().unwrap();
-    let tracker_handle = start_tracker_actor();
-    let metrics_handle = metrics::start_metrics(
-        stats_dir.path().to_str().unwrap().to_string(),
-        tracker_handle,
-    )
-    .await
-    .unwrap();
+    let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+        .await
+        .unwrap();
 
     let temp_dir = tempdir().unwrap();
     let store = Arc::new(ChainStore::new(
