@@ -20,15 +20,22 @@ Rebooting P2Pool
 
 == Run with Docker
 
-All docker commands are run from the docker directory.
+All docker commands are run from the `docker` directory.
 
 Start your local p2pool node:
 
-`docker compose up -d`
+[,shell]
+----
+cd docker
+docker compose up -d
+----
 
 Shutdown your local p2pool node:
 
-`docker compose down`
+[,shell]
+----
+docker compose down
+----
 
 === Run individual docker containers
 
@@ -42,11 +49,17 @@ Remember, all docker commands are run from the docker directory.
 
 === Start p2poolv2
 
-`docker compose up p2pool`
+[,shell]
+----
+docker compose up p2pool
+----
 
 === Start cpuminer to start producing shares
 
-`docker compose up cpuminer`
+[,shell]
+----
+docker compose up cpuminer
+----
 
 == Developer Setup
 
