@@ -270,7 +270,7 @@ impl ShareBlock {
         .unwrap()
         .into();
         let block_hex = hex::decode(genesis_data.bitcoin_block_hex).unwrap();
-        // panic here, as if the genesis block is bad, we bail at the start of the process
+        // we bail at the start of the process if the genesis block is bad -
         let block: Block = match bitcoin::consensus::deserialize(&block_hex) {
             Ok(block) => block,
             Err(e) => {
