@@ -22,7 +22,7 @@ use crate::shares::genesis;
 use crate::shares::share_commitment::ShareCommitment;
 use bitcoin::{
     Block, BlockHash, CompactTarget, CompressedPublicKey, Target, Transaction, TxMerkleNode, Txid,
-    VarInt,
+    VarInt, bip152,
     block::Header,
     consensus::{Decodable, Encodable},
     hashes::Hash,
@@ -270,19 +270,20 @@ impl ShareBlock {
         .unwrap()
         .into();
         let block_hex = hex::decode(genesis_data.bitcoin_block_hex).unwrap();
-        // we bail at the start of the process if the genesis block is bad -
-        let block: Block = match bitcoin::consensus::deserialize(&block_hex) {
-            Ok(block) => block,
-            Err(e) => {
-                println!("Failed to deserialize genesis block: {e}");
-                panic!("Invalid genesis block data");
-            }
-        };
+        // panic here, as if the genesis block is bad, we bail at the start of the process
+        let compact_block: bip152::HeaderAndShortIds =
+            match bitcoin::consensus::deserialize(&block_hex) {
+                Ok(block) => block,
+                Err(e) => {
+                    println!("Failed to deserialize genesis block: {e}");
+                    panic!("Invalid genesis block data");
+                }
+            };
         let header = ShareHeader {
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: vec![],
             miner_pubkey: public_key,
-            bitcoin_header: block.header,
+            bitcoin_header: compact_block.header,
             merkle_root: Some(merkle_root),
             time: 1700000000u32,
             bits: CompactTarget::from_consensus(0x207fffff),
@@ -290,7 +291,9 @@ impl ShareBlock {
         Self {
             header,
             transactions,
-            bitcoin_transactions: block.txdata,
+            // TODO: Initial plan was to rehydrate Block from Headerandshortids and use Block::txdata,
+            // Instead we need to only place short ids here. Still a todo!
+            bitcoin_transactions: vec![],
         }
     }
 }

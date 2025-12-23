@@ -22,7 +22,7 @@ use crate::shares::chain::chain_store::ChainStore;
 use crate::stratum::emission::EmissionReceiver;
 use crate::{accounting::stats::metrics::MetricsHandle, shares::share_block::ShareHeader};
 use std::sync::Arc;
-use tracing::info;
+use tracing::{debug, info};
 
 /// Save share to database for persistence in case we need to recover from a crash
 /// Shares are saved with a TTL for 1 week or when we reach accumulated work required for 5 blocks at current difficulty.
@@ -37,7 +37,7 @@ pub async fn handle_stratum_shares(
         let _ = store.add_pplns_share(emission.pplns);
         // TODO: Send block as Message::ShareBlock to peers. It should include the block as compact block.
         if emission.share_commitment.is_none() {
-            info!("No share commitment emitted by stratum. Won't send share to peers");
+            debug!("No share commitment emitted by stratum. Won't send share to peers");
             return;
         }
         let share_header = ShareHeader::from_commitment_and_header(

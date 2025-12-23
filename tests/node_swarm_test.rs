@@ -81,9 +81,6 @@ async fn test_three_nodes_connectivity() {
     let stats_dir1 = tempfile::tempdir().unwrap();
     let stats_dir2 = tempfile::tempdir().unwrap();
     let stats_dir3 = tempfile::tempdir().unwrap();
-    let tracker_handle1 = start_tracker_actor();
-    let tracker_handle2 = start_tracker_actor();
-    let tracker_handle3 = start_tracker_actor();
     let metrics1 = metrics::start_metrics(stats_dir1.path().to_str().unwrap().to_string())
         .await
         .unwrap();
