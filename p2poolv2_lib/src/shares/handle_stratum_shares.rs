@@ -37,7 +37,7 @@ pub async fn handle_stratum_shares(
         let _ = store.add_pplns_share(emission.pplns);
         // Send share to peers only in p2p mode, i.e. if the pool is run with a miner pubkey that results in a commitment
         if emission.share_commitment.is_none() {
-            info!("No share commitment emitted by stratum. Won't send share to peers");
+            debug!("No share commitment emitted by stratum. Won't send share to peers");
         } else {
             // TODO: Send block as Message::ShareBlock to peers. It should include the block as compact block.
             let _share_header = ShareHeader::from_commitment_and_header(
