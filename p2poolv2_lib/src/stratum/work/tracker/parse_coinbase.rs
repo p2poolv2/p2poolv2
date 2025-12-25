@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::stratum::work::{coinbase::extract_outputs_from_coinbase2, tracker::TrackerHandle};
+use bitcoin::Amount;
 
 /// Parse the coinbase in the latest job and return
 pub async fn get_distribution(
@@ -36,14 +37,16 @@ pub async fn get_distribution(
             let mut exposition = String::new();
 
             for tx_out in outputs.iter() {
-                match bitcoin::Address::from_script(&tx_out.script_pubkey, network) {
-                    Ok(address) => {
-                        exposition.push_str(&format!(
-                            "coinbase_output{{address=\"{address}\"}} {}\n",
-                            tx_out.value.to_sat()
-                        ));
+                if tx_out.value != Amount::ZERO {
+                    match bitcoin::Address::from_script(&tx_out.script_pubkey, network) {
+                        Ok(address) => {
+                            exposition.push_str(&format!(
+                                "coinbase_output{{address=\"{address}\"}} {}\n",
+                                tx_out.value.to_sat()
+                            ));
+                        }
+                        Err(_) => tracing::error!("Error parsing address from coinbase"),
                     }
-                    Err(_) => tracing::error!("Error parsing address from coinbase"),
                 }
             }
 
@@ -136,6 +139,10 @@ mod tests {
 
         assert!(result.is_some());
         let exposition = result.unwrap();
+
+        // only one ouput in exposition - skipping the witness commitment
+        assert_eq!(exposition.matches("coinbase_output").count(), 1);
+
         assert!(exposition.contains(
             "coinbase_output{address=\"tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d\"} 4900000000"
         ));
