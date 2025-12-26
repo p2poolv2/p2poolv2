@@ -36,12 +36,15 @@ pub async fn get_distribution(
             let total_value = job_details.blocktemplate.coinbasevalue;
             let mut exposition = String::new();
 
-            for tx_out in outputs.iter() {
+            // Use index in case the fees and donation addresses are
+            // the same. This way we can leave on grafana how to show
+            // them
+            for (index, tx_out) in outputs.iter().enumerate() {
                 if tx_out.value != Amount::ZERO {
                     match bitcoin::Address::from_script(&tx_out.script_pubkey, network) {
                         Ok(address) => {
                             exposition.push_str(&format!(
-                                "coinbase_output{{address=\"{address}\"}} {}\n",
+                                "coinbase_output{{index=\"{index}\",address=\"{address}\"}} {}\n",
                                 tx_out.value.to_sat()
                             ));
                         }
@@ -144,7 +147,7 @@ mod tests {
         assert_eq!(exposition.matches("coinbase_output").count(), 1);
 
         assert!(exposition.contains(
-            "coinbase_output{address=\"tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d\"} 4900000000"
+            "coinbase_output{index=\"0\",address=\"tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d\"} 4900000000"
         ));
         assert!(exposition.contains("coinbase_total 5000000000"));
     }
@@ -226,10 +229,10 @@ mod tests {
         assert!(result.is_some());
         let exposition = result.unwrap();
         assert!(exposition.contains(
-            "coinbase_output{address=\"tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d\"} 4800000000"
+            "coinbase_output{index=\"0\",address=\"tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d\"} 4800000000"
         ));
         assert!(exposition.contains(
-            "coinbase_output{address=\"tb1q0afww6y0kgl4tyjjyv6xlttvfwdfqxvrfzz35f\"} 200000000"
+            "coinbase_output{index=\"1\",address=\"tb1q0afww6y0kgl4tyjjyv6xlttvfwdfqxvrfzz35f\"} 200000000"
         ));
         assert!(exposition.contains("coinbase_total 5000000000"));
     }
@@ -280,7 +283,7 @@ mod tests {
         assert!(result.is_some());
         let exposition = result.unwrap();
         assert!(exposition.contains(
-            "coinbase_output{address=\"tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d\"} 4900000000"
+            "coinbase_output{index=\"0\",address=\"tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d\"} 4900000000"
         ));
         // OP_RETURN output should be skipped (no coinbase_output line for it)
         assert!(!exposition.contains("OP_RETURN"));
