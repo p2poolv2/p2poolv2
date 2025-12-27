@@ -160,12 +160,30 @@ UnclesFor(p, s) ==
             /\ GetConfirmedHeight(p, parent[u]) # NoHeight
             /\ GetConfirmedHeight(p, parent[u]) >= min_depth
             /\ GetConfirmedHeight(p, parent[u]) < parent_confirmed_height
+            /\ u # parent[s]
             /\ u \notin all_uncles}
     \* Select up to MaxUncles uncles
     IN IF Cardinality(potential_uncles) <= MaxUncles 
        THEN potential_uncles
        ELSE CHOOSE subset \in SUBSET potential_uncles : Cardinality(subset) = MaxUncles
-    
+
+(****************************************************************************)
+(* Recursive function to compute total work for a set of shares             *)
+(****************************************************************************)
+RECURSIVE WorkForShares(_)
+WorkForShares(shares) ==
+    IF shares = {} THEN 0
+    ELSE 
+        LET firstShare == CHOOSE s \in shares : TRUE
+            restShares == shares \ {firstShare}
+        IN firstShare.work + WorkForShares(restShares)
+
+(****************************************************************************)
+(* Find total work for uncles included in share s on process p              *)
+(****************************************************************************)
+WorkForUncles(p, s) ==
+    LET uncles_s == uncles[s]
+    IN WorkForShares(uncles_s)
 
 (****************************************************************************)
 (* Host process generates a new share                                       *)
@@ -194,9 +212,10 @@ GenerateShare(p, work) ==
            \* Immediately confirm the new share at local node
            /\ confirmed' = 
                 [confirmed EXCEPT ![p] = Append(@, newShare)]
-            \* Update confirmed work as parent's work + new share's work
+            \* Update confirmed work as parent's work + new share's work + uncles' work
            /\ chain_work' = 
-                [chain_work EXCEPT ![p, newShare] = chain_work[p, TopConfirmed(p)] + work]
+                [chain_work EXCEPT ![p, newShare] = 
+                    chain_work[p, TopConfirmed(p)] + work + WorkForShares(UnclesFor(p, newShare))]
             \* select uncles for the new share
            /\ uncles' = [uncles EXCEPT ![newShare] = UnclesFor(p, newShare)]
            \* Enqueue the new share for sending to other processes
@@ -266,6 +285,9 @@ StoreShareAndSetExpectedHeight(p, s) ==
        \/ expected_height[p, parent[s]] # NoHeight
        \/ Contains(candidates[p], parent[s])
        \/ Contains(confirmed[p], parent[s])
+    \* All uncles have expected heights set, which implies they have been received
+    /\ \A u \in uncles[s] :
+        expected_height[p, u] # NoHeight
     /\
         LET parentShare == parent[s]
             parent_height == IF parentShare = NoShare \/ parentShare = Genesis
@@ -306,7 +328,9 @@ MarkShareAsCandidate(p, s) ==
     \* /\ parent[s] # TopCandidate(p)
     \* /\ parent[s] # TopConfirmed(p)
     /\ share_status' = [share_status EXCEPT ![p, s] = "Candidate"]
-    /\ chain_work' = [chain_work EXCEPT ![p, s] = chain_work[p, parent[s]] + s.work]
+    \* Set chain work for the share as parent's work + share's work + uncles' work
+    /\ chain_work' = [chain_work EXCEPT ![p, s] =
+                        chain_work[p, parent[s]] + s.work + WorkForShares(uncles[s])]
     /\ UNCHANGED << stored_shares, parent, uncles, confirmed, candidates,
                     bitcoin_height, share_queue, validation_status,
                     spend_dependencies, expected_height, received_shares >>
