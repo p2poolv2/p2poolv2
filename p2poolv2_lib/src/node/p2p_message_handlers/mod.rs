@@ -54,14 +54,20 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
             .await
         }
         Message::ShareHeaders(share_headers) => {
-            handle_share_headers(share_headers, ctx.store, &ctx.time_provider).await
+            handle_share_headers(share_headers, ctx.store, &ctx.time_provider)
+                .await
+                .map_err(|e| {
+                    error!("Error handling received shares {}", e);
+                    e
+                })
         }
         Message::ShareBlock(share_block) => {
-            if let Err(e) = handle_share_block(share_block, ctx.store, &ctx.time_provider).await {
-                error!("Failed to add share: {}", e);
-                return Err(format!("Failed to add share: {e}").into());
-            }
-            Ok(())
+            handle_share_block(share_block, ctx.store, &ctx.time_provider)
+                .await
+                .map_err(|e| {
+                    error!("Failed to add share: {}", e);
+                    format!("Failed to add share: {e}").into()
+                })
         }
         Message::Inventory(inventory) => {
             info!("Received inventory: {:?}", inventory);
