@@ -16,12 +16,38 @@
 
 use super::{Store, column_families::ColumnFamily};
 use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::utils::snowflake_simplified::get_next_id;
+use bitcoin::consensus::Encodable;
 use bitcoin::consensus::encode;
+use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
-
 const INITIAL_SHARE_VEC_CAPACITY: usize = 100_000;
 
 impl Store {
+    /// Add PPLNS Share to pplns_share_cf
+    /// btcaddress and workername are skipped during serialization (serde(skip)) to minimize storage
+    ///
+    /// Key is timestamp (8) + user_id (8) + share id (8) = 24 bytes
+    pub fn add_pplns_share(
+        &self,
+        pplns_share: SimplePplnsShare,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
+
+        let mut serialized = Vec::new();
+        pplns_share.consensus_encode(&mut serialized)?;
+
+        let n_time = pplns_share.n_time * 1_000_000;
+        let key = SimplePplnsShare::make_key(n_time, pplns_share.user_id, get_next_id());
+        self.db.put_cf(&pplns_share_cf, key, serialized)?;
+        Ok(())
+    }
+
+    // Get PPLNS shares, no filter yet
+    pub fn get_pplns_shares(&self) -> Vec<SimplePplnsShare> {
+        self.get_pplns_shares_filtered(None, None, None)
+    }
+
     /// Get PPLNS shares with filtering support using timestamp-based keys for efficient range queries
     /// Deserializes SimplePplnsShare from DB (btcaddress/workername are skipped during serialization)
     /// and enriches with btcaddress from user store
