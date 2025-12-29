@@ -324,4 +324,211 @@ impl Store {
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(()) // TODO
     }
+
+    /// Get a share header from the store
+    pub fn get_share_header(
+        &self,
+        blockhash: &BlockHash,
+    ) -> Result<Option<ShareHeader>, Box<dyn Error + Send + Sync>> {
+        debug!("Getting share header from store: {:?}", blockhash);
+        let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
+        match self.db.get_cf::<&[u8]>(&share_cf, blockhash.as_ref()) {
+            Ok(Some(share)) => {
+                let storage_share: StorageShareBlock = encode::deserialize(&share)?;
+                Ok(Some(storage_share.header))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::TestShareBlockBuilder;
+    use bitcoin::hashes::Hash;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_setup_genesis() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis_block = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store
+            .setup_genesis(genesis_block.clone(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        assert_eq!(store.get_genesis_blockhash(), genesis_block.block_hash());
+
+        // verify we can get the share header for the genesis block
+        let header = store.get_share_header(&genesis_block.block_hash()).unwrap();
+        assert_eq!(header, Some(genesis_block.header.clone()));
+
+        // verify there is nothing in the chain index for the genesis block
+        let children = store
+            .get_children_blockhashes(&genesis_block.block_hash())
+            .unwrap();
+        assert!(children.is_none());
+    }
+
+    #[test]
+    fn test_chain_with_uncles() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create genesis block with a specific nonce to avoid duplicate issues
+        let genesis_block = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store
+            .setup_genesis(genesis_block.clone(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Create first share (child of genesis)
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis_block.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                share1.clone(),
+                1,
+                share1.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Create uncle (also child of genesis)
+        let uncle1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis_block.block_hash().to_string())
+            .nonce(0xe9695793) // Different nonce to get different hash
+            .build();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                uncle1.clone(),
+                1,
+                uncle1.header.get_work(),
+                false,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Create share2 referencing uncle1
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .uncles(vec![uncle1.block_hash()])
+            .nonce(0xe9695794)
+            .build();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                share2.clone(),
+                2,
+                share2.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Verify chain structure
+        // Genesis should have 2 children (share1 and uncle1)
+        let genesis_children = store
+            .get_children_blockhashes(&genesis_block.block_hash())
+            .unwrap()
+            .unwrap();
+        assert_eq!(genesis_children.len(), 2);
+        assert!(genesis_children.contains(&share1.block_hash()));
+        assert!(genesis_children.contains(&uncle1.block_hash()));
+
+        // Share1 should have 1 child (share2)
+        let share1_children = store
+            .get_children_blockhashes(&share1.block_hash())
+            .unwrap()
+            .unwrap();
+        assert_eq!(share1_children.len(), 1);
+        assert!(share1_children.contains(&share2.block_hash()));
+
+        // Uncle1 should also have share2 as child (since share2 references it as uncle)
+        let uncle1_children = store
+            .get_children_blockhashes(&uncle1.block_hash())
+            .unwrap()
+            .unwrap();
+        assert_eq!(uncle1_children.len(), 1);
+        assert!(uncle1_children.contains(&share2.block_hash()));
+
+        // Verify we can retrieve all shares
+        assert!(store.get_share(&genesis_block.block_hash()).is_some());
+        assert!(store.get_share(&share1.block_hash()).is_some());
+        assert!(store.get_share(&uncle1.block_hash()).is_some());
+        assert!(store.get_share(&share2.block_hash()).is_some());
+    }
+
+    #[test]
+    fn test_store_share_block_with_transactions_should_retreive_txs() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let block = TestShareBlockBuilder::new().build();
+        let num_txs = block.transactions.len();
+        let txs = block.transactions.clone();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(block.clone(), 0, block.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let blockhash = block.block_hash();
+
+        let result = store.get_share(&blockhash);
+        assert!(result.is_some());
+        let share = result.unwrap();
+        assert_eq!(share.transactions.len(), num_txs);
+        assert_eq!(share.transactions, txs);
+    }
+
+    #[test]
+    fn test_get_share_header() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block = TestShareBlockBuilder::new().build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(block.clone(), 0, block.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let header = store.get_share_header(&block.block_hash()).unwrap();
+        assert_eq!(header, Some(block.header.clone()));
+    }
+
+    #[test]
+    fn test_get_share_header_nonexistent() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let nonexistent_hash = BlockHash::all_zeros();
+        let header = store.get_share_header(&nonexistent_hash).unwrap();
+        assert!(header.is_none());
+    }
+
+    #[test]
+    fn test_block_status_for_nonexistent_block() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let nonexistent_hash = BlockHash::all_zeros();
+        let share = store.get_share(&nonexistent_hash);
+        assert!(share.is_none());
+    }
 }

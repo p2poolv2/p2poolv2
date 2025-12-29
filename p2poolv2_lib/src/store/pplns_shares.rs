@@ -132,6 +132,42 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn test_add_pplns_share() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let user_id = store
+            .add_user("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string())
+            .unwrap();
+
+        // Create a PPLNS share
+        let pplns_share = SimplePplnsShare::new(
+            user_id,
+            1,
+            "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa".to_string(),
+            "".to_string(),
+            1000,
+            "job".to_string(),
+            "extra".to_string(),
+            "nonce".to_string(),
+        );
+
+        // Add the PPLNS share to the store
+        let result = store.add_pplns_share(pplns_share.clone());
+        assert!(
+            result.is_ok(),
+            "Failed to add PPLNS share: {:?}",
+            result.err()
+        );
+
+        let stored_data = store.get_pplns_shares();
+        assert!(
+            !stored_data.is_empty(),
+            "PPLNS share data not found in database"
+        );
+    }
+
+    #[test]
     fn test_get_pplns_shares_filtered_with_limit() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
