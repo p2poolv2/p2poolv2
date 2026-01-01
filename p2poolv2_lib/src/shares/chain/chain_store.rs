@@ -130,9 +130,13 @@ impl ChainStore {
     }
 
     /// Reorg the chain to the new share
+    ///
     /// Conditions for reorg:
-    /// If common ancestor with current tip - compare chain work at share and tip
+    ///
+    /// If share has a common ancestor with current tip - compare chain work at share and tip
+    ///
     /// Else, i.e. if disjoint chains - compare work over last PPLNS window shares
+    ///
     /// Changes on reorg:
     /// Change chain tip to new share
     /// Remove uncles and prev share from tips

@@ -260,13 +260,21 @@ impl Store {
         to_visit.push_back(*start);
 
         let mut results = Vec::with_capacity(depth);
+        let mut visited = HashSet::new();
         let mut remaining_depth = depth;
 
         // Walk backward through parents and uncles
         while let Some(next) = to_visit.pop_front() {
+            // Skip already visited blocks to avoid duplicates
+            if visited.contains(&next) {
+                continue;
+            }
+
             // Get the share to find its parent
             match self.get_share(&next) {
                 Some(next_share) => {
+                    visited.insert(next);
+
                     to_visit.push_back(next_share.header.prev_share_blockhash);
                     for uncle in next_share.header.uncles.iter() {
                         to_visit.push_back(*uncle);
@@ -1588,5 +1596,335 @@ mod tests {
             .get_common_ancestor(&genesis1.block_hash(), &genesis2.block_hash())
             .unwrap();
         assert_eq!(ancestor, None);
+    }
+
+    #[test]
+    fn test_get_dag_for_depth_no_duplicates_with_uncle() {
+        // This test verifies that get_dag_for_depth does not return duplicate blocks
+        // when uncles and main chain blocks share a common parent.
+        //
+        // DAG structure:
+        //       share1
+        //      /      \
+        //   uncle1    share2
+        //              |
+        //            share3 (uncles=[uncle1])
+        //
+        // uncle1 is a sibling of share2 (both have share1 as parent).
+        // share3 references uncle1 as its uncle.
+        // When traversing from share3, both share2's parent (share1) and
+        // uncle1's parent (share1) point to the same block. Without visited
+        // tracking, share1 would appear twice in the results.
+
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create genesis
+        let share1 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(share1.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Create uncle1 - sibling of share2
+        let uncle1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(100)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                uncle1.clone(),
+                1,
+                share1.header.get_work() + uncle1.header.get_work(),
+                false,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Create share2 - sibling of uncle1
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                share2.clone(),
+                1,
+                share1.header.get_work() + share2.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Create share3 with uncle1 as uncle (uncle1 is sibling of share3's parent)
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .uncles(vec![uncle1.block_hash()])
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                share3.clone(),
+                2,
+                share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Get DAG from share3 with depth 10 (more than enough to include all blocks)
+        let chain = store.get_dag_for_depth(&share3.block_hash(), 10).unwrap();
+
+        // Verify no duplicates by checking that all blockhashes are unique
+        let unique_hashes: HashSet<BlockHash> = chain.iter().cloned().collect();
+        assert_eq!(
+            chain.len(),
+            unique_hashes.len(),
+            "get_dag_for_depth returned duplicate blocks"
+        );
+
+        // Should contain exactly 4 unique blocks: share3, share2, uncle1, share1
+        assert_eq!(chain.len(), 4);
+        assert!(unique_hashes.contains(&share3.block_hash()));
+        assert!(unique_hashes.contains(&share2.block_hash()));
+        assert!(unique_hashes.contains(&uncle1.block_hash()));
+        assert!(unique_hashes.contains(&share1.block_hash()));
+    }
+
+    #[test]
+    fn test_get_dag_for_depth_no_duplicates_with_multiple_uncles() {
+        // More complex test with multiple uncles
+        //
+        // DAG structure:
+        //              share1
+        //           /    |    \
+        //      uncle1  uncle2  share2
+        //                        |
+        //                      share3 (uncles=[uncle1, uncle2])
+        //
+        // uncle1, uncle2, and share2 are all siblings (share1 as parent).
+        // share3 references both uncle1 and uncle2 as uncles.
+        // Without visited tracking, share1 would be added to the queue 3 times.
+
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share1 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(share1.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let uncle1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(100)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                uncle1.clone(),
+                1,
+                share1.header.get_work() + uncle1.header.get_work(),
+                false,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let uncle2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(200)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                uncle2.clone(),
+                1,
+                share1.header.get_work() + uncle2.header.get_work(),
+                false,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                share2.clone(),
+                1,
+                share1.header.get_work() + share2.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .uncles(vec![uncle1.block_hash(), uncle2.block_hash()])
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                share3.clone(),
+                2,
+                share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let chain = store.get_dag_for_depth(&share3.block_hash(), 10).unwrap();
+
+        // Verify no duplicates
+        let unique_hashes: HashSet<BlockHash> = chain.iter().cloned().collect();
+        assert_eq!(
+            chain.len(),
+            unique_hashes.len(),
+            "get_dag_for_depth returned duplicate blocks"
+        );
+
+        // Should contain exactly 5 unique blocks
+        assert_eq!(chain.len(), 5);
+        assert!(unique_hashes.contains(&share3.block_hash()));
+        assert!(unique_hashes.contains(&share2.block_hash()));
+        assert!(unique_hashes.contains(&uncle1.block_hash()));
+        assert!(unique_hashes.contains(&uncle2.block_hash()));
+        assert!(unique_hashes.contains(&share1.block_hash()));
+    }
+
+    #[test]
+    fn test_get_dag_for_depth_no_duplicates_deep_uncle_chain() {
+        // Test with uncles at multiple levels of the chain
+        //
+        // DAG structure:
+        //       share1
+        //      /      \
+        //   uncle1    share2
+        //            /      \
+        //         uncle2    share3 (uncles=[uncle1])
+        //                     |
+        //                   share4 (uncles=[uncle2])
+        //
+        // This creates multiple opportunities for duplicate parent references.
+
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share1 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(share1.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // uncle1 is sibling of share2
+        let uncle1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(100)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                uncle1.clone(),
+                1,
+                share1.header.get_work() + uncle1.header.get_work(),
+                false,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                share2.clone(),
+                1,
+                share1.header.get_work() + share2.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // uncle2 is sibling of share3
+        let uncle2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(200)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                uncle2.clone(),
+                2,
+                share1.header.get_work() + share2.header.get_work() + uncle2.header.get_work(),
+                false,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share3 has uncle1 as uncle (sibling of its parent share2)
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .uncles(vec![uncle1.block_hash()])
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                share3.clone(),
+                2,
+                share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share4 has uncle2 as uncle (sibling of its parent share3)
+        let share4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share3.block_hash().to_string())
+            .uncles(vec![uncle2.block_hash()])
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                share4.clone(),
+                3,
+                share1.header.get_work()
+                    + share2.header.get_work()
+                    + share3.header.get_work()
+                    + share4.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let chain = store.get_dag_for_depth(&share4.block_hash(), 10).unwrap();
+
+        // Verify no duplicates
+        let unique_hashes: HashSet<BlockHash> = chain.iter().cloned().collect();
+        assert_eq!(
+            chain.len(),
+            unique_hashes.len(),
+            "get_dag_for_depth returned duplicate blocks"
+        );
+
+        // Should contain exactly 6 unique blocks
+        assert_eq!(chain.len(), 6);
+        assert!(unique_hashes.contains(&share4.block_hash()));
+        assert!(unique_hashes.contains(&share3.block_hash()));
+        assert!(unique_hashes.contains(&share2.block_hash()));
+        assert!(unique_hashes.contains(&share1.block_hash()));
+        assert!(unique_hashes.contains(&uncle1.block_hash()));
+        assert!(unique_hashes.contains(&uncle2.block_hash()));
     }
 }
