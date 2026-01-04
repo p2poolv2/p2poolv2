@@ -124,8 +124,8 @@ impl Store {
         let metadata_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::Metadata, RocksDbOptions::default());
 
-        let unspent_outputs_cf =
-            ColumnFamilyDescriptor::new(ColumnFamily::UnspentOutputs, RocksDbOptions::default());
+        let spends_index_cf =
+            ColumnFamilyDescriptor::new(ColumnFamily::SpendsIndex, RocksDbOptions::default());
 
         let cfs = vec![
             block_cf,
@@ -141,7 +141,7 @@ impl Store {
             user_cf,
             user_index_cf,
             metadata_cf,
-            unspent_outputs_cf,
+            spends_index_cf,
         ];
 
         // for the db too, we use default options for now
