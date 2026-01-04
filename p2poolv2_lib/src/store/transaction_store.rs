@@ -23,19 +23,30 @@ use rocksdb::WriteBatch;
 use std::error::Error;
 use tracing::debug;
 
-/// Serialized vout size: 32B for Txid hash, 4B for index
+/// Serialized outpoint size: 32B for Txid hash, 4B for index
 const OUTPOINT_SIZE: usize = 36;
 
 #[allow(dead_code)]
 impl Store {
     /// Store transactions in the store
+    ///
     /// Store inputs and outputs for each transaction in separate column families
+    ///
     /// Store txid -> transaction metadata in the tx column family
-    /// The block -> txids store is done in add_txids_to_block_index. This function lets us store transactions outside of a block context
+    ///
+    /// The block -> txids store is done in
+    /// add_txids_to_block_index. This function lets us store
+    /// transactions outside of a block context
+    ///
+    /// Creates entries in spend index to track inputs sending
+    /// outputs. These transactions are saved only for valid and
+    /// candidate blocks, so the spends are valid. Their confirmation
+    /// status depends on the block confirmation status they are
+    /// included in.
     pub(crate) fn add_sharechain_txs(
         &self,
         transactions: &[Transaction],
-        confirmed: bool,
+        on_main_chain: bool,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<Vec<TxMetadata>, Box<dyn Error + Send + Sync>> {
         let inputs_cf = self.db.cf_handle(&ColumnFamily::Inputs).unwrap();
@@ -53,8 +64,15 @@ impl Store {
                 input.consensus_encode(&mut serialized)?;
                 batch.put_cf::<&[u8], Vec<u8>>(&inputs_cf, input_key.as_ref(), serialized);
 
-                if confirmed {
-                    self.confirm_transaction(&txid, tx, batch)?;
+                if on_main_chain {
+                    // Add spends for transaction, confirmed or not.
+                    self.add_spend(
+                        &input.previous_output.txid,
+                        input.previous_output.vout,
+                        &txid,
+                        i as u32,
+                        batch,
+                    )?;
                 }
             }
 
@@ -86,30 +104,6 @@ impl Store {
         batch.put_cf::<&[u8], Vec<u8>>(&tx_cf, txid.as_ref(), serialized);
 
         Ok(tx_metadata)
-    }
-
-    /// Transaction confirmation means it has been validated and is part of a block in the main chain.
-    ///
-    /// Updates spend index to track all prevouts being spent by inputs of transaction
-    ///
-    /// Validated status remains unchanged, the script is still valid etc
-    pub(crate) fn confirm_transaction(
-        &self,
-        txid: &Txid,
-        transaction: &Transaction,
-        batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        // Add all prevouts to spends index
-        for (index, txin) in transaction.input.iter().enumerate() {
-            self.add_spend(
-                &txin.previous_output.txid,
-                txin.previous_output.vout,
-                txid,
-                index as u32,
-                batch,
-            )?;
-        }
-        Ok(())
     }
 
     /// Add spend index entry from output -> input. This helps us
@@ -158,14 +152,11 @@ impl Store {
 
         match self.db.get_cf::<&[u8]>(&spends_index_cf, key.as_ref())? {
             Some(outpoint) => {
-                let txid = encode::deserialize_partial(&outpoint)
-                    .map_err(|_| "Failed to deseralize txid from spends")?;
-                let vout = encode::deserialize_partial(&outpoint)
-                    .map_err(|_| "Failed to deseralize index from spends")?;
-                Ok(Some(OutPoint {
-                    txid: txid.0,
-                    vout: vout.0,
-                }))
+                let (txid, consumed) = encode::deserialize_partial(&outpoint)
+                    .map_err(|_| "Failed to deserialise txid from spends")?;
+                let (vout, _consumed) = encode::deserialize_partial(&outpoint[consumed..])
+                    .map_err(|_| "Failed to deserialize index from spends")?;
+                Ok(Some(OutPoint { txid, vout }))
             }
             None => Ok(None),
         }
@@ -255,7 +246,7 @@ impl Store {
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
         match self.db.get_cf::<&[u8]>(&tx_cf, txid.as_ref())? {
             Some(tx_metadata) => encode::deserialize(&tx_metadata)
-                .map_err(|_| "Failed to deseralize tx metadata".into()),
+                .map_err(|_| "Failed to deserialize tx metadata".into()),
             None => Err(format!("Transaction metadata not found for txid: {txid}").into()),
         }
     }
@@ -626,15 +617,22 @@ mod tests {
             }],
         };
 
+        let txid = tx.compute_txid();
+
         // Confirm the transaction (should add to spend index)
         let mut batch = rocksdb::WriteBatch::default();
-        store
-            .confirm_transaction(&tx.compute_txid(), &tx, &mut batch)
-            .unwrap();
+        store.add_sharechain_txs(&[tx], true, &mut batch).unwrap();
         store.db.write(batch).unwrap();
 
         // Verify the previous outputs are now in spends index
-        assert!(store.is_spent(&prev_txid, 0).unwrap().is_some());
-        assert!(store.is_spent(&prev_txid, 1).unwrap().is_some());
+        let stored = store.is_spent(&prev_txid, 0).unwrap();
+        assert!(stored.is_some());
+        assert_eq!(txid, stored.unwrap().txid);
+        assert_eq!(0, stored.unwrap().vout);
+
+        let stored_second = store.is_spent(&prev_txid, 1).unwrap();
+        assert!(stored_second.is_some());
+        assert_eq!(txid, stored_second.unwrap().txid);
+        assert_eq!(1, stored_second.unwrap().vout);
     }
 }
