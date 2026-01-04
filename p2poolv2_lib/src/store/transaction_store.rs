@@ -19,8 +19,12 @@ use crate::shares::share_block::Txids;
 use crate::store::block_tx_metadata::TxMetadata;
 use bitcoin::consensus::{self, Encodable, encode};
 use bitcoin::{BlockHash, OutPoint, Transaction, Txid};
+use rocksdb::WriteBatch;
 use std::error::Error;
 use tracing::debug;
+
+/// Serialized vout size: 32B for Txid hash, 4B for index
+const OUTPOINT_SIZE: usize = 36;
 
 #[allow(dead_code)]
 impl Store {
@@ -50,7 +54,7 @@ impl Store {
                 batch.put_cf::<&[u8], Vec<u8>>(&inputs_cf, input_key.as_ref(), serialized);
 
                 if confirmed {
-                    self.confirm_transaction(tx, batch)?;
+                    self.confirm_transaction(&txid, tx, batch)?;
                 }
             }
 
@@ -60,9 +64,6 @@ impl Store {
                 let mut serialized = Vec::new();
                 output.consensus_encode(&mut serialized)?;
                 batch.put_cf::<&[u8], Vec<u8>>(&outputs_cf, output_key.as_ref(), serialized);
-
-                // part of batch write, so we make individual calls
-                self.add_to_unspent_outputs(&txid, i as u32, batch)?;
             }
         }
         Ok(txs_metadata)
@@ -88,85 +89,86 @@ impl Store {
     }
 
     /// Transaction confirmation means it has been validated and is part of a block in the main chain.
-    /// Adds the outputs to unspent output set
+    ///
+    /// Updates spend index to track all prevouts being spent by inputs of transaction
+    ///
     /// Validated status remains unchanged, the script is still valid etc
     pub(crate) fn confirm_transaction(
         &self,
+        txid: &Txid,
         transaction: &Transaction,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        // Remove all input prevouts from unspent outputs
-        for txin in transaction.input.iter() {
-            self.remove_from_unspent_outputs(
+        // Add all prevouts to spends index
+        for (index, txin) in transaction.input.iter().enumerate() {
+            self.add_spend(
                 &txin.previous_output.txid,
                 txin.previous_output.vout,
+                txid,
+                index as u32,
                 batch,
             )?;
         }
         Ok(())
     }
 
-    /// Marking transaction as unconfirmed means it has been removed from the main chain as a result of a reorg
-    /// Removes the outputs to unspent output set
-    /// Validated status remains unchanged, the script is still valid etc
-    pub(crate) fn unconfirm_transaction(
+    /// Add spend index entry from output -> input. This helps us
+    /// track which outputs have been spent, and quickly check if an
+    /// output is spent - by checking for presence in this index.
+    ///
+    /// Using this index instead of an UTXO set we can concurrently
+    /// update this index.
+    ///
+    /// To check if a spend is a part of a confirmed block, we need to
+    /// look at the spending txid and check if it is included in a
+    /// confirmed block.
+    ///
+    /// We need to add a transaction id -> blockhash index
+    pub(crate) fn add_spend(
         &self,
-        transaction: &Transaction,
-        batch: &mut rocksdb::WriteBatch,
+        input_txid: &Txid,
+        input_vout: u32,
+        spending_txid: &Txid,
+        spending_index: u32,
+        batch: &mut WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        // Add all input prevouts from unspent outputs
-        for txin in transaction.input.iter() {
-            self.add_to_unspent_outputs(
-                &txin.previous_output.txid,
-                txin.previous_output.vout,
-                batch,
-            )?;
-        }
+        let key = format!("{input_txid}:{input_vout}");
+        let spends_index_cf = self.db.cf_handle(&ColumnFamily::SpendsIndex).unwrap();
+        let mut serialized = Vec::with_capacity(OUTPOINT_SIZE);
+        spending_txid.consensus_encode(&mut serialized)?;
+        spending_index.consensus_encode(&mut serialized)?;
+        batch.put_cf::<&[u8], Vec<u8>>(&spends_index_cf, key.as_ref(), serialized);
         Ok(())
     }
 
-    /// An the txid, index as an unspent output
-    pub(crate) fn add_to_unspent_outputs(
+    /// Check if txid:vout outpoint is spent
+    ///
+    /// Checks if the outpoint is in the index and return the spending
+    /// input txid:index as outpoint if present
+    ///
+    /// Caller should check if the spending outpoint is in a confirmed
+    /// block or not, if they need to.
+    pub(crate) fn is_spent(
         &self,
         txid: &Txid,
-        index: u32,
-        batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let utxo_cf = self.db.cf_handle(&ColumnFamily::UnspentOutputs).unwrap();
-        let key = format!("{txid}:{index}");
-        batch.put_cf(&utxo_cf, key.as_str(), []);
-        Ok(())
-    }
+        vout: u32,
+    ) -> Result<Option<OutPoint>, Box<dyn Error + Send + Sync>> {
+        let key = format!("{txid}:{vout}");
+        let spends_index_cf = self.db.cf_handle(&ColumnFamily::SpendsIndex).unwrap();
 
-    /// Remove txid, index from unspent outputs
-    pub(crate) fn remove_from_unspent_outputs(
-        &self,
-        txid: &Txid,
-        index: u32,
-        batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let utxo_cf = self.db.cf_handle(&ColumnFamily::UnspentOutputs).unwrap();
-        let key = format!("{txid}:{index}");
-        batch.delete_cf(&utxo_cf, key.as_str());
-        Ok(())
-    }
-
-    /// Check if txid, index is in unspent outputs
-    pub(crate) fn is_in_unspent_outputs(
-        &self,
-        txid: Txid,
-        index: u32,
-    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
-        let utxo_cf = self.db.cf_handle(&ColumnFamily::UnspentOutputs).unwrap();
-        let key = format!("{txid}:{index}");
-        // Most of the time OutPoint will NOT exist in unspent txs,
-        // and key may exist will definitely return false in that case
-        let mut exists = self.db.key_may_exist_cf(&utxo_cf, key.as_str());
-        // Check if exists for sure, if we a false positive
-        if exists {
-            exists = self.db.get_pinned_cf(&utxo_cf, key.as_str())?.is_some();
+        match self.db.get_cf::<&[u8]>(&spends_index_cf, key.as_ref())? {
+            Some(outpoint) => {
+                let txid = encode::deserialize_partial(&outpoint)
+                    .map_err(|_| "Failed to deseralize txid from spends")?;
+                let vout = encode::deserialize_partial(&outpoint)
+                    .map_err(|_| "Failed to deseralize index from spends")?;
+                Ok(Some(OutPoint {
+                    txid: txid.0,
+                    vout: vout.0,
+                }))
+            }
+            None => Ok(None),
         }
-        Ok(exists)
     }
 
     /// Store transaction metadata
@@ -245,15 +247,6 @@ impl Store {
         }
     }
 
-    /// Mark output as spent,
-    pub(crate) fn remove_output_from_unspent(
-        &self,
-        _output_point: OutPoint,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        // TODO - implement
-        Ok(())
-    }
-
     /// Get the validation status of a transaction from the store
     pub(crate) fn get_tx_metadata(
         &self,
@@ -262,7 +255,7 @@ impl Store {
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
         match self.db.get_cf::<&[u8]>(&tx_cf, txid.as_ref())? {
             Some(tx_metadata) => encode::deserialize(&tx_metadata)
-                .map_err(|_| "Failed to seralize tx metadata".into()),
+                .map_err(|_| "Failed to deseralize tx metadata".into()),
             None => Err(format!("Transaction metadata not found for txid: {txid}").into()),
         }
     }
@@ -448,68 +441,6 @@ mod tests {
     }
 
     #[test]
-    fn test_add_to_unspent_outputs() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        let txid = Txid::all_zeros();
-        let index = 0;
-
-        let mut batch = Store::get_write_batch();
-        store
-            .add_to_unspent_outputs(&txid, index, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        assert!(store.is_in_unspent_outputs(txid, index).unwrap());
-    }
-
-    #[test]
-    fn test_remove_from_unspent_outputs() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        let txid = Txid::all_zeros();
-        let index = 0;
-
-        // Add first
-        let mut batch = Store::get_write_batch();
-        store
-            .add_to_unspent_outputs(&txid, index, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-        assert!(store.is_in_unspent_outputs(txid, index).unwrap());
-
-        // Remove
-        let mut batch = Store::get_write_batch();
-        store
-            .remove_from_unspent_outputs(&txid, index, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-        assert!(!store.is_in_unspent_outputs(txid, index).unwrap());
-    }
-
-    #[test]
-    fn test_is_in_unspent_outputs() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        let txid = Txid::all_zeros();
-        let index = 0;
-
-        // Should not exist initially
-        assert!(!store.is_in_unspent_outputs(txid, index).unwrap());
-
-        // Add and verify
-        let mut batch = Store::get_write_batch();
-        store
-            .add_to_unspent_outputs(&txid, index, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-        assert!(store.is_in_unspent_outputs(txid, index).unwrap());
-    }
-
-    #[test]
     fn test_mark_transaction_valid() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
@@ -660,22 +591,16 @@ mod tests {
 
         let prev_txid = prev_tx.compute_txid();
 
-        // Add the previous transaction and its outputs to unspent set
+        // Add the previous transaction and update spends index
         let mut batch = rocksdb::WriteBatch::default();
         store
             .add_tx_metadata(prev_txid, &prev_tx, false, &mut batch)
             .unwrap();
-        store
-            .add_to_unspent_outputs(&prev_txid, 0, &mut batch)
-            .unwrap();
-        store
-            .add_to_unspent_outputs(&prev_txid, 1, &mut batch)
-            .unwrap();
         store.db.write(batch).unwrap();
 
-        // Verify outputs are in unspent set
-        assert!(store.is_in_unspent_outputs(prev_txid, 0).unwrap());
-        assert!(store.is_in_unspent_outputs(prev_txid, 1).unwrap());
+        // Verify outputs are not yet spent
+        assert!(store.is_spent(&prev_txid, 0).unwrap().is_none());
+        assert!(store.is_spent(&prev_txid, 1).unwrap().is_none());
 
         // Create a new transaction that spends the previous outputs
         let tx = Transaction {
@@ -701,59 +626,15 @@ mod tests {
             }],
         };
 
-        // Confirm the transaction (should remove inputs from unspent set)
+        // Confirm the transaction (should add to spend index)
         let mut batch = rocksdb::WriteBatch::default();
-        store.confirm_transaction(&tx, &mut batch).unwrap();
+        store
+            .confirm_transaction(&tx.compute_txid(), &tx, &mut batch)
+            .unwrap();
         store.db.write(batch).unwrap();
 
-        // Verify the previous outputs are no longer in unspent set
-        assert!(!store.is_in_unspent_outputs(prev_txid, 0).unwrap());
-        assert!(!store.is_in_unspent_outputs(prev_txid, 1).unwrap());
-    }
-
-    #[test]
-    fn test_unconfirm_transaction() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        // Create a previous transaction
-        let prev_txid = Txid::from_byte_array([5u8; 32]);
-
-        // Create a transaction that spends outputs
-        let tx = Transaction {
-            version: bitcoin::transaction::Version(1),
-            lock_time: bitcoin::absolute::LockTime::ZERO,
-            input: vec![
-                bitcoin::TxIn {
-                    previous_output: bitcoin::OutPoint::new(prev_txid, 0),
-                    script_sig: bitcoin::ScriptBuf::new(),
-                    sequence: bitcoin::Sequence::MAX,
-                    witness: bitcoin::Witness::new(),
-                },
-                bitcoin::TxIn {
-                    previous_output: bitcoin::OutPoint::new(prev_txid, 1),
-                    script_sig: bitcoin::ScriptBuf::new(),
-                    sequence: bitcoin::Sequence::MAX,
-                    witness: bitcoin::Witness::new(),
-                },
-            ],
-            output: vec![bitcoin::TxOut {
-                value: bitcoin::Amount::from_sat(2900000),
-                script_pubkey: bitcoin::ScriptBuf::new(),
-            }],
-        };
-
-        // Verify outputs are not in unspent set initially
-        assert!(!store.is_in_unspent_outputs(prev_txid, 0).unwrap());
-        assert!(!store.is_in_unspent_outputs(prev_txid, 1).unwrap());
-
-        // Unconfirm the transaction (should add inputs back to unspent set)
-        let mut batch = rocksdb::WriteBatch::default();
-        store.unconfirm_transaction(&tx, &mut batch).unwrap();
-        store.db.write(batch).unwrap();
-
-        // Verify the previous outputs are now in unspent set
-        assert!(store.is_in_unspent_outputs(prev_txid, 0).unwrap());
-        assert!(store.is_in_unspent_outputs(prev_txid, 1).unwrap());
+        // Verify the previous outputs are now in spends index
+        assert!(store.is_spent(&prev_txid, 0).unwrap().is_some());
+        assert!(store.is_spent(&prev_txid, 1).unwrap().is_some());
     }
 }

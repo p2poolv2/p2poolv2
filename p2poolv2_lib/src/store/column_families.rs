@@ -30,7 +30,7 @@ pub enum ColumnFamily {
     User,
     UserIndex,
     Metadata,
-    UnspentOutputs,
+    SpendsIndex,
 }
 
 impl ColumnFamily {
@@ -49,7 +49,7 @@ impl ColumnFamily {
             ColumnFamily::User => "user",
             ColumnFamily::UserIndex => "user_index",
             ColumnFamily::Metadata => "metadata",
-            ColumnFamily::UnspentOutputs => "unspent_outputs",
+            ColumnFamily::SpendsIndex => "spends_index",
         }
     }
 }
