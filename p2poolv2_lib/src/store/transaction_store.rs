@@ -38,11 +38,15 @@ impl Store {
     /// add_txids_to_block_index. This function lets us store
     /// transactions outside of a block context
     ///
-    /// Creates entries in spend index to track inputs sending
+    /// Creates entries in spend index to track inputs spending
     /// outputs. These transactions are saved only for valid and
     /// candidate blocks, so the spends are valid. Their confirmation
     /// status depends on the block confirmation status they are
     /// included in.
+    ///
+    /// On chain reorgs this should be called again, so that any
+    /// outputs spent by different txs in the new cofirmed chain are
+    /// overwritten.
     pub(crate) fn add_sharechain_txs(
         &self,
         transactions: &[Transaction],

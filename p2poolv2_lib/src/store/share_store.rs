@@ -25,8 +25,15 @@ use tracing::debug;
 
 impl Store {
     /// Add a share to the store
-    /// We use StorageShareBlock to serialize the share so that we do not store transactions serialized with the block.
-    /// Transactions are stored separately. All writes are done in a single atomic batch.
+    ///
+    /// Uses StorageShareBlock to serialize the share so that
+    /// transactions are not serialized with the block.
+    ///
+    /// Transactions are stored separately. All writes are done in a
+    /// single atomic batch.
+    ///
+    /// Should be called for shares that have been validated for PoW
+    /// and other static checks.
     pub fn add_share(
         &self,
         share: ShareBlock,
