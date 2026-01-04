@@ -93,6 +93,8 @@ impl Store {
         let block_cf = ColumnFamilyDescriptor::new(ColumnFamily::Block, RocksDbOptions::default());
         let block_txids_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::BlockTxids, RocksDbOptions::default());
+        let txids_blocks_cf =
+            ColumnFamilyDescriptor::new(ColumnFamily::TxidsBlocks, RocksDbOptions::default());
         let inputs_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::Inputs, RocksDbOptions::default());
         let outputs_cf =
@@ -130,6 +132,7 @@ impl Store {
         let cfs = vec![
             block_cf,
             block_txids_cf,
+            txids_blocks_cf,
             inputs_cf,
             outputs_cf,
             tx_cf,
