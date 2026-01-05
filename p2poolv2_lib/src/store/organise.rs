@@ -32,10 +32,9 @@ fn height_to_key_with_suffix(height: u32, suffix: &str) -> Vec<u8> {
 }
 
 impl Store {
-    /// Incremement top candidate key if height is one more than current height
+    /// Increment top candidate key if height is one more than current height
     ///
-    /// If it is more than one higher, return an error. This forces
-    /// candidates to be added only at the top of the candidates list.
+    /// Only updates top if it is more than one higher.
     fn increment_top_candidate(
         &self,
         height: u32,
@@ -55,28 +54,16 @@ impl Store {
         Ok(())
     }
 
-    /// Incremement top confirmed key if height is one more than current height
-    ///
-    /// If it is more than one higher, return an error. This forces
-    /// confirmed to be added only at the top of the confirmed list.
-    fn increment_top_confirmed(
-        &self,
-        height: u32,
-        batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    /// Set top confirmed height
+    /// The required height checks are already made in make_confirmed
+    fn set_top_confirmed_height(&self, height: u32, batch: &mut rocksdb::WriteBatch) {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
-
-        let current_top = self.get_top_confirmed_height();
-
-        if current_top.is_none() || height.saturating_sub(current_top.unwrap()) == 1 {
-            let serialized_height = consensus::serialize(&height);
-            batch.put_cf(
-                &block_height_cf,
-                TOP_CONFIRMED_KEY.as_bytes().as_ref(),
-                serialized_height,
-            );
-        }
-        Ok(())
+        let serialized_height = consensus::serialize(&height);
+        batch.put_cf(
+            &block_height_cf,
+            TOP_CONFIRMED_KEY.as_bytes().as_ref(),
+            serialized_height,
+        );
     }
 
     /// Get top candidate height from candidates index
@@ -137,19 +124,33 @@ impl Store {
     }
 
     /// Add blockhash as a confirmed at provided height
+    ///
+    /// Only adds to the confirmed index if the height is one more than the
+    /// current top confirmed height (or if there is no top yet).
+    /// Returns Ok(()) regardless of whether the entry was added.
     pub(crate) fn make_confirmed(
         &self,
         blockhash: &BlockHash,
         height: u32,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let current_top = self.get_top_confirmed_height();
+
+        // Only add if this is the first entry or height is exactly one more than current top
+        let is_valid_height =
+            current_top.is_none() || height.saturating_sub(current_top.unwrap()) == 1;
+
+        if !is_valid_height {
+            return Ok(());
+        }
+
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let key = height_to_key_with_suffix(height, CONFIRMED_SUFFIX);
 
         let serialized_blockhash = consensus::serialize(blockhash);
         batch.put_cf(&block_height_cf, key, serialized_blockhash);
 
-        self.increment_top_confirmed(height, batch)?;
+        self.set_top_confirmed_height(height, batch);
         Ok(())
     }
 
@@ -311,8 +312,8 @@ mod tests {
     }
 
     #[test]
-    fn test_make_confirmed_overwrites_previous() {
-        // Each height should only have one confirmed - new confirmations replace old ones
+    fn test_make_confirmed_ignores_same_height() {
+        // Confirming at the same height as current top is ignored
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -328,15 +329,15 @@ mod tests {
 
         assert_eq!(store.get_confirmed_at_height(0), Some(share1.block_hash()));
 
-        // Make share2 confirmed at same height - should overwrite
+        // Try to make share2 confirmed at same height - should be ignored
         let mut batch = Store::get_write_batch();
         store
             .make_confirmed(&share2.block_hash(), 0, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Should now return share2, not share1
-        assert_eq!(store.get_confirmed_at_height(0), Some(share2.block_hash()));
+        // Should still return share1, not share2
+        assert_eq!(store.get_confirmed_at_height(0), Some(share1.block_hash()));
     }
 
     #[test]
@@ -475,5 +476,69 @@ mod tests {
 
         // is_confirmed should return false because there's no metadata
         assert!(!store.is_confirmed(&fake_blockhash));
+    }
+
+    #[test]
+    fn test_make_candidate_does_not_update_top_when_height_skips() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share0 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let share2 = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+
+        // Make share0 candidate at height 0
+        let mut batch = Store::get_write_batch();
+        store
+            .make_candidate(&share0.block_hash(), 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Verify top candidate height is 0
+        assert_eq!(store.get_top_candidate_height(), Some(0));
+
+        // Make share2 candidate at height 2 (skipping height 1)
+        let mut batch = Store::get_write_batch();
+        store
+            .make_candidate(&share2.block_hash(), 2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Top candidate height should still be 0 (not updated because we skipped height 1)
+        assert_eq!(store.get_top_candidate_height(), Some(0));
+
+        // But the candidate at height 2 should still be retrievable
+        assert_eq!(store.get_candidate_at_height(2), Some(share2.block_hash()));
+    }
+
+    #[test]
+    fn test_make_confirmed_does_not_update_top_when_height_skips() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share0 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let share2 = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+
+        // Make share0 confirmed at height 0
+        let mut batch = Store::get_write_batch();
+        store
+            .make_confirmed(&share0.block_hash(), 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Verify top confirmed height is 0
+        assert_eq!(store.get_top_confirmed_height(), Some(0));
+
+        // Make share2 confirmed at height 2 (skipping height 1)
+        let mut batch = Store::get_write_batch();
+        store
+            .make_confirmed(&share2.block_hash(), 2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Top confirmed height should still be 0 (not updated because we skipped height 1)
+        assert_eq!(store.get_top_confirmed_height(), Some(0));
+
+        // But the confirmed at height 2 should not be retrievable
+        assert!(store.get_confirmed_at_height(2).is_none());
     }
 }
