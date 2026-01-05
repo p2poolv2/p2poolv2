@@ -55,7 +55,7 @@ impl Store {
 
         let txids = Txids(txs_metadata.iter().map(|t| t.txid).collect());
         // Store block -> txids index
-        self.add_txids_to_block_index(
+        self.add_block_to_txids_index(
             &blockhash,
             &txids,
             batch,
@@ -71,7 +71,7 @@ impl Store {
                 .collect(),
         );
         // Store block -> bitcoin txids index
-        self.add_txids_to_block_index(
+        self.add_block_to_txids_index(
             &blockhash,
             &bitcoin_txids,
             batch,
