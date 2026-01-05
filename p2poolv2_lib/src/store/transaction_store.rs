@@ -193,7 +193,7 @@ impl Store {
 
     /// Add the list of transaction IDs to the batch
     /// Transactions themselves are stored in add_txs, here we just store the association between block and txids
-    pub(crate) fn add_txids_to_block_index(
+    pub(crate) fn add_block_to_txids_index(
         &self,
         blockhash: &BlockHash,
         txids: &Txids,
