@@ -174,6 +174,25 @@ impl Store {
             Ok(None) | Err(_) => None,
         }
     }
+
+    /// Check if a blockhash is in the confirmed index
+    ///
+    /// Gets the expected height for the blockhash from block metadata,
+    /// then checks if the confirmed blockhash at that height matches.
+    pub fn is_confirmed(&self, blockhash: &BlockHash) -> bool {
+        let Ok(metadata) = self.get_block_metadata(blockhash) else {
+            return false;
+        };
+
+        let Some(height) = metadata.expected_height else {
+            return false;
+        };
+
+        match self.get_confirmed_at_height(height) {
+            Some(confirmed_blockhash) => confirmed_blockhash == *blockhash,
+            None => false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -348,5 +367,113 @@ mod tests {
             store.get_confirmed_at_height(0),
             Some(confirmed_share.block_hash())
         );
+    }
+
+    #[test]
+    fn test_is_confirmed_returns_true_when_confirmed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create and add a share to the store (this sets up block metadata)
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(genesis.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Mark the genesis as confirmed at height 0
+        let mut batch = Store::get_write_batch();
+        store
+            .make_confirmed(&genesis.block_hash(), 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // is_confirmed should return true
+        assert!(store.is_confirmed(&genesis.block_hash()));
+    }
+
+    #[test]
+    fn test_is_confirmed_returns_false_when_not_confirmed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create and add a share to the store (this sets up block metadata)
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(genesis.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Don't mark it as confirmed - is_confirmed should return false
+        assert!(!store.is_confirmed(&genesis.block_hash()));
+    }
+
+    #[test]
+    fn test_is_confirmed_returns_false_when_different_block_confirmed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create genesis and add to store
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(genesis.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Create another share at the same height
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                share2.clone(),
+                1,
+                share2.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Create a third share at the same height as share2
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                share3.clone(),
+                1,
+                share3.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Mark share2 as confirmed at height 1
+        let mut batch = Store::get_write_batch();
+        store
+            .make_confirmed(&share2.block_hash(), 1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share2 should be confirmed, share3 should not
+        assert!(store.is_confirmed(&share2.block_hash()));
+        assert!(!store.is_confirmed(&share3.block_hash()));
+    }
+
+    #[test]
+    fn test_is_confirmed_returns_false_when_no_metadata() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create a blockhash that doesn't exist in the store
+        let fake_blockhash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+            .parse::<BlockHash>()
+            .unwrap();
+
+        // is_confirmed should return false because there's no metadata
+        assert!(!store.is_confirmed(&fake_blockhash));
     }
 }
