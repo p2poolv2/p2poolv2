@@ -191,12 +191,13 @@ impl Store {
         Ok(tx_metadata)
     }
 
-    /// Add blockhash to all txids as keys
+    /// Add the given blockhash to the txids→blocks index for all txids.
     ///
-    /// The index is used to look up if txid has been spent by any
-    /// output - candidate or confirmed. The confirmation status
-    /// depends on the block's confirmation status so that is check by
-    /// clients outside this function.
+    /// This index maps each txid to one or more blockhashes, allowing
+    /// callers to look up which blocks contain a given transaction.
+    /// Whether those blocks (and thus the transactions) are confirmed
+    /// depends on the chain state and is determined by callers outside
+    /// this function.
     ///
     /// Uses merge operator to append blockhashes, since a txid can be
     /// included in multiple blocks (e.g., competing miners extending
@@ -214,7 +215,7 @@ impl Store {
             batch.merge_cf(
                 &txids_blocks_cf,
                 AsRef::<[u8]>::as_ref(txid),
-                serialized_blockhash.clone(),
+                &serialized_blockhash,
             );
         }
         Ok(())
