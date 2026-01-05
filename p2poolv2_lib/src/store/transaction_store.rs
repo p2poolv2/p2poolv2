@@ -191,6 +191,57 @@ impl Store {
         Ok(tx_metadata)
     }
 
+    /// Add blockhash to all txids as keys
+    ///
+    /// The index is used to look up if txid has been spent by any
+    /// output - candidate or confirmed. The confirmation status
+    /// depends on the block's confirmation status so that is check by
+    /// clients outside this function.
+    ///
+    /// Uses merge operator to append blockhashes, since a txid can be
+    /// included in multiple blocks (e.g., competing miners extending
+    /// different chain tips).
+    pub(crate) fn add_txids_to_blocks_index(
+        &self,
+        blockhash: &BlockHash,
+        txids: &Txids,
+        batch: &mut WriteBatch,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let txids_blocks_cf = self.db.cf_handle(&ColumnFamily::TxidsBlocks).unwrap();
+        let serialized_blockhash = consensus::serialize(blockhash);
+
+        for txid in &txids.0 {
+            batch.merge_cf(
+                &txids_blocks_cf,
+                AsRef::<[u8]>::as_ref(txid),
+                serialized_blockhash.clone(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Get all blockhashes for a given txid from the txids_blocks index
+    ///
+    /// Returns a vector of blockhashes that contain this txid.
+    /// A txid can be in multiple blocks when competing miners include
+    /// the same transaction in different blocks.
+    /// This is the reverse lookup of add_txids_to_blocks_index.
+    pub(crate) fn get_blockhashes_for_txid(
+        &self,
+        txid: &Txid,
+    ) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
+        let txids_blocks_cf = self.db.cf_handle(&ColumnFamily::TxidsBlocks).unwrap();
+
+        match self.db.get_cf::<&[u8]>(&txids_blocks_cf, txid.as_ref())? {
+            Some(blockhash_bytes) => {
+                let blockhashes: Vec<BlockHash> = encode::deserialize(&blockhash_bytes)
+                    .map_err(|_| "Failed to deserialize blockhashes from txids_blocks index")?;
+                Ok(blockhashes)
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// Add the list of transaction IDs to the batch
     /// Transactions themselves are stored in add_txs, here we just store the association between block and txids
     pub(crate) fn add_block_to_txids_index(
@@ -406,8 +457,180 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
+        // Verify block -> txids index (forward lookup)
         let txids = store.get_txids_for_blockhash(&blockhash, ColumnFamily::BlockTxids);
         assert_eq!(txids.0.len(), block.transactions.len());
+
+        // Verify txid -> block index (reverse lookup via add_txids_to_blocks_index)
+        for tx in &block.transactions {
+            let txid = tx.compute_txid();
+            let retrieved_blockhashes = store.get_blockhashes_for_txid(&txid).unwrap();
+            assert_eq!(retrieved_blockhashes.len(), 1);
+            assert_eq!(
+                retrieved_blockhashes[0], blockhash,
+                "txid {} should map to blockhash {}",
+                txid, blockhash
+            );
+        }
+
+        // Verify a non-existent txid returns empty vector
+        let nonexistent_txid = Txid::all_zeros();
+        let result = store.get_blockhashes_for_txid(&nonexistent_txid).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_txid_to_blocks_index_supports_multiple_blockhashes() {
+        // Test that a txid can be associated with multiple blockhashes,
+        // simulating the scenario where competing miners include the same
+        // transaction in different blocks.
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create a transaction that will be included in multiple blocks
+        let shared_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1000000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let shared_txid = shared_tx.compute_txid();
+
+        // Create first block containing the shared transaction
+        let block1 = TestShareBlockBuilder::new()
+            .nonce(0xe9695791)
+            .add_transaction(shared_tx.clone())
+            .build();
+        let blockhash1 = block1.block_hash();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                block1.clone(),
+                0,
+                block1.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Verify the txid maps to the first blockhash
+        let blockhashes = store.get_blockhashes_for_txid(&shared_txid).unwrap();
+        assert_eq!(blockhashes.len(), 1);
+        assert!(blockhashes.contains(&blockhash1));
+
+        // Create second block (different nonce) containing the same transaction
+        // This simulates a competing miner including the same tx
+        let block2 = TestShareBlockBuilder::new()
+            .nonce(0xe9695792)
+            .add_transaction(shared_tx.clone())
+            .build();
+        let blockhash2 = block2.block_hash();
+        assert_ne!(
+            blockhash1, blockhash2,
+            "blocks should have different hashes"
+        );
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                block2.clone(),
+                0,
+                block2.header.get_work(),
+                false,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Verify the txid now maps to both blockhashes
+        let blockhashes = store.get_blockhashes_for_txid(&shared_txid).unwrap();
+        assert_eq!(blockhashes.len(), 2, "txid should map to 2 blockhashes");
+        assert!(
+            blockhashes.contains(&blockhash1),
+            "should contain first blockhash"
+        );
+        assert!(
+            blockhashes.contains(&blockhash2),
+            "should contain second blockhash"
+        );
+
+        // Create third block with the same transaction
+        let block3 = TestShareBlockBuilder::new()
+            .nonce(0xe9695793)
+            .add_transaction(shared_tx.clone())
+            .build();
+        let blockhash3 = block3.block_hash();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                block3.clone(),
+                0,
+                block3.header.get_work(),
+                false,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Verify the txid now maps to all three blockhashes
+        let blockhashes = store.get_blockhashes_for_txid(&shared_txid).unwrap();
+        assert_eq!(blockhashes.len(), 3, "txid should map to 3 blockhashes");
+        assert!(blockhashes.contains(&blockhash1));
+        assert!(blockhashes.contains(&blockhash2));
+        assert!(blockhashes.contains(&blockhash3));
+    }
+
+    #[test]
+    fn test_txid_to_blocks_index_deduplicates_blockhashes() {
+        // Test that adding the same blockhash for a txid multiple times
+        // doesn't create duplicates (merge operator should handle this)
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+        let txid = tx.compute_txid();
+        let txids = Txids(vec![txid]);
+
+        let blockhash = BlockHash::from_byte_array([1u8; 32]);
+
+        // Add the same blockhash for the txid multiple times
+        let mut batch = Store::get_write_batch();
+        store
+            .add_txids_to_blocks_index(&blockhash, &txids, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_txids_to_blocks_index(&blockhash, &txids, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_txids_to_blocks_index(&blockhash, &txids, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Should still only have 1 blockhash (no duplicates)
+        let blockhashes = store.get_blockhashes_for_txid(&txid).unwrap();
+        assert_eq!(
+            blockhashes.len(),
+            1,
+            "should have only 1 blockhash (deduplication)"
+        );
+        assert_eq!(blockhashes[0], blockhash);
     }
 
     #[test]

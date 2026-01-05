@@ -117,7 +117,7 @@ impl Store {
         txids_blocks_opts
             .set_merge_operator_associative("blockhash_list_merge", blockhash_list_merge);
         let txids_blocks_cf =
-            ColumnFamilyDescriptor::new(ColumnFamily::BlockHeight, txids_blocks_opts);
+            ColumnFamilyDescriptor::new(ColumnFamily::TxidsBlocks, txids_blocks_opts);
 
         let bitcoin_txids_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::BitcoinTxids, RocksDbOptions::default());
