@@ -63,6 +63,8 @@ impl Store {
             ColumnFamily::BlockTxids,
         )?;
 
+        self.add_txids_to_blocks_index(&blockhash, &txids, batch)?;
+
         let bitcoin_txids = Txids(
             share
                 .bitcoin_transactions
