@@ -91,7 +91,7 @@ impl Store {
 
         self.set_height_to_blockhash(&blockhash, height, batch)?;
         let block_metadata = BlockMetadata {
-            height: Some(height),
+            expected_height: Some(height),
             chain_work,
         };
         self.set_block_metadata(&blockhash, &block_metadata, batch)?;
