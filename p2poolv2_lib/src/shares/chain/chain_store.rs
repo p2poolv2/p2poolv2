@@ -103,7 +103,7 @@ impl ChainStore {
         let (new_height, new_chain_work) =
             match self.store.get_block_metadata(&prev_share_blockhash) {
                 Ok(prev_metadata) => {
-                    let prev_height = prev_metadata.height.unwrap_or_default();
+                    let prev_height = prev_metadata.expected_height.unwrap_or_default();
                     let new_chain_work = prev_metadata.chain_work + share_work;
                     (prev_height + 1, new_chain_work)
                 }
@@ -313,7 +313,7 @@ impl ChainStore {
         let tip = self.store.get_chain_tip();
         debug!("Chain tip for height {}", tip);
         let metadata = self.store.get_block_metadata(&tip)?;
-        Ok(metadata.height)
+        Ok(metadata.expected_height)
     }
 
     /// Get a locator for the chain.
@@ -415,11 +415,11 @@ impl ChainStore {
 
         // Get the height of the chain tip
         let tip_metadata = self.store.get_block_metadata(&tip).ok()?;
-        let tip_height = tip_metadata.height?;
+        let tip_height = tip_metadata.expected_height?;
 
         // Get the height of the target blockhash
         let block_metadata = self.store.get_block_metadata(blockhash).ok()?;
-        let block_height = block_metadata.height?;
+        let block_height = block_metadata.expected_height?;
 
         // Depth is the difference in heights
         if tip_height >= block_height {

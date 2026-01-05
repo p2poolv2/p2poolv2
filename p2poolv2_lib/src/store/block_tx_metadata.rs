@@ -69,12 +69,17 @@ impl Decodable for TxMetadata {
     }
 }
 
-/// ShareBlock metadata capturing if a share is valid and confirmed
-/// This is stored indexed by the blockhash, we can later optimise to internal key, if needed.
+/// ShareBlock metadata capturing the expected height and the chain
+/// work for the block. These values are computed when the block is
+/// received based on the height and chain work of the previous
+/// blockhash.
+///
+/// This is stored indexed by the blockhash, we can later optimise to
+/// internal key, if needed.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BlockMetadata {
-    /// Height of the block, this is also tracked in BlockHeight index
-    pub height: Option<u32>,
+    /// Expected height of the block based on the expected height of previous blockhash
+    pub expected_height: Option<u32>,
     /// Total chain work up to the share block
     pub chain_work: Work,
 }
@@ -88,7 +93,7 @@ impl Encodable for BlockMetadata {
         let mut len = 0;
 
         // Encode Option<u32> for height
-        match &self.height {
+        match &self.expected_height {
             Some(h) => {
                 len += true.consensus_encode(w)?;
                 len += h.consensus_encode(w)?;
@@ -117,6 +122,9 @@ impl Decodable for BlockMetadata {
 
         let chain_work = Work::from_le_bytes(<[u8; 32]>::consensus_decode(r)?);
 
-        Ok(BlockMetadata { height, chain_work })
+        Ok(BlockMetadata {
+            expected_height: height,
+            chain_work,
+        })
     }
 }
