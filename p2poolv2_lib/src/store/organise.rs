@@ -21,12 +21,104 @@ use bitcoin::{
 };
 use std::error::Error;
 
+const CANDIDATE_SUFFIX: &str = ":c";
+const CONFIRMED_SUFFIX: &str = ":f";
+const TOP_CANDIDATE_KEY: &str = "meta:top_candidate_height";
+const TOP_CONFIRMED_KEY: &str = "meta:top_confirmed_height";
+
 /// Returns key for height with provided suffix
 fn height_to_key_with_suffix(height: u32, suffix: &str) -> Vec<u8> {
     [&height.to_be_bytes(), suffix.as_bytes()].concat()
 }
 
 impl Store {
+    /// Incremement top candidate key if height is one more than current height
+    ///
+    /// If it is more than one higher, return an error. This forces
+    /// candidates to be added only at the top of the candidates list.
+    fn increment_top_candidate(
+        &self,
+        height: u32,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+
+        let current_top = self.get_top_candidate_height();
+        if current_top.is_none() || height.saturating_sub(current_top.unwrap()) == 1 {
+            let serialized_height = consensus::serialize(&height);
+            batch.put_cf(
+                &block_height_cf,
+                TOP_CANDIDATE_KEY.as_bytes().as_ref(),
+                serialized_height,
+            );
+        }
+        Ok(())
+    }
+
+    /// Incremement top confirmed key if height is one more than current height
+    ///
+    /// If it is more than one higher, return an error. This forces
+    /// confirmed to be added only at the top of the confirmed list.
+    fn increment_top_confirmed(
+        &self,
+        height: u32,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+
+        let current_top = self.get_top_confirmed_height();
+
+        if current_top.is_none() || height.saturating_sub(current_top.unwrap()) == 1 {
+            let serialized_height = consensus::serialize(&height);
+            batch.put_cf(
+                &block_height_cf,
+                TOP_CONFIRMED_KEY.as_bytes().as_ref(),
+                serialized_height,
+            );
+        }
+        Ok(())
+    }
+
+    /// Get top candidate height from candidates index
+    pub(crate) fn get_top_candidate_height(&self) -> Option<u32> {
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+        match self
+            .db
+            .get_cf(&block_height_cf, TOP_CANDIDATE_KEY.as_bytes().as_ref())
+        {
+            Ok(Some(height_bytes)) => encode::deserialize(&height_bytes).ok(),
+            Ok(None) | Err(_) => None,
+        }
+    }
+
+    /// Get top confirmed height from confirmed index
+    pub(crate) fn get_top_confirmed_height(&self) -> Option<u32> {
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+        match self
+            .db
+            .get_cf(&block_height_cf, TOP_CONFIRMED_KEY.as_bytes().as_ref())
+        {
+            Ok(Some(height_bytes)) => encode::deserialize(&height_bytes).ok(),
+            Ok(None) | Err(_) => None,
+        }
+    }
+
+    /// Get top candidate after looking up top candidate height
+    pub(crate) fn get_top_candidate(&self) -> Option<BlockHash> {
+        match self.get_top_candidate_height() {
+            Some(height) => self.get_candidate_at_height(height),
+            None => None,
+        }
+    }
+
+    /// Get top confirmed after looking up top confirmed height
+    pub(crate) fn get_top_confirmed(&self) -> Option<BlockHash> {
+        match self.get_top_confirmed_height() {
+            Some(height) => self.get_confirmed_at_height(height),
+            None => None,
+        }
+    }
+
     /// Add blockhash as a candidate at provided height
     pub(crate) fn make_candidate(
         &self,
@@ -34,11 +126,13 @@ impl Store {
         height: u32,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let column_family = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
-        let key = height_to_key_with_suffix(height, ":c");
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+        let key = height_to_key_with_suffix(height, CANDIDATE_SUFFIX);
 
         let serialized_blockhash = consensus::serialize(blockhash);
-        batch.put_cf(&column_family, key, serialized_blockhash);
+        batch.put_cf(&block_height_cf, key, serialized_blockhash);
+
+        self.increment_top_candidate(height, batch)?;
         Ok(())
     }
 
@@ -49,20 +143,22 @@ impl Store {
         height: u32,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let column_family = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
-        let key = height_to_key_with_suffix(height, ":f");
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+        let key = height_to_key_with_suffix(height, CONFIRMED_SUFFIX);
 
         let serialized_blockhash = consensus::serialize(blockhash);
-        batch.put_cf(&column_family, key, serialized_blockhash);
+        batch.put_cf(&block_height_cf, key, serialized_blockhash);
+
+        self.increment_top_confirmed(height, batch)?;
         Ok(())
     }
 
     /// Get the candidate blockhash at a specific height
     pub fn get_candidate_at_height(&self, height: u32) -> Option<BlockHash> {
-        let column_family = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
-        let key = height_to_key_with_suffix(height, ":c");
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+        let key = height_to_key_with_suffix(height, CANDIDATE_SUFFIX);
 
-        match self.db.get_cf::<&[u8]>(&column_family, key.as_ref()) {
+        match self.db.get_cf::<&[u8]>(&block_height_cf, key.as_ref()) {
             Ok(Some(blockhash_bytes)) => encode::deserialize(&blockhash_bytes).ok(),
             Ok(None) | Err(_) => None,
         }
@@ -70,10 +166,10 @@ impl Store {
 
     /// Get the confirmed blockhash at a specific height
     pub fn get_confirmed_at_height(&self, height: u32) -> Option<BlockHash> {
-        let column_family = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
-        let key = height_to_key_with_suffix(height, ":f");
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+        let key = height_to_key_with_suffix(height, CONFIRMED_SUFFIX);
 
-        match self.db.get_cf::<&[u8]>(&column_family, key.as_ref()) {
+        match self.db.get_cf::<&[u8]>(&block_height_cf, key.as_ref()) {
             Ok(Some(blockhash_bytes)) => encode::deserialize(&blockhash_bytes).ok(),
             Ok(None) | Err(_) => None,
         }
@@ -118,6 +214,12 @@ mod tests {
 
         // Non-existent height should return None
         assert_eq!(store.get_candidate_at_height(999), None);
+
+        // Top candidate height is changed
+        assert_eq!(store.get_top_candidate_height(), Some(1));
+
+        // Top candidate is changed
+        assert_eq!(store.get_top_candidate(), Some(share2.block_hash()));
     }
 
     #[test]
@@ -152,6 +254,12 @@ mod tests {
 
         // Non-existent height should return None
         assert_eq!(store.get_confirmed_at_height(999), None);
+
+        // Top confirmed height is changed
+        assert_eq!(store.get_top_confirmed_height(), Some(1));
+
+        // Top confirmed is changed
+        assert_eq!(store.get_top_confirmed(), Some(share2.block_hash()));
     }
 
     #[test]
