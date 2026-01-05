@@ -23,7 +23,7 @@ use std::error::Error;
 
 /// Returns key for height with provided suffix
 fn height_to_key_with_suffix(height: u32, suffix: &str) -> Vec<u8> {
-    [suffix.as_bytes(), &height.to_be_bytes()].concat()
+    [&height.to_be_bytes(), suffix.as_bytes()].concat()
 }
 
 impl Store {
@@ -35,7 +35,7 @@ impl Store {
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let column_family = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
-        let key = height_to_key_with_suffix(height, "c:");
+        let key = height_to_key_with_suffix(height, ":c");
 
         let serialized_blockhash = consensus::serialize(blockhash);
         batch.put_cf(&column_family, key, serialized_blockhash);
@@ -50,7 +50,7 @@ impl Store {
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let column_family = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
-        let key = height_to_key_with_suffix(height, "f:");
+        let key = height_to_key_with_suffix(height, ":f");
 
         let serialized_blockhash = consensus::serialize(blockhash);
         batch.put_cf(&column_family, key, serialized_blockhash);
@@ -60,7 +60,7 @@ impl Store {
     /// Get the candidate blockhash at a specific height
     pub fn get_candidate_at_height(&self, height: u32) -> Option<BlockHash> {
         let column_family = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
-        let key = height_to_key_with_suffix(height, "c:");
+        let key = height_to_key_with_suffix(height, ":c");
 
         match self.db.get_cf::<&[u8]>(&column_family, key.as_ref()) {
             Ok(Some(blockhash_bytes)) => encode::deserialize(&blockhash_bytes).ok(),
@@ -71,7 +71,7 @@ impl Store {
     /// Get the confirmed blockhash at a specific height
     pub fn get_confirmed_at_height(&self, height: u32) -> Option<BlockHash> {
         let column_family = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
-        let key = height_to_key_with_suffix(height, "f:");
+        let key = height_to_key_with_suffix(height, ":f");
 
         match self.db.get_cf::<&[u8]>(&column_family, key.as_ref()) {
             Ok(Some(blockhash_bytes)) => encode::deserialize(&blockhash_bytes).ok(),
