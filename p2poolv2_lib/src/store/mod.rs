@@ -93,8 +93,6 @@ impl Store {
         let block_cf = ColumnFamilyDescriptor::new(ColumnFamily::Block, RocksDbOptions::default());
         let block_txids_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::BlockTxids, RocksDbOptions::default());
-        let txids_blocks_cf =
-            ColumnFamilyDescriptor::new(ColumnFamily::TxidsBlocks, RocksDbOptions::default());
         let inputs_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::Inputs, RocksDbOptions::default());
         let outputs_cf =
@@ -114,6 +112,12 @@ impl Store {
             .set_merge_operator_associative("blockhash_list_merge", blockhash_list_merge);
         let block_height_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::BlockHeight, block_height_opts);
+
+        let mut txids_blocks_opts = RocksDbOptions::default();
+        txids_blocks_opts
+            .set_merge_operator_associative("blockhash_list_merge", blockhash_list_merge);
+        let txids_blocks_cf =
+            ColumnFamilyDescriptor::new(ColumnFamily::BlockHeight, txids_blocks_opts);
 
         let bitcoin_txids_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::BitcoinTxids, RocksDbOptions::default());
