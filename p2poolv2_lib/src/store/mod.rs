@@ -31,6 +31,7 @@ mod block_tx_metadata;
 pub mod column_families;
 pub mod dag_store;
 pub mod job_store;
+pub mod organise;
 mod pplns_shares;
 pub mod share_store;
 pub mod stored_user;
