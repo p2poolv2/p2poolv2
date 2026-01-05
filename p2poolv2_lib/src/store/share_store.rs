@@ -236,25 +236,27 @@ impl Store {
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let column_family = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+        let mut key = b"h:".to_vec();
         let height_bytes = height.to_be_bytes();
+        key.extend_from_slice(&height_bytes);
 
         // Serialize the single BlockHash to merge
         let mut serialized = Vec::new();
         blockhash.consensus_encode(&mut serialized)?;
 
         // Use merge operator to atomically append
-        batch.merge_cf(&column_family, height_bytes, serialized);
+        batch.merge_cf(&column_family, key, serialized);
         Ok(())
     }
 
     /// Get the blockhashes for a specific height
     pub fn get_blockhashes_for_height(&self, height: u32) -> Vec<BlockHash> {
         let column_family = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+        let mut key = b"h:".to_vec();
         let height_bytes = height.to_be_bytes();
-        match self
-            .db
-            .get_cf::<&[u8]>(&column_family, height_bytes.as_ref())
-        {
+        key.extend_from_slice(&height_bytes);
+
+        match self.db.get_cf::<&[u8]>(&column_family, key.as_ref()) {
             Ok(Some(blockhashes)) => encode::deserialize(&blockhashes).unwrap_or_default(),
             Ok(None) | Err(_) => vec![],
         }
