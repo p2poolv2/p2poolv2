@@ -56,7 +56,7 @@ impl Store {
 
     /// Set top confirmed height
     /// The required height checks are already made in make_confirmed
-    fn set_top_confirmed_height(&self, height: u32, batch: &mut rocksdb::WriteBatch) {
+    pub(crate) fn set_top_confirmed_height(&self, height: u32, batch: &mut rocksdb::WriteBatch) {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let serialized_height = consensus::serialize(&height);
         batch.put_cf(
@@ -393,6 +393,21 @@ mod tests {
     }
 
     #[test]
+    fn test_is_confirmed_returns_true_for_genesis_after_setup() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create and add a share to the store (this sets up block metadata)
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(genesis.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Genesis is marked config at setup
+        assert!(store.is_confirmed(&genesis.block_hash()));
+    }
+
+    #[test]
     fn test_is_confirmed_returns_false_when_not_confirmed() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
@@ -403,8 +418,25 @@ mod tests {
         store.setup_genesis(genesis.clone(), &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
+        // Create another share
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                share2.clone(),
+                1,
+                share2.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
         // Don't mark it as confirmed - is_confirmed should return false
-        assert!(!store.is_confirmed(&genesis.block_hash()));
+        assert!(!store.is_confirmed(&share2.block_hash()));
     }
 
     #[test]

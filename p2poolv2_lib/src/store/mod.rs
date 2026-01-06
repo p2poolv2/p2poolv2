@@ -126,7 +126,7 @@ impl Store {
         // Configure Uncles column family with merge operator for efficient appends.
         // Each Uncle can be included by multiple nephews. The rule is that the same
         let mut uncles_opts = RocksDbOptions::default();
-        uncle_opts.set_merge_operator_associative("blockhash_list_merge", blockhash_list_merge);
+        uncles_opts.set_merge_operator_associative("blockhash_list_merge", blockhash_list_merge);
         let uncles_cf = ColumnFamilyDescriptor::new(ColumnFamily::TxidsBlocks, uncles_opts);
 
         let bitcoin_txids_cf =
@@ -288,6 +288,7 @@ impl Store {
         let genesis_work = genesis.header.get_work();
         self.add_share(genesis, 0, genesis_work, true, batch)?;
         *self.genesis_block_hash.write().unwrap() = Some(blockhash);
+        self.make_confirmed(&blockhash, 0, batch)?;
         self.add_tip(blockhash);
         self.set_chain_tip(blockhash);
         Ok(())
