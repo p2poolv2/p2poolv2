@@ -189,8 +189,12 @@ impl Store {
         self.get_share(&parent_blockhash)
     }
 
-    /// Get the uncles of a share as a vector of ShareBlocks
-    /// Panics if an uncle hash is not found in the store
+    /// Get the uncles of a share as pointed to by the ShareHeader
+    /// Returns an error if an uncle hash is not found in the store
+    ///
+    /// This is not used to find uncles from the chain that should be
+    /// included in the ShareHeader. For that look at
+    /// ChainStore::find_uncles
     pub fn get_uncles(
         &self,
         blockhash: &BlockHash,
