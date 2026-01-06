@@ -375,14 +375,14 @@ mod tests {
     #[test]
     fn test_building_coinbase_with_regtest_ckpool_data() {
         // Load GBT and expected notify JSON
-        let gbt_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../tests/test_data/gbt/regtest/ckpool/four-txns/gbt.json");
-        let data = fs::read_to_string(gbt_path).expect("Unable to read file");
+        let data = include_str!(
+            "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/four-txns/gbt.json"
+        );
         let template: BlockTemplate = serde_json::from_str(&data).expect("Invalid JSON");
 
-        let notify_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../tests/test_data/gbt/regtest/ckpool/four-txns/notify.json");
-        let data = fs::read_to_string(notify_path).expect("Unable to read file");
+        let data = include_str!(
+            "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/four-txns/notify.json"
+        );
         let _notify: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
 
         // Address used in ckpool regtest conf
@@ -466,14 +466,14 @@ mod tests {
     #[test]
     fn test_building_coinbase_with_share_commitment_should_include_the_commitment() {
         // Load GBT and expected notify JSON
-        let gbt_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../tests/test_data/gbt/regtest/ckpool/four-txns/gbt.json");
-        let data = fs::read_to_string(gbt_path).expect("Unable to read file");
+        let data = include_str!(
+            "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/four-txns/gbt.json"
+        );
         let template: BlockTemplate = serde_json::from_str(&data).expect("Invalid JSON");
 
-        let notify_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../tests/test_data/gbt/regtest/ckpool/four-txns/notify.json");
-        let data = fs::read_to_string(notify_path).expect("Unable to read file");
+        let data = include_str!(
+            "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/four-txns/notify.json"
+        );
         let _notify: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
 
         // Address used in ckpool regtest conf
@@ -580,9 +580,9 @@ mod tests {
     fn test_extract_outputs_from_coinbase2_integration() {
         // This Test builds splits then parse
 
-        let gbt_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../tests/test_data/gbt/regtest/ckpool/four-txns/gbt.json");
-        let data = fs::read_to_string(gbt_path).expect("Unable to read file");
+        let data = include_str!(
+            "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/four-txns/gbt.json"
+        );
         let template: BlockTemplate = serde_json::from_str(&data).expect("Invalid JSON");
 
         let address = parse_address(

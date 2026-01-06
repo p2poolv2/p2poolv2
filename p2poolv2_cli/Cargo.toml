@@ -31,7 +31,6 @@ hmac = "0.12"
 sha2 = "0.10"
 rpassword = "7.3"
 
-
 [[bin]]
 name = "p2poolv2_cli"
 path = "src/main.rs"

@@ -28,7 +28,7 @@ serde_json = "1"
 chrono = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3.5"
+tempfile.workspace = true
 test-log = { version = "0.2", features = ["trace"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 

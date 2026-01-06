@@ -65,7 +65,8 @@ mod tests {
     async fn test_validate_bitcoin_block_success() {
         // Start mock server
         let mock_server = MockServer::start().await;
-        let block_hex_string = include_str!("../../../../tests/test_data/seralized/block_1.txt");
+        let block_hex_string =
+            include_str!("../../../../p2poolv2_tests/test_data/seralized/block_1.txt");
         let block_hex = hex::decode(block_hex_string).unwrap();
         let block = bitcoin::Block::consensus_decode(&mut block_hex.as_slice()).unwrap();
 
@@ -113,7 +114,8 @@ mod tests {
     async fn test_validate_bitcoin_block_reject() {
         // Start mock server
         let mock_server = MockServer::start().await;
-        let block_hex_string = include_str!("../../../../tests/test_data/seralized/block_1.txt");
+        let block_hex_string =
+            include_str!("../../../../p2poolv2_tests/test_data/seralized/block_1.txt");
         let block_hex = hex::decode(block_hex_string).unwrap();
         let block = bitcoin::Block::consensus_decode(&mut block_hex.as_slice()).unwrap();
 
@@ -161,7 +163,8 @@ mod tests {
     async fn test_validate_bitcoin_block_http_error() {
         // Start mock server
         let mock_server = MockServer::start().await;
-        let block_hex_string = include_str!("../../../../tests/test_data/seralized/block_1.txt");
+        let block_hex_string =
+            include_str!("../../../../p2poolv2_tests/test_data/seralized/block_1.txt");
         let block_hex = hex::decode(block_hex_string).unwrap();
         let block = bitcoin::Block::consensus_decode(&mut block_hex.as_slice()).unwrap();
 

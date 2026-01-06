@@ -68,7 +68,7 @@ mod tests {
     async fn test_handle_share_block_success() {
         let mut store = ChainStore::default();
         let share_block =
-            build_block_from_work_components("../tests/test_data/validation/stratum/b/");
+            build_block_from_work_components("../p2poolv2_tests/test_data/validation/stratum/b/");
 
         // Set up mock expectations
         store
@@ -109,7 +109,7 @@ mod tests {
     async fn test_handle_share_block_add_share_error() {
         let mut store = ChainStore::default();
         let share_block =
-            build_block_from_work_components("../tests/test_data/validation/stratum/b/");
+            build_block_from_work_components("../p2poolv2_tests/test_data/validation/stratum/b/");
 
         // Set up mock expectations
         store

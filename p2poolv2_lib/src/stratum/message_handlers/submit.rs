@@ -234,7 +234,7 @@ mod handle_submit_tests {
         mock_submit_block_with_any_body(&mock_server).await;
 
         let (template, notify, submit, authorize_response) =
-            load_valid_stratum_work_components("../tests/test_data/validation/stratum/b/");
+            load_valid_stratum_work_components("../p2poolv2_tests/test_data/validation/stratum/b/");
 
         let enonce1 = authorize_response.result.unwrap()[1].clone();
         let enonce1: &str = enonce1.as_str().unwrap();
@@ -320,7 +320,7 @@ mod handle_submit_tests {
         mock_submit_block_with_any_body(&mock_server).await;
 
         let (template, notify, submit, authorize_response) =
-            load_valid_stratum_work_components("../tests/test_data/validation/stratum/a/");
+            load_valid_stratum_work_components("../p2poolv2_tests/test_data/validation/stratum/a/");
 
         let enonce1 = authorize_response.result.unwrap()[1].clone();
         let enonce1: &str = enonce1.as_str().unwrap();
@@ -409,7 +409,7 @@ mod handle_submit_tests {
         mock_submit_block_with_any_body(&mock_server).await;
 
         let (template, notify, submit, authorize_response) = load_valid_stratum_work_components(
-            "../tests/test_data/validation/stratum/with_version_rolling/",
+            "../p2poolv2_tests/test_data/validation/stratum/with_version_rolling/",
         );
 
         let enonce1 = authorize_response.result.unwrap()[1].clone();
@@ -497,7 +497,7 @@ mod handle_submit_tests {
         mock_submit_block_with_any_body(&mock_server).await;
 
         let (template, notify, submit, authorize_response) =
-            load_valid_stratum_work_components("../tests/test_data/validation/stratum/a/");
+            load_valid_stratum_work_components("../p2poolv2_tests/test_data/validation/stratum/a/");
 
         let enonce1 = authorize_response.result.unwrap()[1].clone();
         let enonce1: &str = enonce1.as_str().unwrap();
@@ -574,7 +574,7 @@ mod handle_submit_tests {
         let (_mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
         let (_template, _notify, submit, authorize_response) =
-            load_valid_stratum_work_components("../tests/test_data/validation/stratum/a/");
+            load_valid_stratum_work_components("../p2poolv2_tests/test_data/validation/stratum/a/");
 
         let enonce1 = authorize_response.result.unwrap()[1].clone();
         let enonce1: &str = enonce1.as_str().unwrap();
@@ -631,7 +631,7 @@ mod handle_submit_tests {
         mock_submit_block_with_any_body(&mock_server).await;
 
         let (template, notify, submit, authorize_response) =
-            load_valid_stratum_work_components("../tests/test_data/validation/stratum/b/");
+            load_valid_stratum_work_components("../p2poolv2_tests/test_data/validation/stratum/b/");
 
         let enonce1 = authorize_response.result.unwrap()[1].clone();
         let enonce1: &str = enonce1.as_str().unwrap();

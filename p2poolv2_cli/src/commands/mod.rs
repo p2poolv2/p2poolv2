@@ -29,7 +29,7 @@ use std::sync::Arc;
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
     /// Path to p2poolv2 config file (not required for gen-auth command)
-    #[arg(short, long, global = true)]
+    #[arg(short, long, env("P2POOL_CONFIG"), global = true)]
     pub config: Option<String>,
 
     /// Command to execute

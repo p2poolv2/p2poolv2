@@ -22,6 +22,10 @@ use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use std::sync::Arc;
 use tracing::{debug, info};
 
+#[cfg(test)]
+const GBT_NO_TRANSACTIONS_FIXTURE: &str =
+    include_str!("../../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json");
+
 /// Compute merkle branches for the transactions in the block template
 /// Uses private compute_merkle_branches after parsing the txids from the template
 #[allow(dead_code)]
@@ -193,18 +197,20 @@ mod gbt_load_tests {
 
     #[tokio::test]
     async fn test_get_block_template() {
-        let template = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/gbt/signet/gbt-no-transactions.json"),
-        )
-        .expect("Failed to read test fixture");
+        let template = GBT_NO_TRANSACTIONS_FIXTURE;
 
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let params = serde_json::json!([{
             "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
             "rules": ["segwit", "signet"],
         }]);
-        mock_method(&mock_server, "getblocktemplate", params, template).await;
+        mock_method(
+            &mock_server,
+            "getblocktemplate",
+            params,
+            template.to_string(),
+        )
+        .await;
 
         let result = get_block_template(&bitcoinrpc_config, bitcoin::Network::Signet).await;
 
@@ -358,18 +364,20 @@ mod gbt_server_tests {
     #[tokio::test]
     async fn test_start_gbt_trigger_from_timeout() {
         // Mock bitcoind RPC
-        let template = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/gbt/signet/gbt-no-transactions.json"),
-        )
-        .expect("Failed to read test fixture");
+        let template = GBT_NO_TRANSACTIONS_FIXTURE;
 
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let params = serde_json::json!([{
             "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
             "rules": ["segwit", "signet"],
         }]);
-        mock_method(&mock_server, "getblocktemplate", params, template).await;
+        mock_method(
+            &mock_server,
+            "getblocktemplate",
+            params,
+            template.to_string(),
+        )
+        .await;
         mock_method(
             &mock_server,
             "getdifficulty",
@@ -412,18 +420,20 @@ mod gbt_server_tests {
     #[tokio::test]
     async fn test_start_gbt_trigger_from_zmq_event() {
         // Mock bitcoind RPC
-        let template = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/gbt/signet/gbt-no-transactions.json"),
-        )
-        .expect("Failed to read test fixture");
+        let template = GBT_NO_TRANSACTIONS_FIXTURE;
 
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let params = serde_json::json!([{
             "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
             "rules": ["segwit", "signet"],
         }]);
-        mock_method(&mock_server, "getblocktemplate", params, template).await;
+        mock_method(
+            &mock_server,
+            "getblocktemplate",
+            params,
+            template.to_string(),
+        )
+        .await;
         mock_method(
             &mock_server,
             "getdifficulty",

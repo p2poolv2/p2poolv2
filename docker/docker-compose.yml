@@ -1,3 +1,5 @@
+name: p2poolv2
+
 services:
   bitcoind:
     build:
@@ -37,13 +39,14 @@ services:
     restart: unless-stopped
     networks:
       - p2pool_network
+    cpus: 1
     logging:
       driver: "json-file"
       options:
         max-size: "100m"
         max-file: "3"
 
-  p2pool: &p2pool-base
+  p2pool:
     build:
       context: ..
       dockerfile: docker/Dockerfile.p2pool

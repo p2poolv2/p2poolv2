@@ -45,7 +45,7 @@ const STRATUM_SHARES_BUFFER_SIZE: usize = 1000;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    #[arg(short, long)]
+    #[arg(short, long, env("P2POOL_CONFIG"))]
     config: String,
 }
 

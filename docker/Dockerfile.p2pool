@@ -1,8 +1,9 @@
-# Build stage
-FROM rust:1.88-slim-bullseye
+# syntax=docker/dockerfile:1.20
+FROM rust:1.88-slim-bullseye AS builder
 
 # Install required build dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && \
+    apt-get install -y \
     build-essential \
     clang \
     pkg-config \
@@ -14,41 +15,61 @@ RUN apt-get update && apt-get install -y \
     libbz2-dev \
     liblz4-dev \
     zlib1g-dev \
-    libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# # Build and install RocksDB
-# RUN git clone --depth 1 --branch v7.10.2 https://github.com/facebook/rocksdb.git && \
-#     cd rocksdb && \
-#     PORTABLE=1 make -j$(nproc) shared_lib && \
-#     cp librocksdb.so* /usr/lib/ && \
-#     cp -r include/rocksdb /usr/include/ && \
-#     cd .. && \
-#     rm -rf rocksdb
+    libssl-dev
 
 # Create and set working directory
 RUN mkdir -p /p2pool
-COPY bitcoindrpc/ /p2pool/bitcoindrpc
-COPY p2poolv2_cli/ /p2pool/p2poolv2_cli
-COPY p2poolv2_node/ /p2pool/p2poolv2_node
-COPY p2poolv2_lib/ /p2pool/p2poolv2_lib
-COPY p2poolv2_api/ /p2pool/p2poolv2_api
+WORKDIR /p2pool
 
-COPY Cargo.lock /p2pool/Cargo.lock
-COPY Cargo.toml /p2pool/Cargo.toml
+# Copies just the essential files to be able to fetch
+COPY --parents ./**/Cargo.toml .
+COPY --parents ./**/lib.rs .
+COPY --parents ./**/main.rs .
+COPY ./Cargo.lock .
+COPY ./rust-toolchain.toml .
 
-COPY config.toml /p2pool/config.toml
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/usr/local/rustup \
+    --mount=type=cache,target=/p2pool/target \
+    cargo fetch --locked
+
+COPY config.toml .
+
+COPY --parents bitcoindrpc/ .
+COPY --parents p2poolv2_cli/ .
+COPY --parents p2poolv2_node/ .
+COPY --parents p2poolv2_lib/ .
+COPY --parents p2poolv2_api/ .
 
 ENV RUST_LOG=info
 
-WORKDIR /p2pool
+# Build and install
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/usr/local/rustup \
+    --mount=type=cache,target=/p2pool/target \
+    cargo install -j $(nproc) --locked --offline --path ./p2poolv2_node && \
+    cargo install -j $(nproc) --locked --offline --path ./p2poolv2_cli
 
-# Create a minimal source file for the root package. We need a root package in local dev as we have integration tests there.
-# Here we need a dummy root package to satisfy Cargo workspace requirements.
-RUN mkdir -p /p2pool/src && echo '// Empty library file\npub fn dummy() {}\n' > /p2pool/src/lib.rs
+FROM debian:bullseye-slim AS runner
 
-# Build p2poolv2 and p2poolv2_cli
-RUN cargo build --workspace
+WORKDIR /p2poolv2
+VOLUME /p2poolv2/data \
+    /p2poolv2/config \
+    /p2poolv2/logs
 
-ENTRYPOINT [ ]
-CMD [] 
+# stratum, api, p2p
+EXPOSE 3333 \
+    46884 \
+    6884
+
+ENV RUST_BACKTRACE=1 \
+    RUST_LOG=debug \
+    P2POOL_LOGGING_CONSOLE=1 \
+    P2POOL_CONFIG=/p2poolv2/config/config.toml
+
+COPY --from=builder /usr/local/cargo/bin/p2poolv2 /usr/local/bin/p2poolv2
+COPY --from=builder /usr/local/cargo/bin/p2poolv2_cli /usr/local/bin/p2poolv2_cli
+
+ENTRYPOINT ["/usr/local/bin/p2poolv2"]

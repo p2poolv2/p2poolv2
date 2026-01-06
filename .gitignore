@@ -1,12 +1,20 @@
+# Rust intermediary assets
 /target
+
+# Node test data
 store*.db
 p2pool.log
 logs/*
+config/
+data/
+
 tools/log_dashboard/venv/
 tools/log_dashboard/stats.json*
 tools/log_dashboard/agent_logs/
 tools/log_dashboard/last_processed.txt
+
 config-dev.toml
+
 spec/**/*pdf
 spec/**/*dvi
 spec/**/*tex
@@ -15,3 +23,8 @@ spec/**/*log
 spec/**/*out
 spec/**/*ps
 spec/**/states
+
+# Editors
+.zed/
+.vscode/
+.idea/

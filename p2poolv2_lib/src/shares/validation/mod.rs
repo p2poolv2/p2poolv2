@@ -333,7 +333,7 @@ mod tests {
         let mut store = ChainStore::default();
 
         let share_block = crate::test_utils::build_block_from_work_components(
-            "../tests/test_data/validation/stratum/b/",
+            "../p2poolv2_tests/test_data/validation/stratum/b/",
         );
 
         // Set up mock expectations

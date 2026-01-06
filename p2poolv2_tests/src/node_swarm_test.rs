@@ -14,17 +14,17 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use std::sync::Arc;
-mod common;
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::shares::chain::chain_store::ChainStore;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::stratum::emission::Emission;
-use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
 use p2poolv2_lib::{node::actor::NodeHandle, shares::share_block::ShareBlock};
+use std::sync::Arc;
 
 use std::time::Duration;
 use tempfile::tempdir;
+
+use crate::common;
 
 #[tokio::test]
 async fn test_three_nodes_connectivity() {

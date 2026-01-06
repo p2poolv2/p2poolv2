@@ -114,9 +114,9 @@ mod tests {
     #[test]
     fn test_load_transactions_from_json() {
         // Load the test JSON file
-        let json_path =
-            Path::new("../tests/test_data/validation/stratum/gbt_with_transactions.json");
-        let json_content = fs::read_to_string(json_path).expect("Failed to read test JSON file");
+        let json_content = include_str!(
+            "../../../../p2poolv2_tests/test_data/validation/stratum/gbt_with_transactions.json"
+        );
 
         // Parse the JSON into BlockTemplate
         let block_template: BlockTemplate =
@@ -150,9 +150,9 @@ mod tests {
     #[test]
     fn test_get_merkle_root_with_transactions() {
         // Load template with 4 transactions
-        let json_path =
-            Path::new("../tests/test_data/validation/stratum/gbt_with_transactions.json");
-        let json_content = fs::read_to_string(json_path).expect("Failed to read test JSON file");
+        let json_content = include_str!(
+            "../../../../p2poolv2_tests/test_data/validation/stratum/gbt_with_transactions.json"
+        );
         let block_template: BlockTemplate =
             serde_json::from_str(&json_content).expect("Failed to parse JSON into BlockTemplate");
 
@@ -181,8 +181,8 @@ mod tests {
     #[test]
     fn test_get_merkle_root_without_transactions() {
         // Load template with no transactions
-        let json_path = Path::new("../tests/test_data/validation/stratum/a/template.json");
-        let json_content = fs::read_to_string(json_path).expect("Failed to read test JSON file");
+        let json_content =
+            include_str!("../../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
         let block_template: BlockTemplate =
             serde_json::from_str(&json_content).expect("Failed to parse JSON into BlockTemplate");
 

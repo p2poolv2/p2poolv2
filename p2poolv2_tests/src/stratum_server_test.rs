@@ -43,7 +43,7 @@ async fn test_stratum_server_subscribe() {
 
     let template = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/test_data/gbt/signet/gbt-no-transactions.json"),
+            .join("test_data/gbt/signet/gbt-no-transactions.json"),
     )
     .expect("Failed to read test fixture");
     let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;

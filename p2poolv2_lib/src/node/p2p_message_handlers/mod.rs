@@ -140,7 +140,7 @@ mod tests {
             .unwrap();
 
         let share_block =
-            build_block_from_work_components("../tests/test_data/validation/stratum/a/");
+            build_block_from_work_components("../p2poolv2_tests/test_data/validation/stratum/a/");
 
         store
             .expect_add_share()
