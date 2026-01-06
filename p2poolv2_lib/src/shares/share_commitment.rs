@@ -347,8 +347,8 @@ mod tests {
         let mut mock_store = MockChainStore::default();
 
         // Load template from file
-        let json_path = Path::new("../tests/test_data/validation/stratum/a/template.json");
-        let json_content = fs::read_to_string(json_path).expect("Failed to read test JSON file");
+        let json_content =
+            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
         let template = Arc::new(
             serde_json::from_str::<BlockTemplate>(&json_content)
                 .expect("Failed to parse JSON into BlockTemplate"),
@@ -399,8 +399,8 @@ mod tests {
         let mut mock_store = MockChainStore::default();
 
         // Load template from file
-        let json_path = Path::new("../tests/test_data/validation/stratum/a/template.json");
-        let json_content = fs::read_to_string(json_path).expect("Failed to read test JSON file");
+        let json_content =
+            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
         let template = Arc::new(
             serde_json::from_str::<BlockTemplate>(&json_content)
                 .expect("Failed to parse JSON into BlockTemplate"),
@@ -446,8 +446,8 @@ mod tests {
         let mut mock_store = MockChainStore::default();
 
         // Load template from file
-        let json_path = Path::new("../tests/test_data/validation/stratum/a/template.json");
-        let json_content = fs::read_to_string(json_path).expect("Failed to read test JSON file");
+        let json_content =
+            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
         let template = Arc::new(
             serde_json::from_str::<BlockTemplate>(&json_content)
                 .expect("Failed to parse JSON into BlockTemplate"),
@@ -473,8 +473,8 @@ mod tests {
         let mut mock_store = MockChainStore::default();
 
         // Load template from file
-        let json_path = Path::new("../tests/test_data/validation/stratum/a/template.json");
-        let json_content = fs::read_to_string(json_path).expect("Failed to read test JSON file");
+        let json_content =
+            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
         let template = Arc::new(
             serde_json::from_str::<BlockTemplate>(&json_content)
                 .expect("Failed to parse JSON into BlockTemplate"),

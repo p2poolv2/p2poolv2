@@ -3,8 +3,11 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const gbtPath = path.join(__dirname, '../../tests/test_data/gbt/signet/gbt-no-transactions.json');
-const gbt = JSON.parse(fs.readFileSync(gbtPath, 'utf8'));
+const gbtPath = path.join(
+    __dirname,
+    "../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json",
+);
+const gbt = JSON.parse(fs.readFileSync(gbtPath, "utf8"));
 
 // JSON-RPC 1.0 server
 const server = new jayson.Server({

@@ -300,21 +300,20 @@ mod tests {
     use bitcoin::{Amount, ScriptBuf, TxOut};
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use std::collections::HashMap;
-    use std::fs;
     use std::str::FromStr;
     use std::time::SystemTime;
     use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn test_build_notify_from_gbt_and_compare_to_expected() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json");
-        let data = fs::read_to_string(path).expect("Unable to read file");
+        let data = include_str!(
+            "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json"
+        );
         let gbt_json: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
 
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../tests/test_data/gbt/regtest/ckpool/one-txn/notify.json");
-        let data = fs::read_to_string(path).expect("Unable to read file");
+        let data = include_str!(
+            "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/notify.json"
+        );
         let _notify_json: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
 
         // Parse BlockTemplate from GBT
@@ -464,9 +463,9 @@ mod tests {
         });
 
         // Load a sample block template
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json");
-        let data = fs::read_to_string(path).expect("Unable to read file");
+        let data = include_str!(
+            "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json"
+        );
         let gbt_json: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
         let template: BlockTemplate =
             serde_json::from_value(gbt_json.clone()).expect("Failed to parse BlockTemplate");
@@ -506,32 +505,21 @@ mod tests {
         let (mock_server, _bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         mock_submit_block_with_any_body(&mock_server).await;
 
-        let template_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/b/template.json"),
-        )
-        .unwrap();
+        let template_str =
+            include_str!("../../../../p2poolv2_tests/test_data/validation/stratum/b/template.json");
         let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
 
-        let notify_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/b/notify.json"),
-        )
-        .unwrap();
+        let notify_str =
+            include_str!("../../../../p2poolv2_tests/test_data/validation/stratum/b/notify.json");
         let notify: Notify = serde_json::from_str(&notify_str).unwrap();
 
-        let submit_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/b/submit.json"),
-        )
-        .unwrap();
+        let submit_str =
+            include_str!("../../../../p2poolv2_tests/test_data/validation/stratum/b/submit.json");
         let _submit: SimpleRequest = serde_json::from_str(&submit_str).unwrap();
 
-        let authorize_response_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/b/authorize_response.json"),
-        )
-        .unwrap();
+        let authorize_response_str = include_str!(
+            "../../../../p2poolv2_tests/test_data/validation/stratum/b/authorize_response.json"
+        );
         let authorize_response: Response = serde_json::from_str(&authorize_response_str).unwrap();
 
         let enonce1 = authorize_response.result.unwrap()[1].clone();
@@ -585,9 +573,9 @@ mod tests {
     #[tokio::test]
     async fn test_build_notify_and_commitment() {
         // Load a sample block template
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json");
-        let data = fs::read_to_string(path).expect("Unable to read file");
+        let data = include_str!(
+            "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json"
+        );
         let gbt_json: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
         let template: BlockTemplate =
             serde_json::from_value(gbt_json.clone()).expect("Failed to parse BlockTemplate");

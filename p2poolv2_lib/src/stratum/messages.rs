@@ -558,11 +558,8 @@ mod tests {
             "Expected empty merkle branches"
         );
 
-        let notify_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/validation/stratum/a/notify.json"),
-        )
-        .unwrap();
+        let notify_str =
+            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/notify.json");
         let notify: Notify = serde_json::from_str(&notify_str).unwrap();
         assert_eq!(notify.method, "mining.notify");
         assert_eq!(

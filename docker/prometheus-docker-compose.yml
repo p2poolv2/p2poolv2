@@ -1,3 +1,5 @@
+name: p2poolv2-metrics
+
 services:
   prometheus:
     image: prom/prometheus:latest
@@ -7,10 +9,10 @@ services:
     ports:
       - "9090:9090"
     command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -47,4 +49,3 @@ services:
 volumes:
   prometheus_data:
   grafana_data:
-    

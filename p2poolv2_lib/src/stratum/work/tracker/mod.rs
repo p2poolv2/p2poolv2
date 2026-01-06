@@ -396,11 +396,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_block_template_operations() {
-        let template_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/gbt/signet/gbt-no-transactions.json"),
-        )
-        .unwrap();
+        let template_str = include_str!(
+            "../../../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json"
+        );
 
         let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
         let cloned_template = template.clone();
@@ -441,11 +439,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_job_cleanup() {
-        let template_str = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/test_data/gbt/signet/gbt-no-transactions.json"),
-        )
-        .unwrap();
+        let template_str = include_str!(
+            "../../../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json"
+        );
 
         let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
 

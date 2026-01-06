@@ -1,0 +1,5 @@
+target/
+docs/
+docker/
+store.db/
+data/

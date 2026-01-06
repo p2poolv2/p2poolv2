@@ -5,6 +5,7 @@ members = [
     "p2poolv2_node",
     "p2poolv2_cli",
     "p2poolv2_api",
+    "p2poolv2_tests",
 ]
 resolver = "2"
 
@@ -49,7 +50,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = { version = "0.2.3" }
 config = "0.13"
 serde = { version = "1.0", features = ["derive"] }
-clap = { version = "4.0", features = ["derive"] }
+clap = { version = "4.0", features = ["derive", "env"] }
 hex = "0.4.3"
 rocksdb = { version = "0.23.0", features = ["multi-threaded-cf"] }
 async-trait = "0.1.83"
@@ -71,43 +72,7 @@ bitcoindrpc = { path = "bitcoindrpc" }
 p2poolv2_api = { path = "p2poolv2_api" }
 p2poolv2_lib = { path = "p2poolv2_lib", features = ["test-utils"] }
 reqwest = { version = "0.12", features = ["json"] }
-
-# This package declaration is required to make the top-level directory buildable
-# even though we're using a workspace structure
-[package]
-name = "p2poolv2"
-version = "0.1.0"
-edition = "2024"
-publish = false
-
-# Repeat dependencies for use in integration tests
-[dependencies]
-p2poolv2_lib = { path = "p2poolv2_lib" }
-bitcoindrpc = { path = "bitcoindrpc", features = ["test-utils"] }
-chrono.workspace = true
-
-# Repeat dev dependencies for use integration tests
-[dev-dependencies]
-bitcoin = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tokio = { workspace = true }
-base64 = { workspace = true }
+mockall = "0.13.1"
+mockall_double = "0.3.1"
 tempfile = "3.15.0"
 tokio-test = "0.4.3"
-zmq = "0.10"
-tracing = "0.1"
-libp2p = { version = "0.53", features = [
-    "tcp",
-    "dns",
-    "tokio",
-    "noise",
-    "yamux",
-    "identify",
-    "macros",
-    "kad",
-    "secp256k1",
-    "request-response",
-] }
-p2poolv2_api = { path = "p2poolv2_api" }
-reqwest = { version = "0.12", features = ["json","blocking"] }
