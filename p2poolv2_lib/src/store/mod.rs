@@ -114,11 +114,20 @@ impl Store {
         let block_height_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::BlockHeight, block_height_opts);
 
+        // Configure TxidsBlocks column family with merge operator for efficient appends
+        // Each txid can be in multiple blocks - only one confirmed,
+        // but other valid PoW blocks could have the txids
         let mut txids_blocks_opts = RocksDbOptions::default();
         txids_blocks_opts
             .set_merge_operator_associative("blockhash_list_merge", blockhash_list_merge);
         let txids_blocks_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::TxidsBlocks, txids_blocks_opts);
+
+        // Configure Uncles column family with merge operator for efficient appends.
+        // Each Uncle can be included by multiple nephews. The rule is that the same
+        let mut uncles_opts = RocksDbOptions::default();
+        uncle_opts.set_merge_operator_associative("blockhash_list_merge", blockhash_list_merge);
+        let uncles_cf = ColumnFamilyDescriptor::new(ColumnFamily::TxidsBlocks, uncles_opts);
 
         let bitcoin_txids_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::BitcoinTxids, RocksDbOptions::default());
@@ -138,6 +147,7 @@ impl Store {
             block_cf,
             block_txids_cf,
             txids_blocks_cf,
+            uncles_cf,
             inputs_cf,
             outputs_cf,
             tx_cf,
