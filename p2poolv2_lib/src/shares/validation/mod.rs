@@ -26,7 +26,9 @@ use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
 use std::sync::Arc;
 
+/// Maximum uncles in a share block header
 pub const MAX_UNCLES: usize = 3;
+/// Maximum time difference allowed between current tip and received shares
 pub const MAX_TIME_DIFF: u64 = 60;
 
 /// Validate the share block, returning Error in case of failure to validate
