@@ -17,11 +17,15 @@
 use super::{ColumnFamily, Store};
 use crate::shares::chain::chain_store::COMMON_ANCESTOR_DEPTH;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
+use crate::shares::validation::MAX_UNCLES;
 use bitcoin::BlockHash;
 use bitcoin::consensus::{self, Encodable, encode};
 use std::collections::{HashSet, VecDeque};
 use std::error::Error;
 use tracing::debug;
+
+/// Max depth to look for uncles when building new share blocks
+const MAX_UNCLES_DEPTH: u8 = 3;
 
 impl Store {
     /// Iterate over the store from provided start blockhash
@@ -377,8 +381,48 @@ impl Store {
         &self,
         _blockhash: &BlockHash,
     ) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
-        // TODO: Implement find_uncles
-        Ok(vec![])
+        let Some(top_confirmed_height) = self.get_top_confirmed_height() else {
+            return Err("No top confirmation found".into());
+        };
+
+        // get all ancestors up to required depth on the confirmed index
+        let ancestors = (top_confirmed_height.saturating_sub(MAX_UNCLES_DEPTH as u32)
+            ..top_confirmed_height)
+            .filter_map(|height| self.get_confirmed_at_height(height));
+
+        // get all children for the ancestors, will give us all uncles and confirmed blocks
+        let children = ancestors
+            .filter_map(|blockhash| self.get_children_blockhashes(&blockhash).ok())
+            .flatten()
+            .flatten();
+
+        // Only keep the non-confirmed blocks that are not used as uncles already
+        // Collect with height for sorting
+        let mut uncles_with_height: Vec<(BlockHash, u32)> = children
+            .filter_map(|blockhash| {
+                if !self.is_confirmed(&blockhash) && !self.is_already_uncle(&blockhash) {
+                    // Get height from metadata for sorting
+                    let height = self
+                        .get_block_metadata(&blockhash)
+                        .ok()
+                        .and_then(|m| m.expected_height)
+                        .unwrap_or(0);
+                    Some((blockhash, height))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Sort by height descending and take top 3
+        uncles_with_height.sort_by(|a, b| b.1.cmp(&a.1));
+        let uncles = uncles_with_height
+            .into_iter()
+            .take(MAX_UNCLES)
+            .map(|(hash, _)| hash)
+            .collect();
+
+        Ok(uncles)
     }
 }
 
@@ -2561,5 +2605,931 @@ mod tests {
         assert_eq!(nephews.len(), 2);
         assert!(nephews.contains(&nephew1.block_hash()));
         assert!(nephews.contains(&nephew2.block_hash()));
+    }
+
+    #[test]
+    fn test_find_uncles_returns_error_when_no_confirmed_chain() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share = TestShareBlockBuilder::new().build();
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(share.clone(), 0, share.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // No confirmed blocks, should return error
+        let result = store.find_uncles(&share.block_hash());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_find_uncles_returns_empty_when_no_uncles_available() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create a linear chain of confirmed blocks with no forks
+        let share0 = TestShareBlockBuilder::new().nonce(0).build();
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(1)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(2)
+            .build();
+
+        // Add all shares
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share0.clone(),
+                0,
+                share0.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share1.clone(),
+                1,
+                share1.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share2.clone(),
+                2,
+                share2.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Confirm all blocks sequentially
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share0.block_hash(), 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share1.block_hash(), 1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share2.block_hash(), 2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // No unconfirmed children exist, so find_uncles should return empty
+        let uncles = store.find_uncles(&share2.block_hash()).unwrap();
+        assert!(uncles.is_empty());
+    }
+
+    #[test]
+    fn test_find_uncles_finds_single_uncle() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Build chain:
+        //   share0 (confirmed)
+        //   /    \
+        // share1  uncle1 (not confirmed)
+        // (confirmed)
+
+        let share0 = TestShareBlockBuilder::new().nonce(0).build();
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(1)
+            .build();
+        let uncle1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(100)
+            .build();
+
+        // Add all shares
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share0.clone(),
+                0,
+                share0.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share1.clone(),
+                1,
+                share1.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                uncle1.clone(),
+                1,
+                uncle1.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Confirm share0 and share1 only
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share0.block_hash(), 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share1.block_hash(), 1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // find_uncles should find uncle1
+        let uncles = store.find_uncles(&share1.block_hash()).unwrap();
+        assert_eq!(uncles.len(), 1);
+        assert!(uncles.contains(&uncle1.block_hash()));
+    }
+
+    #[test]
+    fn test_find_uncles_finds_multiple_uncles_at_different_heights() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Build chain:
+        //   share0 (confirmed, height 0)
+        //   /    \
+        // share1  uncle0 (not confirmed, height 1)
+        // (confirmed, height 1)
+        //   |    \
+        // share2  uncle1 (not confirmed, height 2)
+        // (confirmed, height 2)
+        //   |    \
+        // share3  uncle2 (not confirmed, height 3)
+        // (confirmed, height 3)
+
+        let share0 = TestShareBlockBuilder::new().nonce(0).build();
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(1)
+            .build();
+        let uncle0 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(100)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(2)
+            .build();
+        let uncle1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(101)
+            .build();
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(3)
+            .build();
+        let uncle2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(102)
+            .build();
+
+        // Add all shares
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share0.clone(),
+                0,
+                share0.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share1.clone(),
+                1,
+                share1.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                uncle0.clone(),
+                1,
+                uncle0.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share2.clone(),
+                2,
+                share2.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                uncle1.clone(),
+                2,
+                uncle1.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share3.clone(),
+                3,
+                share3.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                uncle2.clone(),
+                3,
+                uncle2.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Confirm main chain only
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share0.block_hash(), 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share1.block_hash(), 1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share2.block_hash(), 2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share3.block_hash(), 3, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // find_uncles should find uncle0, uncle1, uncle2
+        // Sorted by height descending: uncle2 (3), uncle1 (2), uncle0 (1)
+        let uncles = store.find_uncles(&share3.block_hash()).unwrap();
+        assert_eq!(uncles.len(), 3);
+        // Verify order - highest height first
+        assert_eq!(uncles[0], uncle2.block_hash());
+        assert_eq!(uncles[1], uncle1.block_hash());
+        assert_eq!(uncles[2], uncle0.block_hash());
+    }
+
+    #[test]
+    fn test_find_uncles_excludes_uncles_beyond_depth_3() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Build chain with 6 blocks (heights 0-5) and uncles at various depths
+        // Uncle at height 1 will be beyond depth 3 when looking from height 5
+        //
+        // share0 (confirmed, height 0)
+        //   |    \
+        // share1  uncle_deep (height 1, beyond depth 3 from height 5)
+        //   |
+        // share2 (confirmed, height 2)
+        //   |    \
+        // share3  uncle_within (height 3, within depth 3 from height 5)
+        //   |
+        // share4 (confirmed, height 4)
+        //   |
+        // share5 (confirmed, height 5)
+
+        let share0 = TestShareBlockBuilder::new().nonce(0).build();
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(1)
+            .build();
+        let uncle_deep = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(100)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(2)
+            .build();
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(3)
+            .build();
+        let uncle_within = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(101)
+            .build();
+        let share4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share3.block_hash().to_string())
+            .nonce(4)
+            .build();
+        let share5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share4.block_hash().to_string())
+            .nonce(5)
+            .build();
+
+        // Add all shares
+        for (share, height) in [
+            (&share0, 0u32),
+            (&share1, 1),
+            (&uncle_deep, 1),
+            (&share2, 2),
+            (&share3, 3),
+            (&uncle_within, 3),
+            (&share4, 4),
+            (&share5, 5),
+        ] {
+            let mut batch = rocksdb::WriteBatch::default();
+            store
+                .add_share(
+                    share.clone(),
+                    height,
+                    share.header.get_work(),
+                    true,
+                    &mut batch,
+                )
+                .unwrap();
+            store.commit_batch(batch).unwrap();
+        }
+
+        // Confirm main chain (share0 through share5)
+        for (share, height) in [
+            (&share0, 0u32),
+            (&share1, 1),
+            (&share2, 2),
+            (&share3, 3),
+            (&share4, 4),
+            (&share5, 5),
+        ] {
+            let mut batch = rocksdb::WriteBatch::default();
+            store
+                .make_confirmed(&share.block_hash(), height, &mut batch)
+                .unwrap();
+            store.commit_batch(batch).unwrap();
+        }
+
+        // find_uncles from share5 (height 5)
+        // Should only find uncle_within (at height 3, within depth 3: heights 2,3,4)
+        // Should NOT find uncle_deep (at height 1, beyond the range we look at)
+        let uncles = store.find_uncles(&share5.block_hash()).unwrap();
+
+        assert_eq!(uncles.len(), 1);
+        assert!(uncles.contains(&uncle_within.block_hash()));
+        assert!(!uncles.contains(&uncle_deep.block_hash()));
+    }
+
+    #[test]
+    fn test_find_uncles_excludes_already_used_uncles() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Build chain:
+        //   share0 (confirmed)
+        //   /    \
+        // share1  uncle1 (not confirmed, but already used as uncle)
+        // (confirmed)
+        //   |    \
+        // share2  uncle2 (not confirmed, available)
+        // (confirmed)
+
+        let share0 = TestShareBlockBuilder::new().nonce(0).build();
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(1)
+            .build();
+        let uncle1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(100)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(2)
+            .build();
+        let uncle2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(101)
+            .build();
+
+        // Add all shares
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share0.clone(),
+                0,
+                share0.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share1.clone(),
+                1,
+                share1.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                uncle1.clone(),
+                1,
+                uncle1.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share2.clone(),
+                2,
+                share2.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                uncle2.clone(),
+                2,
+                uncle2.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Confirm main chain
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share0.block_hash(), 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share1.block_hash(), 1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share2.block_hash(), 2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Mark uncle1 as already used as uncle
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_to_uncles_index(&uncle1.block_hash(), &share2.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // find_uncles should only find uncle2, not uncle1
+        let uncles = store.find_uncles(&share2.block_hash()).unwrap();
+        assert_eq!(uncles.len(), 1);
+        assert!(uncles.contains(&uncle2.block_hash()));
+        assert!(!uncles.contains(&uncle1.block_hash()));
+    }
+
+    #[test]
+    fn test_find_uncles_excludes_confirmed_blocks() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Build chain where all children are confirmed (no uncles)
+        //   share0 (confirmed)
+        //   /
+        // share1 (confirmed)
+        //   |
+        // share2 (confirmed)
+
+        let share0 = TestShareBlockBuilder::new().nonce(0).build();
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(1)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(2)
+            .build();
+
+        // Add all shares
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share0.clone(),
+                0,
+                share0.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share1.clone(),
+                1,
+                share1.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share2.clone(),
+                2,
+                share2.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Confirm all
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share0.block_hash(), 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share1.block_hash(), 1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share2.block_hash(), 2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // find_uncles should return empty - share1 is child of share0 but is confirmed
+        let uncles = store.find_uncles(&share2.block_hash()).unwrap();
+        assert!(uncles.is_empty());
+    }
+
+    #[test]
+    fn test_find_uncles_returns_max_3_uncles_by_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Build chain with 4 uncles - should only return top 3 by height
+        //   share0 (confirmed, height 0)
+        //   / | \ \
+        // share1 uncle_a uncle_b uncle_c (height 1)
+        // (confirmed)
+        //   |    \
+        // share2  uncle_d (height 2)
+        // (confirmed)
+
+        let share0 = TestShareBlockBuilder::new().nonce(0).build();
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(1)
+            .build();
+        let uncle_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(100)
+            .build();
+        let uncle_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(101)
+            .build();
+        let uncle_c = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(102)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(2)
+            .build();
+        let uncle_d = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(103)
+            .build();
+
+        // Add all shares
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share0.clone(),
+                0,
+                share0.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share1.clone(),
+                1,
+                share1.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                uncle_a.clone(),
+                1,
+                uncle_a.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                uncle_b.clone(),
+                1,
+                uncle_b.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                uncle_c.clone(),
+                1,
+                uncle_c.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                share2.clone(),
+                2,
+                share2.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(
+                uncle_d.clone(),
+                2,
+                uncle_d.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Confirm main chain only
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share0.block_hash(), 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share1.block_hash(), 1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .make_confirmed(&share2.block_hash(), 2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // find_uncles should return exactly 3 uncles, prioritizing higher heights
+        // uncle_d is at height 2, uncle_a/b/c are at height 1
+        let uncles = store.find_uncles(&share2.block_hash()).unwrap();
+        assert_eq!(uncles.len(), 3);
+
+        // uncle_d should be first (height 2)
+        assert_eq!(uncles[0], uncle_d.block_hash());
+
+        // The remaining 2 should be from uncle_a, uncle_b, uncle_c (all height 1)
+        let height_1_uncles: HashSet<BlockHash> = [
+            uncle_a.block_hash(),
+            uncle_b.block_hash(),
+            uncle_c.block_hash(),
+        ]
+        .into_iter()
+        .collect();
+        assert!(height_1_uncles.contains(&uncles[1]));
+        assert!(height_1_uncles.contains(&uncles[2]));
+    }
+
+    #[test]
+    fn test_find_uncles_with_deep_chain_only_looks_at_last_3_heights() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Build a chain of 7 blocks (heights 0-6)
+        // with uncles at heights 1, 2, 3, 4, 5
+        // find_uncles from height 6 should only look at heights 3, 4, 5 (last 3)
+
+        let share0 = TestShareBlockBuilder::new().nonce(0).build();
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(1)
+            .build();
+        let uncle1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(101)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(2)
+            .build();
+        let uncle2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(102)
+            .build();
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(3)
+            .build();
+        let uncle3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(103)
+            .build();
+        let share4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share3.block_hash().to_string())
+            .nonce(4)
+            .build();
+        let uncle4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share3.block_hash().to_string())
+            .nonce(104)
+            .build();
+        let share5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share4.block_hash().to_string())
+            .nonce(5)
+            .build();
+        let uncle5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share4.block_hash().to_string())
+            .nonce(105)
+            .build();
+        let share6 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share5.block_hash().to_string())
+            .nonce(6)
+            .build();
+
+        // Add all shares
+        for (share, height) in [
+            (&share0, 0u32),
+            (&share1, 1),
+            (&uncle1, 1),
+            (&share2, 2),
+            (&uncle2, 2),
+            (&share3, 3),
+            (&uncle3, 3),
+            (&share4, 4),
+            (&uncle4, 4),
+            (&share5, 5),
+            (&uncle5, 5),
+            (&share6, 6),
+        ] {
+            let mut batch = rocksdb::WriteBatch::default();
+            store
+                .add_share(
+                    share.clone(),
+                    height,
+                    share.header.get_work(),
+                    true,
+                    &mut batch,
+                )
+                .unwrap();
+            store.commit_batch(batch).unwrap();
+        }
+
+        // Confirm main chain
+        for (share, height) in [
+            (&share0, 0u32),
+            (&share1, 1),
+            (&share2, 2),
+            (&share3, 3),
+            (&share4, 4),
+            (&share5, 5),
+            (&share6, 6),
+        ] {
+            let mut batch = rocksdb::WriteBatch::default();
+            store
+                .make_confirmed(&share.block_hash(), height, &mut batch)
+                .unwrap();
+            store.commit_batch(batch).unwrap();
+        }
+
+        // find_uncles from share6 (height 6) looks at confirmed blocks at heights 3, 4, 5
+        // and finds their non-confirmed children.
+        // - share3 (height 3) has children: share4, uncle4 -> uncle4 found
+        // - share4 (height 4) has children: share5, uncle5 -> uncle5 found
+        // - share5 (height 5) has children: share6 only -> no uncles
+        // uncle3 is NOT found because it's a child of share2 (height 2), which is outside the range
+        let uncles = store.find_uncles(&share6.block_hash()).unwrap();
+
+        assert_eq!(uncles.len(), 2);
+        // Should be sorted by height descending: uncle5 (5), uncle4 (4)
+        assert_eq!(uncles[0], uncle5.block_hash());
+        assert_eq!(uncles[1], uncle4.block_hash());
+
+        // Verify uncle1, uncle2, and uncle3 are NOT included (parents outside depth range)
+        assert!(!uncles.contains(&uncle1.block_hash()));
+        assert!(!uncles.contains(&uncle2.block_hash()));
+        assert!(!uncles.contains(&uncle3.block_hash()));
     }
 }
