@@ -124,7 +124,7 @@ impl Store {
             ColumnFamilyDescriptor::new(ColumnFamily::TxidsBlocks, txids_blocks_opts);
 
         // Configure Uncles column family with merge operator for efficient appends.
-        // Each Uncle can be included by multiple nephews. The rule is that the same
+        // Each Uncle can be included by multiple nephews.
         let mut uncles_opts = RocksDbOptions::default();
         uncles_opts.set_merge_operator_associative("blockhash_list_merge", blockhash_list_merge);
         let uncles_cf = ColumnFamilyDescriptor::new(ColumnFamily::Uncles, uncles_opts);

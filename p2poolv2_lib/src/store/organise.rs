@@ -403,7 +403,7 @@ mod tests {
         store.setup_genesis(genesis.clone(), &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Genesis is marked config at setup
+        // Genesis is marked confirmed at setup
         assert!(store.is_confirmed(&genesis.block_hash()));
     }
 
