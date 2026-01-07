@@ -399,16 +399,15 @@ impl Store {
             .filter_map(|blockhash| {
                 if !self.is_confirmed(&blockhash) && !self.is_already_uncle(&blockhash) {
                     // Get height from metadata for sorting
-                    let height = self
-                        .get_block_metadata(&blockhash)
+                    self.get_block_metadata(&blockhash)
                         .ok()
                         .and_then(|m| m.expected_height)
-                        .unwrap_or(0);
-                    Some((blockhash, height))
+                        .map(|height| Some((blockhash, height)))
                 } else {
                     None
                 }
             })
+            .flatten()
             .collect();
 
         // Sort by height descending and take top 3
