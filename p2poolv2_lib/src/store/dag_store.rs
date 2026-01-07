@@ -330,6 +330,56 @@ impl Store {
 
         Ok(None)
     }
+
+    /// Add a blockhash to the uncles index, marking it as used as an uncle
+    /// by the given nephew blockhash.
+    ///
+    /// Uses merge operator to support multiple nephews including the same uncle.
+    pub(crate) fn add_to_uncles_index(
+        &self,
+        uncle: &BlockHash,
+        nephew: &BlockHash,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let uncles_cf = self.db.cf_handle(&ColumnFamily::Uncles).unwrap();
+        let mut serialized_nephew = Vec::new();
+        nephew.consensus_encode(&mut serialized_nephew)?;
+        batch.merge_cf(&uncles_cf, AsRef::<[u8]>::as_ref(uncle), serialized_nephew);
+        Ok(())
+    }
+
+    /// Check if a blockhash has been used as an uncle
+    pub fn is_already_uncle(&self, blockhash: &BlockHash) -> bool {
+        let uncles_cf = self.db.cf_handle(&ColumnFamily::Uncles).unwrap();
+        matches!(
+            self.db.get_cf::<&[u8]>(&uncles_cf, blockhash.as_ref()),
+            Ok(Some(_))
+        )
+    }
+
+    /// Get the nephews that have included a blockhash as an uncle
+    pub fn get_nephews(&self, uncle: &BlockHash) -> Option<Vec<BlockHash>> {
+        let uncles_cf = self.db.cf_handle(&ColumnFamily::Uncles).unwrap();
+        match self.db.get_cf::<&[u8]>(&uncles_cf, uncle.as_ref()) {
+            Ok(Some(bytes)) => encode::deserialize(&bytes).ok(),
+            Ok(None) | Err(_) => None,
+        }
+    }
+
+    /// Find uncles up to max depth and return a vector of all found
+    /// uncle BlockHashes.
+    ///
+    /// Find ancestors up to MAX_UNCLE_DEPTH on the confirmed chain,
+    /// not counting the parent. Find all children of these ancestors
+    /// that are not on the confirmed chain and that are not already
+    /// included as uncles in other blocks.
+    pub fn find_uncles(
+        &self,
+        _blockhash: &BlockHash,
+    ) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
+        // TODO: Implement find_uncles
+        Ok(vec![])
+    }
 }
 
 #[cfg(test)]
@@ -2389,5 +2439,127 @@ mod tests {
 
         assert_eq!(chain.len(), 1);
         assert_eq!(chain[0], share5.block_hash());
+    }
+
+    #[test]
+    fn test_is_already_uncle_returns_false_for_new_block() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share = TestShareBlockBuilder::new().build();
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(share.clone(), 0, share.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // A share that has not been used as an uncle should return false
+        assert!(!store.is_already_uncle(&share.block_hash()));
+    }
+
+    #[test]
+    fn test_add_to_uncles_index_and_is_already_uncle() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let uncle = TestShareBlockBuilder::new().nonce(100).build();
+        let nephew = TestShareBlockBuilder::new().nonce(200).build();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(uncle.clone(), 0, uncle.header.get_work(), false, &mut batch)
+            .unwrap();
+        store
+            .add_share(
+                nephew.clone(),
+                0,
+                nephew.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Before adding to uncles index
+        assert!(!store.is_already_uncle(&uncle.block_hash()));
+
+        // Add uncle to uncles index
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_to_uncles_index(&uncle.block_hash(), &nephew.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // After adding to uncles index
+        assert!(store.is_already_uncle(&uncle.block_hash()));
+    }
+
+    #[test]
+    fn test_get_nephews_returns_none_for_unused_uncle() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share = TestShareBlockBuilder::new().build();
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(share.clone(), 0, share.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // A share that has not been used as an uncle should return None
+        assert!(store.get_nephews(&share.block_hash()).is_none());
+    }
+
+    #[test]
+    fn test_get_nephews_returns_nephews_for_used_uncle() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let uncle = TestShareBlockBuilder::new().nonce(100).build();
+        let nephew1 = TestShareBlockBuilder::new().nonce(200).build();
+        let nephew2 = TestShareBlockBuilder::new().nonce(300).build();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_share(uncle.clone(), 0, uncle.header.get_work(), false, &mut batch)
+            .unwrap();
+        store
+            .add_share(
+                nephew1.clone(),
+                0,
+                nephew1.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store
+            .add_share(
+                nephew2.clone(),
+                0,
+                nephew2.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Add uncle to uncles index with two nephews
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_to_uncles_index(&uncle.block_hash(), &nephew1.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_to_uncles_index(&uncle.block_hash(), &nephew2.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Get nephews
+        let nephews = store.get_nephews(&uncle.block_hash()).unwrap();
+        assert_eq!(nephews.len(), 2);
+        assert!(nephews.contains(&nephew1.block_hash()));
+        assert!(nephews.contains(&nephew2.block_hash()));
     }
 }

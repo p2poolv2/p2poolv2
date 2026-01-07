@@ -127,7 +127,7 @@ impl Store {
         // Each Uncle can be included by multiple nephews. The rule is that the same
         let mut uncles_opts = RocksDbOptions::default();
         uncles_opts.set_merge_operator_associative("blockhash_list_merge", blockhash_list_merge);
-        let uncles_cf = ColumnFamilyDescriptor::new(ColumnFamily::TxidsBlocks, uncles_opts);
+        let uncles_cf = ColumnFamilyDescriptor::new(ColumnFamily::Uncles, uncles_opts);
 
         let bitcoin_txids_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::BitcoinTxids, RocksDbOptions::default());
