@@ -377,10 +377,7 @@ impl Store {
     /// not counting the parent. Find all children of these ancestors
     /// that are not on the confirmed chain and that are not already
     /// included as uncles in other blocks.
-    pub fn find_uncles(
-        &self,
-        _blockhash: &BlockHash,
-    ) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
+    pub fn find_uncles(&self) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
         let Some(top_confirmed_height) = self.get_top_confirmed_height() else {
             return Err("No top confirmation found".into());
         };
@@ -2620,7 +2617,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // No confirmed blocks, should return error
-        let result = store.find_uncles(&share.block_hash());
+        let result = store.find_uncles();
         assert!(result.is_err());
     }
 
@@ -2697,7 +2694,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // No unconfirmed children exist, so find_uncles should return empty
-        let uncles = store.find_uncles(&share2.block_hash()).unwrap();
+        let uncles = store.find_uncles().unwrap();
         assert!(uncles.is_empty());
     }
 
@@ -2773,7 +2770,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // find_uncles should find uncle1
-        let uncles = store.find_uncles(&share1.block_hash()).unwrap();
+        let uncles = store.find_uncles().unwrap();
         assert_eq!(uncles.len(), 1);
         assert!(uncles.contains(&uncle1.block_hash()));
     }
@@ -2933,7 +2930,7 @@ mod tests {
 
         // find_uncles should find uncle0, uncle1, uncle2
         // Sorted by height descending: uncle2 (3), uncle1 (2), uncle0 (1)
-        let uncles = store.find_uncles(&share3.block_hash()).unwrap();
+        let uncles = store.find_uncles().unwrap();
         assert_eq!(uncles.len(), 3);
         // Verify order - highest height first
         assert_eq!(uncles[0], uncle2.block_hash());
@@ -3034,7 +3031,7 @@ mod tests {
         // find_uncles from share5 (height 5)
         // Should only find uncle_within (at height 3, within depth 3: heights 2,3,4)
         // Should NOT find uncle_deep (at height 1, beyond the range we look at)
-        let uncles = store.find_uncles(&share5.block_hash()).unwrap();
+        let uncles = store.find_uncles().unwrap();
 
         assert_eq!(uncles.len(), 1);
         assert!(uncles.contains(&uncle_within.block_hash()));
@@ -3161,7 +3158,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // find_uncles should only find uncle2, not uncle1
-        let uncles = store.find_uncles(&share2.block_hash()).unwrap();
+        let uncles = store.find_uncles().unwrap();
         assert_eq!(uncles.len(), 1);
         assert!(uncles.contains(&uncle2.block_hash()));
         assert!(!uncles.contains(&uncle1.block_hash()));
@@ -3246,7 +3243,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // find_uncles should return empty - share1 is child of share0 but is confirmed
-        let uncles = store.find_uncles(&share2.block_hash()).unwrap();
+        let uncles = store.find_uncles().unwrap();
         assert!(uncles.is_empty());
     }
 
@@ -3396,7 +3393,7 @@ mod tests {
 
         // find_uncles should return exactly 3 uncles, prioritizing higher heights
         // uncle_d is at height 2, uncle_a/b/c are at height 1
-        let uncles = store.find_uncles(&share2.block_hash()).unwrap();
+        let uncles = store.find_uncles().unwrap();
         assert_eq!(uncles.len(), 3);
 
         // uncle_d should be first (height 2)
@@ -3520,7 +3517,7 @@ mod tests {
         // - share4 (height 4) has children: share5, uncle5 -> uncle5 found
         // - share5 (height 5) has children: share6 only -> no uncles
         // uncle3 is NOT found because it's a child of share2 (height 2), which is outside the range
-        let uncles = store.find_uncles(&share6.block_hash()).unwrap();
+        let uncles = store.find_uncles().unwrap();
 
         assert_eq!(uncles.len(), 2);
         // Should be sorted by height descending: uncle5 (5), uncle4 (4)
