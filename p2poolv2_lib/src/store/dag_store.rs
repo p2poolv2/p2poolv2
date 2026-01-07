@@ -369,7 +369,7 @@ impl Store {
     /// Find uncles up to max depth and return a vector of all found
     /// uncle BlockHashes.
     ///
-    /// Find ancestors up to MAX_UNCLE_DEPTH on the confirmed chain,
+    /// Find ancestors up to max uncle depth on the confirmed chain,
     /// not counting the parent. Find all children of these ancestors
     /// that are not on the confirmed chain and that are not already
     /// included as uncles in other blocks.
