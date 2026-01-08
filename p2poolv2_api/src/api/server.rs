@@ -18,8 +18,10 @@ use crate::api::auth::auth_middleware;
 use crate::api::error::ApiError;
 use axum::{
     Extension, Json, Router,
-    extract::{FromRef, Query, State},
-    middleware::{self},
+    extract::{FromRef, Query, Request, State},
+    http::StatusCode,
+    middleware::{self, Next},
+    response::Response,
     routing::get,
 };
 use chrono::DateTime;
@@ -32,7 +34,7 @@ use p2poolv2_lib::{
 use serde::Deserialize;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
-use tracing::info;
+use tracing::{debug, info};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -94,10 +96,18 @@ pub async fn start_api_server(
         std::net::IpAddr::V4(config.hostname.parse().unwrap()),
         config.port,
     );
+
+    async fn logger(req: Request, next: Next) -> Result<Response, StatusCode> {
+        debug!("received api call at {}", req.uri());
+
+        Ok(next.run(req).await)
+    }
+
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/metrics", get(metrics))
         .route("/pplns_shares", get(pplns_shares))
+        .layer(middleware::from_fn(logger))
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth_middleware,
