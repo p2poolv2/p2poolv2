@@ -16,6 +16,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
+    networks:
+      - p2pool_network
     logging:
       driver: "json-file"
       options:
@@ -40,6 +42,8 @@ services:
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
       - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/pool.json
     restart: unless-stopped
+    networks:
+      - p2pool_network
     logging:
       driver: "json-file"
       options:
@@ -49,3 +53,8 @@ services:
 volumes:
   prometheus_data:
   grafana_data:
+
+networks:
+  p2pool_network:
+    name: p2poolv2_p2pool_network
+    external: true
