@@ -1,6 +1,9 @@
 set unstable := true
 
-export P2POOL_CONFIG := env("P2POOL_CONFIG", "." / "config.toml")
+dev_config := "." / "config-dev.toml"
+default_config := "." / "config.toml"
+target_config := if path_exists(dev_config) == "true" { dev_config } else { default_config }
+export P2POOL_CONFIG := env("P2POOL_CONFIG", target_config)
 
 # Set default log level if not provided through environment
 
@@ -44,25 +47,41 @@ build-release:
     cargo build --workspace --release
 
 # Creates the p2pool docker image
+[group("docker")]
 dockerize:
     docker build -t p2poolv2 -f ./docker/Dockerfile.p2pool .
 
 # Run using the docker image
+[group("docker")]
 docker-run EXTRA="": dockerize
     docker run \
         --rm \
         -it \
         -v $PWD/docker/data:/p2poolv2/data \
         -v $PWD/docker/config/:/p2poolv2/config \
+        -v $P2POOL_CONFIG/:/p2poolv2/config.toml:ro \
+        -e P2POOL_CONFIG=/p2poolv2/config.toml \
         --add-host=host.docker.internal:host-gateway \
         {{ EXTRA }} \
         p2poolv2
 
 # Explore the container image
+[group("docker")]
 docker-explore: (docker-run "--entrypoint bash")
 
+# Starts a service specified in docker container
+[group("docker")]
+[working-directory("docker")]
+compose *services="all":
+    docker compose --env-file .env up -d --build --force-recreate {{ if services == "all" { "" } else { services } }}
+
+[group("docker")]
+[working-directory("docker")]
+compose-explore service="p2pool" index="0":
+    docker compose exec --index {{ index }} {{ service }} bash
+
 # For log level use RUST_LOG=<<level>> just run
-run config="config.toml":
+run config=target_config:
     cargo run -p p2poolv2_node -- --config={{ config }}
 
 # Run cargo flamegraph for detecting bottlenecks
@@ -74,6 +93,7 @@ perf config="config.toml":
 alias dash := dashboard
 
 # Run prometheus and grafana
+[group("docker")]
 [working-directory('docker')]
 dashboard:
     docker compose -f prometheus-docker-compose.yml up -d --force-recreate --build
@@ -94,3 +114,7 @@ fmt:
 # fix common warnings
 fix:
     cargo fix
+
+# Builds and opens local docs for all deps
+doc:
+    cargo doc --open --all
