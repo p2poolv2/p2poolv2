@@ -1,4 +1,7 @@
-FROM alpine:latest
+# syntax=docker/dockerfile:1.20
+FROM alpine:latest AS base
+
+FROM base AS builder
 
 # Install build dependencies
 RUN apk add --no-cache \
@@ -21,9 +24,22 @@ RUN git clone --depth 1 --branch v28.0 https://github.com/bitcoin/bitcoin.git /b
 # Build Bitcoin Core
 WORKDIR /bitcoin
 RUN ./autogen.sh
-RUN ./configure --with-miniupnpc=no --without-gui --disable-tests --disable-bench
+RUN ./configure --with-miniupnpc=no \
+    --without-gui \
+    --without-fuzz \
+    --without-tests \
+    --without-qt \
+    --without-wallet \
+    --without-bench \
+    --enable-util-cli \
+    --enable-debug
 RUN make -j$(nproc)
 RUN make install
+
+FROM base AS runtime
+
+COPY --from=builder /usr/local/bin/bitcoin* /usr/local/bin/
+COPY --from=builder /usr/local/share/man/man1/bitcoin* /usr/local/share/man/man1/
 
 # Install runtime dependencies
 RUN apk add --no-cache \
@@ -54,6 +70,9 @@ EXPOSE 48332 48333
 
 COPY signet/bitcoin-signet.conf /etc/bitcoin/
 COPY testnet4/bitcoin-testnet4.conf /etc/bitcoin/
+COPY bcli /usr/local/bin/
 
-ENTRYPOINT []
-CMD ["bitcoind"]
+HEALTHCHECK --interval=5s --timeout=3s --start-period=10s --retries=3 \
+    CMD ["ash", "-c", "nc -z 127.0.0.1 ${BTC_P2P_PORT:-38333}"]
+
+ENTRYPOINT ["bitcoind"]
