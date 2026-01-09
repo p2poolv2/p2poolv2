@@ -16,11 +16,13 @@
 
 use super::block_template::BlockTemplate;
 use crate::shares::share_commitment::ShareCommitment;
+use bitcoin::BlockHash;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 pub mod parse_coinbase;
+use std::collections::HashSet;
 
 const MAX_JOB_AGE_SECS: u64 = 15 * 60; // 15 minutes
 
@@ -53,6 +55,8 @@ pub struct JobDetails {
     pub coinbase2: String,
     pub generation_timestamp: u64,
     pub share_commitment: Option<ShareCommitment>,
+    /// Shares submitted for this job, used for duplicate detection
+    pub shares: HashSet<BlockHash>,
 }
 
 /// A map that associates templates with job id
@@ -85,6 +89,7 @@ impl Tracker {
                     .unwrap_or_default()
                     .as_secs(),
                 share_commitment,
+                shares: HashSet::new(),
             },
         );
         job_id
@@ -106,12 +111,21 @@ impl Tracker {
 
         let before_count = self.job_details.len();
 
-        // Remove jobs older than max_age_secs
         self.job_details.retain(|_, details| {
             current_time.saturating_sub(details.generation_timestamp) < max_age_secs
         });
 
         before_count - self.job_details.len()
+    }
+
+    /// Add a share to shares tracker for duplicate detection
+    /// Returns true if share is newly inserted, false if job not found or share already exists
+    pub fn add_share(&mut self, job_id: &JobId, blockhash: BlockHash) -> bool {
+        if let Some(job) = self.job_details.get_mut(job_id) {
+            job.shares.insert(blockhash)
+        } else {
+            false
+        }
     }
 }
 
@@ -512,5 +526,54 @@ mod tests {
         // Verify job was removed
         let result = handle.get_job(old_actor_job).await.unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_add_share_rejects_duplicates() {
+        let template_str = include_str!(
+            "../../../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json"
+        );
+        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
+
+        let mut tracker = Tracker::default();
+        let job_id = JobId(1);
+
+        // Insert a job
+        tracker.insert_job(
+            Arc::new(template),
+            "cb1".to_string(),
+            "cb2".to_string(),
+            None,
+            job_id,
+        );
+
+        // Create a test blockhash
+        let blockhash: BlockHash =
+            "0000000000000000000000000000000000000000000000000000000000000001"
+                .parse()
+                .unwrap();
+
+        // First add should succeed (returns true for newly inserted)
+        assert!(tracker.add_share(&job_id, blockhash));
+
+        // Second add of same blockhash should fail (returns false for duplicate)
+        assert!(!tracker.add_share(&job_id, blockhash));
+
+        // Third add should still fail
+        assert!(!tracker.add_share(&job_id, blockhash));
+
+        // Adding a different blockhash should succeed
+        let blockhash2: BlockHash =
+            "0000000000000000000000000000000000000000000000000000000000000002"
+                .parse()
+                .unwrap();
+        assert!(tracker.add_share(&job_id, blockhash2));
+
+        // But adding blockhash2 again should fail
+        assert!(!tracker.add_share(&job_id, blockhash2));
+
+        // Adding to non-existent job should return false
+        let non_existent_job = JobId(999);
+        assert!(!tracker.add_share(&non_existent_job, blockhash));
     }
 }
