@@ -169,6 +169,12 @@ pub enum Command {
         max_age_secs: u64,
         resp: oneshot::Sender<usize>,
     },
+    /// Add a share for duplicate detection
+    AddShare {
+        job_id: JobId,
+        blockhash: BlockHash,
+        resp: oneshot::Sender<bool>,
+    },
 }
 
 /// A handle to the TrackerActor
@@ -268,6 +274,25 @@ impl TrackerHandle {
             .await
             .map_err(|_| "Failed to receive cleanup_old_jobs response".to_string())
     }
+
+    /// Add a share for duplicate detection
+    /// Returns true if share is newly inserted, false if job not found or share already exists
+    pub async fn add_share(&self, job_id: JobId, blockhash: BlockHash) -> Result<bool, String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+
+        self.tx
+            .send(Command::AddShare {
+                job_id,
+                blockhash,
+                resp: resp_tx,
+            })
+            .await
+            .map_err(|_| "Failed to send add_share command".to_string())?;
+
+        resp_rx
+            .await
+            .map_err(|_| "Failed to receive add_share response".to_string())
+    }
 }
 
 /// The actor that manages access to the Tracker
@@ -327,6 +352,14 @@ impl TrackerActor {
                 Command::CleanupOldJobs { max_age_secs, resp } => {
                     let removed_count = self.tracker.cleanup_old_jobs(max_age_secs);
                     let _ = resp.send(removed_count);
+                }
+                Command::AddShare {
+                    job_id,
+                    blockhash,
+                    resp,
+                } => {
+                    let is_new = self.tracker.add_share(&job_id, blockhash);
+                    let _ = resp.send(is_new);
                 }
             }
         }
