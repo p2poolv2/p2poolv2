@@ -24,9 +24,14 @@ impl PoolMetrics {
         // Counters
         output.push_str("# HELP shares_accepted_total Total number of accepted shares\n");
         output.push_str("# TYPE shares_accepted_total counter\n");
+        output.push_str(&format!("shares_accepted_total {}\n", self.accepted_total));
+        output.push('\n');
+
+        output.push_str("# HELP accepted_difficulty_total Total difficulty of accepted shares\n");
+        output.push_str("# TYPE accepted_difficulty_total counter\n");
         output.push_str(&format!(
-            "shares_accepted_total {}\n",
-            self.accepted_total * TWO32
+            "accepted_difficulty_total {}\n",
+            self.accepted_difficulty_total
         ));
         output.push('\n');
 
@@ -160,6 +165,7 @@ mod tests {
     fn test_get_exposition_format() {
         let metrics = PoolMetrics {
             accepted_total: 100,
+            accepted_difficulty_total: 1,
             rejected_total: 5,
             best_share: 500,
             best_share_ever: 500,
@@ -172,7 +178,8 @@ mod tests {
         let exposition = metrics.get_exposition();
 
         // Check that it contains the expected metrics
-        assert!(exposition.contains(&format!("shares_accepted_total {}", 100 * TWO32)));
+        assert!(exposition.contains(&format!("shares_accepted_total {}", 100)));
+        assert!(exposition.contains(&format!("accepted_difficulty_total {}", 1)));
         assert!(exposition.contains("shares_rejected_total 5"));
         assert!(exposition.contains("best_share 500"));
         assert!(exposition.contains("best_share_ever 500"));

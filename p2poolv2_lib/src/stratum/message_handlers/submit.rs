@@ -917,7 +917,11 @@ mod handle_submit_tests {
 
         // Share should be counted as accepted (not rejected)
         // accepted_total tracks total difficulty of accepted shares, which equals session difficulty (10000)
-        assert_eq!(metrics_handle.get_metrics().await.accepted_total, 10000);
+        assert_eq!(metrics_handle.get_metrics().await.accepted_total, 1);
+        assert_eq!(
+            metrics_handle.get_metrics().await.accepted_difficulty_total,
+            10000
+        );
         assert_eq!(metrics_handle.get_metrics().await.rejected_total, 0);
     }
 }
