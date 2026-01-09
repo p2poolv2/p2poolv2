@@ -147,8 +147,9 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
 
     session.last_share_time = Some(SystemTime::now());
 
-    let meets_session_difficulty =
-        truediff >= session.difficulty_adjuster.get_current_difficulty() as u128;
+    // If we are in testing mode and ignoring difficulty, accept share as meeting current difficulty
+    let meets_session_difficulty = stratum_context.ignore_difficulty
+        || truediff >= session.difficulty_adjuster.get_current_difficulty() as u128;
 
     if meets_session_difficulty {
         let _ = stratum_context
@@ -837,5 +838,86 @@ mod handle_submit_tests {
 
         // Only the first share should have been accepted
         assert_eq!(metrics_handle.get_metrics().await.accepted_total, 1);
+    }
+
+    #[tokio::test]
+    async fn test_handle_submit_accepts_low_difficulty_share_when_ignore_difficulty_is_true() {
+        // Set high session difficulty (10_000) so the share won't meet it normally
+        let mut session = Session::<DifficultyAdjuster>::new(10_000, 10_000, None, 0x1fffe000);
+        let tracker_handle = start_tracker_actor();
+
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        mock_submit_block_with_any_body(&mock_server).await;
+
+        let (template, notify, submit, authorize_response) =
+            load_valid_stratum_work_components("../p2poolv2_tests/test_data/validation/stratum/b/");
+
+        let enonce1 = authorize_response.result.unwrap()[1].clone();
+        let enonce1: &str = enonce1.as_str().unwrap();
+        session.enonce1 =
+            u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
+        session.enonce1_hex = enonce1.to_string();
+        session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
+        session.user_id = Some(1);
+
+        let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
+
+        let _ = tracker_handle
+            .insert_job(
+                Arc::new(template),
+                notify.params.coinbase1.to_string(),
+                notify.params.coinbase2.to_string(),
+                Some(create_test_commitment()),
+                job_id,
+            )
+            .await;
+
+        let (emissions_tx, mut emissions_rx) = mpsc::channel(10);
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
+        let temp_dir = tempdir().unwrap();
+        let store = Arc::new(ChainStore::new(
+            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
+            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
+            bitcoin::network::Network::Signet,
+        ));
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle: tracker_handle.clone(),
+            bitcoinrpc_config,
+            start_difficulty: 10000,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
+            ignore_difficulty: true, // Ignore difficulty check
+            emissions_tx,
+            network: bitcoin::network::Network::Signet,
+            metrics: metrics_handle.clone(),
+            store,
+        };
+
+        let message = handle_submit(submit, &mut session, ctx).await.unwrap();
+
+        let response = match &message[..] {
+            [Message::Response(response)] => response,
+            _ => panic!("Expected a Response message"),
+        };
+
+        assert_eq!(response.id, Some(Id::Number(4)));
+
+        // The response should indicate the share is accepted even though it doesn't meet session difficulty
+        assert_eq!(response.result, Some(json!(true)));
+
+        // Emission should be sent
+        let share = emissions_rx.try_recv().unwrap();
+        assert_eq!(share.pplns.btcaddress, Some(session.btcaddress.unwrap()));
+
+        // Share should be counted as accepted (not rejected)
+        // accepted_total tracks total difficulty of accepted shares, which equals session difficulty (10000)
+        assert_eq!(metrics_handle.get_metrics().await.accepted_total, 10000);
+        assert_eq!(metrics_handle.get_metrics().await.rejected_total, 0);
     }
 }
