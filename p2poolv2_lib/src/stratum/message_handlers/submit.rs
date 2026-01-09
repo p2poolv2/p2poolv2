@@ -94,6 +94,23 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         }
     };
 
+    let is_new_share = stratum_context
+        .tracker_handle
+        .add_share(JobId(job_id), validation_result.block.block_hash())
+        .await
+        .unwrap_or_else(|e| {
+            debug!("Duplicate detection failed: {}", e);
+            false
+        });
+
+    if !is_new_share {
+        // return error to asic client if share already exists or duplicate detection failed
+        return Ok(vec![Message::Response(Response::new_ok(
+            message.id,
+            json!(false),
+        ))]);
+    }
+
     if validation_result.meets_bitcoin_difficulty {
         // Submit block asap, do difficulty adjustment after submission
         submit_block(&validation_result.block, stratum_context.bitcoinrpc_config).await;
@@ -707,5 +724,110 @@ mod handle_submit_tests {
 
         assert_eq!(metrics_handle.get_metrics().await.accepted_total, 0);
         assert_eq!(metrics_handle.get_metrics().await.rejected_total, 1);
+    }
+
+    #[tokio::test]
+    async fn test_handle_submit_duplicate_share_is_rejected() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let tracker_handle = start_tracker_actor();
+
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        mock_submit_block_with_any_body(&mock_server).await;
+
+        let (template, notify, submit, authorize_response) =
+            load_valid_stratum_work_components("../p2poolv2_tests/test_data/validation/stratum/b/");
+
+        let enonce1 = authorize_response.result.unwrap()[1].clone();
+        let enonce1: &str = enonce1.as_str().unwrap();
+        session.enonce1 =
+            u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
+        session.enonce1_hex = enonce1.to_string();
+        session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
+        session.user_id = Some(1);
+
+        let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
+
+        let _ = tracker_handle
+            .insert_job(
+                Arc::new(template),
+                notify.params.coinbase1.to_string(),
+                notify.params.coinbase2.to_string(),
+                Some(create_test_commitment()),
+                job_id,
+            )
+            .await;
+
+        let (emissions_tx, mut emissions_rx) = mpsc::channel(10);
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
+        let temp_dir = tempdir().unwrap();
+        let store = Arc::new(ChainStore::new(
+            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
+            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
+            bitcoin::network::Network::Signet,
+        ));
+
+        // First submission should succeed
+        let ctx = StratumContext {
+            notify_tx: notify_tx.clone(),
+            tracker_handle: tracker_handle.clone(),
+            bitcoinrpc_config: bitcoinrpc_config.clone(),
+            start_difficulty: 10000,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
+            emissions_tx: emissions_tx.clone(),
+            network: bitcoin::network::Network::Signet,
+            metrics: metrics_handle.clone(),
+            store: store.clone(),
+        };
+
+        let message = handle_submit(submit.clone(), &mut session, ctx)
+            .await
+            .unwrap();
+
+        let response = match &message[..] {
+            [Message::Response(response)] => response,
+            _ => panic!("Expected a Response message"),
+        };
+
+        // First submission should succeed
+        assert_eq!(response.result, Some(json!(true)));
+
+        // Verify emission was sent for first submission
+        let _share = emissions_rx.try_recv().unwrap();
+
+        // Second submission of the same share should be rejected as duplicate
+        let ctx2 = StratumContext {
+            notify_tx,
+            tracker_handle: tracker_handle.clone(),
+            bitcoinrpc_config,
+            start_difficulty: 10000,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
+            emissions_tx,
+            network: bitcoin::network::Network::Signet,
+            metrics: metrics_handle.clone(),
+            store,
+        };
+
+        let message2 = handle_submit(submit, &mut session, ctx2).await.unwrap();
+
+        let response2 = match &message2[..] {
+            [Message::Response(response)] => response,
+            _ => panic!("Expected a Response message"),
+        };
+
+        // Duplicate submission should return false
+        assert_eq!(response2.result, Some(json!(false)));
+
+        // No additional emission should be sent for duplicate
+        assert!(emissions_rx.try_recv().is_err());
+
+        // Only the first share should have been accepted
+        assert_eq!(metrics_handle.get_metrics().await.accepted_total, 1);
     }
 }
