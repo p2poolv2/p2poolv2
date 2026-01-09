@@ -69,7 +69,7 @@ pub struct StratumConfig<State = Raw> {
     /// The difficulty multiplier for dynamic difficulty adjustment
     pub difficulty_multiplier: f64,
     /// Test config to ignore difficulty
-    pub ignore_difficulty: bool,
+    pub ignore_difficulty: Option<bool>,
     /// Optional pool signature to include in coinbase
     pub pool_signature: Option<String>,
 
@@ -175,7 +175,7 @@ impl StratumConfig<Raw> {
             network: bitcoin::Network::Signet,
             version_mask: 0x1fffe000,
             difficulty_multiplier: 1.0,
-            ignore_difficulty: false,
+            ignore_difficulty: None,
             pool_signature: None,
             bootstrap_address_parsed: None,
             donation_address_parsed: None,
@@ -429,7 +429,7 @@ impl Config {
         self
     }
 
-    pub fn with_ignore_difficulty(mut self, ignore_difficulty: bool) -> Self {
+    pub fn with_ignore_difficulty(mut self, ignore_difficulty: Option<bool>) -> Self {
         self.stratum.ignore_difficulty = ignore_difficulty;
         self
     }
@@ -517,7 +517,7 @@ mod tests {
             .with_minimum_difficulty(1)
             .with_maximum_difficulty(Some(100))
             .with_difficulty_multiplier(2.0)
-            .with_ignore_difficulty(true)
+            .with_ignore_difficulty(Some(true))
             .with_miner_pubkey(
                 "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".to_string(),
             )
@@ -544,7 +544,7 @@ mod tests {
         assert_eq!(config.stratum.minimum_difficulty, 1);
         assert_eq!(config.stratum.maximum_difficulty, Some(100));
         assert_eq!(config.stratum.difficulty_multiplier, 2.0);
-        assert!(config.stratum.ignore_difficulty);
+        assert!(config.stratum.ignore_difficulty.unwrap());
         assert_eq!(
             config.stratum.solo_address,
             Some("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string())

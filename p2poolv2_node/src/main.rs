@@ -177,6 +177,7 @@ async fn main() -> Result<(), String> {
             .start_difficulty(stratum_config.start_difficulty)
             .minimum_difficulty(stratum_config.minimum_difficulty)
             .maximum_difficulty(stratum_config.maximum_difficulty)
+            .ignore_difficulty(stratum_config.ignore_difficulty)
             .network(stratum_config.network)
             .version_mask(stratum_config.version_mask)
             .store(store_for_stratum)
