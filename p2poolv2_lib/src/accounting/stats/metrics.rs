@@ -35,8 +35,10 @@ pub struct PoolMetrics {
     pub start_time: u64,
     /// Last update timestamp, time since epoch in seconds
     pub lastupdate: Option<u64>,
-    /// Total accepted shares
+    /// Total number of shares accepted
     pub accepted_total: u64,
+    /// Total difficulty of shares accepted
+    pub accepted_difficulty_total: u64,
     /// Total rejected shares
     pub rejected_total: u64,
     /// Highest difficulty share on this start
@@ -54,6 +56,7 @@ impl Default for PoolMetrics {
         Self {
             lastupdate: None,
             accepted_total: 0,
+            accepted_difficulty_total: 0,
             rejected_total: 0,
             start_time: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -73,6 +76,7 @@ impl PoolMetrics {
         let pool_stats = load_pool_local_stats(log_dir)?;
         Ok(PoolMetrics {
             accepted_total: pool_stats.accepted_total,
+            accepted_difficulty_total: pool_stats.accepted_difficulty_total,
             rejected_total: pool_stats.rejected_total,
             users: pool_stats.users,
             ..Default::default()
@@ -207,7 +211,8 @@ impl MetricsActor {
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        self.metrics.accepted_total += difficulty;
+        self.metrics.accepted_total += 1;
+        self.metrics.accepted_difficulty_total += difficulty;
         self.metrics.lastupdate = Some(current_unix_timestamp);
         self.metrics.best_share = self.metrics.best_share.max(truediff);
         self.metrics.best_share_ever = self.metrics.best_share_ever.max(truediff);
@@ -589,12 +594,17 @@ mod tests {
                 .workers
                 .contains_key("workerD")
         );
-        assert_eq!(metrics.accepted_total, 123);
+        assert_eq!(metrics.accepted_total, 1);
+        assert_eq!(metrics.accepted_difficulty_total, 123);
         assert_eq!(metrics.rejected_total, 1);
 
         // save and reload metrics to verify persistence
         let _ = save_pool_local_stats(&metrics, log_dir.path().to_str().unwrap());
         let reloaded = PoolMetrics::load_existing(log_dir.path().to_str().unwrap()).unwrap();
+        assert_eq!(
+            reloaded.accepted_difficulty_total,
+            metrics.accepted_difficulty_total
+        );
         assert_eq!(reloaded.accepted_total, metrics.accepted_total);
         assert_eq!(reloaded.rejected_total, metrics.rejected_total);
         assert_eq!(reloaded.users, metrics.users);
