@@ -277,6 +277,10 @@ impl TrackerHandle {
 
     /// Add a share for duplicate detection
     /// Returns true if share is newly inserted, false if job not found or share already exists
+    ///
+    /// If a client sends same share with an earlier job_id, the share
+    /// validation will fail as the blocktemplate's nTime will be
+    /// different and the share's nonce will not meet the current difficulty
     pub async fn add_share(&self, job_id: JobId, blockhash: BlockHash) -> Result<bool, String> {
         let (resp_tx, resp_rx) = oneshot::channel();
 
