@@ -21,11 +21,10 @@ use super::transactions;
 use crate::shares::genesis;
 use crate::shares::share_commitment::ShareCommitment;
 use bitcoin::{
-    Block, BlockHash, CompactTarget, CompressedPublicKey, Target, Transaction, TxMerkleNode, Txid,
-    VarInt, bip152,
-    block::Header,
-    consensus::{Decodable, Encodable},
-    hashes::Hash,
+    Block, BlockHash, CompactTarget, CompressedPublicKey,
+     Target, Transaction, TxMerkleNode, Txid, 
+    VarInt, bip152, block::Header,
+     consensus::{Decodable, Encodable}, hashes::Hash,
 };
 use core::mem;
 use serde::{Deserialize, Serialize};
@@ -61,7 +60,13 @@ impl ShareHeader {
     pub(crate) fn get_work(&self) -> bitcoin::Work {
         Target::from_compact(self.bits).to_work()
     }
-
+    ///get target from bits
+    pub fn get_target(&self) -> Target {
+        Target::from_compact(self.bits)
+    }
+    pub fn get_difficulty_float(&self) -> f64{
+        Target::from_compact(self.bits).difficulty_float()
+    }
     /// Build a ShareHeader from a commitment and a bitcoin header
     /// which contains a coinbase matching the commitment.
     ///
