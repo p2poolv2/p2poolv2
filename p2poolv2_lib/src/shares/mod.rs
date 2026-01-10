@@ -23,3 +23,4 @@ pub mod share_block;
 pub mod share_commitment;
 pub mod transactions;
 pub mod validation;
+pub mod share_utils;
