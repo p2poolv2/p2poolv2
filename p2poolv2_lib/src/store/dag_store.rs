@@ -22,9 +22,23 @@ use bitcoin::consensus::{self, Encodable, encode};
 use std::collections::{HashSet, VecDeque};
 use std::error::Error;
 use tracing::debug;
+/// Data structure representing difficulty and timestamp for a single share.
+/// # Fields
+/// * `difficulty` - The difficulty of the share as a 128-bit unsigned integer.
+///                  Calculated from the share's compact target (bits field).
+/// * `time` - Unix timestamp when the share was created (seconds since epoch).
+/// # Example
+/// ```rust
+/// let data = DifficultyData {
+///     difficulty: 100_000_000_000,
+///     time: 1736294380,
+/// };
+/// ```
 #[derive(Debug)]
 pub struct DifficultyData{
+    /// Share difficulty as u128 for high-precision calculations
     pub difficulty:u128,
+    /// Unix timestamp (seconds since epoch) when share was created
     pub time:u32
 }
 impl Store {
@@ -305,8 +319,25 @@ impl Store {
 
         Ok(results)
     }
-
-
+    /// Collect difficulty and timestamp data from shares within a specified depth.
+    /// # Arguments
+/// * `start` - The blockhash to start traversal from (typically the chain tip)
+/// * `depth` - Number of main chain blocks to traverse (e.g., 2160 for PPLNS window)
+/// * `network` - Bitcoin network parameters (needed for difficulty calculation)
+///
+/// # Returns
+/// * `Ok(Vec<DifficultyData>)` - Vector of difficulty data, sorted by timestamp
+/// * `Err(...)` - If a share has an invalid zero target or share not found
+///
+/// # Example
+/// ```rust
+/// let tip = store.get_chain_tip();
+/// let difficulty_data = store.get_difficulty_data_for_depth(
+///     &tip,
+///     2160,  // PPLNS window size
+///     bitcoin::Network::Bitcoin
+/// )?;
+/// ```
     pub fn get_difficulty_data_for_depth(
     &self,
     start: &BlockHash,
@@ -332,6 +363,7 @@ impl Store {
             // Can't find share, stop here
             break;
         };
+        // Validate target is not zero/invalid
         let zero_target = Target::from_hex("0x0000000000000000000000000000000000000000000000000000000000000000")?;
         if next_share.header.get_target() == zero_target {
             return Err(format!(
@@ -339,7 +371,7 @@ impl Store {
                 next, remaining_depth
             ).into());
         }
-
+        // Collect difficulty data
         difficulty_data.push(DifficultyData {
             difficulty: next_share.header.get_target().difficulty(network.params()),
             time: next_share.header.time,

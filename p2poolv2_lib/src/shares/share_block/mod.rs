@@ -60,10 +60,11 @@ impl ShareHeader {
     pub(crate) fn get_work(&self) -> bitcoin::Work {
         Target::from_compact(self.bits).to_work()
     }
-    ///get target from bits
+    /// get target from bits(compact target)
     pub fn get_target(&self) -> Target {
         Target::from_compact(self.bits)
     }
+    /// get difficulty float u64
     pub fn get_difficulty_float(&self) -> f64{
         Target::from_compact(self.bits).difficulty_float()
     }
