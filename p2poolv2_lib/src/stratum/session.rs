@@ -60,6 +60,8 @@ pub struct Session<D: DifficultyAdjusterTrait> {
     pub connected_at: SystemTime,
     /// Instant when the last valid share was submitted
     pub last_share_time: Option<SystemTime>,
+    /// Authorization failed once
+    pub auth_failed_once: bool,
 }
 
 impl<D: DifficultyAdjusterTrait> Session<D> {
@@ -89,6 +91,7 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
             suggested_difficulty: None,
             connected_at: now,
             last_share_time: None,
+            auth_failed_once: false,
         }
     }
 
