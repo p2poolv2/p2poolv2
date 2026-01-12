@@ -65,17 +65,28 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
     let username = match message.params[0].clone() {
         Some(name) => name,
         None => {
-            return Err(Error::AuthorizationFailure(
-                "Username parameter missing".to_string(),
-            ));
+            return Ok(vec![Message::Response(Response::new_error(
+                message.id,
+                -401,
+                "Empty username".to_string(),
+            ))]);
         }
     };
     let parsed_username = match validate_username::validate(&username, ctx.network) {
         Ok(validated) => validated,
         Err(e) => {
-            return Err(Error::AuthorizationFailure(format!(
-                "Invalid username: {e}",
-            )));
+            if !session.auth_failed_once {
+                session.auth_failed_once = true;
+                return Ok(vec![Message::Response(Response::new_error(
+                    message.id,
+                    -401,
+                    format!("Invalid username {e}"),
+                ))]);
+            } else {
+                return Err(Error::AuthorizationFailure(
+                    "Second invalid username. Disconnecting.".to_string(),
+                ));
+            }
         }
     };
 
@@ -399,7 +410,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_authorize_invalid_username() {
+    async fn test_handle_authorize_invalid_username_first_attempt() {
         // Setup
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         let request = SimpleRequest::new_authorize(
@@ -446,18 +457,33 @@ mod tests {
         )
         .await;
 
-        // Verify
-        assert!(result.is_err(), "Should fail with invalid username");
-        if let Err(Error::AuthorizationFailure(msg)) = result {
-            assert!(
-                msg.contains("Invalid username"),
-                "Expected error message to mention invalid username"
-            );
-        } else {
-            panic!("Expected AuthorizationFailure error");
+        // Verify - first invalid username should return Ok with error response
+        assert!(
+            result.is_ok(),
+            "First invalid username should return Ok with error response"
+        );
+        let messages = result.unwrap();
+        assert_eq!(messages.len(), 1, "Should return one message");
+        match &messages[0] {
+            Message::Response(response) => {
+                assert!(response.error.is_some(), "Response should have an error");
+                let error = response.error.as_ref().unwrap();
+                assert_eq!(error.code, -401, "Error code should be -401");
+                assert!(
+                    error.message.contains("Invalid username"),
+                    "Error message should mention invalid username"
+                );
+            }
+            _ => panic!("Expected Response message"),
         }
 
-        // Session should not be updated
+        // Session should mark auth_failed_once as true
+        assert!(
+            session.auth_failed_once,
+            "auth_failed_once should be set to true after first invalid username"
+        );
+
+        // Session should not be updated with user data
         assert!(
             session.username.is_none(),
             "Username should not be set for invalid address"
@@ -483,6 +509,77 @@ mod tests {
         assert!(
             session.worker_id.is_none(),
             "worker_id should remain None for invalid username"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_authorize_invalid_username_second_attempt() {
+        // Setup - session with auth_failed_once already true
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        session.auth_failed_once = true;
+        let request = SimpleRequest::new_authorize(
+            12345,
+            "invalid_address_format".to_string(),
+            Some("x".to_string()),
+        );
+        let (notify_tx, _notify_rx) = mpsc::channel(1);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let tracker_handle = start_tracker_actor();
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+
+        let temp_dir = tempdir().unwrap();
+        let store = Arc::new(ChainStore::new(
+            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
+            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
+            bitcoin::Network::Signet,
+        ));
+
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle,
+            bitcoinrpc_config,
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
+            ignore_difficulty: false,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet,
+            metrics: metrics_handle,
+            store,
+        };
+
+        // Execute
+        let result = handle_authorize(
+            request,
+            &mut session,
+            SocketAddr::from(([127, 0, 0, 1], 8080)),
+            ctx,
+        )
+        .await;
+
+        // Verify - second invalid username should return Err
+        assert!(result.is_err(), "Second invalid username should return Err");
+        if let Err(Error::AuthorizationFailure(msg)) = result {
+            assert!(
+                msg.contains("Second invalid username"),
+                "Expected error message to mention second invalid username"
+            );
+        } else {
+            panic!("Expected AuthorizationFailure error");
+        }
+
+        // Session should not be updated with user data
+        assert!(
+            session.username.is_none(),
+            "Username should not be set for invalid address"
+        );
+        assert!(
+            session.btcaddress.is_none(),
+            "BTC address should not be set for invalid address"
         );
     }
 }

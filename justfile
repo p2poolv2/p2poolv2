@@ -63,7 +63,7 @@ docker-explore: (docker-run "--entrypoint bash")
 
 # For log level use RUST_LOG=<<level>> just run
 run config="config.toml":
-	cargo run -p p2poolv2_node -- --config={{ config }}
+    cargo run -p p2poolv2_node -- --config={{ config }}
 
 alias dash := dashboard
 
