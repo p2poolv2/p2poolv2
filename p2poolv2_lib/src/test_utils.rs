@@ -167,7 +167,7 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
             "020202020202020202020202020202020202020202020202020202020202020202",
         )
         .unwrap(),
-        merkle_root: Some(share_merkle_root),
+        merkle_root: share_merkle_root,
         bitcoin_header,
         time: 1700000000u32,
         bits: CompactTarget::from_consensus(0x207fffff),
@@ -305,7 +305,7 @@ fn test_share_block(
         prev_share_blockhash: BlockHash::from_str(prev_share_blockhash).unwrap(),
         uncles,
         miner_pubkey: CompressedPublicKey::from_str(miner_pubkey).unwrap(),
-        merkle_root: Some(share_merkle_root),
+        merkle_root: share_merkle_root,
         bitcoin_header,
         time: 1700000000u32,
         bits: CompactTarget::from_consensus(0x01e0377ae * work.unwrap_or(1)),
@@ -392,7 +392,7 @@ impl TestShareHeaderBuilder {
             prev_share_blockhash: self.prev_share_blockhash.unwrap_or(BlockHash::all_zeros()),
             uncles: self.uncles,
             miner_pubkey: self.miner_pubkey.unwrap_or(default_pubkey),
-            merkle_root: Some(share_merkle_root),
+            merkle_root: share_merkle_root,
             bitcoin_header: Header {
                 version: bitcoin::block::Version::TWO,
                 prev_blockhash: BlockHash::all_zeros(),

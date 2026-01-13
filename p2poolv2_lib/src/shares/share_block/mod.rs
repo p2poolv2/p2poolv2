@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+pub mod share_coinbase;
 pub mod short_ids;
 pub mod storage_share_block;
 
@@ -29,6 +30,7 @@ use bitcoin::{
 };
 use core::mem;
 use serde::{Deserialize, Serialize};
+use share_coinbase::build_share_coinbase;
 use std::error::Error;
 pub use storage_share_block::StorageShareBlock;
 
@@ -47,7 +49,7 @@ pub struct ShareHeader {
     /// Compressed pubkey identifying the miner
     pub miner_pubkey: CompressedPublicKey,
     /// Share block transactions merkle root
-    pub merkle_root: Option<TxMerkleNode>,
+    pub merkle_root: TxMerkleNode,
     /// Bitcoin header the share is found for
     pub bitcoin_header: Header,
     /// Share chain difficult as compact target
@@ -70,12 +72,13 @@ impl ShareHeader {
     pub(crate) fn from_commitment_and_header(
         commitment: ShareCommitment,
         bitcoin_header: Header,
+        share_chain_merkle_root: TxMerkleNode,
     ) -> Self {
         Self {
             prev_share_blockhash: commitment.prev_share_blockhash,
             uncles: commitment.uncles,
             miner_pubkey: commitment.miner_pubkey,
-            merkle_root: commitment.merkle_root,
+            merkle_root: share_chain_merkle_root,
             bitcoin_header,
             bits: commitment.bits,
             time: commitment.time,
@@ -103,7 +106,6 @@ impl ShareHeader {
         self.miner_pubkey
             .write_into(&mut serialized_without_bitcoin_header)?;
         self.merkle_root
-            .unwrap()
             .consensus_encode(&mut serialized_without_bitcoin_header)?;
         self.bits
             .consensus_encode(&mut serialized_without_bitcoin_header)?;
@@ -127,7 +129,7 @@ impl Encodable for ShareHeader {
         len += self.uncles.consensus_encode(w)?;
         self.miner_pubkey.write_into(w)?;
         len += 33; // Compressedpublickey is 33 bytes
-        len += self.merkle_root.unwrap().consensus_encode(w)?;
+        len += self.merkle_root.consensus_encode(w)?;
         len += self.bitcoin_header.consensus_encode(w)?;
         len += self.bits.consensus_encode(w)?;
         len += self.time.consensus_encode(w)?;
@@ -144,7 +146,7 @@ impl Decodable for ShareHeader {
             prev_share_blockhash: BlockHash::consensus_decode(r)?,
             uncles: Vec::<BlockHash>::consensus_decode(r)?,
             miner_pubkey: CompressedPublicKey::read_from(r)?,
-            merkle_root: Some(TxMerkleNode::consensus_decode(r)?),
+            merkle_root: TxMerkleNode::consensus_decode(r)?,
             bitcoin_header: Header::consensus_decode(r)?,
             bits: CompactTarget::consensus_decode(r)?,
             time: u32::consensus_decode(r)?,
@@ -171,27 +173,6 @@ impl ShareBlock {
     /// Get difficulty for share header with given bitcoin network
     pub fn get_difficulty(&self, network: bitcoin::Network) -> u128 {
         self.header.bitcoin_header.difficulty(network)
-    }
-
-    pub fn genesis(_genesis_data: &genesis::GenesisData, public_key: CompressedPublicKey) -> Self {
-        // TODO: Replace placeholder share with real data from pool
-        let placeholder_block_hex = "00604d243d0b394c6c8d334d711ed3194ba3aa1f0e98673d17ede5f9f018c80000000000d0d7c1f59a8d08fed3cb59037fac64cabc248223ccb47ab35746ef14bb9abfe17be9ec684406021d3603418501020000000001010000000000000000000000000000000000000000000000000000000000000000ffffffff25020e400100047be9ec6804e82c6e030c536c314d110000000036cc3f085032506f6f6c7632ffffffff0440787d0100000000160014274466e754a1c12d0a2d2cc34ceb70d8e017053ae03fee0500000000160014274466e754a1c12d0a2d2cc34ceb70d8e017053ae0399a2201000000160014274466e754a1c12d0a2d2cc34ceb70d8e017053a0000000000000000266a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf90120000000000000000000000000000000000000000000000000000000000000000000000000";
-        let block: Block =
-            bitcoin::consensus::deserialize(placeholder_block_hex.as_bytes()).unwrap();
-        let header = ShareHeader {
-            prev_share_blockhash: BlockHash::all_zeros(),
-            uncles: vec![],
-            miner_pubkey: public_key,
-            merkle_root: None,
-            bitcoin_header: block.header,
-            time: 1700000000u32,
-            bits: CompactTarget::from_consensus(0x207fffff),
-        };
-        Self {
-            header,
-            transactions: vec![],
-            bitcoin_transactions: block.txdata,
-        }
     }
 
     /// Build a new ShareBlock from the found bitcoin block and share chain metadata
@@ -222,7 +203,7 @@ impl ShareBlock {
             uncles: uncles.to_vec(),
             miner_pubkey,
             bitcoin_header: bitcoin_block.header,
-            merkle_root: Some(merkle_root),
+            merkle_root,
             time: 1700000000u32,
             bits: CompactTarget::from_consensus(0x207fffff),
         };
@@ -284,7 +265,7 @@ impl ShareBlock {
             uncles: vec![],
             miner_pubkey: public_key,
             bitcoin_header: compact_block.header,
-            merkle_root: Some(merkle_root),
+            merkle_root,
             time: 1700000000u32,
             bits: CompactTarget::from_consensus(0x207fffff),
         };
@@ -458,7 +439,7 @@ mod tests {
         )
         .unwrap()
         .into();
-        assert_eq!(share_block.header.merkle_root, Some(expected_merkle_root));
+        assert_eq!(share_block.header.merkle_root, expected_merkle_root);
     }
 
     #[test]
@@ -523,12 +504,16 @@ mod tests {
         };
 
         let cloned = commitment.clone();
-        let header = ShareHeader::from_commitment_and_header(commitment, bitcoin_header);
+        let header = ShareHeader::from_commitment_and_header(
+            commitment,
+            bitcoin_header,
+            bitcoin_header.merkle_root.clone(),
+        );
 
         assert_eq!(header.prev_share_blockhash, cloned.prev_share_blockhash);
         assert_eq!(header.uncles, cloned.uncles);
         assert_eq!(header.miner_pubkey, cloned.miner_pubkey);
-        assert_eq!(header.merkle_root, cloned.merkle_root);
+        assert_eq!(header.merkle_root, bitcoin_header.merkle_root);
         assert_eq!(header.bitcoin_header, bitcoin_header);
         assert_eq!(header.bits, cloned.bits);
         assert_eq!(header.time, cloned.time);
