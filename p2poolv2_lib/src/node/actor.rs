@@ -20,12 +20,13 @@ use crate::command::Command;
 use crate::config::Config;
 use crate::node::Node;
 use crate::node::SwarmSend;
+use crate::node::messages::Message;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store::ChainStore;
-use crate::shares::handle_stratum_shares::handle_stratum_shares;
+use crate::shares::handle_stratum_share;
 use crate::stratum::emission::EmissionReceiver;
 use libp2p::futures::StreamExt;
 use std::error::Error;
@@ -46,21 +47,22 @@ impl NodeHandle {
     /// Create a new Node and return a handle to interact with it
     pub async fn new(
         config: Config,
-        store: Arc<ChainStore>,
+        chain_store: Arc<ChainStore>,
         emissions_rx: EmissionReceiver,
         metrics: MetricsHandle,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
-        let (node_actor, stopping_rx) = NodeActor::new(config, store.clone(), command_rx).unwrap();
+        let (node_actor, stopping_rx) = NodeActor::new(
+            config,
+            chain_store.clone(),
+            command_rx,
+            emissions_rx,
+            metrics,
+        )
+        .unwrap();
 
         tokio::spawn(async move {
             node_actor.run().await;
-        });
-
-        let store_clone = store.clone();
-        let metrics_clone = metrics.clone();
-        tokio::spawn(async move {
-            handle_stratum_shares(emissions_rx, store_clone, metrics_clone).await;
         });
 
         Ok((Self { command_tx }, stopping_rx))
@@ -104,15 +106,11 @@ impl NodeHandle {
 use mockall::mock;
 
 #[cfg(test)]
-use crate::node::messages::Message;
-
-#[cfg(test)]
 mock! {
     pub NodeHandle {
         pub async fn new(config: Config, store: std::sync::Arc<ChainStore>) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>>;
         pub async fn get_peers(&self) -> Result<Vec<libp2p::PeerId>, Box<dyn Error>>;
         pub async fn shutdown(&self) -> Result<(), Box<dyn Error>>;
-        pub async fn send_gossip(&self, message: Message) -> Result<(), Box<dyn Error>>;
         pub async fn send_to_peer(&self, peer_id: libp2p::PeerId, message: Message) -> Result<(), Box<dyn Error>>;
     }
 
@@ -129,21 +127,27 @@ struct NodeActor {
     node: Node,
     command_rx: mpsc::Receiver<Command>,
     stopping_tx: oneshot::Sender<()>,
+    emissions_rx: EmissionReceiver,
+    metrics: MetricsHandle,
 }
 
 impl NodeActor {
     fn new(
         config: Config,
-        store: Arc<ChainStore>,
+        chain_store: Arc<ChainStore>,
         command_rx: mpsc::Receiver<Command>,
+        emissions_rx: EmissionReceiver,
+        metrics: MetricsHandle,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>> {
-        let node = Node::new(&config, store)?;
+        let node = Node::new(&config, chain_store)?;
         let (stopping_tx, stopping_rx) = oneshot::channel();
         Ok((
             Self {
                 node,
                 command_rx,
                 stopping_tx,
+                emissions_rx,
+                metrics,
             },
             stopping_rx,
         ))
@@ -152,10 +156,27 @@ impl NodeActor {
     async fn run(mut self) {
         loop {
             tokio::select! {
+                buf = self.emissions_rx.recv() => {
+                    match buf {
+                        Some(emission) => {
+                            debug!("Sending share to peers");
+                            if let Ok(Some(share_block)) = handle_stratum_share::handle_stratum_share(emission, self.node.chain_store.clone()) {
+                                if let Err(e) = self.node.send_to_all_peers(Message::ShareBlock(share_block)) {
+                                    error!("Error sending share to all peers {e}");
+                                }
+                            }
+                        },
+                        None => {
+                            info!("Share emission channel closed. Stopping.");
+                            self.stopping_tx.send(()).unwrap();
+                            return;
+                        }
+                    }
+                },
                 buf = self.node.swarm_rx.recv() => {
                     match buf {
                         Some(SwarmSend::Request(peer_id, msg)) => {
-                            let request_id =    self.node.swarm.behaviour_mut().request_response.send_request(&peer_id, msg);
+                            let request_id = self.node.swarm.behaviour_mut().request_response.send_request(&peer_id, msg);
                             debug!("Sent message to peer: {peer_id}, request_id: {request_id}");
                         }
                         Some(SwarmSend::Response(response_channel, msg)) => {
@@ -192,7 +213,7 @@ impl NodeActor {
                             tx.send(peers).unwrap();
                         },
                         Some(Command::SendToPeer(peer_id, message, tx)) => {
-                            match self.node.send_to_peer(peer_id, message) {
+                            match self.node.send_to_peer(&peer_id, message) {
                                 Ok(_) => tx.send(Ok(())).unwrap(),
                                 Err(e) => {
                                     error!("Error sending message to peer: {}", e);

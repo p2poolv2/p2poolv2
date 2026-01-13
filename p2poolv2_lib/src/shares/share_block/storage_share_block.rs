@@ -32,10 +32,10 @@ pub struct StorageShareBlock {
     pub bitcoin_txids: Txids,
 }
 
-impl From<ShareBlock> for StorageShareBlock {
-    fn from(block: ShareBlock) -> Self {
+impl From<&ShareBlock> for StorageShareBlock {
+    fn from(block: &ShareBlock) -> Self {
         Self {
-            header: block.header,
+            header: block.header.clone(),
             txids: Txids(
                 block
                     .transactions
@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn test_storage_share_block_conversion() {
-        let share = TestShareBlockBuilder::new()
+        let share = &TestShareBlockBuilder::new()
             .prev_share_blockhash(
                 "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4".into(),
             )
@@ -97,7 +97,7 @@ mod tests {
             .build();
 
         // Test conversion to StorageShareBlock
-        let storage_share: StorageShareBlock = share.clone().into();
+        let storage_share: StorageShareBlock = share.into();
 
         // Verify header and miner_share are preserved
         assert_eq!(storage_share.header, share.header);

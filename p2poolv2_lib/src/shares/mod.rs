@@ -17,8 +17,7 @@
 pub mod chain;
 pub(crate) mod compact_block;
 pub mod genesis;
-pub mod handle_mining_message;
-pub mod handle_stratum_shares;
+pub mod handle_stratum_share;
 pub mod share_block;
 pub mod share_commitment;
 pub mod transactions;

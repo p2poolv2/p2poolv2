@@ -454,7 +454,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         store
-            .add_share(block.clone(), 0, block.header.get_work(), true, &mut batch)
+            .add_share(&block, 0, block.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -509,13 +509,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
-                block1.clone(),
-                0,
-                block1.header.get_work(),
-                true,
-                &mut batch,
-            )
+            .add_share(&block1, 0, block1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -538,13 +532,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
-                block2.clone(),
-                0,
-                block2.header.get_work(),
-                false,
-                &mut batch,
-            )
+            .add_share(&block2, 0, block2.header.get_work(), false, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -569,13 +557,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
-                block3.clone(),
-                0,
-                block3.header.get_work(),
-                false,
-                &mut batch,
-            )
+            .add_share(&block3, 0, block3.header.get_work(), false, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
