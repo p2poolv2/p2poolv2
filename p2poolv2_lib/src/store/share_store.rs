@@ -36,7 +36,7 @@ impl Store {
     /// and other static checks.
     pub fn add_share(
         &self,
-        share: ShareBlock,
+        share: &ShareBlock,
         height: u32,
         chain_work: Work,
         confirm_txs: bool,
@@ -367,9 +367,7 @@ mod tests {
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
         let genesis_block = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         let mut batch = Store::get_write_batch();
-        store
-            .setup_genesis(genesis_block.clone(), &mut batch)
-            .unwrap();
+        store.setup_genesis(&genesis_block, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
         assert_eq!(store.get_genesis_blockhash(), genesis_block.block_hash());
 
@@ -392,9 +390,7 @@ mod tests {
         // Create genesis block with a specific nonce to avoid duplicate issues
         let genesis_block = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         let mut batch = Store::get_write_batch();
-        store
-            .setup_genesis(genesis_block.clone(), &mut batch)
-            .unwrap();
+        store.setup_genesis(&genesis_block, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Create first share (child of genesis)
@@ -405,13 +401,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
-                share1.clone(),
-                1,
-                share1.header.get_work(),
-                true,
-                &mut batch,
-            )
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -423,13 +413,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
-                uncle1.clone(),
-                1,
-                uncle1.header.get_work(),
-                false,
-                &mut batch,
-            )
+            .add_share(&uncle1, 1, uncle1.header.get_work(), false, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -442,13 +426,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
-                share2.clone(),
-                2,
-                share2.header.get_work(),
-                true,
-                &mut batch,
-            )
+            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -494,7 +472,7 @@ mod tests {
         let txs = block.transactions.clone();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(block.clone(), 0, block.header.get_work(), true, &mut batch)
+            .add_share(&block, 0, block.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -515,7 +493,7 @@ mod tests {
         let block = TestShareBlockBuilder::new().build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(block.clone(), 0, block.header.get_work(), true, &mut batch)
+            .add_share(&block, 0, block.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 

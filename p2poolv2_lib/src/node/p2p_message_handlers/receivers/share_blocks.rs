@@ -32,7 +32,7 @@ use tracing::{error, info};
 /// We do not send any inventory message as we do not want to gossip the share block.
 /// Share blocks are gossiped using the libp2p gossipsub protocol.
 pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
-    share_block: ShareBlock,
+    share_block: &ShareBlock,
     chain_store: Arc<ChainStore>,
     time_provider: &T,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -43,7 +43,7 @@ pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
     }
 
     // TODO: Check if this will be an uncle, for now add to main chain
-    if let Err(e) = chain_store.add_share(share_block.clone(), true) {
+    if let Err(e) = chain_store.add_share(&share_block, true) {
         error!("Failed to add share: {}", e);
         return Err("Error adding share to chain".into());
     }
@@ -86,7 +86,7 @@ mod tests {
                 .unwrap(),
         );
 
-        let result = handle_share_block(share_block, Arc::new(store), &time_provider).await;
+        let result = handle_share_block(&share_block, Arc::new(store), &time_provider).await;
         assert!(result.is_ok());
     }
 
@@ -97,7 +97,7 @@ mod tests {
 
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
-        let result = handle_share_block(share_block, Arc::new(store), &time_provider).await;
+        let result = handle_share_block(&share_block, Arc::new(store), &time_provider).await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
@@ -127,7 +127,7 @@ mod tests {
                 .unwrap(),
         );
 
-        let result = handle_share_block(share_block, Arc::new(store), &time_provider).await;
+        let result = handle_share_block(&share_block, Arc::new(store), &time_provider).await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),

@@ -378,7 +378,7 @@ mod tests {
         // Create and add a share to the store (this sets up block metadata)
         let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         let mut batch = Store::get_write_batch();
-        store.setup_genesis(genesis.clone(), &mut batch).unwrap();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Mark the genesis as confirmed at height 0
@@ -400,7 +400,7 @@ mod tests {
         // Create and add a share to the store (this sets up block metadata)
         let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         let mut batch = Store::get_write_batch();
-        store.setup_genesis(genesis.clone(), &mut batch).unwrap();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Genesis is marked confirmed at setup
@@ -415,7 +415,7 @@ mod tests {
         // Create and add a share to the store (this sets up block metadata)
         let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         let mut batch = Store::get_write_batch();
-        store.setup_genesis(genesis.clone(), &mut batch).unwrap();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Create another share
@@ -425,13 +425,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
-                share2.clone(),
-                1,
-                share2.header.get_work(),
-                true,
-                &mut batch,
-            )
+            .add_share(&share2, 1, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -447,7 +441,7 @@ mod tests {
         // Create genesis and add to store
         let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         let mut batch = Store::get_write_batch();
-        store.setup_genesis(genesis.clone(), &mut batch).unwrap();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Create another share at the same height
@@ -457,13 +451,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
-                share2.clone(),
-                1,
-                share2.header.get_work(),
-                true,
-                &mut batch,
-            )
+            .add_share(&share2, 1, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -474,13 +462,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
-                share3.clone(),
-                1,
-                share3.header.get_work(),
-                true,
-                &mut batch,
-            )
+            .add_share(&share3, 1, share3.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 

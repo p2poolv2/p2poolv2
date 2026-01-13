@@ -281,7 +281,7 @@ impl Store {
     /// Returns an error, if store already has even a single block
     pub fn setup_genesis(
         &self,
-        genesis: ShareBlock,
+        genesis: &ShareBlock,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let blockhash = genesis.block_hash();
@@ -362,17 +362,11 @@ mod tests {
 
         // Store shares in linear chain 0 -> 1 -> 2
         store
-            .add_share(
-                share1.clone(),
-                0,
-                share1.header.get_work(),
-                true,
-                &mut batch,
-            )
+            .add_share(&share1, 0, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .add_share(
-                share2.clone(),
+                &share2,
                 1,
                 share1.header.get_work() + share2.header.get_work(),
                 true,
@@ -381,7 +375,7 @@ mod tests {
             .unwrap();
         store
             .add_share(
-                share3.clone(),
+                &share3,
                 2,
                 share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
                 true,
