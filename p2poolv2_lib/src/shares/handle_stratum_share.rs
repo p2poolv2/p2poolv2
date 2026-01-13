@@ -21,6 +21,8 @@ use crate::shares::chain::chain_store::ChainStore;
 use crate::shares::chain::chain_store::ChainStore;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::stratum::emission::Emission;
+use bitcoin::merkle_tree;
+use bitcoin::{Transaction, Txid, absolute::LockTime, transaction::Version};
 use std::error::Error;
 use std::sync::Arc;
 use tracing::debug;
@@ -39,9 +41,25 @@ pub fn handle_stratum_share(
         debug!("No share commitment emitted by stratum. Won't send share to peers");
         Ok(None)
     } else {
+        // TODO: Get share chain transactions and use them here.
+        // TODO: Build the coinbase transaction for the share here and include it in the transactions.
+        let dummy_coinbase = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+        let txids: Vec<Txid> = vec![dummy_coinbase.compute_txid()];
+        let merkle_root =
+            match merkle_tree::calculate_root(txids.iter().map(|txid| txid.to_raw_hash())) {
+                Some(merkle_root) => merkle_root,
+                None => return Err("No coinbase found".into()),
+            };
+
         let share_header = ShareHeader::from_commitment_and_header(
             emission.share_commitment.unwrap(),
             emission.block.header,
+            merkle_root.into(),
         );
         // For now, send the entire block, we will do tx deltas or compact block optimisation later on
         let share_block = ShareBlock {

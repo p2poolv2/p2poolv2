@@ -5,6 +5,7 @@
 store*.db
 p2pool.log
 logs/*
+logs*/*
 config/
 data/
 

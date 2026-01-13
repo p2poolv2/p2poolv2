@@ -87,7 +87,6 @@ async fn build_output_distribution(
     }
 }
 
-#[allow(dead_code)]
 pub fn build_notify(
     template: &BlockTemplate,
     output_distribution: Vec<OutputPair>,
