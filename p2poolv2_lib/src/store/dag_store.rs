@@ -89,7 +89,7 @@ impl Store {
         batch.merge_cf(&block_index_cf, prev_blockhash_bytes, serialized);
 
         debug!(
-            "Queued merge operation: {} -> {}",
+            "Block index from parent to child: {} -> {}",
             prev_blockhash, next_blockhash
         );
         Ok(())
@@ -280,24 +280,24 @@ impl Store {
             }
 
             // Get the share to find its parent
-            let Some(next_share) = self.get_share(&next) else {
+            let Ok(Some(next_share_header)) = self.get_share_header(&next) else {
                 // Can't find share, stop here
                 break;
             };
 
             visited.insert(next);
-            results.push(next_share.block_hash());
+            results.push(next_share_header.block_hash());
 
             if is_main_chain {
                 remaining_depth -= 1;
 
                 // Only continue main chain if depth not exhausted
                 if remaining_depth > 0 {
-                    to_visit.push_back((next_share.header.prev_share_blockhash, true));
+                    to_visit.push_back((next_share_header.prev_share_blockhash, true));
                 }
 
                 // Always include uncles of main chain blocks we've processed
-                for uncle in next_share.header.uncles.iter() {
+                for uncle in next_share_header.uncles.iter() {
                     to_visit.push_back((*uncle, false));
                 }
             }
