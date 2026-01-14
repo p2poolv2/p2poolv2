@@ -26,7 +26,7 @@ use crate::node::messages::Message;
 use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store::ChainStore;
-use crate::shares::handle_stratum_share;
+use crate::shares::handle_stratum_share::handle_stratum_share;
 use crate::stratum::emission::EmissionReceiver;
 use libp2p::futures::StreamExt;
 use std::error::Error;
@@ -52,14 +52,8 @@ impl NodeHandle {
         metrics: MetricsHandle,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
-        let (node_actor, stopping_rx) = NodeActor::new(
-            config,
-            chain_store.clone(),
-            command_rx,
-            emissions_rx,
-            metrics,
-        )
-        .unwrap();
+        let (node_actor, stopping_rx) =
+            NodeActor::new(config, chain_store, command_rx, emissions_rx, metrics).unwrap();
 
         tokio::spawn(async move {
             node_actor.run().await;
@@ -139,7 +133,7 @@ impl NodeActor {
         emissions_rx: EmissionReceiver,
         metrics: MetricsHandle,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>> {
-        let node = Node::new(&config, chain_store)?;
+        let node = Node::new(config, chain_store)?;
         let (stopping_tx, stopping_rx) = oneshot::channel();
         Ok((
             Self {
@@ -160,7 +154,7 @@ impl NodeActor {
                     match buf {
                         Some(emission) => {
                             debug!("Sending share to peers");
-                            if let Ok(Some(share_block)) = handle_stratum_share::handle_stratum_share(emission, self.node.chain_store.clone()) {
+                              if let Ok(Some(share_block)) = handle_stratum_share(emission, self.node.chain_store.clone(), self.node.config.stratum.network) {
                                 if let Err(e) = self.node.send_to_all_peers(Message::ShareBlock(share_block)) {
                                     error!("Error sending share to all peers {e}");
                                 }
