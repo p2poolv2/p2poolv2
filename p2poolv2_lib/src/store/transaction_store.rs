@@ -315,11 +315,7 @@ impl Store {
         column_family: ColumnFamily,
     ) -> Vec<Transaction> {
         let txids = self.get_txids_for_blockhash(blockhash, column_family);
-        txids
-            .0
-            .iter()
-            .map(|txid| self.get_tx(txid).unwrap())
-            .collect()
+        txids.0.iter().flat_map(|txid| self.get_tx(txid)).collect()
     }
 
     /// Get a transaction from the store using a provided txid
