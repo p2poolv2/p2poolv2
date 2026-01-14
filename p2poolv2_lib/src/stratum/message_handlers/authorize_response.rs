@@ -72,7 +72,7 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             ))]);
         }
     };
-    let parsed_username = match validate_username::validate(&username, ctx.network) {
+    let parsed_username = match validate_username::validate(&username, true, ctx.network) {
         Ok(validated) => validated,
         Err(e) => {
             if !session.auth_failed_once {
