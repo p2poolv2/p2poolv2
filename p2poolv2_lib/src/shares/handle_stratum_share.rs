@@ -39,9 +39,9 @@ pub fn handle_stratum_share(
 
     // Send share to peers only in p2p mode, i.e. if the pool is run with a miner pubkey that results in a commitment
     if let Some(share_commitment) = emission.share_commitment {
-        let Ok(coinbase) = build_share_coinbase(share_commitment.miner_pubkey, network) else {
-            return Err("Failed to build coinbase. Will quit".into());
-        };
+        let coinbase = build_share_coinbase(share_commitment.miner_pubkey, network)
+            .map_err(|e| format!("Failed to build coinbase. {e}"))?;
+
         // TODO: Get share chain transactions and use them here.
         let share_transactions = vec![coinbase];
 
