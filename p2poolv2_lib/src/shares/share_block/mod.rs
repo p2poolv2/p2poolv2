@@ -30,7 +30,6 @@ use bitcoin::{
 };
 use core::mem;
 use serde::{Deserialize, Serialize};
-use share_coinbase::build_share_coinbase;
 use std::error::Error;
 pub use storage_share_block::StorageShareBlock;
 

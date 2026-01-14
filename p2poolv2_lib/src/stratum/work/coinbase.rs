@@ -237,7 +237,6 @@ mod tests {
 
     use super::*;
     use crate::{stratum::work::block_template::BlockTemplate, test_utils::genesis_for_tests};
-    use std::fs;
 
     #[test]
     fn test_parse_address_valid_mainnet() {

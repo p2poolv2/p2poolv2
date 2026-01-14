@@ -93,16 +93,17 @@ struct Node {
         (),
         Box<dyn Error + Send + Sync>,
     >,
+    config: Config,
 }
 
 impl Node {
     pub fn new(
-        config: &Config,
+        config: Config,
         chain_store: Arc<ChainStore>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
 
-        let behavior = match P2PoolBehaviour::new(&id_keys, config) {
+        let behavior = match P2PoolBehaviour::new(&id_keys, &config) {
             Ok(behavior) => behavior,
             Err(err) => {
                 error!("Failed to create P2PoolBehaviour: {}", err);
@@ -194,6 +195,7 @@ impl Node {
             swarm_rx,
             chain_store,
             service,
+            config,
         })
     }
 
@@ -548,7 +550,7 @@ mod tests {
         let mock_store = ChainStore::default();
         let store = std::sync::Arc::new(mock_store);
 
-        let mut node = Node::new(&config, store).expect("Node initialization failed");
+        let mut node = Node::new(config.clone(), store).expect("Node initialization failed");
 
         //  Initiate the dial manually!
         let unreachable_peer_multiaddr: libp2p::Multiaddr =

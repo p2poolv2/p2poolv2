@@ -89,8 +89,6 @@ impl BlockTemplate {
 mod tests {
     use super::*;
     use bitcoin::hashes::Hash;
-    use std::fs;
-    use std::path::Path;
 
     #[test]
     fn test_template_transaction_conversion() {

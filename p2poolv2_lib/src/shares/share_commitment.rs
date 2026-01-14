@@ -166,8 +166,6 @@ mod tests {
     use crate::test_utils::create_test_commitment;
     use bitcoin::hashes::Hash;
     use std::collections::HashSet;
-    use std::fs;
-    use std::path::Path;
     use std::str::FromStr;
 
     #[test]
