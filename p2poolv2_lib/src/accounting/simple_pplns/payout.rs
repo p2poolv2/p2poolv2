@@ -154,7 +154,7 @@ impl Payout {
 
             let address_difficulty_map = Self::group_shares_by_address(&shares);
 
-            distribution.reserve(address_difficulty_map.len() + 2);
+            distribution.reserve(address_difficulty_map.len());
 
             Self::append_proportional_distribution(
                 address_difficulty_map,
