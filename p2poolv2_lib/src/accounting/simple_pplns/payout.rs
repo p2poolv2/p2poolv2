@@ -148,12 +148,16 @@ impl Payout {
             config.fee,
         );
 
-        let address_difficulty_map = Self::group_shares_by_address(&shares);
-        Self::append_proportional_distribution(
-            address_difficulty_map,
-            remaining_total_amount,
-            &mut distribution,
-        )?;
+        // Only calculate proportional distribution if there's remaining amount for miners
+        // This avoids parsing miner addresses when 100% goes to donation/fee
+        if remaining_total_amount > bitcoin::Amount::ZERO {
+            let address_difficulty_map = Self::group_shares_by_address(&shares);
+            Self::append_proportional_distribution(
+                address_difficulty_map,
+                remaining_total_amount,
+                &mut distribution,
+            )?;
+        }
 
         Ok(distribution)
     }
@@ -1325,5 +1329,70 @@ mod tests {
         // Total should still equal input
         let total_distributed: bitcoin::Amount = result.iter().map(|op| op.amount).sum();
         assert_eq!(total_distributed, total_amount);
+    }
+
+    #[tokio::test]
+    async fn test_get_output_distribution_with_full_donation_and_invalid_miner_addresses() {
+        // This test verifies that when donation is 100%, we don't try to parse miner addresses
+        // which allows non-standard usernames when validate_address is false
+        let payout = Payout::new(86400);
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let mut store = ChainStore::default();
+
+        // Create shares with invalid bitcoin addresses (non-standard usernames)
+        let shares = vec![
+            SimplePplnsShare::new(
+                1,
+                600,
+                "invalid_username_not_a_btc_address".to_string(),
+                "worker1".to_string(),
+                (current_time - 1800) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
+            ),
+            SimplePplnsShare::new(
+                2,
+                400,
+                "another_invalid_name".to_string(),
+                "worker2".to_string(),
+                (current_time - 2400) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
+            ),
+        ];
+
+        store
+            .expect_get_pplns_shares_filtered()
+            .return_const(shares);
+
+        let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
+
+        // Create config with 100% donation (10000 basis points)
+        let mut stratum_config = StratumConfig::new_for_test_default();
+        stratum_config.donation_address =
+            Some("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string());
+        stratum_config.donation = Some(10000); // 100%
+        let stratum_config = stratum_config.parse().unwrap();
+
+        let result = payout
+            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
+            .await
+            .unwrap();
+
+        // Should have only 1 output: donation gets 100%
+        assert_eq!(result.len(), 1);
+
+        // Verify donation address gets all funds
+        assert_eq!(
+            result[0].address.to_string(),
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
+        );
+        assert_eq!(result[0].amount, total_amount);
     }
 }
