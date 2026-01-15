@@ -72,23 +72,24 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             ))]);
         }
     };
-    let parsed_username = match validate_username::validate(&username, true, ctx.network) {
-        Ok(validated) => validated,
-        Err(e) => {
-            if !session.auth_failed_once {
-                session.auth_failed_once = true;
-                return Ok(vec![Message::Response(Response::new_error(
-                    message.id,
-                    -401,
-                    format!("Invalid username {e}"),
-                ))]);
-            } else {
-                return Err(Error::AuthorizationFailure(
-                    "Second invalid username. Disconnecting.".to_string(),
-                ));
+    let parsed_username =
+        match validate_username::validate(&username, ctx.validate_addresses, ctx.network) {
+            Ok(validated) => validated,
+            Err(e) => {
+                if !session.auth_failed_once {
+                    session.auth_failed_once = true;
+                    return Ok(vec![Message::Response(Response::new_error(
+                        message.id,
+                        -401,
+                        format!("Invalid username {e}"),
+                    ))]);
+                } else {
+                    return Err(Error::AuthorizationFailure(
+                        "Second invalid username. Disconnecting.".to_string(),
+                    ));
+                }
             }
-        }
-    };
+        };
 
     session.username = Some(message.params[0].clone().unwrap());
     session.btcaddress = Some(parsed_username.0.to_string());
@@ -176,6 +177,7 @@ mod tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             ignore_difficulty: false,
+            validate_addresses: true,
             emissions_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
@@ -283,6 +285,7 @@ mod tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             ignore_difficulty: false,
+            validate_addresses: true,
             emissions_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
@@ -442,6 +445,7 @@ mod tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             ignore_difficulty: false,
+            validate_addresses: true,
             emissions_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
@@ -546,6 +550,7 @@ mod tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             ignore_difficulty: false,
+            validate_addresses: true,
             emissions_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
