@@ -42,6 +42,9 @@ const GBT_POLL_INTERVAL: u64 = 10; // seconds
 /// Maximum number of pending shares from all clients connected to stratum server
 const STRATUM_SHARES_BUFFER_SIZE: usize = 1000;
 
+/// 100% donation in bips, skip address validation
+const FULL_DONATION_BIPS: u16 = 10_000;
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -178,7 +181,9 @@ async fn main() -> Result<(), String> {
             .minimum_difficulty(stratum_config.minimum_difficulty)
             .maximum_difficulty(stratum_config.maximum_difficulty)
             .ignore_difficulty(stratum_config.ignore_difficulty)
-            .validate_addresses(Some(stratum_config.donation.unwrap_or_default() != 10000)) // 100% donation in bips, skip address validation
+            .validate_addresses(Some(
+                stratum_config.donation.unwrap_or_default() != FULL_DONATION_BIPS,
+            ))
             .network(stratum_config.network)
             .version_mask(stratum_config.version_mask)
             .store(store_for_stratum)
