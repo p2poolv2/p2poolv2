@@ -178,6 +178,7 @@ async fn main() -> Result<(), String> {
             .minimum_difficulty(stratum_config.minimum_difficulty)
             .maximum_difficulty(stratum_config.maximum_difficulty)
             .ignore_difficulty(stratum_config.ignore_difficulty)
+            .validate_addresses(Some(stratum_config.donation.unwrap_or_default() != 10000)) // 100% donation in bips, skip address validation
             .network(stratum_config.network)
             .version_mask(stratum_config.version_mask)
             .store(store_for_stratum)

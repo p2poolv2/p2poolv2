@@ -50,7 +50,8 @@ pub struct StratumServer {
     pub start_difficulty: u64,
     pub minimum_difficulty: u64,
     pub maximum_difficulty: Option<u64>,
-    ignore_difficulty: bool,
+    pub ignore_difficulty: bool,
+    pub validate_addresses: bool,
     pub network: bitcoin::Network,
     pub version_mask: i32,
     shutdown_rx: oneshot::Receiver<()>,
@@ -68,6 +69,7 @@ pub struct StratumServerBuilder {
     minimum_difficulty: Option<u64>,
     maximum_difficulty: Option<Option<u64>>,
     ignore_difficulty: Option<bool>,
+    validate_addresses: Option<bool>,
     network: Option<bitcoin::Network>,
     version_mask: Option<i32>,
     shutdown_rx: Option<oneshot::Receiver<()>>,
@@ -105,6 +107,11 @@ impl StratumServerBuilder {
 
     pub fn ignore_difficulty(mut self, ignore_difficulty: Option<bool>) -> Self {
         self.ignore_difficulty = ignore_difficulty;
+        self
+    }
+
+    pub fn validate_addresses(mut self, validate_addresses: Option<bool>) -> Self {
+        self.validate_addresses = validate_addresses;
         self
     }
 
@@ -157,6 +164,7 @@ impl StratumServerBuilder {
                 .maximum_difficulty
                 .ok_or("maximum_difficulty is required")?,
             ignore_difficulty: self.ignore_difficulty.unwrap_or(false),
+            validate_addresses: self.validate_addresses.unwrap_or(true),
             network: self.network.ok_or("network is required")?,
             version_mask: self.version_mask.ok_or("version_mask is required")?,
             shutdown_rx: self.shutdown_rx.ok_or("shutdown_rx is required")?,
@@ -222,6 +230,7 @@ impl StratumServer {
                                 minimum_difficulty: self.minimum_difficulty,
                                 maximum_difficulty: self.maximum_difficulty,
                                 ignore_difficulty: self.ignore_difficulty,
+                                validate_addresses: self.validate_addresses,
                                 emissions_tx: self.emissions_tx.clone(),
                                 network: self.network,
                                 metrics: metrics.clone(),
@@ -258,6 +267,7 @@ pub(crate) struct StratumContext {
     pub minimum_difficulty: u64,
     pub maximum_difficulty: Option<u64>,
     pub ignore_difficulty: bool,
+    pub validate_addresses: bool,
     pub emissions_tx: EmissionSender,
     pub network: bitcoin::network::Network,
     pub metrics: metrics::MetricsHandle,
@@ -554,6 +564,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             ignore_difficulty: false,
+            validate_addresses: true,
             emissions_tx,
             network: bitcoin::network::Network::Regtest,
             store,
@@ -673,6 +684,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             ignore_difficulty: false,
+            validate_addresses: true,
             emissions_tx,
             network: bitcoin::network::Network::Regtest,
             store,
@@ -745,6 +757,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             ignore_difficulty: false,
+            validate_addresses: true,
             emissions_tx,
             metrics: metrics_handle,
             network: bitcoin::network::Network::Regtest,
@@ -823,6 +836,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             ignore_difficulty: false,
+            validate_addresses: true,
             emissions_tx,
             network: bitcoin::network::Network::Regtest,
             metrics: metrics_handle,
@@ -921,6 +935,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             ignore_difficulty: false,
+            validate_addresses: true,
             emissions_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
@@ -1038,6 +1053,7 @@ mod stratum_server_tests {
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
             ignore_difficulty: false,
+            validate_addresses: true,
             emissions_tx,
             network: bitcoin::network::Network::Regtest,
             metrics: metrics_handle,
@@ -1145,6 +1161,7 @@ mod stratum_server_tests {
                 minimum_difficulty: 1,
                 maximum_difficulty: Some(2),
                 ignore_difficulty: false,
+                validate_addresses: true,
                 emissions_tx,
                 network: bitcoin::network::Network::Regtest,
                 store,
@@ -1223,6 +1240,7 @@ mod stratum_server_tests {
                 minimum_difficulty: 1,
                 maximum_difficulty: Some(2),
                 ignore_difficulty: false,
+                validate_addresses: true,
                 emissions_tx,
                 network: bitcoin::network::Network::Signet,
                 store,
