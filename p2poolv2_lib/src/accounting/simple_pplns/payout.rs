@@ -122,19 +122,8 @@ impl Payout {
         total_amount: bitcoin::Amount,
         config: &StratumConfig<crate::config::Parsed>,
     ) -> Result<Vec<OutputPair>, Box<dyn Error + Send + Sync>> {
-        let shares = self
-            .get_shares_for_difficulty(store, total_difficulty)
-            .await?;
-
-        if shares.is_empty() {
-            return Ok(vec![OutputPair {
-                address: config.bootstrap_address().clone(),
-                amount: total_amount,
-            }]);
-        }
-
         // Extra two places for potential cuts
-        let mut distribution = Vec::<OutputPair>::with_capacity(shares.len() + 2);
+        let mut distribution = Vec::<OutputPair>::new();
         let remaining_total_amount = Self::include_address_and_cut(
             &mut distribution,
             total_amount,
@@ -150,8 +139,23 @@ impl Payout {
 
         // Only calculate proportional distribution if there's remaining amount for miners
         // This avoids parsing miner addresses when 100% goes to donation/fee
+        // This also avoids running PPLNS share look ups when we don't need to use that data
         if remaining_total_amount > bitcoin::Amount::ZERO {
+            let shares = self
+                .get_shares_for_difficulty(store, total_difficulty)
+                .await?;
+
+            if shares.is_empty() {
+                return Ok(vec![OutputPair {
+                    address: config.bootstrap_address().clone(),
+                    amount: total_amount,
+                }]);
+            }
+
             let address_difficulty_map = Self::group_shares_by_address(&shares);
+
+            distribution.reserve(address_difficulty_map.len() + 2);
+
             Self::append_proportional_distribution(
                 address_difficulty_map,
                 remaining_total_amount,
