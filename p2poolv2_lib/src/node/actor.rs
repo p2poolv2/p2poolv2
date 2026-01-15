@@ -227,7 +227,7 @@ impl NodeActor {
                         },
                         None => {
                             info!("Stopping node actor on channel close");
-                            self.stopping_tx.send(()).unwrap();
+                            let _ = self.stopping_tx.send(());
                             return;
                         }
                     }
