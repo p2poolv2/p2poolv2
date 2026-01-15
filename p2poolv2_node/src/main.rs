@@ -33,43 +33,7 @@ use p2poolv2_lib::stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
 use std::process::exit;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::oneshot;
-use tracing::error;
-use tracing::info;
-
-/// Wait for shutdown signals (Ctrl+C, SIGTERM on Unix) or internal shutdown signal.
-/// Returns when any shutdown signal is received.
-#[cfg(unix)]
-async fn wait_for_shutdown_signal(stopping_rx: oneshot::Receiver<()>) {
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .expect("Failed to set up SIGTERM handler");
-
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            info!("Received Ctrl+C, initiating graceful shutdown...");
-        }
-        _ = sigterm.recv() => {
-            info!("Received SIGTERM, initiating graceful shutdown...");
-        }
-        _ = stopping_rx => {
-            info!("Node stopping due to internal signal...");
-        }
-    }
-}
-
-/// Wait for shutdown signals (Ctrl+C) or internal shutdown signal.
-/// Returns when any shutdown signal is received.
-#[cfg(not(unix))]
-async fn wait_for_shutdown_signal(stopping_rx: oneshot::Receiver<()>) {
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            info!("Received Ctrl+C, initiating graceful shutdown...");
-        }
-        _ = stopping_rx => {
-            info!("Node stopping due to internal signal...");
-        }
-    }
-}
+use tracing::{error, info, trace};
 
 /// Interval in seconds to poll for new block templates since the last zmq event signal
 const GBT_POLL_INTERVAL: u64 = 10; // seconds
@@ -122,6 +86,24 @@ async fn main() -> Result<(), String> {
         }
     };
 
+    info!("Running on {} network", &config.stratum.network);
+
+    let exit_sender = tokio::sync::watch::Sender::new(false);
+    let exit_receiver = exit_sender.subscribe();
+
+    let exit_sender_signal = exit_sender.clone();
+    // future: improve this by implementing sigterm. Maybe usr1 and 2 for things like committing to disk
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to listen for signal");
+
+        info!("Received signal. Stopping...");
+        exit_sender_signal
+            .send(true)
+            .expect("failed to set shutdown signal");
+    });
+
     let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
     let store = Arc::new(Store::new(config.store.path.clone(), false).unwrap());
     let chain_store = Arc::new(ChainStore::new(
@@ -163,6 +145,7 @@ async fn main() -> Result<(), String> {
         }
     };
 
+    let exit_sender_gbt = exit_sender.clone();
     tokio::spawn(async move {
         if let Err(e) = start_gbt(
             bitcoinrpc_config_cloned,
@@ -174,7 +157,7 @@ async fn main() -> Result<(), String> {
         .await
         {
             tracing::error!("Failed to fetch block template. Shutting down. \n {e}");
-            exit(1);
+            let _ = exit_sender_gbt.send(true);
         }
     });
 
@@ -213,6 +196,7 @@ async fn main() -> Result<(), String> {
     let stats_dir_for_shutdown = config.logging.stats_dir.clone();
     let store_for_stratum = chain_store.clone();
     let tracker_handle_cloned = tracker_handle.clone();
+    let exit_sender_stratum = exit_sender.clone();
 
     tokio::spawn(async move {
         let mut stratum_server = StratumServerBuilder::default()
@@ -246,6 +230,7 @@ async fn main() -> Result<(), String> {
             .await;
         if result.is_err() {
             error!("Failed to start Stratum server: {}", result.unwrap_err());
+            let _ = exit_sender_stratum.send(true);
         }
         info!("Stratum server stopped");
     });
@@ -271,44 +256,47 @@ async fn main() -> Result<(), String> {
         config.api.hostname, config.api.port
     );
 
-    match NodeHandle::new(config, chain_store, emissions_rx, metrics_handle).await {
-        Ok((node_handle, stopping_rx)) => {
-            info!("Node started");
+    let (_node_handle, stopping_rx) =
+        NodeHandle::new(config, chain_store, emissions_rx, metrics_handle)
+            .await
+            .expect("Failed to start node");
 
-            wait_for_shutdown_signal(stopping_rx).await;
+    info!("Node started");
 
-            info!("Node shutting down ...");
+    let mut exit_receiver = exit_sender.subscribe();
+    let stop_all = async move || {
+        info!("Node shutting down...");
 
-            // Shutdown node first to stop accepting new work
-            if let Err(e) = node_handle.shutdown().await {
-                error!("Error during node shutdown: {e}");
-            }
-
-            // Save metrics before shutdown to prevent data loss
-            let metrics = metrics_for_shutdown.get_metrics().await;
-            if let Err(e) = p2poolv2_lib::accounting::stats::pool_local_stats::save_pool_local_stats(
-                &metrics,
-                &stats_dir_for_shutdown,
-            ) {
-                error!("Failed to save metrics on shutdown: {e}");
-            } else {
-                info!("Metrics saved on shutdown");
-            }
-
-            stratum_shutdown_tx
-                .send(())
-                .expect("Failed to send shutdown signal to Stratum server");
-
-            api_shutdown_tx
-                .send(())
-                .expect("Failed to send shutdown signal to API server");
-
-            info!("Node stopped");
+        // Save metrics before shutdown to prevent data loss
+        let metrics = metrics_for_shutdown.get_metrics().await;
+        if let Err(e) = p2poolv2_lib::accounting::stats::pool_local_stats::save_pool_local_stats(
+            &metrics,
+            &stats_dir_for_shutdown,
+        ) {
+            error!("Failed to save metrics on shutdown: {e}");
+        } else {
+            info!("Metrics saved on shutdown");
         }
-        Err(e) => {
-            error!("Failed to start node: {e}");
-            return Err(format!("Failed to start node: {e}"));
+
+        // channels might be closed already, ignore errors
+        let _ = stratum_shutdown_tx.send(());
+        let _ = api_shutdown_tx.send(());
+        let _ = exit_sender.send(true);
+    };
+
+    if *exit_receiver.borrow() {
+        stop_all().await;
+        exit(1);
+    }
+
+    tokio::select! {
+        _ = stopping_rx => {
+            stop_all().await;
+        },
+        _ = exit_receiver.changed() => {
+            stop_all().await;
         }
     }
+
     Ok(())
 }
