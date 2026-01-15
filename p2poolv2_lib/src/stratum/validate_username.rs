@@ -160,4 +160,24 @@ mod tests {
         assert_eq!(address.to_string(), mainnet_address);
         assert_eq!(worker_name, Some("worker.with.dots"));
     }
+
+    #[test]
+    fn test_empty_username() {
+        let result = validate("", true, Network::Bitcoin);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            UsernameValidationError::UserNameMissing()
+        ));
+    }
+
+    #[test]
+    fn test_empty_username_without_address_validation() {
+        let result = validate("", false, Network::Bitcoin);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            UsernameValidationError::UserNameMissing()
+        ));
+    }
 }
