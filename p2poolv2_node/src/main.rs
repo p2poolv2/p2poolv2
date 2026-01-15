@@ -46,8 +46,10 @@ const STRATUM_SHARES_BUFFER_SIZE: usize = 1000;
 const FULL_DONATION_BIPS: u16 = 10_000;
 
 /// Notify channel enqueues requests to send notify updates to new
-/// clients. If we have more than notify channel capacity of pending
-/// clients in queue, some will be dropped.
+/// clients. If we have more than the notify channel capacity of
+/// pending notifications in the queue, senders are blocked unless
+/// space is available. We want to avoid this blocking for up to 1000
+/// notifications from new clients.
 const NOTIFY_CHANNEL_CAPACITY: usize = 1000;
 
 #[derive(Parser, Debug)]
