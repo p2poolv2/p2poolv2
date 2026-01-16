@@ -54,14 +54,14 @@ pub struct JobDetails {
     pub coinbase2: String,
     pub generation_timestamp: u64,
     pub share_commitment: Option<ShareCommitment>,
-    /// Shares submitted for this job, used for duplicate detection
-    pub shares: DashSet<BlockHash>,
 }
 
 /// Lock-free job tracker using DashMap for concurrent access.
 #[derive(Debug)]
 pub struct JobTracker {
     job_details: DashMap<JobId, JobDetails>,
+    /// Tracks submitted shares per job for duplicate detection (internal only)
+    job_shares: DashMap<JobId, DashSet<BlockHash>>,
     latest_job_id: AtomicU64,
 }
 
@@ -74,6 +74,7 @@ impl JobTracker {
             .as_nanos() as u64;
         Self {
             job_details: DashMap::new(),
+            job_shares: DashMap::new(),
             latest_job_id: AtomicU64::new(timestamp),
         }
     }
@@ -98,9 +99,9 @@ impl JobTracker {
                     .unwrap_or_default()
                     .as_secs(),
                 share_commitment,
-                shares: DashSet::new(),
             },
         );
+        self.job_shares.insert(job_id, DashSet::new());
         job_id
     }
 
@@ -129,8 +130,13 @@ impl JobTracker {
 
         let before_count = self.job_details.len();
 
-        self.job_details.retain(|_, details| {
-            current_time.saturating_sub(details.generation_timestamp) < max_age_secs
+        self.job_details.retain(|job_id, details| {
+            let keep = current_time.saturating_sub(details.generation_timestamp) < max_age_secs;
+            if !keep {
+                // Also remove shares for this job
+                self.job_shares.remove(job_id);
+            }
+            keep
         });
 
         before_count - self.job_details.len()
@@ -139,8 +145,8 @@ impl JobTracker {
     /// Add a share to shares tracker for duplicate detection
     /// Returns true if share is newly inserted, false if job not found or share already exists
     pub fn add_share(&self, job_id: JobId, blockhash: BlockHash) -> bool {
-        if let Some(job) = self.job_details.get(&job_id) {
-            job.shares.insert(blockhash)
+        if let Some(shares) = self.job_shares.get(&job_id) {
+            shares.insert(blockhash)
         } else {
             false
         }
