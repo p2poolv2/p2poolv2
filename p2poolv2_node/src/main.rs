@@ -33,7 +33,11 @@ use p2poolv2_lib::stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
 use std::process::exit;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::{error, info, trace};
+
+use crate::signal::setup_signal_handler;
+
+mod signal;
 
 /// Interval in seconds to poll for new block templates since the last zmq event signal
 const GBT_POLL_INTERVAL: u64 = 10; // seconds
@@ -74,20 +78,8 @@ async fn main() -> Result<(), String> {
     info!("Running on {} network", &config.stratum.network);
 
     let exit_sender = tokio::sync::watch::Sender::new(false);
-    let exit_receiver = exit_sender.subscribe();
 
-    let exit_sender_signal = exit_sender.clone();
-    // future: improve this by implementing sigterm. Maybe usr1 and 2 for things like committing to disk
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to listen for signal");
-
-        info!("Received signal. Stopping...");
-        exit_sender_signal
-            .send(true)
-            .expect("failed to set shutdown signal");
-    });
+    let sig_handle = setup_signal_handler(exit_sender.clone());
 
     let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
     let store = Arc::new(Store::new(config.store.path.clone(), false).unwrap());
@@ -282,6 +274,9 @@ async fn main() -> Result<(), String> {
             stop_all().await;
         }
     }
+
+    trace!("Waiting signal handlers");
+    sig_handle.await.unwrap();
 
     Ok(())
 }
