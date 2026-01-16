@@ -18,7 +18,7 @@ use crate::stratum::error::Error;
 use crate::stratum::messages::SimpleRequest;
 use crate::stratum::work::block_template::BlockTemplate;
 use crate::stratum::work::tracker::JobDetails;
-use bitcoin::blockdata::block::{Block, Header};
+use bitcoin::blockdata::block::Header;
 use bitcoin::consensus::Decodable;
 use bitcoin::hex::DisplayHex;
 use hex::FromHex;
@@ -27,10 +27,12 @@ use tracing::{debug, info};
 
 /// Share validation result
 ///
-/// Captures the block and boolens to signal if block meets bitcoin and job difficult
+/// Captures the header and coinbase, with a boolean to signal if block meets bitcoin difficulty
 pub struct ValidationResult {
-    /// The block built with the share components
-    pub block: Block,
+    /// The block header built from the share components
+    pub header: Header,
+    /// The coinbase transaction built from share components
+    pub coinbase: bitcoin::Transaction,
     /// Does the block meet bitcoin difficulty
     pub meets_bitcoin_difficulty: bool,
 }
@@ -164,28 +166,9 @@ pub fn validate_submission_difficulty(
         }
     };
 
-    // Decode transactions from the block template
-    let transactions: Vec<bitcoin::transaction::Transaction> = job
-        .blocktemplate
-        .transactions
-        .iter()
-        .map(|tx| {
-            let tx_bytes = hex::decode(&tx.data).unwrap();
-            bitcoin::Transaction::consensus_decode(&mut std::io::Cursor::new(tx_bytes)).unwrap()
-        })
-        .collect();
-
-    let mut all_transactions = Vec::with_capacity(transactions.len() + 1);
-    all_transactions.push(coinbase);
-    all_transactions.extend(transactions);
-
-    let block = Block {
-        header,
-        txdata: all_transactions,
-    };
-
     Ok(ValidationResult {
-        block,
+        header,
+        coinbase,
         meets_bitcoin_difficulty,
     })
 }
