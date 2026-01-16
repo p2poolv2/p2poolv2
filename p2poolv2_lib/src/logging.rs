@@ -28,10 +28,15 @@ pub fn setup_logging(
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&logging_config.level));
 
-    let registry = Registry::default().with(filter);
+    let console_layer = if logging_config.console.unwrap_or(true) {
+        info!("Console logging enabled");
+        Some(fmt::layer())
+    } else {
+        info!("Console logging disabled");
+        None
+    };
 
-    // Configure console logging if enabled
-    if let Some(file_path) = &logging_config.file {
+    let (file_layer, guard) = if let Some(file_path) = &logging_config.file {
         info!("File logging is enabled, writing to: {}", file_path);
         // Create directory structure if it doesn't exist
         if let Some(parent) = std::path::Path::new(file_path).parent() {
@@ -63,19 +68,20 @@ pub fn setup_logging(
 
         // Use the non_blocking function directly from tracing_appender
         let (non_blocking_appender, guard) = non_blocking(file_appender);
-        let file_layer = fmt::layer()
+        let layer = fmt::layer()
             .with_writer(non_blocking_appender)
             .with_ansi(false);
 
-        // Initialize with both layers
-        registry.with(file_layer).init();
-
-        Ok(Some(guard)) // Return the guard to ensure the appender is flushed on exit
+        (Some(layer), Some(guard))
     } else {
-        info!("No logging configuration provided, defaulting to console");
-        // If neither console nor file is configured, default to console
-        let console_layer = fmt::layer();
-        registry.with(console_layer).init();
-        Ok(None)
-    }
+        (None, None)
+    };
+
+    Registry::default()
+        .with(filter)
+        .with(console_layer)
+        .with(file_layer)
+        .init();
+
+    Ok(guard)
 }
