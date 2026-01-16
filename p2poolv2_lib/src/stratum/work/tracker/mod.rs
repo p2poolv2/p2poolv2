@@ -17,12 +17,11 @@
 use super::block_template::BlockTemplate;
 use crate::shares::share_commitment::ShareCommitment;
 use bitcoin::BlockHash;
-use std::collections::HashMap;
+use dashmap::{DashMap, DashSet};
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, warn};
+use std::sync::atomic::{AtomicU64, Ordering};
+use tracing::debug;
 pub mod parse_coinbase;
-use std::collections::HashSet;
 
 const MAX_JOB_AGE_SECS: u64 = 15 * 60; // 15 minutes
 
@@ -56,22 +55,32 @@ pub struct JobDetails {
     pub generation_timestamp: u64,
     pub share_commitment: Option<ShareCommitment>,
     /// Shares submitted for this job, used for duplicate detection
-    pub shares: HashSet<BlockHash>,
+    pub shares: DashSet<BlockHash>,
 }
 
-/// A map that associates templates with job id
-///
-/// We use this to build blocks from submitted jobs and their matching block templates.
-#[derive(Debug, Clone)]
-pub struct Tracker {
-    job_details: HashMap<JobId, JobDetails>,
-    latest_job_id: JobId,
+/// Lock-free job tracker using DashMap for concurrent access.
+#[derive(Debug)]
+pub struct JobTracker {
+    job_details: DashMap<JobId, JobDetails>,
+    latest_job_id: AtomicU64,
 }
 
-impl Tracker {
+impl JobTracker {
+    /// Create a new Tracker with timestamp-based initial job ID
+    pub fn new() -> Self {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        Self {
+            job_details: DashMap::new(),
+            latest_job_id: AtomicU64::new(timestamp),
+        }
+    }
+
     /// Insert a block template with the specified job id
     pub fn insert_job(
-        &mut self,
+        &self,
         block_template: Arc<BlockTemplate>,
         coinbase1: String,
         coinbase2: String,
@@ -89,21 +98,30 @@ impl Tracker {
                     .unwrap_or_default()
                     .as_secs(),
                 share_commitment,
-                shares: HashSet::new(),
+                shares: DashSet::new(),
             },
         );
         job_id
     }
 
     /// Get the next job id, incrementing it atomically
-    pub fn get_next_job_id(&mut self) -> JobId {
-        self.latest_job_id = self.latest_job_id + 1;
-        self.latest_job_id
+    pub fn get_next_job_id(&self) -> JobId {
+        JobId(self.latest_job_id.fetch_add(1, Ordering::SeqCst) + 1)
+    }
+
+    /// Get the latest job id without incrementing
+    pub fn get_latest_job_id(&self) -> JobId {
+        JobId(self.latest_job_id.load(Ordering::SeqCst))
+    }
+
+    /// Get job details by job id
+    pub fn get_job(&self, job_id: JobId) -> Option<JobDetails> {
+        self.job_details.get(&job_id).map(|r| r.clone())
     }
 
     /// Remove job details that are older than the specified duration in seconds
     /// Returns the number of jobs that were removed
-    pub fn cleanup_old_jobs(&mut self, max_age_secs: u64) -> usize {
+    pub fn cleanup_old_jobs(&self, max_age_secs: u64) -> usize {
         let current_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -120,8 +138,8 @@ impl Tracker {
 
     /// Add a share to shares tracker for duplicate detection
     /// Returns true if share is newly inserted, false if job not found or share already exists
-    pub fn add_share(&mut self, job_id: &JobId, blockhash: BlockHash) -> bool {
-        if let Some(job) = self.job_details.get_mut(job_id) {
+    pub fn add_share(&self, job_id: JobId, blockhash: BlockHash) -> bool {
+        if let Some(job) = self.job_details.get(&job_id) {
             job.shares.insert(blockhash)
         } else {
             false
@@ -129,276 +147,32 @@ impl Tracker {
     }
 }
 
-impl Default for Tracker {
-    /// Create a default empty Map
+impl Default for JobTracker {
     fn default() -> Self {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
-        Self {
-            job_details: HashMap::new(),
-            latest_job_id: JobId(timestamp),
-        }
+        Self::new()
     }
 }
 
-/// Commands that can be sent to the MapActor
-#[derive(Debug)]
-pub enum Command {
-    /// Insert a block template under the specified job id
-    InsertJob {
-        block_template: Arc<BlockTemplate>,
-        coinbase1: String,
-        coinbase2: String,
-        job_id: JobId,
-        share_commitment: Option<ShareCommitment>,
-        resp: oneshot::Sender<JobId>,
-    },
-    /// Get job details by job id
-    GetJob {
-        job_id: JobId,
-        resp: oneshot::Sender<Option<JobDetails>>,
-    },
-    /// Get the next job id, incrementing it atomically
-    GetNextJobId { resp: oneshot::Sender<JobId> },
-    /// Get the latest job id using the atomic counter
-    GetLatestJobId { resp: oneshot::Sender<JobId> },
-    /// Clean up old job ids that are older than the specified duration
-    CleanupOldJobs {
-        max_age_secs: u64,
-        resp: oneshot::Sender<usize>,
-    },
-    /// Add a share for duplicate detection
-    AddShare {
-        job_id: JobId,
-        blockhash: BlockHash,
-        resp: oneshot::Sender<bool>,
-    },
-}
-
-/// A handle to the TrackerActor
-#[derive(Debug, Clone)]
-pub struct TrackerHandle {
-    tx: mpsc::Sender<Command>,
-}
-
-impl TrackerHandle {
-    /// Insert a block template under the specified job id
-    pub async fn insert_job(
-        &self,
-        block_template: Arc<BlockTemplate>,
-        coinbase1: String,
-        coinbase2: String,
-        share_commitment: Option<ShareCommitment>,
-        job_id: JobId,
-    ) -> Result<JobId, String> {
-        let (resp_tx, resp_rx) = oneshot::channel();
-
-        self.tx
-            .send(Command::InsertJob {
-                block_template,
-                coinbase1,
-                coinbase2,
-                job_id,
-                share_commitment,
-                resp: resp_tx,
-            })
-            .await
-            .map_err(|_| "Failed to send insert_block_template command".to_string())?;
-
-        resp_rx
-            .await
-            .map_err(|_| "Failed to receive insert_block_template response".to_string())
-    }
-
-    /// Find a block template by job id
-    pub async fn get_job(&self, job_id: JobId) -> Result<Option<JobDetails>, String> {
-        let (resp_tx, resp_rx) = oneshot::channel();
-
-        self.tx
-            .send(Command::GetJob {
-                job_id,
-                resp: resp_tx,
-            })
-            .await
-            .map_err(|_| "Failed to send find_block_template command".to_string())?;
-
-        resp_rx
-            .await
-            .map_err(|_| "Failed to receive find_block_template response".to_string())
-    }
-
-    /// Get the next job id, incrementing it atomically
-    pub async fn get_next_job_id(&self) -> Result<JobId, String> {
-        let (resp_tx, resp_rx) = oneshot::channel();
-
-        self.tx
-            .send(Command::GetNextJobId { resp: resp_tx })
-            .await
-            .map_err(|_| "Failed to send get_next_job_id command".to_string())?;
-
-        resp_rx
-            .await
-            .map_err(|_| "Failed to receive get_next_job_id response".to_string())
-    }
-
-    /// Get the latest job id using the atomic counter
-    pub async fn get_latest_job_id(&self) -> Result<JobId, String> {
-        let (resp_tx, resp_rx) = oneshot::channel();
-
-        self.tx
-            .send(Command::GetLatestJobId { resp: resp_tx })
-            .await
-            .map_err(|_| "Failed to send get_latest_job_id command".to_string())?;
-
-        resp_rx
-            .await
-            .map_err(|_| "Failed to receive get_latest_job_id response".to_string())
-    }
-
-    /// Clean up old job ids that are older than the specified duration in seconds
-    /// Returns the number of jobs that were removed
-    pub async fn cleanup_old_jobs(&self, max_age_secs: u64) -> Result<usize, String> {
-        let (resp_tx, resp_rx) = oneshot::channel();
-
-        self.tx
-            .send(Command::CleanupOldJobs {
-                max_age_secs,
-                resp: resp_tx,
-            })
-            .await
-            .map_err(|_| "Failed to send cleanup_old_jobs command".to_string())?;
-
-        resp_rx
-            .await
-            .map_err(|_| "Failed to receive cleanup_old_jobs response".to_string())
-    }
-
-    /// Add a share for duplicate detection
-    /// Returns true if share is newly inserted, false if job not found or share already exists
-    ///
-    /// If a client sends same share with an earlier job_id, the share
-    /// validation will fail as the blocktemplate's nTime will be
-    /// different and the share's nonce will not meet the current difficulty
-    pub async fn add_share(&self, job_id: JobId, blockhash: BlockHash) -> Result<bool, String> {
-        let (resp_tx, resp_rx) = oneshot::channel();
-
-        self.tx
-            .send(Command::AddShare {
-                job_id,
-                blockhash,
-                resp: resp_tx,
-            })
-            .await
-            .map_err(|_| "Failed to send add_share command".to_string())?;
-
-        resp_rx
-            .await
-            .map_err(|_| "Failed to receive add_share response".to_string())
-    }
-}
-
-/// The actor that manages access to the Tracker
-pub struct TrackerActor {
-    tracker: Tracker,
-    rx: mpsc::Receiver<Command>,
-}
-
-impl TrackerActor {
-    /// Create a new TrackerActor and return a handle to it
-    pub fn new() -> (Self, TrackerHandle) {
-        let (tx, rx) = mpsc::channel(100); // Buffer size of 100
-
-        let actor = Self {
-            tracker: Tracker::default(),
-            rx,
-        };
-
-        let handle = TrackerHandle { tx };
-
-        (actor, handle)
-    }
-
-    /// Start the actor's processing loop
-    pub async fn run(mut self) {
-        while let Some(cmd) = self.rx.recv().await {
-            match cmd {
-                Command::InsertJob {
-                    block_template,
-                    coinbase1,
-                    coinbase2,
-                    job_id,
-                    share_commitment,
-                    resp,
-                } => {
-                    let job_id = self.tracker.insert_job(
-                        block_template,
-                        coinbase1,
-                        coinbase2,
-                        share_commitment,
-                        job_id,
-                    );
-                    let _ = resp.send(job_id);
-                }
-                Command::GetJob { job_id, resp } => {
-                    let details = self.tracker.job_details.get(&job_id).cloned();
-                    let _ = resp.send(details);
-                }
-                Command::GetNextJobId { resp } => {
-                    let next_job_id = self.tracker.get_next_job_id();
-                    let _ = resp.send(next_job_id);
-                }
-                Command::GetLatestJobId { resp } => {
-                    let latest_job_id = self.tracker.latest_job_id;
-                    let _ = resp.send(latest_job_id);
-                }
-                Command::CleanupOldJobs { max_age_secs, resp } => {
-                    let removed_count = self.tracker.cleanup_old_jobs(max_age_secs);
-                    let _ = resp.send(removed_count);
-                }
-                Command::AddShare {
-                    job_id,
-                    blockhash,
-                    resp,
-                } => {
-                    let is_new = self.tracker.add_share(&job_id, blockhash);
-                    let _ = resp.send(is_new);
-                }
-            }
-        }
-    }
-}
-
-/// Start a new TrackerActor in a separate task and return a handle to it
-pub fn start_tracker_actor() -> TrackerHandle {
-    let (actor, handle) = TrackerActor::new();
-    let cleanup_handle = handle.clone();
-
-    // Spawn the actor in a new task
-    tokio::spawn(async move {
-        actor.run().await;
-    });
+/// Start a new JobTracker and return an Arc to it.
+///
+/// Also spawns a background cleanup task that periodically removes old jobs.
+pub fn start_tracker_actor() -> Arc<JobTracker> {
+    let tracker = Arc::new(JobTracker::new());
 
     // Spawn a task for periodic cleanup
+    let cleanup_tracker = tracker.clone();
     tokio::spawn(async move {
         let cleanup_interval = tokio::time::Duration::from_secs(MAX_JOB_AGE_SECS);
         loop {
             tokio::time::sleep(cleanup_interval).await;
-            match cleanup_handle.cleanup_old_jobs(MAX_JOB_AGE_SECS).await {
-                Ok(count) => {
-                    if count > 0 {
-                        debug!("Cleaned up {} old job IDs", count);
-                    }
-                }
-                Err(err) => {
-                    warn!("Failed to clean up old job IDs: {}", err);
-                }
+            let count = cleanup_tracker.cleanup_old_jobs(MAX_JOB_AGE_SECS);
+            if count > 0 {
+                debug!("Cleaned up {} old job IDs", count);
             }
         }
     });
 
-    handle
+    tracker
 }
 
 #[cfg(test)]
@@ -406,42 +180,41 @@ mod tests {
     use super::*;
     use crate::test_utils::create_test_commitment;
 
-    #[tokio::test]
-    async fn test_job_id_generation() {
-        // Test with tracker directly
-        let mut map = Tracker::default();
-        let initial_job_id = map.latest_job_id;
+    #[test]
+    fn test_job_id_generation() {
+        let tracker = JobTracker::new();
+        let initial_job_id = tracker.get_latest_job_id();
 
         // Get next job id should increment
-        let next_job_id = map.get_next_job_id();
+        let next_job_id = tracker.get_next_job_id();
         assert_eq!(next_job_id.0, initial_job_id.0 + 1);
 
         // Latest job id should reflect the increment
-        let latest_job_id = map.latest_job_id;
+        let latest_job_id = tracker.get_latest_job_id();
         assert_eq!(latest_job_id.0, next_job_id.0);
 
         // Multiple calls should continue incrementing
-        let next_job_id2 = map.get_next_job_id();
+        let next_job_id2 = tracker.get_next_job_id();
         assert_eq!(next_job_id2.0, next_job_id.0 + 1);
     }
 
     #[tokio::test]
-    async fn test_job_id_generation_actor() {
+    async fn test_job_id_generation_handle() {
         let handle = start_tracker_actor();
 
         // Get the initial latest job id
-        let initial_job_id = handle.get_latest_job_id().await.unwrap();
+        let initial_job_id = handle.get_latest_job_id();
 
         // Get next job id should increment
-        let next_job_id = handle.get_next_job_id().await.unwrap();
+        let next_job_id = handle.get_next_job_id();
         assert_eq!(next_job_id.0, initial_job_id.0 + 1);
 
         // Latest job id should reflect the increment
-        let latest_job_id = handle.get_latest_job_id().await.unwrap();
+        let latest_job_id = handle.get_latest_job_id();
         assert_eq!(latest_job_id.0, next_job_id.0);
 
         // Multiple calls should continue incrementing
-        let next_job_id2 = handle.get_next_job_id().await.unwrap();
+        let next_job_id2 = handle.get_next_job_id();
         assert_eq!(next_job_id2.0, next_job_id.0 + 1);
     }
 
@@ -456,20 +229,19 @@ mod tests {
 
         let handle = start_tracker_actor();
 
-        let job_id = handle
-            .insert_job(
-                Arc::new(template),
-                "cb1".to_string(),
-                "cb2".to_string(),
-                Some(create_test_commitment()),
-                JobId(1),
-            )
-            .await;
+        let job_id = handle.insert_job(
+            Arc::new(template),
+            "cb1".to_string(),
+            "cb2".to_string(),
+            Some(create_test_commitment()),
+            JobId(1),
+        );
+
         // Test inserting a block template
-        assert!(job_id.is_ok());
+        assert_eq!(job_id, JobId(1));
 
         // Test finding the job
-        let retrieved_job = &handle.get_job(job_id.unwrap()).await.unwrap().unwrap();
+        let retrieved_job = handle.get_job(job_id).unwrap();
         assert_eq!(
             cloned_template.previousblockhash,
             retrieved_job.blocktemplate.previousblockhash
@@ -481,10 +253,10 @@ mod tests {
             .unwrap_or_default()
             .as_secs();
         assert!(current_timestamp >= retrieved_job.generation_timestamp);
-        assert!(current_timestamp - retrieved_job.generation_timestamp <= 5); // Allow a small margin for time difference
+        assert!(current_timestamp - retrieved_job.generation_timestamp <= 5);
 
         // Test with non-existent job id
-        let retrieved_job = handle.get_job(JobId(9997)).await.unwrap();
+        let retrieved_job = handle.get_job(JobId(9997));
         assert!(retrieved_job.is_none());
     }
 
@@ -496,8 +268,8 @@ mod tests {
 
         let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
 
-        // Create tracker with direct access
-        let mut tracker = Tracker::default();
+        // Create tracker directly
+        let tracker = JobTracker::new();
 
         // Insert jobs with different timestamps
         let old_job_id = JobId(1);
@@ -514,7 +286,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        if let Some(job) = tracker.job_details.get_mut(&old_job_id) {
+        if let Some(mut job) = tracker.job_details.get_mut(&old_job_id) {
             job.generation_timestamp = current_time - (20 * 60);
         }
 
@@ -540,28 +312,24 @@ mod tests {
         assert!(!tracker.job_details.contains_key(&old_job_id));
         assert!(tracker.job_details.contains_key(&new_job_id));
 
-        // Now test with the actor
+        // Test with handle
         let handle = start_tracker_actor();
 
-        // Insert jobs
-        let old_actor_job = handle
-            .insert_job(
-                Arc::new(template.clone()),
-                "old_actor_cb1".to_string(),
-                "old_actor_cb2".to_string(),
-                None,
-                JobId(3),
-            )
-            .await
-            .unwrap();
+        // Insert a job
+        let job_id = handle.insert_job(
+            Arc::new(template.clone()),
+            "actor_cb1".to_string(),
+            "actor_cb2".to_string(),
+            None,
+            JobId(3),
+        );
 
-        // We can't modify timestamps directly with the actor, so we'll test cleanup command
-        // by just verifying it executes successfully
-        let removed = handle.cleanup_old_jobs(0).await.unwrap(); // All jobs should be cleaned
+        // Cleanup with 0 max age should remove all jobs
+        let removed = handle.cleanup_old_jobs(0);
         assert_eq!(removed, 1);
 
         // Verify job was removed
-        let result = handle.get_job(old_actor_job).await.unwrap();
+        let result = handle.get_job(job_id);
         assert!(result.is_none());
     }
 
@@ -572,7 +340,7 @@ mod tests {
         );
         let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
 
-        let mut tracker = Tracker::default();
+        let tracker = JobTracker::new();
         let job_id = JobId(1);
 
         // Insert a job
@@ -591,26 +359,59 @@ mod tests {
                 .unwrap();
 
         // First add should succeed (returns true for newly inserted)
-        assert!(tracker.add_share(&job_id, blockhash));
+        assert!(tracker.add_share(job_id, blockhash));
 
         // Second add of same blockhash should fail (returns false for duplicate)
-        assert!(!tracker.add_share(&job_id, blockhash));
+        assert!(!tracker.add_share(job_id, blockhash));
 
         // Third add should still fail
-        assert!(!tracker.add_share(&job_id, blockhash));
+        assert!(!tracker.add_share(job_id, blockhash));
 
         // Adding a different blockhash should succeed
         let blockhash2: BlockHash =
             "0000000000000000000000000000000000000000000000000000000000000002"
                 .parse()
                 .unwrap();
-        assert!(tracker.add_share(&job_id, blockhash2));
+        assert!(tracker.add_share(job_id, blockhash2));
 
         // But adding blockhash2 again should fail
-        assert!(!tracker.add_share(&job_id, blockhash2));
+        assert!(!tracker.add_share(job_id, blockhash2));
 
         // Adding to non-existent job should return false
         let non_existent_job = JobId(999);
-        assert!(!tracker.add_share(&non_existent_job, blockhash));
+        assert!(!tracker.add_share(non_existent_job, blockhash));
+    }
+
+    #[test]
+    fn test_concurrent_access() {
+        use std::thread;
+
+        let tracker = Arc::new(JobTracker::new());
+
+        // Get the initial job ID before spawning threads
+        let initial_id = tracker.get_latest_job_id();
+
+        // Spawn multiple threads doing concurrent operations
+        let mut handles = vec![];
+
+        for _ in 0..10 {
+            let tracker_clone = tracker.clone();
+            let handle = thread::spawn(move || {
+                // Each thread gets job IDs
+                for _ in 0..100 {
+                    let _job_id = tracker_clone.get_next_job_id();
+                }
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all threads
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Should have incremented 1000 times total (10 threads * 100 iterations)
+        let final_id = tracker.get_latest_job_id();
+        assert_eq!(final_id.0, initial_id.0 + 1000);
     }
 }

@@ -14,21 +14,20 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::stratum::work::{coinbase::extract_outputs_from_coinbase2, tracker::TrackerHandle};
+use crate::stratum::work::{coinbase::extract_outputs_from_coinbase2, tracker::JobTracker};
 use bitcoin::Amount;
+use std::sync::Arc;
 
 /// Parse the coinbase in the latest job and return
-pub async fn get_distribution(
-    tracker: &TrackerHandle,
+pub fn get_distribution(
+    tracker: &Arc<JobTracker>,
     pool_signature_length: usize,
     network: bitcoin::network::Network,
 ) -> Option<String> {
-    let job_details = match tracker.get_latest_job_id().await {
-        Ok(job_id) => match tracker.get_job(job_id).await.ok().flatten() {
-            Some(job_details) => job_details,
-            None => return None,
-        },
-        _ => return None,
+    let job_id = tracker.get_latest_job_id();
+    let job_details = match tracker.get_job(job_id) {
+        Some(job_details) => job_details,
+        None => return None,
     };
 
     match extract_outputs_from_coinbase2(&job_details.coinbase2, pool_signature_length) {
@@ -126,19 +125,16 @@ mod tests {
 
         let coinbase2 = create_valid_coinbase2(b"P2Poolv2", &outputs);
 
-        let job_id = tracker.get_next_job_id().await.unwrap();
-        tracker
-            .insert_job(
-                Arc::new(create_test_template()),
-                "".to_string(),
-                coinbase2,
-                None,
-                job_id,
-            )
-            .await
-            .unwrap();
+        let job_id = tracker.get_next_job_id();
+        tracker.insert_job(
+            Arc::new(create_test_template()),
+            "".to_string(),
+            coinbase2,
+            None,
+            job_id,
+        );
 
-        let result = get_distribution(&tracker, 8, Network::Signet).await;
+        let result = get_distribution(&tracker, 8, Network::Signet);
 
         assert!(result.is_some());
         let exposition = result.unwrap();
@@ -157,7 +153,7 @@ mod tests {
         let tracker = start_tracker_actor();
 
         // Don't insert any jobs
-        let result = get_distribution(&tracker, 8, Network::Signet).await;
+        let result = get_distribution(&tracker, 8, Network::Signet);
 
         assert!(result.is_none());
     }
@@ -167,19 +163,16 @@ mod tests {
         let tracker = start_tracker_actor();
 
         // Insert job with invalid coinbase2 (too short)
-        let job_id = tracker.get_next_job_id().await.unwrap();
-        tracker
-            .insert_job(
-                Arc::new(create_test_template()),
-                "".to_string(),
-                "deadbeef".to_string(), // Invalid coinbase2
-                None,
-                job_id,
-            )
-            .await
-            .unwrap();
+        let job_id = tracker.get_next_job_id();
+        tracker.insert_job(
+            Arc::new(create_test_template()),
+            "".to_string(),
+            "deadbeef".to_string(), // Invalid coinbase2
+            None,
+            job_id,
+        );
 
-        let result = get_distribution(&tracker, 8, Network::Signet).await;
+        let result = get_distribution(&tracker, 8, Network::Signet);
 
         assert!(result.is_none());
     }
@@ -212,19 +205,16 @@ mod tests {
 
         let coinbase2 = create_valid_coinbase2(b"P2Poolv2", &outputs);
 
-        let job_id = tracker.get_next_job_id().await.unwrap();
-        tracker
-            .insert_job(
-                Arc::new(create_test_template()),
-                "".to_string(),
-                coinbase2,
-                None,
-                job_id,
-            )
-            .await
-            .unwrap();
+        let job_id = tracker.get_next_job_id();
+        tracker.insert_job(
+            Arc::new(create_test_template()),
+            "".to_string(),
+            coinbase2,
+            None,
+            job_id,
+        );
 
-        let result = get_distribution(&tracker, 8, Network::Signet).await;
+        let result = get_distribution(&tracker, 8, Network::Signet);
 
         assert!(result.is_some());
         let exposition = result.unwrap();
@@ -265,19 +255,16 @@ mod tests {
 
         let coinbase2 = create_valid_coinbase2(b"P2Poolv2", &outputs);
 
-        let job_id = tracker.get_next_job_id().await.unwrap();
-        tracker
-            .insert_job(
-                Arc::new(create_test_template()),
-                "".to_string(),
-                coinbase2,
-                None,
-                job_id,
-            )
-            .await
-            .unwrap();
+        let job_id = tracker.get_next_job_id();
+        tracker.insert_job(
+            Arc::new(create_test_template()),
+            "".to_string(),
+            coinbase2,
+            None,
+            job_id,
+        );
 
-        let result = get_distribution(&tracker, 8, Network::Signet).await;
+        let result = get_distribution(&tracker, 8, Network::Signet);
 
         // Should still return Some, just without the unparseable output
         assert!(result.is_some());
