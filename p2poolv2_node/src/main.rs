@@ -37,7 +37,7 @@ use tracing::error;
 use tracing::info;
 
 /// Interval in seconds to poll for new block templates since the last zmq event signal
-const GBT_POLL_INTERVAL: u64 = 10; // seconds
+const GBT_POLL_INTERVAL: u64 = 30; // seconds
 
 /// Maximum number of pending shares from all clients connected to stratum server
 const STRATUM_SHARES_BUFFER_SIZE: usize = 1000;
