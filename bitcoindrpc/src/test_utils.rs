@@ -19,7 +19,9 @@ use base64::Engine;
 #[cfg(any(test, feature = "test-utils"))]
 use wiremock::MockServer;
 #[cfg(any(test, feature = "test-utils"))]
-use wiremock::matchers::{body_json, header, method, path};
+use wiremock::matchers::body_partial_json;
+#[cfg(any(test, feature = "test-utils"))]
+use wiremock::matchers::{header, method, path};
 #[cfg(any(test, feature = "test-utils"))]
 use wiremock::{Mock, ResponseTemplate};
 
@@ -52,11 +54,11 @@ pub async fn mock_method(
     let template_json: serde_json::Value =
         serde_json::from_str(&response).expect("Template response should be valid JSON");
 
+    // Use body_partial_json to match method and params without requiring exact id match
     Mock::given(method("POST"))
         .and(path("/"))
         .and(header("Authorization", auth_header))
-        .and(body_json(serde_json::json!({
-            "id": 0,
+        .and(body_partial_json(serde_json::json!({
             "method": api_method,
             "params": params,
         })))

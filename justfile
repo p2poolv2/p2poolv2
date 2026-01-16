@@ -65,6 +65,9 @@ docker-explore: (docker-run "--entrypoint bash")
 run config="config.toml":
     cargo run -p p2poolv2_node -- --config={{ config }}
 
+perf config="config.toml":
+    CARGO_PROFILE_RELEASE_DEBUG=true cargo flamegraph -p p2poolv2_node -- --config={{ config }}
+
 alias dash := dashboard
 
 # Run prometheus and grafana
