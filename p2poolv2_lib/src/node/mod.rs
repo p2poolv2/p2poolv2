@@ -94,6 +94,8 @@ struct Node {
         Box<dyn Error + Send + Sync>,
     >,
     config: Config,
+    /// If p2poolv2 is enabled or are we running as a standalone pool
+    p2p_enabled: bool,
 }
 
 impl Node {
@@ -189,6 +191,7 @@ impl Node {
         let service =
             build_service::<ResponseChannel<Message>, _>(config.network.clone(), swarm_tx.clone());
 
+        let p2p_enabled = !config.network.listen_address.is_empty();
         Ok(Self {
             swarm,
             swarm_tx,
@@ -196,6 +199,7 @@ impl Node {
             chain_store,
             service,
             config,
+            p2p_enabled,
         })
     }
 

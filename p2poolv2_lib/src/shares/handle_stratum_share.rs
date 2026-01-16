@@ -29,13 +29,18 @@ use tracing::debug;
 
 /// Save share to database for persistence in case we need to recover from a crash
 /// Shares are saved with a TTL for 1 week or when we reach accumulated work required for 5 blocks at current difficulty.
+///
+/// TODO: Replace p2p_enabled with a generic argument to avoid a branch at run time.
 pub fn handle_stratum_share(
     emission: Emission,
     chain_store: Arc<ChainStore>,
     network: bitcoin::Network,
+    p2p_enabled: bool,
 ) -> Result<Option<ShareBlock>, Box<dyn Error + Send + Sync>> {
     // save pplns share for accounting
-    chain_store.add_pplns_share(emission.pplns)?;
+    if p2p_enabled {
+        chain_store.add_pplns_share(emission.pplns)?;
+    }
 
     // Send share to peers only in p2p mode, i.e. if the pool is run with a miner pubkey that results in a commitment
     if let Some(share_commitment) = emission.share_commitment {
@@ -70,8 +75,10 @@ pub fn handle_stratum_share(
             share_block.transactions.len()
         );
 
-        // save and reorg share
-        chain_store.add_share(&share_block, true)?;
+        if p2p_enabled {
+            // save and reorg share
+            chain_store.add_share(&share_block, true)?;
+        }
 
         Ok(Some(share_block))
     } else {
@@ -174,7 +181,7 @@ mod tests {
         let emission = create_test_emission_without_commitment();
         let store = Arc::new(mock_store);
 
-        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet);
+        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet, true);
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -199,7 +206,7 @@ mod tests {
         let emission = create_test_emission_with_commitment();
         let store = Arc::new(mock_store);
 
-        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet);
+        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet, true);
 
         assert!(result.is_ok());
         let share_block = result.unwrap();
@@ -224,7 +231,7 @@ mod tests {
         let emission = create_test_emission_without_commitment();
         let store = Arc::new(mock_store);
 
-        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet);
+        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet, true);
 
         assert!(result.is_err());
         assert!(
@@ -254,7 +261,7 @@ mod tests {
         let emission = create_test_emission_with_commitment();
         let store = Arc::new(mock_store);
 
-        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet);
+        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet, true);
 
         assert!(result.is_err());
         assert!(
@@ -284,7 +291,7 @@ mod tests {
         let expected_bitcoin_header = emission.block.header;
 
         let store = Arc::new(mock_store);
-        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet);
+        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet, true);
 
         assert!(result.is_ok());
         let share_block = result.unwrap().unwrap();
@@ -363,7 +370,7 @@ mod tests {
         };
 
         let store = Arc::new(mock_store);
-        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet);
+        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet, true);
 
         assert!(result.is_ok());
         let share_block = result.unwrap().unwrap();
@@ -391,7 +398,7 @@ mod tests {
         let emission = create_test_emission_without_commitment();
         let store = Arc::new(mock_store);
 
-        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet);
+        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet, true);
         assert!(result.is_ok());
     }
 }
