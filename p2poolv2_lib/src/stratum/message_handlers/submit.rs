@@ -190,7 +190,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
 ///
 /// Build bitcoindrpc from config and call submit block
 pub async fn submit_block(block: &Block, bitcoinrpc_config: BitcoinRpcConfig) {
-    info!(
+    tracing::warn!(
         "Submitting block to bitcoind: {:?}",
         block.header.block_hash()
     );
