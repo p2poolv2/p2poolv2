@@ -96,31 +96,16 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    info!("Starting P2Pool v2...");
     // Parse command line arguments
     let args = Args::parse();
 
     // Load configuration
-    let config = Config::load(&args.config);
-    if config.is_err() {
-        let err = config.unwrap_err();
-        error!("Failed to load config: {err}");
-        return Err(format!("Failed to load config: {err}"));
-    }
-    let config = config.unwrap();
+    let config = Config::load(&args.config).expect("Failed to load toml config");
+
     // Configure logging based on config
-    let logging_result = setup_logging(&config.logging);
     // hold guard to ensure logging is set up correctly
-    let _guard = match logging_result {
-        Ok(guard) => {
-            info!("Logging set up successfully");
-            guard
-        }
-        Err(e) => {
-            error!("Failed to set up logging: {e}");
-            return Err(format!("Failed to set up logging: {e}"));
-        }
-    };
+    let _guard = setup_logging(&config.logging).expect("Failed to set up logging");
+    info!("Logging set up successfully");
 
     let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
     let store = Arc::new(Store::new(config.store.path.clone(), false).unwrap());

@@ -538,6 +538,7 @@ mod tests {
                     .unwrap(),
             }),
             logging: LoggingConfig {
+                console: Some(true),
                 level: "info".to_string(),
                 file: Some("./p2pool.log".to_string()),
                 stats_dir: "./logs/stats".to_string(),
