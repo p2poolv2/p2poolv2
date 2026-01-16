@@ -65,23 +65,9 @@ fn compute_merkle_branches(input_txids: Vec<sha256d::Hash>) -> Vec<sha256d::Hash
 /// Parse the received JSON into a BlockTemplate struct and return it.
 #[allow(dead_code)]
 async fn get_block_template(
-    bitcoin_config: &BitcoinRpcConfig,
+    bitcoind: &BitcoindRpcClient,
     network: bitcoin::Network,
 ) -> Result<BlockTemplate, Box<dyn std::error::Error + Send + Sync>> {
-    let bitcoind: BitcoindRpcClient = match BitcoindRpcClient::new(
-        &bitcoin_config.url,
-        &bitcoin_config.username,
-        &bitcoin_config.password,
-    ) {
-        Ok(bitcoind) => bitcoind,
-        Err(e) => {
-            info!("Failed to connect to bitcoind: {}", e);
-            return Err(Box::new(WorkError {
-                message: format!("Failed to connect to bitcoind: {e}"),
-            }));
-        }
-    };
-
     match bitcoind.getblocktemplate(network).await {
         Ok(blocktemplate_json) => {
             match serde_json::from_str::<BlockTemplate>(blocktemplate_json.as_str()) {
@@ -97,19 +83,6 @@ async fn get_block_template(
     }
 }
 
-/// Print the current network difficulty
-/// Called from start_gbt when it is first invoked
-async fn print_start_network_diff(bitcoin_config: &BitcoinRpcConfig) {
-    let bitcoind = BitcoindRpcClient::new(
-        &bitcoin_config.url,
-        &bitcoin_config.username,
-        &bitcoin_config.password,
-    )
-    .unwrap();
-    let difficulty = bitcoind.get_difficulty().await.unwrap();
-    info!("Bitcoin network difficulty: {}", difficulty);
-}
-
 /// Start a task to fetch block templates from bitcoind
 ///
 /// Listen to zmqpubhashblock from bitcoind.
@@ -121,9 +94,27 @@ pub async fn start_gbt(
     network: bitcoin::Network,
     mut zmq_trigger_rx: tokio::sync::mpsc::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    print_start_network_diff(&bitcoin_config).await;
+    // Create the RPC client once and reuse it for all requests
+    let bitcoind = match BitcoindRpcClient::new(
+        &bitcoin_config.url,
+        &bitcoin_config.username,
+        &bitcoin_config.password,
+    ) {
+        Ok(client) => client,
+        Err(e) => {
+            info!("Failed to connect to bitcoind: {}", e);
+            return Err(Box::new(WorkError {
+                message: format!("Failed to connect to bitcoind: {e}"),
+            }));
+        }
+    };
 
-    let template = match get_block_template(&bitcoin_config, network).await {
+    // Print network difficulty at startup
+    if let Ok(difficulty) = bitcoind.get_difficulty().await {
+        info!("Bitcoin network difficulty: {}", difficulty);
+    }
+
+    let template = match get_block_template(&bitcoind, network).await {
         Ok(template) => template,
         Err(e) => {
             info!("Error getting block template: {}", e);
@@ -150,7 +141,7 @@ pub async fn start_gbt(
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    match get_block_template(&bitcoin_config, network).await {
+                    match get_block_template(&bitcoind, network).await {
                         Ok(template) => {
                             if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
                                 info!("Failed to send block template to channel");
@@ -165,7 +156,7 @@ pub async fn start_gbt(
                     match result {
                         Some(_) => {
                             debug!("Received ZMQ block notification");
-                            match get_block_template(&bitcoin_config, network).await {
+                            match get_block_template(&bitcoind, network).await {
                                 Ok(template) => {
                                     if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
                                         info!("Failed to send block template to channel");
@@ -212,7 +203,13 @@ mod gbt_load_tests {
         )
         .await;
 
-        let result = get_block_template(&bitcoinrpc_config, bitcoin::Network::Signet).await;
+        let bitcoind = BitcoindRpcClient::new(
+            &bitcoinrpc_config.url,
+            &bitcoinrpc_config.username,
+            &bitcoinrpc_config.password,
+        )
+        .unwrap();
+        let result = get_block_template(&bitcoind, bitcoin::Network::Signet).await;
 
         assert!(result.is_ok());
         let template = result.unwrap();
