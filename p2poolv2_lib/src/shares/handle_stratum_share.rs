@@ -60,14 +60,22 @@ pub fn handle_stratum_share(
 
         let share_header = ShareHeader::from_commitment_and_header(
             share_commitment,
-            emission.block.header,
+            emission.header,
             merkle_root.into(),
         );
-        // For now, send the entire block, we will do tx deltas or compact block optimisation later on
+
+        // Decode bitcoin transactions lazily - only in p2p mode when building ShareBlock
+        let mut bitcoin_transactions =
+            Vec::with_capacity(emission.blocktemplate.transactions.len() + 1);
+        bitcoin_transactions.push(emission.coinbase);
+        bitcoin_transactions.extend(emission.blocktemplate.decode_transactions());
+
+        // For now, send the entire template txdata, we will do tx
+        // deltas or compact block optimisation later on
         let share_block = ShareBlock {
             header: share_header,
             transactions: share_transactions,
-            bitcoin_transactions: emission.block.txdata,
+            bitcoin_transactions,
         };
 
         debug!(
@@ -92,11 +100,40 @@ mod tests {
     use super::*;
     use crate::accounting::simple_pplns::SimplePplnsShare;
     use crate::shares::chain::chain_store::MockChainStore;
+    use crate::stratum::work::block_template::BlockTemplate;
     use crate::test_utils::create_test_commitment;
     use bitcoin::block::Header;
     use bitcoin::hashes::Hash;
-    use bitcoin::{Block, BlockHash, CompactTarget};
+    use bitcoin::{BlockHash, CompactTarget};
     use bitcoin::{Transaction, absolute::LockTime, transaction::Version};
+    use std::collections::HashMap;
+
+    /// Helper to create a minimal BlockTemplate for testing
+    fn create_test_blocktemplate() -> BlockTemplate {
+        BlockTemplate {
+            version: 0x20000000,
+            rules: vec![],
+            vbavailable: HashMap::new(),
+            vbrequired: 0,
+            previousblockhash: "0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
+            transactions: vec![],
+            coinbaseaux: HashMap::new(),
+            coinbasevalue: 5000000000,
+            longpollid: "".to_string(),
+            target: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+            mintime: 0,
+            mutable: vec![],
+            noncerange: "00000000ffffffff".to_string(),
+            sigoplimit: 80000,
+            sizelimit: 4000000,
+            weightlimit: 4000000,
+            curtime: 1700000000,
+            bits: "207fffff".to_string(),
+            height: 1,
+            default_witness_commitment: None,
+        }
+    }
 
     /// Helper to create a test Emission with no share commitment (solo mining mode)
     fn create_test_emission_without_commitment() -> Emission {
@@ -120,14 +157,19 @@ mod tests {
             nonce: 12345,
         };
 
-        let block = Block {
-            header: bitcoin_header,
-            txdata: vec![],
+        // Create a minimal coinbase transaction
+        let coinbase = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![],
         };
 
         Emission {
             pplns,
-            block,
+            header: bitcoin_header,
+            coinbase,
+            blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: None,
         }
     }
@@ -154,16 +196,21 @@ mod tests {
             nonce: 12345,
         };
 
-        let block = Block {
-            header: bitcoin_header,
-            txdata: vec![],
+        // Create a minimal coinbase transaction
+        let coinbase = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![],
         };
 
         let commitment = create_test_commitment();
 
         Emission {
             pplns,
-            block,
+            header: bitcoin_header,
+            coinbase,
+            blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: Some(commitment),
         }
     }
@@ -214,8 +261,9 @@ mod tests {
 
         let share_block = share_block.unwrap();
         // Verify the share block has the expected structure
-        assert_eq!(share_block.transactions.len(), 1); // One dummy coinbase
-        assert!(share_block.bitcoin_transactions.is_empty()); // No bitcoin transactions in test
+        assert_eq!(share_block.transactions.len(), 1); // One share coinbase
+        // bitcoin_transactions includes the emission coinbase (1) + decoded template txs (0)
+        assert_eq!(share_block.bitcoin_transactions.len(), 1);
     }
 
     #[test]
@@ -288,7 +336,7 @@ mod tests {
 
         let emission = create_test_emission_with_commitment();
         let expected_commitment = emission.share_commitment.clone().unwrap();
-        let expected_bitcoin_header = emission.block.header;
+        let expected_bitcoin_header = emission.header;
 
         let store = Arc::new(mock_store);
         let result = handle_stratum_share(emission, store, bitcoin::Network::Signet, true);
@@ -315,6 +363,9 @@ mod tests {
 
     #[test]
     fn test_handle_stratum_share_with_bitcoin_transactions() {
+        use crate::stratum::work::block_template::TemplateTransaction;
+        use bitcoin::consensus::Encodable;
+
         let mut mock_store = MockChainStore::default();
 
         mock_store
@@ -348,24 +399,45 @@ mod tests {
             nonce: 12345,
         };
 
-        // Create a simple transaction
-        let test_tx = Transaction {
+        // Create a coinbase transaction
+        let coinbase = Transaction {
             version: Version::TWO,
             lock_time: LockTime::ZERO,
             input: vec![],
             output: vec![],
         };
 
-        let block = Block {
-            header: bitcoin_header,
-            txdata: vec![test_tx.clone(), test_tx.clone()],
+        // Create a valid template transaction by serializing a real Transaction
+        let template_source_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![],
         };
+        let mut tx_bytes = Vec::new();
+        template_source_tx.consensus_encode(&mut tx_bytes).unwrap();
+        let tx_hex = hex::encode(&tx_bytes);
+
+        let template_tx = TemplateTransaction {
+            data: tx_hex.clone(),
+            txid: template_source_tx.compute_txid().to_string(),
+            hash: template_source_tx.compute_wtxid().to_string(),
+            depends: vec![],
+            fee: 0,
+            sigops: 0,
+            weight: 100,
+        };
+
+        let mut blocktemplate = create_test_blocktemplate();
+        blocktemplate.transactions = vec![template_tx.clone(), template_tx];
 
         let commitment = create_test_commitment();
 
         let emission = Emission {
             pplns,
-            block,
+            header: bitcoin_header,
+            coinbase,
+            blocktemplate: Arc::new(blocktemplate),
             share_commitment: Some(commitment),
         };
 
@@ -375,8 +447,8 @@ mod tests {
         assert!(result.is_ok());
         let share_block = result.unwrap().unwrap();
 
-        // Verify bitcoin transactions are included
-        assert_eq!(share_block.bitcoin_transactions.len(), 2);
+        // Verify bitcoin transactions are included (1 coinbase + 2 from template)
+        assert_eq!(share_block.bitcoin_transactions.len(), 3);
     }
 
     #[test]

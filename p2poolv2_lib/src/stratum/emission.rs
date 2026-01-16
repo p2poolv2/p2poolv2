@@ -16,14 +16,18 @@
 
 use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::shares::share_commitment::ShareCommitment;
-use bitcoin::Block;
+use crate::stratum::work::block_template::BlockTemplate;
+use bitcoin::block::Header;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// Shares emitted by stratum and consumed by accounting and p2p
 /// network.
 pub struct Emission {
     pub pplns: SimplePplnsShare,
-    pub block: Block,
+    pub header: Header,
+    pub coinbase: bitcoin::Transaction,
+    pub blocktemplate: Arc<BlockTemplate>,
     pub share_commitment: Option<ShareCommitment>,
 }
 

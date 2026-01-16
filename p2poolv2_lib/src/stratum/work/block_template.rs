@@ -83,6 +83,15 @@ impl BlockTemplate {
             .map(|obj| obj.txid.parse().unwrap());
         merkle_tree::calculate_root(hashes)
     }
+
+    /// Decode all transactions from the template into bitcoin::Transaction
+    /// Uses the From<&TemplateTransaction> implementation
+    pub fn decode_transactions(&self) -> Vec<bitcoin::Transaction> {
+        self.transactions
+            .iter()
+            .map(bitcoin::Transaction::from)
+            .collect()
+    }
 }
 
 #[cfg(test)]

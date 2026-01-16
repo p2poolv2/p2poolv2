@@ -21,8 +21,10 @@ use crate::stratum::error::Error;
 use crate::stratum::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
 use crate::stratum::server::StratumContext;
 use crate::stratum::session::Session;
+use crate::stratum::work::block_template::BlockTemplate;
 use crate::stratum::work::difficulty::validate::validate_submission_difficulty;
 use crate::stratum::work::tracker::JobId;
+use bitcoin::block::Header;
 use bitcoin::blockdata::block::Block;
 use bitcoin::hashes::Hash;
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
@@ -96,7 +98,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
 
     let is_new_share = stratum_context
         .tracker_handle
-        .add_share(JobId(job_id), validation_result.block.block_hash());
+        .add_share(JobId(job_id), validation_result.header.block_hash());
 
     if !is_new_share {
         // return error to asic client if share already exists or duplicate detection failed
@@ -107,12 +109,17 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     }
 
     if validation_result.meets_bitcoin_difficulty {
-        // Submit block asap, do difficulty adjustment after submission
-        submit_block(&validation_result.block, stratum_context.bitcoinrpc_config).await;
+        // Submit block asap - decode transactions only for this rare case
+        let block = build_full_block(
+            validation_result.header,
+            validation_result.coinbase.clone(),
+            &job.blocktemplate,
+        );
+        submit_block(&block, stratum_context.bitcoinrpc_config).await;
     }
 
     // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet
-    let truediff = get_true_difficulty(&validation_result.block.block_hash());
+    let truediff = get_true_difficulty(&validation_result.header.block_hash());
     debug!("True difficulty: {}", truediff);
 
     let timestamp = std::time::SystemTime::now()
@@ -134,7 +141,9 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         .emissions_tx
         .send(Emission {
             pplns: stratum_share.clone(),
-            block: validation_result.block,
+            header: validation_result.header,
+            coinbase: validation_result.coinbase,
+            blocktemplate: job.blocktemplate.clone(),
             share_commitment: job.share_commitment.clone(),
         })
         .await
@@ -198,6 +207,23 @@ pub async fn submit_block(block: &Block, bitcoinrpc_config: BitcoinRpcConfig) {
         Err(e) => {
             error!("Failed to create Bitcoind RPC client: {}", e);
         }
+    }
+}
+
+/// Build full block from header, coinbase and blocktemplate
+/// Only called for the rare case of finding a bitcoin block
+fn build_full_block(
+    header: Header,
+    coinbase: bitcoin::Transaction,
+    blocktemplate: &BlockTemplate,
+) -> Block {
+    let mut all_transactions = Vec::with_capacity(blocktemplate.transactions.len() + 1);
+    all_transactions.push(coinbase);
+    all_transactions.extend(blocktemplate.decode_transactions());
+
+    Block {
+        header,
+        txdata: all_transactions,
     }
 }
 
