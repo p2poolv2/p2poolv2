@@ -130,15 +130,15 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         message.params[4].as_ref().unwrap().to_string(),
     );
 
-    stratum_context
-        .emissions_tx
-        .send(Emission {
-            pplns: stratum_share.clone(),
-            block: validation_result.block,
-            share_commitment: job.share_commitment.clone(),
-        })
-        .await
-        .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;
+    // stratum_context
+    //     .emissions_tx
+    //     .send(Emission {
+    //         pplns: stratum_share.clone(),
+    //         block: validation_result.block,
+    //         share_commitment: job.share_commitment.clone(),
+    //     })
+    //     .await
+    //     .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;
 
     session.last_share_time = Some(SystemTime::now());
 
