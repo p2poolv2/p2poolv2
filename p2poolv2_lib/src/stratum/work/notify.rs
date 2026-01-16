@@ -18,7 +18,7 @@ use super::block_template::BlockTemplate;
 use super::coinbase::{build_coinbase_transaction, split_coinbase};
 use super::error::WorkError;
 use super::gbt::build_merkle_branches_for_template;
-use super::tracker::{JobId, TrackerHandle};
+use super::tracker::{JobId, JobTracker};
 use crate::accounting::OutputPair;
 use crate::accounting::simple_pplns::payout::Payout;
 use crate::config::StratumConfig;
@@ -144,9 +144,9 @@ async fn build_notify_and_commitment(
     config: &StratumConfig<crate::config::Parsed>,
     miner_pubkey: Option<CompressedPublicKey>,
     pool_signature: &[u8],
-    tracker_handle: &TrackerHandle,
+    tracker_handle: &Arc<JobTracker>,
 ) -> Result<(String, Option<ShareCommitment>), WorkError> {
-    let job_id = tracker_handle.get_next_job_id().await.unwrap();
+    let job_id = tracker_handle.get_next_job_id();
     let output_distribution = build_output_distribution(template, chain_store, config).await;
 
     let share_commitment =
@@ -169,16 +169,13 @@ async fn build_notify_and_commitment(
     let serialized_notify =
         serde_json::to_string(&notify).expect("Failed to serialize Notify message");
 
-    tracker_handle
-        .insert_job(
-            Arc::clone(template),
-            notify.params.coinbase1.to_string(),
-            notify.params.coinbase2.to_string(),
-            share_commitment.clone(),
-            job_id,
-        )
-        .await
-        .unwrap();
+    tracker_handle.insert_job(
+        Arc::clone(template),
+        notify.params.coinbase1.to_string(),
+        notify.params.coinbase2.to_string(),
+        share_commitment.clone(),
+        job_id,
+    );
 
     Ok((serialized_notify, share_commitment))
 }
@@ -203,7 +200,7 @@ pub async fn start_notify(
     mut notifier_rx: mpsc::Receiver<NotifyCmd>,
     connections: ClientConnectionsHandle,
     chain_store: Arc<ChainStore>,
-    tracker_handle: TrackerHandle,
+    tracker_handle: Arc<JobTracker>,
     config: &StratumConfig<crate::config::Parsed>,
     miner_pubkey: Option<CompressedPublicKey>,
 ) {
@@ -651,7 +648,7 @@ mod tests {
 
         // Verify the job was inserted in the tracker
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
-        let job_details = tracker_handle.get_job(job_id).await.unwrap();
+        let job_details = tracker_handle.get_job(job_id);
         assert!(job_details.is_some());
         let details = job_details.unwrap();
 

@@ -30,7 +30,7 @@ use crate::stratum::messages::Request;
 use crate::stratum::session::Session;
 use crate::stratum::session_timeout::{self, check_session_timeouts};
 use crate::stratum::work::notify::NotifyCmd;
-use crate::stratum::work::tracker::TrackerHandle;
+use crate::stratum::work::tracker::JobTracker;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoindrpc::BitcoinRpcConfig;
 use std::net::SocketAddr;
@@ -183,7 +183,7 @@ impl StratumServer {
         &mut self,
         ready_tx: Option<oneshot::Sender<()>>,
         notify_tx: mpsc::Sender<NotifyCmd>,
-        tracker_handle: TrackerHandle,
+        tracker_handle: Arc<JobTracker>,
         bitcoinrpc_config: BitcoinRpcConfig,
         metrics: metrics::MetricsHandle,
     ) -> Result<(), Box<dyn std::error::Error + Send>> {
@@ -261,7 +261,7 @@ impl StratumServer {
 #[derive(Clone)]
 pub(crate) struct StratumContext {
     pub notify_tx: mpsc::Sender<NotifyCmd>,
-    pub tracker_handle: TrackerHandle,
+    pub tracker_handle: Arc<JobTracker>,
     pub bitcoinrpc_config: BitcoinRpcConfig,
     pub start_difficulty: u64,
     pub minimum_difficulty: u64,

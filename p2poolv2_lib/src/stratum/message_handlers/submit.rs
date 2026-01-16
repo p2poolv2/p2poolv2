@@ -60,9 +60,9 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     let job_id =
         u64::from_str_radix(id, 16).map_err(|_| Error::InvalidParams("Invalid job_id".into()))?;
 
-    let job = match stratum_context.tracker_handle.get_job(JobId(job_id)).await {
-        Ok(Some(job)) => job,
-        _ => {
+    let job = match stratum_context.tracker_handle.get_job(JobId(job_id)) {
+        Some(job) => job,
+        None => {
             debug!("Job not found for job_id: {}", job_id);
             return Ok(vec![Message::Response(Response::new_ok(
                 message.id,
@@ -96,12 +96,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
 
     let is_new_share = stratum_context
         .tracker_handle
-        .add_share(JobId(job_id), validation_result.block.block_hash())
-        .await
-        .unwrap_or_else(|e| {
-            debug!("Duplicate detection failed: {}", e);
-            false
-        });
+        .add_share(JobId(job_id), validation_result.block.block_hash());
 
     if !is_new_share {
         // return error to asic client if share already exists or duplicate detection failed
@@ -264,15 +259,13 @@ mod handle_submit_tests {
 
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
-        let _ = tracker_handle
-            .insert_job(
-                Arc::new(template),
-                notify.params.coinbase1.to_string(),
-                notify.params.coinbase2.to_string(),
-                Some(create_test_commitment()),
-                job_id,
-            )
-            .await;
+        let _ = tracker_handle.insert_job(
+            Arc::new(template),
+            notify.params.coinbase1.to_string(),
+            notify.params.coinbase2.to_string(),
+            Some(create_test_commitment()),
+            job_id,
+        );
 
         let (emissions_tx, mut emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
@@ -352,15 +345,13 @@ mod handle_submit_tests {
 
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
-        let _ = tracker_handle
-            .insert_job(
-                Arc::new(template),
-                notify.params.coinbase1.to_string(),
-                notify.params.coinbase2.to_string(),
-                Some(create_test_commitment()),
-                job_id,
-            )
-            .await;
+        let _ = tracker_handle.insert_job(
+            Arc::new(template),
+            notify.params.coinbase1.to_string(),
+            notify.params.coinbase2.to_string(),
+            Some(create_test_commitment()),
+            job_id,
+        );
 
         let (emissions_tx, mut emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
@@ -444,15 +435,13 @@ mod handle_submit_tests {
 
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
-        let _ = tracker_handle
-            .insert_job(
-                Arc::new(template),
-                notify.params.coinbase1.to_string(),
-                notify.params.coinbase2.to_string(),
-                Some(create_test_commitment()),
-                job_id,
-            )
-            .await;
+        let _ = tracker_handle.insert_job(
+            Arc::new(template),
+            notify.params.coinbase1.to_string(),
+            notify.params.coinbase2.to_string(),
+            Some(create_test_commitment()),
+            job_id,
+        );
 
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
@@ -533,15 +522,13 @@ mod handle_submit_tests {
 
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
-        let _ = tracker_handle
-            .insert_job(
-                Arc::new(template),
-                notify.params.coinbase1.to_string(),
-                notify.params.coinbase2.to_string(),
-                Some(create_test_commitment()),
-                job_id,
-            )
-            .await;
+        let _ = tracker_handle.insert_job(
+            Arc::new(template),
+            notify.params.coinbase1.to_string(),
+            notify.params.coinbase2.to_string(),
+            Some(create_test_commitment()),
+            job_id,
+        );
 
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
@@ -671,15 +658,13 @@ mod handle_submit_tests {
 
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
-        let _ = tracker_handle
-            .insert_job(
-                Arc::new(template),
-                notify.params.coinbase1.to_string(),
-                notify.params.coinbase2.to_string(),
-                Some(create_test_commitment()),
-                job_id,
-            )
-            .await;
+        let _ = tracker_handle.insert_job(
+            Arc::new(template),
+            notify.params.coinbase1.to_string(),
+            notify.params.coinbase2.to_string(),
+            Some(create_test_commitment()),
+            job_id,
+        );
 
         let (emissions_tx, mut emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
@@ -760,15 +745,13 @@ mod handle_submit_tests {
 
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
-        let _ = tracker_handle
-            .insert_job(
-                Arc::new(template),
-                notify.params.coinbase1.to_string(),
-                notify.params.coinbase2.to_string(),
-                Some(create_test_commitment()),
-                job_id,
-            )
-            .await;
+        let _ = tracker_handle.insert_job(
+            Arc::new(template),
+            notify.params.coinbase1.to_string(),
+            notify.params.coinbase2.to_string(),
+            Some(create_test_commitment()),
+            job_id,
+        );
 
         let (emissions_tx, mut emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
@@ -870,15 +853,13 @@ mod handle_submit_tests {
 
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
-        let _ = tracker_handle
-            .insert_job(
-                Arc::new(template),
-                notify.params.coinbase1.to_string(),
-                notify.params.coinbase2.to_string(),
-                Some(create_test_commitment()),
-                job_id,
-            )
-            .await;
+        let _ = tracker_handle.insert_job(
+            Arc::new(template),
+            notify.params.coinbase1.to_string(),
+            notify.params.coinbase2.to_string(),
+            Some(create_test_commitment()),
+            job_id,
+        );
 
         let (emissions_tx, mut emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();

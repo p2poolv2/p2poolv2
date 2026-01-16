@@ -25,7 +25,7 @@ use axum::{
 use chrono::DateTime;
 use p2poolv2_lib::stratum::work::{
     coinbase::extract_outputs_from_coinbase2,
-    tracker::{TrackerHandle, parse_coinbase},
+    tracker::{JobTracker, parse_coinbase},
 };
 use p2poolv2_lib::{
     accounting::{simple_pplns::SimplePplnsShare, stats::metrics::MetricsHandle},
@@ -42,7 +42,7 @@ pub(crate) struct AppState {
     pub(crate) app_config: AppConfig,
     pub(crate) chain_store: Arc<ChainStore>,
     pub(crate) metrics_handle: MetricsHandle,
-    pub(crate) tracker_handle: TrackerHandle,
+    pub(crate) tracker_handle: Arc<JobTracker>,
     pub(crate) auth_user: Option<String>,
     pub(crate) auth_token: Option<String>,
 }
@@ -74,7 +74,7 @@ pub async fn start_api_server(
     config: ApiConfig,
     chain_store: Arc<ChainStore>,
     metrics_handle: MetricsHandle,
-    tracker_handle: TrackerHandle,
+    tracker_handle: Arc<JobTracker>,
     network: bitcoin::Network,
     pool_signature: Option<String>,
 ) -> Result<oneshot::Sender<()>, std::io::Error> {
@@ -147,9 +147,7 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
         &state.tracker_handle,
         state.app_config.pool_signature_length,
         state.app_config.network,
-    )
-    .await
-    {
+    ) {
         exposition.push_str("# HELP coinbase_rewards_distribution Current coinbase rewards distribution between users\n");
         exposition.push_str(&coinbase_distribution);
     }
@@ -287,17 +285,14 @@ mod tests {
         let coinbase2_hex = hex::encode(coinbase2_bytes);
 
         //  Insert Job into Tracker
-        let job_id = tracker_handle.get_next_job_id().await.unwrap();
-        tracker_handle
-            .insert_job(
-                Arc::new(template),
-                "".to_string(),
-                coinbase2_hex,
-                None,
-                job_id,
-            )
-            .await
-            .expect("Failed to insert job");
+        let job_id = tracker_handle.get_next_job_id();
+        tracker_handle.insert_job(
+            Arc::new(template),
+            "".to_string(),
+            coinbase2_hex,
+            None,
+            job_id,
+        );
 
         //  Mock ChainStore
         let temp_dir_store = tempfile::tempdir().unwrap();
