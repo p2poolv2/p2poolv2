@@ -199,22 +199,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_job_id_generation_handle() {
-        let handle = start_tracker_actor();
+    async fn test_job_id_generation_tracker() {
+        let tracker = start_tracker_actor();
 
         // Get the initial latest job id
-        let initial_job_id = handle.get_latest_job_id();
+        let initial_job_id = tracker.get_latest_job_id();
 
         // Get next job id should increment
-        let next_job_id = handle.get_next_job_id();
+        let next_job_id = tracker.get_next_job_id();
         assert_eq!(next_job_id.0, initial_job_id.0 + 1);
 
         // Latest job id should reflect the increment
-        let latest_job_id = handle.get_latest_job_id();
+        let latest_job_id = tracker.get_latest_job_id();
         assert_eq!(latest_job_id.0, next_job_id.0);
 
         // Multiple calls should continue incrementing
-        let next_job_id2 = handle.get_next_job_id();
+        let next_job_id2 = tracker.get_next_job_id();
         assert_eq!(next_job_id2.0, next_job_id.0 + 1);
     }
 
@@ -227,9 +227,9 @@ mod tests {
         let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
         let cloned_template = template.clone();
 
-        let handle = start_tracker_actor();
+        let tracker = start_tracker_actor();
 
-        let job_id = handle.insert_job(
+        let job_id = tracker.insert_job(
             Arc::new(template),
             "cb1".to_string(),
             "cb2".to_string(),
@@ -241,7 +241,7 @@ mod tests {
         assert_eq!(job_id, JobId(1));
 
         // Test finding the job
-        let retrieved_job = handle.get_job(job_id).unwrap();
+        let retrieved_job = tracker.get_job(job_id).unwrap();
         assert_eq!(
             cloned_template.previousblockhash,
             retrieved_job.blocktemplate.previousblockhash
@@ -256,7 +256,7 @@ mod tests {
         assert!(current_timestamp - retrieved_job.generation_timestamp <= 5);
 
         // Test with non-existent job id
-        let retrieved_job = handle.get_job(JobId(9997));
+        let retrieved_job = tracker.get_job(JobId(9997));
         assert!(retrieved_job.is_none());
     }
 
@@ -312,11 +312,11 @@ mod tests {
         assert!(!tracker.job_details.contains_key(&old_job_id));
         assert!(tracker.job_details.contains_key(&new_job_id));
 
-        // Test with handle
-        let handle = start_tracker_actor();
+        // Test with tracker
+        let tracker = start_tracker_actor();
 
         // Insert a job
-        let job_id = handle.insert_job(
+        let job_id = tracker.insert_job(
             Arc::new(template.clone()),
             "actor_cb1".to_string(),
             "actor_cb2".to_string(),
@@ -325,11 +325,11 @@ mod tests {
         );
 
         // Cleanup with 0 max age should remove all jobs
-        let removed = handle.cleanup_old_jobs(0);
+        let removed = tracker.cleanup_old_jobs(0);
         assert_eq!(removed, 1);
 
         // Verify job was removed
-        let result = handle.get_job(job_id);
+        let result = tracker.get_job(job_id);
         assert!(result.is_none());
     }
 
@@ -392,22 +392,22 @@ mod tests {
         let initial_id = tracker.get_latest_job_id();
 
         // Spawn multiple threads doing concurrent operations
-        let mut handles = vec![];
+        let mut trackers = vec![];
 
         for _ in 0..10 {
             let tracker_clone = tracker.clone();
-            let handle = thread::spawn(move || {
+            let tracker = thread::spawn(move || {
                 // Each thread gets job IDs
                 for _ in 0..100 {
                     let _job_id = tracker_clone.get_next_job_id();
                 }
             });
-            handles.push(handle);
+            trackers.push(tracker);
         }
 
         // Wait for all threads
-        for handle in handles {
-            handle.join().unwrap();
+        for tracker in trackers {
+            tracker.join().unwrap();
         }
 
         // Should have incremented 1000 times total (10 threads * 100 iterations)
