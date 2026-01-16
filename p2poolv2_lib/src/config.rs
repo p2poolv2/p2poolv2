@@ -284,6 +284,13 @@ pub struct LoggingConfig {
     /// Directory for stats
     #[serde(default = "default_stats_dir")]
     pub stats_dir: String,
+    /// Log to stdout if `true`
+    #[serde(default = "default_log_console")]
+    pub console: Option<bool>,
+}
+
+fn default_log_console() -> Option<bool> {
+    Some(true)
 }
 
 fn default_log_level() -> String {
