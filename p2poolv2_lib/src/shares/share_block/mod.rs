@@ -400,7 +400,7 @@ mod tests {
 
         // Verify the output is a P2PKH to the miner's public key
         let output = &share_block.transactions[0].output[0];
-        assert_eq!(output.value.to_sat(), 1);
+        assert_eq!(output.value.to_sat(), 100_000_000);
 
         // Verify the output script is P2PKH for the miner's pubkey
         let expected_address = bitcoin::Address::p2pkh(pubkey, bitcoin::Network::Regtest);
