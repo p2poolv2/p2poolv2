@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::sync::Arc;
 use tracing::{debug, info};
-
+use crate::shares::share_utils::filter_timestamp_percentile_and_delta_t;
 /// The minimum number of shares that must be on the chain for a share to be considered confirmed
 const MIN_CONFIRMATION_DEPTH: usize = 100;
 
@@ -36,7 +36,7 @@ pub(crate) const COMMON_ANCESTOR_DEPTH: usize = 2160; // 6 shares per minute * 6
 
 /// PPLNS window in shares
 const PPLNS_WINDOW: usize = 2160; // 6 shares per minute * 60 * 6 hours.
-
+const TARGET_BLOCK_TIME:u32 = 30; 
 /// A datastructure representing the main share chain
 /// The share chain reorgs when a share is found that has a higher total PoW than the current tip
 /// Chain state is now managed by the Store itself
@@ -423,7 +423,49 @@ impl ChainStore {
             None
         }
     }
+    /// Calculates the next difficulty target for the pool using a percentile-based algorithm.
+    /// # Returns
+/// The calculated difficulty as a `u128` value
+///
+/// # Errors
+/// Returns an error if:
+/// - No valid difficulty data is available (empty chain)
+/// - Delta time is zero (all timestamps identical or invalid)
+/// - Any share in the chain has an invalid zero target
+/// - Database read errors occur
+///
+/// # Example
+/// ```
+/// let difficulty = chain.get_difficulty()?;
+/// println!("Next pool difficulty target: {}", difficulty);
+/// ```
+     pub fn get_difficulty(&self)-> Result<u128, Box<dyn Error + Send + Sync>>{
 
+        let tip = self.store.get_chain_tip();
+
+        let difficulty_data = self.store.get_difficulty_data_for_depth(&tip, PPLNS_WINDOW,self.network)?;
+        if difficulty_data.is_empty() {
+        return Err("No valid difficulty data available".into());
+    }
+        let (timestamp_10th, timestamp_90th,delta_t) = 
+        filter_timestamp_percentile_and_delta_t(&difficulty_data);
+
+        if delta_t == 0 {
+        return Err("Delta time is zero - cannot calculate difficulty".into());
+    }
+        let mut total_difficulty:u128 = 0;
+
+        for data in &difficulty_data {
+        if data.time >= timestamp_10th && data.time <= timestamp_90th {
+            total_difficulty = total_difficulty + data.difficulty;
+        }
+    }
+    let target_time = TARGET_BLOCK_TIME as u128;
+    let delta_t_u128 = delta_t as u128;
+    let difficulty = (total_difficulty * target_time) / delta_t_u128;
+    
+    Ok(difficulty)
+    }
     /// Save a job with timestamp-prefixed key
     /// Uses timestamp in microseconds to enable time-based range queries
     pub fn add_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -1283,4 +1325,400 @@ mod chain_tests {
         assert!(!uncles.contains(&deep_uncle.block_hash()));
         assert!(!uncles.contains(&share5.block_hash())); // chain tip should not be in uncles
     }
+      #[test]
+fn test_get_difficulty_with_varying_timestamps_and_bits() {
+    use rand::Rng;
+    
+    let temp_dir = tempdir().unwrap();
+    let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+    let genesis = genesis_for_tests();
+    let chain = ChainStore::new(Arc::new(store), genesis.clone(), bitcoin::Network::Bitcoin);
+
+    let exponents: [u32; 5] = [0x16, 0x17, 0x18, 0x19, 0x1a];
+    
+    let mut rng = rand::thread_rng();
+    let mut current_time = 1736294380; // Starting timestamp
+    let mut prev_hash = genesis.block_hash();
+
+    // Build chain of 10 blocks with varying time and difficulty
+    for i in 0..100 {
+        // Random time interval between 10-30 seconds
+        let time_delta = rng.gen_range(10..=30);
+        current_time += time_delta;
+        
+        // Generate VALID nbits: random exponent + valid mantissa (0x000001 to 0x7FFFFF)
+        let exponent = exponents[rng.gen_range(0..exponents.len())];
+        let mantissa = rng.gen_range(0x000001..=0x7FFFFF);
+        let nbits = (exponent << 24) | mantissa;
+        
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(prev_hash.to_string())
+            .nonce(0xe9695791 + i)
+            .bits(nbits)
+            .time(current_time)
+            .build();
+        
+        eprintln!(
+            "Share {}: time={}, bits=0x{:x}, time_delta={}s",
+            i + 1,
+            current_time,
+            nbits,
+            time_delta
+        );
+        
+        chain.add_share(share.clone(), true).unwrap();
+        prev_hash = share.block_hash();
+    }
+
+    // Test get_difficulty
+    let difficulty = chain.get_difficulty().unwrap();
+    
+    eprintln!("\nCalculated difficulty: {}", difficulty);
+    eprintln!("Chain tip: {}", chain.store.get_chain_tip());
+    eprintln!("Tip height: {:?}", chain.get_tip_height().unwrap());
+    
+    // Verify difficulty is non-zero
+    assert!(difficulty > 0, "Difficulty should be greater than 0");
+    
+    // Get the difficulty data to verify calculation
+    let tip = chain.store.get_chain_tip();
+    let difficulty_data = chain.store
+        .get_difficulty_data_for_depth(&tip, 100, chain.network)
+        .unwrap();
+    
+    eprintln!("\nDifficulty data collected: {} shares", difficulty_data.len());
+    
+    // Verify we collected data from all shares
+    assert!(
+        difficulty_data.len() >= 10,
+        "Should collect more data from at most 10 shares"
+    );
+    
+    
+    // Calculate expected difficulty manually to verify
+    let (timestamp_10th, timestamp_90th, delta_t) = 
+        filter_timestamp_percentile_and_delta_t(&difficulty_data);
+    
+    eprintln!("\nTimestamp 10th percentile: {}", timestamp_10th);
+    eprintln!("Timestamp 90th percentile: {}", timestamp_90th);
+    eprintln!("Delta t: {}", delta_t);
+    
+    let mut total_difficulty: u128 = 0;
+    for data in &difficulty_data {
+        if data.time >= timestamp_10th && data.time <= timestamp_90th {
+            total_difficulty += data.difficulty;
+        }
+    }
+    
+    let expected_difficulty = (total_difficulty * TARGET_BLOCK_TIME as u128) / delta_t as u128;
+    
+    eprintln!("Total difficulty (filtered): {}", total_difficulty);
+    eprintln!("Expected difficulty: {}", expected_difficulty);
+    
+    // Verify the calculated difficulty matches expected
+    assert_eq!(
+        difficulty,
+        expected_difficulty,
+        "Calculated difficulty should match manual calculation"
+    );
+}
+#[test]
+fn test_get_difficulty_with_random_nbits_2160_blocks() {
+    use rand::Rng;
+    
+    let temp_dir = tempdir().unwrap();
+    let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+    let genesis = genesis_for_tests();
+    let chain = ChainStore::new(Arc::new(store), genesis.clone(), bitcoin::Network::Bitcoin);
+
+    let mut rng = rand::thread_rng();
+    let mut current_time = 1736294380;
+    let mut prev_hash = genesis.block_hash();
+
+    let exponents: [u32; 5] = [0x16, 0x17, 0x18, 0x19, 0x1a];
+
+    // Build chain of 2160 blocks
+    for i in 0..2160 {
+        let time_delta = rng.gen_range(10..=30);
+        current_time += time_delta;
+        
+        let exponent = exponents[rng.gen_range(0..exponents.len())];
+        let mantissa = rng.gen_range(0x000001..=0x7FFFFF);
+        let nbits = (exponent << 24) | mantissa;
+        
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(prev_hash.to_string())
+            .nonce(0xe9695791 + i)
+            .bits(nbits)
+            .time(current_time)
+            .build();
+        
+        if i % 500 == 0 || i == 2159 {
+            eprintln!(
+                "Share {}: time={}, bits=0x{:08x}, time_delta={}s",
+                i + 1, current_time, nbits, time_delta
+            );
+        }
+        
+        chain.add_share(share.clone(), true).unwrap();
+        prev_hash = share.block_hash();
+    }
+
+    let difficulty = chain.get_difficulty().unwrap();
+    
+    eprintln!("\nCalculated difficulty: {}", difficulty);
+    eprintln!("Chain tip: {}", chain.store.get_chain_tip());
+    eprintln!("Tip height: {:?}", chain.get_tip_height().unwrap());
+    
+    assert!(difficulty > 0, "Difficulty should be greater than 0");
+    
+    let tip = chain.store.get_chain_tip();
+    let difficulty_data = chain.store
+        .get_difficulty_data_for_depth(&tip, PPLNS_WINDOW, chain.network)
+        .unwrap();
+    
+    eprintln!("\nPPLNS_WINDOW: {}", PPLNS_WINDOW);
+    eprintln!("Difficulty data collected: {} shares", difficulty_data.len());
+    
+    // Adjust assertion based on actual PPLNS_WINDOW value
+    assert!(
+        difficulty_data.len() > 0,
+        "Should collect at least some shares"
+    );
+    
+    // Optionally assert it's close to PPLNS_WINDOW
+    assert!(
+        difficulty_data.len() <= PPLNS_WINDOW + 1,  // +1 for genesis
+        "Should not exceed PPLNS_WINDOW depth"
+    );
+
+    let (timestamp_10th, timestamp_90th, delta_t) = 
+        filter_timestamp_percentile_and_delta_t(&difficulty_data);
+    
+    eprintln!("\nTimestamp 10th percentile: {}", timestamp_10th);
+    eprintln!("Timestamp 90th percentile: {}", timestamp_90th);
+    eprintln!("Delta t: {}", delta_t);
+    
+    let mut total_difficulty: u128 = 0;
+    for data in &difficulty_data {
+        if data.time >= timestamp_10th && data.time <= timestamp_90th {
+            total_difficulty += data.difficulty;
+        }
+    }
+    
+    let expected_difficulty = (total_difficulty * TARGET_BLOCK_TIME as u128) / delta_t as u128;
+    
+    eprintln!("Total difficulty (filtered): {}", total_difficulty);
+    eprintln!("Expected difficulty: {}", expected_difficulty);
+    
+    assert_eq!(
+        difficulty, expected_difficulty,
+        "Calculated difficulty should match manual calculation"
+    );
+    
+    eprintln!("\n=== Test passed with 2160 blocks and random nbits! ===");
+}
+#[test]
+fn test_get_difficulty_same_timestamps() {
+    // All blocks have identical timestamp - tests delta_t fallback
+    let temp_dir = tempdir().unwrap();
+    let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+    let genesis = genesis_for_tests();
+    let chain = ChainStore::new(Arc::new(store), genesis.clone(), bitcoin::Network::Bitcoin);
+    
+    let fixed_time = 1736294400u32;
+    let mut prev_hash = genesis.block_hash();
+    
+    for i in 0..100 {
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(prev_hash.to_string())
+            .nonce(0xe9695791 + i)
+            .bits(0x1a01ad7d)
+            .time(fixed_time)
+            .build();
+        chain.add_share(share.clone(), true).unwrap();
+        prev_hash = share.block_hash();
+    }
+    
+    let difficulty = chain.get_difficulty().unwrap();
+    eprintln!("Difficulty with same timestamps: {}", difficulty);
+    assert!(difficulty > 0);
+}
+
+#[test]
+fn test_get_difficulty_reverse_timestamps() {
+    // Decreasing timestamps - simulates clock drift/manipulation
+    let temp_dir = tempdir().unwrap();
+    let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+    let genesis = genesis_for_tests();
+    let chain = ChainStore::new(Arc::new(store), genesis.clone(), bitcoin::Network::Bitcoin);
+    
+    let mut current_time = 1736304400u32; // Start high
+    let mut prev_hash = genesis.block_hash();
+    
+    for i in 0..100 {
+        current_time -= 10;
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(prev_hash.to_string())
+            .nonce(0xe9695791 + i)
+            .bits(0x1a01ad7d)
+            .time(current_time)
+            .build();
+        chain.add_share(share.clone(), true).unwrap();
+        prev_hash = share.block_hash();
+    }
+    
+    let difficulty = chain.get_difficulty().unwrap();
+    eprintln!("Difficulty with reverse timestamps: {}", difficulty);
+    assert!(difficulty > 0);
+}
+#[test]
+#[ignore] // Run with: cargo test -- --ignored
+fn test_get_difficulty_fuzz() {
+    use rand::Rng;
+    
+    let mut rng = rand::thread_rng();
+    
+    // Run multiple iterations with different random seeds
+    for iteration in 0..10 {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = genesis_for_tests();
+        let chain = ChainStore::new(Arc::new(store), genesis.clone(), bitcoin::Network::Bitcoin);
+        
+        let block_count = rng.gen_range(50..500);
+        let mut current_time: u32 = rng.gen_range(1700000000..1750000000);
+        let mut prev_hash = genesis.block_hash();
+        
+        let exponents: [u32; 5] = [0x16, 0x17, 0x18, 0x19, 0x1a];
+        
+        for _i in 0..block_count {
+            // Random time delta (can be negative sometimes to simulate clock issues)
+            let time_delta: i32 = rng.gen_range(-5..=60);
+            current_time = ((current_time as i64) + (time_delta as i64)).max(0) as u32;
+            
+            let exponent = exponents[rng.gen_range(0..exponents.len())];
+            let mantissa: u32 = rng.gen_range(0x000001..=0x7FFFFF);
+            let nbits = (exponent << 24) | mantissa;
+            
+            // Generate random nonce using gen_range instead of gen()
+            let nonce: u32 = rng.gen_range(0..=u32::MAX);
+            
+            let share = TestShareBlockBuilder::new()
+                .prev_share_blockhash(prev_hash.to_string())
+                .nonce(nonce)
+                .bits(nbits)
+                .time(current_time)
+                .build();
+            
+            chain.add_share(share.clone(), true).unwrap();
+            prev_hash = share.block_hash();
+        }
+        
+        // Should never panic
+        let result = chain.get_difficulty();
+        assert!(result.is_ok(), "Iteration {} failed: {:?}", iteration, result.err());
+        
+        let difficulty = result.unwrap();
+        eprintln!(
+            "Fuzz iteration {}: {} blocks, difficulty = {}",
+            iteration, block_count, difficulty
+        );
+        
+        // Basic sanity check
+        assert!(difficulty > 0, "Difficulty should be positive");
+    }
+    
+    eprintln!("\n=== Fuzz test completed successfully! ===");
+}
+
+#[test]
+fn test_get_difficulty_timing_only_calculation() {
+    use std::time::Instant;
+    use rand::Rng;
+    
+    // Setup
+    let temp_dir = tempdir().unwrap();
+    let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+    let genesis = genesis_for_tests();
+    let chain = ChainStore::new(Arc::new(store), genesis.clone(), bitcoin::Network::Bitcoin);
+
+    let mut rng = rand::thread_rng();
+    let mut current_time = 1736294380u32;
+    let mut prev_hash = genesis.block_hash();
+    let exponents: [u32; 5] = [0x16, 0x17, 0x18, 0x19, 0x1a];
+
+    // Build and add all 2160 shares (don't time this part)
+    eprintln!("Building and adding 2160 shares...");
+    for i in 0..2160 {
+        current_time += rng.gen_range(10..=30);
+        let exponent = exponents[rng.gen_range(0..exponents.len())];
+        let mantissa = rng.gen_range(0x000001u32..=0x7FFFFF);
+        let nbits = (exponent << 24) | mantissa;
+        
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(prev_hash.to_string())
+            .nonce(0xe9695791 + i)
+            .bits(nbits)
+            .time(current_time)
+            .build();
+        
+        chain.add_share(share.clone(), true).unwrap();
+        prev_hash = share.block_hash();
+        
+        if i % 500 == 0 {
+            eprintln!("  Added {} shares...", i);
+        }
+    }
+    eprintln!("Chain built with 2160 shares.\n");
+
+    // NOW time only the get_difficulty() call
+    eprintln!("=== TIMING get_difficulty() ===");
+    let start = Instant::now();
+    let difficulty = chain.get_difficulty().unwrap();
+    let elapsed = start.elapsed();
+    eprintln!("get_difficulty() took: {:?}", elapsed);
+    eprintln!("Difficulty: {}\n", difficulty);
+
+    // Also time get_difficulty_data_for_depth separately
+    eprintln!("=== TIMING get_difficulty_data_for_depth() ===");
+    let tip = chain.store.get_chain_tip();
+    let start2 = Instant::now();
+    let difficulty_data = chain.store
+        .get_difficulty_data_for_depth(&tip, PPLNS_WINDOW, chain.network)
+        .unwrap();
+    let elapsed2 = start2.elapsed();
+    eprintln!("get_difficulty_data_for_depth() took: {:?}", elapsed2);
+    eprintln!("Shares collected: {}\n", difficulty_data.len());
+
+    // Time the percentile calculation
+    eprintln!("=== TIMING filter_timestamp_percentile_and_delta_t() ===");
+    let start3 = Instant::now();
+    let (timestamp_10th, timestamp_90th, delta_t) = 
+        filter_timestamp_percentile_and_delta_t(&difficulty_data);
+    let elapsed3 = start3.elapsed();
+    eprintln!("filter_timestamp_percentile_and_delta_t() took: {:?}", elapsed3);
+
+    // Time the difficulty sum
+    eprintln!("=== TIMING difficulty summation ===");
+    let start4 = Instant::now();
+    let mut total_difficulty: u128 = 0;
+    for data in &difficulty_data {
+        if data.time >= timestamp_10th && data.time <= timestamp_90th {
+            total_difficulty += data.difficulty;
+        }
+    }
+    let expected = (total_difficulty * TARGET_BLOCK_TIME as u128) / delta_t as u128;
+    let elapsed4 = start4.elapsed();
+    eprintln!("Difficulty summation took: {:?}", elapsed4);
+
+    eprintln!("\n=== SUMMARY ===");
+    eprintln!("Tip height: {:?}", chain.get_tip_height().unwrap());
+    eprintln!("Difficulty: {}", difficulty);
+    eprintln!("Expected:   {}", expected);
+    
+    assert_eq!(difficulty, expected);
+    eprintln!("\nTest passed!");
+}
+
 }

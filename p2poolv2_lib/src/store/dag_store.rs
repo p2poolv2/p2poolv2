@@ -18,12 +18,26 @@ use super::{ColumnFamily, Store};
 use crate::shares::chain::chain_store::COMMON_ANCESTOR_DEPTH;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::shares::validation::MAX_UNCLES;
-use bitcoin::BlockHash;
+use bitcoin::{BlockHash,Target};
 use bitcoin::consensus::{self, Encodable, encode};
 use std::collections::{HashSet, VecDeque};
 use std::error::Error;
 use tracing::debug;
-
+/// Data structure containing difficulty and timestamp information for a share.
+/// # Fields
+/// * `difficulty` - The mining difficulty for this share as a `u128` value.
+///   Derived from the share's target using `target.difficulty(network.params())`.
+///   Higher values indicate harder mining conditions.
+///
+/// * `time` - Unix timestamp (in seconds) when this share was created as a `u32`.
+///   Used to calculate time deltas between shares for difficulty adjustment.
+#[derive(Debug)]
+pub struct DifficultyData{
+    /// The mining difficulty value for this share.
+    pub difficulty:u128,
+    /// Unix timestamp (seconds since epoch) when this share was created.
+    pub time:u32
+}
 /// Max depth to look for uncles when building new share blocks
 const MAX_UNCLES_DEPTH: u8 = 3;
 
@@ -305,7 +319,87 @@ impl Store {
 
         Ok(results)
     }
+    /// Accumulates difficulty and timestamp data for difficulty adjustment calculations.
+    /// # Arguments
+    /// * `start` - The blockhash to start traversing from (typically the current tip)
+    /// * `depth` - How many main chain blocks to traverse backwards (uncles don't count toward depth)
+    /// * `network` - Bitcoin network type (mainnet/testnet) used for difficulty calculations
+    ///
+    /// # Returns
+    /// A vector of `DifficultyData` containing:
+    /// * `difficulty` - The difficulty value for each block (derived from target)
+    /// * `time` - The timestamp of each block
+    ///
+    /// The data is ordered from newest to oldest, suitable for percentile calculations.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// * A share in the chain has an invalid zero target
+    /// * A share cannot be found in the store
+    ///
+    /// # Example
+    /// ```
+    /// // Get difficulty data for the last 2016 blocks
+    /// let data = store.get_difficulty_data_for_depth(&tip_hash, 2016, Network::Bitcoin)?;
+    /// // Use this data to calculate new difficulty target
+    /// ```
+    pub fn get_difficulty_data_for_depth(
+    &self,
+    start: &BlockHash,
+    depth: usize,
+    network:bitcoin::Network,
+) -> Result<Vec<DifficultyData>, Box<dyn Error + Send + Sync>> {
+    let mut to_visit: VecDeque<(BlockHash, bool)> = VecDeque::with_capacity(depth);
+    to_visit.push_back((*start, true)); // (blockhash, is_main_chain)
 
+    let mut visited = HashSet::new();
+    let mut remaining_depth = depth;
+    let mut difficulty_data = Vec::with_capacity(2 * depth);
+    
+    // Walk backward through parents and uncles
+    while let Some((next, is_main_chain)) = to_visit.pop_front() {
+        // Skip already visited blocks to avoid duplicates
+        if visited.contains(&next) {
+            continue;
+        }
+
+        // Get the share to find its parent
+        let Some(next_share) = self.get_share(&next) else {
+            // Can't find share, stop here
+            break;
+        };
+        let zero_target = Target::from_hex("0x0000000000000000000000000000000000000000000000000000000000000000")?;
+        if next_share.header.get_target() == zero_target {
+            return Err(format!(
+                "Invalid zero target for share {} at depth {}",
+                next, remaining_depth
+            ).into());
+        }
+
+        difficulty_data.push(DifficultyData {
+            difficulty: next_share.header.get_target().difficulty(network.params()),
+            time: next_share.header.time,
+        });
+
+        visited.insert(next);
+
+        if is_main_chain {
+            remaining_depth -= 1;
+
+            // Only continue main chain if depth not exhausted
+            if remaining_depth > 0 {
+                to_visit.push_back((next_share.header.prev_share_blockhash, true));
+            }
+
+            // Always include uncles of main chain blocks we've processed
+            for uncle in next_share.header.uncles.iter() {
+                to_visit.push_back((*uncle, false));
+            }
+        }
+    }
+
+    Ok(difficulty_data)
+}
     /// Get common ancestor of two blockhashes
     /// We first find chain from each blockhashes provided and then find the common ancestor
     ///
@@ -3222,4 +3316,75 @@ mod tests {
         assert!(!uncles.contains(&uncle2.block_hash()));
         assert!(!uncles.contains(&uncle3.block_hash()));
     }
+       #[test]
+fn test_get_difficulty_data_for_depth() {
+    let temp_dir = tempdir().unwrap();
+    let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+    // Create a chain: share1 -> share2 -> share3
+    let share1 = TestShareBlockBuilder::new().nonce(0xe9695791).bits(0x1c028f59).time(1736294380).build();
+    let mut batch = Store::get_write_batch();
+    store.setup_genesis(share1.clone(), &mut batch).unwrap();
+
+    store.commit_batch(batch).unwrap();
+    let genesis_work = share1.header.get_work();
+    eprintln!("{:?}",share1.header.bits);
+    eprintln!("{:?}",share1.header.get_target());
+    eprintln!("{:?}",share1.header.get_work());
+    let share2 = TestShareBlockBuilder::new()
+        .prev_share_blockhash(share1.block_hash().to_string())
+        .nonce(0xe9695792)
+        .bits(0x1c028f59) 
+        .time(1736294400)
+        .build();
+    let mut batch = Store::get_write_batch();
+    store
+        .add_share(
+            share2.clone(),
+            1,
+            genesis_work,
+            true,
+            &mut batch,
+        )
+        .unwrap();
+    store.commit_batch(batch).unwrap();
+    let share3 = TestShareBlockBuilder::new()
+        .prev_share_blockhash(share2.block_hash().to_string())
+        .nonce(0xe9695793)
+        .bits(0x1c028f59)
+        .time(1736294425) 
+        .build();
+    let mut batch = Store::get_write_batch();
+    store
+        .add_share(
+            share3.clone(),
+            2,
+            genesis_work,
+            true,
+            &mut batch,
+        )
+        .unwrap();
+    store.commit_batch(batch).unwrap();
+    // Test with depth 2 from share3
+    let difficulty_data = store
+        .get_difficulty_data_for_depth(&share3.block_hash(), 2, bitcoin::Network::Bitcoin)
+        .unwrap();
+    eprintln!("{:?}",difficulty_data);
+    // Should return data for share3 and share2 (depth=2)
+    assert_eq!(difficulty_data.len(), 2);
+    
+    // Verify the data matches the shares
+    assert_eq!(difficulty_data[0].time, share3.header.time);
+    assert_eq!(
+        difficulty_data[0].difficulty,
+        share3.header.get_target().difficulty(bitcoin::Network::Bitcoin.params())
+    );
+    
+    assert_eq!(difficulty_data[1].time, share2.header.time);
+    assert_eq!(
+        difficulty_data[1].difficulty,
+        share2.header.get_target().difficulty(bitcoin::Network::Bitcoin.params())
+    );
+}
+
 }
