@@ -33,8 +33,43 @@ use p2poolv2_lib::stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
 use std::process::exit;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::oneshot;
 use tracing::error;
 use tracing::info;
+
+/// Wait for shutdown signals (Ctrl+C, SIGTERM on Unix) or internal shutdown signal.
+/// Returns when any shutdown signal is received.
+#[cfg(unix)]
+async fn wait_for_shutdown_signal(stopping_rx: oneshot::Receiver<()>) {
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("Failed to set up SIGTERM handler");
+
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            info!("Received Ctrl+C, initiating graceful shutdown...");
+        }
+        _ = sigterm.recv() => {
+            info!("Received SIGTERM, initiating graceful shutdown...");
+        }
+        _ = stopping_rx => {
+            info!("Node stopping due to internal signal...");
+        }
+    }
+}
+
+/// Wait for shutdown signals (Ctrl+C) or internal shutdown signal.
+/// Returns when any shutdown signal is received.
+#[cfg(not(unix))]
+async fn wait_for_shutdown_signal(stopping_rx: oneshot::Receiver<()>) {
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            info!("Received Ctrl+C, initiating graceful shutdown...");
+        }
+        _ = stopping_rx => {
+            info!("Node stopping due to internal signal...");
+        }
+    }
+}
 
 /// Interval in seconds to poll for new block templates since the last zmq event signal
 const GBT_POLL_INTERVAL: u64 = 10; // seconds
@@ -240,24 +275,7 @@ async fn main() -> Result<(), String> {
         Ok((node_handle, stopping_rx)) => {
             info!("Node started");
 
-            // Set up SIGTERM handler for systemd
-            let mut sigterm =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("Failed to set up SIGTERM handler");
-
-            // Wait for Ctrl+C (cross platform works on windows too),
-            // SIGTERM (for systemd), or internal shutdown signal
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    info!("Received Ctrl+C, initiating graceful shutdown...");
-                }
-                _ = sigterm.recv() => {
-                    info!("Received SIGTERM, initiating graceful shutdown...");
-                }
-                _ = stopping_rx => {
-                    info!("Node stopping due to internal signal...");
-                }
-            }
+            wait_for_shutdown_signal(stopping_rx).await;
 
             info!("Node shutting down ...");
 
@@ -281,7 +299,9 @@ async fn main() -> Result<(), String> {
                 .send(())
                 .expect("Failed to send shutdown signal to Stratum server");
 
-            let _ = api_shutdown_tx.send(());
+            api_shutdown_tx
+                .send(())
+                .expect("Failed to send shutdown signal to API server");
 
             info!("Node stopped");
         }
