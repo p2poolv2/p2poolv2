@@ -369,7 +369,7 @@ mod tests {
         assert_eq!(share.transactions[0].input.len(), 1);
 
         let output = &share.transactions[0].output[0];
-        assert_eq!(output.value.to_sat(), 1);
+        assert_eq!(output.value.to_sat(), 100_000_000);
 
         let expected_address = bitcoin::Address::p2pkh(
             "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
