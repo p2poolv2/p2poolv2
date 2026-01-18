@@ -174,6 +174,8 @@ async fn main() -> Result<(), String> {
         }
     };
     let metrics_cloned = metrics_handle.clone();
+    let metrics_for_shutdown = metrics_handle.clone();
+    let stats_dir_for_shutdown = config.logging.stats_dir.clone();
     let store_for_stratum = chain_store.clone();
     let tracker_handle_cloned = tracker_handle.clone();
 
@@ -235,19 +237,53 @@ async fn main() -> Result<(), String> {
     );
 
     match NodeHandle::new(config, chain_store, emissions_rx, metrics_handle).await {
-        Ok((_node_handle, stopping_rx)) => {
+        Ok((node_handle, stopping_rx)) => {
             info!("Node started");
-            if (stopping_rx.await).is_ok() {
-                info!("Node shutting down ...");
 
-                stratum_shutdown_tx
-                    .send(())
-                    .expect("Failed to send shutdown signal to Stratum server");
+            // Set up SIGTERM handler for systemd
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("Failed to set up SIGTERM handler");
 
-                let _ = api_shutdown_tx.send(());
-
-                info!("Node stopped");
+            // Wait for Ctrl+C (cross platform works on windows too),
+            // SIGTERM (for systemd), or internal shutdown signal
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Received Ctrl+C, initiating graceful shutdown...");
+                }
+                _ = sigterm.recv() => {
+                    info!("Received SIGTERM, initiating graceful shutdown...");
+                }
+                _ = stopping_rx => {
+                    info!("Node stopping due to internal signal...");
+                }
             }
+
+            info!("Node shutting down ...");
+
+            // Shutdown node first to stop accepting new work
+            if let Err(e) = node_handle.shutdown().await {
+                error!("Error during node shutdown: {e}");
+            }
+
+            // Save metrics before shutdown to prevent data loss
+            let metrics = metrics_for_shutdown.get_metrics().await;
+            if let Err(e) = p2poolv2_lib::accounting::stats::pool_local_stats::save_pool_local_stats(
+                &metrics,
+                &stats_dir_for_shutdown,
+            ) {
+                error!("Failed to save metrics on shutdown: {e}");
+            } else {
+                info!("Metrics saved on shutdown");
+            }
+
+            stratum_shutdown_tx
+                .send(())
+                .expect("Failed to send shutdown signal to Stratum server");
+
+            let _ = api_shutdown_tx.send(());
+
+            info!("Node stopped");
         }
         Err(e) => {
             error!("Failed to start node: {e}");
