@@ -16,7 +16,7 @@
 
 use bitcoin::{Address, CompressedPublicKey, Network, Transaction, TxOut};
 
-const SHARE_VALUE: u64 = 1;
+const SHARE_VALUE: u64 = 100_000_000;
 
 /// Create a P2PKH coinbase transaction for the given public key and amount
 /// For now, all shares are equal value, so the amount is 1 unit share coin.
