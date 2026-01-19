@@ -16,8 +16,8 @@
 
 //! Save and load pool metrics.
 //!
-//! We introduce Filtered.* strucs to serialize PoolMetric without
-//! cloning and collecting vectore of user and workers.
+//! We introduce Filtered.* structs to serialize PoolMetric without
+//! cloning and collecting vectors of user and workers.
 //!
 //! The Filtered structs let us serialize PoolMetrics without cloning
 //! and in a single iteration over users and workers.
