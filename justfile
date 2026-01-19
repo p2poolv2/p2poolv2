@@ -66,6 +66,7 @@ run config="config.toml":
     cargo run -p p2poolv2_node -- --config={{ config }}
 
 # Run cargo flamegraph for detecting bottlenecks
+
 # You will need perf installed as well as flamegraph installed
 perf config="config.toml":
     CARGO_PROFILE_RELEASE_DEBUG=true CARGO_PROFILE_RELEASE_STRIP=false RUSTFLAGS="-C force-frame-pointers=yes" cargo flamegraph --no-buildid-cache -p p2poolv2_node -- --config={{ config }}
