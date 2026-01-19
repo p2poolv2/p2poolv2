@@ -25,6 +25,7 @@ const POOL_STATS_DIR: &str = "pool";
 
 /// Save pool stats to log dir
 /// Use fs::rename to ensure atomic write
+/// Only saves active workers and users with at least one active worker
 pub fn save_pool_local_stats(pool_metrics: &PoolMetrics, log_dir: &str) -> std::io::Result<()> {
     let stats_dir = Path::new(log_dir).join(POOL_STATS_DIR);
     if let Err(e) = create_dir_all(&stats_dir) {
@@ -34,7 +35,16 @@ pub fn save_pool_local_stats(pool_metrics: &PoolMetrics, log_dir: &str) -> std::
     let path = stats_dir.join("pool_stats.json");
     let tmp_path = stats_dir.join("pool_stats.json.tmp");
 
-    let serialized = serde_json::to_string_pretty(pool_metrics)
+    // Create filtered copy - only keep active workers and non-empty users
+    let mut filtered_metrics = pool_metrics.clone();
+    for user in filtered_metrics.users.values_mut() {
+        user.workers.retain(|_, worker| worker.active);
+    }
+    filtered_metrics
+        .users
+        .retain(|_, user| !user.workers.is_empty());
+
+    let serialized = serde_json::to_string_pretty(&filtered_metrics)
         .map_err(|_| std::io::Error::other("JSON serialization failed"))?;
 
     if !serialized.is_empty() {
