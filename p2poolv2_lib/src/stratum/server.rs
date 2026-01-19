@@ -217,6 +217,10 @@ impl StratumServer {
                     match connection {
                         Ok(connection) => {
                             let (stream, addr) = connection;
+                            // Disable Nagle's algorithm for lower latency
+                            if let Err(e) = stream.set_nodelay(true) {
+                                error!("Failed to set TCP_NODELAY for {}: {}", addr, e);
+                            }
                             info!("New connection from: {}", addr);
                             let (message_rx, shutdown_rx) = self.connections_handle.add(addr).await;
                             let (reader, writer) = stream.into_split();
@@ -327,10 +331,6 @@ where
                     error!("Failed to write to {}: {}", addr, e);
                     break;
                 }
-                if let Err(e) = writer.flush().await {
-                    error!("Failed to flush writer for {}: {}", addr, e);
-                    break;
-                }
             }
             // Read a line from the stream
             line = framed.next() => {
@@ -420,12 +420,8 @@ where
                         return Err(Box::new(e));
                     }
                 }
-                if let Err(e) = writer.flush().await {
-                    Err(Box::new(e))
-                } else {
-                    debug!("Successfully sent response to {}", addr);
-                    Ok(())
-                }
+                debug!("Successfully sent response to {}", addr);
+                Ok(())
             } else {
                 error!(
                     "Error handling message from {}: {:?}. Closing connection.",
