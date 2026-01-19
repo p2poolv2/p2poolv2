@@ -62,6 +62,16 @@ impl Default for User {
 }
 
 impl User {
+    /// Returns true if this user has at least one active worker.
+    pub fn any_active_workers(&self) -> bool {
+        self.workers.values().any(|w| w.active)
+    }
+
+    /// Returns an iterator over active workers (name, worker) pairs.
+    pub fn active_workers(&self) -> impl Iterator<Item = (&String, &Worker)> {
+        self.workers.iter().filter(|(_, w)| w.active)
+    }
+
     /// Get a mutable reference to a worker by name, if it exists.
     pub fn get_worker_mut(&mut self, workername: &str) -> Option<&mut Worker> {
         self.workers.get_mut(workername)

@@ -564,6 +564,10 @@ mod tests {
             .await
             .unwrap();
 
+        // Create user1/worker1 before recording shares (as would happen in real flow)
+        let _ = handle
+            .increment_worker_count("user1".to_string(), "worker1".to_string())
+            .await;
         let _ = handle
             .record_share_accepted(
                 SimplePplnsShare {
@@ -580,11 +584,13 @@ mod tests {
             )
             .await;
         let _ = handle.record_share_rejected().await;
+        // Create an inactive worker (no shares submitted)
         let _ = handle
             .increment_worker_count("user4".to_string(), "workerD".to_string())
             .await;
 
         let metrics = handle.get_metrics().await;
+        // Inactive worker exists in memory
         assert!(metrics.users.contains_key("user4"));
         assert!(
             metrics
@@ -607,7 +613,18 @@ mod tests {
         );
         assert_eq!(reloaded.accepted_total, metrics.accepted_total);
         assert_eq!(reloaded.rejected_total, metrics.rejected_total);
-        assert_eq!(reloaded.users, metrics.users);
+        // Inactive workers/users are filtered out when saving to JSON
+        assert!(!reloaded.users.contains_key("user4"));
+        // Active user1 with worker1 should be present
+        assert!(reloaded.users.contains_key("user1"));
+        assert!(
+            reloaded
+                .users
+                .get("user1")
+                .unwrap()
+                .workers
+                .contains_key("worker1")
+        );
     }
 
     #[tokio::test]

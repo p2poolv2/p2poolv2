@@ -76,12 +76,19 @@ impl PoolMetrics {
     fn get_worker_expositions(&self) -> String {
         let mut output = String::new();
 
+        // Collect active users once to avoid repeated filter evaluation
+        let active_users: Vec<_> = self
+            .users
+            .iter()
+            .filter(|(_, u)| u.any_active_workers())
+            .collect();
+
         // Worker metrics with btcaddress and workername labels
         output
             .push_str("# HELP worker_shares_valid_total Total valid shares submitted by worker\n");
         output.push_str("# TYPE worker_shares_valid_total counter\n");
-        for (btcaddress, user) in &self.users {
-            for (workername, worker) in &user.workers {
+        for (btcaddress, user) in &active_users {
+            for (workername, worker) in user.active_workers() {
                 let display_name = if workername.is_empty() {
                     "unnamed"
                 } else {
@@ -99,8 +106,8 @@ impl PoolMetrics {
 
         output.push_str("# HELP worker_best_share Best share difficulty for this session\n");
         output.push_str("# TYPE worker_best_share gauge\n");
-        for (btcaddress, user) in &self.users {
-            for (workername, worker) in &user.workers {
+        for (btcaddress, user) in &active_users {
+            for (workername, worker) in user.active_workers() {
                 let display_name = if workername.is_empty() {
                     "unnamed"
                 } else {
@@ -118,8 +125,8 @@ impl PoolMetrics {
             "# HELP worker_best_share_ever Best share difficulty ever submitted by worker\n",
         );
         output.push_str("# TYPE worker_best_share_ever gauge\n");
-        for (btcaddress, user) in &self.users {
-            for (workername, worker) in &user.workers {
+        for (btcaddress, user) in &active_users {
+            for (workername, worker) in user.active_workers() {
                 let display_name = if workername.is_empty() {
                     "unnamed"
                 } else {
@@ -136,8 +143,8 @@ impl PoolMetrics {
         output
             .push_str("# HELP worker_last_share_at Last share submission time in Unix timestamp\n");
         output.push_str("# TYPE worker_last_share_at gauge\n");
-        for (btcaddress, user) in &self.users {
-            for (workername, worker) in &user.workers {
+        for (btcaddress, user) in &active_users {
+            for (workername, worker) in user.active_workers() {
                 let display_name = if workername.is_empty() {
                     "unnamed"
                 } else {
@@ -234,14 +241,15 @@ mod tests {
 
         let exposition = metrics.get_exposition();
 
-        // Check worker metrics are present
+        // Check worker metrics are present for active worker1
         assert!(exposition.contains("# HELP worker_shares_valid"));
         assert!(exposition.contains("# TYPE worker_shares_valid_total counter"));
         assert!(exposition.contains(&format!(
             r#"worker_shares_valid_total{{btcaddress="bc1quser1",workername="worker1"}} {}"#,
             20 * TWO32
         )));
-        assert!(exposition.contains(&format!(
+        // Inactive worker2 should NOT be present
+        assert!(!exposition.contains(&format!(
             r#"worker_shares_valid_total{{btcaddress="bc1quser1",workername="worker2"}} {}"#,
             22 * TWO32
         )));
@@ -252,8 +260,9 @@ mod tests {
             exposition
                 .contains("worker_best_share{btcaddress=\"bc1quser1\",workername=\"worker1\"} 800")
         );
+        // Inactive worker2 should NOT be present
         assert!(
-            exposition
+            !exposition
                 .contains("worker_best_share{btcaddress=\"bc1quser1\",workername=\"worker2\"} 600")
         );
 
@@ -262,8 +271,9 @@ mod tests {
         assert!(exposition.contains(
             "worker_best_share_ever{btcaddress=\"bc1quser1\",workername=\"worker1\"} 1500"
         ));
+        // Inactive worker2 should NOT be present
         assert!(
-            exposition.contains(
+            !exposition.contains(
                 "worker_best_share_ever{btcaddress=\"bc1quser1\",workername=\"worker2\"} 0"
             )
         );
@@ -273,7 +283,8 @@ mod tests {
         assert!(exposition.contains(
             "worker_last_share_at{btcaddress=\"bc1quser1\",workername=\"worker1\"} 1234567891"
         ));
-        assert!(exposition.contains(
+        // Inactive worker2 should NOT be present
+        assert!(!exposition.contains(
             "worker_last_share_at{btcaddress=\"bc1quser1\",workername=\"worker2\"} 1234567892"
         ));
 
