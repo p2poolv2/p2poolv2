@@ -38,7 +38,7 @@ pub fn save_pool_local_stats(pool_metrics: &PoolMetrics, log_dir: &str) -> std::
     // Create filtered copy - only keep active workers and non-empty users
     let mut filtered_metrics = pool_metrics.clone();
     for user in filtered_metrics.users.values_mut() {
-        user.workers.retain(|_, worker| worker.active);
+        user.workers.retain(|_, worker| worker.active && worker.shares_valid_total > 0);
     }
     filtered_metrics
         .users
