@@ -96,17 +96,17 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         }
     };
 
-    let is_new_share = stratum_context
-        .tracker_handle
-        .add_share(JobId(job_id), validation_result.header.block_hash());
+    // let is_new_share = stratum_context
+    //     .tracker_handle
+    //     .add_share(JobId(job_id), validation_result.header.block_hash());
 
-    if !is_new_share {
-        // return error to asic client if share already exists or duplicate detection failed
-        return Ok(vec![Message::Response(Response::new_ok(
-            message.id,
-            json!(false),
-        ))]);
-    }
+    // if !is_new_share {
+    //     // return error to asic client if share already exists or duplicate detection failed
+    //     return Ok(vec![Message::Response(Response::new_ok(
+    //         message.id,
+    //         json!(false),
+    //     ))]);
+    // }
 
     if validation_result.meets_bitcoin_difficulty {
         // Submit block asap - decode transactions only for this rare case
