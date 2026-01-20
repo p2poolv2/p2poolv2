@@ -137,17 +137,14 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         message.params[4].as_ref().unwrap().to_string(),
     );
 
-    stratum_context
-        .emissions_tx
-        .send(Emission {
-            pplns: stratum_share.clone(),
-            header: validation_result.header,
-            coinbase: validation_result.coinbase,
-            blocktemplate: job.blocktemplate.clone(),
-            share_commitment: job.share_commitment.clone(),
-        })
-        .await
-        .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;
+    // Fire-and-forget: don't block share submission waiting for emission processing
+    let _ = stratum_context.emissions_tx.try_send(Emission {
+        pplns: stratum_share.clone(),
+        header: validation_result.header,
+        coinbase: validation_result.coinbase,
+        blocktemplate: job.blocktemplate.clone(),
+        share_commitment: job.share_commitment.clone(),
+    });
 
     session.last_share_time = Some(SystemTime::now());
 
