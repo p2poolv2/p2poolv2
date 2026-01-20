@@ -148,7 +148,7 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
         state.app_config.pool_signature_length,
         state.app_config.network,
     ) {
-        exposition.push_str("# HELP coinbase_rewards_distribution Current coinbase rewards distribution between users\n");
+        exposition.push_str("# HELP coinbase_rewards_distribution Recent (in last 10 mins) coinbase rewards distribution\n");
         exposition.push_str(&coinbase_distribution);
     }
     exposition
