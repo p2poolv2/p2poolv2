@@ -96,17 +96,17 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         }
     };
 
-    // let is_new_share = stratum_context
-    //     .tracker_handle
-    //     .add_share(JobId(job_id), validation_result.header.block_hash());
+    let is_new_share = stratum_context
+        .tracker_handle
+        .add_share(JobId(job_id), validation_result.header.block_hash());
 
-    // if !is_new_share {
-    //     // return error to asic client if share already exists or duplicate detection failed
-    //     return Ok(vec![Message::Response(Response::new_ok(
-    //         message.id,
-    //         json!(false),
-    //     ))]);
-    // }
+    if !is_new_share {
+        // return error to asic client if share already exists or duplicate detection failed
+        return Ok(vec![Message::Response(Response::new_ok(
+            message.id,
+            json!(false),
+        ))]);
+    }
 
     if validation_result.meets_bitcoin_difficulty {
         // Submit block asap - decode transactions only for this rare case
@@ -156,12 +156,11 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         || truediff >= session.difficulty_adjuster.get_current_difficulty() as u128;
 
     if meets_session_difficulty {
-        let _ = stratum_context
+        stratum_context
             .metrics
-            .record_share_accepted(stratum_share, truediff as u64)
-            .await;
+            .record_share_accepted(stratum_share, truediff as u64);
     } else {
-        let _ = stratum_context.metrics.record_share_rejected().await;
+        stratum_context.metrics.record_share_rejected();
     }
 
     let (new_difficulty, _is_first_share) = session.difficulty_adjuster.record_share_submission(
