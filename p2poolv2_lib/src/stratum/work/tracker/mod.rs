@@ -89,6 +89,8 @@ impl JobTracker {
 
     /// Insert a block template with the specified job id.
     /// The job's creation time is encoded in the job_id itself (snowflake ID).
+    /// Note: Inserts into shares first, then details, so add_share can find the job
+    /// as soon as get_job returns it.
     pub fn insert_job(
         &self,
         block_template: Arc<BlockTemplate>,
@@ -97,6 +99,8 @@ impl JobTracker {
         share_commitment: Option<ShareCommitment>,
         job_id: JobId,
     ) -> JobId {
+        // Insert shares entry first so add_share works as soon as job is visible
+        self.job_shares.write().insert(job_id, HashSet::new());
         self.job_details.write().insert(
             job_id,
             JobDetails {
@@ -106,7 +110,6 @@ impl JobTracker {
                 share_commitment,
             },
         );
-        self.job_shares.write().insert(job_id, HashSet::new());
         job_id
     }
 
@@ -131,6 +134,8 @@ impl JobTracker {
 
     /// Remove job details that are older than the specified duration in seconds.
     /// Uses the timestamp encoded in the snowflake job ID for age determination.
+    /// Note: Cleans details first, then shares. Once get_job returns None,
+    /// the job is considered gone and shares cleanup follows.
     /// Returns the number of jobs that were removed.
     pub fn cleanup_old_jobs(&self, max_age_secs: u64) -> usize {
         let current_time_secs = std::time::SystemTime::now()
@@ -140,8 +145,8 @@ impl JobTracker {
 
         let mut removed_count = 0;
 
-        // Clean job_shares using job_id timestamps
-        self.job_shares.write().retain(|job_id, _| {
+        // Clean job_details first so get_job returns None for old jobs
+        self.job_details.write().retain(|job_id, _| {
             let keep = current_time_secs.saturating_sub(job_id.timestamp_secs()) < max_age_secs;
             if !keep {
                 removed_count += 1;
@@ -149,8 +154,8 @@ impl JobTracker {
             keep
         });
 
-        // Clean job_details using job_id timestamps
-        self.job_details.write().retain(|job_id, _| {
+        // Then clean job_shares
+        self.job_shares.write().retain(|job_id, _| {
             current_time_secs.saturating_sub(job_id.timestamp_secs()) < max_age_secs
         });
 
