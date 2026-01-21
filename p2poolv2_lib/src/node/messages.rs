@@ -48,15 +48,16 @@ mod getdata_discriminants {
 }
 
 /// Network magic bytes for different P2Poolv2 networks
+/// Chosen at random.
 pub mod network_magic {
     /// Mainnet P2Poolv2
-    pub const MAINNET: [u8; 4] = [0xf9, 0xbe, 0xb4, 0xd9];
+    pub const MAINNET: [u8; 4] = [0x5a, 0xf0, 0x19, 0x13];
     /// Testnet P2Poolv2
-    pub const TESTNET: [u8; 4] = [0x0b, 0x11, 0x09, 0x07];
+    pub const TESTNET: [u8; 4] = [0xbc, 0xc7, 0x13, 0xc6];
     /// Signet P2Poolv2
-    pub const SIGNET: [u8; 4] = [0x0a, 0x03, 0xcf, 0x40];
+    pub const SIGNET: [u8; 4] = [0x44, 0xe0, 0x9a, 0x44];
     /// Regtest P2Poolv2
-    pub const REGTEST: [u8; 4] = [0xfa, 0xbf, 0xb5, 0xda];
+    pub const REGTEST: [u8; 4] = [0x3f, 0x8e, 0xa2, 0xd8];
 }
 
 /// P2P network messages, encoded using bitcoin consensus_encode
