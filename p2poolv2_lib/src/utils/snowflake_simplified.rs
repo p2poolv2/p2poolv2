@@ -19,7 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static SEQ: AtomicU32 = AtomicU32::new(0);
 
-pub const CUSTOM_EPOCH: u64 = 1735689600000; // 2025-01-01 in ms
+const CUSTOM_EPOCH: u64 = 1735689600000; // 2025-01-01 in ms
 
 /// A simplified snowflake inspired ID generator where we drop the
 /// machine and node id as we always run on a single machine/process.

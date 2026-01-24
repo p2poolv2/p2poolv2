@@ -3181,7 +3181,6 @@ dependencies = [
  "libp2p",
  "mockall",
  "mockall_double",
- "parking_lot",
  "rand 0.8.5",
  "rocksdb",
  "rust_decimal",

@@ -18,15 +18,17 @@ use crate::stratum::work::{coinbase::extract_outputs_from_coinbase2, tracker::Jo
 use bitcoin::Amount;
 use std::sync::Arc;
 
-/// Parse the coinbase in a recent job and return distribution metrics.
-/// Returns None if no jobs exist or the coinbase cannot be parsed.
+/// Parse the coinbase in the latest job and return
 pub fn get_distribution(
     tracker: &Arc<JobTracker>,
     pool_signature_length: usize,
     network: bitcoin::network::Network,
 ) -> Option<String> {
-    let job_id = tracker.get_recent_job_id()?;
-    let job_details = tracker.get_job(job_id)?;
+    let job_id = tracker.get_latest_job_id();
+    let job_details = match tracker.get_job(job_id) {
+        Some(job_details) => job_details,
+        None => return None,
+    };
 
     match extract_outputs_from_coinbase2(&job_details.coinbase2, pool_signature_length) {
         Ok(outputs) => {
