@@ -26,10 +26,6 @@ pub mod parse_coinbase;
 
 const MAX_JOB_AGE_SECS: u64 = 10 * 60; // 10 minutes
 
-// Pre-allocation capacities to avoid HashMap/HashSet resizing overhead
-const EXPECTED_JOBS: usize = 128; // ~60 jobs in 10 min window, with headroom
-const EXPECTED_SHARES_PER_JOB: usize = 200_000; // ~10k shares/sec, job lives ~10-20 sec
-
 /// The job id sent to miners.
 /// A job id matches a block template.
 /// Uses snowflake IDs which encode timestamp and sequence, making them chronologically ordered.
@@ -83,11 +79,11 @@ pub struct JobTracker {
 }
 
 impl JobTracker {
-    /// Create a new Tracker with pre-allocated capacity to avoid resize overhead.
+    /// Create a new Tracker
     pub fn new() -> Self {
         Self {
-            job_details: RwLock::new(HashMap::with_capacity(EXPECTED_JOBS)),
-            job_shares: RwLock::new(HashMap::with_capacity(EXPECTED_JOBS)),
+            job_details: RwLock::new(HashMap::new()),
+            job_shares: RwLock::new(HashMap::new()),
         }
     }
 
@@ -104,10 +100,7 @@ impl JobTracker {
         job_id: JobId,
     ) -> JobId {
         // Insert shares entry first so add_share works as soon as job is visible
-        // Pre-allocate capacity to avoid resize overhead during high-volume share submission
-        self.job_shares
-            .write()
-            .insert(job_id, HashSet::with_capacity(EXPECTED_SHARES_PER_JOB));
+        self.job_shares.write().insert(job_id, HashSet::new());
         self.job_details.write().insert(
             job_id,
             JobDetails {
