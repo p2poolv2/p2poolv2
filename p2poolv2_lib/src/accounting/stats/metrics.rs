@@ -24,7 +24,7 @@ use std::time::SystemTime;
 use tokio::sync::{mpsc, oneshot};
 use tracing::error;
 
-const METRICS_MESSAGE_BUFFER_SIZE: usize = 10_000;
+const METRICS_MESSAGE_BUFFER_SIZE: usize = 1000;
 pub const INITIAL_USER_MAP_CAPACITY: usize = 1000;
 const METRICS_SAVE_INTERVAL: u64 = 5;
 
@@ -87,15 +87,16 @@ impl PoolMetrics {
 /// Messages that can be sent to the MetricsActor
 #[derive(Debug)]
 pub enum MetricsMessage {
-    /// Fire-and-forget share accepted message - no response needed
     RecordShareAccepted {
         btcaddress: String,
         workername: String,
         difficulty: u64,
         truediff: u64,
+        response: oneshot::Sender<()>,
     },
-    /// Fire-and-forget share rejected message - no response needed
-    RecordShareRejected,
+    RecordShareRejected {
+        response: oneshot::Sender<()>,
+    },
     IncrementWorkerCount {
         btcaddress: String,
         workername: String,
@@ -156,11 +157,14 @@ impl MetricsActor {
                 workername,
                 difficulty,
                 truediff,
+                response,
             } => {
                 self.record_share_accepted(btcaddress, workername, difficulty, truediff);
+                let _ = response.send(());
             }
-            MetricsMessage::RecordShareRejected => {
+            MetricsMessage::RecordShareRejected { response } => {
                 self.record_share_rejected();
+                let _ = response.send(());
             }
             MetricsMessage::IncrementWorkerCount {
                 btcaddress,
@@ -270,23 +274,39 @@ pub struct MetricsHandle {
 }
 
 impl MetricsHandle {
-    /// Record an accepted share with the given difficulty.
-    /// Fire-and-forget: sends the message without waiting for acknowledgement.
-    pub fn record_share_accepted(&self, share: SimplePplnsShare, truediff: u64) {
-        // Use try_send to avoid blocking if the channel is full
-        let _ = self.sender.try_send(MetricsMessage::RecordShareAccepted {
-            btcaddress: share.btcaddress.unwrap_or_default(),
-            workername: share.workername.unwrap_or_default(),
-            difficulty: share.difficulty,
-            truediff,
-        });
+    /// Record an accepted share with the given difficulty
+    pub async fn record_share_accepted(
+        &self,
+        share: SimplePplnsShare,
+        truediff: u64,
+    ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(MetricsMessage::RecordShareAccepted {
+                btcaddress: share.btcaddress.unwrap_or_default(),
+                workername: share.workername.unwrap_or_default(),
+                difficulty: share.difficulty,
+                truediff,
+                response: response_tx,
+            })
+            .await
+            .expect("Error recording share");
+        response_rx.await
     }
 
-    /// Record a rejected share.
-    /// Fire-and-forget: sends the message without waiting for acknowledgement.
-    pub fn record_share_rejected(&self) {
-        // Use try_send to avoid blocking if the channel is full
-        let _ = self.sender.try_send(MetricsMessage::RecordShareRejected);
+    /// Record a rejected share
+    /// We don't difficulty or user info for rejected shares as the could be rejected for any reason
+    pub async fn record_share_rejected(
+        &self,
+    ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(MetricsMessage::RecordShareRejected {
+                response: response_tx,
+            })
+            .await
+            .expect("Error recording share");
+        response_rx.await
     }
 
     /// Increment worker count
@@ -408,58 +428,60 @@ mod tests {
         let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
             .await
             .unwrap();
-        handle.record_share_accepted(
-            SimplePplnsShare {
-                user_id: 1,
-                difficulty: 100,
-                btcaddress: Some("user1".to_string()),
-                workername: Some("worker1".to_string()),
-                n_time: 1000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            },
-            110,
-        );
-        // Yield to allow actor to process the message
-        tokio::task::yield_now().await;
+        let _ = handle
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 100,
+                    btcaddress: Some("user1".to_string()),
+                    workername: Some("worker1".to_string()),
+                    n_time: 1000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                110,
+            )
+            .await;
 
         let metrics = handle.get_metrics().await;
         assert!(metrics.lastupdate.is_some());
         assert_eq!(metrics.best_share, 110);
 
         // Test that highest difficulty is updated correctly
-        handle.record_share_accepted(
-            SimplePplnsShare {
-                user_id: 1,
-                difficulty: 50,
-                btcaddress: Some("user1".to_string()),
-                workername: Some("worker1".to_string()),
-                n_time: 1000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            },
-            55,
-        );
-        tokio::task::yield_now().await;
+        let _ = handle
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 50,
+                    btcaddress: Some("user1".to_string()),
+                    workername: Some("worker1".to_string()),
+                    n_time: 1000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                55,
+            )
+            .await;
         let metrics = handle.get_metrics().await;
         assert_eq!(metrics.best_share, 110);
 
-        handle.record_share_accepted(
-            SimplePplnsShare {
-                user_id: 1,
-                difficulty: 200,
-                btcaddress: Some("user1".to_string()),
-                workername: Some("worker1".to_string()),
-                n_time: 1000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            },
-            220,
-        );
-        tokio::task::yield_now().await;
+        let _ = handle
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 200,
+                    btcaddress: Some("user1".to_string()),
+                    workername: Some("worker1".to_string()),
+                    n_time: 1000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                220,
+            )
+            .await;
         let metrics = handle.get_metrics().await;
         assert_eq!(metrics.best_share, 220);
     }
@@ -470,8 +492,9 @@ mod tests {
         let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
             .await
             .unwrap();
-        handle.record_share_rejected();
-        handle.record_share_rejected();
+        let _ = handle.record_share_rejected().await;
+
+        let _ = handle.record_share_rejected().await;
     }
 
     #[tokio::test]
@@ -485,34 +508,37 @@ mod tests {
             .increment_worker_count("user1".to_string(), "worker1".to_string())
             .await;
 
-        handle.record_share_accepted(
-            SimplePplnsShare {
-                user_id: 1,
-                difficulty: 1000,
-                btcaddress: Some("user1".to_string()),
-                workername: Some("worker1".to_string()),
-                n_time: 1000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            },
-            1100,
-        );
-        handle.record_share_accepted(
-            SimplePplnsShare {
-                user_id: 1,
-                difficulty: 2000,
-                btcaddress: Some("user1".to_string()),
-                workername: Some("worker1".to_string()),
-                n_time: 1000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            },
-            2200,
-        );
-        handle.record_share_rejected();
-        tokio::task::yield_now().await;
+        let _ = handle
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 1000,
+                    btcaddress: Some("user1".to_string()),
+                    workername: Some("worker1".to_string()),
+                    n_time: 1000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                1100,
+            )
+            .await;
+        let _ = handle
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 2000,
+                    btcaddress: Some("user1".to_string()),
+                    workername: Some("worker1".to_string()),
+                    n_time: 1000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                2200,
+            )
+            .await;
+        let _ = handle.record_share_rejected().await;
 
         let current_unix_timestamp = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -542,21 +568,22 @@ mod tests {
         let _ = handle
             .increment_worker_count("user1".to_string(), "worker1".to_string())
             .await;
-        handle.record_share_accepted(
-            SimplePplnsShare {
-                user_id: 1,
-                difficulty: 123,
-                btcaddress: Some("user1".to_string()),
-                workername: Some("worker1".to_string()),
-                n_time: 1000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            },
-            134,
-        );
-        handle.record_share_rejected();
-        tokio::task::yield_now().await;
+        let _ = handle
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 123,
+                    btcaddress: Some("user1".to_string()),
+                    workername: Some("worker1".to_string()),
+                    n_time: 1000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                134,
+            )
+            .await;
+        let _ = handle.record_share_rejected().await;
         // Create an inactive worker (no shares submitted)
         let _ = handle
             .increment_worker_count("user4".to_string(), "workerD".to_string())
@@ -614,20 +641,21 @@ mod tests {
             .increment_worker_count(btcaddress.clone(), workername.clone())
             .await;
 
-        handle.record_share_accepted(
-            SimplePplnsShare {
-                user_id: 1,
-                difficulty: 77,
-                btcaddress: Some(btcaddress.clone()),
-                workername: Some(workername.clone()),
-                n_time: 3000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            },
-            84,
-        );
-        tokio::task::yield_now().await;
+        let _ = handle
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 77,
+                    btcaddress: Some(btcaddress.clone()),
+                    workername: Some(workername.clone()),
+                    n_time: 3000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                84,
+            )
+            .await;
 
         let metrics = handle.get_metrics().await;
         let user = metrics.users.get(&btcaddress).unwrap();
@@ -657,46 +685,51 @@ mod tests {
             .increment_worker_count("userB".to_string(), "workerB1".to_string())
             .await;
 
-        handle.record_share_accepted(
-            SimplePplnsShare {
-                user_id: 1,
-                difficulty: 10,
-                btcaddress: Some("userA".to_string()),
-                workername: Some("workerA1".to_string()),
-                n_time: 4000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            },
-            11,
-        );
-        handle.record_share_accepted(
-            SimplePplnsShare {
-                user_id: 1,
-                difficulty: 20,
-                btcaddress: Some("userA".to_string()),
-                workername: Some("workerA2".to_string()),
-                n_time: 5000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            },
-            22,
-        );
-        handle.record_share_accepted(
-            SimplePplnsShare {
-                user_id: 1,
-                difficulty: 30,
-                btcaddress: Some("userB".to_string()),
-                workername: Some("workerB1".to_string()),
-                n_time: 6000,
-                job_id: "test_job".to_string(),
-                extranonce2: "test_extra".to_string(),
-                nonce: "test_nonce".to_string(),
-            },
-            33,
-        );
-        tokio::task::yield_now().await;
+        let _ = handle
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 10,
+                    btcaddress: Some("userA".to_string()),
+                    workername: Some("workerA1".to_string()),
+                    n_time: 4000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                11,
+            )
+            .await;
+        let _ = handle
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 20,
+                    btcaddress: Some("userA".to_string()),
+                    workername: Some("workerA2".to_string()),
+                    n_time: 5000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                22,
+            )
+            .await;
+        let _ = handle
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 30,
+                    btcaddress: Some("userB".to_string()),
+                    workername: Some("workerB1".to_string()),
+                    n_time: 6000,
+                    job_id: "test_job".to_string(),
+                    extranonce2: "test_extra".to_string(),
+                    nonce: "test_nonce".to_string(),
+                },
+                33,
+            )
+            .await;
 
         let metrics = handle.get_metrics().await;
 
