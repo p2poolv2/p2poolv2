@@ -16,33 +16,19 @@
 
 use super::block_template::BlockTemplate;
 use crate::shares::share_commitment::ShareCommitment;
-use crate::utils::snowflake_simplified::{CUSTOM_EPOCH, get_next_id};
 use bitcoin::BlockHash;
-use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
+use dashmap::{DashMap, DashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::debug;
 pub mod parse_coinbase;
 
-const MAX_JOB_AGE_SECS: u64 = 10 * 60; // 10 minutes
+const MAX_JOB_AGE_SECS: u64 = 15 * 60; // 15 minutes
 
 /// The job id sent to miners.
 /// A job id matches a block template.
-/// Uses snowflake IDs which encode timestamp and sequence, making them chronologically ordered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct JobId(pub u64);
-
-impl JobId {
-    /// Extract creation timestamp in milliseconds since Unix epoch from the snowflake ID.
-    pub fn timestamp_ms(&self) -> u64 {
-        (self.0 >> 22) + CUSTOM_EPOCH
-    }
-
-    /// Extract creation timestamp in seconds since Unix epoch from the snowflake ID.
-    pub fn timestamp_secs(&self) -> u64 {
-        self.timestamp_ms() / 1000
-    }
-}
 
 /// Delegate to u64's lower hex
 impl std::fmt::LowerHex for JobId {
@@ -66,29 +52,34 @@ pub struct JobDetails {
     pub blocktemplate: Arc<BlockTemplate>,
     pub coinbase1: String,
     pub coinbase2: String,
+    pub generation_timestamp: u64,
     pub share_commitment: Option<ShareCommitment>,
 }
 
-/// Job tracker using RwLock<HashMap> for concurrent access.
+/// Lock-free job tracker using DashMap for concurrent access.
 #[derive(Debug)]
 pub struct JobTracker {
-    /// Job details indexed by job ID
-    job_details: RwLock<HashMap<JobId, JobDetails>>,
-    /// Tracks submitted shares per job for duplicate detection
-    job_shares: RwLock<HashMap<JobId, HashSet<BlockHash>>>,
+    job_details: DashMap<JobId, JobDetails>,
+    /// Tracks submitted shares per job for duplicate detection (internal only)
+    job_shares: DashMap<JobId, DashSet<BlockHash>>,
+    latest_job_id: AtomicU64,
 }
 
 impl JobTracker {
-    /// Create a new Tracker
+    /// Create a new Tracker with timestamp-based initial job ID
     pub fn new() -> Self {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
         Self {
-            job_details: RwLock::new(HashMap::new()),
-            job_shares: RwLock::new(HashMap::new()),
+            job_details: DashMap::new(),
+            job_shares: DashMap::new(),
+            latest_job_id: AtomicU64::new(timestamp),
         }
     }
 
-    /// Insert a block template with the specified job id.
-    /// The job's creation time is encoded in the job_id itself (snowflake ID).
+    /// Insert a block template with the specified job id
     pub fn insert_job(
         &self,
         block_template: Arc<BlockTemplate>,
@@ -97,71 +88,64 @@ impl JobTracker {
         share_commitment: Option<ShareCommitment>,
         job_id: JobId,
     ) -> JobId {
-        self.job_details.write().insert(
+        self.job_details.insert(
             job_id,
             JobDetails {
                 blocktemplate: block_template,
                 coinbase1,
                 coinbase2,
+                generation_timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
                 share_commitment,
             },
         );
-        self.job_shares.write().insert(job_id, HashSet::new());
+        self.job_shares.insert(job_id, DashSet::new());
         job_id
     }
 
-    /// Get the next job id using snowflake ID generator.
-    /// The ID encodes the current timestamp (42 bits) and a sequence number (22 bits).
+    /// Get the next job id, incrementing it atomically
     pub fn get_next_job_id(&self) -> JobId {
-        JobId(get_next_id())
+        JobId(self.latest_job_id.fetch_add(1, Ordering::SeqCst) + 1)
+    }
+
+    /// Get the latest job id without incrementing
+    pub fn get_latest_job_id(&self) -> JobId {
+        JobId(self.latest_job_id.load(Ordering::SeqCst))
     }
 
     /// Get job details by job id
     pub fn get_job(&self, job_id: JobId) -> Option<JobDetails> {
-        self.job_details.read().get(&job_id).cloned()
+        self.job_details.get(&job_id).map(|r| r.clone())
     }
 
-    /// Get any recent job ID from the tracker.
-    /// Returns the first key found without iterating all keys (O(1)).
-    /// All jobs are recent (within 10 min max age), so coinbase is essentially the same.
-    /// Returns None if no jobs exist.
-    pub fn get_recent_job_id(&self) -> Option<JobId> {
-        self.job_details.read().keys().next().copied()
-    }
-
-    /// Remove job details that are older than the specified duration in seconds.
-    /// Uses the timestamp encoded in the snowflake job ID for age determination.
-    /// Returns the number of jobs that were removed.
+    /// Remove job details that are older than the specified duration in seconds
+    /// Returns the number of jobs that were removed
     pub fn cleanup_old_jobs(&self, max_age_secs: u64) -> usize {
-        let current_time_secs = std::time::SystemTime::now()
+        let current_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
 
-        let mut removed_count = 0;
+        let before_count = self.job_details.len();
 
-        // Clean job_shares using job_id timestamps
-        self.job_shares.write().retain(|job_id, _| {
-            let keep = current_time_secs.saturating_sub(job_id.timestamp_secs()) < max_age_secs;
+        self.job_details.retain(|job_id, details| {
+            let keep = current_time.saturating_sub(details.generation_timestamp) < max_age_secs;
             if !keep {
-                removed_count += 1;
+                // Also remove shares for this job
+                self.job_shares.remove(job_id);
             }
             keep
         });
 
-        // Clean job_details using job_id timestamps
-        self.job_details.write().retain(|job_id, _| {
-            current_time_secs.saturating_sub(job_id.timestamp_secs()) < max_age_secs
-        });
-
-        removed_count
+        before_count - self.job_details.len()
     }
 
-    /// Add a share to shares tracker for duplicate detection.
-    /// Returns true if share is newly inserted, false if job not found or share already exists.
+    /// Add a share to shares tracker for duplicate detection
+    /// Returns true if share is newly inserted, false if job not found or share already exists
     pub fn add_share(&self, job_id: JobId, blockhash: BlockHash) -> bool {
-        let mut shares_map = self.job_shares.write();
-        if let Some(shares) = shares_map.get_mut(&job_id) {
+        if let Some(shares) = self.job_shares.get(&job_id) {
             shares.insert(blockhash)
         } else {
             false
@@ -203,111 +187,41 @@ mod tests {
     use crate::test_utils::create_test_commitment;
 
     #[test]
-    fn test_job_id_timestamp_extraction() {
-        // Test with a known timestamp to verify extraction logic
-        // Snowflake ID structure: (timestamp_ms - CUSTOM_EPOCH) << 22 | sequence
-        let known_timestamp_ms: u64 = 1750000000000; // A known timestamp in ms
-        let sequence: u64 = 42;
-        let snowflake_id = ((known_timestamp_ms - CUSTOM_EPOCH) << 22) | sequence;
-        let job_id = JobId(snowflake_id);
-
-        // Verify timestamp_ms extracts the correct timestamp
-        assert_eq!(
-            job_id.timestamp_ms(),
-            known_timestamp_ms,
-            "timestamp_ms should extract the encoded timestamp"
-        );
-
-        // Verify timestamp_secs is timestamp_ms / 1000
-        assert_eq!(
-            job_id.timestamp_secs(),
-            known_timestamp_ms / 1000,
-            "timestamp_secs should be timestamp_ms / 1000"
-        );
-
-        // Test with sequence bits at maximum (all 22 bits set)
-        let max_sequence: u64 = (1 << 22) - 1;
-        let snowflake_id_max_seq = ((known_timestamp_ms - CUSTOM_EPOCH) << 22) | max_sequence;
-        let job_id_max_seq = JobId(snowflake_id_max_seq);
-
-        assert_eq!(
-            job_id_max_seq.timestamp_ms(),
-            known_timestamp_ms,
-            "timestamp should be unaffected by sequence bits"
-        );
-
-        // Test with a freshly generated ID
-        let tracker = JobTracker::new();
-        let fresh_job_id = tracker.get_next_job_id();
-        let current_time_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-
-        // Fresh ID timestamp should be within 1 second of current time
-        let extracted_ms = fresh_job_id.timestamp_ms();
-        assert!(
-            current_time_ms.saturating_sub(extracted_ms) < 1000,
-            "Fresh ID timestamp_ms should be within 1 second of current time"
-        );
-
-        let extracted_secs = fresh_job_id.timestamp_secs();
-        let current_time_secs = current_time_ms / 1000;
-        assert!(
-            current_time_secs.saturating_sub(extracted_secs) <= 1,
-            "Fresh ID timestamp_secs should be within 1 second of current time"
-        );
-    }
-
-    #[test]
     fn test_job_id_generation() {
         let tracker = JobTracker::new();
+        let initial_job_id = tracker.get_latest_job_id();
 
-        // No jobs initially
-        assert!(tracker.get_recent_job_id().is_none());
+        // Get next job id should increment
+        let next_job_id = tracker.get_next_job_id();
+        assert_eq!(next_job_id.0, initial_job_id.0 + 1);
 
-        // Snowflake IDs should be unique and increasing
-        let job_id1 = tracker.get_next_job_id();
-        let job_id2 = tracker.get_next_job_id();
-        let job_id3 = tracker.get_next_job_id();
+        // Latest job id should reflect the increment
+        let latest_job_id = tracker.get_latest_job_id();
+        assert_eq!(latest_job_id.0, next_job_id.0);
 
-        assert!(job_id2.0 > job_id1.0, "IDs should be increasing");
-        assert!(job_id3.0 > job_id2.0, "IDs should be increasing");
-
-        // IDs should encode a reasonable timestamp (close to current time)
-        let current_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let id_timestamp = job_id1.timestamp_secs();
-        assert!(
-            current_time.saturating_sub(id_timestamp) < 5,
-            "ID timestamp should be recent"
-        );
+        // Multiple calls should continue incrementing
+        let next_job_id2 = tracker.get_next_job_id();
+        assert_eq!(next_job_id2.0, next_job_id.0 + 1);
     }
 
     #[tokio::test]
     async fn test_job_id_generation_tracker() {
         let tracker = start_tracker_actor();
 
-        // Snowflake IDs should be unique and increasing
-        let job_id1 = tracker.get_next_job_id();
-        let job_id2 = tracker.get_next_job_id();
-        let job_id3 = tracker.get_next_job_id();
+        // Get the initial latest job id
+        let initial_job_id = tracker.get_latest_job_id();
 
-        assert!(job_id2.0 > job_id1.0, "IDs should be increasing");
-        assert!(job_id3.0 > job_id2.0, "IDs should be increasing");
+        // Get next job id should increment
+        let next_job_id = tracker.get_next_job_id();
+        assert_eq!(next_job_id.0, initial_job_id.0 + 1);
 
-        // IDs should encode a reasonable timestamp
-        let current_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let id_timestamp = job_id1.timestamp_secs();
-        assert!(
-            current_time.saturating_sub(id_timestamp) < 5,
-            "ID timestamp should be recent"
-        );
+        // Latest job id should reflect the increment
+        let latest_job_id = tracker.get_latest_job_id();
+        assert_eq!(latest_job_id.0, next_job_id.0);
+
+        // Multiple calls should continue incrementing
+        let next_job_id2 = tracker.get_next_job_id();
+        assert_eq!(next_job_id2.0, next_job_id.0 + 1);
     }
 
     #[tokio::test]
@@ -321,15 +235,16 @@ mod tests {
 
         let tracker = start_tracker_actor();
 
-        // Use a snowflake ID for the job
-        let job_id = tracker.get_next_job_id();
-        tracker.insert_job(
+        let job_id = tracker.insert_job(
             Arc::new(template),
             "cb1".to_string(),
             "cb2".to_string(),
             Some(create_test_commitment()),
-            job_id,
+            JobId(1),
         );
+
+        // Test inserting a block template
+        assert_eq!(job_id, JobId(1));
 
         // Test finding the job
         let retrieved_job = tracker.get_job(job_id).unwrap();
@@ -339,14 +254,12 @@ mod tests {
         );
         assert_eq!(retrieved_job.coinbase1, "cb1".to_string());
         assert_eq!(retrieved_job.coinbase2, "cb2".to_string());
-
-        // Verify job_id encodes a recent timestamp
         let current_timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        assert!(current_timestamp >= job_id.timestamp_secs());
-        assert!(current_timestamp - job_id.timestamp_secs() <= 5);
+        assert!(current_timestamp >= retrieved_job.generation_timestamp);
+        assert!(current_timestamp - retrieved_job.generation_timestamp <= 5);
 
         // Test with non-existent job id
         let retrieved_job = tracker.get_job(JobId(9997));
@@ -364,14 +277,8 @@ mod tests {
         // Create tracker directly
         let tracker = JobTracker::new();
 
-        // Create a snowflake ID representing a job from 20 minutes ago
-        let current_time_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        let old_timestamp_ms = current_time_ms - (20 * 60 * 1000); // 20 minutes ago
-        let old_job_id = JobId((old_timestamp_ms - CUSTOM_EPOCH) << 22);
-
+        // Insert jobs with different timestamps
+        let old_job_id = JobId(1);
         tracker.insert_job(
             Arc::new(template.clone()),
             "old_cb1".to_string(),
@@ -380,8 +287,17 @@ mod tests {
             old_job_id,
         );
 
-        // Insert a new job with current timestamp
-        let new_job_id = tracker.get_next_job_id();
+        // Manually set an old timestamp (20 minutes ago)
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if let Some(mut job) = tracker.job_details.get_mut(&old_job_id) {
+            job.generation_timestamp = current_time - (20 * 60);
+        }
+
+        // Insert a new job
+        let new_job_id = JobId(2);
         tracker.insert_job(
             Arc::new(template.clone()),
             "new_cb1".to_string(),
@@ -391,27 +307,27 @@ mod tests {
         );
 
         // Verify both jobs exist
-        assert!(tracker.job_details.read().contains_key(&old_job_id));
-        assert!(tracker.job_details.read().contains_key(&new_job_id));
+        assert!(tracker.job_details.contains_key(&old_job_id));
+        assert!(tracker.job_details.contains_key(&new_job_id));
 
         // Run cleanup (15 minutes max age)
         let removed = tracker.cleanup_old_jobs(15 * 60);
         assert_eq!(removed, 1);
 
         // Verify only the new job remains
-        assert!(!tracker.job_details.read().contains_key(&old_job_id));
-        assert!(tracker.job_details.read().contains_key(&new_job_id));
+        assert!(!tracker.job_details.contains_key(&old_job_id));
+        assert!(tracker.job_details.contains_key(&new_job_id));
 
-        // Test with tracker: cleanup with 0 max age should remove all jobs
+        // Test with tracker
         let tracker = start_tracker_actor();
 
-        let job_id = tracker.get_next_job_id();
-        tracker.insert_job(
+        // Insert a job
+        let job_id = tracker.insert_job(
             Arc::new(template.clone()),
             "actor_cb1".to_string(),
             "actor_cb2".to_string(),
             None,
-            job_id,
+            JobId(3),
         );
 
         // Cleanup with 0 max age should remove all jobs
@@ -474,42 +390,34 @@ mod tests {
 
     #[test]
     fn test_concurrent_access() {
-        use std::collections::HashSet;
-        use std::sync::Mutex;
         use std::thread;
 
         let tracker = Arc::new(JobTracker::new());
-        let collected_ids = Arc::new(Mutex::new(HashSet::new()));
+
+        // Get the initial job ID before spawning threads
+        let initial_id = tracker.get_latest_job_id();
 
         // Spawn multiple threads doing concurrent operations
-        let mut handles = vec![];
+        let mut trackers = vec![];
 
         for _ in 0..10 {
             let tracker_clone = tracker.clone();
-            let ids_clone = collected_ids.clone();
-            let handle = thread::spawn(move || {
-                let mut local_ids = Vec::new();
+            let tracker = thread::spawn(move || {
                 // Each thread gets job IDs
                 for _ in 0..100 {
-                    let job_id = tracker_clone.get_next_job_id();
-                    local_ids.push(job_id);
-                }
-                // Add to shared collection
-                let mut ids = ids_clone.lock().unwrap();
-                for id in local_ids {
-                    ids.insert(id);
+                    let _job_id = tracker_clone.get_next_job_id();
                 }
             });
-            handles.push(handle);
+            trackers.push(tracker);
         }
 
         // Wait for all threads
-        for handle in handles {
-            handle.join().unwrap();
+        for tracker in trackers {
+            tracker.join().unwrap();
         }
 
-        // All 1000 IDs should be unique
-        let ids = collected_ids.lock().unwrap();
-        assert_eq!(ids.len(), 1000, "All generated IDs should be unique");
+        // Should have incremented 1000 times total (10 threads * 100 iterations)
+        let final_id = tracker.get_latest_job_id();
+        assert_eq!(final_id.0, initial_id.0 + 1000);
     }
 }
