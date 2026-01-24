@@ -75,7 +75,7 @@ async fn wait_for_shutdown_signal(stopping_rx: oneshot::Receiver<()>) {
 const GBT_POLL_INTERVAL: u64 = 10; // seconds
 
 /// Maximum number of pending shares from all clients connected to stratum server
-const STRATUM_SHARES_BUFFER_SIZE: usize = 10_000;
+const STRATUM_SHARES_BUFFER_SIZE: usize = 1000;
 
 /// 100% donation in bips, skip address validation
 const FULL_DONATION_BIPS: u16 = 10_000;

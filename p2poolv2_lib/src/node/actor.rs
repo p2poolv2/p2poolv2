@@ -149,13 +149,11 @@ impl NodeActor {
 
     async fn run(mut self) {
         loop {
-            // TODO: We need to stop this single loop and create multiple tasks here.
             tokio::select! {
                 buf = self.emissions_rx.recv() => {
                     match buf {
                         Some(emission) => {
                             debug!("Sending share to peers");
-                            // TODO: This is in the critical path of submit, we should validate and move on, letting block submission happen in a task - which will be occassionally triggered.
                             if let Ok(Some(share_block)) = handle_stratum_share(emission, self.node.chain_store.clone(), self.node.config.stratum.network, self.node.p2p_enabled) {
                                 if let Err(e) = self.node.send_to_all_peers(Message::ShareBlock(share_block)) {
                                     error!("Error sending share to all peers {e}");
