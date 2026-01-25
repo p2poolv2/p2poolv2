@@ -17,11 +17,11 @@
 #[cfg(unix)]
 use tokio::signal::unix::{self, SignalKind};
 
-use tokio::{sync::watch::Sender, task::JoinHandle};
+use tokio::{sync::watch, task::JoinHandle};
 use tracing::info;
 
 #[cfg(unix)]
-pub fn setup_signal_handler(exit_sender: Sender<bool>) -> JoinHandle<()> {
+pub fn setup_signal_handler(exit_sender: watch::Sender<bool>) -> JoinHandle<()> {
     let mut exit_receiver = exit_sender.subscribe();
     // future: improve this by implementing sigterm. Maybe usr1 and 2 for things like committing to disk
     tokio::spawn(async move {
@@ -48,7 +48,7 @@ pub fn setup_signal_handler(exit_sender: Sender<bool>) -> JoinHandle<()> {
 }
 
 #[cfg(not(unix))]
-pub fn setup_signal_handler(exit_sender: Sender<bool>) -> JoinHandle<()> {
+pub fn setup_signal_handler(exit_sender: watch::Sender<bool>) -> JoinHandle<()> {
     let mut exit_receiver = exit_sender.subscribe();
     tokio::spawn(async move {
         tokio::select! {
@@ -61,4 +61,27 @@ pub fn setup_signal_handler(exit_sender: Sender<bool>) -> JoinHandle<()> {
             }
         };
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::watch;
+
+    #[tokio::test]
+    async fn test_signal_handler_exits_on_shutdown_signal() {
+        let (exit_sender, _) = watch::channel(false);
+        let handle = setup_signal_handler(exit_sender.clone());
+
+        // Send shutdown signal via the watch channel
+        exit_sender.send(true).unwrap();
+
+        // Handler should exit promptly
+        let result = tokio::time::timeout(std::time::Duration::from_millis(100), handle).await;
+
+        assert!(
+            result.is_ok(),
+            "Handler should exit when shutdown signal is sent"
+        );
+    }
 }
