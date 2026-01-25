@@ -51,10 +51,7 @@ pub fn setup_signal_handler(exit_sender: watch::Sender<ShutdownReason>) -> JoinH
 
         if let Some(sig) = sig {
             info!("Received signal {sig:?}. Stopping...");
-
-            exit_sender
-                .send(ShutdownReason::Signal)
-                .expect("failed to set shutdown signal");
+            let _ = exit_sender.send(ShutdownReason::Signal);
         };
     })
 }
@@ -67,9 +64,7 @@ pub fn setup_signal_handler(exit_sender: watch::Sender<ShutdownReason>) -> JoinH
             _ = exit_receiver.changed() => {},
             _ = tokio::signal::ctrl_c() => {
                 info!("Received ctrl-c signal. Stopping...");
-                exit_sender
-                    .send(ShutdownReason::Signal)
-                    .expect("failed to set shutdown signal");
+                let _ = exit_sender.send(ShutdownReason::Signal);
             }
         };
     })
