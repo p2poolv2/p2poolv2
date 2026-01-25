@@ -78,7 +78,7 @@ async fn main() -> ExitCode {
     let config = config.unwrap();
     // Configure logging based on config
     // hold guard to ensure logging is set up correctly
-    let _guard = match logging_result {
+    let _guard = match setup_logging(&config.logging) {
         Ok(guard) => {
             info!("Logging set up successfully");
             guard
