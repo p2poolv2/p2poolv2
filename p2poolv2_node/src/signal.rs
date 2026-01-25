@@ -20,8 +20,20 @@ use tokio::signal::unix::{self, SignalKind};
 use tokio::{sync::watch, task::JoinHandle};
 use tracing::info;
 
+/// Reason for shutdown - used to determine exit code
+/// Correct exit code will help service runners
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShutdownReason {
+    /// No shutdown requested yet
+    None,
+    /// Clean shutdown from user signal (ctrl-c, SIGTERM, SIGHUP)
+    Signal,
+    /// Shutdown due to component error
+    Error,
+}
+
 #[cfg(unix)]
-pub fn setup_signal_handler(exit_sender: watch::Sender<bool>) -> JoinHandle<()> {
+pub fn setup_signal_handler(exit_sender: watch::Sender<ShutdownReason>) -> JoinHandle<()> {
     let mut exit_receiver = exit_sender.subscribe();
     // future: improve this by implementing sigterm. Maybe usr1 and 2 for things like committing to disk
     tokio::spawn(async move {
@@ -41,14 +53,14 @@ pub fn setup_signal_handler(exit_sender: watch::Sender<bool>) -> JoinHandle<()> 
             info!("Received signal {sig:?}. Stopping...");
 
             exit_sender
-                .send(true)
+                .send(ShutdownReason::Signal)
                 .expect("failed to set shutdown signal");
         };
     })
 }
 
 #[cfg(not(unix))]
-pub fn setup_signal_handler(exit_sender: watch::Sender<bool>) -> JoinHandle<()> {
+pub fn setup_signal_handler(exit_sender: watch::Sender<ShutdownReason>) -> JoinHandle<()> {
     let mut exit_receiver = exit_sender.subscribe();
     tokio::spawn(async move {
         tokio::select! {
@@ -56,7 +68,7 @@ pub fn setup_signal_handler(exit_sender: watch::Sender<bool>) -> JoinHandle<()> 
             _ = tokio::signal::ctrl_c() => {
                 info!("Received ctrl-c signal. Stopping...");
                 exit_sender
-                    .send(true)
+                    .send(ShutdownReason::Signal)
                     .expect("failed to set shutdown signal");
             }
         };
@@ -70,11 +82,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_signal_handler_exits_on_shutdown_signal() {
-        let (exit_sender, _) = watch::channel(false);
+        let (exit_sender, _) = watch::channel(ShutdownReason::None);
         let handle = setup_signal_handler(exit_sender.clone());
 
         // Send shutdown signal via the watch channel
-        exit_sender.send(true).unwrap();
+        exit_sender.send(ShutdownReason::Signal).unwrap();
 
         // Handler should exit promptly
         let result = tokio::time::timeout(std::time::Duration::from_millis(100), handle).await;

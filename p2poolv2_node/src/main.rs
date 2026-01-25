@@ -30,12 +30,12 @@ use p2poolv2_lib::stratum::work::gbt::start_gbt;
 use p2poolv2_lib::stratum::work::notify::start_notify;
 use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
 use p2poolv2_lib::stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
-use std::process::exit;
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info, trace};
 
-use crate::signal::setup_signal_handler;
+use crate::signal::{ShutdownReason, setup_signal_handler};
 
 mod signal;
 
@@ -63,21 +63,35 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), String> {
+async fn main() -> ExitCode {
+    info!("Starting P2Pool v2...");
     // Parse command line arguments
     let args = Args::parse();
 
     // Load configuration
-    let config = Config::load(&args.config).expect("Failed to load toml config");
-
+    let config = Config::load(&args.config);
+    if config.is_err() {
+        let err = config.unwrap_err();
+        error!("Failed to load config: {err}");
+        return ExitCode::FAILURE;
+    }
+    let config = config.unwrap();
     // Configure logging based on config
     // hold guard to ensure logging is set up correctly
-    let _guard = setup_logging(&config.logging).expect("Failed to set up logging");
-    info!("Logging set up successfully");
+    let _guard = match logging_result {
+        Ok(guard) => {
+            info!("Logging set up successfully");
+            guard
+        }
+        Err(e) => {
+            error!("Failed to set up logging: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     info!("Running on {} network", &config.stratum.network);
 
-    let exit_sender = tokio::sync::watch::Sender::new(false);
+    let exit_sender = tokio::sync::watch::Sender::new(ShutdownReason::None);
 
     let sig_handle = setup_signal_handler(exit_sender.clone());
 
@@ -118,7 +132,7 @@ async fn main() -> Result<(), String> {
         Ok(rx) => rx,
         Err(e) => {
             error!("Failed to set up ZMQ publisher: {e}");
-            return Err("Failed to set up ZMQ publisher".into());
+            return ExitCode::FAILURE;
         }
     };
 
@@ -134,7 +148,7 @@ async fn main() -> Result<(), String> {
         .await
         {
             tracing::error!("Failed to fetch block template. Shutting down. \n {e}");
-            let _ = exit_sender_gbt.send(true);
+            let _ = exit_sender_gbt.send(ShutdownReason::Error);
         }
     });
 
@@ -165,7 +179,8 @@ async fn main() -> Result<(), String> {
     let metrics_handle = match metrics::start_metrics(config.logging.stats_dir.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
-            return Err(format!("Failed to start metrics: {e}"));
+            error!("Failed to start metrics: {e}");
+            return ExitCode::FAILURE;
         }
     };
     let metrics_cloned = metrics_handle.clone();
@@ -207,7 +222,7 @@ async fn main() -> Result<(), String> {
             .await;
         if result.is_err() {
             error!("Failed to start Stratum server: {}", result.unwrap_err());
-            let _ = exit_sender_stratum.send(true);
+            let _ = exit_sender_stratum.send(ShutdownReason::Error);
         }
         info!("Stratum server stopped");
     });
@@ -224,8 +239,8 @@ async fn main() -> Result<(), String> {
     {
         Ok(shutdown_tx) => shutdown_tx,
         Err(e) => {
-            info!("Error starting server: {}", e);
-            return Err("Failed to start API Server. Quitting.".into());
+            error!("Error starting API server: {e}");
+            return ExitCode::FAILURE;
         }
     };
     info!(
@@ -234,14 +249,18 @@ async fn main() -> Result<(), String> {
     );
 
     let (node_handle, stopping_rx) =
-        NodeHandle::new(config, chain_store, emissions_rx, metrics_handle)
-            .await
-            .map_err(|e| format!("Failed to start node: {e}"))?;
+        match NodeHandle::new(config, chain_store, emissions_rx, metrics_handle).await {
+            Ok(result) => result,
+            Err(e) => {
+                error!("Failed to start node: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
 
     info!("Node started");
 
     let mut exit_receiver = exit_sender.subscribe();
-    let stop_all = async move || {
+    let stop_all = async move |reason: ShutdownReason| -> ShutdownReason {
         info!("Node shutting down...");
 
         // Save metrics before shutdown to prevent data loss
@@ -263,25 +282,41 @@ async fn main() -> Result<(), String> {
         // channels might be closed already, ignore errors
         let _ = stratum_shutdown_tx.send(());
         let _ = api_shutdown_tx.send(());
-        let _ = exit_sender.send(true);
+        // Notify signal handler to exit
+        let _ = exit_sender.send(reason);
+        reason
     };
 
-    if *exit_receiver.borrow() {
-        stop_all().await;
-        exit(1);
+    // Check if shutdown was already requested before we started waiting
+    let early_reason = *exit_receiver.borrow();
+    if early_reason != ShutdownReason::None {
+        stop_all(early_reason).await;
+        trace!("Waiting signal handlers");
+        sig_handle.await.unwrap();
+        return if early_reason == ShutdownReason::Signal {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
     }
 
-    tokio::select! {
+    let shutdown_reason = tokio::select! {
         _ = stopping_rx => {
-            stop_all().await;
+            // Node stopped unexpectedly - treat as error
+            stop_all(ShutdownReason::Error).await
         },
         _ = exit_receiver.changed() => {
-            stop_all().await;
+            let reason = *exit_receiver.borrow();
+            stop_all(reason).await
         }
-    }
+    };
 
     trace!("Waiting signal handlers");
     sig_handle.await.unwrap();
 
-    Ok(())
+    if shutdown_reason == ShutdownReason::Signal {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }
