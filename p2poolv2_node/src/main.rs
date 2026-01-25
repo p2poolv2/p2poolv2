@@ -236,7 +236,7 @@ async fn main() -> Result<(), String> {
     let (_node_handle, stopping_rx) =
         NodeHandle::new(config, chain_store, emissions_rx, metrics_handle)
             .await
-            .expect("Failed to start node");
+            .map_err(|e| format!("Failed to start node: {e}"))?;
 
     info!("Node started");
 
