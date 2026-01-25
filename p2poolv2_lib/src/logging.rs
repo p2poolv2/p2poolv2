@@ -21,14 +21,32 @@ use tracing_appender::non_blocking;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, Registry, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-/// Sets up logging according to the logging configuration
+/// Sets up logging according to the logging configuration.
+///
+/// If both console logging is disabled and no file logging is configured,
+/// console logging is enabled as a fallback to prevent silent operation.
 pub fn setup_logging(
     logging_config: &LoggingConfig,
 ) -> Result<Option<non_blocking::WorkerGuard>, Box<dyn Error>> {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&logging_config.level));
 
-    let console_layer = if logging_config.console.unwrap_or(true) {
+    // Determine if console logging should be enabled
+    let console_explicitly_disabled = logging_config.console == Some(false);
+    let file_configured = logging_config.file.is_some();
+
+    // Enable console if: explicitly enabled, not specified (default), or as fallback when no file is configured
+    let enable_console = if console_explicitly_disabled && !file_configured {
+        // Fallback: enable console to prevent silent operation
+        eprintln!(
+            "Warning: Console logging disabled but no file configured. Enabling console logging as fallback."
+        );
+        true
+    } else {
+        logging_config.console.unwrap_or(true)
+    };
+
+    let console_layer = if enable_console {
         info!("Console logging enabled");
         Some(fmt::layer())
     } else {
