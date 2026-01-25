@@ -21,6 +21,23 @@ use tracing_appender::non_blocking;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, Registry, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
+/// Determines whether console logging should be enabled based on the configuration.
+///
+/// Returns `(enable_console, is_fallback)` where:
+/// - `enable_console`: whether console logging should be enabled
+/// - `is_fallback`: whether this is a fallback due to no logging destination being configured
+fn should_enable_console(logging_config: &LoggingConfig) -> (bool, bool) {
+    let console_explicitly_disabled = logging_config.console == Some(false);
+    let file_configured = logging_config.file.is_some();
+
+    if console_explicitly_disabled && !file_configured {
+        // Fallback: enable console to prevent silent operation
+        (true, true)
+    } else {
+        (logging_config.console.unwrap_or(true), false)
+    }
+}
+
 /// Sets up logging according to the logging configuration.
 ///
 /// If both console logging is disabled and no file logging is configured,
@@ -31,26 +48,19 @@ pub fn setup_logging(
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&logging_config.level));
 
-    // Determine if console logging should be enabled
-    let console_explicitly_disabled = logging_config.console == Some(false);
-    let file_configured = logging_config.file.is_some();
+    let (enable_console, is_fallback) = should_enable_console(logging_config);
 
-    // Enable console if: explicitly enabled, not specified (default), or as fallback when no file is configured
-    let enable_console = if console_explicitly_disabled && !file_configured {
-        // Fallback: enable console to prevent silent operation
+    if is_fallback {
         eprintln!(
             "Warning: Console logging disabled but no file configured. Enabling console logging as fallback."
         );
-        true
-    } else {
-        logging_config.console.unwrap_or(true)
-    };
+    }
 
     let console_layer = if enable_console {
-        info!("Console logging enabled");
+        eprintln!("Console logging enabled");
         Some(fmt::layer())
     } else {
-        info!("Console logging disabled");
+        eprintln!("Console logging disabled");
         None
     };
 
@@ -102,4 +112,93 @@ pub fn setup_logging(
         .init();
 
     Ok(guard)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_with(console: Option<bool>, file: Option<&str>) -> LoggingConfig {
+        LoggingConfig {
+            console,
+            file: file.map(String::from),
+            level: "info".to_string(),
+            stats_dir: "./logs/stats".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_console_enabled_by_default_when_not_specified() {
+        let config = config_with(None, None);
+        let (enable_console, is_fallback) = should_enable_console(&config);
+
+        assert!(enable_console, "Console should be enabled by default");
+        assert!(!is_fallback, "Should not be a fallback when using default");
+    }
+
+    #[test]
+    fn test_console_enabled_when_explicitly_true() {
+        let config = config_with(Some(true), None);
+        let (enable_console, is_fallback) = should_enable_console(&config);
+
+        assert!(
+            enable_console,
+            "Console should be enabled when explicitly set to true"
+        );
+        assert!(
+            !is_fallback,
+            "Should not be a fallback when explicitly enabled"
+        );
+    }
+
+    #[test]
+    fn test_console_disabled_when_file_configured() {
+        let config = config_with(Some(false), Some("./logs/test.log"));
+        let (enable_console, is_fallback) = should_enable_console(&config);
+
+        assert!(
+            !enable_console,
+            "Console should be disabled when file is configured"
+        );
+        assert!(
+            !is_fallback,
+            "Should not be a fallback when file is configured"
+        );
+    }
+
+    #[test]
+    fn test_console_fallback_when_disabled_without_file() {
+        let config = config_with(Some(false), None);
+        let (enable_console, is_fallback) = should_enable_console(&config);
+
+        assert!(enable_console, "Console should be enabled as fallback");
+        assert!(is_fallback, "Should indicate this is a fallback");
+    }
+
+    #[test]
+    fn test_console_enabled_with_file_configured() {
+        let config = config_with(Some(true), Some("./logs/test.log"));
+        let (enable_console, is_fallback) = should_enable_console(&config);
+
+        assert!(
+            enable_console,
+            "Console should be enabled alongside file logging"
+        );
+        assert!(
+            !is_fallback,
+            "Should not be a fallback when explicitly enabled"
+        );
+    }
+
+    #[test]
+    fn test_console_default_with_file_configured() {
+        let config = config_with(None, Some("./logs/test.log"));
+        let (enable_console, is_fallback) = should_enable_console(&config);
+
+        assert!(
+            enable_console,
+            "Console should be enabled by default even with file"
+        );
+        assert!(!is_fallback, "Should not be a fallback when using default");
+    }
 }
