@@ -233,7 +233,7 @@ async fn main() -> Result<(), String> {
         config.api.hostname, config.api.port
     );
 
-    let (_node_handle, stopping_rx) =
+    let (node_handle, stopping_rx) =
         NodeHandle::new(config, chain_store, emissions_rx, metrics_handle)
             .await
             .map_err(|e| format!("Failed to start node: {e}"))?;
@@ -253,6 +253,11 @@ async fn main() -> Result<(), String> {
             error!("Failed to save metrics on shutdown: {e}");
         } else {
             info!("Metrics saved on shutdown");
+        }
+
+        // Shutdown node gracefully
+        if let Err(e) = node_handle.shutdown().await {
+            error!("Failed to shutdown node: {e}");
         }
 
         // channels might be closed already, ignore errors
