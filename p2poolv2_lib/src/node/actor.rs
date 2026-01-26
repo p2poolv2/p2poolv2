@@ -154,7 +154,7 @@ impl NodeActor {
                     match buf {
                         Some(emission) => {
                             debug!("Sending share to peers");
-                            if let Ok(Some(share_block)) = handle_stratum_share(emission, self.node.chain_store.clone(), self.node.config.stratum.network, self.node.p2p_enabled) {
+                            if let Ok(Some(share_block)) = handle_stratum_share(emission, self.node.chain_store.clone(), self.node.config.stratum.network) {
                                 if let Err(e) = self.node.send_to_all_peers(Message::ShareBlock(share_block)) {
                                     error!("Error sending share to all peers {e}");
                                 }
