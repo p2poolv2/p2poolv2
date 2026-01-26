@@ -59,7 +59,7 @@ docker-run EXTRA="": dockerize
         -it \
         -v $PWD/docker/data:/p2poolv2/data \
         -v $PWD/docker/config/:/p2poolv2/config \
-        -v $P2POOL_CONFIG/:/p2poolv2/config.toml:ro \
+        -v $P2POOL_CONFIG:/p2poolv2/config.toml:ro \
         -e P2POOL_CONFIG=/p2poolv2/config.toml \
         --add-host=host.docker.internal:host-gateway \
         {{ EXTRA }} \
