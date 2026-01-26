@@ -20,13 +20,13 @@ use crate::command::Command;
 use crate::config::Config;
 use crate::node::Node;
 use crate::node::SwarmSend;
+use crate::node::emission_worker::EmissionWorker;
 use crate::node::messages::Message;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store::ChainStore;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store::ChainStore;
-use crate::shares::handle_stratum_share::handle_stratum_share;
 use crate::stratum::emission::EmissionReceiver;
 use libp2p::futures::StreamExt;
 use std::error::Error;
@@ -148,25 +148,17 @@ impl NodeActor {
     }
 
     async fn run(mut self) {
+        // Spawn emission worker - processes shares in separate task and enqueues SwarmSend::Broadcast
+        let emission_worker = EmissionWorker::new(
+            self.emissions_rx,
+            self.node.swarm_tx.clone(),
+            self.node.chain_store.clone(),
+            self.node.config.stratum.network,
+        );
+        tokio::spawn(emission_worker.run());
+
         loop {
             tokio::select! {
-                buf = self.emissions_rx.recv() => {
-                    match buf {
-                        Some(emission) => {
-                            debug!("Sending share to peers");
-                            if let Ok(Some(share_block)) = handle_stratum_share(emission, self.node.chain_store.clone(), self.node.config.stratum.network) {
-                                if let Err(e) = self.node.send_to_all_peers(Message::ShareBlock(share_block)) {
-                                    error!("Error sending share to all peers {e}");
-                                }
-                            }
-                        },
-                        None => {
-                            info!("Share emission channel closed. Stopping.");
-                            self.stopping_tx.send(()).unwrap();
-                            return;
-                        }
-                    }
-                },
                 buf = self.node.swarm_rx.recv() => {
                     match buf {
                         Some(SwarmSend::Request(peer_id, msg)) => {
@@ -188,9 +180,16 @@ impl NodeActor {
                                 debug!("Disconnected peer: {peer_id}");
                             }
                         }
+                        Some(SwarmSend::Broadcast(share_block)) => {
+                            // Broadcast share to all peers (from emission worker)
+                            debug!("Broadcasting share to peers");
+                            if let Err(e) = self.node.send_to_all_peers(Message::ShareBlock(share_block)) {
+                                error!("Error sending share to all peers {e}");
+                            }
+                        }
                         None => {
                             info!("Stopping node actor on channel close");
-                            self.stopping_tx.send(()).unwrap();
+                            let _ = self.stopping_tx.send(());
                             return;
                         }
                     }
