@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod behaviour;
+pub mod emission_worker;
 pub mod request_response_handler;
 pub use crate::config::Config;
 pub mod actor;
@@ -80,6 +81,8 @@ pub enum SwarmSend<C> {
     Response(C, Message),
     Inv(ShareBlock),
     Disconnect(PeerId),
+    /// Broadcast a share block to all connected peers (from emission worker)
+    Broadcast(ShareBlock),
 }
 
 /// Node is the main struct that represents the node

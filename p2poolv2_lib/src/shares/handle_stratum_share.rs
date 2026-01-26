@@ -58,7 +58,6 @@ pub fn handle_stratum_share(
             merkle_root.into(),
         );
 
-        // Decode bitcoin transactions lazily - only in p2p mode when building ShareBlock
         let mut bitcoin_transactions =
             Vec::with_capacity(emission.blocktemplate.transactions.len() + 1);
         bitcoin_transactions.push(emission.coinbase);
