@@ -16,20 +16,16 @@
 
 //! Emission worker processes stratum share submissions in a dedicated task.
 //!
-//! This offloads CPU-intensive merkle tree calculations and I/O-bound
-//! database writes from the main swarm event loop, improving P2P responsiveness.
+//! This offloads CPU-intensive merkle tree calculations from the main swarm
+//! event loop, improving P2P responsiveness. Storage is delegated to the
+//! StorageWorker for serialized database writes.
 
 use crate::node::SwarmSend;
 use crate::node::messages::Message;
-#[cfg(test)]
-#[mockall_double::double]
-use crate::shares::chain::chain_store::ChainStore;
-#[cfg(not(test))]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::node::storage_worker::StorageSender;
 use crate::shares::handle_stratum_share::handle_stratum_share;
 use crate::stratum::emission::EmissionReceiver;
 use libp2p::request_response::ResponseChannel;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
@@ -40,7 +36,7 @@ use tracing::{debug, error, info};
 pub struct EmissionWorker {
     emissions_rx: EmissionReceiver,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
-    chain_store: Arc<ChainStore>,
+    storage_tx: StorageSender,
     network: bitcoin::Network,
 }
 
@@ -49,13 +45,13 @@ impl EmissionWorker {
     pub fn new(
         emissions_rx: EmissionReceiver,
         swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
-        chain_store: Arc<ChainStore>,
+        storage_tx: StorageSender,
         network: bitcoin::Network,
     ) -> Self {
         Self {
             emissions_rx,
             swarm_tx,
-            chain_store,
+            storage_tx,
             network,
         }
     }
@@ -65,7 +61,7 @@ impl EmissionWorker {
         info!("Emission worker started");
         while let Some(emission) = self.emissions_rx.recv().await {
             debug!("Processing emission");
-            match handle_stratum_share(emission, self.chain_store.clone(), self.network) {
+            match handle_stratum_share(emission, &self.storage_tx, self.network).await {
                 Ok(Some(share_block)) => {
                     // Send to swarm_tx for broadcast to peers
                     if let Err(e) = self.swarm_tx.send(SwarmSend::Broadcast(share_block)).await {

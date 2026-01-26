@@ -37,6 +37,8 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
+pub const STORAGE_CHANNEL_SIZE: usize = 100;
+
 /// Items that can be stored by the storage worker.
 #[derive(Debug)]
 pub enum StorageItem {
@@ -55,9 +57,9 @@ pub type StorageSender = mpsc::Sender<StorageItem>;
 /// Receiver type for the storage channel.
 pub type StorageReceiver = mpsc::Receiver<StorageItem>;
 
-/// Creates a new storage channel with the specified buffer capacity.
-pub fn storage_channel(capacity: usize) -> (StorageSender, StorageReceiver) {
-    mpsc::channel(capacity)
+/// Creates a new storage channel
+pub fn storage_channel() -> (StorageSender, StorageReceiver) {
+    mpsc::channel(STORAGE_CHANNEL_SIZE)
 }
 
 /// Worker that processes database writes in a dedicated task.

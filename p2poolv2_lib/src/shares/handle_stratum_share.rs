@@ -14,26 +14,22 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-#[cfg(test)]
-#[mockall_double::double]
-use crate::shares::chain::chain_store::ChainStore;
-#[cfg(not(test))]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::node::storage_worker::{StorageItem, StorageSender};
 use crate::shares::share_block::share_coinbase::build_share_coinbase;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::stratum::emission::Emission;
 use bitcoin::merkle_tree;
 use std::error::Error;
-use std::sync::Arc;
 use tracing::debug;
 
-/// Save share to database for persistence in case we need to recover from a crash
-/// Shares are saved with a TTL for 1 week or when we reach accumulated work required for 5 blocks at current difficulty.
+/// Process a stratum share submission and emit to storage worker.
 ///
-/// TODO: Replace p2p_enabled with a generic argument to avoid a branch at run time.
-pub fn handle_stratum_share(
+/// Builds a ShareBlock if there's a share commitment (p2p mode), or emits
+/// just the PPLNS share for accounting (solo mode). Storage is handled
+/// asynchronously by the StorageWorker.
+pub async fn handle_stratum_share(
     emission: Emission,
-    chain_store: Arc<ChainStore>,
+    storage_tx: &StorageSender,
     network: bitcoin::Network,
 ) -> Result<Option<ShareBlock>, Box<dyn Error + Send + Sync>> {
     // Send share to peers only in p2p mode, i.e. if the pool is run with a miner pubkey that results in a commitment
@@ -76,16 +72,24 @@ pub fn handle_stratum_share(
             share_block.transactions.len()
         );
 
-        // save and reorg share
-        chain_store.add_share(&share_block, true)?;
+        // The clone happens is here as we need to send data to database and to peers
+        storage_tx
+            .send(StorageItem::ShareBlock {
+                share: share_block.clone(),
+                confirm_txs: true,
+            })
+            .await
+            .map_err(|e| format!("Failed to send share to storage worker: {e}"))?;
 
         Ok(Some(share_block))
     } else {
-        // save pplns share for accounting
-        match chain_store.add_pplns_share(emission.pplns) {
-            Ok(()) => Ok(None),
-            Err(e) => Err(e),
-        }
+        // Emit pplns share to storage worker for accounting
+        storage_tx
+            .send(StorageItem::PplnsShare(emission.pplns))
+            .await
+            .map_err(|e| format!("Failed to send PPLNS share to storage worker: {e}"))?;
+
+        Ok(None)
     }
 }
 
@@ -93,7 +97,7 @@ pub fn handle_stratum_share(
 mod tests {
     use super::*;
     use crate::accounting::simple_pplns::SimplePplnsShare;
-    use crate::shares::chain::chain_store::MockChainStore;
+    use crate::node::storage_worker::storage_channel;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::test_utils::create_test_commitment;
     use bitcoin::block::Header;
@@ -101,6 +105,7 @@ mod tests {
     use bitcoin::{BlockHash, CompactTarget};
     use bitcoin::{Transaction, absolute::LockTime, transaction::Version};
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     /// Helper to create a minimal BlockTemplate for testing
     fn create_test_blocktemplate() -> BlockTemplate {
@@ -209,39 +214,29 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_handle_stratum_share_without_commitment_returns_none() {
-        let mut mock_store = MockChainStore::default();
-
-        // Expect add_pplns_share to be called once
-        mock_store
-            .expect_add_pplns_share()
-            .times(1)
-            .returning(|_| Ok(()));
+    #[tokio::test]
+    async fn test_handle_stratum_share_without_commitment_returns_none() {
+        let (storage_tx, mut storage_rx) = storage_channel(10);
 
         let emission = create_test_emission_without_commitment();
-        let store = Arc::new(mock_store);
 
-        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet);
+        let result = handle_stratum_share(emission, &storage_tx, bitcoin::Network::Signet).await;
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
+
+        // Verify PPLNS share was sent to storage
+        let item = storage_rx.recv().await.unwrap();
+        assert!(matches!(item, StorageItem::PplnsShare(_)));
     }
 
-    #[test]
-    fn test_handle_stratum_share_with_commitment_returns_share_block() {
-        let mut mock_store = MockChainStore::default();
-
-        // Expect add_share to be called once and succeed
-        mock_store
-            .expect_add_share()
-            .times(1)
-            .returning(|_, _| Ok(()));
+    #[tokio::test]
+    async fn test_handle_stratum_share_with_commitment_returns_share_block() {
+        let (storage_tx, mut storage_rx) = storage_channel(10);
 
         let emission = create_test_emission_with_commitment();
-        let store = Arc::new(mock_store);
 
-        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet);
+        let result = handle_stratum_share(emission, &storage_tx, bitcoin::Network::Signet).await;
 
         assert!(result.is_ok());
         let share_block = result.unwrap();
@@ -252,71 +247,41 @@ mod tests {
         assert_eq!(share_block.transactions.len(), 1); // One share coinbase
         // bitcoin_transactions includes the emission coinbase (1) + decoded template txs (0)
         assert_eq!(share_block.bitcoin_transactions.len(), 1);
+
+        // Verify ShareBlock was sent to storage
+        let item = storage_rx.recv().await.unwrap();
+        assert!(matches!(
+            item,
+            StorageItem::ShareBlock {
+                confirm_txs: true,
+                ..
+            }
+        ));
     }
 
-    #[test]
-    fn test_handle_stratum_share_without_commitment_propagates_add_pplns_error() {
-        let mut mock_store = MockChainStore::default();
-
-        // Expect add_pplns_share to called only once and return an error
-        mock_store
-            .expect_add_pplns_share()
-            .times(1)
-            .returning(|_| Err("PPLNS storage error".into()));
+    #[tokio::test]
+    async fn test_handle_stratum_share_channel_closed_returns_error() {
+        let (storage_tx, storage_rx) = storage_channel(10);
+        // Drop receiver to close channel
+        drop(storage_rx);
 
         let emission = create_test_emission_without_commitment();
-        let store = Arc::new(mock_store);
 
-        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet);
-
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("PPLNS storage error")
-        );
-    }
-
-    #[test]
-    fn test_handle_stratum_share_propagates_add_share_error() {
-        let mut mock_store = MockChainStore::default();
-
-        // Expect add_share to be called once and return an error
-        mock_store
-            .expect_add_share()
-            .times(1)
-            .returning(|_, _| Err("Chain store error".into()));
-
-        let emission = create_test_emission_with_commitment();
-        let store = Arc::new(mock_store);
-
-        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet);
+        let result = handle_stratum_share(emission, &storage_tx, bitcoin::Network::Signet).await;
 
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Chain store error")
-        );
+        assert!(result.unwrap_err().to_string().contains("storage worker"));
     }
 
-    #[test]
-    fn test_handle_stratum_share_builds_correct_share_header() {
-        let mut mock_store = MockChainStore::default();
-
-        mock_store
-            .expect_add_share()
-            .times(1)
-            .returning(|_, _| Ok(()));
+    #[tokio::test]
+    async fn test_handle_stratum_share_builds_correct_share_header() {
+        let (storage_tx, _storage_rx) = storage_channel(10);
 
         let emission = create_test_emission_with_commitment();
         let expected_commitment = emission.share_commitment.clone().unwrap();
         let expected_bitcoin_header = emission.header;
 
-        let store = Arc::new(mock_store);
-        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet);
+        let result = handle_stratum_share(emission, &storage_tx, bitcoin::Network::Signet).await;
 
         assert!(result.is_ok());
         let share_block = result.unwrap().unwrap();
@@ -338,17 +303,12 @@ mod tests {
         assert_eq!(share_block.header.bitcoin_header, expected_bitcoin_header);
     }
 
-    #[test]
-    fn test_handle_stratum_share_with_bitcoin_transactions() {
+    #[tokio::test]
+    async fn test_handle_stratum_share_with_bitcoin_transactions() {
         use crate::stratum::work::block_template::TemplateTransaction;
         use bitcoin::consensus::Encodable;
 
-        let mut mock_store = MockChainStore::default();
-
-        mock_store
-            .expect_add_share()
-            .times(1)
-            .returning(|_, _| Ok(()));
+        let (storage_tx, _storage_rx) = storage_channel(10);
 
         // Create emission with some bitcoin transactions
         let pplns = SimplePplnsShare {
@@ -413,8 +373,7 @@ mod tests {
             share_commitment: Some(commitment),
         };
 
-        let store = Arc::new(mock_store);
-        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet);
+        let result = handle_stratum_share(emission, &storage_tx, bitcoin::Network::Signet).await;
 
         assert!(result.is_ok());
         let share_block = result.unwrap().unwrap();
@@ -423,26 +382,24 @@ mod tests {
         assert_eq!(share_block.bitcoin_transactions.len(), 3);
     }
 
-    #[test]
-    fn test_handle_stratum_share_pplns_data_passed_correctly() {
-        let mut mock_store = MockChainStore::default();
-
-        // Capture the PPLNS share that's passed to verify it's correct
-        mock_store
-            .expect_add_pplns_share()
-            .times(1)
-            .withf(|pplns: &SimplePplnsShare| {
-                pplns.user_id == 1
-                    && pplns.difficulty == 1000
-                    && pplns.job_id == "test_job_1"
-                    && pplns.n_time == 1700000000
-            })
-            .returning(|_| Ok(()));
+    #[tokio::test]
+    async fn test_handle_stratum_share_pplns_data_sent_correctly() {
+        let (storage_tx, mut storage_rx) = storage_channel(10);
 
         let emission = create_test_emission_without_commitment();
-        let store = Arc::new(mock_store);
 
-        let result = handle_stratum_share(emission, store, bitcoin::Network::Signet);
+        let result = handle_stratum_share(emission, &storage_tx, bitcoin::Network::Signet).await;
         assert!(result.is_ok());
+
+        // Verify the PPLNS share data sent to storage
+        let item = storage_rx.recv().await.unwrap();
+        if let StorageItem::PplnsShare(pplns) = item {
+            assert_eq!(pplns.user_id, 1);
+            assert_eq!(pplns.difficulty, 1000);
+            assert_eq!(pplns.job_id, "test_job_1");
+            assert_eq!(pplns.n_time, 1700000000);
+        } else {
+            panic!("Expected PplnsShare, got ShareBlock");
+        }
     }
 }
