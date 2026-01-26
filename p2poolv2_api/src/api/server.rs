@@ -100,7 +100,7 @@ pub async fn start_api_server(
     async fn logger(req: Request, next: Next) -> Result<Response, StatusCode> {
         debug!("received api call at {}", req.uri());
 
-        return Ok(next.run(req).await);
+        Ok(next.run(req).await)
     }
 
     let app = Router::new()
