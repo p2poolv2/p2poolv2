@@ -188,8 +188,10 @@ impl NodeActor {
                             }
                         }
                         None => {
-                            info!("Stopping node actor on channel close");
-                            let _ = self.stopping_tx.send(());
+                            info!("Stopping node actor on swarm channel close");
+                            if self.stopping_tx.send(()).is_err() {
+                                error!("Failed to send stopping signal - receiver dropped");
+                            }
                             return;
                         }
                     }
@@ -203,30 +205,44 @@ impl NodeActor {
                     match command {
                         Some(Command::GetPeers(tx)) => {
                             let peers = self.node.swarm.connected_peers().cloned().collect::<Vec<_>>();
-                            tx.send(peers).unwrap();
+                            if tx.send(peers).is_err() {
+                                error!("Failed to send GetPeers response - receiver dropped");
+                            }
                         },
                         Some(Command::SendToPeer(peer_id, message, tx)) => {
                             match self.node.send_to_peer(&peer_id, message) {
-                                Ok(_) => tx.send(Ok(())).unwrap(),
+                                Ok(_) => {
+                                    if tx.send(Ok(())).is_err() {
+                                        error!("Failed to send SendToPeer response - receiver dropped");
+                                    }
+                                },
                                 Err(e) => {
                                     error!("Error sending message to peer: {}", e);
-                                    tx.send(Err("Error sending message to peer".into())).unwrap()
+                                    if tx.send(Err("Error sending message to peer".into())).is_err() {
+                                        error!("Failed to send SendToPeer error response - receiver dropped");
+                                    }
                                 },
                             };
                         },
                         Some(Command::Shutdown(tx)) => {
                             self.node.shutdown().unwrap();
-                            tx.send(()).unwrap();
+                            if tx.send(()).is_err() {
+                                error!("Failed to send Shutdown response - receiver dropped");
+                            }
                             return;
                         },
                         Some(Command::GetPplnsShares(query, tx)) => {
                             info!("Received GetPplnsShares command with limit: {}", query.limit);
                             let result = self.node.handle_get_pplns_shares(query);
-                            let _ = tx.send(result);
+                            if tx.send(result).is_err() {
+                                error!("Failed to send GetPplnsShares response - receiver dropped");
+                            }
                         },
                         None => {
                             info!("Stopping node actor on channel close");
-                            let _ = self.stopping_tx.send(());
+                            if self.stopping_tx.send(()).is_err() {
+                                error!("Failed to send stopping signal - receiver dropped");
+                            }
                             return;
                         }
                     }
