@@ -258,7 +258,7 @@ mod tests {
     fn test_handle_stratum_share_without_commitment_propagates_add_pplns_error() {
         let mut mock_store = MockChainStore::default();
 
-        // Expect add_pplns_share to not be called
+        // Expect add_pplns_share to called only once and return an error
         mock_store
             .expect_add_pplns_share()
             .times(1)
