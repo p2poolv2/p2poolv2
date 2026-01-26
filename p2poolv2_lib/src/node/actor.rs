@@ -22,6 +22,7 @@ use crate::node::Node;
 use crate::node::SwarmSend;
 use crate::node::emission_worker::EmissionWorker;
 use crate::node::messages::Message;
+use crate::node::storage_worker::{StorageWorker, storage_channel};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store::ChainStore;
@@ -148,11 +149,16 @@ impl NodeActor {
     }
 
     async fn run(mut self) {
+        // Create storage channel and spawn storage worker for serialized database writes
+        let (storage_tx, storage_rx) = storage_channel();
+        let storage_worker = StorageWorker::new(storage_rx, self.node.chain_store.clone());
+        tokio::spawn(storage_worker.run());
+
         // Spawn emission worker - processes shares in separate task and enqueues SwarmSend::Broadcast
         let emission_worker = EmissionWorker::new(
             self.emissions_rx,
             self.node.swarm_tx.clone(),
-            self.node.chain_store.clone(),
+            storage_tx,
             self.node.config.stratum.network,
         );
         tokio::spawn(emission_worker.run());
