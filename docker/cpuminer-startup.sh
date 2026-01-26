@@ -17,7 +17,7 @@ trap cleanup INT
 
 function cleanup() {
   echo "Cleaning up..."
-  killall -9 $MINERD
+  killall -9 "$MINERD" || true
   exit 0
 }
 
