@@ -16,9 +16,9 @@
 
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::stratum::work::block_template::BlockTemplate;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoin::consensus::{Decodable, Encodable};
@@ -133,15 +133,15 @@ impl Decodable for ShareCommitment {
 /// Query the chain store for previous share and uncles.
 /// Uses the current timestamp
 pub(crate) fn build_share_commitment(
-    chain_store: &Arc<ChainStore>,
+    chain_store_handle: &ChainStoreHandle,
     template: &Arc<BlockTemplate>,
     miner_pubkey: Option<CompressedPublicKey>,
 ) -> Result<Option<ShareCommitment>, Box<dyn Error + Send + Sync>> {
-    let target = match chain_store.get_current_target() {
+    let target = match chain_store_handle.get_current_target() {
         Ok(target) => target,
         Err(e) => return Err(format!("Failed to get current target: {e}").into()),
     };
-    let (tip, uncles) = chain_store.get_chain_tip_and_uncles();
+    let (tip, uncles) = chain_store_handle.get_chain_tip_and_uncles();
     let merkle_root = template.get_merkle_root_without_coinbase();
     let time = SystemTimeProvider.seconds_since_epoch() as u32;
 
@@ -161,7 +161,6 @@ pub(crate) fn build_share_commitment(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shares::chain::chain_store::MockChainStore;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::test_utils::create_test_commitment;
     use bitcoin::hashes::Hash;
@@ -342,7 +341,7 @@ mod tests {
 
     #[test]
     fn test_build_share_commitment_success() {
-        let mut mock_store = MockChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         // Load template from file
         let json_content =
@@ -357,22 +356,23 @@ mod tests {
             .unwrap();
 
         // Set up mock expectations
-        mock_store
+        chain_store_handle
             .expect_get_current_target()
             .returning(|| Ok(0x207fffff));
 
-        mock_store.expect_get_chain_tip_and_uncles().returning(|| {
-            (
-                BlockHash::from_str(
-                    "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
+        chain_store_handle
+            .expect_get_chain_tip_and_uncles()
+            .returning(|| {
+                (
+                    BlockHash::from_str(
+                        "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
+                    )
+                    .unwrap(),
+                    HashSet::new(),
                 )
-                .unwrap(),
-                HashSet::new(),
-            )
-        });
+            });
 
-        let store = Arc::new(mock_store);
-        let result = build_share_commitment(&store, &template, Some(miner_pubkey));
+        let result = build_share_commitment(&chain_store_handle, &template, Some(miner_pubkey));
 
         assert!(result.is_ok());
         let commitment = result.unwrap().unwrap();
@@ -394,7 +394,7 @@ mod tests {
 
     #[test]
     fn test_build_share_commitment_with_uncles() {
-        let mut mock_store = MockChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         // Load template from file
         let json_content =
@@ -409,7 +409,7 @@ mod tests {
             .unwrap();
 
         // Set up mock expectations
-        mock_store
+        chain_store_handle
             .expect_get_current_target()
             .returning(|| Ok(0x207fffff));
 
@@ -420,15 +420,14 @@ mod tests {
             BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
                 .unwrap();
 
-        mock_store
+        chain_store_handle
             .expect_get_chain_tip_and_uncles()
             .returning(move || {
                 let uncles = HashSet::from([uncle1, uncle2]);
                 (BlockHash::all_zeros(), uncles)
             });
 
-        let store = Arc::new(mock_store);
-        let result = build_share_commitment(&store, &template, Some(miner_pubkey));
+        let result = build_share_commitment(&chain_store_handle, &template, Some(miner_pubkey));
 
         assert!(result.is_ok());
         let commitment = result.unwrap().unwrap();
@@ -441,7 +440,7 @@ mod tests {
 
     #[test]
     fn test_build_share_commitment_error_on_get_target_failure() {
-        let mut mock_store = MockChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         // Load template from file
         let json_content =
@@ -456,19 +455,18 @@ mod tests {
             .unwrap();
 
         // Set up mock to return error
-        mock_store
+        chain_store_handle
             .expect_get_current_target()
             .returning(|| Err("Failed to get target".into()));
 
-        let store = Arc::new(mock_store);
-        let result = build_share_commitment(&store, &template, Some(miner_pubkey));
+        let result = build_share_commitment(&chain_store_handle, &template, Some(miner_pubkey));
 
         assert!(result.is_err());
     }
 
     #[test_log::test]
     fn test_build_share_commitment_with_none_miner_pubkey_returns_none() {
-        let mut mock_store = MockChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         // Load template from file
         let json_content =
@@ -485,19 +483,18 @@ mod tests {
             BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
                 .unwrap();
 
-        mock_store
+        chain_store_handle
             .expect_get_chain_tip_and_uncles()
             .returning(move || {
                 let uncles = HashSet::from([uncle1, uncle2]);
                 (BlockHash::all_zeros(), uncles)
             });
 
-        mock_store
+        chain_store_handle
             .expect_get_current_target()
             .returning(|| Ok(0x207fffff));
 
-        let store = Arc::new(mock_store);
-        let result = build_share_commitment(&store, &template, None);
+        let result = build_share_commitment(&chain_store_handle, &template, None);
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());

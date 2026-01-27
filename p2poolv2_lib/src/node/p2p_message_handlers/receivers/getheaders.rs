@@ -18,9 +18,9 @@ use crate::node::Message;
 use crate::node::SwarmSend;
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use bitcoin::BlockHash;
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -35,13 +35,13 @@ const MAX_HEADERS: usize = 2000;
 pub async fn handle_getheaders<C: 'static + Send + Sync>(
     block_hashes: Vec<BlockHash>,
     stop_block_hash: BlockHash,
-    store: std::sync::Arc<ChainStore>,
+    chain_store_handle: ChainStoreHandle,
     response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Received getheaders: {:?}", block_hashes);
     let response_headers =
-        store.get_headers_for_locator(&block_hashes, &stop_block_hash, MAX_HEADERS)?;
+        chain_store_handle.get_headers_for_locator(&block_hashes, &stop_block_hash, MAX_HEADERS)?;
     let headers_message = Message::ShareHeaders(response_headers);
     // Send response and handle errors by logging them before returning
     if let Err(err) = swarm_tx
@@ -58,14 +58,13 @@ pub async fn handle_getheaders<C: 'static + Send + Sync>(
 mod tests {
     use super::*;
     #[mockall_double::double]
-    use crate::shares::chain::chain_store::ChainStore;
+    use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::test_utils::TestShareBlockBuilder;
-    use std::sync::Arc;
     use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn test_handle_getheaders() {
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
         let response_channel = 1u32;
 
@@ -80,14 +79,14 @@ mod tests {
         let stop_block_hash = block2.block_hash();
 
         // Set up mock expectations
-        store
+        chain_store_handle
             .expect_get_headers_for_locator()
             .returning(move |_, _, _| Ok(response_headers.clone()));
 
         let _result = handle_getheaders(
             block_hashes,
             stop_block_hash,
-            Arc::new(store),
+            chain_store_handle,
             response_channel,
             swarm_tx,
         )
@@ -106,7 +105,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_getheaders_send_failure() {
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
         let (swarm_tx, swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
         let response_channel = 1u32;
 
@@ -119,7 +118,7 @@ mod tests {
         let stop_block_hash = block2.block_hash();
 
         // Set up mock expectations
-        store
+        chain_store_handle
             .expect_get_headers_for_locator()
             .returning(move |_, _, _| Ok(Vec::new()));
 
@@ -129,7 +128,7 @@ mod tests {
         let result = handle_getheaders(
             block_hashes,
             stop_block_hash,
-            Arc::new(store),
+            chain_store_handle,
             response_channel,
             swarm_tx,
         )

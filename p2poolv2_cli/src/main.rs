@@ -17,6 +17,7 @@
 use p2poolv2_cli::commands;
 use std::error::Error;
 
-fn main() -> Result<(), Box<dyn Error>> {
-    commands::run()
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    commands::run().await
 }

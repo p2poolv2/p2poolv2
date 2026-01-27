@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::stratum::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::stratum::error::Error;
 use crate::stratum::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
@@ -22,18 +22,18 @@ use crate::stratum::server::StratumContext;
 use crate::stratum::session::Session;
 use crate::stratum::validate_username;
 use crate::stratum::work::notify::NotifyCmd;
-use std::sync::Arc;
 use tracing::debug;
 
 /// Register user in the store and update session with their IDs
-fn register_user<D: DifficultyAdjusterTrait>(
+async fn register_user<D: DifficultyAdjusterTrait>(
     session: &mut Session<D>,
     btcaddress: &str,
-    store: Arc<ChainStore>,
+    chain_store_handle: ChainStoreHandle,
 ) -> Result<(), Error> {
     // Store user and get user_id
-    let user_id = store
+    let user_id = chain_store_handle
         .add_user(btcaddress.to_string())
+        .await
         .map_err(|e| Error::AuthorizationFailure(format!("Failed to store user: {e}")))?;
 
     session.user_id = Some(user_id);
@@ -97,7 +97,7 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
     session.password = message.params[1].clone();
 
     // Register user in the store
-    register_user(session, parsed_username.0, ctx.store)?;
+    register_user(session, parsed_username.0, ctx.chain_store_handle).await?;
 
     match ctx
         .metrics
@@ -134,15 +134,13 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
 mod tests {
     use super::*;
     use crate::accounting::stats::metrics;
-    use crate::shares::share_block::ShareBlock;
-    use crate::store::Store;
     use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
     use crate::stratum::messages::Id;
     use crate::stratum::server::StratumContext;
     use crate::stratum::work::tracker::start_tracker_actor;
+    use crate::test_utils::setup_test_chain_store_handle;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
     use std::net::SocketAddr;
-    use tempfile::tempdir;
     use tokio::sync::mpsc;
 
     #[tokio::test]
@@ -161,12 +159,7 @@ mod tests {
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
             .unwrap();
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
-            bitcoin::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
         let tracker_handle = start_tracker_actor();
 
         let ctx = StratumContext {
@@ -181,7 +174,7 @@ mod tests {
             emissions_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
-            store,
+            chain_store_handle,
         };
 
         // Execute
@@ -270,12 +263,7 @@ mod tests {
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
             .unwrap();
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
-            bitcoin::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -289,7 +277,7 @@ mod tests {
             emissions_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
-            store,
+            chain_store_handle,
         };
 
         // Execute
@@ -316,20 +304,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_register_user() {
-        // Setup
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
-            bitcoin::Network::Signet,
-        ));
+    #[tokio::test]
+    async fn test_register_user() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         let btcaddress = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
 
         // Execute
-        let result = register_user(&mut session, btcaddress, store.clone());
+        let result = register_user(&mut session, btcaddress, chain_store_handle.clone()).await;
 
         // Verify
         assert!(result.is_ok(), "register_user should succeed");
@@ -339,30 +321,24 @@ mod tests {
         let user_id = session.user_id.unwrap();
 
         // Verify user can be retrieved
-        let btcaddresses = store
-            .store
+        let btcaddresses = chain_store_handle
             .get_btcaddresses_for_user_ids(&[user_id])
             .unwrap();
         assert_eq!(btcaddresses.len(), 1);
         assert_eq!(btcaddresses[0].1, btcaddress);
     }
 
-    #[test]
-    fn test_register_same_user_twice() {
-        // Setup
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
-            bitcoin::Network::Signet,
-        ));
+    #[tokio::test]
+    async fn test_register_same_user_twice() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+
         let mut session1 = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         let mut session2 = Session::<DifficultyAdjuster>::new(2, 2, None, 0x1fffe000);
         let btcaddress = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
 
         // Execute - register the same user twice
-        let result1 = register_user(&mut session1, btcaddress, store.clone());
-        let result2 = register_user(&mut session2, btcaddress, store.clone());
+        let result1 = register_user(&mut session1, btcaddress, chain_store_handle.clone()).await;
+        let result2 = register_user(&mut session2, btcaddress, chain_store_handle).await;
 
         // Verify
         assert!(result1.is_ok(), "First registration should succeed");
@@ -375,23 +351,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_register_user_multiple_users() {
-        // Setup
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
-            bitcoin::Network::Signet,
-        ));
+    #[tokio::test]
+    async fn test_register_user_multiple_users() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+
         let mut session1 = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         let mut session2 = Session::<DifficultyAdjuster>::new(2, 2, None, 0x1fffe000);
         let btcaddress1 = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
         let btcaddress2 = "tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7";
 
         // Execute - register two different users
-        let result1 = register_user(&mut session1, btcaddress1, store.clone());
-        let result2 = register_user(&mut session2, btcaddress2, store.clone());
+        let result1 = register_user(&mut session1, btcaddress1, chain_store_handle.clone()).await;
+        let result2 = register_user(&mut session2, btcaddress2, chain_store_handle).await;
 
         // Verify
         assert!(result1.is_ok(), "First registration should succeed");
@@ -430,12 +401,7 @@ mod tests {
             .await
             .unwrap();
 
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
-            bitcoin::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -449,7 +415,7 @@ mod tests {
             emissions_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
-            store,
+            chain_store_handle,
         };
 
         // Execute
@@ -535,12 +501,7 @@ mod tests {
             .await
             .unwrap();
 
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
-            bitcoin::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -554,7 +515,7 @@ mod tests {
             emissions_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
-            store,
+            chain_store_handle,
         };
 
         // Execute

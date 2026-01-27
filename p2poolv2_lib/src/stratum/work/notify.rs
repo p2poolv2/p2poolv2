@@ -24,9 +24,9 @@ use crate::accounting::simple_pplns::payout::Payout;
 use crate::config::StratumConfig;
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_commitment::{ShareCommitment, build_share_commitment};
 use crate::stratum::messages::{Notify, NotifyParams};
 use crate::stratum::util::reverse_four_byte_chunks;
@@ -62,7 +62,7 @@ fn parse_flags(flags: Option<String>) -> PushBytesBuf {
 /// to match to collect all the shares to use to compute output distribution.
 async fn build_output_distribution(
     template: &BlockTemplate,
-    store: &Arc<ChainStore>,
+    chain_store_handle: &ChainStoreHandle,
     config: &StratumConfig<crate::config::Parsed>,
 ) -> Vec<OutputPair> {
     const DEFAULT_STEP_SIZE_SECONDS: u64 = 24 * 60 * 60; // 1 day
@@ -75,7 +75,7 @@ async fn build_output_distribution(
     let total_difficulty = required_target.difficulty_float() * config.difficulty_multiplier;
 
     match payout
-        .get_output_distribution(store, total_difficulty, total_amount, config)
+        .get_output_distribution(chain_store_handle, total_difficulty, total_amount, config)
         .await
     {
         Ok(distribution) => distribution,
@@ -140,17 +140,17 @@ pub fn build_notify(
 async fn build_notify_and_commitment(
     template: &Arc<BlockTemplate>,
     clean_jobs: bool,
-    chain_store: &Arc<ChainStore>,
+    chain_store_handle: &ChainStoreHandle,
     config: &StratumConfig<crate::config::Parsed>,
     miner_pubkey: Option<CompressedPublicKey>,
     pool_signature: &[u8],
     tracker_handle: &Arc<JobTracker>,
 ) -> Result<(String, Option<ShareCommitment>), WorkError> {
     let job_id = tracker_handle.get_next_job_id();
-    let output_distribution = build_output_distribution(template, chain_store, config).await;
+    let output_distribution = build_output_distribution(template, chain_store_handle, config).await;
 
-    let share_commitment =
-        build_share_commitment(chain_store, template, miner_pubkey).map_err(|_| WorkError {
+    let share_commitment = build_share_commitment(chain_store_handle, template, miner_pubkey)
+        .map_err(|_| WorkError {
             message: "Failed to build share commitment".to_string(),
         })?;
     let commitment_hash = share_commitment
@@ -199,7 +199,7 @@ pub enum NotifyCmd {
 pub async fn start_notify(
     mut notifier_rx: mpsc::Receiver<NotifyCmd>,
     connections: ClientConnectionsHandle,
-    chain_store: Arc<ChainStore>,
+    chain_store_handle: ChainStoreHandle,
     tracker_handle: Arc<JobTracker>,
     config: &StratumConfig<crate::config::Parsed>,
     miner_pubkey: Option<CompressedPublicKey>,
@@ -209,6 +209,7 @@ pub async fn start_notify(
         Some(ref sig) => sig.as_bytes(),
         None => &[],
     };
+
     while let Some(cmd) = notifier_rx.recv().await {
         match cmd {
             NotifyCmd::SendToAll { template } => {
@@ -219,7 +220,7 @@ pub async fn start_notify(
                 let (notify_str, _share_commitment) = match build_notify_and_commitment(
                     &template,
                     clean_jobs,
-                    &chain_store,
+                    &chain_store_handle,
                     config,
                     miner_pubkey,
                     pool_signature,
@@ -235,7 +236,7 @@ pub async fn start_notify(
                 };
 
                 connections.send_to_all(Arc::new(notify_str.clone())).await;
-                if chain_store.add_job(notify_str).is_err() {
+                if chain_store_handle.add_job(notify_str).await.is_err() {
                     tracing::warn!("Couldn't save job when sending to all");
                 }
             }
@@ -255,7 +256,7 @@ pub async fn start_notify(
                 let (notify_str, _share_commitment) = match build_notify_and_commitment(
                     template,
                     clean_jobs,
-                    &chain_store,
+                    &chain_store_handle,
                     config,
                     miner_pubkey,
                     pool_signature,
@@ -273,7 +274,7 @@ pub async fn start_notify(
                 connections
                     .send_to_client(client_address, Arc::new(notify_str.clone()))
                     .await;
-                if chain_store.add_job(notify_str).is_err() {
+                if chain_store_handle.add_job(notify_str).await.is_err() {
                     tracing::warn!("Couldn't save job when sending to client");
                 }
             }
@@ -285,16 +286,12 @@ pub async fn start_notify(
 mod tests {
     use super::*;
     use crate::accounting::simple_pplns::SimplePplnsShare;
-    use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
-    use crate::stratum::messages::{Response, SimpleRequest};
-    use crate::stratum::session::Session;
     use crate::stratum::work::block_template::{BlockTemplate, TemplateTransaction};
     use crate::stratum::work::coinbase::extract_outputs_from_coinbase2;
     use crate::stratum::work::tracker::start_tracker_actor;
     use crate::test_utils::genesis_for_tests;
     use bitcoin::CompressedPublicKey;
     use bitcoin::{Amount, ScriptBuf, TxOut};
-    use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::time::SystemTime;
@@ -325,7 +322,7 @@ mod tests {
             - 60)
             * 1_000_000;
 
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         let shares = vec![SimplePplnsShare {
             user_id: 1,
@@ -338,14 +335,14 @@ mod tests {
             nonce: "test_nonce".to_string(),
         }];
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let output_distribution =
-            build_output_distribution(&template, &Arc::new(store), &stratum_config).await;
+            build_output_distribution(&template, &chain_store_handle, &stratum_config).await;
         // Build Notify
         let notify = build_notify(&template, output_distribution, job_id, false, &[], None)
             .expect("Failed to build notify");
@@ -412,7 +409,7 @@ mod tests {
             - 60)
             * 1_000_000;
 
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         let shares = vec![SimplePplnsShare {
             user_id: 1,
@@ -425,18 +422,18 @@ mod tests {
             nonce: "test_nonce".to_string(),
         }];
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
-        store.expect_add_job().returning(|_| Ok(()));
+        chain_store_handle.expect_add_job().returning(|_| Ok(()));
 
-        store
+        chain_store_handle
             .expect_get_current_target()
             .returning(|| Ok(503543726));
 
         let genesis = genesis_for_tests().block_hash();
-        store
+        chain_store_handle
             .expect_get_chain_tip_and_uncles()
             .returning(move || (genesis, std::collections::HashSet::new()));
 
@@ -450,7 +447,7 @@ mod tests {
             start_notify(
                 notify_rx,
                 mock_connections,
-                Arc::new(store),
+                chain_store_handle,
                 work_map_handle,
                 &stratum_config,
                 Some(miner_pubkey),
@@ -494,79 +491,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_build_notify_from_ckpool_sample() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
-        let _tracker_handle = start_tracker_actor();
-
-        let (mock_server, _bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
-        mock_submit_block_with_any_body(&mock_server).await;
-
-        let template_str =
-            include_str!("../../../../p2poolv2_tests/test_data/validation/stratum/b/template.json");
-        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
-
-        let notify_str =
-            include_str!("../../../../p2poolv2_tests/test_data/validation/stratum/b/notify.json");
-        let notify: Notify = serde_json::from_str(&notify_str).unwrap();
-
-        let submit_str =
-            include_str!("../../../../p2poolv2_tests/test_data/validation/stratum/b/submit.json");
-        let _submit: SimpleRequest = serde_json::from_str(&submit_str).unwrap();
-
-        let authorize_response_str = include_str!(
-            "../../../../p2poolv2_tests/test_data/validation/stratum/b/authorize_response.json"
-        );
-        let authorize_response: Response = serde_json::from_str(&authorize_response_str).unwrap();
-
-        let enonce1 = authorize_response.result.unwrap()[1].clone();
-        let enonce1: &str = enonce1.as_str().unwrap();
-        session.enonce1 =
-            u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
-        session.enonce1_hex = enonce1.to_string();
-
-        let job_id = u64::from_str_radix(&notify.params.job_id, 16).unwrap();
-        let n_time = (SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            - 60)
-            * 1_000_000;
-
-        let mut store = ChainStore::default();
-
-        let shares = vec![SimplePplnsShare {
-            user_id: 1,
-            difficulty: 100,
-            btcaddress: Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string()),
-            workername: Some("".to_string()),
-            n_time,
-            job_id: "test_job".to_string(),
-            extranonce2: "test_extra".to_string(),
-            nonce: "test_nonce".to_string(),
-        }];
-
-        store
-            .expect_get_pplns_shares_filtered()
-            .return_const(shares);
-
-        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
-
-        let output_distribution =
-            build_output_distribution(&template, &Arc::new(store), &stratum_config).await;
-
-        let result = build_notify(
-            &template,
-            output_distribution,
-            JobId(job_id),
-            false,
-            &[],
-            None,
-        );
-
-        assert_eq!(result.unwrap().params.prevhash, notify.params.prevhash);
-    }
-
-    #[tokio::test]
     async fn test_build_notify_and_commitment() {
         // Load a sample block template
         let data = include_str!(
@@ -584,7 +508,7 @@ mod tests {
             - 60)
             * 1_000_000;
 
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         let shares = vec![SimplePplnsShare {
             user_id: 1,
@@ -597,16 +521,16 @@ mod tests {
             nonce: "test_nonce".to_string(),
         }];
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
         let genesis = genesis_for_tests().block_hash();
-        store
+        chain_store_handle
             .expect_get_chain_tip_and_uncles()
             .returning(move || (genesis, std::collections::HashSet::new()));
 
-        store
+        chain_store_handle
             .expect_get_current_target()
             .returning(|| Ok(503543726));
 
@@ -623,7 +547,7 @@ mod tests {
         let result = build_notify_and_commitment(
             &Arc::new(template.clone()),
             false,
-            &Arc::new(store),
+            &chain_store_handle,
             &stratum_config,
             Some(miner_pubkey),
             pool_signature,

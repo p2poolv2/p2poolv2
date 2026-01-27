@@ -17,7 +17,6 @@
 pub mod behaviour;
 pub mod emission_worker;
 pub mod request_response_handler;
-pub mod storage_worker;
 pub use crate::config::Config;
 pub mod actor;
 pub mod messages;
@@ -31,9 +30,9 @@ use crate::service::build_service;
 use crate::service::p2p_service::RequestContext;
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::utils::time_provider::SystemTimeProvider;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
@@ -49,7 +48,6 @@ use libp2p::{
     swarm::SwarmEvent,
 };
 use std::error::Error;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tower::{Service, ServiceExt, util::BoxService};
@@ -91,7 +89,7 @@ struct Node {
     swarm: Swarm<P2PoolBehaviour>,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     swarm_rx: mpsc::Receiver<SwarmSend<ResponseChannel<Message>>>,
-    chain_store: Arc<ChainStore>,
+    chain_store_handle: ChainStoreHandle,
     service: BoxService<
         RequestContext<ResponseChannel<Message>, SystemTimeProvider>,
         (),
@@ -103,7 +101,7 @@ struct Node {
 impl Node {
     pub fn new(
         config: Config,
-        chain_store: Arc<ChainStore>,
+        chain_store_handle: ChainStoreHandle,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
 
@@ -197,7 +195,7 @@ impl Node {
             swarm,
             swarm_tx,
             swarm_rx,
-            chain_store,
+            chain_store_handle,
             service,
             config,
         })
@@ -246,7 +244,7 @@ impl Node {
         &self,
         query: crate::command::GetPplnsShareQuery,
     ) -> Vec<SimplePplnsShare> {
-        self.chain_store.get_pplns_shares_filtered(
+        self.chain_store_handle.get_pplns_shares_filtered(
             Some(query.limit),
             query.start_time,
             query.end_time,
@@ -270,7 +268,7 @@ impl Node {
                     libp2p::core::ConnectedPoint::Dialer { .. } => {
                         if let Err(e) = send_getheaders(
                             peer_id,
-                            self.chain_store.clone(),
+                            self.chain_store_handle.clone(),
                             self.swarm_tx.clone(),
                         )
                         .await
@@ -387,7 +385,7 @@ impl Node {
         info!("Connection established with peer: {peer_id}");
         let _ = send_blocks_inventory::<ResponseChannel<Message>>(
             peer_id,
-            self.chain_store.clone(),
+            self.chain_store_handle.clone(),
             self.swarm_tx.clone(),
         )
         .await;
@@ -412,7 +410,7 @@ impl Node {
             let ctx = RequestContext::<ResponseChannel<Message>, _> {
                 peer,
                 request: request.clone(),
-                store: self.chain_store.clone(),
+                chain_store_handle: self.chain_store_handle.clone(),
                 response_channel: channel,
                 swarm_tx: self.swarm_tx.clone(),
                 time_provider: SystemTimeProvider,
@@ -480,12 +478,11 @@ impl Node {
 ///   will be denied before it is attempted.
 #[cfg(test)]
 mod tests {
+    use super::ChainStoreHandle;
     use crate::config::{
         ApiConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig, StratumConfig,
     };
     use crate::node::Node;
-    #[mockall_double::double]
-    use crate::shares::chain::chain_store::ChainStore;
     use bitcoindrpc::BitcoinRpcConfig;
     use futures::StreamExt;
     use std::time::{Duration, Instant};
@@ -552,10 +549,10 @@ mod tests {
         };
         config.network = network_config;
 
-        let mock_store = ChainStore::default();
-        let store = std::sync::Arc::new(mock_store);
+        let chain_store_handle = ChainStoreHandle::default();
 
-        let mut node = Node::new(config.clone(), store).expect("Node initialization failed");
+        let mut node =
+            Node::new(config.clone(), chain_store_handle).expect("Node initialization failed");
 
         //  Initiate the dial manually!
         let unreachable_peer_multiaddr: libp2p::Multiaddr =

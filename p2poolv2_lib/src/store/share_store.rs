@@ -369,7 +369,10 @@ mod tests {
         let mut batch = Store::get_write_batch();
         store.setup_genesis(&genesis_block, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
-        assert_eq!(store.get_genesis_blockhash(), genesis_block.block_hash());
+        assert_eq!(
+            store.get_genesis_blockhash().unwrap(),
+            genesis_block.block_hash()
+        );
 
         // verify we can get the share header for the genesis block
         let header = store.get_share_header(&genesis_block.block_hash()).unwrap();

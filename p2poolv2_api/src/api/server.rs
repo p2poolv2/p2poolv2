@@ -23,14 +23,11 @@ use axum::{
     routing::get,
 };
 use chrono::DateTime;
-use p2poolv2_lib::stratum::work::{
-    coinbase::extract_outputs_from_coinbase2,
-    tracker::{JobTracker, parse_coinbase},
-};
+use p2poolv2_lib::stratum::work::tracker::{JobTracker, parse_coinbase};
 use p2poolv2_lib::{
     accounting::{simple_pplns::SimplePplnsShare, stats::metrics::MetricsHandle},
     config::ApiConfig,
-    shares::chain::chain_store::ChainStore,
+    shares::chain::chain_store_handle::ChainStoreHandle,
 };
 use serde::Deserialize;
 use std::{net::SocketAddr, sync::Arc};
@@ -40,7 +37,7 @@ use tracing::info;
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) app_config: AppConfig,
-    pub(crate) chain_store: Arc<ChainStore>,
+    pub(crate) chain_store_handle: ChainStoreHandle,
     pub(crate) metrics_handle: MetricsHandle,
     pub(crate) tracker_handle: Arc<JobTracker>,
     pub(crate) auth_user: Option<String>,
@@ -72,7 +69,7 @@ pub struct PplnsQuery {
 /// Start the API server and return a shutdown channel
 pub async fn start_api_server(
     config: ApiConfig,
-    chain_store: Arc<ChainStore>,
+    chain_store_handle: ChainStoreHandle,
     metrics_handle: MetricsHandle,
     tracker_handle: Arc<JobTracker>,
     network: bitcoin::Network,
@@ -85,7 +82,7 @@ pub async fn start_api_server(
 
     let app_state = Arc::new(AppState {
         app_config: app_config.clone(),
-        chain_store,
+        chain_store_handle,
         metrics_handle,
         tracker_handle,
         auth_user: config.auth_user.clone(),
@@ -187,10 +184,11 @@ async fn pplns_shares(
         return Err(ApiError::ServerError("Invalid date range".into()));
     }
 
-    let shares =
-        state
-            .chain_store
-            .get_pplns_shares_filtered(query.limit, Some(start_time), Some(end_time));
+    let shares = state.chain_store_handle.get_pplns_shares_filtered(
+        query.limit,
+        Some(start_time),
+        Some(end_time),
+    );
 
     Ok(Json(shares))
 }
@@ -201,12 +199,11 @@ mod tests {
     use axum::extract::State;
     use bitcoin::{Amount, Network, TxOut};
     use p2poolv2_lib::accounting::stats::metrics;
-    use p2poolv2_lib::shares::chain::chain_store::ChainStore;
     use p2poolv2_lib::shares::share_block::ShareBlock;
-    use p2poolv2_lib::store::Store;
     use p2poolv2_lib::stratum::work::block_template::BlockTemplate;
     use p2poolv2_lib::stratum::work::coinbase::parse_address;
     use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
+    use p2poolv2_lib::test_utils::setup_test_chain_store_handle;
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
@@ -295,12 +292,8 @@ mod tests {
         );
 
         //  Mock ChainStore
-        let temp_dir_store = tempfile::tempdir().unwrap();
-        let store = Arc::new(
-            Store::new(temp_dir_store.path().to_str().unwrap().to_string(), false).unwrap(),
-        );
-        let genesis = ShareBlock::build_genesis_for_network(Network::Signet);
-        let chain_store = Arc::new(ChainStore::new(store, genesis, Network::Signet));
+        let _genesis = ShareBlock::build_genesis_for_network(Network::Signet);
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
         //  Prepare AppState
         let state = Arc::new(AppState {
@@ -308,7 +301,7 @@ mod tests {
                 pool_signature_length: 8,
                 network: bitcoin::Network::Signet,
             },
-            chain_store,
+            chain_store_handle,
             metrics_handle,
             tracker_handle,
             auth_user: None,
