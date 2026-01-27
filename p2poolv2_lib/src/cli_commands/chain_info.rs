@@ -14,15 +14,15 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use bitcoin::{BlockHash, hashes::Hash};
 use serde::Serialize;
 use std::error::Error;
-use std::sync::Arc;
 
 /// Structure to hold chain information
 #[derive(Serialize)]
 struct ChainInfo {
-    genesis_block_hash: Option<String>,
+    genesis_blockhash: Option<String>,
     chain_tip_height: Option<u32>,
     total_work: String,
     chain_tip_blockhash: String,
@@ -30,37 +30,37 @@ struct ChainInfo {
 }
 
 /// Implementation of the info command
-pub fn execute(chain: Arc<ChainStore>) -> Result<(), Box<dyn Error>> {
+pub fn execute(chain_store_handle: ChainStoreHandle) -> Result<(), Box<dyn Error>> {
     // Get genesis block hash
-    let genesis_block_hash = chain
-        .store
-        .get_genesis_block_hash()
-        .map(|hash| format!("{hash:?}"));
+    let genesis_blockhash = chain_store_handle.get_genesis_blockhash();
 
     // Get chain tip height
-    let chain_tip_height = chain
+    let chain_tip_height = chain_store_handle
         .get_tip_height()
-        .map_err(|e| format!("Error getting chain tip {e}"))?;
+        .unwrap_or_default()
+        .unwrap_or_default();
 
     // Get chain tip blockhash
-    let chain_tip_blockhash = format!("{:?}", chain.store.get_chain_tip());
+    let chain_tip_blockhash = format!("{:?}", chain_store_handle.get_chain_tip());
 
     // Get total work (difficulty)
-    let total_work = format!("{:?}", chain.store.get_total_work());
+    let total_work = format!("{:?}", chain_store_handle.get_total_work());
 
     // Count total number of shares in the chain
     let mut total_shares = 0;
-    if let Some(height) = chain_tip_height {
-        for h in 0..=height {
-            let blockhashes = chain.store.get_blockhashes_for_height(h);
-            total_shares += blockhashes.len() as u64;
-        }
+    for h in 0..=chain_tip_height {
+        let blockhashes = chain_store_handle.get_blockhashes_for_height(h);
+        total_shares += blockhashes.len() as u64;
     }
 
     // Create info object
     let info = ChainInfo {
-        genesis_block_hash,
-        chain_tip_height,
+        genesis_blockhash: Some(
+            genesis_blockhash
+                .unwrap_or(BlockHash::all_zeros())
+                .to_string(),
+        ),
+        chain_tip_height: Some(chain_tip_height),
         total_work,
         chain_tip_blockhash,
         total_shares,
@@ -75,26 +75,33 @@ pub fn execute(chain: Arc<ChainStore>) -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::execute;
-    use crate::shares::chain::chain_store::ChainStore;
     use crate::shares::share_block::ShareBlock;
-    use crate::store::Store;
-    use std::sync::Arc;
-    use tempfile::tempdir;
+    use crate::test_utils::setup_test_chain_store_handle;
 
-    #[test]
-    fn test_execute_empty_chain() {
-        // Create a temporary directory for the store
-        let temp_dir = tempdir().unwrap();
-        let store =
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap());
-        let chain = ChainStore::new(
-            store,
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
-            bitcoin::Network::Signet,
-        );
+    #[test_log::test(tokio::test)]
+    async fn test_execute_empty_chain() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
-        // Execute the info command with an empty store
-        let result = execute(Arc::new(chain));
+        // Execute the info command
+        let result = execute(chain_store_handle);
+
+        // Verify the command executed successfully
+        assert!(result.is_ok(), "Execute should not return an error");
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_genesis() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+
+        // Initialize genesis block
+        let genesis = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
+        chain_store_handle
+            .init_or_setup_genesis(genesis)
+            .await
+            .expect("Failed to initialize genesis");
+
+        // Execute the info command
+        let result = execute(chain_store_handle);
 
         // Verify the command executed successfully
         assert!(result.is_ok(), "Execute should not return an error");

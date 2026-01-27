@@ -22,16 +22,14 @@ use crate::node::Node;
 use crate::node::SwarmSend;
 use crate::node::emission_worker::EmissionWorker;
 use crate::node::messages::Message;
-use crate::node::storage_worker::{StorageWorker, storage_channel};
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::stratum::emission::EmissionReceiver;
 use libp2p::futures::StreamExt;
 use std::error::Error;
-use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info};
 
@@ -48,13 +46,19 @@ impl NodeHandle {
     /// Create a new Node and return a handle to interact with it
     pub async fn new(
         config: Config,
-        chain_store: Arc<ChainStore>,
+        chain_store_handle: ChainStoreHandle,
         emissions_rx: EmissionReceiver,
         metrics: MetricsHandle,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
-        let (node_actor, stopping_rx) =
-            NodeActor::new(config, chain_store, command_rx, emissions_rx, metrics).unwrap();
+        let (node_actor, stopping_rx) = NodeActor::new(
+            config,
+            chain_store_handle,
+            command_rx,
+            emissions_rx,
+            metrics,
+        )
+        .unwrap();
 
         tokio::spawn(async move {
             node_actor.run().await;
@@ -103,7 +107,7 @@ use mockall::mock;
 #[cfg(test)]
 mock! {
     pub NodeHandle {
-        pub async fn new(config: Config, store: std::sync::Arc<ChainStore>) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>>;
+        pub async fn new(config: Config, chain_store_handle: ChainStoreHandle) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>>;
         pub async fn get_peers(&self) -> Result<Vec<libp2p::PeerId>, Box<dyn Error>>;
         pub async fn shutdown(&self) -> Result<(), Box<dyn Error>>;
         pub async fn send_to_peer(&self, peer_id: libp2p::PeerId, message: Message) -> Result<(), Box<dyn Error>>;
@@ -123,18 +127,20 @@ struct NodeActor {
     command_rx: mpsc::Receiver<Command>,
     stopping_tx: oneshot::Sender<()>,
     emissions_rx: EmissionReceiver,
+    chain_store_handle: ChainStoreHandle,
+    #[allow(dead_code)]
     metrics: MetricsHandle,
 }
 
 impl NodeActor {
     fn new(
         config: Config,
-        chain_store: Arc<ChainStore>,
+        chain_store_handle: ChainStoreHandle,
         command_rx: mpsc::Receiver<Command>,
         emissions_rx: EmissionReceiver,
         metrics: MetricsHandle,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>> {
-        let node = Node::new(config, chain_store)?;
+        let node = Node::new(config, chain_store_handle.clone())?;
         let (stopping_tx, stopping_rx) = oneshot::channel();
         Ok((
             Self {
@@ -142,6 +148,7 @@ impl NodeActor {
                 command_rx,
                 stopping_tx,
                 emissions_rx,
+                chain_store_handle,
                 metrics,
             },
             stopping_rx,
@@ -149,16 +156,11 @@ impl NodeActor {
     }
 
     async fn run(mut self) {
-        // Create storage channel and spawn storage worker for serialized database writes
-        let (storage_tx, storage_rx) = storage_channel();
-        let storage_worker = StorageWorker::new(storage_rx, self.node.chain_store.clone());
-        tokio::spawn(storage_worker.run());
-
         // Spawn emission worker - processes shares in separate task and enqueues SwarmSend::Broadcast
         let emission_worker = EmissionWorker::new(
             self.emissions_rx,
             self.node.swarm_tx.clone(),
-            storage_tx,
+            self.chain_store_handle.clone(),
             self.node.config.stratum.network,
         );
         tokio::spawn(emission_worker.run());

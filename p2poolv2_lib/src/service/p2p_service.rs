@@ -27,17 +27,16 @@ use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::handle_request;
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::utils::time_provider::TimeProvider;
-use std::sync::Arc;
 
 /// Request context wrapping all inputs for the service call.
 pub struct RequestContext<C, T> {
     pub peer: libp2p::PeerId,
     pub request: Message,
-    pub store: Arc<ChainStore>,
+    pub chain_store_handle: ChainStoreHandle,
     pub response_channel: C,
     pub swarm_tx: mpsc::Sender<SwarmSend<C>>,
     pub time_provider: T,

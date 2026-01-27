@@ -16,14 +16,13 @@
 
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::shares::validation;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
-use std::sync::Arc;
 use tracing::{error, info};
 
 /// Handle a ShareBlock received from a peer in response to a getblocks request.
@@ -33,17 +32,17 @@ use tracing::{error, info};
 /// Share blocks are gossiped using the libp2p gossipsub protocol.
 pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
     share_block: &ShareBlock,
-    chain_store: Arc<ChainStore>,
+    chain_store_handle: &ChainStoreHandle,
     time_provider: &T,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Received share block: {:?}", share_block);
-    if let Err(e) = validation::validate(&share_block, chain_store.clone(), time_provider).await {
+    if let Err(e) = validation::validate(share_block, chain_store_handle, time_provider).await {
         error!("Share block validation failed: {}", e);
         return Err("Share block validation failed".into());
     }
 
     // TODO: Check if this will be an uncle, for now add to main chain
-    if let Err(e) = chain_store.add_share(&share_block, true) {
+    if let Err(e) = chain_store_handle.add_share(share_block, true).await {
         error!("Failed to add share: {}", e);
         return Err("Error adding share to chain".into());
     }
@@ -61,21 +60,20 @@ mod tests {
     use crate::utils::time_provider::TestTimeProvider;
     use bitcoin::hashes::Hash as _;
     use mockall::predicate::*;
-    use std::sync::Arc;
     use std::time::SystemTime;
 
     #[tokio::test]
     async fn test_handle_share_block_success() {
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
         let share_block =
             build_block_from_work_components("../p2poolv2_tests/test_data/validation/stratum/b/");
 
         // Set up mock expectations
-        store
+        chain_store_handle
             .expect_add_share()
             .with(eq(share_block.clone()), eq(true))
             .returning(|_, _| Ok(()));
-        store
+        chain_store_handle
             .expect_get_share()
             .with(eq(bitcoin::BlockHash::all_zeros()))
             .returning(|_| Some(genesis_for_tests()));
@@ -86,18 +84,18 @@ mod tests {
                 .unwrap(),
         );
 
-        let result = handle_share_block(&share_block, Arc::new(store), &time_provider).await;
+        let result = handle_share_block(&share_block, &chain_store_handle, &time_provider).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_handle_share_block_validation_error() {
-        let store = ChainStore::default();
+        let chain_store_handle = ChainStoreHandle::default();
         let share_block = TestShareBlockBuilder::new().build();
 
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
-        let result = handle_share_block(&share_block, Arc::new(store), &time_provider).await;
+        let result = handle_share_block(&share_block, &chain_store_handle, &time_provider).await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
@@ -107,16 +105,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_share_block_add_share_error() {
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
         let share_block =
             build_block_from_work_components("../p2poolv2_tests/test_data/validation/stratum/b/");
 
         // Set up mock expectations
-        store
+        chain_store_handle
             .expect_add_share()
             .with(eq(share_block.clone()), eq(true))
             .returning(|_, _| Err("Failed to add share".into()));
-        store
+        chain_store_handle
             .expect_get_share()
             .with(eq(bitcoin::BlockHash::all_zeros()))
             .returning(|_| Some(genesis_for_tests()));
@@ -127,7 +125,7 @@ mod tests {
                 .unwrap(),
         );
 
-        let result = handle_share_block(&share_block, Arc::new(store), &time_provider).await;
+        let result = handle_share_block(&share_block, &chain_store_handle, &time_provider).await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),

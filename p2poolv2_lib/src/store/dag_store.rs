@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::{ColumnFamily, Store};
-use crate::shares::chain::chain_store::COMMON_ANCESTOR_DEPTH;
+use crate::shares::chain::chain_store_handle::COMMON_ANCESTOR_DEPTH;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::shares::validation::MAX_UNCLES;
 use bitcoin::BlockHash;
@@ -140,7 +140,10 @@ impl Store {
         // If no blockhash found, return vector with genesis block
         let start_blockhash = match start_blockhash {
             Some(hash) => hash,
-            None => return Ok(vec![self.get_genesis_blockhash()]),
+            None => match self.get_genesis_blockhash() {
+                Some(hash) => return Ok(vec![hash]),
+                None => return Ok(vec![]),
+            },
         };
 
         self.get_descendant_blockhashes(&start_blockhash, stop_blockhash, limit)

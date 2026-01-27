@@ -14,22 +14,26 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+#[cfg(test)]
 use bitcoindrpc::test_utils::{mock_method, setup_mock_bitcoin_rpc};
+#[cfg(test)]
 use p2poolv2_lib::accounting::stats::metrics;
-use p2poolv2_lib::shares::chain::chain_store::ChainStore;
-use p2poolv2_lib::shares::share_block::ShareBlock;
-use p2poolv2_lib::store::Store;
+#[cfg(test)]
 use p2poolv2_lib::stratum::{
     self, client_connections,
     messages::{Response, SimpleRequest},
     server::StratumServerBuilder,
     work::{notify, tracker::start_tracker_actor},
 };
+#[cfg(test)]
+use p2poolv2_lib::test_utils::setup_test_chain_store_handle;
+#[cfg(test)]
 use std::net::SocketAddr;
+#[cfg(test)]
 use std::str;
-use std::sync::Arc;
-use tempfile::tempdir;
+#[cfg(test)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(test)]
 use tokio::net::TcpStream;
 
 #[tokio::test]
@@ -59,12 +63,7 @@ async fn test_stratum_server_subscribe() {
         .await
         .unwrap();
 
-    let temp_dir = tempdir().unwrap();
-    let store = Arc::new(ChainStore::new(
-        Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-        ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
-        bitcoin::Network::Signet,
-    ));
+    let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
     let mut server = StratumServerBuilder::default()
         .shutdown_rx(shutdown_rx)
@@ -78,7 +77,7 @@ async fn test_stratum_server_subscribe() {
         .zmqpubhashblock("tcp://127.0.0.1:28332".to_string())
         .network(bitcoin::network::Network::Regtest)
         .version_mask(0x1fffe000)
-        .store(store)
+        .chain_store_handle(chain_store_handle)
         .build()
         .await
         .unwrap();

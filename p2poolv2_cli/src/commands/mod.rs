@@ -19,8 +19,9 @@ pub mod gen_auth;
 use clap::{Parser, Subcommand};
 use p2poolv2_lib::cli_commands;
 use p2poolv2_lib::config::Config;
-use p2poolv2_lib::shares::chain::chain_store::ChainStore;
+use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::shares::share_block::ShareBlock;
+use p2poolv2_lib::store::writer::{StoreHandle, StoreWriter, write_channel};
 use std::error::Error;
 use std::sync::Arc;
 
@@ -62,7 +63,7 @@ pub enum Commands {
     },
 }
 
-pub fn run() -> Result<(), Box<dyn Error>> {
+pub async fn run() -> Result<(), Box<dyn Error>> {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
@@ -82,29 +83,41 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                 .ok_or("Config file required for this command. Use --config")?;
             let config = Config::load(config_path)?;
 
+            let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
             let store = match cli_commands::store::open_store(config.store.path.clone()) {
-                Ok(s) => s,
+                Ok(s) => Arc::new(s),
                 Err(e) => {
                     panic!("Error opening store {e}");
                 }
             };
-            let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
-            let chain = Arc::new(ChainStore::new(
-                Arc::new(store),
-                genesis,
-                config.stratum.network,
-            ));
+            // Create StoreWriter for serialized database writes
+            let (write_tx, write_rx) = write_channel();
+            let store_writer = StoreWriter::new(store.clone(), write_rx);
+            tokio::spawn(store_writer.run());
+
+            // Create StoreHandle and ChainStoreHandle for new components
+            let store_handle = StoreHandle::new(store.clone(), write_tx);
+            let chain_store_handle = ChainStoreHandle::new(store_handle, config.stratum.network);
+            if let Err(e) = chain_store_handle.init_or_setup_genesis(genesis).await {
+                eprintln!("Error loading store");
+                return Err(e);
+            };
 
             match &cli.command {
                 Some(Commands::Info) => {
-                    cli_commands::chain_info::execute(chain)?;
+                    cli_commands::chain_info::execute(chain_store_handle)?;
                 }
                 Some(Commands::PplnsShares {
                     limit,
                     start_time,
                     end_time,
                 }) => {
-                    cli_commands::pplns_shares::execute(chain, *limit, *start_time, *end_time)?;
+                    cli_commands::pplns_shares::execute(
+                        chain_store_handle,
+                        *limit,
+                        *start_time,
+                        *end_time,
+                    )?;
                 }
                 _ => unreachable!(),
             }

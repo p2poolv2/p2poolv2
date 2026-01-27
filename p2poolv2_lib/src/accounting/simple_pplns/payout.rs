@@ -19,13 +19,12 @@ use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::config::StratumConfig;
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use bitcoin::{Address, Amount};
 use std::collections::HashMap;
 use std::error::Error;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct Payout {
@@ -62,7 +61,7 @@ impl Payout {
     /// Continues querying additional time windows if total difficulty hasn't been reached.
     async fn get_shares_for_difficulty(
         &self,
-        store: &Arc<ChainStore>,
+        store: &ChainStoreHandle,
         total_difficulty: f64,
     ) -> Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>> {
         let mut result_shares = Vec::new();
@@ -117,7 +116,7 @@ impl Payout {
     /// Vector of OutputPair containing addresses and their proportional amounts
     pub async fn get_output_distribution(
         &self,
-        store: &Arc<ChainStore>,
+        chain_store_handle: &ChainStoreHandle,
         total_difficulty: f64,
         total_amount: bitcoin::Amount,
         config: &StratumConfig<crate::config::Parsed>,
@@ -142,7 +141,7 @@ impl Payout {
         // This also avoids running PPLNS share look ups when we don't need to use that data
         if remaining_total_amount > bitcoin::Amount::ZERO {
             let shares = self
-                .get_shares_for_difficulty(store, total_difficulty)
+                .get_shares_for_difficulty(&chain_store_handle, total_difficulty)
                 .await?;
 
             if shares.is_empty() {
@@ -245,7 +244,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_shares_for_difficulty_exact_match() {
         let payout = Payout::new(86400);
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         // Get current time and create recent timestamps (within last hour)
         let current_time = SystemTime::now()
@@ -297,12 +296,12 @@ mod tests {
             ), // 60 min ago
         ];
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
         let result = payout
-            .get_shares_for_difficulty(&Arc::new(store), 1000.0)
+            .get_shares_for_difficulty(&chain_store_handle, 1000.0)
             .await
             .unwrap();
 
@@ -328,7 +327,7 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         let shares = vec![
             SimplePplnsShare::new(
@@ -373,12 +372,12 @@ mod tests {
             ),
         ];
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
         let result = payout
-            .get_shares_for_difficulty(&Arc::new(store), 750.0)
+            .get_shares_for_difficulty(&chain_store_handle, 750.0)
             .await
             .unwrap();
 
@@ -400,7 +399,7 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         let shares = vec![
             SimplePplnsShare::new(
@@ -427,20 +426,20 @@ mod tests {
 
         let mut seq = mockall::Sequence::new();
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .times(1)
             .in_sequence(&mut seq)
             .return_const(shares);
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .times(1)
             .in_sequence(&mut seq)
             .return_const(vec![]);
 
         let result = payout
-            .get_shares_for_difficulty(&Arc::new(store), 500.0)
+            .get_shares_for_difficulty(&chain_store_handle, 500.0)
             .await
             .unwrap();
 
@@ -454,14 +453,14 @@ mod tests {
     #[tokio::test]
     async fn test_get_shares_for_difficulty_empty_store() {
         let payout = Payout::new(86400);
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(vec![]);
 
         let result = payout
-            .get_shares_for_difficulty(&Arc::new(store), 1000.0)
+            .get_shares_for_difficulty(&chain_store_handle, 1000.0)
             .await
             .unwrap();
 
@@ -476,7 +475,7 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         let shares = vec![SimplePplnsShare::new(
             1,
@@ -489,12 +488,12 @@ mod tests {
             "nonce".to_string(),
         )];
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
         let result = payout
-            .get_shares_for_difficulty(&Arc::new(store), 1000.0)
+            .get_shares_for_difficulty(&chain_store_handle, 1000.0)
             .await
             .unwrap();
 
@@ -512,7 +511,7 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         // Create shares spanning 300 seconds (3 batches)
         let shares = vec![
@@ -560,7 +559,7 @@ mod tests {
 
         let mut seq = mockall::Sequence::new();
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .times(1)
             .in_sequence(&mut seq)
@@ -572,7 +571,7 @@ mod tests {
         //     .return_const(Vec::from_iter(shares[3..].iter().cloned()));
 
         let result = payout
-            .get_shares_for_difficulty(&Arc::new(store), 550.0)
+            .get_shares_for_difficulty(&chain_store_handle, 550.0)
             .await
             .unwrap();
 
@@ -602,7 +601,7 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         let shares = vec![SimplePplnsShare::new(
             1,
@@ -615,7 +614,7 @@ mod tests {
             "nonce".to_string(),
         )];
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
@@ -624,7 +623,7 @@ mod tests {
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
             .await
             .unwrap();
 
@@ -644,7 +643,7 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         let shares = vec![
             SimplePplnsShare::new(
@@ -669,7 +668,7 @@ mod tests {
             ),
         ];
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
@@ -678,7 +677,7 @@ mod tests {
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
             .await
             .unwrap();
 
@@ -714,7 +713,7 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         // Multiple shares from same address should be aggregated
         let shares = vec![
@@ -750,7 +749,7 @@ mod tests {
             ),
         ];
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
@@ -759,7 +758,7 @@ mod tests {
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
             .await
             .unwrap();
 
@@ -779,18 +778,18 @@ mod tests {
     #[tokio::test]
     async fn test_get_output_distribution_empty_shares() {
         let payout = Payout::new(86400);
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         let total_amount = bitcoin::Amount::from_sat(100_000_000);
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(vec![]);
 
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
             .await
             .unwrap();
 
@@ -876,7 +875,7 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         let shares = vec![
             SimplePplnsShare::new(
@@ -901,7 +900,7 @@ mod tests {
             ),
         ];
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
@@ -915,7 +914,7 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
             .await
             .unwrap();
 
@@ -965,7 +964,7 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         let shares = vec![
             SimplePplnsShare::new(
@@ -990,7 +989,7 @@ mod tests {
             ),
         ];
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
@@ -1004,7 +1003,7 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
             .await
             .unwrap();
 
@@ -1057,7 +1056,7 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         let shares = vec![
             SimplePplnsShare::new(
@@ -1082,7 +1081,7 @@ mod tests {
             ),
         ];
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
@@ -1099,7 +1098,7 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
             .await
             .unwrap();
 
@@ -1160,9 +1159,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_output_distribution_with_donation_empty_shares() {
         let payout = Payout::new(86400);
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(vec![]);
 
@@ -1176,7 +1175,7 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
             .await
             .unwrap();
 
@@ -1194,7 +1193,7 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         let shares = vec![
             SimplePplnsShare::new(
@@ -1219,7 +1218,7 @@ mod tests {
             ),
         ];
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
@@ -1233,7 +1232,7 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
             .await
             .unwrap();
 
@@ -1280,7 +1279,7 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         let shares = vec![
             SimplePplnsShare::new(
@@ -1305,7 +1304,7 @@ mod tests {
             ),
         ];
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
@@ -1319,7 +1318,7 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
             .await
             .unwrap();
 
@@ -1345,7 +1344,7 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
         // Create shares with invalid bitcoin addresses (non-standard usernames)
         let shares = vec![
@@ -1371,7 +1370,7 @@ mod tests {
             ),
         ];
 
-        store
+        chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
@@ -1385,7 +1384,7 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&Arc::new(store), 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
             .await
             .unwrap();
 

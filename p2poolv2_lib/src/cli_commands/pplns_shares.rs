@@ -14,11 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::utils::time_provider::format_timestamp;
 use serde::Serialize;
 use std::error::Error;
-use std::sync::Arc;
 
 /// Structure to hold PPLNS share information for JSON output
 #[derive(Serialize)]
@@ -32,13 +31,13 @@ struct PplnsShareInfo {
 
 /// Implementation of the pplns-shares command
 pub fn execute(
-    chain_store: Arc<ChainStore>,
+    chain_store_handle: ChainStoreHandle,
     limit: usize,
     start_time: Option<u64>,
     end_time: Option<u64>,
 ) -> Result<(), Box<dyn Error>> {
     // Get PPLNS shares with filtering
-    let shares = chain_store.get_pplns_shares_filtered(Some(limit), start_time, end_time);
+    let shares = chain_store_handle.get_pplns_shares_filtered(Some(limit), start_time, end_time);
 
     // Convert to display format
     let share_infos: Vec<PplnsShareInfo> = shares
@@ -62,37 +61,22 @@ pub fn execute(
 mod tests {
     use super::execute;
     use crate::accounting::simple_pplns::SimplePplnsShare;
-    use crate::shares::chain::chain_store::ChainStore;
-    use crate::shares::share_block::ShareBlock;
-    use crate::store::Store;
-    use std::sync::Arc;
-    use tempfile::tempdir;
+    use crate::test_utils::setup_test_chain_store_handle;
 
-    #[test]
-    fn test_execute_empty_store() {
-        // Create a temporary directory for the store
-        let temp_dir = tempdir().unwrap();
-        let store =
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap());
-        let chain = Arc::new(ChainStore::new(
-            store,
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
-            bitcoin::Network::Signet,
-        ));
+    #[tokio::test]
+    async fn test_execute_empty_store() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
         // Execute the pplns-shares command with an empty store
-        let result = execute(chain, 10, None, None);
+        let result = execute(chain_store_handle, 10, None, None);
 
         // Verify the command executed successfully
         assert!(result.is_ok(), "Execute should not return an error");
     }
 
-    #[test]
-    fn test_execute_with_shares() {
-        // Create a temporary directory for the store
-        let temp_dir = tempdir().unwrap();
-        let store =
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap());
+    #[tokio::test]
+    async fn test_execute_with_shares() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
         // Add test shares
         let shares = vec![
@@ -119,17 +103,14 @@ mod tests {
         ];
 
         for share in &shares {
-            store.add_pplns_share(share.clone()).unwrap();
+            chain_store_handle
+                .add_pplns_share(share.clone())
+                .await
+                .unwrap();
         }
 
-        let chain = Arc::new(ChainStore::new(
-            store,
-            ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
-            bitcoin::Network::Signet,
-        ));
-
         // Execute the pplns-shares command
-        let result = execute(chain, 10, None, None);
+        let result = execute(chain_store_handle, 10, None, None);
 
         // Verify the command executed successfully
         assert!(result.is_ok(), "Execute should not return an error");

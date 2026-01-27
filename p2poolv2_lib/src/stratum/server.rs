@@ -14,14 +14,13 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::accounting::stats::metrics;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::stratum::client_connections::ClientConnectionsHandle;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::stratum::client_connections::ClientConnectionsHandle;
-
-use crate::accounting::stats::metrics;
-use crate::shares::chain::chain_store::ChainStore;
 use crate::stratum::difficulty_adjuster::{DifficultyAdjuster, DifficultyAdjusterTrait};
 use crate::stratum::emission::EmissionSender;
 use crate::stratum::error::Error;
@@ -57,7 +56,7 @@ pub struct StratumServer {
     shutdown_rx: oneshot::Receiver<()>,
     connections_handle: ClientConnectionsHandle,
     emissions_tx: EmissionSender,
-    store: Arc<ChainStore>,
+    chain_store_handle: ChainStoreHandle,
 }
 
 /// Builder for StratumServer to avoid dependency on StratumConfig
@@ -76,7 +75,7 @@ pub struct StratumServerBuilder {
     connections_handle: Option<ClientConnectionsHandle>,
     emissions_tx: Option<EmissionSender>,
     zmqpubhashblock: Option<String>,
-    store: Option<Arc<ChainStore>>,
+    chain_store_handle: Option<ChainStoreHandle>,
 }
 
 impl StratumServerBuilder {
@@ -145,8 +144,8 @@ impl StratumServerBuilder {
         self
     }
 
-    pub fn store(mut self, store: Arc<ChainStore>) -> Self {
-        self.store = Some(store);
+    pub fn chain_store_handle(mut self, handle: ChainStoreHandle) -> Self {
+        self.chain_store_handle = Some(handle);
         self
     }
 
@@ -172,7 +171,9 @@ impl StratumServerBuilder {
                 .connections_handle
                 .ok_or("connections_handle is required")?,
             emissions_tx: self.emissions_tx.ok_or("shares_tx is required")?,
-            store: self.store.ok_or("store is required")?,
+            chain_store_handle: self
+                .chain_store_handle
+                .ok_or("chain store handle is required")?,
         })
     }
 }
@@ -238,7 +239,7 @@ impl StratumServer {
                                 emissions_tx: self.emissions_tx.clone(),
                                 network: self.network,
                                 metrics: metrics.clone(),
-                                store: self.store.clone(),
+                                chain_store_handle: self.chain_store_handle.clone(),
                             };
                             let version_mask = self.version_mask;
                             // Spawn a new task for each connection
@@ -275,7 +276,7 @@ pub(crate) struct StratumContext {
     pub emissions_tx: EmissionSender,
     pub network: bitcoin::network::Network,
     pub metrics: metrics::MetricsHandle,
-    pub store: Arc<ChainStore>,
+    pub chain_store_handle: ChainStoreHandle,
 }
 
 /// Handles a single connection to the Stratum server.
@@ -440,17 +441,14 @@ where
 #[cfg(test)]
 mod stratum_server_tests {
     use super::*;
-    use crate::shares::chain::chain_store::ChainStore;
-    use crate::shares::share_block::ShareBlock;
-    use crate::store::Store;
     use crate::stratum::messages::SimpleRequest;
     use crate::stratum::server;
     use crate::stratum::work::tracker::start_tracker_actor;
+    use crate::test_utils::setup_test_chain_store_handle;
     use crate::utils::time_provider::TestTimeProvider;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::Arc;
-    use tempfile::tempdir;
     use tokio::sync::mpsc;
 
     #[tokio::test]
@@ -465,12 +463,7 @@ mod stratum_server_tests {
             .await
             .unwrap();
         let tracker_handle = start_tracker_actor();
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
-            bitcoin::network::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
         let mut server = StratumServerBuilder::default()
             .hostname("127.0.0.1".to_string())
@@ -483,7 +476,7 @@ mod stratum_server_tests {
             .shutdown_rx(shutdown_rx)
             .connections_handle(connections_handle)
             .emissions_tx(shares_tx)
-            .store(store)
+            .chain_store_handle(chain_store_handle)
             .build()
             .await
             .unwrap();
@@ -544,12 +537,7 @@ mod stratum_server_tests {
             .await
             .unwrap();
 
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
-            bitcoin::network::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -563,7 +551,7 @@ mod stratum_server_tests {
             validate_addresses: true,
             emissions_tx,
             network: bitcoin::network::Network::Regtest,
-            store,
+            chain_store_handle,
         };
 
         // Run the handler
@@ -664,12 +652,7 @@ mod stratum_server_tests {
             .await
             .unwrap();
 
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
-            bitcoin::network::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -683,7 +666,7 @@ mod stratum_server_tests {
             validate_addresses: true,
             emissions_tx,
             network: bitcoin::network::Network::Regtest,
-            store,
+            chain_store_handle,
         };
 
         // Run the handler
@@ -738,12 +721,7 @@ mod stratum_server_tests {
             .await
             .unwrap();
 
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
-            bitcoin::network::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -757,7 +735,7 @@ mod stratum_server_tests {
             emissions_tx,
             metrics: metrics_handle,
             network: bitcoin::network::Network::Regtest,
-            store,
+            chain_store_handle,
         };
 
         // Run the handler
@@ -817,12 +795,7 @@ mod stratum_server_tests {
             .await
             .unwrap();
 
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
-            bitcoin::network::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -836,7 +809,7 @@ mod stratum_server_tests {
             emissions_tx,
             network: bitcoin::network::Network::Regtest,
             metrics: metrics_handle,
-            store,
+            chain_store_handle,
         };
 
         // Run the handler
@@ -916,12 +889,7 @@ mod stratum_server_tests {
             .await
             .unwrap();
 
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
-            bitcoin::network::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -935,7 +903,7 @@ mod stratum_server_tests {
             emissions_tx,
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
-            store,
+            chain_store_handle,
         };
 
         // Spawn the handler in a separate task
@@ -1034,12 +1002,7 @@ mod stratum_server_tests {
             .await
             .unwrap();
 
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
-            bitcoin::network::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -1053,7 +1016,7 @@ mod stratum_server_tests {
             emissions_tx,
             network: bitcoin::network::Network::Regtest,
             metrics: metrics_handle,
-            store,
+            chain_store_handle,
         };
 
         // Spawn the handler in a separate task
@@ -1141,12 +1104,7 @@ mod stratum_server_tests {
                     .await
                     .unwrap();
 
-            let temp_dir = tempdir().unwrap();
-            let store = Arc::new(ChainStore::new(
-                Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-                ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
-                bitcoin::Network::Signet,
-            ));
+            let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
             let ctx = StratumContext {
                 notify_tx,
@@ -1160,7 +1118,7 @@ mod stratum_server_tests {
                 validate_addresses: true,
                 emissions_tx,
                 network: bitcoin::network::Network::Regtest,
-                store,
+                chain_store_handle,
             };
 
             // wait for subscribe/authorize messages
@@ -1220,12 +1178,7 @@ mod stratum_server_tests {
                     .await
                     .unwrap();
 
-            let temp_dir = tempdir().unwrap();
-            let store = Arc::new(ChainStore::new(
-                Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-                ShareBlock::build_genesis_for_network(bitcoin::Network::Signet),
-                bitcoin::Network::Signet,
-            ));
+            let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
             let ctx = StratumContext {
                 notify_tx,
@@ -1239,7 +1192,7 @@ mod stratum_server_tests {
                 validate_addresses: true,
                 emissions_tx,
                 network: bitcoin::network::Network::Signet,
-                store,
+                chain_store_handle,
             };
 
             let subscribe_message =

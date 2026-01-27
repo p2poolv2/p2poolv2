@@ -27,7 +27,7 @@ pub mod store;
 pub mod stratum;
 pub mod utils;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 
 pub use service::build_service;

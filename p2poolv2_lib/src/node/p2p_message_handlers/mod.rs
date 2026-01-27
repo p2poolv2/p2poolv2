@@ -37,7 +37,7 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
             handle_getheaders(
                 block_hashes,
                 stop_block_hash,
-                ctx.store,
+                ctx.chain_store_handle,
                 ctx.response_channel,
                 ctx.swarm_tx,
             )
@@ -47,14 +47,14 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
             handle_getblocks(
                 block_hashes,
                 stop_block_hash,
-                ctx.store,
+                ctx.chain_store_handle,
                 ctx.response_channel,
                 ctx.swarm_tx,
             )
             .await
         }
         Message::ShareHeaders(share_headers) => {
-            handle_share_headers(share_headers, ctx.store, &ctx.time_provider)
+            handle_share_headers(share_headers, ctx.chain_store_handle, &ctx.time_provider)
                 .await
                 .map_err(|e| {
                     error!("Error handling received shares {}", e);
@@ -62,7 +62,7 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
                 })
         }
         Message::ShareBlock(share_block) => {
-            handle_share_block(&share_block, ctx.store, &ctx.time_provider)
+            handle_share_block(&share_block, &ctx.chain_store_handle, &ctx.time_provider)
                 .await
                 .map_err(|e| {
                     error!("Failed to add share: {}", e);
@@ -112,7 +112,7 @@ mod tests {
     use super::*;
     use crate::node::SwarmSend;
     #[mockall_double::double]
-    use crate::shares::chain::chain_store::ChainStore;
+    use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::share_block::Txids;
     use crate::test_utils::{
         TestShareBlockBuilder, build_block_from_work_components, genesis_for_tests,
@@ -122,14 +122,13 @@ mod tests {
     use bitcoin::BlockHash;
     use bitcoin::hashes::Hash as _;
     use mockall::predicate::*;
-    use std::sync::Arc;
     use std::time::SystemTime;
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
 
     #[tokio::test]
     async fn test_handle_share_block_request() {
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let peer_id = libp2p::PeerId::random();
@@ -142,16 +141,16 @@ mod tests {
         let share_block =
             build_block_from_work_components("../p2poolv2_tests/test_data/validation/stratum/a/");
 
-        store
+        chain_store_handle
             .expect_add_share()
             .with(eq(share_block.clone()), eq(true))
             .returning(|_, _| Ok(()));
-        store
+        chain_store_handle
             .expect_get_share()
             .with(eq(bitcoin::BlockHash::all_zeros()))
             .returning(|_| Some(genesis_for_tests()));
 
-        store
+        chain_store_handle
             .expect_setup_share_for_chain()
             .returning(|share_block| share_block);
 
@@ -163,7 +162,7 @@ mod tests {
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::ShareBlock(share_block.clone()),
-            store: Arc::new(store),
+            chain_store_handle,
             response_channel: response_channel_tx,
             swarm_tx,
             time_provider,
@@ -179,26 +178,26 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
         let share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
-        store
+        chain_store_handle
             .expect_add_share()
             .with(eq(share_block.clone()), eq(true))
             .returning(|_, _| Err("Failed to add share".into()));
 
-        store
+        chain_store_handle
             .expect_setup_share_for_chain()
             .returning(|share_block| share_block);
 
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::ShareBlock(share_block),
-            store: Arc::new(store),
+            chain_store_handle,
             response_channel: response_channel_tx,
             swarm_tx,
             time_provider,
@@ -218,7 +217,7 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
         let response_channel = 1u32;
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Mock the response headers
@@ -230,14 +229,14 @@ mod tests {
 
         let response_headers = vec![block1.header.clone(), block2.header.clone()];
 
-        store
+        chain_store_handle
             .expect_get_headers_for_locator()
             .returning(move |_, _, _| Ok(response_headers.clone()));
 
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::GetShareHeaders(block_hashes, stop_block_hash),
-            store: Arc::new(store),
+            chain_store_handle,
             response_channel,
             swarm_tx,
             time_provider,
@@ -262,7 +261,7 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
         let (response_channel, _response_channel_rx) = oneshot::channel::<Message>();
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Create test blocks that will be returned
@@ -273,14 +272,14 @@ mod tests {
         let stop_block_hash = block2.block_hash();
 
         // Set up mock expectations
-        store
+        chain_store_handle
             .expect_get_blockhashes_for_locator()
             .returning(move |_, _, _| Ok(vec![block1.block_hash(), block2.block_hash()]));
 
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::GetShareBlocks(block_hashes.clone(), stop_block_hash),
-            store: Arc::new(store),
+            chain_store_handle,
             response_channel,
             swarm_tx,
             time_provider,
@@ -307,7 +306,7 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let store = ChainStore::default();
+        let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Test BlockHashes inventory
@@ -324,7 +323,7 @@ mod tests {
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::Inventory(inventory),
-            store: Arc::new(store),
+            chain_store_handle,
             response_channel: response_channel_tx,
             swarm_tx,
             time_provider,
@@ -340,7 +339,7 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let store = ChainStore::default();
+        let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Test TransactionHashes inventory
@@ -357,7 +356,7 @@ mod tests {
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::Inventory(inventory),
-            store: Arc::new(store),
+            chain_store_handle,
             response_channel: response_channel_tx,
             swarm_tx,
             time_provider,
@@ -373,13 +372,13 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let store = ChainStore::default();
+        let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::NotFound(()),
-            store: Arc::new(store),
+            chain_store_handle,
             response_channel: response_channel_tx,
             swarm_tx,
             time_provider,
@@ -395,7 +394,7 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let store = ChainStore::default();
+        let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
         let block_hash = "0000000000000000000000000000000000000000000000000000000000000001"
@@ -406,7 +405,7 @@ mod tests {
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::GetData(get_data),
-            store: Arc::new(store),
+            chain_store_handle,
             response_channel: response_channel_tx,
             swarm_tx,
             time_provider,
@@ -422,7 +421,7 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let store = ChainStore::default();
+        let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Test GetData message with txid
@@ -434,7 +433,7 @@ mod tests {
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::GetData(get_data),
-            store: Arc::new(store),
+            chain_store_handle,
             response_channel: response_channel_tx,
             swarm_tx,
             time_provider,
@@ -450,7 +449,7 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let store = ChainStore::default();
+        let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Create a test transaction
@@ -459,7 +458,7 @@ mod tests {
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::Transaction(transaction),
-            store: Arc::new(store),
+            chain_store_handle,
             response_channel: response_channel_tx,
             swarm_tx,
             time_provider,
@@ -475,7 +474,7 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
         // Create test share headers
@@ -485,14 +484,14 @@ mod tests {
         let share_headers = vec![block1.header.clone(), block2.header.clone()];
 
         // Set up mock expectations for processing headers
-        store
+        chain_store_handle
             .expect_get_headers_for_locator()
             .returning(|_, _, _| Ok(vec![]));
 
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::ShareHeaders(share_headers),
-            store: Arc::new(store),
+            chain_store_handle,
             response_channel: response_channel_tx,
             swarm_tx,
             time_provider,

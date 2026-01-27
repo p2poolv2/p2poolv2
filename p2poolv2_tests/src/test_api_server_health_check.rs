@@ -20,28 +20,15 @@ use p2poolv2_api::api::error::ApiError;
 use p2poolv2_api::start_api_server;
 use p2poolv2_lib::accounting::{simple_pplns::SimplePplnsShare, stats::metrics::start_metrics};
 use p2poolv2_lib::config::ApiConfig;
-use p2poolv2_lib::shares::chain::chain_store::ChainStore;
 use p2poolv2_lib::shares::share_block::ShareBlock;
-use p2poolv2_lib::store::Store;
 use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
+use p2poolv2_lib::test_utils::setup_test_chain_store_handle;
 use reqwest::{Client, header};
-use std::sync::Arc;
-use tempfile::tempdir;
 use tokio::time::{Duration, sleep};
 
 #[tokio::test]
 async fn test_api_server_without_authentication() -> Result<(), ApiError> {
-    let temp_dir = tempdir().map_err(|e| ApiError::ServerError(e.to_string()))?;
-    let store = Arc::new(
-        Store::new(temp_dir.path().to_str().unwrap().to_string(), false)
-            .map_err(|e| ApiError::ServerError(e.to_string()))?,
-    );
-    let genesis_block = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
-    let chain_store = Arc::new(ChainStore::new(
-        store,
-        genesis_block,
-        bitcoin::Network::Signet,
-    ));
+    let (chain_store_handle, temp_dir) = setup_test_chain_store_handle().await;
 
     let tracker_handle = start_tracker_actor();
     // Start metrics actor
@@ -59,7 +46,7 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
     // Start API server with the new signature
     let shutdown_tx = start_api_server(
         api_config.clone(),
-        chain_store.clone(),
+        chain_store_handle,
         metrics_handle,
         tracker_handle,
         bitcoin::Network::Signet,
@@ -111,17 +98,7 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
 
 #[tokio::test]
 async fn test_api_server_with_authentication() -> Result<(), ApiError> {
-    let temp_dir = tempdir().map_err(|e| ApiError::ServerError(e.to_string()))?;
-    let store = Arc::new(
-        Store::new(temp_dir.path().to_str().unwrap().to_string(), false)
-            .map_err(|e| ApiError::ServerError(e.to_string()))?,
-    );
-    let genesis_block = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
-    let chain_store = Arc::new(ChainStore::new(
-        store,
-        genesis_block,
-        bitcoin::Network::Signet,
-    ));
+    let (chain_store_handle, temp_dir) = setup_test_chain_store_handle().await;
     let tracker_handle = start_tracker_actor();
     // Start metrics actor
     let metrics_handle = start_metrics(temp_dir.path().to_str().unwrap().to_string())
@@ -148,7 +125,7 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
     // Start API server with authentication
     let shutdown_tx = start_api_server(
         api_config.clone(),
-        chain_store.clone(),
+        chain_store_handle,
         metrics_handle,
         tracker_handle,
         bitcoin::Network::Signet,
@@ -239,18 +216,7 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
 
 #[tokio::test]
 async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
-    // Setup temporary DB
-    let temp_dir = tempdir().map_err(|e| ApiError::ServerError(e.to_string()))?;
-    let store = Arc::new(
-        Store::new(temp_dir.path().to_str().unwrap().to_string(), false)
-            .map_err(|e| ApiError::ServerError(e.to_string()))?,
-    );
-    let genesis_block = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
-    let chain_store = Arc::new(p2poolv2_lib::shares::chain::chain_store::ChainStore::new(
-        store.clone(),
-        genesis_block,
-        bitcoin::Network::Signet,
-    ));
+    let (chain_store_handle, temp_dir) = setup_test_chain_store_handle().await;
 
     // Start tracker actor
     let tracker_handle = start_tracker_actor();
@@ -272,7 +238,7 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
     // Start API server
     let shutdown_tx = p2poolv2_api::start_api_server(
         api_config.clone(),
-        chain_store.clone(),
+        chain_store_handle.clone(),
         metrics_handle,
         tracker_handle,
         bitcoin::Network::Signet,
@@ -284,8 +250,9 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
     sleep(Duration::from_millis(500)).await;
 
     // Insert test shares
-    let user_id = store
+    let user_id = chain_store_handle
         .add_user("tb1qtestaddress".to_string())
+        .await
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
     let share1_timestamp = Utc
@@ -323,8 +290,9 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
     ];
 
     for share in &shares {
-        store
+        chain_store_handle
             .add_pplns_share(share.clone())
+            .await
             .map_err(|e| ApiError::ServerError(e.to_string()))?;
     }
 
@@ -358,18 +326,7 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
 
 #[tokio::test]
 async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
-    // Setup temporary DB
-    let temp_dir = tempdir().map_err(|e| ApiError::ServerError(e.to_string()))?;
-    let store = Arc::new(
-        Store::new(temp_dir.path().to_str().unwrap().to_string(), false)
-            .map_err(|e| ApiError::ServerError(e.to_string()))?,
-    );
-    let genesis_block = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
-    let chain_store = Arc::new(p2poolv2_lib::shares::chain::chain_store::ChainStore::new(
-        store.clone(),
-        genesis_block,
-        bitcoin::Network::Signet,
-    ));
+    let (chain_store_handle, temp_dir) = setup_test_chain_store_handle().await;
 
     // Start tracker actor
     let tracker_handle = start_tracker_actor();
@@ -391,7 +348,7 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
     // Start API server
     let shutdown_tx = p2poolv2_api::start_api_server(
         api_config.clone(),
-        chain_store.clone(),
+        chain_store_handle.clone(),
         metrics_handle,
         tracker_handle,
         bitcoin::Network::Signet,
@@ -403,8 +360,9 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
     sleep(Duration::from_millis(500)).await;
 
     // Insert test shares
-    let user_id = store
+    let user_id = chain_store_handle
         .add_user("tb1qtestaddress".to_string())
+        .await
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
     let t1 = Utc
@@ -442,8 +400,9 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
     ];
 
     for share in &shares {
-        store
+        chain_store_handle
             .add_pplns_share(share.clone())
+            .await
             .map_err(|e| ApiError::ServerError(e.to_string()))?;
     }
 
@@ -473,18 +432,7 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
 
 #[tokio::test]
 async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
-    // Setup temporary DB
-    let temp_dir = tempdir().map_err(|e| ApiError::ServerError(e.to_string()))?;
-    let store = Arc::new(
-        Store::new(temp_dir.path().to_str().unwrap().to_string(), false)
-            .map_err(|e| ApiError::ServerError(e.to_string()))?,
-    );
-    let genesis_block = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
-    let chain_store = Arc::new(p2poolv2_lib::shares::chain::chain_store::ChainStore::new(
-        store.clone(),
-        genesis_block,
-        bitcoin::Network::Signet,
-    ));
+    let (chain_store_handle, temp_dir) = setup_test_chain_store_handle().await;
 
     let tracker_handle = start_tracker_actor();
     // Start metrics actor
@@ -505,7 +453,7 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
     // Start API server
     let shutdown_tx = p2poolv2_api::start_api_server(
         api_config.clone(),
-        chain_store.clone(),
+        chain_store_handle.clone(),
         metrics_handle,
         tracker_handle,
         bitcoin::Network::Signet,
@@ -517,8 +465,9 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
     sleep(Duration::from_millis(500)).await;
 
     // Insert test shares
-    let user_id = store
+    let user_id = chain_store_handle
         .add_user("tb1qtestaddress".to_string())
+        .await
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
     let share1_timestamp = Utc
@@ -556,8 +505,9 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
     ];
 
     for share in &shares {
-        store
+        chain_store_handle
             .add_pplns_share(share.clone())
+            .await
             .map_err(|e| ApiError::ServerError(e.to_string()))?;
     }
 

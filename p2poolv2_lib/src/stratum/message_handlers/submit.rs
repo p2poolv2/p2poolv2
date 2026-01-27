@@ -240,19 +240,17 @@ fn get_true_difficulty(hash: &bitcoin::BlockHash) -> u128 {
 mod handle_submit_tests {
     use super::*;
     use crate::accounting::stats::metrics;
-    use crate::shares::chain::chain_store::ChainStore;
-    use crate::shares::share_block::ShareBlock;
-    use crate::store::Store;
     use crate::stratum::difficulty_adjuster::{DifficultyAdjuster, MockDifficultyAdjusterTrait};
     use crate::stratum::messages::Id;
     use crate::stratum::messages::SetDifficultyNotification;
     use crate::stratum::session::Session;
     use crate::stratum::work::tracker::start_tracker_actor;
-    use crate::test_utils::{create_test_commitment, load_valid_stratum_work_components};
+    use crate::test_utils::{
+        create_test_commitment, load_valid_stratum_work_components, setup_test_chain_store_handle,
+    };
     use bitcoin::BlockHash;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use std::sync::Arc;
-    use tempfile::tempdir;
     use tokio::sync::mpsc;
 
     #[test]
@@ -300,12 +298,8 @@ mod handle_submit_tests {
             .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
-            bitcoin::network::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+
         let ctx = StratumContext {
             notify_tx,
             tracker_handle: tracker_handle.clone(),
@@ -318,7 +312,7 @@ mod handle_submit_tests {
             emissions_tx,
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
-            store,
+            chain_store_handle,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -386,12 +380,9 @@ mod handle_submit_tests {
             .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
-            bitcoin::network::Network::Signet,
-        ));
+
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+
         let ctx = StratumContext {
             notify_tx,
             tracker_handle: tracker_handle.clone(),
@@ -404,7 +395,7 @@ mod handle_submit_tests {
             emissions_tx,
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
-            store,
+            chain_store_handle,
         };
 
         let response = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -476,12 +467,8 @@ mod handle_submit_tests {
             .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
-            bitcoin::network::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+
         let ctx = StratumContext {
             notify_tx,
             tracker_handle: tracker_handle.clone(),
@@ -494,7 +481,7 @@ mod handle_submit_tests {
             emissions_tx,
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
-            store,
+            chain_store_handle,
         };
 
         let response = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -564,12 +551,8 @@ mod handle_submit_tests {
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
 
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
-            bitcoin::network::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+
         let ctx = StratumContext {
             notify_tx,
             tracker_handle: tracker_handle.clone(),
@@ -582,7 +565,7 @@ mod handle_submit_tests {
             emissions_tx,
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
-            store,
+            chain_store_handle,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -630,12 +613,8 @@ mod handle_submit_tests {
             .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
-            bitcoin::network::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+
         let ctx = StratumContext {
             notify_tx,
             tracker_handle: tracker_handle.clone(),
@@ -648,7 +627,7 @@ mod handle_submit_tests {
             emissions_tx,
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
-            store,
+            chain_store_handle,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -699,12 +678,8 @@ mod handle_submit_tests {
             .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
-            bitcoin::network::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+
         let ctx = StratumContext {
             notify_tx,
             tracker_handle: tracker_handle.clone(),
@@ -717,7 +692,7 @@ mod handle_submit_tests {
             emissions_tx,
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
-            store,
+            chain_store_handle,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -786,12 +761,7 @@ mod handle_submit_tests {
             .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
-            bitcoin::network::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
 
         // First submission should succeed
         let ctx = StratumContext {
@@ -806,7 +776,7 @@ mod handle_submit_tests {
             emissions_tx: emissions_tx.clone(),
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
-            store: store.clone(),
+            chain_store_handle: chain_store_handle.clone(),
         };
 
         let message = handle_submit(submit.clone(), &mut session, ctx)
@@ -837,7 +807,7 @@ mod handle_submit_tests {
             emissions_tx,
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
-            store,
+            chain_store_handle,
         };
 
         let message2 = handle_submit(submit, &mut session, ctx2).await.unwrap();
@@ -894,12 +864,8 @@ mod handle_submit_tests {
             .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
-        let temp_dir = tempdir().unwrap();
-        let store = Arc::new(ChainStore::new(
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap()),
-            ShareBlock::build_genesis_for_network(bitcoin::network::Network::Signet),
-            bitcoin::network::Network::Signet,
-        ));
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+
         let ctx = StratumContext {
             notify_tx,
             tracker_handle: tracker_handle.clone(),
@@ -912,7 +878,7 @@ mod handle_submit_tests {
             emissions_tx,
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
-            store,
+            chain_store_handle,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();

@@ -14,24 +14,57 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+// Imports for setup_test_chain_store_handle (available with test-utils feature)
+#[cfg(any(test, feature = "test-utils"))]
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+#[cfg(any(test, feature = "test-utils"))]
+use crate::store::Store;
+#[cfg(any(test, feature = "test-utils"))]
+use crate::store::writer::{StoreHandle, StoreWriter, write_channel};
+#[cfg(any(test, feature = "test-utils"))]
+use std::sync::Arc;
+#[cfg(any(test, feature = "test-utils"))]
+use tempfile::{TempDir, tempdir};
+
+// Imports only needed for internal tests
 #[cfg(test)]
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 #[cfg(test)]
 use crate::shares::share_commitment::ShareCommitment;
 #[cfg(test)]
 use crate::shares::transactions::coinbase::create_coinbase_transaction;
+#[cfg(test)]
 use crate::stratum::messages::Notify;
+#[cfg(test)]
 use crate::stratum::messages::Response;
 #[cfg(test)]
 use crate::stratum::messages::SimpleRequest;
+#[cfg(test)]
 use crate::stratum::work::block_template::BlockTemplate;
+#[cfg(test)]
 use bitcoin::CompressedPublicKey;
 #[cfg(test)]
 use bitcoin::hashes::Hash;
 #[cfg(test)]
 use bitcoin::{Block, BlockHash, CompactTarget, Transaction, TxMerkleNode, block::Header};
-use rand;
+#[cfg(test)]
 use std::str::FromStr;
+
+/// Setup returns both chain handle and tempdir (tempdir must stay alive)
+#[cfg(any(test, feature = "test-utils"))]
+pub async fn setup_test_chain_store_handle() -> (ChainStoreHandle, TempDir) {
+    let temp_dir = tempdir().unwrap();
+    let store = Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap());
+    let (write_tx, write_rx) = write_channel();
+
+    // Spawn store writer
+    let store_writer = StoreWriter::new(store.clone(), write_rx);
+    tokio::spawn(store_writer.run());
+
+    let store_handle = StoreHandle::new(store, write_tx);
+    let chain_handle = ChainStoreHandle::new(store_handle, bitcoin::Network::Signet);
+    (chain_handle, temp_dir)
+}
 
 #[cfg(test)]
 pub fn genesis_for_tests() -> ShareBlock {

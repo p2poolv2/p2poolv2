@@ -37,6 +37,7 @@ pub mod share_store;
 pub mod stored_user;
 pub mod transaction_store;
 pub mod user;
+pub mod writer;
 
 /// A store for share blocks.
 /// RocksDB as is used as the underlying database.
@@ -51,7 +52,7 @@ pub struct Store {
     path: String,
     db: DB,
     // Thread-safe chain state for use by ChainStore
-    genesis_block_hash: Arc<RwLock<Option<BlockHash>>>,
+    genesis_blockhash: Arc<RwLock<Option<BlockHash>>>,
     chain_tip: Arc<RwLock<BlockHash>>,
     tips: Arc<RwLock<HashSet<BlockHash>>>,
 }
@@ -175,7 +176,7 @@ impl Store {
             path,
             db,
             // Initialize chain state fields
-            genesis_block_hash: Arc::new(RwLock::new(None)),
+            genesis_blockhash: Arc::new(RwLock::new(None)),
             chain_tip: Arc::new(RwLock::new(BlockHash::all_zeros())),
             tips: Arc::new(RwLock::new(HashSet::new())),
         };
@@ -225,20 +226,14 @@ impl Store {
         Ok(blockhashes)
     }
 
-    /// Get the genesis blockhash, as the first blockhash in the chain
-    /// Assume there is no uncle at height 0
-    pub fn get_genesis_blockhash(&self) -> BlockHash {
-        self.get_blockhashes_for_height(0)[0]
-    }
-
     /// Get genesis block hash from chain state
-    pub fn get_genesis_block_hash(&self) -> Option<BlockHash> {
-        *self.genesis_block_hash.read().unwrap()
+    pub fn get_genesis_blockhash(&self) -> Option<BlockHash> {
+        *self.genesis_blockhash.read().unwrap()
     }
 
     /// Set genesis block hash in chain state
-    pub fn set_genesis_block_hash(&self, hash: BlockHash) {
-        *self.genesis_block_hash.write().unwrap() = Some(hash);
+    pub fn set_genesis_blockhash(&self, hash: BlockHash) {
+        *self.genesis_blockhash.write().unwrap() = Some(hash);
     }
 
     /// Get chain tip from chain state
@@ -287,7 +282,7 @@ impl Store {
         let blockhash = genesis.block_hash();
         let genesis_work = genesis.header.get_work();
         self.add_share(genesis, 0, genesis_work, true, batch)?;
-        *self.genesis_block_hash.write().unwrap() = Some(blockhash);
+        *self.genesis_blockhash.write().unwrap() = Some(blockhash);
         self.make_confirmed(&blockhash, 0, batch)?;
         self.add_tip(blockhash);
         self.set_chain_tip(blockhash);
@@ -301,7 +296,7 @@ impl Store {
         genesis_hash: BlockHash,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         // Set genesis block hash
-        self.set_genesis_block_hash(genesis_hash);
+        self.set_genesis_blockhash(genesis_hash);
 
         // Load main chain and total work
         let (chain, tips) = self.load_chain(genesis_hash)?;
@@ -388,8 +383,8 @@ mod tests {
         let genesis_hash = share1.block_hash();
 
         // Test manual chain state operations
-        store.set_genesis_block_hash(genesis_hash);
-        assert_eq!(store.get_genesis_block_hash(), Some(genesis_hash));
+        store.set_genesis_blockhash(genesis_hash);
+        assert_eq!(store.get_genesis_blockhash(), Some(genesis_hash));
 
         store.set_chain_tip(share3.block_hash());
         assert_eq!(store.get_chain_tip(), share3.block_hash());
@@ -411,7 +406,7 @@ mod tests {
         // After initialization, tip should be set to last block in main chain
         assert_eq!(store.get_chain_tip(), share3.block_hash());
 
-        assert_eq!(store.get_genesis_block_hash(), Some(genesis_hash));
+        assert_eq!(store.get_genesis_blockhash(), Some(genesis_hash));
 
         // Tips should include only blocks at highest height (height 2)
         let tips_after_init = store.get_tips();

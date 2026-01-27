@@ -18,9 +18,9 @@ use crate::node::SwarmSend;
 use crate::node::messages::{InventoryMessage, Message};
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
-use crate::shares::chain::chain_store::ChainStore;
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use libp2p::PeerId;
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -28,19 +28,20 @@ use tracing::info;
 
 /// Send blocks inventory update to a peer. This is not a response, but is triggered
 /// by the node when it has new data to share.
-pub async fn send_blocks_inventory<C: 'static>(
+pub async fn send_blocks_inventory<C: 'static + Send + Sync>(
     peer_id: PeerId,
-    store: std::sync::Arc<ChainStore>,
+    chain_store_handle: ChainStoreHandle,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Sending inventory update to peer: {:?}", peer_id);
-    let locator = store
+    let locator = chain_store_handle
         .build_locator()
         .map_err(|e| format!("Failed to build locator {e}"))?;
     let inventory_message = Message::Inventory(InventoryMessage::BlockHashes(locator));
     swarm_tx
         .send(SwarmSend::Request(peer_id, inventory_message))
-        .await?;
+        .await
+        .map_err(|e| format!("Failed to send inventory: {e}"))?;
     Ok(())
 }
 
@@ -48,11 +49,10 @@ pub async fn send_blocks_inventory<C: 'static>(
 mod tests {
     use super::*;
     use bitcoin::BlockHash;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_send_blocks_inventory() {
-        let mut store = ChainStore::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
         let peer_id = PeerId::random();
 
@@ -67,13 +67,13 @@ mod tests {
         ];
 
         let cloned_expected_hashes = expected_hashes.clone();
-        store
+        chain_store_handle
             .expect_build_locator()
             .times(1)
             .returning(move || Ok(cloned_expected_hashes.clone()));
 
         // Send inventory
-        let result = send_blocks_inventory(peer_id, Arc::new(store), swarm_tx).await;
+        let result = send_blocks_inventory(peer_id, chain_store_handle, swarm_tx).await;
         assert!(result.is_ok());
 
         // Check the message sent to swarm_tx
@@ -88,5 +88,20 @@ mod tests {
         } else {
             panic!("No message received");
         }
+    }
+
+    #[tokio::test]
+    async fn test_send_blocks_inventory_locator_error() {
+        let mut mock_chain_store = ChainStoreHandle::default();
+
+        mock_chain_store
+            .expect_build_locator()
+            .returning(|| Err("Build locator failed".into()));
+
+        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
+        let peer_id = PeerId::random();
+
+        let result = send_blocks_inventory(peer_id, mock_chain_store, swarm_tx).await;
+        assert!(result.is_err());
     }
 }

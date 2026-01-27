@@ -13,9 +13,12 @@ categories.workspace = true
 rust-version.workspace = true
 
 [features]
-test-utils = []
+test-utils = ["dep:rand", "dep:tempfile"]
 
 [dependencies]
+# Optional test utilities dependencies
+rand = { version = "0.8", optional = true }
+tempfile = { workspace = true, optional = true }
 libp2p = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
