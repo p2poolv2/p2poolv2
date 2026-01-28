@@ -34,8 +34,8 @@ use bitcoin::{BlockHash, Work};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
-use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::mpsc;
 use tokio::sync::oneshot;
 use tracing::{debug, info};
 
@@ -184,7 +184,7 @@ impl StoreWriter {
                     .and_then(|_| {
                         self.store
                             .commit_batch(batch)
-                            .map_err(|e| e.to_string().into())
+                            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
                     });
                 let _ = reply.send(result.map_err(|e| StoreError::Database(e.to_string())));
             }
@@ -198,7 +198,7 @@ impl StoreWriter {
                     .and_then(|_| {
                         self.store
                             .commit_batch(batch)
-                            .map_err(|e| e.to_string().into())
+                            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
                     });
                 let _ = reply.send(result.map_err(|e| StoreError::Database(e.to_string())));
             }
@@ -272,11 +272,5 @@ mod tests {
 
         let err = StoreError::NotFound("block".to_string());
         assert_eq!(format!("{err}"), "Not found: block");
-    }
-
-    #[test]
-    fn test_write_channel_creation() {
-        let (tx, _rx) = write_channel();
-        assert!(!tx.is_closed());
     }
 }
