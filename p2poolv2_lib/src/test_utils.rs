@@ -51,15 +51,21 @@ use bitcoin::{Block, BlockHash, CompactTarget, Transaction, TxMerkleNode, block:
 use std::str::FromStr;
 
 /// Setup returns both chain handle and tempdir (tempdir must stay alive)
+///
+/// Optionally starts the writer background task. Some tests that use
+/// single threaded tokio runtime for timeout testing don't want to
+/// start the bg task
 #[cfg(any(test, feature = "test-utils"))]
-pub async fn setup_test_chain_store_handle() -> (ChainStoreHandle, TempDir) {
+pub async fn setup_test_chain_store_handle(start_writer: bool) -> (ChainStoreHandle, TempDir) {
     let temp_dir = tempdir().unwrap();
     let store = Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap());
     let (write_tx, write_rx) = write_channel();
 
     // Spawn store writer
     let store_writer = StoreWriter::new(store.clone(), write_rx);
-    tokio::spawn(store_writer.run());
+    if start_writer {
+        tokio::task::spawn_blocking(move || store_writer.run());
+    }
 
     let store_handle = StoreHandle::new(store, write_tx);
     let chain_handle = ChainStoreHandle::new(store_handle, bitcoin::Network::Signet);

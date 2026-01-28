@@ -65,7 +65,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_empty_store() {
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         // Execute the pplns-shares command with an empty store
         let result = execute(chain_store_handle, 10, None, None);
@@ -76,7 +76,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_with_shares() {
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         // Add test shares
         let shares = vec![

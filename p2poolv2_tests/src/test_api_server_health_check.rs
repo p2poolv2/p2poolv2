@@ -28,7 +28,7 @@ use tokio::time::{Duration, sleep};
 
 #[tokio::test]
 async fn test_api_server_without_authentication() -> Result<(), ApiError> {
-    let (chain_store_handle, temp_dir) = setup_test_chain_store_handle().await;
+    let (chain_store_handle, temp_dir) = setup_test_chain_store_handle(true).await;
 
     let tracker_handle = start_tracker_actor();
     // Start metrics actor
@@ -98,7 +98,7 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
 
 #[tokio::test]
 async fn test_api_server_with_authentication() -> Result<(), ApiError> {
-    let (chain_store_handle, temp_dir) = setup_test_chain_store_handle().await;
+    let (chain_store_handle, temp_dir) = setup_test_chain_store_handle(true).await;
     let tracker_handle = start_tracker_actor();
     // Start metrics actor
     let metrics_handle = start_metrics(temp_dir.path().to_str().unwrap().to_string())
@@ -216,7 +216,7 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
 
 #[tokio::test]
 async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
-    let (chain_store_handle, temp_dir) = setup_test_chain_store_handle().await;
+    let (chain_store_handle, temp_dir) = setup_test_chain_store_handle(true).await;
 
     // Start tracker actor
     let tracker_handle = start_tracker_actor();
@@ -326,7 +326,7 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
 
 #[tokio::test]
 async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
-    let (chain_store_handle, temp_dir) = setup_test_chain_store_handle().await;
+    let (chain_store_handle, temp_dir) = setup_test_chain_store_handle(true).await;
 
     // Start tracker actor
     let tracker_handle = start_tracker_actor();
@@ -432,7 +432,7 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
 
 #[tokio::test]
 async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
-    let (chain_store_handle, temp_dir) = setup_test_chain_store_handle().await;
+    let (chain_store_handle, temp_dir) = setup_test_chain_store_handle(true).await;
 
     let tracker_handle = start_tracker_actor();
     // Start metrics actor

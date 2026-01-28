@@ -293,7 +293,7 @@ mod tests {
 
         //  Mock ChainStore
         let _genesis = ShareBlock::build_genesis_for_network(Network::Signet);
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         //  Prepare AppState
         let state = Arc::new(AppState {

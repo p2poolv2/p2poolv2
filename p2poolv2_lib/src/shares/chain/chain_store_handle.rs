@@ -510,13 +510,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_chain_store_handle_creation() {
-        let (chain_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         assert_eq!(chain_handle.network(), bitcoin::Network::Signet);
     }
 
     #[tokio::test]
     async fn test_chain_store_handle_init_genesis() {
-        let (chain_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let genesis = genesis_for_tests();
 
         chain_handle
@@ -532,7 +532,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_chain_store_handle_add_share() {
-        let (chain_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let genesis = genesis_for_tests();
 
         chain_handle
@@ -562,7 +562,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_chain_store_handle_get_depth() {
-        let (chain_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let genesis = genesis_for_tests();
 
         chain_handle

@@ -298,7 +298,7 @@ mod handle_submit_tests {
             .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -381,7 +381,7 @@ mod handle_submit_tests {
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
 
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -467,7 +467,7 @@ mod handle_submit_tests {
             .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -551,7 +551,7 @@ mod handle_submit_tests {
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
 
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -613,7 +613,7 @@ mod handle_submit_tests {
             .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -678,7 +678,7 @@ mod handle_submit_tests {
             .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -761,7 +761,7 @@ mod handle_submit_tests {
             .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         // First submission should succeed
         let ctx = StratumContext {
@@ -864,7 +864,7 @@ mod handle_submit_tests {
             .unwrap();
 
         let (notify_tx, _notify_rx) = mpsc::channel(10);
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
             notify_tx,

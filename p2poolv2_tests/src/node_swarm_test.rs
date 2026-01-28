@@ -64,7 +64,7 @@ async fn test_three_nodes_connectivity() {
         Arc::new(Store::new(temp_dir1.path().to_str().unwrap().to_string(), false).unwrap());
     let (write_tx1, write_rx1) = write_channel();
     let store_writer1 = StoreWriter::new(store1.clone(), write_rx1);
-    tokio::spawn(store_writer1.run());
+    tokio::task::spawn_blocking(move || store_writer1.run());
     let store_handle1 = StoreHandle::new(store1, write_tx1);
     let chain_store_handle1 = ChainStoreHandle::new(store_handle1, config1.stratum.network);
     chain_store_handle1
@@ -79,7 +79,7 @@ async fn test_three_nodes_connectivity() {
         Arc::new(Store::new(temp_dir2.path().to_str().unwrap().to_string(), false).unwrap());
     let (write_tx2, write_rx2) = write_channel();
     let store_writer2 = StoreWriter::new(store2.clone(), write_rx2);
-    tokio::spawn(store_writer2.run());
+    tokio::task::spawn_blocking(move || store_writer2.run());
     let store_handle2 = StoreHandle::new(store2, write_tx2);
     let chain_store_handle2 = ChainStoreHandle::new(store_handle2, config2.stratum.network);
     chain_store_handle2
@@ -94,7 +94,7 @@ async fn test_three_nodes_connectivity() {
         Arc::new(Store::new(temp_dir3.path().to_str().unwrap().to_string(), false).unwrap());
     let (write_tx3, write_rx3) = write_channel();
     let store_writer3 = StoreWriter::new(store3.clone(), write_rx3);
-    tokio::spawn(store_writer3.run());
+    tokio::task::spawn_blocking(move || store_writer3.run());
     let store_handle3 = StoreHandle::new(store3, write_tx3);
     let chain_store_handle3 = ChainStoreHandle::new(store_handle3, config3.stratum.network);
     chain_store_handle3

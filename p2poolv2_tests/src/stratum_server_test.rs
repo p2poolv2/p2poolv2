@@ -63,7 +63,7 @@ async fn test_stratum_server_subscribe() {
         .await
         .unwrap();
 
-    let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+    let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
     let mut server = StratumServerBuilder::default()
         .shutdown_rx(shutdown_rx)

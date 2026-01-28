@@ -159,7 +159,7 @@ mod tests {
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
             .unwrap();
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let tracker_handle = start_tracker_actor();
 
         let ctx = StratumContext {
@@ -263,7 +263,7 @@ mod tests {
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
             .unwrap();
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -306,7 +306,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_user() {
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         let btcaddress = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
 
@@ -330,7 +330,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_same_user_twice() {
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let mut session1 = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         let mut session2 = Session::<DifficultyAdjuster>::new(2, 2, None, 0x1fffe000);
@@ -353,7 +353,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_user_multiple_users() {
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let mut session1 = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         let mut session2 = Session::<DifficultyAdjuster>::new(2, 2, None, 0x1fffe000);
@@ -401,7 +401,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
             notify_tx,
@@ -501,7 +501,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
             notify_tx,
