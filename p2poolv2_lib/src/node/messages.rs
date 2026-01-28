@@ -259,10 +259,27 @@ impl Encodable for Message {
             }
 
             // compact block relay
-            Message::CompactBlock(_) => todo!(),
-            Message::SendCompact(_, _) => todo!(),
-            Message::GetBlockTxn(_) => todo!(),
-            Message::BlockTxn(_) => todo!(),
+            Message::CompactBlock(cb) => {
+                let mut len = COMPACT_BLOCK.consensus_encode(w)?;
+                len += cb.consensus_encode(w)?;
+                Ok(len)
+            }
+            Message::SendCompact(flag, version) => {
+                let mut len = SEND_COMPACT.consensus_encode(w)?;
+                len += flag.consensus_encode(w)?;
+                len += version.consensus_encode(w)?;
+                Ok(len)
+            }
+            Message::GetBlockTxn(req) => {
+                let mut len = GET_BLOCK_TXN.consensus_encode(w)?;
+                len += req.consensus_encode(w)?;
+                Ok(len)
+            }
+            Message::BlockTxn(txn) => {
+                let mut len = BLOCK_TXN.consensus_encode(w)?;
+                len += txn.consensus_encode(w)?;
+                Ok(len)
+            }
         }
     }
 }
@@ -289,6 +306,20 @@ impl Decodable for Message {
             GET_DATA => Ok(Message::GetData(GetData::consensus_decode(r)?)),
             TRANSACTION => Ok(Message::Transaction(
                 bitcoin::Transaction::consensus_decode(r)?,
+            )),
+            message_discriminants::COMPACT_BLOCK => Ok(Message::CompactBlock(
+                bip152::ShareHeaderAndShortIds::consensus_decode(r)?,
+            )),
+            message_discriminants::SEND_COMPACT => {
+                let announce = bool::consensus_decode(r)?;
+                let version = u64::consensus_decode(r)?;
+                Ok(Message::SendCompact(announce, version))
+            }
+            message_discriminants::GET_BLOCK_TXN => Ok(Message::GetBlockTxn(
+                bip152::ShareBlockTransactionsRequest::consensus_decode(r)?,
+            )),
+            message_discriminants::BLOCK_TXN => Ok(Message::BlockTxn(
+                bitcoin::bip152::BlockTransactions::consensus_decode(r)?,
             )),
             _ => Err(encode::Error::ParseFailed("Invalid Message discriminant")),
         }

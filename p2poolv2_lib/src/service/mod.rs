@@ -21,6 +21,7 @@ use crate::config::NetworkConfig;
 use crate::middleware::inactivity::InactivityLayer;
 use crate::node::SwarmSend;
 use crate::service::p2p_service::{P2PService, RequestContext};
+use crate::shares::validation::ShareValidator;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
 use std::fmt::Debug;
@@ -29,13 +30,14 @@ use tokio::sync::mpsc::Sender;
 use tower::{ServiceBuilder, limit::RateLimitLayer, util::BoxService};
 
 // Build the full service stack
-pub fn build_service<C, T>(
+pub fn build_service<C, T, SV>(
     config: NetworkConfig,
     swarm_tx: Sender<SwarmSend<C>>,
-) -> BoxService<RequestContext<C, T>, (), Box<dyn Error + Send + Sync>>
+) -> BoxService<RequestContext<C, T, SV>, (), Box<dyn Error + Send + Sync>>
 where
     C: Send + Sync + Debug + 'static,
     T: TimeProvider + Send + Sync + Debug + 'static,
+    SV: ShareValidator + Send + Sync + Debug + 'static,
 {
     let base_service = P2PService::new(swarm_tx.clone());
 
@@ -94,7 +96,7 @@ mod tests {
     // This struct simulates a service that always fails on poll_ready()
     struct AlwaysFailReadyService;
 
-    impl<C, T> tower::Service<RequestContext<C, T>> for AlwaysFailReadyService {
+    impl<C, T, SV: Debug> tower::Service<RequestContext<C, T, SV>> for AlwaysFailReadyService {
         type Response = ();
         type Error = Box<dyn std::error::Error + Send + Sync>;
         type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
@@ -103,7 +105,7 @@ mod tests {
             Poll::Ready(Err("simulated readiness failure".into()))
         }
 
-        fn call(&mut self, _req: RequestContext<C, T>) -> Self::Future {
+        fn call(&mut self, _req: RequestContext<C, T, SV>) -> Self::Future {
             Box::pin(async { Ok(()) }) // Won't be called in this test
         }
     }
@@ -218,6 +220,7 @@ mod tests {
                 p2p_service::RequestContext<
                     tokio::sync::oneshot::Sender<Message>,
                     TestTimeProvider,
+                    MockDefaultShareValidator,
                 >,
             >>::ready(&mut service)
             .await
@@ -232,6 +235,7 @@ mod tests {
                 p2p_service::RequestContext<
                     tokio::sync::oneshot::Sender<Message>,
                     TestTimeProvider,
+                    MockDefaultShareValidator,
                 >,
             >>::ready(&mut service)
             .await
@@ -246,6 +250,7 @@ mod tests {
                 p2p_service::RequestContext<
                     tokio::sync::oneshot::Sender<Message>,
                     TestTimeProvider,
+                    MockDefaultShareValidator,
                 >,
             >>::ready(&mut service)
             .await
@@ -261,6 +266,7 @@ mod tests {
                 p2p_service::RequestContext<
                     tokio::sync::oneshot::Sender<Message>,
                     TestTimeProvider,
+                    MockDefaultShareValidator,
                 >,
             >>::ready(&mut service)
             .await
@@ -306,7 +312,11 @@ mod tests {
         // Try service.ready(), and on failure, trigger disconnect manually
 
         if <RateLimit<AlwaysFailReadyService> as ServiceExt<
-            RequestContext<tokio::sync::oneshot::Sender<Message>, TestTimeProvider>,
+            RequestContext<
+                tokio::sync::oneshot::Sender<Message>,
+                TestTimeProvider,
+                MockDefaultShareValidator,
+            >,
         >>::ready(&mut service)
         .await
         .is_err()
@@ -393,7 +403,7 @@ mod tests {
         };
 
         let mut service =
-            build_service::<Sender<Message>, _>(network_config.clone(), swarm_tx.clone());
+            build_service::<Sender<Message>, _, _>(network_config.clone(), swarm_tx.clone());
 
         // First request should succeed immediately
         assert!(
@@ -475,7 +485,7 @@ mod tests {
         };
 
         let mut service =
-            build_service::<Sender<Message>, _>(network_config.clone(), swarm_tx.clone());
+            build_service::<Sender<Message>, _, _>(network_config.clone(), swarm_tx.clone());
 
         // First request succeeds
         assert!(

@@ -62,6 +62,8 @@ use libp2p::{
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::error::Error;
+use std::fmt::Debug;
+use std::hash::DefaultHasher;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -102,24 +104,31 @@ pub enum SwarmSend<C> {
 }
 
 /// Node is the main struct that represents the node
-struct Node {
+struct Node<SV>
+where
+    SV: ShareValidator + Send + Sync + Debug + 'static,
+{
     swarm: Swarm<P2PoolBehaviour>,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     swarm_rx: mpsc::Receiver<SwarmSend<ResponseChannel<Message>>>,
     chain_store_handle: ChainStoreHandle,
-    request_response_handler: RequestResponseHandler<ResponseChannel<Message>>,
+    request_response_handler: RequestResponseHandler<ResponseChannel<Message>, SV>,
     config: Config,
     monitoring_event_sender: MonitoringEventSender,
     peer_states: Arc<PeerStates>,
 }
 
-impl Node {
+impl<SV> Node<SV>
+where
+    SV: ShareValidator + Send + Sync + Debug + 'static,
+{
     pub fn new(
         config: Config,
         chain_store_handle: ChainStoreHandle,
         block_fetcher_handle: BlockFetcherHandle,
         validation_tx: ValidationSender,
         monitoring_event_sender: MonitoringEventSender,
+        share_validator: Arc<SV>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
 
@@ -208,20 +217,13 @@ impl Node {
         // TODO: persist this to disk
         let peer_states = Arc::new(RwLock::new(HashMap::new()));
 
-        let pool_difficulty = PoolDifficulty::build(&chain_store_handle)
-            .expect("Failed to build pool difficulty from chain store");
-        let share_validator: Arc<dyn ShareValidator + Send + Sync> =
-            Arc::new(DefaultShareValidator::new(
-                pool_difficulty,
-                config.stratum.difficulty_multiplier as u128,
-            ));
         let request_response_handler = RequestResponseHandler::new(
             config.network.clone(),
             chain_store_handle.clone(),
             swarm_tx.clone(),
             block_fetcher_handle,
             validation_tx,
-            share_validator,
+            share_validator.clone(),
             peer_states.clone(),
         );
 
@@ -508,6 +510,7 @@ mod tests {
     use crate::node::Node;
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
     use crate::node::validation_worker::create_validation_channel;
+    use crate::shares::validation::MockDefaultShareValidator;
     use bitcoindrpc::BitcoinRpcConfig;
     use futures::StreamExt;
     use std::time::{Duration, Instant};
@@ -590,6 +593,7 @@ mod tests {
             block_fetcher_tx,
             validation_tx,
             monitoring_tx,
+            MockDefaultShareValidator::default().into(),
         )
         .expect("Node initialization failed");
 

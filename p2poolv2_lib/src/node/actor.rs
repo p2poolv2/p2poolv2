@@ -39,13 +39,21 @@ use crate::node::validation_worker::{
 };
 #[cfg(test)]
 #[mockall_double::double]
+use crate::pool_difficulty::PoolDifficulty;
+#[cfg(not(test))]
+use crate::pool_difficulty::PoolDifficulty;
+#[cfg(test)]
+#[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use crate::shares::validation::DefaultShareValidator;
+use crate::shares::validation::ShareValidator;
 use crate::stratum::emission::EmissionReceiver;
 use crate::stratum::work::notify::NotifySender;
 use libp2p::futures::StreamExt;
 use std::error::Error;
+use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 use tokio::sync::{mpsc, oneshot};
 use tracing::trace;
@@ -73,8 +81,15 @@ impl NodeHandle {
         notify_tx: NotifySender,
         pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
+        let pool_difficulty = PoolDifficulty::build(&chain_store_handle)
+            .expect("Failed to build pool difficulty from chain store");
+        let share_validator: Arc<DefaultShareValidator> = Arc::new(DefaultShareValidator::new(
+            pool_difficulty,
+            config.stratum.difficulty_multiplier as u128,
+        ));
+
         let (command_tx, command_rx) = mpsc::channel::<Command>(NODE_CMD_BUFFER);
-        let (node_actor, stopping_rx) = NodeActor::new(
+        let (node_actor, stopping_rx) = NodeActor::<DefaultShareValidator>::new(
             config,
             chain_store_handle,
             command_rx,
@@ -83,6 +98,7 @@ impl NodeHandle {
             monitoring_event_sender,
             notify_tx,
             pplns_window,
+            share_validator,
         )
         .unwrap();
 
@@ -212,8 +228,11 @@ mock! {
 }
 
 /// NodeActor runs the Node in a separate task and handles all its events
-struct NodeActor {
-    node: Node,
+struct NodeActor<SV>
+where
+    SV: ShareValidator + Send + Sync + Debug + 'static,
+{
+    node: Node<SV>,
     command_rx: mpsc::Receiver<Command>,
     stopping_tx: oneshot::Sender<()>,
     /// stratum share emissions
@@ -228,7 +247,10 @@ struct NodeActor {
     validation_handle: tokio::task::JoinHandle<Result<(), ValidationWorkerError>>,
 }
 
-impl NodeActor {
+impl<SV> NodeActor<SV>
+where
+    SV: ShareValidator + Send + Sync + Debug + 'static,
+{
     fn new(
         config: Config,
         chain_store_handle: ChainStoreHandle,
@@ -238,6 +260,7 @@ impl NodeActor {
         monitoring_event_sender: MonitoringEventSender,
         notify_tx: NotifySender,
         pplns_window: Arc<RwLock<PplnsWindow>>,
+        share_validator: Arc<SV>,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>> {
         // Create organise channel
         let (organise_tx, organise_rx) = create_organise_channel();
@@ -258,6 +281,7 @@ impl NodeActor {
             block_fetcher_tx,
             validation_tx,
             monitoring_event_sender.clone(),
+            share_validator,
         )?;
 
         // Spawn organise worker

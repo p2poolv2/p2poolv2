@@ -34,12 +34,14 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use libp2p::PeerId;
+use std::fmt::Debug;
 use tokio::sync::mpsc::Sender;
 use tokio::time::sleep;
 use tower::{Layer, Service};
 
 use crate::node::SwarmSend;
 use crate::service::p2p_service::RequestContext;
+use crate::shares::validation::ShareValidator;
 
 /// Layer that injects the InactivityService middleware into the stack.
 /// Pass `None` for `timeout_duration` to disable inactivity monitoring.
@@ -137,10 +139,10 @@ where
     }
 }
 
-impl<S, C, T> Service<RequestContext<C, T>> for InactivityService<S, C>
+impl<S, C, T, SV> Service<RequestContext<C, T, SV>> for InactivityService<S, C>
 where
     S: Service<
-            RequestContext<C, T>,
+            RequestContext<C, T, SV>,
             Response = (),
             Error = Box<dyn std::error::Error + Send + Sync>,
         > + Send
@@ -148,6 +150,7 @@ where
     S::Future: Send + 'static,
     C: Send + Sync + 'static,
     T: Send + Sync + 'static,
+    SV: ShareValidator + Send + Sync + Debug + 'static,
 {
     type Response = ();
     type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -157,10 +160,10 @@ where
         self.service.poll_ready(cx)
     }
 
-    fn call(&mut self, req: RequestContext<C, T>) -> Self::Future {
+    fn call(&mut self, req: RequestContext<C, T, SV>) -> Self::Future {
         if self.timeout_duration.is_some() {
             let mut map = self.last_seen.lock().unwrap();
-            map.insert(req.peer, Instant::now());
+            map.insert(req.peer.id, Instant::now());
         }
 
         self.service.call(req)
@@ -290,10 +293,11 @@ mod tests {
     #[derive(Clone)]
     struct MockService;
 
-    impl<C, T> Service<RequestContext<C, T>> for MockService
+    impl<C, T, SV> Service<RequestContext<C, T, SV>> for MockService
     where
         C: Send + Sync + 'static,
         T: Send + Sync + 'static,
+        SV: ShareValidator + Send + Sync + Debug + 'static,
     {
         type Response = ();
         type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -303,7 +307,7 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        fn call(&mut self, _req: RequestContext<C, T>) -> Self::Future {
+        fn call(&mut self, _req: RequestContext<C, T, SV>) -> Self::Future {
             futures::future::ready(Ok(()))
         }
     }
