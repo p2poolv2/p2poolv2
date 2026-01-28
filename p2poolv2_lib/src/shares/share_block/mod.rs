@@ -282,7 +282,7 @@ impl ShareBlock {
 /// Encode ShareBlock using rust-bitcoin Encodable support
 ///
 /// We have a new type ShareTransaction and have to encode a vector of
-/// `transactions` manualy. The` bitcoin_transactions` is a vector of
+/// `transactions` manually. The `bitcoin_transactions` is a vector of
 /// Transaction and rust-bitcoin provides encoding for vec of their
 /// types out of the box.
 impl Encodable for ShareBlock {
