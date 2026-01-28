@@ -212,7 +212,6 @@ impl StoreHandle {
                 confirm_txs,
                 reply: reply_tx,
             })
-            .await
             .map_err(|_| StoreError::ChannelClosed)?;
         reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
     }
@@ -225,7 +224,6 @@ impl StoreHandle {
                 genesis,
                 reply: reply_tx,
             })
-            .await
             .map_err(|_| StoreError::ChannelClosed)?;
         reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
     }
@@ -241,7 +239,6 @@ impl StoreHandle {
                 genesis_hash,
                 reply: reply_tx,
             })
-            .await
             .map_err(|_| StoreError::ChannelClosed)?;
         reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
     }
@@ -259,7 +256,6 @@ impl StoreHandle {
                 serialized_notify,
                 reply: reply_tx,
             })
-            .await
             .map_err(|_| StoreError::ChannelClosed)?;
         reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
     }
@@ -272,7 +268,6 @@ impl StoreHandle {
                 btcaddress,
                 reply: reply_tx,
             })
-            .await
             .map_err(|_| StoreError::ChannelClosed)?;
         reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
     }
@@ -285,7 +280,6 @@ impl StoreHandle {
                 pplns_share,
                 reply: reply_tx,
             })
-            .await
             .map_err(|_| StoreError::ChannelClosed)?;
         reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
     }

@@ -99,10 +99,15 @@ async fn main() -> ExitCode {
     let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
     let store = Arc::new(Store::new(config.store.path.clone(), false).unwrap());
 
-    // Create StoreWriter for serialized database writes
+    // Create StoreWriter for serialized database writes (runs on dedicated blocking thread)
     let (write_tx, write_rx) = write_channel();
     let store_writer = StoreWriter::new(store.clone(), write_rx);
-    tokio::spawn(store_writer.run());
+    // Use spawn_blocking to spawn a dedicated thread to write to
+    // rocksdb.  Rocks does support concurrent writes, however, the
+    // throughput doesn't scale linearly with threads. We still with a
+    // single thread, if we need to start another thread as scale
+    // increases, we can deal with that then.
+    tokio::task::spawn_blocking(move || store_writer.run());
 
     // Create StoreHandle and ChainStoreHandle for new components
     let store_handle = StoreHandle::new(store.clone(), write_tx);

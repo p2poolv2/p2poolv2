@@ -16,9 +16,12 @@
 
 //! Store writer for serialized database writes.
 //!
-//! This module provides a dedicated task for processing all Store write
+//! This module provides a dedicated thread for processing all Store write
 //! operations sequentially. Reads are direct via Arc<Store>, while writes
 //! go through a channel to ensure serialization.
+//!
+//! The StoreWriter runs on a dedicated OS thread (via `spawn_blocking`) to
+//! ensure RocksDB write stalls don't block tokio's async worker threads.
 
 mod handle;
 
@@ -31,12 +34,10 @@ use bitcoin::{BlockHash, Work};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
+use std::sync::mpsc;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use tracing::{debug, info};
-
-/// Channel buffer size for write commands
-pub const WRITE_CHANNEL_SIZE: usize = 100;
 
 /// Error type for store operations
 #[derive(Debug, Clone)]
@@ -123,21 +124,24 @@ pub enum WriteCommand {
     RemoveTip { hash: BlockHash },
 }
 
-/// Sender type for write commands
+/// Sender type for write commands (std::sync::mpsc for sync StoreWriter)
 pub type WriteSender = mpsc::Sender<WriteCommand>;
 
-/// Receiver type for write commands
+/// Receiver type for write commands (std::sync::mpsc for sync StoreWriter)
 pub type WriteReceiver = mpsc::Receiver<WriteCommand>;
 
-/// Create a new write channel
+/// Create a new write channel (unbounded std::sync::mpsc)
 pub fn write_channel() -> (WriteSender, WriteReceiver) {
-    mpsc::channel(WRITE_CHANNEL_SIZE)
+    mpsc::channel()
 }
 
 /// Store writer that processes write commands sequentially.
 ///
 /// This ensures all writes to RocksDB are serialized, avoiding
 /// concurrent write conflicts while allowing direct reads.
+///
+/// Runs on a dedicated OS thread via `tokio::task::spawn_blocking`
+/// to prevent RocksDB write stalls from blocking tokio workers.
 pub struct StoreWriter {
     store: Arc<Store>,
     command_rx: WriteReceiver,
@@ -149,11 +153,13 @@ impl StoreWriter {
         Self { store, command_rx }
     }
 
-    /// Run the writer event loop until the channel is closed
-    pub async fn run(mut self) {
-        info!("Store writer started");
+    /// Run the writer event loop until the channel is closed.
+    ///
+    /// This is a blocking function - spawn with `tokio::task::spawn_blocking`.
+    pub fn run(self) {
+        info!("Store writer started on dedicated thread");
 
-        while let Some(cmd) = self.command_rx.recv().await {
+        while let Ok(cmd) = self.command_rx.recv() {
             self.handle_command(cmd);
         }
 

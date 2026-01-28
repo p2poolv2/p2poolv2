@@ -80,7 +80,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_execute_empty_chain() {
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         // Execute the info command
         let result = execute(chain_store_handle);
@@ -91,7 +91,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_with_genesis() {
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle().await;
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         // Initialize genesis block
         let genesis = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
