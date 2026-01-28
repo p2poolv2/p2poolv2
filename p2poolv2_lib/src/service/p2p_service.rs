@@ -40,13 +40,31 @@ use std::fmt::Debug;
 
 /// Request context wrapping all inputs for the service call.
 #[derive(Debug)]
-pub struct RequestContext<C, T, SV> {
+pub struct RequestContext<C, T, SV>
+where
+    SV: Debug,
+{
     pub peer: Arc<PeerState>,
     pub request: Message,
     pub chain_store_handle: ChainStoreHandle,
     pub response_channel: C,
     pub swarm_tx: mpsc::Sender<SwarmSend<C>>,
     pub time_provider: T,
+    pub block_fetcher_handle: BlockFetcherHandle,
+    pub validation_tx: ValidationSender,
+    pub share_validator: Arc<SV>,
+}
+
+/// Request context wrapping all inputs for the service call.
+#[derive(Debug)]
+pub struct ResponseContext<C, SV>
+where
+    SV: Debug,
+{
+    pub peer: Arc<PeerState>,
+    pub response: Message,
+    pub chain_store_handle: ChainStoreHandle,
+    pub swarm_tx: mpsc::Sender<SwarmSend<C>>,
     pub block_fetcher_handle: BlockFetcherHandle,
     pub validation_tx: ValidationSender,
     pub share_validator: Arc<SV>,
@@ -62,8 +80,11 @@ impl P2PService {
     }
 }
 
-impl<C: 'static + Send + Sync, T: TimeProvider + Send + Sync + 'static>
-    Service<RequestContext<C, T>> for P2PService
+impl<C, T, SV> Service<RequestContext<C, T, SV>> for P2PService
+where
+    C: 'static + Send + Sync + Debug,
+    T: TimeProvider + Send + Sync + Debug + 'static,
+    SV: ShareValidator + Send + Sync + Debug + 'static,
 {
     type Response = ();
     type Error = Box<dyn Error + Send + Sync>;
@@ -73,7 +94,7 @@ impl<C: 'static + Send + Sync, T: TimeProvider + Send + Sync + 'static>
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: RequestContext<C, T>) -> Self::Future {
+    fn call(&mut self, req: RequestContext<C, T, SV>) -> Self::Future {
         Box::pin(async move {
             handle_request(req).await.map_err(|e| {
                 tracing::error!("Service failed to process request: {}", e);

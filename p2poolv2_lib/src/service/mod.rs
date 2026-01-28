@@ -19,6 +19,7 @@ pub mod peer_state;
 
 use crate::config::NetworkConfig;
 use crate::service::p2p_service::{P2PService, RequestContext};
+use crate::shares::validation::ShareValidator;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
 use std::fmt::Debug;
@@ -26,12 +27,13 @@ use std::time::Duration;
 use tower::{ServiceBuilder, limit::RateLimitLayer, util::BoxService};
 
 /// Build the full service stack with rate limiting.
-pub fn build_service<C, T>(
+pub fn build_service<C, T, SV>(
     config: NetworkConfig,
-) -> BoxService<RequestContext<C, T>, (), Box<dyn Error + Send + Sync>>
+) -> BoxService<RequestContext<C, T, SV>, (), Box<dyn Error + Send + Sync>>
 where
     C: Send + Sync + Debug + 'static,
     T: TimeProvider + Send + Sync + Debug + 'static,
+    SV: ShareValidator + Send + Sync + Debug + 'static,
 {
     let base_service = P2PService::new();
 
@@ -84,7 +86,7 @@ mod tests {
     // This struct simulates a service that always fails on poll_ready()
     struct AlwaysFailReadyService;
 
-    impl<C, T> tower::Service<RequestContext<C, T>> for AlwaysFailReadyService {
+    impl<C, T, SV: Debug> tower::Service<RequestContext<C, T, SV>> for AlwaysFailReadyService {
         type Response = ();
         type Error = Box<dyn std::error::Error + Send + Sync>;
         type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
@@ -93,7 +95,7 @@ mod tests {
             Poll::Ready(Err("simulated readiness failure".into()))
         }
 
-        fn call(&mut self, _req: RequestContext<C, T>) -> Self::Future {
+        fn call(&mut self, _req: RequestContext<C, T, SV>) -> Self::Future {
             Box::pin(async { Ok(()) }) // Won't be called in this test
         }
     }
@@ -208,6 +210,7 @@ mod tests {
                 p2p_service::RequestContext<
                     tokio::sync::oneshot::Sender<Message>,
                     TestTimeProvider,
+                    MockDefaultShareValidator,
                 >,
             >>::ready(&mut service)
             .await
@@ -222,6 +225,7 @@ mod tests {
                 p2p_service::RequestContext<
                     tokio::sync::oneshot::Sender<Message>,
                     TestTimeProvider,
+                    MockDefaultShareValidator,
                 >,
             >>::ready(&mut service)
             .await
@@ -236,6 +240,7 @@ mod tests {
                 p2p_service::RequestContext<
                     tokio::sync::oneshot::Sender<Message>,
                     TestTimeProvider,
+                    MockDefaultShareValidator,
                 >,
             >>::ready(&mut service)
             .await
@@ -251,6 +256,7 @@ mod tests {
                 p2p_service::RequestContext<
                     tokio::sync::oneshot::Sender<Message>,
                     TestTimeProvider,
+                    MockDefaultShareValidator,
                 >,
             >>::ready(&mut service)
             .await
@@ -296,7 +302,11 @@ mod tests {
         // Try service.ready(), and on failure, trigger disconnect manually
 
         if <RateLimit<AlwaysFailReadyService> as ServiceExt<
-            RequestContext<tokio::sync::oneshot::Sender<Message>, TestTimeProvider>,
+            RequestContext<
+                tokio::sync::oneshot::Sender<Message>,
+                TestTimeProvider,
+                MockDefaultShareValidator,
+            >,
         >>::ready(&mut service)
         .await
         .is_err()
@@ -368,7 +378,7 @@ mod tests {
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
-        let mut service = build_service::<Sender<Message>, _>(network_config.clone());
+        let mut service = build_service::<Sender<Message>, _, _>(network_config.clone());
 
         // First request should succeed immediately
         assert!(
@@ -435,7 +445,7 @@ mod tests {
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
-        let mut service = build_service::<Sender<Message>, _>(network_config.clone());
+        let mut service = build_service::<Sender<Message>, _, _>(network_config.clone());
 
         // First request succeeds
         assert!(
