@@ -16,7 +16,9 @@
 
 use super::block_tx_metadata::BlockMetadata;
 use super::{ColumnFamily, Store};
-use crate::shares::share_block::{ShareBlock, ShareHeader, StorageShareBlock, Txids};
+use crate::shares::share_block::{
+    ShareBlock, ShareHeader, ShareTransaction, StorageShareBlock, Txids,
+};
 use bitcoin::consensus::{self, Encodable, encode};
 use bitcoin::{BlockHash, Work};
 use std::collections::HashMap;
@@ -118,7 +120,11 @@ impl Store {
             Ok(share) => share,
             Err(_) => return None,
         };
-        let transactions = self.get_txs_for_blockhash(blockhash, ColumnFamily::BlockTxids);
+        let transactions: Vec<ShareTransaction> = self
+            .get_txs_for_blockhash(blockhash, ColumnFamily::BlockTxids)
+            .into_iter()
+            .map(ShareTransaction)
+            .collect();
         let bitcoin_transactions =
             self.get_txs_for_blockhash(blockhash, ColumnFamily::BitcoinTxids);
         let share = ShareBlock {
@@ -199,8 +205,11 @@ impl Store {
             .filter_map(|(blockhash, result)| {
                 if let Ok(Some(data)) = result {
                     if let Ok(storage_share) = encode::deserialize::<StorageShareBlock>(&data) {
-                        let transactions =
-                            self.get_txs_for_blockhash(blockhash, ColumnFamily::BlockTxids);
+                        let transactions: Vec<ShareTransaction> = self
+                            .get_txs_for_blockhash(blockhash, ColumnFamily::BlockTxids)
+                            .into_iter()
+                            .map(ShareTransaction)
+                            .collect();
                         let bitcoin_transactions =
                             self.get_txs_for_blockhash(blockhash, ColumnFamily::BitcoinTxids);
                         Some((

@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::{ColumnFamily, Store};
-use crate::shares::share_block::Txids;
+use crate::shares::share_block::{ShareTransaction, Txids};
 use crate::store::block_tx_metadata::TxMetadata;
 use bitcoin::consensus::{self, Encodable, encode};
 use bitcoin::{BlockHash, OutPoint, Transaction, Txid};
@@ -28,7 +28,7 @@ const OUTPOINT_SIZE: usize = 36;
 
 #[allow(dead_code)]
 impl Store {
-    /// Store transactions in the store
+    /// Store share chain transactions in the store
     ///
     /// Store inputs and outputs for each transaction in separate column families
     ///
@@ -49,7 +49,7 @@ impl Store {
     /// overwritten.
     pub(crate) fn add_sharechain_txs(
         &self,
-        transactions: &[Transaction],
+        transactions: &[ShareTransaction],
         on_main_chain: bool,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<Vec<TxMetadata>, Box<dyn Error + Send + Sync>> {
@@ -395,11 +395,11 @@ impl Store {
     pub(crate) fn get_sharechain_txs_by_blockhash_index(
         &self,
         blockhash: &BlockHash,
-    ) -> Result<Vec<Transaction>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<ShareTransaction>, Box<dyn Error + Send + Sync>> {
         let txids = self.get_txids_for_blockhash(blockhash, ColumnFamily::BlockTxids);
-        let mut txs = Vec::new();
+        let mut txs = Vec::with_capacity(txids.0.len());
         for txid in txids.0 {
-            txs.push(self.get_tx(&txid)?);
+            txs.push(ShareTransaction(self.get_tx(&txid)?));
         }
         Ok(txs)
     }
@@ -691,7 +691,7 @@ mod tests {
             output: vec![],
         };
 
-        let transactions = vec![tx1.clone(), tx2.clone()];
+        let transactions = vec![ShareTransaction(tx1.clone()), ShareTransaction(tx2.clone())];
 
         // Add transactions to store
         let mut batch = rocksdb::WriteBatch::default();
@@ -739,7 +739,7 @@ mod tests {
         let txid = tx.compute_txid();
         let mut batch = rocksdb::WriteBatch::default();
         let res = store
-            .add_sharechain_txs(&[tx.clone()], true, &mut batch)
+            .add_sharechain_txs(&[ShareTransaction(tx.clone())], true, &mut batch)
             .unwrap();
         store.db.write(batch).unwrap();
 
@@ -827,7 +827,9 @@ mod tests {
 
         // Confirm the transaction (should add to spend index)
         let mut batch = rocksdb::WriteBatch::default();
-        store.add_sharechain_txs(&[tx], true, &mut batch).unwrap();
+        store
+            .add_sharechain_txs(&[ShareTransaction(tx)], true, &mut batch)
+            .unwrap();
         store.db.write(batch).unwrap();
 
         // Verify the previous outputs are now in spends index

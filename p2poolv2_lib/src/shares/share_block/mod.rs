@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod share_coinbase;
+pub mod share_transaction;
 pub mod short_ids;
 pub mod storage_share_block;
 
@@ -30,6 +31,7 @@ use bitcoin::{
 };
 use core::mem;
 use serde::{Deserialize, Serialize};
+pub use share_transaction::ShareTransaction;
 use std::error::Error;
 pub use storage_share_block::StorageShareBlock;
 
@@ -161,8 +163,8 @@ impl Decodable for ShareHeader {
 pub struct ShareBlock {
     /// Header for the block
     pub header: ShareHeader,
-    /// Any share chain transactions to be included in the share block. We use rust-bitcoin Transactions.
-    pub transactions: Vec<Transaction>,
+    /// Share chain transactions - including the coinbase for the share.
+    pub transactions: Vec<ShareTransaction>,
     /// Bitcoin transactions, making for a full share block.
     /// Optimisations for storage and communication are left elsewhere as they are two different optimisations.
     pub bitcoin_transactions: Vec<Transaction>,
@@ -185,14 +187,14 @@ impl ShareBlock {
         prev_share_blockhash: BlockHash,
         uncles: &[BlockHash],
         miner_pubkey: CompressedPublicKey,
-        transactions: Vec<Transaction>,
+        transactions: Vec<ShareTransaction>,
         network: bitcoin::Network,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let coinbase = transactions::coinbase::create_coinbase_transaction(&miner_pubkey, network);
-        let mut all_transactions = vec![coinbase];
+        let mut all_transactions = vec![ShareTransaction(coinbase)];
         all_transactions.extend(transactions);
         let merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
-            all_transactions.iter().map(Transaction::compute_txid),
+            all_transactions.iter().map(|tx| tx.compute_txid()),
         )
         .unwrap()
         .into();
@@ -243,12 +245,11 @@ impl ShareBlock {
             .parse::<CompressedPublicKey>()
             .unwrap();
         let coinbase_tx = transactions::coinbase::create_coinbase_transaction(&public_key, network);
-        let transactions = vec![coinbase_tx];
-        let merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
-            transactions.iter().map(Transaction::compute_txid),
-        )
-        .unwrap()
-        .into();
+        let transactions = vec![ShareTransaction(coinbase_tx)];
+        let merkle_root: TxMerkleNode =
+            bitcoin::merkle_tree::calculate_root(transactions.iter().map(|tx| tx.compute_txid()))
+                .unwrap()
+                .into();
         let block_hex = hex::decode(genesis_data.bitcoin_block_hex).unwrap();
         // panic here, as if the genesis block is bad, we bail at the start of the process
         let compact_block: bip152::HeaderAndShortIds =
@@ -278,6 +279,12 @@ impl ShareBlock {
     }
 }
 
+/// Encode ShareBlock using rust-bitcoin Encodable support
+///
+/// We have a new type ShareTransaction and have to encode a vector of
+/// `transactions` manualy. The` bitcoin_transactions` is a vector of
+/// Transaction and rust-bitcoin provides encoding for vec of their
+/// types out of the box.
 impl Encodable for ShareBlock {
     fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
         &self,
@@ -285,20 +292,37 @@ impl Encodable for ShareBlock {
     ) -> Result<usize, bitcoin::io::Error> {
         let mut len = 0;
         len += self.header.consensus_encode(w)?;
-        len += self.transactions.consensus_encode(w)?;
+        // Encode share transactions
+        len += VarInt(self.transactions.len() as u64).consensus_encode(w)?;
+        for tx in &self.transactions {
+            len += tx.consensus_encode(w)?;
+        }
         len += self.bitcoin_transactions.consensus_encode(w)?;
         Ok(len)
     }
 }
 
+/// Decode ShareBlock using rust-bitcoin.
+///
+/// See comment on Encodable for handling `transactions` vs `bitcoin_transactions`
 impl Decodable for ShareBlock {
     fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
         r: &mut R,
     ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        let header = ShareHeader::consensus_decode(r)?;
+        // Decode share transactions
+        let tx_count = VarInt::consensus_decode(r)?.0 as usize;
+        let max_capacity =
+            bitcoin::consensus::encode::MAX_VEC_SIZE / 4 / mem::size_of::<ShareTransaction>();
+        let mut transactions = Vec::with_capacity(core::cmp::min(tx_count, max_capacity));
+        for _ in 0..tx_count {
+            transactions.push(ShareTransaction::consensus_decode(r)?);
+        }
+        let bitcoin_transactions = Vec::<Transaction>::consensus_decode(r)?;
         Ok(ShareBlock {
-            header: ShareHeader::consensus_decode(r)?,
-            transactions: Vec::<Transaction>::consensus_decode(r)?,
-            bitcoin_transactions: Vec::<Transaction>::consensus_decode(r)?,
+            header,
+            transactions,
+            bitcoin_transactions,
         })
     }
 }
@@ -352,6 +376,7 @@ impl Decodable for Txids {
 mod tests {
     use super::*;
     use crate::test_utils::TestShareBlockBuilder;
+    use bitcoin::consensus::{deserialize, serialize};
     use std::str::FromStr;
 
     #[test]
@@ -431,10 +456,7 @@ mod tests {
 
         // Verify merkle root is correctly calculated
         let expected_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
-            share_block
-                .transactions
-                .iter()
-                .map(Transaction::compute_txid),
+            share_block.transactions.iter().map(|tx| tx.compute_txid()),
         )
         .unwrap()
         .into();
@@ -506,7 +528,7 @@ mod tests {
         let header = ShareHeader::from_commitment_and_header(
             commitment,
             bitcoin_header,
-            bitcoin_header.merkle_root.clone(),
+            bitcoin_header.merkle_root,
         );
 
         assert_eq!(header.prev_share_blockhash, cloned.prev_share_blockhash);
@@ -519,5 +541,36 @@ mod tests {
 
         let hashed = cloned.hash();
         assert_ne!(hashed, bitcoin::hashes::sha256::Hash::all_zeros());
+    }
+
+    #[test]
+    fn test_share_block_encode_decode_share_transaction_correctly() {
+        // Build a share block with transactions
+        let original = TestShareBlockBuilder::new()
+            .prev_share_blockhash(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4".to_string(),
+            )
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+
+        // Verify we have share transactions
+        assert!(!original.transactions.is_empty());
+        assert!(original.transactions[0].is_coinbase());
+
+        // Encode to bytes
+        let encoded = serialize(&original);
+
+        // Decode back
+        let decoded: ShareBlock = deserialize(&encoded).expect("Failed to decode ShareBlock");
+
+        // Verify share transactions match (comparing inner Transaction)
+        for (orig_tx, decoded_tx) in original
+            .transactions
+            .iter()
+            .zip(decoded.transactions.iter())
+        {
+            assert_eq!(orig_tx.compute_txid(), decoded_tx.compute_txid());
+            assert_eq!(orig_tx.0, decoded_tx.0);
+        }
     }
 }
