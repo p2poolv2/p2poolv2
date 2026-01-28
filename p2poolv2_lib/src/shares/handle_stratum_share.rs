@@ -20,7 +20,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::share_coinbase::build_share_coinbase;
-use crate::shares::share_block::{ShareBlock, ShareHeader};
+use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
 use crate::stratum::emission::Emission;
 use bitcoin::merkle_tree;
 use std::error::Error;
@@ -41,7 +41,7 @@ pub async fn handle_stratum_share(
             .map_err(|e| format!("Failed to build coinbase. {e}"))?;
 
         // TODO: Get share chain transactions and use them here.
-        let share_transactions = vec![coinbase];
+        let share_transactions = vec![ShareTransaction(coinbase)];
 
         let txids = share_transactions
             .iter()

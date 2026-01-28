@@ -28,7 +28,7 @@ use tempfile::{TempDir, tempdir};
 
 // Imports only needed for internal tests
 #[cfg(test)]
-use crate::shares::share_block::{ShareBlock, ShareHeader};
+use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
 #[cfg(test)]
 use crate::shares::share_commitment::ShareCommitment;
 #[cfg(test)]
@@ -214,7 +214,7 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
 
     ShareBlock {
         header: share_header,
-        transactions: vec![coinbase],
+        transactions: vec![ShareTransaction(coinbase)],
         bitcoin_transactions,
     }
 }
@@ -280,9 +280,9 @@ impl TestShareBlockBuilder {
             }
             None => test_coinbase_transaction(),
         };
-        let all_transactions = {
-            let mut txs = vec![coinbase];
-            txs.extend(self.transactions);
+        let all_transactions: Vec<ShareTransaction> = {
+            let mut txs = vec![ShareTransaction(coinbase)];
+            txs.extend(self.transactions.into_iter().map(ShareTransaction));
             txs
         };
         test_share_block(
@@ -314,7 +314,7 @@ fn test_share_block(
     prev_share_blockhash: &str,
     uncles: Vec<BlockHash>,
     miner_pubkey: &str,
-    transactions: Vec<Transaction>,
+    transactions: Vec<ShareTransaction>,
     work: Option<u32>,
     nonce: Option<u32>,
 ) -> ShareBlock {
