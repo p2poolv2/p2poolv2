@@ -14,12 +14,11 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use super::{Store, column_families::ColumnFamily};
+use super::{Store, column_families::ColumnFamily, writer::StoreError};
 use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::utils::snowflake_simplified::get_next_id;
 use bitcoin::consensus::Encodable;
 use bitcoin::consensus::encode;
-use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 const INITIAL_SHARE_VEC_CAPACITY: usize = 100_000;
 
@@ -28,10 +27,7 @@ impl Store {
     /// btcaddress and workername are skipped during serialization (serde(skip)) to minimize storage
     ///
     /// Key is timestamp (8) + user_id (8) + share id (8) = 24 bytes
-    pub fn add_pplns_share(
-        &self,
-        pplns_share: SimplePplnsShare,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError> {
         let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
 
         let mut serialized = Vec::new();

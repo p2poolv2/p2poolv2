@@ -15,14 +15,13 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::stored_user::StoredUser;
-use super::{ColumnFamily, Store};
+use super::{ColumnFamily, Store, writer::StoreError};
 use crate::utils::snowflake_simplified::get_next_id;
 use bitcoin::consensus::{Encodable, encode};
-use std::error::Error;
 
 impl Store {
     /// Store a user by btcaddress, returns the user ID
-    pub fn add_user(&self, btcaddress: String) -> Result<u64, Box<dyn Error + Send + Sync>> {
+    pub fn add_user(&self, btcaddress: String) -> Result<u64, StoreError> {
         let user_cf = self.db.cf_handle(&ColumnFamily::User).unwrap();
         let user_index_cf = self.db.cf_handle(&ColumnFamily::UserIndex).unwrap();
 
@@ -68,10 +67,7 @@ impl Store {
     }
 
     /// Get user by user ID
-    pub fn get_user_by_id(
-        &self,
-        user_id: u64,
-    ) -> Result<Option<StoredUser>, Box<dyn Error + Send + Sync>> {
+    pub fn get_user_by_id(&self, user_id: u64) -> Result<Option<StoredUser>, StoreError> {
         let user_cf = self.db.cf_handle(&ColumnFamily::User).unwrap();
 
         if let Some(serialized_user) = self.db.get_cf(&user_cf, user_id.to_be_bytes())? {
@@ -90,7 +86,7 @@ impl Store {
     pub fn get_user_by_btcaddress(
         &self,
         btcaddress: &str,
-    ) -> Result<Option<StoredUser>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Option<StoredUser>, StoreError> {
         let user_index_cf = self.db.cf_handle(&ColumnFamily::UserIndex).unwrap();
 
         if let Some(user_id_bytes) = self.db.get_cf(&user_index_cf, btcaddress)? {
@@ -112,7 +108,7 @@ impl Store {
     pub fn get_btcaddresses_for_user_ids(
         &self,
         user_ids: &[u64],
-    ) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<(u64, String)>, StoreError> {
         let user_cf = self.db.cf_handle(&ColumnFamily::User).unwrap();
 
         // Build keys for multi_get_cf: (column_family, key_bytes)

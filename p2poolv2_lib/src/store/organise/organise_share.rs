@@ -14,9 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::store::writer::StoreError;
+
 use super::Store;
 use bitcoin::BlockHash;
-use std::error::Error;
 
 impl Store {
     /// Organise a share by updating candidate and confirmed indexes.
@@ -33,7 +34,7 @@ impl Store {
         &self,
         blockhash: &BlockHash,
         _batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<(), StoreError> {
         tracing::debug!("organise_share called for {blockhash} (no-op)");
         Ok(())
     }

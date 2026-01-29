@@ -100,7 +100,7 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
             let chain_store_handle = ChainStoreHandle::new(store_handle, config.stratum.network);
             if let Err(e) = chain_store_handle.init_or_setup_genesis(genesis).await {
                 eprintln!("Error loading store");
-                return Err(e);
+                return Err(e.into());
             };
 
             match &cli.command {

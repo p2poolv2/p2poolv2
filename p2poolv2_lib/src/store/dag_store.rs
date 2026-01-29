@@ -14,14 +14,13 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use super::{ColumnFamily, Store};
+use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::chain::chain_store_handle::COMMON_ANCESTOR_DEPTH;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::shares::validation::MAX_UNCLES;
 use bitcoin::BlockHash;
 use bitcoin::consensus::{self, Encodable, encode};
 use std::collections::{HashSet, VecDeque};
-use std::error::Error;
 use tracing::debug;
 
 /// Max depth to look for uncles when building new share blocks
@@ -35,7 +34,7 @@ impl Store {
     pub fn load_chain(
         &self,
         genesis: BlockHash,
-    ) -> Result<(Vec<BlockHash>, HashSet<BlockHash>), Box<dyn Error + Send + Sync>> {
+    ) -> Result<(Vec<BlockHash>, HashSet<BlockHash>), StoreError> {
         let mut chain = vec![genesis];
         let mut tips = HashSet::new();
         let mut to_visit = VecDeque::new();
@@ -71,7 +70,7 @@ impl Store {
         prev_blockhash: &BlockHash,
         next_blockhash: &BlockHash,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<(), StoreError> {
         debug!(
             "Updating block index {} to {}",
             prev_blockhash, next_blockhash
@@ -101,28 +100,20 @@ impl Store {
     pub fn get_children_blockhashes(
         &self,
         blockhash: &BlockHash,
-    ) -> Result<Option<Vec<BlockHash>>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Option<Vec<BlockHash>>, StoreError> {
         let block_index_cf = self.db.cf_handle(&ColumnFamily::BlockIndex).unwrap();
         let mut blockhash_bytes = consensus::serialize(blockhash);
         blockhash_bytes.extend_from_slice(b"_bi");
 
         match self
             .db
-            .get_cf::<&[u8]>(&block_index_cf, blockhash_bytes.as_ref())
+            .get_cf::<&[u8]>(&block_index_cf, blockhash_bytes.as_ref())?
         {
-            Ok(Some(existing)) => {
-                if let Ok(existing_blockhashes) = encode::deserialize::<Vec<BlockHash>>(&existing) {
-                    Ok(Some(existing_blockhashes))
-                } else {
-                    tracing::warn!("Failed to deseriliaze child blockhash");
-                    Err("Failed to deseriliaze child blockhash".into())
-                }
+            Some(existing) => {
+                let existing_blockhashes = encode::deserialize::<Vec<BlockHash>>(&existing)?;
+                Ok(Some(existing_blockhashes))
             }
-            Ok(None) => Ok(None),
-            Err(e) => {
-                tracing::error!("Error querying existing children shares");
-                Err(e.into())
-            }
+            None => Ok(None),
         }
     }
 
@@ -135,7 +126,7 @@ impl Store {
         locator: &[BlockHash],
         stop_blockhash: &BlockHash,
         limit: usize,
-    ) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<BlockHash>, StoreError> {
         let start_blockhash = self.get_first_existing_blockhash(locator);
         // If no blockhash found, return vector with genesis block
         let start_blockhash = match start_blockhash {
@@ -155,7 +146,7 @@ impl Store {
         locator: &[BlockHash],
         stop_blockhash: &BlockHash,
         limit: usize,
-    ) -> Result<Vec<ShareHeader>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<ShareHeader>, StoreError> {
         let blockhashes = self.get_blockhashes_for_locator(locator, stop_blockhash, limit)?;
         self.get_share_headers(&blockhashes)
     }
@@ -167,7 +158,7 @@ impl Store {
         share: BlockHash,
         stop_blockhash: &BlockHash,
         limit: usize,
-    ) -> Result<Vec<ShareHeader>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<ShareHeader>, StoreError> {
         let mut descendants = Vec::with_capacity(limit);
 
         let mut next_children = vec![];
@@ -202,10 +193,7 @@ impl Store {
     /// This is not used to find uncles from the chain that should be
     /// included in the ShareHeader. For that look at
     /// ChainStore::find_uncles
-    pub fn get_uncles(
-        &self,
-        blockhash: &BlockHash,
-    ) -> Result<Vec<ShareBlock>, Box<dyn Error + Send + Sync>> {
+    pub fn get_uncles(&self, blockhash: &BlockHash) -> Result<Vec<ShareBlock>, StoreError> {
         let share = self.get_share(blockhash);
         if share.is_none() {
             return Ok(vec![]);
@@ -221,13 +209,15 @@ impl Store {
     pub fn get_shares_from_tip_to_blockhash(
         &self,
         blockhash: &BlockHash,
-    ) -> Result<Vec<ShareBlock>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<ShareBlock>, StoreError> {
         let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
         if !self
             .db
             .key_may_exist_cf::<&[u8]>(&share_cf, blockhash.as_ref())
         {
-            return Err(format!("Blockhash {blockhash} not found in chain").into());
+            return Err(StoreError::NotFound(format!(
+                "Blockhash {blockhash} not found in chain"
+            )));
         };
 
         let tips = self.get_tips();
@@ -267,7 +257,7 @@ impl Store {
         &self,
         start: &BlockHash,
         depth: usize,
-    ) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<BlockHash>, StoreError> {
         let mut to_visit: VecDeque<(BlockHash, bool)> = VecDeque::with_capacity(depth);
         to_visit.push_back((*start, true)); // (blockhash, is_main_chain)
 
@@ -318,7 +308,7 @@ impl Store {
         &self,
         blockhash1: &BlockHash,
         blockhash2: &BlockHash,
-    ) -> Result<Option<BlockHash>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Option<BlockHash>, StoreError> {
         debug!("Looking for common ancestor between {blockhash1} and {blockhash2}");
         // Get chains up to COMMON_ANCESTOR_DEPTH (ordered from newest to oldest)
         let chain1 = self.get_dag_for_depth(blockhash1, COMMON_ANCESTOR_DEPTH)?;
@@ -347,7 +337,7 @@ impl Store {
         uncle: &BlockHash,
         nephew: &BlockHash,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<(), StoreError> {
         let uncles_cf = self.db.cf_handle(&ColumnFamily::Uncles).unwrap();
         let mut serialized_nephew = Vec::new();
         nephew.consensus_encode(&mut serialized_nephew)?;
@@ -380,9 +370,9 @@ impl Store {
     /// not counting the parent. Find all children of these ancestors
     /// that are not on the confirmed chain and that are not already
     /// included as uncles in other blocks.
-    pub fn find_uncles(&self) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
+    pub fn find_uncles(&self) -> Result<Vec<BlockHash>, StoreError> {
         let Some(top_confirmed_height) = self.get_top_confirmed_height() else {
-            return Err("No top confirmation found".into());
+            return Err(StoreError::Database("No top confirmation found".into()));
         };
 
         // get all ancestors up to required depth on the confirmed index

@@ -27,7 +27,6 @@ use crate::store::Store;
 use crate::store::stored_user::StoredUser;
 use bitcoin::{BlockHash, Work};
 use std::collections::{HashMap, HashSet};
-use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
@@ -70,7 +69,7 @@ impl StoreHandle {
     pub fn get_share_headers(
         &self,
         blockhashes: &[BlockHash],
-    ) -> Result<Vec<ShareHeader>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<ShareHeader>, StoreError> {
         self.store.get_share_headers(blockhashes)
     }
 
@@ -78,7 +77,7 @@ impl StoreHandle {
     pub fn get_share_header(
         &self,
         blockhash: &BlockHash,
-    ) -> Result<Option<ShareHeader>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Option<ShareHeader>, StoreError> {
         self.store.get_share_header(blockhash)
     }
 
@@ -86,7 +85,7 @@ impl StoreHandle {
     pub fn get_shares(
         &self,
         blockhashes: &[BlockHash],
-    ) -> Result<HashMap<BlockHash, ShareBlock>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<HashMap<BlockHash, ShareBlock>, StoreError> {
         self.store.get_shares(blockhashes)
     }
 
@@ -94,7 +93,7 @@ impl StoreHandle {
     pub fn get_shares_at_height(
         &self,
         height: u32,
-    ) -> Result<HashMap<BlockHash, ShareBlock>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<HashMap<BlockHash, ShareBlock>, StoreError> {
         self.store.get_shares_at_height(height)
     }
 
@@ -124,7 +123,7 @@ impl StoreHandle {
     }
 
     /// Get the total work of the chain.
-    pub fn get_total_work(&self) -> Result<Work, Box<dyn Error + Send + Sync>> {
+    pub fn get_total_work(&self) -> Result<Work, StoreError> {
         self.store.get_total_work()
     }
 
@@ -150,15 +149,12 @@ impl StoreHandle {
         start_time: Option<u64>,
         end_time: Option<u64>,
         limit: usize,
-    ) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<(u64, String)>, StoreError> {
         self.store.get_jobs(start_time, end_time, limit)
     }
 
     /// Get user by user ID.
-    pub fn get_user_by_id(
-        &self,
-        user_id: u64,
-    ) -> Result<Option<StoredUser>, Box<dyn Error + Send + Sync>> {
+    pub fn get_user_by_id(&self, user_id: u64) -> Result<Option<StoredUser>, StoreError> {
         self.store.get_user_by_id(user_id)
     }
 
@@ -166,7 +162,7 @@ impl StoreHandle {
     pub fn get_user_by_btcaddress(
         &self,
         btcaddress: &str,
-    ) -> Result<Option<StoredUser>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Option<StoredUser>, StoreError> {
         self.store.get_user_by_btcaddress(btcaddress)
     }
 
@@ -174,7 +170,7 @@ impl StoreHandle {
     pub fn get_btcaddresses_for_user_ids(
         &self,
         user_ids: &[u64],
-    ) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<(u64, String)>, StoreError> {
         self.store.get_btcaddresses_for_user_ids(user_ids)
     }
 
@@ -182,7 +178,7 @@ impl StoreHandle {
     pub fn get_children_blockhashes(
         &self,
         blockhash: &BlockHash,
-    ) -> Result<Option<Vec<BlockHash>>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Option<Vec<BlockHash>>, StoreError> {
         self.store.get_children_blockhashes(blockhash)
     }
 
@@ -337,23 +333,23 @@ mockall::mock! {
         // Direct reads
         pub fn get_share(&self, blockhash: &BlockHash) -> Option<ShareBlock>;
         pub fn get_share_at_tip(&self) -> Option<ShareBlock>;
-        pub fn get_share_headers(&self, blockhashes: &[BlockHash]) -> Result<Vec<ShareHeader>, Box<dyn Error + Send + Sync>>;
-        pub fn get_share_header(&self, blockhash: &BlockHash) -> Result<Option<ShareHeader>, Box<dyn Error + Send + Sync>>;
-        pub fn get_shares(&self, blockhashes: &[BlockHash]) -> Result<HashMap<BlockHash, ShareBlock>, Box<dyn Error + Send + Sync>>;
-        pub fn get_shares_at_height(&self, height: u32) -> Result<HashMap<BlockHash, ShareBlock>, Box<dyn Error + Send + Sync>>;
+        pub fn get_share_headers(&self, blockhashes: &[BlockHash]) -> Result<Vec<ShareHeader>, StoreError>;
+        pub fn get_share_header(&self, blockhash: &BlockHash) -> Result<Option<ShareHeader>, StoreError>;
+        pub fn get_shares(&self, blockhashes: &[BlockHash]) -> Result<HashMap<BlockHash, ShareBlock>, StoreError>;
+        pub fn get_shares_at_height(&self, height: u32) -> Result<HashMap<BlockHash, ShareBlock>, StoreError>;
         pub fn get_blockhashes_for_height(&self, height: u32) -> Vec<BlockHash>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
         pub fn get_genesis_blockhash(&self) -> Option<BlockHash>;
         pub fn get_chain_tip(&self) -> BlockHash;
         pub fn get_tips(&self) -> HashSet<BlockHash>;
-        pub fn get_total_work(&self) -> Result<Work, Box<dyn Error + Send + Sync>>;
+        pub fn get_total_work(&self) -> Result<Work, StoreError>;
         pub fn get_pplns_shares(&self) -> Vec<SimplePplnsShare>;
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
-        pub fn get_jobs(&self, start_time: Option<u64>, end_time: Option<u64>, limit: usize) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>>;
-        pub fn get_user_by_id(&self, user_id: u64) -> Result<Option<StoredUser>, Box<dyn Error + Send + Sync>>;
-        pub fn get_user_by_btcaddress(&self, btcaddress: &str) -> Result<Option<StoredUser>, Box<dyn Error + Send + Sync>>;
-        pub fn get_btcaddresses_for_user_ids(&self, user_ids: &[u64]) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>>;
-        pub fn get_children_blockhashes(&self, blockhash: &BlockHash) -> Result<Option<Vec<BlockHash>>, Box<dyn Error + Send + Sync>>;
+        pub fn get_jobs(&self, start_time: Option<u64>, end_time: Option<u64>, limit: usize) -> Result<Vec<(u64, String)>, StoreError>;
+        pub fn get_user_by_id(&self, user_id: u64) -> Result<Option<StoredUser>, StoreError>;
+        pub fn get_user_by_btcaddress(&self, btcaddress: &str) -> Result<Option<StoredUser>, StoreError>;
+        pub fn get_btcaddresses_for_user_ids(&self, user_ids: &[u64]) -> Result<Vec<(u64, String)>, StoreError>;
+        pub fn get_children_blockhashes(&self, blockhash: &BlockHash) -> Result<Option<Vec<BlockHash>>, StoreError>;
 
         // Serialized writes (async)
         pub async fn organise_share(&self, blockhash: BlockHash) -> Result<(), StoreError>;

@@ -26,7 +26,6 @@ use crate::store::writer::{StoreError, StoreHandle};
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Work};
 use std::collections::{HashMap, HashSet};
-use std::error::Error;
 use tracing::{debug, info};
 
 /// The minimum number of shares that must be on the chain for a share to be considered confirmed
@@ -68,10 +67,7 @@ impl ChainStoreHandle {
     ///
     /// If genesis is already in store, initializes chain state from existing data.
     /// Otherwise, adds genesis block to create a new chain.
-    pub async fn init_or_setup_genesis(
-        &self,
-        genesis_block: ShareBlock,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError> {
         let genesis_block_hash = genesis_block.header.block_hash();
         let genesis_in_store = self.store_handle.get_share(&genesis_block_hash);
 
@@ -110,7 +106,7 @@ impl ChainStoreHandle {
     pub fn get_shares_at_height(
         &self,
         height: u32,
-    ) -> Result<HashMap<BlockHash, ShareBlock>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<HashMap<BlockHash, ShareBlock>, StoreError> {
         self.store_handle.get_shares_at_height(height)
     }
 
@@ -118,7 +114,7 @@ impl ChainStoreHandle {
     pub fn get_share_headers(
         &self,
         share_hashes: &[BlockHash],
-    ) -> Result<Vec<ShareHeader>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<ShareHeader>, StoreError> {
         self.store_handle.get_share_headers(share_hashes)
     }
 
@@ -128,7 +124,7 @@ impl ChainStoreHandle {
         block_hashes: &[BlockHash],
         stop_block_hash: &BlockHash,
         limit: usize,
-    ) -> Result<Vec<ShareHeader>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<ShareHeader>, StoreError> {
         self.store_handle
             .store()
             .get_headers_for_locator(block_hashes, stop_block_hash, limit)
@@ -140,7 +136,7 @@ impl ChainStoreHandle {
         locator: &[BlockHash],
         stop_block_hash: &BlockHash,
         max_blockhashes: usize,
-    ) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<BlockHash>, StoreError> {
         self.store_handle.store().get_blockhashes_for_locator(
             locator,
             stop_block_hash,
@@ -149,7 +145,7 @@ impl ChainStoreHandle {
     }
 
     /// Get the height of the chain tip.
-    pub fn get_tip_height(&self) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
+    pub fn get_tip_height(&self) -> Result<Option<u32>, StoreError> {
         let tip = self.store_handle.get_chain_tip();
         debug!("Chain tip for height {}", tip);
         let metadata = self.store_handle.store().get_block_metadata(&tip)?;
@@ -167,7 +163,7 @@ impl ChainStoreHandle {
     }
 
     /// Get total work from chain state
-    pub fn get_total_work(&self) -> Result<Work, Box<dyn Error + Send + Sync>> {
+    pub fn get_total_work(&self) -> Result<Work, StoreError> {
         self.store_handle.get_total_work()
     }
 
@@ -177,7 +173,7 @@ impl ChainStoreHandle {
     }
 
     /// Build a locator for the chain.
-    pub fn build_locator(&self) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
+    pub fn build_locator(&self) -> Result<Vec<BlockHash>, StoreError> {
         let tip_height = self.get_tip_height()?;
         match tip_height {
             Some(tip_height) => {
@@ -265,11 +261,11 @@ impl ChainStoreHandle {
     }
 
     /// Get the current target from the tip share block.
-    pub fn get_current_target(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
+    pub fn get_current_target(&self) -> Result<u32, StoreError> {
         let tip = self.store_handle.get_chain_tip();
         let headers = self.get_share_headers(&[tip])?;
         match headers.first() {
-            None => Err("No tips found".into()),
+            None => Err(StoreError::NotFound("No tips found".into())),
             Some(header) => Ok(header.bits.to_consensus()),
         }
     }
@@ -295,11 +291,7 @@ impl ChainStoreHandle {
     /// Add a share to the chain.
     ///
     /// Calculates height and chain work, stores the share, and handles reorgs.
-    pub async fn add_share(
-        &self,
-        share: ShareBlock,
-        confirm_txs: bool,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn add_share(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), StoreError> {
         debug!("Adding share to chain: {:?}", share.block_hash());
 
         let blockhash = share.block_hash();
@@ -338,18 +330,10 @@ impl ChainStoreHandle {
         self.store_handle
             .add_share(share, new_height, new_chain_work, confirm_txs)
             .await
-            .map_err(|e| format!("Error adding share to store {e}").into())
-
-        // Handle reorg
-        // self.reorg(share, new_chain_work).await
     }
 
     /// Handle chain reorg logic.
-    async fn reorg(
-        &self,
-        share: &ShareBlock,
-        new_chain_work: Work,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn reorg(&self, share: &ShareBlock, new_chain_work: Work) -> Result<(), StoreError> {
         let share_block_hash = share.block_hash();
         info!("Reorging chain to share: {:?}", share_block_hash);
 
@@ -379,7 +363,7 @@ impl ChainStoreHandle {
                 debug!("No common ancestor found");
                 let old_chain_work = self.work_over_pplns_window(&tip)?;
                 let mut new_chain_work_calc = self.work_over_pplns_window(&share_block_hash)?;
-                if new_chain_work_calc == Work::from_hex("0x00")? {
+                if new_chain_work_calc == Work::from_hex("0x00").unwrap() {
                     new_chain_work_calc = share.header.get_work();
                 }
                 debug!(
@@ -406,10 +390,7 @@ impl ChainStoreHandle {
     }
 
     /// Calculate work over PPLNS window.
-    fn work_over_pplns_window(
-        &self,
-        start_blockhash: &BlockHash,
-    ) -> Result<Work, Box<dyn Error + Send + Sync>> {
+    fn work_over_pplns_window(&self, start_blockhash: &BlockHash) -> Result<Work, StoreError> {
         let chain_blockhashes = self
             .store_handle
             .store()
@@ -417,7 +398,7 @@ impl ChainStoreHandle {
 
         let chain = self.store_handle.get_shares(&chain_blockhashes)?;
 
-        let zero_work = Work::from_hex("0x00")?;
+        let zero_work = Work::from_hex("0x00").unwrap();
         let sum = chain
             .iter()
             .fold(zero_work, |acc, (_, share)| acc + share.header.get_work());
@@ -435,13 +416,13 @@ impl ChainStoreHandle {
     }
 
     /// Add a job with current timestamp.
-    pub async fn add_job(
-        &self,
-        serialized_notify: String,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub async fn add_job(&self, serialized_notify: String) -> Result<(), StoreError> {
         use std::time::{SystemTime, UNIX_EPOCH};
 
-        let timestamp_micros = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros() as u64;
+        let timestamp_micros = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64;
         self.store_handle
             .add_job(timestamp_micros, serialized_notify)
             .await?;
@@ -467,7 +448,7 @@ impl ChainStoreHandle {
     pub fn get_btcaddresses_for_user_ids(
         &self,
         user_ids: &[u64],
-    ) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<(u64, String)>, StoreError> {
         self.store_handle.get_btcaddresses_for_user_ids(user_ids)
     }
 }
@@ -480,28 +461,28 @@ mockall::mock! {
     pub ChainStoreHandle {
         pub fn network(&self) -> bitcoin::Network;
         pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock>;
-        pub fn get_shares_at_height(&self, height: u32) -> Result<HashMap<BlockHash, ShareBlock>, Box<dyn Error + Send + Sync>>;
-        pub fn get_share_headers(&self, share_hashes: &[BlockHash]) -> Result<Vec<ShareHeader>, Box<dyn Error + Send + Sync>>;
-        pub fn get_headers_for_locator(&self, block_hashes: &[BlockHash], stop_block_hash: &BlockHash, limit: usize) -> Result<Vec<ShareHeader>, Box<dyn Error + Send + Sync>>;
-        pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>>;
-        pub fn get_tip_height(&self) -> Result<Option<u32>, Box<dyn Error + Send + Sync>>;
-        pub fn build_locator(&self) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>>;
+        pub fn get_shares_at_height(&self, height: u32) -> Result<HashMap<BlockHash, ShareBlock>, StoreError>;
+        pub fn get_share_headers(&self, share_hashes: &[BlockHash]) -> Result<Vec<ShareHeader>, StoreError>;
+        pub fn get_headers_for_locator(&self, block_hashes: &[BlockHash], stop_block_hash: &BlockHash, limit: usize) -> Result<Vec<ShareHeader>, StoreError>;
+        pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Result<Vec<BlockHash>, StoreError>;
+        pub fn get_tip_height(&self) -> Result<Option<u32>, StoreError>;
+        pub fn build_locator(&self) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_chain_tip(&self) -> BlockHash;
         pub fn get_chain_tip_and_uncles(&self) -> (BlockHash, HashSet<BlockHash>);
         pub fn get_genesis_blockhash(&self) -> Option<BlockHash>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
         pub fn get_depth(&self, blockhash: &BlockHash) -> Option<usize>;
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
-        pub fn get_current_target(&self) -> Result<u32, Box<dyn Error + Send + Sync>>;
+        pub fn get_current_target(&self) -> Result<u32, StoreError>;
         pub fn setup_share_for_chain(&self, share_block: ShareBlock) -> ShareBlock;
         pub fn is_confirmed(&self, share: &ShareBlock) -> bool;
-        pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>>;
+        pub fn get_btcaddresses_for_user_ids(&self, user_ids: &[u64]) -> Result<Vec<(u64, String)>, StoreError>;
+        pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError>;
         pub async fn organise_share(&self, blockhash: BlockHash) -> Result<(), StoreError>;
-        pub async fn add_share(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), Box<dyn Error + Send + Sync>>;
+        pub async fn add_share(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), StoreError>;
         pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError>;
-        pub async fn add_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>>;
+        pub async fn add_job(&self, serialized_notify: String) -> Result<(), StoreError>;
         pub async fn add_user(&self, btcaddress: String) -> Result<u64, StoreError>;
-        pub fn get_btcaddresses_for_user_ids(&self, user_ids: &[u64]) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>>;
     }
 
     impl Clone for ChainStoreHandle {
