@@ -16,6 +16,7 @@
 
 pub mod behaviour;
 pub mod emission_worker;
+pub mod organise_worker;
 pub mod request_response_handler;
 pub use crate::config::Config;
 pub mod actor;

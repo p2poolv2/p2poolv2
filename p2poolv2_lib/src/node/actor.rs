@@ -22,6 +22,7 @@ use crate::node::Node;
 use crate::node::SwarmSend;
 use crate::node::emission_worker::EmissionWorker;
 use crate::node::messages::Message;
+use crate::node::organise_worker::{OrganiseWorker, organise_channel};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -156,12 +157,18 @@ impl NodeActor {
     }
 
     async fn run(mut self) {
+        // Create organise channel and spawn organise worker
+        let (organise_tx, organise_rx) = organise_channel();
+        let organise_worker = OrganiseWorker::new(organise_rx, self.chain_store_handle.clone());
+        let mut organise_handle = tokio::spawn(organise_worker.run());
+
         // Spawn emission worker - processes shares in separate task and enqueues SwarmSend::Broadcast
         let emission_worker = EmissionWorker::new(
             self.emissions_rx,
             self.node.swarm_tx.clone(),
             self.chain_store_handle.clone(),
             self.node.config.stratum.network,
+            organise_tx,
         );
         tokio::spawn(emission_worker.run());
 
@@ -248,6 +255,27 @@ impl NodeActor {
                         },
                         None => {
                             info!("Stopping node actor on channel close");
+                            if self.stopping_tx.send(()).is_err() {
+                                error!("Failed to send stopping signal - receiver dropped");
+                            }
+                            return;
+                        }
+                    }
+                },
+                organise_result = &mut organise_handle => {
+                    match organise_result {
+                        Ok(Err(e)) => {
+                            error!("Organise worker fatal error: {e}");
+                            if self.stopping_tx.send(()).is_err() {
+                                error!("Failed to send stopping signal - receiver dropped");
+                            }
+                            return;
+                        }
+                        Ok(Ok(())) => {
+                            info!("Organise worker stopped cleanly");
+                        }
+                        Err(e) => {
+                            error!("Organise worker panicked: {e}");
                             if self.stopping_tx.send(()).is_err() {
                                 error!("Failed to send stopping signal - receiver dropped");
                             }

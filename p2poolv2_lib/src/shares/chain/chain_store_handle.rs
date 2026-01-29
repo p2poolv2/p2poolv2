@@ -424,6 +424,11 @@ impl ChainStoreHandle {
         Ok(sum)
     }
 
+    /// Organise a share: update candidate and confirmed indexes atomically.
+    pub async fn organise_share(&self, blockhash: BlockHash) -> Result<(), StoreError> {
+        self.store_handle.organise_share(blockhash).await
+    }
+
     /// Add a PPLNS share for accounting.
     pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError> {
         self.store_handle.add_pplns_share(pplns_share).await
@@ -491,6 +496,7 @@ mockall::mock! {
         pub fn setup_share_for_chain(&self, share_block: ShareBlock) -> ShareBlock;
         pub fn is_confirmed(&self, share: &ShareBlock) -> bool;
         pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), Box<dyn Error + Send + Sync>>;
+        pub async fn organise_share(&self, blockhash: BlockHash) -> Result<(), StoreError>;
         pub async fn add_share(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), Box<dyn Error + Send + Sync>>;
         pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError>;
         pub async fn add_job(&self, serialized_notify: String) -> Result<(), Box<dyn Error + Send + Sync>>;
