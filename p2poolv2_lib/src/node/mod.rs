@@ -23,17 +23,20 @@ pub mod request_response_handler;
 pub mod validation_worker;
 pub use crate::config::Config;
 pub mod actor;
+pub mod bip152;
 pub mod messages;
 pub mod p2p_message_handlers;
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender, PeerResponse, PeerStatus};
+use crate::node::bip152::CompactBlockRelay;
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
-use crate::node::p2p_message_handlers::senders::send_handshake;
+use crate::node::p2p_message_handlers::senders::{send_getheaders, send_handshake};
 use crate::node::request_response_handler::RequestResponseHandler;
 use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
 use crate::node::validation_worker::ValidationSender;
+use crate::service::peer_state::PeerStates;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -59,7 +62,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 pub struct SwarmResponseChannel<T> {
     channel: ResponseChannel<T>,
@@ -106,6 +109,9 @@ struct Node {
     monitoring_event_sender: MonitoringEventSender,
     peer_reconnector: peer_reconnector::PeerReconnector,
     connection_tracker: ConnectionTracker,
+    /// Tracks Multiaddrs of currently connected outbound peers for reconnection logic
+    connected_dial_addresses: Vec<Multiaddr>,
+    peer_states: Arc<PeerStates>,
 }
 
 impl Node {
@@ -204,6 +210,9 @@ impl Node {
 
         let (swarm_tx, swarm_rx) = mpsc::channel(100);
 
+        // TODO: persist this to disk
+        let peer_states = Arc::new(PeerStates::default());
+
         let request_response_handler = RequestResponseHandler::new(
             config.network.clone(),
             chain_store_handle.clone(),
@@ -212,6 +221,7 @@ impl Node {
             validation_tx,
             block_receiver_handle,
             share_validator,
+            peer_states.clone(),
         );
 
         let peer_reconnector = peer_reconnector::PeerReconnector::new(&config.network.dial_peers);
@@ -244,6 +254,8 @@ impl Node {
             monitoring_event_sender,
             peer_reconnector,
             connection_tracker: ConnectionTracker::new(blocked_ips),
+            connected_dial_addresses: Vec::new(),
+            peer_states,
         })
     }
 
@@ -374,6 +386,8 @@ impl Node {
                 self.connection_tracker.handle_closed(&peer_id, &endpoint);
                 self.swarm.behaviour_mut().remove_peer(&peer_id);
                 self.request_response_handler.remove_peer(&peer_id).await;
+                // TODO: Track this in [PeerState] and add peerstatus
+                self.peer_states.remove(&peer_id);
                 let _ = self
                     .monitoring_event_sender
                     .send(MonitoringEvent::Peer(PeerResponse {
@@ -486,6 +500,24 @@ impl Node {
             },
             _ => debug!("Other Kademlia event: {:?}", event),
         }
+    }
+
+    /// Handle connection established events, these are events that are generated when a connection is established
+    async fn handle_connection_established(
+        &mut self,
+        peer_id: libp2p::PeerId,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        send_getheaders(
+            peer_id,
+            self.chain_store_handle.clone(),
+            self.swarm_tx.clone(),
+            0,
+        )
+        .await?;
+
+        // TODO: Re-add send inventory messages here?
+
+        Ok(())
     }
 }
 

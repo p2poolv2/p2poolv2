@@ -10,16 +10,18 @@ services:
       context: bitcoind
     volumes:
       - bitcoin_data:/data
+    network_mode: host
     ports:
       - "${BTC_P2P_PORT:-38333}:${BTC_P2P_PORT:-38333}" # P2P port
       - "${BTC_RPC_PORT:-38332}:${BTC_RPC_PORT:-38332}" # RPC port
       - "28332:28332" # ZMQ port is always the same
+      - "38333:38333" # ZMQ port is always the same
     environment:
       - NETWORK=${NETWORK:-signet}
     command: -conf=/etc/bitcoin/bitcoin-${NETWORK:-signet}.conf -datadir=/data
     restart: unless-stopped
-    networks:
-      - p2poolv2_network
+    # networks:
+    # - p2poolv2_network
     logging:
       driver: "json-file"
       options:
