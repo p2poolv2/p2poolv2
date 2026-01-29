@@ -19,6 +19,7 @@ use bitcoin::{
     BlockHash,
     consensus::{self, encode},
 };
+pub mod organise_share;
 use std::error::Error;
 
 const CANDIDATE_SUFFIX: &str = ":c";
@@ -174,20 +175,6 @@ impl Store {
             Ok(Some(blockhash_bytes)) => encode::deserialize(&blockhash_bytes).ok(),
             Ok(None) | Err(_) => None,
         }
-    }
-
-    /// Organise a share by updating candidate and confirmed indexes.
-    ///
-    /// All writes go into the provided `WriteBatch` so the caller can
-    /// commit them atomically. Currently a no-op stub; the actual
-    /// organisation logic will be implemented later.
-    pub(crate) fn organise_share(
-        &self,
-        blockhash: &BlockHash,
-        _batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        tracing::debug!("organise_share called for {blockhash} (no-op)");
-        Ok(())
     }
 
     /// Check if a blockhash is in the confirmed index
