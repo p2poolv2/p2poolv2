@@ -31,12 +31,12 @@ use tracing::{error, info};
 /// We do not send any inventory message as we do not want to gossip the share block.
 /// Share blocks are gossiped using the libp2p gossipsub protocol.
 pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
-    share_block: &ShareBlock,
+    share_block: ShareBlock,
     chain_store_handle: &ChainStoreHandle,
     time_provider: &T,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Received share block: {:?}", share_block);
-    if let Err(e) = validation::validate(share_block, chain_store_handle, time_provider).await {
+    if let Err(e) = validation::validate(&share_block, chain_store_handle, time_provider).await {
         error!("Share block validation failed: {}", e);
         return Err("Share block validation failed".into());
     }
@@ -84,7 +84,7 @@ mod tests {
                 .unwrap(),
         );
 
-        let result = handle_share_block(&share_block, &chain_store_handle, &time_provider).await;
+        let result = handle_share_block(share_block, &chain_store_handle, &time_provider).await;
         assert!(result.is_ok());
     }
 
@@ -95,7 +95,7 @@ mod tests {
 
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
-        let result = handle_share_block(&share_block, &chain_store_handle, &time_provider).await;
+        let result = handle_share_block(share_block, &chain_store_handle, &time_provider).await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
@@ -125,7 +125,7 @@ mod tests {
                 .unwrap(),
         );
 
-        let result = handle_share_block(&share_block, &chain_store_handle, &time_provider).await;
+        let result = handle_share_block(share_block, &chain_store_handle, &time_provider).await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),

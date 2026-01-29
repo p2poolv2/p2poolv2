@@ -62,7 +62,7 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
                 })
         }
         Message::ShareBlock(share_block) => {
-            handle_share_block(&share_block, &ctx.chain_store_handle, &ctx.time_provider)
+            handle_share_block(share_block, &ctx.chain_store_handle, &ctx.time_provider)
                 .await
                 .map_err(|e| {
                     error!("Failed to add share: {}", e);
