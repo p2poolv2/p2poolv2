@@ -1393,6 +1393,7 @@ impl ShareValidator for DefaultShareValidator {
 // Use with #[mockall_double::double] to swap real type for mock in tests.
 #[cfg(test)]
 mockall::mock! {
+    #[derive(Debug)]
     pub DefaultShareValidator {
     }
 
