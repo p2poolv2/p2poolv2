@@ -176,6 +176,20 @@ impl Store {
         }
     }
 
+    /// Organise a share by updating candidate and confirmed indexes.
+    ///
+    /// All writes go into the provided `WriteBatch` so the caller can
+    /// commit them atomically. Currently a no-op stub; the actual
+    /// organisation logic will be implemented later.
+    pub(crate) fn organise_share(
+        &self,
+        blockhash: &BlockHash,
+        _batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        tracing::debug!("organise_share called for {blockhash} (no-op)");
+        Ok(())
+    }
+
     /// Check if a blockhash is in the confirmed index
     ///
     /// Gets the expected height for the blockhash from block metadata,

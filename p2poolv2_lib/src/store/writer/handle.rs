@@ -272,6 +272,18 @@ impl StoreHandle {
         reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
     }
 
+    /// Organise a share: update candidate and confirmed indexes atomically.
+    pub async fn organise_share(&self, blockhash: BlockHash) -> Result<(), StoreError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.write_tx
+            .send(WriteCommand::OrganiseShare {
+                blockhash,
+                reply: reply_tx,
+            })
+            .map_err(|_| StoreError::ChannelClosed)?;
+        reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
+    }
+
     /// Add a PPLNS share for accounting.
     pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError> {
         let (reply_tx, reply_rx) = oneshot::channel();
@@ -344,6 +356,7 @@ mockall::mock! {
         pub fn get_children_blockhashes(&self, blockhash: &BlockHash) -> Result<Option<Vec<BlockHash>>, Box<dyn Error + Send + Sync>>;
 
         // Serialized writes (async)
+        pub async fn organise_share(&self, blockhash: BlockHash) -> Result<(), StoreError>;
         pub async fn add_share(&self, share: ShareBlock, height: u32, chain_work: Work, confirm_txs: bool) -> Result<(), StoreError>;
         pub async fn setup_genesis(&self, genesis: ShareBlock) -> Result<(), StoreError>;
         pub async fn init_chain_state_from_store(&self, genesis_hash: BlockHash) -> Result<(), StoreError>;

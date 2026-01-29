@@ -22,6 +22,7 @@
 
 use crate::node::SwarmSend;
 use crate::node::messages::Message;
+use crate::node::organise_worker::OrganiseSender;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -42,6 +43,7 @@ pub struct EmissionWorker {
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     chain_store_handle: ChainStoreHandle,
     network: bitcoin::Network,
+    organise_tx: OrganiseSender,
 }
 
 impl EmissionWorker {
@@ -51,12 +53,14 @@ impl EmissionWorker {
         swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
         chain_store_handle: ChainStoreHandle,
         network: bitcoin::Network,
+        organise_tx: OrganiseSender,
     ) -> Self {
         Self {
             emissions_rx,
             swarm_tx,
             chain_store_handle,
             network,
+            organise_tx,
         }
     }
 
@@ -68,6 +72,10 @@ impl EmissionWorker {
             // Pass a references to chain store handle to avoid clones on each loop
             match handle_stratum_share(emission, &self.chain_store_handle, self.network).await {
                 Ok(Some(share_block)) => {
+                    // Send to organise worker for candidate/confirmed indexing
+                    if let Err(e) = self.organise_tx.send(share_block.clone()).await {
+                        error!("Failed to send share to organise worker: {e}");
+                    }
                     // Send to swarm_tx for broadcast to peers
                     if let Err(e) = self.swarm_tx.send(SwarmSend::Broadcast(share_block)).await {
                         error!("Failed to queue share for broadcast: {e}");

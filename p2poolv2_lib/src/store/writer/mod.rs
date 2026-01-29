@@ -122,6 +122,12 @@ pub enum WriteCommand {
 
     /// Remove a tip (fire-and-forget)
     RemoveTip { hash: BlockHash },
+
+    /// Organise a share: update candidate and confirmed indexes atomically
+    OrganiseShare {
+        blockhash: BlockHash,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
 }
 
 /// Sender type for write commands (std::sync::mpsc for sync StoreWriter)
@@ -253,6 +259,20 @@ impl StoreWriter {
 
             WriteCommand::RemoveTip { hash } => {
                 self.store.remove_tip(&hash);
+            }
+
+            WriteCommand::OrganiseShare { blockhash, reply } => {
+                debug!("Organising share: {:?}", blockhash);
+                let mut batch = Store::get_write_batch();
+                let result = self
+                    .store
+                    .organise_share(&blockhash, &mut batch)
+                    .and_then(|_| {
+                        self.store
+                            .commit_batch(batch)
+                            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
+                    });
+                let _ = reply.send(result.map_err(|e| StoreError::Database(e.to_string())));
             }
         }
     }
