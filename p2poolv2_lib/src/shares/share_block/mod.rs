@@ -47,7 +47,7 @@ pub const MIN_CUMULATIVE_CHAIN_WORK_MULTIPLIER: u64 = 1;
 ///
 /// Excludes bitcoin compact block and share chain transactions.
 /// Includes the bitcoin block hash for the bitcoin compact block instead.
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ShareHeader {
     /// The hash of the prev share block, will be None for genesis block
     pub prev_share_blockhash: BlockHash,
