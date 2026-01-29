@@ -48,7 +48,10 @@ use libp2p::futures::StreamExt;
 use std::error::Error;
 use std::sync::{Arc, RwLock};
 use tokio::sync::{mpsc, oneshot};
+use tracing::trace;
 use tracing::{debug, error, info};
+
+const NODE_CMD_BUFFER: usize = 32;
 
 /// NodeHandle provides an interface to interact with a Node running in a separate task
 #[derive(Clone)]
@@ -70,7 +73,7 @@ impl NodeHandle {
         notify_tx: NotifySender,
         pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
-        let (command_tx, command_rx) = mpsc::channel::<Command>(32);
+        let (command_tx, command_rx) = mpsc::channel::<Command>(NODE_CMD_BUFFER);
         let (node_actor, stopping_rx) = NodeActor::new(
             config,
             chain_store_handle,
@@ -213,8 +216,10 @@ struct NodeActor {
     node: Node,
     command_rx: mpsc::Receiver<Command>,
     stopping_tx: oneshot::Sender<()>,
+    /// stratum share emissions
     emissions_rx: EmissionReceiver,
     chain_store_handle: ChainStoreHandle,
+    /// Handle to send messages to the metrics actor
     #[allow(dead_code)]
     metrics: MetricsHandle,
     organise_tx: OrganiseSender,
@@ -320,7 +325,7 @@ impl NodeActor {
                                 .behaviour_mut()
                                 .request_response
                                 .send_request(&peer_id, msg);
-                            debug!("Sent message to peer: {peer_id}, request_id: {request_id}");
+                            trace!("Sent message to peer: {peer_id}, request_id: {request_id}");
                         }
                         Some(SwarmSend::Response(response_channel, msg)) => {
                             let request_id = self
@@ -352,7 +357,7 @@ impl NodeActor {
                             if let Err(_e) = self.node.swarm.disconnect_peer_id(peer_id) {
                                 error!("Error disconnecting peer {peer_id}");
                             } else {
-                                debug!("Disconnected peer: {peer_id}");
+                                trace!("Disconnected peer: {peer_id}");
                             }
                         }
                         Some(SwarmSend::Broadcast(share_block)) => {
@@ -511,7 +516,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_node_handle_get_pplns_shares_sends_correct_command() {
-        let (command_tx, mut command_rx) = mpsc::channel(32);
+        let (command_tx, mut command_rx) = mpsc::channel(NODE_CMD_BUFFER);
         let node_handle = NodeHandle { command_tx };
 
         let query = GetPplnsShareQuery {

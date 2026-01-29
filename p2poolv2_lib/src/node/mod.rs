@@ -21,13 +21,15 @@ pub mod request_response_handler;
 pub mod validation_worker;
 pub use crate::config::Config;
 pub mod actor;
+pub mod bip152;
 pub mod messages;
 pub mod p2p_message_handlers;
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender, PeerResponse, PeerStatus};
+use crate::node::bip152::CompactBlockRelay;
 use crate::node::messages::Message;
-use crate::node::p2p_message_handlers::senders::send_getheaders;
+use crate::node::p2p_message_handlers::senders::{send_block_inventory, send_getheaders};
 use crate::node::request_response_handler::RequestResponseHandler;
 use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
 use crate::node::validation_worker::ValidationSender;
@@ -36,6 +38,7 @@ use crate::node::validation_worker::ValidationSender;
 use crate::pool_difficulty::PoolDifficulty;
 #[cfg(not(test))]
 use crate::pool_difficulty::PoolDifficulty;
+use crate::service::peer_state::{PeerState, PeerStates};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -56,11 +59,13 @@ use libp2p::{
     kad::{Event as KademliaEvent, QueryResult},
     swarm::SwarmEvent,
 };
+use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 pub struct SwarmResponseChannel<T> {
     channel: ResponseChannel<T>,
@@ -105,6 +110,7 @@ struct Node {
     request_response_handler: RequestResponseHandler<ResponseChannel<Message>>,
     config: Config,
     monitoring_event_sender: MonitoringEventSender,
+    peer_states: Arc<PeerStates>,
 }
 
 impl Node {
@@ -199,6 +205,9 @@ impl Node {
 
         let (swarm_tx, swarm_rx) = mpsc::channel(100);
 
+        // TODO: persist this to disk
+        let peer_states = Arc::new(RwLock::new(HashMap::new()));
+
         let pool_difficulty = PoolDifficulty::build(&chain_store_handle)
             .expect("Failed to build pool difficulty from chain store");
         let share_validator: Arc<dyn ShareValidator + Send + Sync> =
@@ -213,6 +222,7 @@ impl Node {
             block_fetcher_handle,
             validation_tx,
             share_validator,
+            peer_states.clone(),
         );
 
         Ok(Self {
@@ -223,6 +233,7 @@ impl Node {
             request_response_handler,
             config,
             monitoring_event_sender,
+            peer_states,
         })
     }
 
@@ -238,6 +249,23 @@ impl Node {
             self.swarm.disconnect_peer_id(peer_id).unwrap_or_default();
         }
         Ok(())
+    }
+
+    /// Gets the peer state for a given peer id
+    fn get_peer_state(&self, peer_id: &PeerId) -> Arc<PeerState> {
+        let state = { self.peer_states.read().get(peer_id).cloned() };
+        match state {
+            Some(state) => state,
+            None => {
+                debug!(?peer_id, "Initializing state for unknown peer.");
+                // create a new state for a new peer
+                let peer_state = Arc::new(PeerState::new(*peer_id));
+                self.peer_states
+                    .write()
+                    .insert(*peer_id, peer_state.clone());
+                peer_state
+            }
+        }
     }
 
     /// Send Message to all peers
@@ -291,20 +319,7 @@ impl Node {
             } => {
                 match endpoint {
                     libp2p::core::ConnectedPoint::Dialer { .. } => {
-                        if let Err(e) = send_getheaders(
-                            peer_id,
-                            self.chain_store_handle.clone(),
-                            self.swarm_tx.clone(),
-                        )
-                        .await
-                        {
-                            error!(
-                                "Failed to handle outbound connection to peer {}: {}",
-                                peer_id, e
-                            );
-                        } else {
-                            info!("Outbound connection established to peer: {}", peer_id);
-                        }
+                        self.handle_connection_established(peer_id).await;
                     }
                     libp2p::core::ConnectedPoint::Listener { .. } => {
                         info!("Inbound connection established from peer: {peer_id}");
@@ -418,6 +433,43 @@ impl Node {
             },
             _ => debug!("Other Kademlia event: {:?}", event),
         }
+    }
+
+    /// Handle connection established events, these are events that are generated when a connection is established
+    async fn handle_connection_established(&mut self, peer_id: libp2p::PeerId) {
+        info!(?peer_id, "Outbound connection established");
+
+        match send_getheaders(
+            peer_id,
+            self.chain_store_handle.clone(),
+            self.swarm_tx.clone(),
+        )
+        .await
+        {
+            Ok(_) => {
+                trace!(?peer_id, "Received GetHeaders response");
+            }
+            Err(e) => {
+                error!(?peer_id, "Failed to receive GetHeaders response: {}", e);
+            }
+        }
+
+        let connected_compactblock_peers = self
+            .connected_peers()
+            .iter()
+            .map(|p| self.get_peer_state(p))
+            .filter(|s| !matches!(s.compact_block_to, Some(CompactBlockRelay::Disabled) | None))
+            .count();
+
+        let has_few_cmpct_relays = connected_compactblock_peers < 3;
+
+        if has_few_cmpct_relays
+            && let Err(err) = self.send_to_peer(&peer_id, Message::SendCompact(true, 1))
+        {
+            warn!("Failed to send initial message: {}", err);
+        }
+
+        // TODO: Re-add send inventory messages here?
     }
 }
 

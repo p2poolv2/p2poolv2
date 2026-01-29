@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::node::bip152;
 use crate::shares::share_block::{ShareBlock, ShareHeader, Txids};
 use bitcoin::consensus::{Decodable, Encodable, encode};
 use bitcoin::hashes::{Hash, sha256d};
@@ -33,6 +34,10 @@ mod message_discriminants {
     pub const SHARE_BLOCK: u8 = 5;
     pub const GET_DATA: u8 = 6;
     pub const TRANSACTION: u8 = 7;
+    pub const SEND_COMPACT: u8 = 8;
+    pub const COMPACT_BLOCK: u8 = 9;
+    pub const GET_BLOCK_TXN: u8 = 10;
+    pub const BLOCK_TXN: u8 = 11;
 }
 
 /// InventoryMessage discriminants to determine the type of inventory message
@@ -62,8 +67,9 @@ pub mod network_magic {
 
 /// P2P network messages, encoded using bitcoin consensus_encode
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[repr(u32)]
 pub enum Message {
-    Inventory(InventoryMessage),
+    Inventory(InventoryMessage) = 0,
     NotFound(()),
     GetShareHeaders(Vec<BlockHash>, BlockHash),
     GetShareBlocks(Vec<BlockHash>, BlockHash),
@@ -71,6 +77,18 @@ pub enum Message {
     ShareBlock(ShareBlock),
     GetData(GetData),
     Transaction(bitcoin::Transaction),
+
+    /// Delivers block header, per-peer short txIDs, and prefilled txs for reconstruction
+    CompactBlock(bip152::ShareHeaderAndShortIds),
+
+    /// Negotiates compact block version and high-bandwidth mode (bool + version)
+    SendCompact(bool, u64),
+
+    /// Requests missing txs from a prior [Message::CompactBlock] by block hash and indexes.
+    GetBlockTxn(bip152::ShareBlockTransactionsRequest),
+
+    /// Responds with the exact requested txs from the block
+    BlockTxn(bitcoin::bip152::BlockTransactions),
 }
 
 /// A complete P2P network message with protocol framing
@@ -142,6 +160,12 @@ impl Display for Message {
             Message::ShareBlock(_) => write!(f, "ShareBlock"),
             Message::GetData(_) => write!(f, "GetData"),
             Message::Transaction(_) => write!(f, "Transaction"),
+
+            // compact block relay
+            Message::CompactBlock(_) => write!(f, "CompactBlock"),
+            Message::SendCompact(_, _) => write!(f, "SendCompact"),
+            Message::GetBlockTxn(_) => write!(f, "GetBlockTxn"),
+            Message::BlockTxn(_) => write!(f, "BlockTxn"),
         }
     }
 }
@@ -233,6 +257,12 @@ impl Encodable for Message {
                 len += tx.consensus_encode(w)?;
                 Ok(len)
             }
+
+            // compact block relay
+            Message::CompactBlock(_) => todo!(),
+            Message::SendCompact(_, _) => todo!(),
+            Message::GetBlockTxn(_) => todo!(),
+            Message::BlockTxn(_) => todo!(),
         }
     }
 }
@@ -308,9 +338,12 @@ impl Decodable for RawMessage {
 /// The inventory message used to tell a peer what we have in our inventory.
 /// The message can be used to tell the peer about share headers, blocks, or transactions that this peer has.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[repr(u32)]
 pub enum InventoryMessage {
     BlockHashes(Vec<BlockHash>),
     TransactionHashes(Txids),
+    // TODO
+    CompactBlock = 4,
 }
 
 impl Encodable for InventoryMessage {
@@ -327,6 +360,7 @@ impl Encodable for InventoryMessage {
                 len += txids.consensus_encode(w)?;
                 Ok(len)
             }
+            InventoryMessage::CompactBlock => todo!(),
         }
     }
 }

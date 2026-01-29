@@ -25,8 +25,9 @@ use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::{InventoryMessage, Message};
 use crate::node::p2p_message_handlers::handle_response;
 use crate::node::validation_worker::ValidationSender;
-use crate::service::build_service;
 use crate::service::p2p_service::RequestContext;
+use crate::service::peer_state::PeerState;
+use crate::service::{build_service, peer_state::PeerStates};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -67,6 +68,7 @@ pub struct RequestResponseHandler<C: Send + Sync> {
     validation_tx: ValidationSender,
     peer_block_knowledge: PeerBlockKnowledge,
     share_validator: Arc<dyn ShareValidator + Send + Sync>,
+    peer_states: Arc<PeerStates>,
 }
 
 /// Implementation of ResponseChannel<Message>, used in production.
@@ -81,6 +83,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
         block_fetcher_handle: BlockFetcherHandle,
         validation_tx: ValidationSender,
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
+        peer_states: Arc<PeerStates>,
     ) -> Self {
         let service =
             build_service::<ResponseChannel<Message>, _>(network_config, swarm_tx.clone());
@@ -92,6 +95,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
             validation_tx,
             peer_block_knowledge: PeerBlockKnowledge::default(),
             share_validator,
+            peer_states,
         }
     }
 
@@ -116,7 +120,11 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
                         request,
                         channel,
                     },
-            } => self.dispatch_request(peer, request, channel).await,
+            } => {
+                // TODO: move get from node to its own struct
+                let state = { self.peer_states.read().get(&peer).unwrap().clone() };
+                self.dispatch_request(state, request, channel).await
+            }
             RequestResponseEvent::Message {
                 peer,
                 message:
@@ -201,14 +209,14 @@ impl<C: Send + Sync> RequestResponseHandler<C> {
     /// error, the peer is disconnected.
     async fn dispatch_request(
         &mut self,
-        peer: libp2p::PeerId,
+        peer: Arc<PeerState>,
         request: Message,
         channel: C,
     ) -> Result<(), Box<dyn Error>> {
         self.record_peer_knowledge(&peer, &request);
 
         let ctx = RequestContext::<C, _> {
-            peer,
+            peer: peer.clone(),
             request: request.clone(),
             chain_store_handle: self.chain_store_handle.clone(),
             response_channel: channel,
@@ -222,12 +230,12 @@ impl<C: Send + Sync> RequestResponseHandler<C> {
         match tokio::time::timeout(Duration::from_secs(1), self.request_service.ready()).await {
             Ok(Ok(_)) => {
                 if let Err(err) = self.request_service.call(ctx).await {
-                    error!("Service call failed for peer {}: {}", peer, err);
+                    error!("Service call failed for peer {}: {}", peer.id, err);
                 }
             }
             Ok(Err(err)) => {
                 error!("Service not ready for peer {}: {}", peer, err);
-                if let Err(send_err) = self.swarm_tx.send(SwarmSend::Disconnect(peer)).await {
+                if let Err(send_err) = self.swarm_tx.send(SwarmSend::Disconnect(peer.id)).await {
                     error!(
                         "Failed to send disconnect command for peer {}: {:?}",
                         peer, send_err
@@ -236,7 +244,7 @@ impl<C: Send + Sync> RequestResponseHandler<C> {
             }
             Err(_) => {
                 error!("Service readiness timed out for peer {}", peer);
-                if let Err(send_err) = self.swarm_tx.send(SwarmSend::Disconnect(peer)).await {
+                if let Err(send_err) = self.swarm_tx.send(SwarmSend::Disconnect(peer.id)).await {
                     error!(
                         "Failed to send disconnect command for peer {}: {:?}",
                         peer, send_err
@@ -333,6 +341,7 @@ mod tests {
             validation_tx,
             peer_block_knowledge: PeerBlockKnowledge::default(),
             share_validator,
+            peer_states: Default::default(),
         }
     }
 
@@ -480,12 +489,12 @@ mod tests {
 
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
-        let peer_id = libp2p::PeerId::random();
+        let peer_state = PeerState::random();
         let (response_tx, _response_rx) = oneshot::channel::<Message>();
 
         let result = handler
             .dispatch_request(
-                peer_id,
+                peer_state.into(),
                 Message::GetShareHeaders(block_hashes, stop_block_hash),
                 response_tx,
             )
@@ -523,13 +532,14 @@ mod tests {
             validation_tx,
             peer_block_knowledge: PeerBlockKnowledge::default(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            peer_states: Default::default(),
         };
 
-        let peer_id = libp2p::PeerId::random();
+        let peer_state = Arc::from(PeerState::random());
         let (channel_tx, _channel_rx) = oneshot::channel::<Message>();
 
         let result = handler
-            .dispatch_request(peer_id, Message::NotFound(()), channel_tx)
+            .dispatch_request(peer_state.clone(), Message::NotFound(()), channel_tx)
             .await;
         assert!(result.is_ok());
 
@@ -539,7 +549,7 @@ mod tests {
             .expect("Expected a SwarmSend message after timeout");
         if let SwarmSend::Disconnect(disconnected_peer) = received {
             assert_eq!(
-                disconnected_peer, peer_id,
+                disconnected_peer, peer_state.id,
                 "Expected Disconnect for the correct peer"
             );
         } else {
@@ -560,20 +570,24 @@ mod tests {
         });
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
-        let peer_id = libp2p::PeerId::random();
+        let peer_state = Arc::from(PeerState::random());
         let block_hash = BlockHash::all_zeros();
         let inventory = InventoryMessage::BlockHashes(vec![block_hash]);
         let (channel_tx, _channel_rx) = oneshot::channel::<Message>();
 
         let result = handler
-            .dispatch_request(peer_id, Message::Inventory(inventory), channel_tx)
+            .dispatch_request(
+                peer_state.clone(),
+                Message::Inventory(inventory),
+                channel_tx,
+            )
             .await;
         assert!(result.is_ok());
 
         assert!(
             handler
                 .peer_block_knowledge()
-                .peer_knows_block(&peer_id, &block_hash)
+                .peer_knows_block(&peer_state, &block_hash)
         );
     }
 
@@ -659,25 +673,29 @@ mod tests {
         });
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
-        let peer_id = libp2p::PeerId::random();
+        let peer_state = Arc::from(PeerState::random());
         let block_hash = BlockHash::all_zeros();
         let inventory = InventoryMessage::BlockHashes(vec![block_hash]);
         let (channel_tx, _channel_rx) = oneshot::channel::<Message>();
 
         let _ = handler
-            .dispatch_request(peer_id, Message::Inventory(inventory), channel_tx)
+            .dispatch_request(
+                peer_state.clone(),
+                Message::Inventory(inventory),
+                channel_tx,
+            )
             .await;
         assert!(
             handler
                 .peer_block_knowledge()
-                .peer_knows_block(&peer_id, &block_hash)
+                .peer_knows_block(&peer_state, &block_hash)
         );
 
-        handler.remove_peer_knowledge(&peer_id);
+        handler.remove_peer_knowledge(&peer_state);
         assert!(
             !handler
                 .peer_block_knowledge()
-                .peer_knows_block(&peer_id, &block_hash)
+                .peer_knows_block(&peer_state, &block_hash)
         );
     }
 }
