@@ -23,7 +23,10 @@
 //! Share events use `ShareInfo` from the store directly so there is
 //! a single source of truth for the wire format.
 
-use crate::store::dag_store::ShareInfo;
+use crate::{
+    node::compact_block_relay::CompactBlockRelay, service::peer_state::PeerState,
+    store::dag_store::ShareInfo,
+};
 use serde::Serialize;
 use tokio::sync::broadcast;
 
@@ -44,16 +47,30 @@ pub struct ChainInfo {
 }
 
 /// JSON response for a peer event.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct PeerResponse {
     pub peer_id: String,
     pub status: PeerStatus,
+    pub compact_block_to: CompactBlockRelay,
+    pub compact_block_from: CompactBlockRelay,
+}
+
+impl From<PeerState> for PeerResponse {
+    fn from(state: PeerState) -> Self {
+        Self {
+            peer_id: state.id.to_string(),
+            status: PeerStatus::Connected,
+            compact_block_to: state.compact_block_to,
+            compact_block_from: state.compact_block_from,
+        }
+    }
 }
 
 /// Whether a peer connected or disconnected.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub enum PeerStatus {
     Connected,
+    #[default]
     Disconnected,
 }
 
@@ -111,6 +128,7 @@ mod tests {
         let event = MonitoringEvent::Peer(PeerResponse {
             peer_id: "12D3KooW".to_string(),
             status: PeerStatus::Connected,
+            ..Default::default()
         });
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"topic\":\"Peer\""));
@@ -123,6 +141,7 @@ mod tests {
         let event = MonitoringEvent::Peer(PeerResponse {
             peer_id: "12D3KooW".to_string(),
             status: PeerStatus::Disconnected,
+            ..Default::default()
         });
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"status\":\"Disconnected\""));
@@ -180,6 +199,7 @@ mod tests {
         let event = MonitoringEvent::Peer(PeerResponse {
             peer_id: "12D3KooW".to_string(),
             status: PeerStatus::Connected,
+            ..Default::default()
         });
         sender.send(event.clone()).unwrap();
         let received = receiver.try_recv().unwrap();

@@ -21,6 +21,7 @@ use self::block_fetcher::BlockFetcherHandle;
 use self::peer_block_knowledge::PeerBlockKnowledge;
 use crate::config::NetworkConfig;
 use crate::node::SwarmSend;
+use crate::node::actor::NodeHandle;
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::{InventoryMessage, Message};
 use crate::node::p2p_message_handlers::handle_response;
@@ -87,6 +88,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
         block_receiver_handle: BlockReceiverHandle,
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
         peer_states: Arc<PeerStates>,
+        node_handle: NodeHandle,
     ) -> Self {
         Self {
             peer_handles: HashMap::new(),
@@ -255,6 +257,7 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
             validation_tx: self.validation_tx.clone(),
             block_receiver_handle: self.block_receiver_handle.clone(),
             share_validator: self.share_validator.clone(),
+            peer_states: self.peer_states.clone(),
         };
 
         let peer_handle = match self.peer_handles.get(&peer.id) {
@@ -306,6 +309,7 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
             validation_tx: self.validation_tx.clone(),
             block_receiver_handle: self.block_receiver_handle.clone(),
             share_validator: self.share_validator.clone(),
+            peer_states: self.peer_states.clone(),
         };
         if let Err(err) = handle_response(ctx).await {
             error!("Error handling response from peer {}: {}", peer_id, err);

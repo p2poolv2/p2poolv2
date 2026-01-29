@@ -236,22 +236,19 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
 /// Reuses the shared PeerResponse from the lib crate but with a
 /// default Connected status since the REST endpoint only lists
 /// currently connected peers.
-use p2poolv2_lib::monitoring_events::{PeerResponse, PeerStatus};
+use p2poolv2_lib::monitoring_events::PeerResponse;
 
 /// Returns the list of currently connected peers.
 async fn peers(State(state): State<Arc<AppState>>) -> Result<Json<Vec<PeerResponse>>, ApiError> {
-    let peer_ids = state
+    let peer_states = state
         .node_handle
         .get_peers()
         .await
         .map_err(|error| ApiError::ServerError(format!("Failed to get peers: {error}")))?;
 
-    let peers: Vec<PeerResponse> = peer_ids
+    let peers: Vec<PeerResponse> = peer_states
         .into_iter()
-        .map(|peer_id| PeerResponse {
-            peer_id: peer_id.to_string(),
-            status: PeerStatus::Connected,
-        })
+        .map(|peer_state| peer_state.as_ref().clone().into())
         .collect();
 
     Ok(Json(peers))

@@ -20,7 +20,7 @@
 
 use std::{collections::HashMap, fmt::Debug, fmt::Display, ops::Deref, sync::Arc};
 
-use crate::node::bip152::CompactBlockRelay;
+use crate::node::compact_block_relay::CompactBlockRelay;
 use libp2p::PeerId;
 use parking_lot::{Mutex, RwLock};
 
@@ -59,7 +59,8 @@ impl PeerStates {
         self.inner.write().remove(peer_id).is_some()
     }
 
-    pub fn update(&self, peer_id: PeerId, mut mutator: PeerStateMutation) -> bool {
+    pub fn update(&self, peer_id: PeerId, mutator: impl Into<PeerStateMutation>) -> bool {
+        let mut mutator = mutator.into();
         let peer = self.inner.read().get(&peer_id).cloned();
         match peer {
             Some(peer) => {
@@ -72,6 +73,15 @@ impl PeerStates {
 }
 
 pub struct PeerStateMutation(pub Box<dyn FnMut(&mut PeerState) + Send + Sync>);
+
+impl<F> From<F> for PeerStateMutation
+where
+    F: FnMut(&mut PeerState) + Send + Sync + 'static,
+{
+    fn from(value: F) -> Self {
+        Self(Box::from(value))
+    }
+}
 
 impl Debug for PeerStateMutation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -93,8 +103,8 @@ impl PeerState {
     pub fn new(id: PeerId) -> Self {
         Self {
             id,
-            compact_block_to: CompactBlockRelay::Disabled,
-            compact_block_from: CompactBlockRelay::Disabled,
+            compact_block_to: Default::default(),
+            compact_block_from: Default::default(),
         }
     }
 

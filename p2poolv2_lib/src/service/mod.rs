@@ -181,7 +181,7 @@ mod tests {
     use crate::node::request_response_handler::block_fetcher;
     use crate::node::validation_worker;
     use crate::service::p2p_service::{P2PService, RequestContext};
-    use crate::service::peer_state::PeerState;
+    use crate::service::peer_state::{PeerState, PeerStates};
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::validation::MockDefaultShareValidator;
@@ -222,6 +222,7 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            peer_states: PeerStates::default().into(),
         }
     }
 

@@ -17,7 +17,6 @@
 pub mod receivers;
 pub mod senders;
 
-use crate::node::SwarmSend;
 use crate::node::messages::{GetData, Message};
 use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
 use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
@@ -29,6 +28,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::utils::time_provider::TimeProvider;
+use receivers::compact_block::handle_send_compact;
 use receivers::getblocks::handle_getblocks;
 use receivers::getdata::handle_getdata_block;
 use receivers::getheaders::handle_getheaders;
@@ -122,8 +122,29 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
             );
             Ok(())
         }
+
+        // compact block relay
+        Message::CompactBlock(cb) => {
+            info!("CompactBlock recv from {}", ctx.peer);
+            // TODO: impl
+            Ok(())
+        }
+        Message::SendCompact(announce, version) => {
+            handle_send_compact(announce, version, ctx.peer.id, &ctx.peer_states).await
+        }
+        Message::GetBlockTxn(req) => {
+            info!("GetBlockTxn recv from {}", ctx.peer);
+            // TODO: impl
+            Ok(())
+        }
+        Message::BlockTxn(txn) => {
+            info!("BlockTxn recv from {}", ctx.peer);
+            // TODO: impl
+            Ok(())
+        }
+
         other => {
-            info!("Unexpected request type {other}");
+            warn!("Unexpected request type {other}");
             Ok(())
         }
     }
@@ -202,14 +223,7 @@ pub async fn handle_response<C: Send + Sync>(
             Ok(())
         }
         Message::SendCompact(announce, version) => {
-            info!(
-                "SendCompact recv from {} announce={} v={}",
-                peer, announce, version
-            );
-            if announce && version >= 1 {
-                // TODO: impl
-            }
-            Ok(())
+            handle_send_compact(announce, version, peer, &ctx.peer_states).await
         }
         Message::GetBlockTxn(req) => {
             info!("GetBlockTxn recv from {}", peer);
@@ -223,7 +237,7 @@ pub async fn handle_response<C: Send + Sync>(
         }
 
         other => {
-            info!("Unexpected response type from peer {}: {}", peer, other);
+            warn!("Unexpected response type from peer {}: {}", peer, other);
             Ok(())
         }
     }
@@ -233,6 +247,7 @@ pub async fn handle_response<C: Send + Sync>(
 mod tests {
     use super::*;
     use crate::node::SwarmSend;
+    use crate::node::actor::NodeHandle;
     use crate::node::messages::InventoryMessage;
     use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
@@ -300,6 +315,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            peer_states: Default::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -348,6 +364,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            peer_states: Default::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -406,6 +423,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            peer_states: Default::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -460,6 +478,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            peer_states: Default::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -496,6 +515,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            peer_states: Default::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -536,6 +556,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            peer_states: Default::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -579,6 +600,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            peer_states: Default::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -620,6 +642,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            peer_states: Default::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -650,6 +673,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            peer_states: Default::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -688,6 +712,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            peer_states: Default::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -717,6 +742,7 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            peer_states: Default::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -775,6 +801,7 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             share_validator: Arc::new(mock_validator),
+            peer_states: Default::default(),
         };
 
         let result = handle_response(ctx).await;
@@ -802,6 +829,7 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            peer_states: Default::default(),
         };
 
         let result = handle_response(ctx).await;
@@ -842,6 +870,7 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            peer_states: Default::default(),
         };
 
         let result = handle_response(ctx).await;
@@ -865,6 +894,7 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            peer_states: Default::default(),
         };
 
         let result = handle_response(ctx).await;

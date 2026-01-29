@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod block_receiver;
+pub mod compact_block;
 pub mod getblocks;
 pub mod getdata;
 pub mod getheaders;
@@ -23,6 +24,7 @@ pub mod inventory;
 pub mod share_blocks;
 pub mod share_headers;
 
+pub use compact_block::handle_send_compact;
 pub use getblocks::handle_getblocks;
 pub use getdata::handle_getdata_block;
 pub use getheaders::handle_getheaders;

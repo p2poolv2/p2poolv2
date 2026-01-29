@@ -46,6 +46,7 @@ use crate::node::validation_worker::{
 use crate::pool_difficulty::PoolDifficulty;
 #[cfg(not(test))]
 use crate::pool_difficulty::PoolDifficulty;
+use crate::service::peer_state::{PeerState, PeerStateMutation};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -63,7 +64,7 @@ use tracing::trace;
 use tracing::{debug, error, info};
 
 /// NodeHandle provides an interface to interact with a Node running in a separate task
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct NodeHandle {
     // The channel to send commands to the Node Actor
@@ -71,7 +72,21 @@ pub struct NodeHandle {
 }
 
 #[allow(dead_code)]
+#[cfg(any(test, feature = "test-utils"))]
+impl Default for NodeHandle {
+    /// Create a dummy channel for testing purposes
+    fn default() -> Self {
+        let (command_tx, _) = mpsc::channel(1);
+        Self { command_tx }
+    }
+}
+
 impl NodeHandle {
+    /// Create a new NodeHandle from a command sender
+    pub(crate) fn from_sender(command_tx: mpsc::Sender<Command>) -> Self {
+        Self { command_tx }
+    }
+
     /// Create a new Node and return a handle to interact with it
     pub async fn new(
         config: Config,
@@ -83,20 +98,7 @@ impl NodeHandle {
         pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
-        let pool_difficulty = PoolDifficulty::build(&chain_store_handle)
-            .expect("Failed to build pool difficulty from chain store");
-        let pool_signature = config
-            .stratum
-            .pool_signature
-            .as_deref()
-            .unwrap_or("")
-            .as_bytes()
-            .to_vec();
-        let share_validator: Arc<DefaultShareValidator> = Arc::new(DefaultShareValidator::new(
-            pool_difficulty,
-            config.stratum.difficulty_multiplier as u128,
-            pool_signature,
-        ));
+        let node_handle = Self::from_sender(command_tx);
 
         let (node_actor, stopping_rx) = NodeActor::new(
             config,
@@ -107,7 +109,7 @@ impl NodeHandle {
             monitoring_event_sender,
             notify_tx,
             pplns_window,
-            share_validator,
+            node_handle.clone(),
         )
         .unwrap();
 
@@ -115,15 +117,31 @@ impl NodeHandle {
             node_actor.run().await;
         });
 
-        Ok((Self { command_tx }, stopping_rx))
+        Ok((node_handle, stopping_rx))
     }
 
-    /// Get a list of connected peers
-    pub async fn get_peers(&self) -> Result<Vec<libp2p::PeerId>, Box<dyn Error + Send + Sync>> {
+    /// Get all connected peers with their states
+    pub async fn get_peers(&self) -> Result<Vec<Arc<PeerState>>, Box<dyn Error + Send + Sync>> {
         let (tx, rx) = oneshot::channel();
         self.command_tx.send(Command::GetPeers(tx)).await?;
         match rx.await {
             Ok(peers) => Ok(peers),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Update peer state
+    pub async fn update_peer_state(
+        &self,
+        peer_id: libp2p::PeerId,
+        mut_state: PeerStateMutation,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::UpdatePeerState(peer_id, mut_state, tx))
+            .await?;
+        match rx.await {
+            Ok(result) => result,
             Err(e) => Err(e.into()),
         }
     }
@@ -173,6 +191,9 @@ impl NodeHandle {
                     Command::SendToPeer(_, _, reply) => {
                         let _ = reply.send(Ok(()));
                     }
+                    Command::UpdatePeerState(_, _, reply) => {
+                        let _ = reply.send(Ok(()));
+                    }
                 }
             }
         });
@@ -184,20 +205,14 @@ impl NodeHandle {
     /// Returns the handle and the string representations of the generated peer IDs
     /// so callers can assert on expected values without depending on libp2p directly.
     pub fn new_for_test_with_peer_count(count: usize) -> (Self, Vec<String>) {
-        let peer_ids: Vec<libp2p::PeerId> = (0..count)
-            .map(|_| {
-                libp2p::identity::Keypair::generate_ed25519()
-                    .public()
-                    .to_peer_id()
-            })
-            .collect();
-        let peer_id_strings: Vec<String> = peer_ids.iter().map(|id| id.to_string()).collect();
+        let peers: Vec<Arc<PeerState>> = (0..count).map(|_| PeerState::random().into()).collect();
+        let peer_id_strings: Vec<String> = peers.iter().map(|p| p.id.to_string()).collect();
         let (command_tx, mut command_rx) = mpsc::channel::<Command>(32);
         tokio::spawn(async move {
             while let Some(command) = command_rx.recv().await {
                 match command {
                     Command::GetPeers(reply) => {
-                        let _ = reply.send(peer_ids.clone());
+                        let _ = reply.send(peers.clone());
                     }
                     Command::Shutdown(reply) => {
                         let _ = reply.send(());
@@ -207,6 +222,9 @@ impl NodeHandle {
                         let _ = reply.send(Vec::new());
                     }
                     Command::SendToPeer(_, _, reply) => {
+                        let _ = reply.send(Ok(()));
+                    }
+                    Command::UpdatePeerState(_, _, reply) => {
                         let _ = reply.send(Ok(()));
                     }
                 }
@@ -223,9 +241,10 @@ use mockall::mock;
 mock! {
     pub NodeHandle {
         pub async fn new(config: Config, chain_store_handle: ChainStoreHandle) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>>;
-        pub async fn get_peers(&self) -> Result<Vec<libp2p::PeerId>, Box<dyn Error>>;
+        pub async fn get_peers(&self) -> Result<Vec<Arc<PeerState>>, Box<dyn Error>>;
         pub async fn shutdown(&self) -> Result<(), Box<dyn Error>>;
         pub async fn send_to_peer(&self, peer_id: libp2p::PeerId, message: Message) -> Result<(), Box<dyn Error>>;
+        pub async fn update_peer_state(&self, peer_id: libp2p::PeerId, mut_state: PeerStateMutation) -> Result<(), Box<dyn Error>>;
     }
 
     // Provide a clone implementation for NodeHandle mock double
@@ -262,7 +281,7 @@ impl NodeActor {
         monitoring_event_sender: MonitoringEventSender,
         notify_tx: NotifySender,
         pplns_window: Arc<RwLock<PplnsWindow>>,
-        share_validator: Arc<dyn ShareValidator + Send + Sync>,
+        node_handle: NodeHandle,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>> {
         // Create organise channel
         let (organise_tx, organise_rx) = create_organise_channel();
@@ -306,6 +325,7 @@ impl NodeActor {
             block_receiver_tx,
             monitoring_event_sender.clone(),
             share_validator.clone(),
+            node_handle,
         )?;
 
         // Spawn organise worker
@@ -446,8 +466,7 @@ impl NodeActor {
                 command = self.command_rx.recv() => {
                     match command {
                         Some(Command::GetPeers(tx)) => {
-                            let peers =
-                                self.node.swarm.connected_peers().cloned().collect::<Vec<_>>();
+                            let peers = self.node.peer_states.all();
                             if tx.send(peers).is_err() {
                                 error!("Failed to send GetPeers response - receiver dropped");
                             }
@@ -487,6 +506,12 @@ impl NodeActor {
                             let result = self.node.handle_get_pplns_shares(query);
                             if tx.send(result).is_err() {
                                 error!("Failed to send GetPplnsShares response - receiver dropped");
+                            }
+                        },
+                        Some(Command::UpdatePeerState(peer, mut state_mutator, tx)) => {
+                            self.node.peer_states.update(peer, state_mutator);
+                            if tx.send(Ok(())).is_err() {
+                                error!("Failed to send UpdatePeerState response - receiver dropped");
                             }
                         },
                         None => {

@@ -14,16 +14,50 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-/*!
- * BIP-152-like implementation
- */
+//!
+//! ## BIP-152-like implementation
+//! We have a custom implementation of compact block relay that matches
+//! P2PoolV2 needs better.
+//!
+
+use crate::shares::share_block::ShareHeader;
 
 use bitcoin::{
     bip152::{BlockTransactionsRequest, HeaderAndShortIds, PrefilledTransaction, ShortId},
     consensus::{Decodable, Encodable},
 };
+use serde::Serialize;
 
-use crate::shares::share_block::ShareHeader;
+#[repr(u64)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactBlockRelayVersion {
+    One = 1,
+}
+
+impl Encodable for CompactBlockRelayVersion {
+    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+        &self,
+        writer: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        let mut len = 0;
+        len += (*self as u64).consensus_encode(writer)?;
+        Ok(len)
+    }
+}
+
+impl Decodable for CompactBlockRelayVersion {
+    fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
+        reader: &mut R,
+    ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        let version = u64::consensus_decode(reader)?;
+        match version {
+            1 => Ok(CompactBlockRelayVersion::One),
+            _ => Err(bitcoin::consensus::encode::Error::ParseFailed(
+                "Invalid version",
+            )),
+        }
+    }
+}
 
 /// Similar to [HeaderAndShortIds] but with added data for the sharechain
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,9 +166,10 @@ impl Decodable for ShareHeaderAndShortIds {
 }
 
 #[repr(i8)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, Default, Serialize)]
 pub enum CompactBlockRelay {
     /// Disabled when the other node can't handle it
+    #[default]
     Disabled = -1,
     /// **Low** bandwidth connection
     LowBandwidth = 0,
