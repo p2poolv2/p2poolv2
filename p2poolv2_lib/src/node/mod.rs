@@ -58,6 +58,8 @@ use libp2p::{
 };
 use std::collections::HashSet;
 use std::error::Error;
+use std::fmt::Debug;
+use std::hash::DefaultHasher;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -516,6 +518,7 @@ impl Node {
         .await?;
 
         // TODO: Re-add send inventory messages here?
+        //
 
         Ok(())
     }
@@ -557,6 +560,7 @@ mod tests {
     use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
     use crate::node::validation_worker::create_validation_channel;
+    use crate::shares::validation::MockDefaultShareValidator;
     use bitcoindrpc::BitcoinRpcConfig;
     use futures::StreamExt;
     use std::sync::Arc;

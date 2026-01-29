@@ -53,6 +53,18 @@ pub struct RequestContext<C, T> {
     pub share_validator: Arc<dyn ShareValidator + Send + Sync>,
 }
 
+/// Response context wrapping all inputs for the service call.
+pub struct ResponseContext<C> {
+    pub peer: Arc<PeerState>,
+    pub response: Message,
+    pub chain_store_handle: ChainStoreHandle,
+    pub swarm_tx: mpsc::Sender<SwarmSend<C>>,
+    pub block_fetcher_handle: BlockFetcherHandle,
+    pub validation_tx: ValidationSender,
+    pub block_receiver_handle: BlockReceiverHandle,
+    pub share_validator: Arc<dyn ShareValidator + Send + Sync>,
+}
+
 /// The Tower service that processes inbound P2P requests.
 #[derive(Clone)]
 pub struct P2PService;
@@ -63,8 +75,10 @@ impl P2PService {
     }
 }
 
-impl<C: 'static + Send + Sync, T: TimeProvider + Send + Sync + 'static>
-    Service<RequestContext<C, T>> for P2PService
+impl<C, T> Service<RequestContext<C, T>> for P2PService
+where
+    C: 'static + Send + Sync,
+    T: TimeProvider + Send + Sync + 'static,
 {
     type Response = ();
     type Error = Box<dyn Error + Send + Sync>;

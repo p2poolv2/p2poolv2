@@ -196,7 +196,7 @@ impl Error for PoolDifficultyError {}
 /// for any given height and timestamp. The ASERT algorithm is absolute
 /// (not iterative), meaning it only needs the anchor point and the current
 /// block's parameters to compute the next target.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct PoolDifficulty {
     /// The anchor block's compact target (difficulty at the anchor point)
     anchor_target: CompactTarget,
@@ -302,6 +302,7 @@ impl PoolDifficulty {
 // Use with #[mockall_double::double] to swap the real type for mock in tests.
 #[cfg(test)]
 mockall::mock! {
+    #[derive(Debug)]
     pub PoolDifficulty {
         pub fn new(anchor_target: CompactTarget, anchor_parent_time: u32, anchor_height: u32) -> Self;
         pub fn build(chain_store_handle: &ChainStoreHandle) -> Result<Self, PoolDifficultyError>;

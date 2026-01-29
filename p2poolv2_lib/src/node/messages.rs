@@ -306,10 +306,27 @@ impl Encodable for Message {
             }
 
             // compact block relay
-            Message::CompactBlock(_) => todo!(),
-            Message::SendCompact(_, _) => todo!(),
-            Message::GetBlockTxn(_) => todo!(),
-            Message::BlockTxn(_) => todo!(),
+            Message::CompactBlock(cb) => {
+                let mut len = COMPACT_BLOCK.consensus_encode(w)?;
+                len += cb.consensus_encode(w)?;
+                Ok(len)
+            }
+            Message::SendCompact(flag, version) => {
+                let mut len = SEND_COMPACT.consensus_encode(w)?;
+                len += flag.consensus_encode(w)?;
+                len += version.consensus_encode(w)?;
+                Ok(len)
+            }
+            Message::GetBlockTxn(req) => {
+                let mut len = GET_BLOCK_TXN.consensus_encode(w)?;
+                len += req.consensus_encode(w)?;
+                Ok(len)
+            }
+            Message::BlockTxn(txn) => {
+                let mut len = BLOCK_TXN.consensus_encode(w)?;
+                len += txn.consensus_encode(w)?;
+                Ok(len)
+            }
         }
     }
 }
@@ -342,6 +359,20 @@ impl Decodable for Message {
                 tip_hash: BlockHash::consensus_decode(r)?,
             })),
             ACK => Ok(Message::Ack),
+            COMPACT_BLOCK => Ok(Message::CompactBlock(
+                ShareHeaderAndShortIds::consensus_decode(r)?,
+            )),
+            SEND_COMPACT => {
+                let announce = bool::consensus_decode(r)?;
+                let version = u64::consensus_decode(r)?;
+                Ok(Message::SendCompact(announce, version))
+            }
+            GET_BLOCK_TXN => Ok(Message::GetBlockTxn(
+                ShareBlockTransactionsRequest::consensus_decode(r)?,
+            )),
+            BLOCK_TXN => Ok(Message::BlockTxn(
+                bitcoin::bip152::BlockTransactions::consensus_decode(r)?,
+            )),
             _ => Err(encode::Error::ParseFailed("Invalid Message discriminant")),
         }
     }
