@@ -68,6 +68,7 @@ impl P2PoolBehaviour {
         let kademlia_behaviour =
             kad::Behaviour::with_config(local_key.public().to_peer_id(), store, kad_config);
 
+        // TODO: handshake here with custom behavior?
         let identify_behaviour = identify::Behaviour::new(identify::Config::new(
             "/p2pool/1.0.0".to_string(),
             local_key.public(),

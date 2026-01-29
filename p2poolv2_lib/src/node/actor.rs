@@ -58,6 +58,7 @@ use libp2p::futures::StreamExt;
 use std::error::Error;
 use std::sync::{Arc, RwLock};
 use tokio::sync::{mpsc, oneshot};
+use tracing::trace;
 use tracing::{debug, error, info};
 
 /// NodeHandle provides an interface to interact with a Node running in a separate task
@@ -375,7 +376,7 @@ impl NodeActor {
                                 .behaviour_mut()
                                 .request_response
                                 .send_request(&peer_id, msg);
-                            debug!("Sent {msg_type} to peer: {peer_id}, request_id: {request_id}");
+                            trace!("Sent {msg_type} to peer: {peer_id}, request_id: {request_id}");
                         }
                         Some(SwarmSend::Response(response_channel, msg)) => {
                             let request_id = self
@@ -407,7 +408,7 @@ impl NodeActor {
                             if let Err(_e) = self.node.swarm.disconnect_peer_id(peer_id) {
                                 error!("Error disconnecting peer {peer_id}");
                             } else {
-                                debug!("Disconnected peer: {peer_id}");
+                                trace!("Disconnected peer: {peer_id}");
                             }
                         }
                         None => {
