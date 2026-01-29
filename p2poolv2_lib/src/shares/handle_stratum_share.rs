@@ -77,7 +77,7 @@ pub async fn handle_stratum_share(
 
         // Store share block via ChainStoreHandle
         chain_store_handle
-            .add_share(&share_block, true)
+            .add_share(share_block.clone(), true)
             .await
             .map_err(|e| format!("Failed to add share to chain: {e}"))?;
 
