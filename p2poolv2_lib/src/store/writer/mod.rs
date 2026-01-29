@@ -62,6 +62,36 @@ impl fmt::Display for StoreError {
 
 impl Error for StoreError {}
 
+impl From<rocksdb::Error> for StoreError {
+    fn from(e: rocksdb::Error) -> Self {
+        StoreError::Database(format!("{e:?}"))
+    }
+}
+
+impl From<bitcoin::io::Error> for StoreError {
+    fn from(e: bitcoin::io::Error) -> Self {
+        StoreError::Database(format!("{e:?}"))
+    }
+}
+
+impl From<bitcoin::consensus::encode::Error> for StoreError {
+    fn from(e: bitcoin::consensus::encode::Error) -> Self {
+        StoreError::Database(format!("{e:?}"))
+    }
+}
+
+impl From<String> for StoreError {
+    fn from(s: String) -> Self {
+        StoreError::Database(s)
+    }
+}
+
+impl From<&str> for StoreError {
+    fn from(s: &str) -> Self {
+        StoreError::Database(s.to_string())
+    }
+}
+
 /// Commands for write operations on the Store.
 ///
 /// Each command that needs a response includes a oneshot sender.
@@ -187,12 +217,8 @@ impl StoreWriter {
                 let result = self
                     .store
                     .add_share(&share, height, chain_work, confirm_txs, &mut batch)
-                    .and_then(|_| {
-                        self.store
-                            .commit_batch(batch)
-                            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
-                    });
-                let _ = reply.send(result.map_err(|e| StoreError::Database(e.to_string())));
+                    .and_then(|_| self.store.commit_batch(batch).map_err(StoreError::from));
+                let _ = reply.send(result);
             }
 
             WriteCommand::SetupGenesis { genesis, reply } => {
@@ -201,12 +227,8 @@ impl StoreWriter {
                 let result = self
                     .store
                     .setup_genesis(&genesis, &mut batch)
-                    .and_then(|_| {
-                        self.store
-                            .commit_batch(batch)
-                            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
-                    });
-                let _ = reply.send(result.map_err(|e| StoreError::Database(e.to_string())));
+                    .and_then(|_| self.store.commit_batch(batch).map_err(StoreError::from));
+                let _ = reply.send(result);
             }
 
             WriteCommand::InitChainStateFromStore {
@@ -215,7 +237,7 @@ impl StoreWriter {
             } => {
                 debug!("Initializing chain state from store");
                 let result = self.store.init_chain_state_from_store(genesis_hash);
-                let _ = reply.send(result.map_err(|e| StoreError::Database(e.to_string())));
+                let _ = reply.send(result);
             }
 
             WriteCommand::AddJob {
@@ -225,19 +247,19 @@ impl StoreWriter {
             } => {
                 debug!("Adding job: {}", timestamp);
                 let result = self.store.add_job(timestamp, serialized_notify);
-                let _ = reply.send(result.map_err(|e| StoreError::Database(e.to_string())));
+                let _ = reply.send(result);
             }
 
             WriteCommand::AddUser { btcaddress, reply } => {
                 debug!("Adding user: {}", btcaddress);
                 let result = self.store.add_user(btcaddress);
-                let _ = reply.send(result.map_err(|e| StoreError::Database(e.to_string())));
+                let _ = reply.send(result);
             }
 
             WriteCommand::AddPplnsShare { pplns_share, reply } => {
                 debug!("Adding PPLNS share for user: {}", pplns_share.user_id);
                 let result = self.store.add_pplns_share(pplns_share);
-                let _ = reply.send(result.map_err(|e| StoreError::Database(e.to_string())));
+                let _ = reply.send(result);
             }
 
             // Fire-and-forget commands (in-memory state updates)
@@ -267,12 +289,8 @@ impl StoreWriter {
                 let result = self
                     .store
                     .organise_share(&blockhash, &mut batch)
-                    .and_then(|_| {
-                        self.store
-                            .commit_batch(batch)
-                            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
-                    });
-                let _ = reply.send(result.map_err(|e| StoreError::Database(e.to_string())));
+                    .and_then(|_| self.store.commit_batch(batch).map_err(StoreError::from));
+                let _ = reply.send(result);
             }
         }
     }

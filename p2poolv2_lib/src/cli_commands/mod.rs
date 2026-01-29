@@ -19,11 +19,10 @@ pub mod pplns_shares;
 
 // Re-export the shared store functionality
 pub mod store {
-    use crate::store::Store;
-    use std::error::Error;
+    use crate::store::{Store, writer::StoreError};
 
     /// Open a store from the given path
-    pub fn open_store(store_path: String) -> Result<Store, Box<dyn Error + Send + Sync>> {
+    pub fn open_store(store_path: String) -> Result<Store, StoreError> {
         tracing::info!("Opening store in read-only mode: {:?}", store_path);
 
         Store::new(store_path, true).map_err(|e| {

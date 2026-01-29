@@ -17,7 +17,7 @@
 use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::store::Store;
 use crate::store::column_families::ColumnFamily;
-use std::error::Error;
+use crate::store::writer::StoreError;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info};
@@ -55,7 +55,7 @@ impl Store {
     ///
     /// Uses RocksDB range delete for efficient bulk deletion
     /// Keys are in format: n_time(8 bytes) + user_id(8 bytes) + seq(8 bytes)
-    fn prune_shares(&self, pplns_ttl: Duration) -> Result<(), Box<dyn Error>> {
+    fn prune_shares(&self, pplns_ttl: Duration) -> Result<(), StoreError> {
         let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
 
         // Calculate cutoff time in microseconds
@@ -91,7 +91,7 @@ impl Store {
     ///
     /// Uses RocksDB range delete for efficient bulk deletion
     /// Keys are in format: timestamp(8 bytes) in big-endian
-    fn prune_jobs(&self, job_ttl: Duration) -> Result<(), Box<dyn Error>> {
+    fn prune_jobs(&self, job_ttl: Duration) -> Result<(), StoreError> {
         let job_cf = self.db.cf_handle(&ColumnFamily::Job).unwrap();
 
         // Calculate cutoff time in microseconds

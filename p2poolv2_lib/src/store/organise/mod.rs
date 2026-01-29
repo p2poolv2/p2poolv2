@@ -14,13 +14,12 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use super::{ColumnFamily, Store};
+use super::{ColumnFamily, Store, writer::StoreError};
 use bitcoin::{
     BlockHash,
     consensus::{self, encode},
 };
 pub mod organise_share;
-use std::error::Error;
 
 const CANDIDATE_SUFFIX: &str = ":c";
 const CONFIRMED_SUFFIX: &str = ":f";
@@ -40,7 +39,7 @@ impl Store {
         &self,
         height: u32,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<(), StoreError> {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
 
         let current_top = self.get_top_candidate_height();
@@ -113,7 +112,7 @@ impl Store {
         blockhash: &BlockHash,
         height: u32,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<(), StoreError> {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let key = height_to_key_with_suffix(height, CANDIDATE_SUFFIX);
 
@@ -134,7 +133,7 @@ impl Store {
         blockhash: &BlockHash,
         height: u32,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<(), StoreError> {
         let current_top = self.get_top_confirmed_height();
 
         // Only add if this is the first entry or height is exactly one more than current top

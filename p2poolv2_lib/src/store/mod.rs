@@ -22,9 +22,9 @@ use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Work};
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
 use std::collections::{HashSet, VecDeque};
-use std::error::Error;
 use std::sync::{Arc, RwLock};
 use tracing::debug;
+use writer::StoreError;
 
 pub mod background_tasks;
 mod block_tx_metadata;
@@ -90,7 +90,7 @@ fn blockhash_list_merge(
 #[allow(dead_code)]
 impl Store {
     /// Create a new share store
-    pub fn new(path: String, read_only: bool) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    pub fn new(path: String, read_only: bool) -> Result<Self, StoreError> {
         // for now we use default options for all column families, we can tweak this later based on performance testing
         let block_cf = ColumnFamilyDescriptor::new(ColumnFamily::Block, RocksDbOptions::default());
         let block_txids_cf =
@@ -200,7 +200,7 @@ impl Store {
         blockhash: &BlockHash,
         stop_blockhash: &BlockHash,
         limit: usize,
-    ) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<BlockHash>, StoreError> {
         let mut blockhashes = Vec::with_capacity(limit);
         let mut next_children = VecDeque::new();
         next_children.push_back(*blockhash);
@@ -267,7 +267,7 @@ impl Store {
     }
 
     /// Get total work from chain state
-    pub fn get_total_work(&self) -> Result<Work, Box<dyn Error + Send + Sync>> {
+    pub fn get_total_work(&self) -> Result<Work, StoreError> {
         let tip = self.get_block_metadata(&self.chain_tip.read().unwrap())?;
         Ok(tip.chain_work)
     }
@@ -278,7 +278,7 @@ impl Store {
         &self,
         genesis: &ShareBlock,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<(), StoreError> {
         let blockhash = genesis.block_hash();
         let genesis_work = genesis.header.get_work();
         self.add_share(genesis, 0, genesis_work, true, batch)?;
@@ -291,10 +291,7 @@ impl Store {
 
     /// Initialize chain state from existing data in the store
     /// This should be called after opening an existing store to load cached state
-    pub fn init_chain_state_from_store(
-        &self,
-        genesis_hash: BlockHash,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub fn init_chain_state_from_store(&self, genesis_hash: BlockHash) -> Result<(), StoreError> {
         // Set genesis block hash
         self.set_genesis_blockhash(genesis_hash);
 

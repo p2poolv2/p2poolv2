@@ -14,13 +14,12 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use super::{ColumnFamily, Store};
+use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::share_block::{ShareTransaction, Txids};
 use crate::store::block_tx_metadata::TxMetadata;
 use bitcoin::consensus::{self, Encodable, encode};
 use bitcoin::{BlockHash, OutPoint, Transaction, Txid};
 use rocksdb::WriteBatch;
-use std::error::Error;
 use tracing::debug;
 
 /// Serialized outpoint size: 32B for Txid hash, 4B for index
@@ -52,7 +51,7 @@ impl Store {
         transactions: &[ShareTransaction],
         on_main_chain: bool,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<Vec<TxMetadata>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<TxMetadata>, StoreError> {
         let inputs_cf = self.db.cf_handle(&ColumnFamily::Inputs).unwrap();
         let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
         let mut txs_metadata = Vec::new();
@@ -97,7 +96,7 @@ impl Store {
         &self,
         txid: &Txid,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<TxMetadata, Box<dyn Error + Send + Sync>> {
+    ) -> Result<TxMetadata, StoreError> {
         // mark tx metadata as validated
         let mut tx_metadata = self.get_tx_metadata(txid)?;
         tx_metadata.validated = true;
@@ -129,7 +128,7 @@ impl Store {
         spending_txid: &Txid,
         spending_index: u32,
         batch: &mut WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<(), StoreError> {
         let key = format!("{input_txid}:{input_vout}");
         let spends_index_cf = self.db.cf_handle(&ColumnFamily::SpendsIndex).unwrap();
         let mut serialized = Vec::with_capacity(OUTPOINT_SIZE);
@@ -146,11 +145,7 @@ impl Store {
     ///
     /// Caller should check if the spending outpoint is in a confirmed
     /// block or not, if they need to.
-    pub(crate) fn is_spent(
-        &self,
-        txid: &Txid,
-        vout: u32,
-    ) -> Result<Option<OutPoint>, Box<dyn Error + Send + Sync>> {
+    pub(crate) fn is_spent(&self, txid: &Txid, vout: u32) -> Result<Option<OutPoint>, StoreError> {
         let key = format!("{txid}:{vout}");
         let spends_index_cf = self.db.cf_handle(&ColumnFamily::SpendsIndex).unwrap();
 
@@ -173,7 +168,7 @@ impl Store {
         tx: &Transaction,
         validated: bool,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<TxMetadata, Box<dyn Error + Send + Sync>> {
+    ) -> Result<TxMetadata, StoreError> {
         debug!("Adding tx metadata for txid {txid}");
         let tx_metadata = TxMetadata {
             txid,
@@ -207,7 +202,7 @@ impl Store {
         blockhash: &BlockHash,
         txids: &Txids,
         batch: &mut WriteBatch,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<(), StoreError> {
         let txids_blocks_cf = self.db.cf_handle(&ColumnFamily::TxidsBlocks).unwrap();
         let serialized_blockhash = consensus::serialize(blockhash);
 
@@ -230,7 +225,7 @@ impl Store {
     pub(crate) fn get_blockhashes_for_txid(
         &self,
         txid: &Txid,
-    ) -> Result<Vec<BlockHash>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<BlockHash>, StoreError> {
         let txids_blocks_cf = self.db.cf_handle(&ColumnFamily::TxidsBlocks).unwrap();
 
         match self.db.get_cf::<&[u8]>(&txids_blocks_cf, txid.as_ref())? {
@@ -252,7 +247,7 @@ impl Store {
         batch: &mut rocksdb::WriteBatch,
         bytes_suffix: &[u8],
         column_family: ColumnFamily,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<(), StoreError> {
         let mut blockhash_bytes = consensus::serialize(blockhash);
         blockhash_bytes.extend_from_slice(bytes_suffix);
 
@@ -295,15 +290,14 @@ impl Store {
     }
 
     /// Get the validation status of a transaction from the store
-    pub(crate) fn get_tx_metadata(
-        &self,
-        txid: &bitcoin::Txid,
-    ) -> Result<TxMetadata, Box<dyn Error + Send + Sync>> {
+    pub(crate) fn get_tx_metadata(&self, txid: &bitcoin::Txid) -> Result<TxMetadata, StoreError> {
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
         match self.db.get_cf::<&[u8]>(&tx_cf, txid.as_ref())? {
             Some(tx_metadata) => encode::deserialize(&tx_metadata)
                 .map_err(|_| "Failed to deserialize tx metadata".into()),
-            None => Err(format!("Transaction metadata not found for txid: {txid}").into()),
+            None => Err(StoreError::NotFound(format!(
+                "Transaction metadata not found for txid: {txid}"
+            ))),
         }
     }
 
@@ -324,10 +318,7 @@ impl Store {
     /// - Load outputs
     /// - Deserialize inputs and outputs
     /// - Return transaction
-    pub fn get_tx(
-        &self,
-        txid: &bitcoin::Txid,
-    ) -> Result<Transaction, Box<dyn Error + Send + Sync>> {
+    pub fn get_tx(&self, txid: &bitcoin::Txid) -> Result<Transaction, StoreError> {
         let tx_metadata = self.get_tx_metadata(txid)?;
 
         debug!("Transaction metadata: {:?}", tx_metadata);
@@ -382,7 +373,7 @@ impl Store {
     pub(crate) fn get_bitcoin_txs_by_blockhash_index(
         &self,
         blockhash: &BlockHash,
-    ) -> Result<Vec<Transaction>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<Transaction>, StoreError> {
         let txids = self.get_txids_for_blockhash(blockhash, ColumnFamily::BitcoinTxids);
         let mut txs = Vec::new();
         for txid in txids.0 {
@@ -395,7 +386,7 @@ impl Store {
     pub(crate) fn get_sharechain_txs_by_blockhash_index(
         &self,
         blockhash: &BlockHash,
-    ) -> Result<Vec<ShareTransaction>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<ShareTransaction>, StoreError> {
         let txids = self.get_txids_for_blockhash(blockhash, ColumnFamily::BlockTxids);
         let mut txs = Vec::with_capacity(txids.0.len());
         for txid in txids.0 {

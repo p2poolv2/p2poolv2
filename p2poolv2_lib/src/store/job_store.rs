@@ -14,18 +14,14 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::store::writer::StoreError;
 use crate::store::{ColumnFamily, Store};
-use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 impl Store {
     /// Save a job with the given timestamp key to the Job column family
-    pub fn add_job(
-        &self,
-        timestamp: u64,
-        serialized_notify: String,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    pub fn add_job(&self, timestamp: u64, serialized_notify: String) -> Result<(), StoreError> {
         debug!("Saving job to store with key: {:?}", timestamp);
         let job_cf = self.db.cf_handle(&ColumnFamily::Job).unwrap();
         self.db.put_cf(
@@ -43,7 +39,7 @@ impl Store {
         start_time: Option<u64>,
         end_time: Option<u64>,
         limit: usize,
-    ) -> Result<Vec<(u64, String)>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Vec<(u64, String)>, StoreError> {
         debug!(
             "Getting jobs from store with start_time: {:?}, end_time: {:?}, limit: {}",
             start_time, end_time, limit
