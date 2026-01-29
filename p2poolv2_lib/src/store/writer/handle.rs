@@ -34,7 +34,7 @@ use tokio::sync::oneshot;
 ///
 /// Provides direct read access via `Arc<Store>` and serialized write
 /// access through a channel to the `StoreWriter` task.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StoreHandle {
     store: Arc<Store>,
     write_tx: WriteSender,
