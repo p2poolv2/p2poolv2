@@ -74,7 +74,7 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
         Message::Inventory(inventory) => {
             handle_inventory(
                 inventory,
-                ctx.peer,
+                ctx.peer.id,
                 ctx.chain_store_handle,
                 ctx.response_channel,
                 ctx.swarm_tx,
@@ -110,7 +110,7 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
         Message::Handshake(handshake_data) => {
             handle_handshake(
                 handshake_data,
-                ctx.peer,
+                ctx.peer.id,
                 ctx.chain_store_handle,
                 ctx.response_channel,
                 ctx.swarm_tx,
@@ -216,6 +216,13 @@ pub async fn handle_response<C: Send + Sync>(
             debug!("Received Ack response from peer: {}", peer);
             Ok(())
         }
+
+        // compact block relay
+        Message::CompactBlock(_) => todo!(),
+        Message::SendCompact(_, _) => todo!(),
+        Message::GetBlockTxn(_) => todo!(),
+        Message::BlockTxn(_) => todo!(),
+
         other => {
             debug!("Unexpected response type from peer {}: {}", peer, other);
             Ok(())
@@ -235,6 +242,7 @@ mod tests {
     use crate::node::validation_worker::create_validation_channel;
     #[mockall_double::double]
     use crate::pool_difficulty::PoolDifficulty;
+    use crate::service::peer_state::PeerState;
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::share_block::Txids;
@@ -283,7 +291,7 @@ mod tests {
             .returning(move |_, _, _| Ok(response_headers.clone()));
 
         let ctx = RequestContext {
-            peer: peer_id,
+            peer: Arc::new(peer_id.into()),
             request: Message::GetShareHeaders(block_hashes, stop_block_hash),
             chain_store_handle,
             response_channel,
@@ -331,7 +339,7 @@ mod tests {
             .returning(move |_, _, _| Ok(vec![block1.block_hash(), block2.block_hash()]));
 
         let ctx = RequestContext {
-            peer: peer_id,
+            peer: Arc::new(peer_id.into()),
             request: Message::GetShareBlocks(block_hashes.clone(), stop_block_hash),
             chain_store_handle,
             response_channel,
@@ -389,7 +397,7 @@ mod tests {
         let inventory = InventoryMessage::BlockHashes(block_hashes);
 
         let ctx = RequestContext {
-            peer: peer_id,
+            peer: Arc::new(peer_id.into()),
             request: Message::Inventory(inventory),
             chain_store_handle,
             response_channel: response_channel_tx,
@@ -443,7 +451,7 @@ mod tests {
         let inventory = InventoryMessage::TransactionHashes(Txids(tx_hashes));
 
         let ctx = RequestContext {
-            peer: peer_id,
+            peer: Arc::new(peer_id.into()),
             request: Message::Inventory(inventory),
             chain_store_handle,
             response_channel: response_channel_tx,
@@ -479,7 +487,7 @@ mod tests {
         let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
 
         let ctx = RequestContext {
-            peer: peer_id,
+            peer: Arc::new(peer_id.into()),
             request: Message::NotFound(GetData::Block(BlockHash::all_zeros())),
             chain_store_handle,
             response_channel: response_channel_tx,
@@ -498,7 +506,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_request_get_data_for_block_confirmed() {
-        let peer_id = libp2p::PeerId::random();
+        let peer_state = PeerState::random();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
@@ -519,7 +527,7 @@ mod tests {
         let get_data = GetData::Block(block_hash);
 
         let ctx = RequestContext {
-            peer: peer_id,
+            peer: peer_state.into(),
             request: Message::GetData(get_data),
             chain_store_handle,
             response_channel,
@@ -562,7 +570,7 @@ mod tests {
         let get_data = GetData::Block(block_hash);
 
         let ctx = RequestContext {
-            peer: peer_id,
+            peer: Arc::new(peer_id.into()),
             request: Message::GetData(get_data),
             chain_store_handle,
             response_channel,
@@ -603,7 +611,7 @@ mod tests {
         let get_data = GetData::Txid(txid);
 
         let ctx = RequestContext {
-            peer: peer_id,
+            peer: Arc::new(peer_id.into()),
             request: Message::GetData(get_data),
             chain_store_handle,
             response_channel: response_channel_tx,
@@ -633,7 +641,7 @@ mod tests {
         let transaction = test_coinbase_transaction(1);
 
         let ctx = RequestContext {
-            peer: peer_id,
+            peer: Arc::new(peer_id.into()),
             request: Message::Transaction(transaction),
             chain_store_handle,
             response_channel: response_channel_tx,
@@ -671,7 +679,7 @@ mod tests {
             .returning(|_, _, _| Ok(vec![]));
 
         let ctx = RequestContext {
-            peer: peer_id,
+            peer: Arc::new(peer_id.into()),
             request: Message::ShareHeaders(share_headers),
             chain_store_handle,
             response_channel: response_channel_tx,
@@ -690,7 +698,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_request_share_block_sends_ack_and_processes() {
-        let peer_id = libp2p::PeerId::random();
+        let peer_state = PeerState::random();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
@@ -710,7 +718,7 @@ mod tests {
         chain_store_handle.expect_is_current().returning(|| false);
 
         let ctx = RequestContext {
-            peer: peer_id,
+            peer: peer_state.into(),
             request: Message::ShareBlock(share_block),
             chain_store_handle,
             response_channel,

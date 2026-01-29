@@ -45,7 +45,7 @@ pub mod writer;
 /// - block_txids: txids for a block, to get transactions for a block. A tx can appear in multiple blocks.
 /// - inputs: inputs for a transaction, to get inputs for a tx.
 /// - outputs: outputs for a transaction, to get outputs for a tx. These can be marked as spent. So these are updated.
-#[allow(dead_code)]
+#[derive(Debug)]
 pub struct Store {
     path: String,
     db: DB,
