@@ -21,12 +21,12 @@
 //! tokio task, decoupled from share producers (emission worker, peer
 //! handler, future validation worker).
 
-use crate::shares::share_block::ShareBlock;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use crate::shares::share_block::ShareBlock;
 use crate::store::writer::StoreError;
 use std::fmt;
 use tokio::sync::mpsc;
@@ -134,8 +134,7 @@ mod tests {
         let (tx, rx) = organise_channel();
         let mut mock = MockChainStoreHandle::new();
         mock.expect_clone().return_once(MockChainStoreHandle::new);
-        mock.expect_organise_share()
-            .returning(|_| Ok(()));
+        mock.expect_organise_share().returning(|_| Ok(()));
 
         let worker = OrganiseWorker::new(rx, mock);
 
