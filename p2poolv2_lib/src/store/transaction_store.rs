@@ -230,7 +230,7 @@ impl Store {
             Some(blockhash_bytes) => {
                 let blockhashes: Vec<BlockHash> =
                     encode::deserialize(&blockhash_bytes).map_err(|_| {
-                        StoreError::Database(
+                        StoreError::Serialization(
                             "Failed to deserialize blockhashes from txids_blocks index".to_string(),
                         )
                     })?;
@@ -295,8 +295,9 @@ impl Store {
     pub(crate) fn get_tx_metadata(&self, txid: &bitcoin::Txid) -> Result<TxMetadata, StoreError> {
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
         match self.db.get_cf::<&[u8]>(&tx_cf, txid.as_ref())? {
-            Some(tx_metadata) => encode::deserialize(&tx_metadata)
-                .map_err(|_| StoreError::Database("Failed to deserialize tx metadata".to_string())),
+            Some(tx_metadata) => encode::deserialize(&tx_metadata).map_err(|_| {
+                StoreError::Serialization("Failed to deserialize tx metadata".to_string())
+            }),
             None => Err(StoreError::NotFound(format!(
                 "Transaction metadata not found for txid: {txid}"
             ))),

@@ -292,7 +292,7 @@ impl Store {
         match self.db.get_cf::<&[u8]>(&block_metadata_cf, &metadata_key) {
             Ok(Some(metadata_serialized)) => match encode::deserialize(&metadata_serialized) {
                 Ok(metadata) => Ok(metadata),
-                Err(e) => Err(StoreError::Database(format!(
+                Err(e) => Err(StoreError::Serialization(format!(
                     "Error deserializing block metadata: {e}"
                 ))),
             },

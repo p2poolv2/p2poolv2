@@ -44,6 +44,8 @@ use tracing::{debug, info};
 pub enum StoreError {
     /// Database error
     Database(String),
+    /// Bitcoin encoding/decoding serialization error error when handling data
+    Serialization(String),
     /// Channel closed
     ChannelClosed,
     /// Item not found
@@ -56,6 +58,7 @@ impl fmt::Display for StoreError {
             StoreError::Database(msg) => write!(f, "Database error: {msg}"),
             StoreError::ChannelClosed => write!(f, "Channel closed"),
             StoreError::NotFound(msg) => write!(f, "Not found: {msg}"),
+            StoreError::Serialization(msg) => write!(f, "Bitcoin en/decoding error: {msg}"),
         }
     }
 }
@@ -70,13 +73,13 @@ impl From<rocksdb::Error> for StoreError {
 
 impl From<bitcoin::io::Error> for StoreError {
     fn from(e: bitcoin::io::Error) -> Self {
-        StoreError::Database(format!("{e:?}"))
+        StoreError::Serialization(format!("{e:?}"))
     }
 }
 
 impl From<bitcoin::consensus::encode::Error> for StoreError {
     fn from(e: bitcoin::consensus::encode::Error) -> Self {
-        StoreError::Database(format!("{e:?}"))
+        StoreError::Serialization(format!("{e:?}"))
     }
 }
 
@@ -298,5 +301,8 @@ mod tests {
 
         let err = StoreError::NotFound("block".to_string());
         assert_eq!(format!("{err}"), "Not found: block");
+
+        let err = StoreError::Serialization("bad data".to_string());
+        assert_eq!(format!("{err}"), "Bitcoin en/decoding error: bad data");
     }
 }
