@@ -296,7 +296,7 @@ impl Store {
                     "Error deserializing block metadata: {e}"
                 ))),
             },
-            Ok(None) | Err(_) => Err(StoreError::Database(format!(
+            Ok(None) | Err(_) => Err(StoreError::NotFound(format!(
                 "No metadata found for blockhash: {blockhash}"
             ))),
         }

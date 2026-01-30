@@ -151,10 +151,8 @@ impl Store {
 
         match self.db.get_cf::<&[u8]>(&spends_index_cf, key.as_ref())? {
             Some(outpoint) => {
-                let (txid, consumed) = encode::deserialize_partial(&outpoint)
-                    .map_err(|_| "Failed to deserialise txid from spends")?;
-                let (vout, _consumed) = encode::deserialize_partial(&outpoint[consumed..])
-                    .map_err(|_| "Failed to deserialize index from spends")?;
+                let (txid, consumed) = encode::deserialize_partial(&outpoint)?;
+                let (vout, _consumed) = encode::deserialize_partial(&outpoint[consumed..])?;
                 Ok(Some(OutPoint { txid, vout }))
             }
             None => Ok(None),
@@ -230,8 +228,12 @@ impl Store {
 
         match self.db.get_cf::<&[u8]>(&txids_blocks_cf, txid.as_ref())? {
             Some(blockhash_bytes) => {
-                let blockhashes: Vec<BlockHash> = encode::deserialize(&blockhash_bytes)
-                    .map_err(|_| "Failed to deserialize blockhashes from txids_blocks index")?;
+                let blockhashes: Vec<BlockHash> =
+                    encode::deserialize(&blockhash_bytes).map_err(|_| {
+                        StoreError::Database(
+                            "Failed to deserialize blockhashes from txids_blocks index".to_string(),
+                        )
+                    })?;
                 Ok(blockhashes)
             }
             None => Ok(Vec::new()),
@@ -294,7 +296,7 @@ impl Store {
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
         match self.db.get_cf::<&[u8]>(&tx_cf, txid.as_ref())? {
             Some(tx_metadata) => encode::deserialize(&tx_metadata)
-                .map_err(|_| "Failed to deserialize tx metadata".into()),
+                .map_err(|_| StoreError::Database("Failed to deserialize tx metadata".to_string())),
             None => Err(StoreError::NotFound(format!(
                 "Transaction metadata not found for txid: {txid}"
             ))),
