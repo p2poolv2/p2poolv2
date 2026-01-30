@@ -27,11 +27,9 @@ impl Store {
 
         // Check if user already exists via index
         if let Some(existing_id_bytes) = self.db.get_cf(&user_index_cf, &btcaddress)? {
-            let user_id = u64::from_be_bytes(
-                existing_id_bytes
-                    .try_into()
-                    .map_err(|_| "Invalid user ID format in index")?,
-            );
+            let user_id = u64::from_be_bytes(existing_id_bytes.try_into().map_err(|_| {
+                StoreError::Database("Invalid user ID format in index".to_string())
+            })?);
             return Ok(user_id);
         }
 
@@ -90,11 +88,9 @@ impl Store {
         let user_index_cf = self.db.cf_handle(&ColumnFamily::UserIndex).unwrap();
 
         if let Some(user_id_bytes) = self.db.get_cf(&user_index_cf, btcaddress)? {
-            let user_id = u64::from_be_bytes(
-                user_id_bytes
-                    .try_into()
-                    .map_err(|_| "Invalid user ID format in index")?,
-            );
+            let user_id = u64::from_be_bytes(user_id_bytes.try_into().map_err(|_| {
+                StoreError::Database("Invalid user ID format in index".to_string())
+            })?);
             self.get_user_by_id(user_id)
         } else {
             Ok(None)

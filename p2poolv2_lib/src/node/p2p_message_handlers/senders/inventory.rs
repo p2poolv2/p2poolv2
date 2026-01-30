@@ -48,6 +48,7 @@ pub async fn send_blocks_inventory<C: 'static + Send + Sync>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::writer::StoreError;
     use bitcoin::BlockHash;
 
     #[tokio::test]
@@ -96,7 +97,7 @@ mod tests {
 
         mock_chain_store
             .expect_build_locator()
-            .returning(|| Err("Build locator failed".into()));
+            .returning(|| Err(StoreError::Database("Build locator failed".to_string())));
 
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
         let peer_id = PeerId::random();

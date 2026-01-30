@@ -80,18 +80,6 @@ impl From<bitcoin::consensus::encode::Error> for StoreError {
     }
 }
 
-impl From<String> for StoreError {
-    fn from(s: String) -> Self {
-        StoreError::Database(s)
-    }
-}
-
-impl From<&str> for StoreError {
-    fn from(s: &str) -> Self {
-        StoreError::Database(s.to_string())
-    }
-}
-
 /// Commands for write operations on the Store.
 ///
 /// Each command that needs a response includes a oneshot sender.

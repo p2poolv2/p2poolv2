@@ -161,6 +161,7 @@ pub(crate) fn build_share_commitment(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::writer::StoreError;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::test_utils::create_test_commitment;
     use bitcoin::hashes::Hash;
@@ -457,7 +458,7 @@ mod tests {
         // Set up mock to return error
         chain_store_handle
             .expect_get_current_target()
-            .returning(|| Err("Failed to get target".into()));
+            .returning(|| Err(StoreError::Database("Failed to get target".to_string())));
 
         let result = build_share_commitment(&chain_store_handle, &template, Some(miner_pubkey));
 

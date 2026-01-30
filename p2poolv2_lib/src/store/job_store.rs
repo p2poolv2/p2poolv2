@@ -87,12 +87,12 @@ impl Store {
             let timestamp = u64::from_be_bytes(
                 key.as_ref()
                     .try_into()
-                    .map_err(|_| "Invalid timestamp key")?,
+                    .map_err(|_| StoreError::Database("Invalid timestamp key".to_string()))?,
             );
 
             // Convert value bytes to string
-            let job_data =
-                String::from_utf8(value.to_vec()).map_err(|e| format!("Invalid job data: {e}"))?;
+            let job_data = String::from_utf8(value.to_vec())
+                .map_err(|e| StoreError::Database(format!("Invalid job data: {e}")))?;
 
             results.push((timestamp, job_data));
         }

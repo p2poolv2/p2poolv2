@@ -50,6 +50,7 @@ pub async fn send_getheaders<C: 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::writer::StoreError;
     use std::str::FromStr;
     use tokio::sync::mpsc::channel;
 
@@ -131,7 +132,7 @@ mod tests {
 
         mock_chain_store
             .expect_build_locator()
-            .returning(|| Err("Build locator failed".into()));
+            .returning(|| Err(StoreError::Database("Build locator failed".to_string())));
 
         let (swarm_tx, _swarm_rx) = channel::<SwarmSend<()>>(1);
         let peer_id = libp2p::PeerId::random();

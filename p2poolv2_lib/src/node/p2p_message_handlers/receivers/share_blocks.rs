@@ -54,6 +54,7 @@ pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::writer::StoreError;
     use crate::test_utils::{
         TestShareBlockBuilder, build_block_from_work_components, genesis_for_tests,
     };
@@ -113,7 +114,7 @@ mod tests {
         chain_store_handle
             .expect_add_share()
             .with(eq(share_block.clone()), eq(true))
-            .returning(|_, _| Err("Failed to add share".into()));
+            .returning(|_, _| Err(StoreError::Database("Failed to add share".to_string())));
         chain_store_handle
             .expect_get_share()
             .with(eq(bitcoin::BlockHash::all_zeros()))
