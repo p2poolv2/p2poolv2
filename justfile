@@ -10,6 +10,11 @@ export RUST_BACKTRACE := env("RUST_BACKTRACE", "1")
 _default:
     @{{ just_executable() }} --list
 
+setup-dev:
+    @echo "Setting up git environment..."
+    mkdir -p .git/hooks
+    ln -vf .githooks/pre-commit .git/hooks/pre-commit
+
 # Run tests for entire workspace or a specific package
 test package="":
     cargo nextest run {{ if package == "" { "" } else { "-p " + package } }}
@@ -90,6 +95,9 @@ cli *args:
 fmt:
     cargo fmt --all
     just --fmt --unstable
+
+lint:
+    cargo clippy --all -- -D warnings
 
 # fix common warnings
 fix:
