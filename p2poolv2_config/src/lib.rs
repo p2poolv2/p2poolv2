@@ -17,7 +17,8 @@
 use bitcoin::address::NetworkChecked;
 use bitcoin::{Address, Network};
 use bitcoindrpc::BitcoinRpcConfig;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::str::FromStr;
 
@@ -61,6 +62,7 @@ pub struct Parsed;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(bound(deserialize = "State: Default"))]
+#[cfg_attr(any(test, feature = "test-utils"), derive(Serialize))]
 pub struct StratumConfig<State = Raw> {
     /// The hostname for the Stratum server
     pub hostname: String,
@@ -90,7 +92,10 @@ pub struct StratumConfig<State = Raw> {
     #[serde(deserialize_with = "deserialize_network")]
     pub network: bitcoin::Network,
     /// The version mask to use for version-rolling
-    #[serde(deserialize_with = "deserialize_version_mask")]
+    #[serde(
+        deserialize_with = "deserialize_version_mask",
+        serialize_with = "serialize_version_mask"
+    )]
     pub version_mask: i32,
     /// The difficulty multiplier for dynamic difficulty adjustment
     pub difficulty_multiplier: f64,
@@ -194,11 +199,10 @@ impl StratumConfig<Parsed> {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-impl StratumConfig<Raw> {
+impl Default for StratumConfig<Raw> {
     /// Helper for tests to create a basic StratumConfig
-    /// Uses regtest network by default with a valid regtest address
-    pub fn new_for_test_default() -> Self {
-        StratumConfig {
+    fn default() -> Self {
+        Self {
             hostname: "127.0.0.1".to_string(),
             port: 3333,
             start_difficulty: 1,
@@ -242,7 +246,15 @@ where
     i32::from_str_radix(&hex_string, 16).map_err(serde::de::Error::custom)
 }
 
+fn serialize_version_mask<S>(version_mask: &i32, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&format!("{:x}", *version_mask as u32))
+}
+
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(any(test, feature = "test-utils"), derive(Serialize))]
 pub struct NetworkConfig {
     pub listen_address: String,
     pub dial_peers: Vec<String>,
@@ -287,6 +299,7 @@ impl Default for NetworkConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(any(test, feature = "test-utils"), derive(Serialize))]
 pub struct StoreConfig {
     pub path: String,
     /// How often to run background cleanup tasks (in hours)
@@ -295,6 +308,17 @@ pub struct StoreConfig {
     /// Time-to-live for PPLNS shares (in days)
     #[serde(default = "default_pplns_ttl_days")]
     pub pplns_ttl_days: u64,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl Default for StoreConfig {
+    fn default() -> Self {
+        Self {
+            path: Default::default(),
+            background_task_frequency_hours: default_background_task_frequency_hours(),
+            pplns_ttl_days: default_pplns_ttl_days(),
+        }
+    }
 }
 
 fn default_background_task_frequency_hours() -> u64 {
@@ -306,6 +330,7 @@ fn default_pplns_ttl_days() -> u64 {
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
+#[cfg_attr(any(test, feature = "test-utils"), derive(Serialize))]
 pub struct LoggingConfig {
     /// Log to file if specified
     pub file: Option<String>,
@@ -333,6 +358,7 @@ fn default_stats_dir() -> String {
 }
 
 #[derive(Deserialize, Clone)]
+#[cfg_attr(any(test, feature = "test-utils"), derive(Default, Serialize))]
 pub struct ApiConfig {
     /// The hostname for the API server
     pub hostname: String,
@@ -365,6 +391,7 @@ impl std::fmt::Debug for ApiConfig {
 /// The network config switches to defaults if not provided. This is
 /// the case for standalone PPLNS pools like Hydrapool.
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(any(test, feature = "test-utils"), derive(Default, Serialize))]
 #[allow(dead_code)]
 pub struct Config {
     #[serde(default)]
@@ -376,11 +403,22 @@ pub struct Config {
     pub api: ApiConfig,
 }
 
-#[allow(dead_code)]
 impl Config {
+    /// Configuration loaded from file in storage overridden by environment variables (if any).
     pub fn load(path: &str) -> Result<Self, config::ConfigError> {
         config::Config::builder()
             .add_source(config::File::with_name(path))
+            .add_source(config::Environment::with_prefix("P2POOL").separator("_"))
+            .build()?
+            .try_deserialize()
+    }
+
+    /// Default config overridden by environment variables (if any).
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn load_env() -> Result<Self, config::ConfigError> {
+        let content = serde_json::to_string(&Config::default()).unwrap();
+        config::Config::builder()
+            .add_source(config::File::from_str(&content, config::FileFormat::Json))
             .add_source(config::Environment::with_prefix("P2POOL").separator("_"))
             .build()?
             .try_deserialize()
@@ -545,8 +583,8 @@ mod tests {
 
     #[test]
     fn test_config_builder() {
-        let config = Config::load("../config.toml").unwrap();
-        let config = config
+        let config = Config::load_env()
+            .unwrap()
             .with_listen_address("127.0.0.1:8080".to_string())
             .with_dial_peers(vec![
                 "peer1.example.com".to_string(),
@@ -623,13 +661,13 @@ mod tests {
         assert_eq!(config.api.auth_token, Some("secret_token".to_string()));
 
         // Test values from config.toml
-        assert_eq!(config.store.background_task_frequency_hours, 24);
+        assert_eq!(config.store.background_task_frequency_hours, 1);
         assert_eq!(config.store.pplns_ttl_days, 7);
     }
 
     #[test]
     fn test_config_store_background_settings() {
-        let config = Config::load("../config.toml")
+        let config = Config::load_env()
             .unwrap()
             .with_background_task_frequency_hours(2)
             .with_pplns_ttl_days(7);
@@ -645,7 +683,7 @@ mod tests {
             Some("http://bitcoin-from-env:8332"),
             || {
                 // Load config from file first
-                let config = Config::load("../config.toml").unwrap();
+                let config = Config::load_env().unwrap();
 
                 // Check that the environment variable overrides the config file value
                 assert_eq!(config.bitcoinrpc.url, "http://bitcoin-from-env:8332");
@@ -662,7 +700,7 @@ mod tests {
     #[test]
     fn test_pool_signature_option() {
         // Test with None
-        let config = StratumConfig::<Raw>::new_for_test_default();
+        let config = StratumConfig::<Raw>::default();
         assert_eq!(config.pool_signature, None);
 
         // Test parsing preserves pool_signature
@@ -670,7 +708,7 @@ mod tests {
         assert_eq!(parsed.pool_signature, None);
 
         // Test with Some value
-        let mut config_with_sig = StratumConfig::<Raw>::new_for_test_default();
+        let mut config_with_sig = StratumConfig::<Raw>::default();
         config_with_sig.pool_signature = Some("MyPool/1.0".to_string());
         assert_eq!(
             config_with_sig.pool_signature,
@@ -685,14 +723,14 @@ mod tests {
         );
 
         // Test sig length limit
-        let mut config_with_sig = StratumConfig::<Raw>::new_for_test_default();
+        let mut config_with_sig = StratumConfig::<Raw>::default();
         config_with_sig.pool_signature = Some("MyPool/1.0 and some more bytes....".to_string());
         assert_err!(config_with_sig.parse());
     }
 
     #[test]
     fn test_parse_fails_donation_address_without_amount() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        let mut config = StratumConfig::<Raw>::default();
         config.donation_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
         config.donation = None;
         let result = config.parse();
@@ -707,7 +745,7 @@ mod tests {
 
     #[test]
     fn test_parse_fails_donation_amount_without_address() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        let mut config = StratumConfig::<Raw>::default();
         config.donation_address = None;
         config.donation = Some(50);
         let result = config.parse();
@@ -722,7 +760,7 @@ mod tests {
 
     #[test]
     fn test_parse_fails_fee_address_without_amount() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        let mut config = StratumConfig::<Raw>::default();
         config.fee_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
         config.fee = None;
         let result = config.parse();
@@ -732,7 +770,7 @@ mod tests {
 
     #[test]
     fn test_parse_fails_fee_amount_without_address() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        let mut config = StratumConfig::<Raw>::default();
         config.fee_address = None;
         config.fee = Some(200);
         let result = config.parse();
@@ -742,7 +780,7 @@ mod tests {
 
     #[test]
     fn test_parse_succeeds_with_both_donation_fields() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        let mut config = StratumConfig::<Raw>::default();
         config.donation_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
         config.donation = Some(50);
         let parsed = config.parse().unwrap();
@@ -752,7 +790,7 @@ mod tests {
 
     #[test]
     fn test_parse_succeeds_with_both_fee_fields() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        let mut config = StratumConfig::<Raw>::default();
         config.fee_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
         config.fee = Some(200);
         let parsed = config.parse().unwrap();
@@ -762,7 +800,7 @@ mod tests {
 
     #[test]
     fn test_parse_succeeds_with_neither_donation_nor_fee() {
-        let config = StratumConfig::<Raw>::new_for_test_default();
+        let config = StratumConfig::<Raw>::default();
         assert!(config.donation_address.is_none());
         assert!(config.donation.is_none());
         assert!(config.fee_address.is_none());

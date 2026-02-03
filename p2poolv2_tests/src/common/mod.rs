@@ -53,7 +53,7 @@ pub fn default_test_config() -> Config {
             background_task_frequency_hours: 1,
             pplns_ttl_days: 3,
         },
-        stratum: StratumConfig::new_for_test_default(),
+        stratum: StratumConfig::default(),
         logging: LoggingConfig {
             console: Some(true),
             level: "info".to_string(),

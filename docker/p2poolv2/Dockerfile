@@ -35,8 +35,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/p2poolv2/target \
     cargo fetch --locked
 
-COPY config.toml .
-
 COPY --parents bitcoindrpc/ .
 COPY --parents p2poolv2_cli/ .
 COPY --parents p2poolv2_node/ .
