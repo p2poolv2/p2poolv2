@@ -13,9 +13,12 @@ export RUST_BACKTRACE := env("RUST_BACKTRACE", "1")
 _default:
     @{{ just_executable() }} --list
 
-setup-dev:
-    touch .env docker/.env
-    cp -v config.toml config-dev.toml
+# Sets up the development environment with all needed files
+@setup-dev:
+    touch -v .env docker/.env
+    cp -v config.sample.toml config-dev.toml
+    echo 'Please, edit the ./config.toml file for your specific needs'
+    echo 'You can easily run a local cluster with `just compose`'
 
 # Run tests for entire workspace or a specific package
 test package="":

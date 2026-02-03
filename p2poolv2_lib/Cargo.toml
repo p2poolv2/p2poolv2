@@ -1,58 +1,55 @@
 [package]
 name = "p2poolv2_lib"
 version.workspace = true
-edition.workspace = true
 authors.workspace = true
-license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description.workspace = true
 readme.workspace = true
 homepage.workspace = true
 repository.workspace = true
+license.workspace = true
 keywords.workspace = true
 categories.workspace = true
-rust-version.workspace = true
-
-[features]
-test-utils = ["dep:rand", "dep:tempfile"]
 
 [dependencies]
-# Optional test utilities dependencies
-rand = { version = "0.8", optional = true }
-tempfile = { workspace = true, optional = true }
-libp2p = { workspace = true }
-tokio = { workspace = true }
-futures = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-config = { workspace = true }
-serde = { workspace = true }
-hex = { workspace = true }
-rocksdb = { workspace = true }
 async-trait = { workspace = true }
-thiserror = { workspace = true }
-serde_json = { workspace = true }
-rust_decimal = { workspace = true }
-rust_decimal_macros = { workspace = true }
-zmq = { workspace = true }
-bitcoin = { workspace = true }
 base64 = { workspace = true }
-void = { workspace = true }
-tower = { version = "0.5", features = ["util", "limit"] }
-tokio-util = { workspace = true }
-tokio-stream = { workspace = true }
-tracing-appender = { workspace = true }
+bitcoin = { workspace = true }
 bitcoindrpc = { path = "../bitcoindrpc" }
 chrono = { workspace = true }
+config = { workspace = true }
 dashmap = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true }
+libp2p = { workspace = true }
+rand = { version = "0.8", optional = true }
+rocksdb = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
+tower = { version = "0.5", features = ["limit", "util"] }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }
+void = { workspace = true }
+zmq = { workspace = true }
 
 [dev-dependencies]
 bitcoindrpc = { path = "../bitcoindrpc", features = ["test-utils"] }
-tempfile.workspace = true
-test-log = { version = "0.2.17", features = ["trace"] }
-tokio = { version = "1.0", features = ["full", "test-util"] }
-rand = "0.8"
-wiremock = "0.6.2"
 mockall.workspace = true
 mockall_double.workspace = true
 temp-env = "0.3.6"
+test-log = { version = "0.2.17", features = ["trace"] }
+tokio = { version = "1.0", features = ["full", "test-util"] }
 tokio-test.workspace = true
+wiremock = "0.6.2"
+
+[features]
+test-utils = ["bitcoindrpc/test-utils", "dep:rand", "dep:tempfile"]

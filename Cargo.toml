@@ -1,79 +1,79 @@
 [workspace]
-members = [
-    "bitcoindrpc",
-    "p2poolv2_lib",
-    "p2poolv2_node",
-    "p2poolv2_cli",
-    "p2poolv2_api",
-    "p2poolv2_tests",
-]
 resolver = "2"
+members = [
+  "bitcoindrpc",
+  "p2poolv2_api",
+  "p2poolv2_cli",
+  "p2poolv2_lib",
+  "p2poolv2_node",
+  "p2poolv2_tests",
+]
 
 [workspace.package]
 version = "0.1.0"
-edition = "2024"
 authors = ["Kulpreet Singh<kp@opdup.com>"]
-license = "AGPLv3"
+edition = "2024"
+rust-version = "1.88"
 description = "P2Pool for bitcoin"
 readme = "README.adoc"
 homepage = "https://github.com/p2poolv2/p2poolv2"
 repository = "https://github.com/p2poolv2/p2poolv2"
-keywords = ["bitcoin", "mining", "pool", "p2p"]
+license = "AGPLv3"
+keywords = ["bitcoin", "mining", "p2p", "pool"]
 categories = ["cryptography::cryptocurrencies"]
-exclude=["tests"]
-rust-version = "1.88"
+exclude = ["tests"]
 publish = false
 
-[profile.release]
-codegen-units = 1
-lto = "fat"
-strip = "symbols"
-panic = "abort"
-
 [workspace.dependencies]
-libp2p = { version = "0.53", features = [
-    "tcp",
-    "dns",
-    "tokio",
-    "noise",
-    "yamux",
-    "identify",
-    "macros",
-    "kad",
-    "secp256k1",
-    "request-response",
-] }
-tokio = { version = "1.0", features = ["full"] }
-futures = "0.3"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tracing-appender = { version = "0.2.3" }
-config = "0.13"
-serde = { version = "1.0", features = ["derive"] }
-clap = { version = "4.0", features = ["derive", "env"] }
-hex = "0.4.3"
-rocksdb = { version = "0.24.0", features = ["multi-threaded-cf"] }
 async-trait = "0.1.83"
-thiserror = "2.0.8"
-serde_json = "1.0.135"
-rust_decimal = { version = "1.36.0", features = [
-    "serde",
-    "serde-with-arbitrary-precision",
-] }
-rust_decimal_macros = "1.36.0"
-zmq = "0.10"
-bitcoin = { version = "0.32.5", features = ["serde", "rand"] }
 base64 = "0.22.1"
-void = "1.0.2"
-chrono = { version = "0.4", features = ["serde"] }
-tokio-util = "0.7.15"
-tokio-stream = "0.1.17"
+bitcoin = { version = "0.32.5", features = ["rand", "serde"] }
 bitcoindrpc = { path = "bitcoindrpc" }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.0", features = ["derive", "env"] }
+config = "0.13"
+dashmap = "6"
+futures = "0.3"
+hex = "0.4.3"
+libp2p = { version = "0.53", features = [
+  "dns",
+  "identify",
+  "kad",
+  "macros",
+  "noise",
+  "request-response",
+  "secp256k1",
+  "tcp",
+  "tokio",
+  "yamux",
+] }
+mockall = "0.13.1"
+mockall_double = "0.3.1"
 p2poolv2_api = { path = "p2poolv2_api" }
 p2poolv2_lib = { path = "p2poolv2_lib", features = ["test-utils"] }
 reqwest = { version = "0.12", features = ["json"] }
-mockall = "0.13.1"
-mockall_double = "0.3.1"
+rocksdb = { version = "0.24.0", features = ["multi-threaded-cf"] }
+rust_decimal = { version = "1.36.0", features = [
+  "serde",
+  "serde-with-arbitrary-precision",
+] }
+rust_decimal_macros = "1.36.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.135"
 tempfile = "3.15.0"
+thiserror = "2.0.8"
+tokio = { version = "1.0", features = ["full"] }
+tokio-stream = "0.1.17"
 tokio-test = "0.4.3"
-dashmap = "6"
+tokio-util = "0.7.15"
+tracing = "0.1"
+tracing-appender = { version = "0.2.3" }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+void = "1.0.2"
+zmq = "0.10"
+
+[profile.release]
+strip = "symbols"
+lto = "fat"
+panic = "abort"
+codegen-units = 1
