@@ -65,7 +65,7 @@ pub fn setup_signal_handler(exit_sender: watch::Sender<ShutdownReason>) -> JoinH
             _ = tokio::signal::ctrl_c() => {
                 info!("Received ctrl-c signal. Stopping...");
                 let _ = exit_sender.send(ShutdownReason::Signal);
-            }
+            },
         };
     })
 }

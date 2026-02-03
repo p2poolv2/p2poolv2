@@ -177,11 +177,21 @@ impl NodeActor {
                 buf = self.node.swarm_rx.recv() => {
                     match buf {
                         Some(SwarmSend::Request(peer_id, msg)) => {
-                            let request_id = self.node.swarm.behaviour_mut().request_response.send_request(&peer_id, msg);
+                            let request_id = self
+                                .node
+                                .swarm
+                                .behaviour_mut()
+                                .request_response
+                                .send_request(&peer_id, msg);
                             debug!("Sent message to peer: {peer_id}, request_id: {request_id}");
                         }
                         Some(SwarmSend::Response(response_channel, msg)) => {
-                            let request_id = self.node.swarm.behaviour_mut().request_response.send_response(response_channel, msg);
+                            let request_id = self
+                                .node
+                                .swarm
+                                .behaviour_mut()
+                                .request_response
+                                .send_response(response_channel, msg);
                             debug!("Sent message to response channel: {:?}", request_id);
                         }
                         Some(SwarmSend::Inv(_share_block)) => {
@@ -198,7 +208,10 @@ impl NodeActor {
                         Some(SwarmSend::Broadcast(share_block)) => {
                             // Broadcast share to all peers (from emission worker)
                             debug!("Broadcasting share to peers");
-                            if let Err(e) = self.node.send_to_all_peers(Message::ShareBlock(share_block)) {
+                            if let Err(e) = self
+                                .node
+                                .send_to_all_peers(Message::ShareBlock(share_block))
+                            {
                                 error!("Error sending share to all peers {e}");
                             }
                         }
@@ -219,7 +232,8 @@ impl NodeActor {
                 command = self.command_rx.recv() => {
                     match command {
                         Some(Command::GetPeers(tx)) => {
-                            let peers = self.node.swarm.connected_peers().cloned().collect::<Vec<_>>();
+                            let peers =
+                                self.node.swarm.connected_peers().cloned().collect::<Vec<_>>();
                             if tx.send(peers).is_err() {
                                 error!("Failed to send GetPeers response - receiver dropped");
                             }
@@ -228,13 +242,18 @@ impl NodeActor {
                             match self.node.send_to_peer(&peer_id, message) {
                                 Ok(_) => {
                                     if tx.send(Ok(())).is_err() {
-                                        error!("Failed to send SendToPeer response - receiver dropped");
+                                        error!(
+                                            "Failed to send SendToPeer response - receiver dropped"
+                                        );
                                     }
                                 },
                                 Err(e) => {
                                     error!("Error sending message to peer: {}", e);
-                                    if tx.send(Err("Error sending message to peer".into())).is_err() {
-                                        error!("Failed to send SendToPeer error response - receiver dropped");
+                                    if tx.send(Err("Error sending message to peer".into())).is_err()
+                                    {
+                                        error!(
+                                            "Failed to send SendToPeer error response - receiver dropped"
+                                        );
                                     }
                                 },
                             };
@@ -247,7 +266,10 @@ impl NodeActor {
                             return;
                         },
                         Some(Command::GetPplnsShares(query, tx)) => {
-                            info!("Received GetPplnsShares command with limit: {}", query.limit);
+                            info!(
+                                "Received GetPplnsShares command with limit: {}",
+                                query.limit
+                            );
                             let result = self.node.handle_get_pplns_shares(query);
                             if tx.send(result).is_err() {
                                 error!("Failed to send GetPplnsShares response - receiver dropped");

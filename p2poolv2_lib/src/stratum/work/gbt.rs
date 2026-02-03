@@ -143,7 +143,13 @@ pub async fn start_gbt(
                 _ = interval.tick() => {
                     match get_block_template(&bitcoind, network).await {
                         Ok(template) => {
-                            if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
+                            if result_tx
+                                .send(NotifyCmd::SendToAll {
+                                    template: Arc::new(template),
+                                })
+                                .await
+                                .is_err()
+                            {
                                 info!("Failed to send block template to channel");
                             }
                         }
@@ -158,13 +164,22 @@ pub async fn start_gbt(
                             debug!("Received ZMQ block notification");
                             match get_block_template(&bitcoind, network).await {
                                 Ok(template) => {
-                                    if result_tx.send(NotifyCmd::SendToAll { template: Arc::new(template) }).await.is_err() {
+                                    if result_tx
+                                        .send(NotifyCmd::SendToAll {
+                                            template: Arc::new(template),
+                                        })
+                                        .await
+                                        .is_err()
+                                    {
                                         info!("Failed to send block template to channel");
                                     }
                                     interval.reset();
                                 }
                                 Err(e) => {
-                                    info!("Error getting block template after ZMQ notification: {}", e);
+                                    info!(
+                                        "Error getting block template after ZMQ notification: {}",
+                                        e
+                                    );
                                 }
                             }
                         }

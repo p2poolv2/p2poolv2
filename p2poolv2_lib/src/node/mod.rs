@@ -569,35 +569,34 @@ mod tests {
         loop {
             tokio::select! {
                 event = node.swarm.next() => {
-                                            match event {
-                                                Some(SwarmEvent::OutgoingConnectionError { error, .. }) => {
-                                                    let elapsed = start.elapsed();
-                                                   let err_str = error.to_string();
-            let err_str_lower = err_str.to_lowercase();
-            assert!(
-                err_str_lower.contains("timeout") ||
-                err_str_lower.contains("connection refused") ||
-                err_str_lower.contains("failed to negotiate transport protocol"),
-                "Expected timeout or connection refused error, got: {}",
-                err_str
-            );
-
-
-                                                    assert!(
-                                                        elapsed.as_secs_f32() <= 10.0,
-                                                        "Dialing took too long: {:?}, expected ~10s",
-                                                        elapsed
-                                                    );
-                                                    break;
-                                                }
-                                                Some(_) => continue,
-                                                None => panic!("Swarm event stream ended unexpectedly"),
-                                            }
-                                        }
-                                        _ = &mut timeout => {
-                                            panic!("Test timed out after 5 seconds, dial timeout not triggered");
-                                        }
-                                    }
+                    match event {
+                        Some(SwarmEvent::OutgoingConnectionError { error, .. }) => {
+                            let elapsed = start.elapsed();
+                            let err_str = error.to_string();
+                            let err_str_lower = err_str.to_lowercase();
+                            assert!(
+                                err_str_lower.contains("timeout")
+                                    || err_str_lower.contains("connection refused")
+                                    || err_str_lower
+                                        .contains("failed to negotiate transport protocol"),
+                                "Expected timeout or connection refused error, got: {}",
+                                err_str
+                            );
+                            assert!(
+                                elapsed.as_secs_f32() <= 10.0,
+                                "Dialing took too long: {:?}, expected ~10s",
+                                elapsed
+                            );
+                            break;
+                        }
+                        Some(_) => continue,
+                        None => panic!("Swarm event stream ended unexpectedly"),
+                    }
+                }
+                _ = &mut timeout => {
+                    panic!("Test timed out after 5 seconds, dial timeout not triggered");
+                }
+            }
         }
     }
 }
