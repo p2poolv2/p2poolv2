@@ -603,7 +603,7 @@ mod tests {
 
         let total_amount = bitcoin::Amount::from_sat(50_000_000); // 0.5 BTC
 
-        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+        let stratum_config = StratumConfig::default().parse().unwrap();
 
         let result = payout
             .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
@@ -656,7 +656,7 @@ mod tests {
 
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
 
-        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+        let stratum_config = StratumConfig::default().parse().unwrap();
 
         let result = payout
             .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
@@ -736,7 +736,7 @@ mod tests {
 
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
 
-        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+        let stratum_config = StratumConfig::default().parse().unwrap();
 
         let result = payout
             .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
@@ -766,7 +766,7 @@ mod tests {
             .expect_get_pplns_shares_filtered()
             .return_const(vec![]);
 
-        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+        let stratum_config = StratumConfig::default().parse().unwrap();
 
         let result = payout
             .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
@@ -817,7 +817,7 @@ mod tests {
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
 
         // Create config with 5% donation (500 basis points out of 10000)
-        let mut stratum_config = StratumConfig::new_for_test_default();
+        let mut stratum_config = StratumConfig::default();
         stratum_config.donation_address =
             Some("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string());
         stratum_config.donation = Some(500); // 5%
@@ -905,7 +905,7 @@ mod tests {
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
 
         // Create config with 2% fee
-        let mut stratum_config = StratumConfig::new_for_test_default();
+        let mut stratum_config = StratumConfig::default();
         stratum_config.fee_address =
             Some("tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7".to_string());
         stratum_config.fee = Some(200); // 2%
@@ -996,7 +996,7 @@ mod tests {
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
 
         // Create config with 5% donation and 2% fee
-        let mut stratum_config = StratumConfig::new_for_test_default();
+        let mut stratum_config = StratumConfig::default();
         stratum_config.donation_address =
             Some("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string());
         stratum_config.donation = Some(500); // 5%
@@ -1075,7 +1075,7 @@ mod tests {
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
 
         // Create config with donation
-        let mut stratum_config = StratumConfig::new_for_test_default();
+        let mut stratum_config = StratumConfig::default();
         stratum_config.donation_address =
             Some("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string());
         stratum_config.donation = Some(500); // 5%
@@ -1131,7 +1131,7 @@ mod tests {
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
 
         // Create config with 0% donation (should be filtered out)
-        let mut stratum_config = StratumConfig::new_for_test_default();
+        let mut stratum_config = StratumConfig::default();
         stratum_config.donation_address =
             Some("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string());
         stratum_config.donation = Some(0); // 0% - should not create output
@@ -1216,7 +1216,7 @@ mod tests {
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
 
         // Create config with 0% fee (should be filtered out)
-        let mut stratum_config = StratumConfig::new_for_test_default();
+        let mut stratum_config = StratumConfig::default();
         stratum_config.fee_address =
             Some("tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7".to_string());
         stratum_config.fee = Some(0); // 0% - should not create output
@@ -1281,7 +1281,7 @@ mod tests {
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
 
         // Create config with 100% donation (10000 basis points)
-        let mut stratum_config = StratumConfig::new_for_test_default();
+        let mut stratum_config = StratumConfig::default();
         stratum_config.donation_address =
             Some("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string());
         stratum_config.donation = Some(10000); // 100%

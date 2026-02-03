@@ -3309,6 +3309,7 @@ dependencies = [
  "bitcoindrpc",
  "config",
  "serde",
+ "serde_json",
  "temp-env",
  "tokio-test",
 ]
