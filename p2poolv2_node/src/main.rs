@@ -327,7 +327,7 @@ async fn main() -> ExitCode {
         _ = exit_receiver.changed() => {
             let reason = *exit_receiver.borrow();
             stop_all(reason).await
-        }
+        },
     };
 
     trace!("Waiting signal handlers");
