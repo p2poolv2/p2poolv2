@@ -18,21 +18,21 @@ path = "src/lib.rs"
 [dependencies]
 base64.workspace = true
 bitcoin.workspace = true
+hex.workspace = true
+mockall = { version = "0.13.1", optional = true }
 reqwest = { workspace = true, features = ["json"] }
 serde.workspace = true
 serde_json.workspace = true
-mockall = { version = "0.13.1", optional = true }
-hex.workspace = true
-wiremock = { version = "0.6.2", optional = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-tokio = { workspace = true }
+wiremock = { workspace = true, optional = true }
 
 [dev-dependencies]
+mockall = "0.13.1"
 test-log = { version = "0.2.17", features = ["trace"] }
 tokio = { version = "1.0", features = ["full", "test-util"] }
-mockall = "0.13.1"
-wiremock = "0.6.2"
+wiremock = { workspace = true }
 
 [features]
 test-utils = ["wiremock"]

@@ -129,7 +129,7 @@ mod tests {
     use std::collections::HashSet;
 
     fn make_test_config() -> crate::config::StratumConfig<crate::config::Parsed> {
-        StratumConfig::new_for_test_default().parse().unwrap()
+        StratumConfig::default().parse().unwrap()
     }
 
     #[test]
