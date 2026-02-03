@@ -339,7 +339,7 @@ mod tests {
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
-        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+        let stratum_config = StratumConfig::default().parse().unwrap();
 
         let output_distribution =
             build_output_distribution(&template, &chain_store_handle, &stratum_config);
@@ -430,7 +430,7 @@ mod tests {
             .expect_get_tip_height_and_time()
             .returning(|| Ok((0, genesis_for_tests().header.time)));
 
-        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+        let stratum_config = StratumConfig::default().parse().unwrap();
 
         let task_handle = tokio::spawn(async move {
             start_notify(notify_rx, template_tx, chain_store_handle, &stratum_config).await;
@@ -525,7 +525,7 @@ mod tests {
             .returning(|| Ok((0, genesis_for_tests().header.time)));
 
         // Setup config and tracker
-        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+        let stratum_config = StratumConfig::default().parse().unwrap();
         let tracker_handle = start_tracker_actor();
         let miner_pubkey: CompressedPublicKey =
             "020202020202020202020202020202020202020202020202020202020202020202"
