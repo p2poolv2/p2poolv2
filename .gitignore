@@ -29,3 +29,8 @@ spec/**/states
 .zed/
 .vscode/
 .idea/
+
+# AI Agents
+.claude/
+.opencode/
+.agents/
