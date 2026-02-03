@@ -14,7 +14,9 @@ tools/log_dashboard/stats.json*
 tools/log_dashboard/agent_logs/
 tools/log_dashboard/last_processed.txt
 
-config-dev.toml
+# Configs are user specific
+config*.toml
+!config.sample.toml
 
 spec/**/*pdf
 spec/**/*dvi

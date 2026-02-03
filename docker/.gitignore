@@ -1,3 +1,6 @@
 # folders used by just docker-run as mounted volumes
 config/
 data/
+
+# env
+.env

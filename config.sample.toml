@@ -1,0 +1,106 @@
+[network]
+# The address for the network to listen on (String, e.g., "/ip4/127.0.0.1/tcp/6884")
+listen_address = "/ip4/127.0.0.1/tcp/6884"
+# An array of multi-addresses for peers to dial (Vec<String>, e.g., ["/ip4/127.0.0.1/tcp/6885"])
+dial_peers = []
+# Maximum number of pending incoming connections (u32)
+max_pending_incoming = 10
+# Maximum number of pending outgoing connections (u32)
+max_pending_outgoing = 10
+# Maximum number of established incoming connections (u32)
+max_established_incoming = 50
+# Maximum number of established outgoing connections (u32)
+max_established_outgoing = 50
+# Maximum number of established connections per peer (u32)
+max_established_per_peer = 1
+# Maximum number of workbase messages per second (u32)
+max_workbase_per_second = 10
+# Maximum number of user workbase messages per second (u32)
+max_userworkbase_per_second = 10
+# Maximum number of mining share messages per second (u32)
+max_miningshare_per_second = 100
+# Maximum number of inventory messages per second (u32)
+max_inventory_per_second = 100
+# Maximum number of transaction messages per second (u32)
+max_transaction_per_second = 100
+# Rate limit window in seconds (u64)
+rate_limit_window_secs = 1
+# Maximum number of requests per second (u64)
+max_requests_per_second = 1
+# Peer inactivity timeout in seconds (u64)
+peer_inactivity_timeout_secs = 60
+# Dial timeout in seconds (u64)
+dial_timeout_secs = 30
+
+[store]
+# Path to the store database file (String)
+path = "./store.db"
+# How often to run background cleanup tasks (u64, in hours, defaults to 1)
+background_task_frequency_hours = 24
+# Time-to-live for PPLNS shares (u64, in days, defaults to 7)
+pplns_ttl_days = 7
+
+[stratum]
+# The hostname for the Stratum server (String)
+hostname = "0.0.0.0"
+# The port for the Stratum server (u16)
+port = 3333
+# The start difficulty for all miners that connect to the server (u64)
+start_difficulty = 10000
+# The minimum difficulty for the pool (u64)
+minimum_difficulty = 100
+# The address for solo mining payouts (Option<String>, Bitcoin address)
+solo_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
+# The bitcoin address to use for first jobs when there are no shares (String, Bitcoin address)
+bootstrap_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
+# The donation address for developers (Option<String>, Bitcoin address)
+# donation_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
+# The donation basis points, 1% = 100 basis points (Option<u16>)
+# donation = 0
+# The fee address (Option<String>, Bitcoin address)
+# fee_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
+# The fee basis points, 1% = 100 basis points (Option<u16>)
+# fee = 0
+# The ZMQ publisher address for block hashes. Set this to the same bitcoind value (String)
+zmqpubhashblock = "tcp://127.0.0.1:28332"
+# The network can be "main", "testnet4" or "signet" (String)
+network = "signet"
+# The version mask to use for version-rolling (i32, hex string)
+version_mask = "1fffe000"
+# The difficulty multiplier for dynamic difficulty adjustment (f64)
+# See https://github.com/p2poolv2/p2poolv2/wiki/Difficult-Multiplier on how to choose this
+difficulty_multiplier = 1.0
+# Optional pool signature to include in coinbase (Option<String>, max 16 bytes)
+pool_signature = "P2Poolv2"
+
+[miner]
+# The compressed public key for the local miner (String, CompressedPublicKey format)
+pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+
+[bitcoinrpc]
+# The URL for the Bitcoin RPC server (String)
+url = "http://127.0.0.1:38332"
+# The username for Bitcoin RPC authentication (String)
+username = "p2pool"
+# The password for Bitcoin RPC authentication (String)
+password = "p2pool"
+
+[logging]
+# Log to file if specified (Option<String>, file path)
+# file = "./logs/p2pool.log"
+# Log to stdout if true (Option<bool>)
+console = true
+# Log level - overwritten by RUST_LOG (String, e.g., "info", "debug", "warn", "error", defaults to "info")
+level = "debug"
+# Directory for stats (String, directory path, defaults to "./logs/stats")
+stats_dir = "./logs/stats"
+
+[api]
+# The hostname for the API server (String)
+hostname = "127.0.0.1"
+# The port for the API server (u16)
+port = 46884
+# Optional authentication username (Option<String>)
+# auth_user = "admin"
+# Optional authentication token (Option<String>, format: salt:password-hmac)
+# auth_token = "your_secret_token"
