@@ -290,7 +290,7 @@ impl ChainStoreHandle {
 
     /// Add a share to the chain.
     ///
-    /// Calculates height and chain work, stores the share, and handles reorgs.
+    /// Calculates height and chain work and stores the share. Reorgs are handled by OrganiseWorker
     pub async fn add_share(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), StoreError> {
         debug!("Adding share to chain: {:?}", share.block_hash());
 
@@ -406,8 +406,8 @@ impl ChainStoreHandle {
     }
 
     /// Organise a share: update candidate and confirmed indexes atomically.
-    pub async fn organise_share(&self, blockhash: BlockHash) -> Result<(), StoreError> {
-        self.store_handle.organise_share(blockhash).await
+    pub async fn organise_share(&self, share: ShareBlock) -> Result<(), StoreError> {
+        self.store_handle.organise_share(share).await
     }
 
     /// Add a PPLNS share for accounting.
@@ -478,7 +478,7 @@ mockall::mock! {
         pub fn is_confirmed(&self, share: &ShareBlock) -> bool;
         pub fn get_btcaddresses_for_user_ids(&self, user_ids: &[u64]) -> Result<Vec<(u64, String)>, StoreError>;
         pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError>;
-        pub async fn organise_share(&self, blockhash: BlockHash) -> Result<(), StoreError>;
+        pub async fn organise_share(&self, share: ShareBlock) -> Result<(), StoreError>;
         pub async fn add_share(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), StoreError>;
         pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError>;
         pub async fn add_job(&self, serialized_notify: String) -> Result<(), StoreError>;
