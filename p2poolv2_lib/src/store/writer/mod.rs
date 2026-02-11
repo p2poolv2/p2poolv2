@@ -146,7 +146,7 @@ pub enum WriteCommand {
 
     /// Organise a share: update candidate and confirmed indexes atomically
     OrganiseShare {
-        blockhash: BlockHash,
+        share: ShareBlock,
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
 }
@@ -274,12 +274,11 @@ impl StoreWriter {
                 self.store.remove_tip(&hash);
             }
 
-            WriteCommand::OrganiseShare { blockhash, reply } => {
-                debug!("Organising share: {:?}", blockhash);
+            WriteCommand::OrganiseShare { share, reply } => {
                 let mut batch = Store::get_write_batch();
                 let result = self
                     .store
-                    .organise_share(&blockhash, &mut batch)
+                    .organise_share(share, &mut batch)
                     .and_then(|_| self.store.commit_batch(batch).map_err(StoreError::from));
                 let _ = reply.send(result);
             }

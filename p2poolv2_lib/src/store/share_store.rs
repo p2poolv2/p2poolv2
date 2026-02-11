@@ -96,7 +96,6 @@ impl Store {
             chain_work,
         };
         self.set_block_metadata(&blockhash, &block_metadata, batch)?;
-
         // Add the share block itself
         let storage_share_block: StorageShareBlock = share.into();
         let block_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();

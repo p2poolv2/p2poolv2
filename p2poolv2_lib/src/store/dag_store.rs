@@ -371,14 +371,14 @@ impl Store {
     /// that are not on the confirmed chain and that are not already
     /// included as uncles in other blocks.
     pub fn find_uncles(&self) -> Result<Vec<BlockHash>, StoreError> {
-        let Some(top_confirmed_height) = self.get_top_confirmed_height() else {
+        let Ok(top_confirmed_height) = self.get_top_confirmed_height() else {
             return Err(StoreError::Database("No top confirmation found".into()));
         };
 
         // get all ancestors up to required depth on the confirmed index
         let ancestors = (top_confirmed_height.saturating_sub(MAX_UNCLES_DEPTH as u32)
             ..top_confirmed_height)
-            .filter_map(|height| self.get_confirmed_at_height(height));
+            .filter_map(|height| self.get_confirmed_at_height(height).ok());
 
         // get all children for the ancestors, will give us all uncles and confirmed blocks
         let children = ancestors

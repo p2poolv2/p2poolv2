@@ -14,9 +14,9 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use super::{ColumnFamily, Store, writer::StoreError};
+use super::{ColumnFamily, Store, block_tx_metadata::BlockMetadata, writer::StoreError};
 use bitcoin::{
-    BlockHash,
+    BlockHash, Work,
     consensus::{self, encode},
 };
 pub mod organise_share;
@@ -39,19 +39,31 @@ impl Store {
         &self,
         height: u32,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), StoreError> {
+    ) -> Result<u32, StoreError> {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
 
-        let current_top = self.get_top_candidate_height();
-        if current_top.is_none() || height.saturating_sub(current_top.unwrap()) == 1 {
+        let use_height = match self.get_top_candidate_height() {
+            Ok(current_top_height) => {
+                if height.saturating_sub(current_top_height) == 1 {
+                    Ok(height)
+                } else {
+                    Err(StoreError::Database("Mismatch in top height".into()))
+                }
+            }
+            Err(StoreError::NotFound(_reason)) => Ok(height), // Use share height if no candidate top present
+            Err(e) => Err(e),
+        };
+        if let Ok(height) = use_height {
             let serialized_height = consensus::serialize(&height);
             batch.put_cf(
                 &block_height_cf,
                 TOP_CANDIDATE_KEY.as_bytes().as_ref(),
                 serialized_height,
             );
+            Ok(height)
+        } else {
+            Err(StoreError::Database("Mismatch in top height".into()))
         }
-        Ok(())
     }
 
     /// Set top confirmed height
@@ -67,47 +79,50 @@ impl Store {
     }
 
     /// Get top candidate height from candidates index
-    pub(crate) fn get_top_candidate_height(&self) -> Option<u32> {
+    pub(crate) fn get_top_candidate_height(&self) -> Result<u32, StoreError> {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         match self
             .db
             .get_cf(&block_height_cf, TOP_CANDIDATE_KEY.as_bytes().as_ref())
         {
-            Ok(Some(height_bytes)) => encode::deserialize(&height_bytes).ok(),
-            Ok(None) | Err(_) => None,
+            Ok(Some(height_bytes)) => Ok(encode::deserialize(&height_bytes)?),
+            Ok(None) => Err(StoreError::NotFound("No candidate found at top".into())),
+            Err(e) => Err(e.into()),
         }
     }
 
     /// Get top confirmed height from confirmed index
-    pub(crate) fn get_top_confirmed_height(&self) -> Option<u32> {
+    pub(crate) fn get_top_confirmed_height(&self) -> Result<u32, StoreError> {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         match self
             .db
             .get_cf(&block_height_cf, TOP_CONFIRMED_KEY.as_bytes().as_ref())
         {
-            Ok(Some(height_bytes)) => encode::deserialize(&height_bytes).ok(),
-            Ok(None) | Err(_) => None,
+            Ok(Some(height_bytes)) => Ok(encode::deserialize(&height_bytes)?),
+            Ok(None) => Err(StoreError::NotFound("No candidate found at top".into())),
+            Err(e) => Err(e.into()),
         }
     }
 
     /// Get top candidate after looking up top candidate height
-    pub(crate) fn get_top_candidate(&self) -> Option<BlockHash> {
-        match self.get_top_candidate_height() {
-            Some(height) => self.get_candidate_at_height(height),
-            None => None,
-        }
+    /// Return both the blockhash and the height
+    pub(crate) fn get_top_candidate(&self) -> Result<(BlockHash, u32, Work), StoreError> {
+        let height = self.get_top_candidate_height()?;
+        let hash = self.get_candidate_at_height(height)?;
+        let metadata = self.get_block_metadata(&hash)?;
+        Ok((hash, height, metadata.chain_work))
     }
 
     /// Get top confirmed after looking up top confirmed height
-    pub(crate) fn get_top_confirmed(&self) -> Option<BlockHash> {
-        match self.get_top_confirmed_height() {
-            Some(height) => self.get_confirmed_at_height(height),
-            None => None,
-        }
+    pub(crate) fn get_top_confirmed(&self) -> Result<(BlockHash, u32, Work), StoreError> {
+        let height = self.get_top_confirmed_height()?;
+        let hash = self.get_confirmed_at_height(height)?;
+        let metadata = self.get_block_metadata(&hash)?;
+        Ok((hash, height, metadata.chain_work))
     }
 
     /// Add blockhash as a candidate at provided height
-    pub(crate) fn make_candidate(
+    pub(crate) fn append_to_candidates(
         &self,
         blockhash: &BlockHash,
         height: u32,
@@ -134,14 +149,16 @@ impl Store {
         height: u32,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), StoreError> {
-        let current_top = self.get_top_confirmed_height();
+        let current_top = match self.get_top_confirmed_height() {
+            Ok(top) => top,
+            Err(StoreError::NotFound(_)) => 0,
+            Err(e) => return Err(e),
+        };
 
         // Only add if this is the first entry or height is exactly one more than current top
-        let is_valid_height =
-            current_top.is_none() || height.saturating_sub(current_top.unwrap()) == 1;
-
-        if !is_valid_height {
-            return Ok(());
+        // Or if it is the first confirmation
+        if height.saturating_sub(current_top) != 1 && !(height == 0 && current_top == 0) {
+            return Err(StoreError::Database("Incorrect confirmation".into()));
         }
 
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
@@ -155,24 +172,30 @@ impl Store {
     }
 
     /// Get the candidate blockhash at a specific height
-    pub fn get_candidate_at_height(&self, height: u32) -> Option<BlockHash> {
+    pub fn get_candidate_at_height(&self, height: u32) -> Result<BlockHash, StoreError> {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let key = height_to_key_with_suffix(height, CANDIDATE_SUFFIX);
 
         match self.db.get_cf::<&[u8]>(&block_height_cf, key.as_ref()) {
-            Ok(Some(blockhash_bytes)) => encode::deserialize(&blockhash_bytes).ok(),
-            Ok(None) | Err(_) => None,
+            Ok(Some(blockhash_bytes)) => Ok(encode::deserialize(&blockhash_bytes)?),
+            Ok(None) => Err(StoreError::NotFound(format!(
+                "No candidate found at height {height}"
+            ))),
+            Err(e) => Err(e.into()),
         }
     }
 
     /// Get the confirmed blockhash at a specific height
-    pub fn get_confirmed_at_height(&self, height: u32) -> Option<BlockHash> {
+    pub fn get_confirmed_at_height(&self, height: u32) -> Result<BlockHash, StoreError> {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let key = height_to_key_with_suffix(height, CONFIRMED_SUFFIX);
 
         match self.db.get_cf::<&[u8]>(&block_height_cf, key.as_ref()) {
-            Ok(Some(blockhash_bytes)) => encode::deserialize(&blockhash_bytes).ok(),
-            Ok(None) | Err(_) => None,
+            Ok(Some(blockhash_bytes)) => Ok(encode::deserialize(&blockhash_bytes)?),
+            Ok(None) => Err(StoreError::NotFound(
+                format!("No confirmed found at height {height}").into(),
+            )),
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -190,8 +213,8 @@ impl Store {
         };
 
         match self.get_confirmed_at_height(height) {
-            Some(confirmed_blockhash) => confirmed_blockhash == *blockhash,
-            None => false,
+            Ok(confirmed_blockhash) => confirmed_blockhash == *blockhash,
+            Err(_) => false,
         }
     }
 }
@@ -202,44 +225,137 @@ mod tests {
     use crate::test_utils::TestShareBlockBuilder;
     use tempfile::tempdir;
 
+    // ── increment_top_candidate tests ────────────────────────────────
+
     #[test]
-    fn test_make_candidate() {
+    fn test_increment_top_candidate_sets_initial_top_from_height() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
-        let share1 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        let share2 = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+        assert!(store.get_top_candidate_height().is_err());
+
+        let mut batch = Store::get_write_batch();
+        let result = store.increment_top_candidate(5, &mut batch);
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(result.unwrap(), 5);
+        assert_eq!(store.get_top_candidate_height().unwrap(), 5);
+    }
+
+    #[test]
+    fn test_increment_top_candidate_increments_consecutive_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Bootstrap top to 3
+        let mut batch = Store::get_write_batch();
+        store.increment_top_candidate(3, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Height 4 is exactly 1 more than current top (3)
+        let mut batch = Store::get_write_batch();
+        let result = store.increment_top_candidate(4, &mut batch);
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(result.unwrap(), 4);
+        assert_eq!(store.get_top_candidate_height().unwrap(), 4);
+    }
+
+    #[test]
+    fn test_increment_top_candidate_errors_on_skipped_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store.increment_top_candidate(1, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Height 3 skips over 2
+        let mut batch = Store::get_write_batch();
+        let result = store.increment_top_candidate(3, &mut batch);
+
+        assert!(result.is_err());
+        assert_eq!(store.get_top_candidate_height().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_increment_top_candidate_errors_on_same_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store.increment_top_candidate(2, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // 2 - 2 = 0, not 1
+        let mut batch = Store::get_write_batch();
+        let result = store.increment_top_candidate(2, &mut batch);
+
+        assert!(result.is_err());
+        assert_eq!(store.get_top_candidate_height().unwrap(), 2);
+    }
+
+    // ── append_to_candidate tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_append_to_candidate() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .nonce(0xe9695791)
+            .work(1)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .nonce(0xe9695792)
+            .work(2)
+            .build();
 
         // Make share1 candidate at height 0
         let mut batch = Store::get_write_batch();
         store
-            .make_candidate(&share1.block_hash(), 0, &mut batch)
+            .add_share(&share1, 1, share1.header.get_work(), false, &mut batch)
+            .ok();
+        store
+            .append_to_candidates(&share1.block_hash(), 0, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         // Verify we can retrieve it
-        let candidate = store.get_candidate_at_height(0);
+        let candidate = store.get_candidate_at_height(0).ok();
         assert_eq!(candidate, Some(share1.block_hash()));
 
         // Make share2 candidate at height 1
         let mut batch = Store::get_write_batch();
         store
-            .make_candidate(&share2.block_hash(), 1, &mut batch)
+            .add_share(&share2, 2, share2.header.get_work(), false, &mut batch)
+            .ok();
+        store
+            .append_to_candidates(&share2.block_hash(), 1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         // Verify both heights
-        assert_eq!(store.get_candidate_at_height(0), Some(share1.block_hash()));
-        assert_eq!(store.get_candidate_at_height(1), Some(share2.block_hash()));
+        assert_eq!(
+            store.get_candidate_at_height(0).ok(),
+            Some(share1.block_hash())
+        );
+        assert_eq!(
+            store.get_candidate_at_height(1).ok(),
+            Some(share2.block_hash())
+        );
 
         // Non-existent height should return None
-        assert_eq!(store.get_candidate_at_height(999), None);
+        assert_eq!(store.get_candidate_at_height(999).ok(), None);
 
         // Top candidate height is changed
-        assert_eq!(store.get_top_candidate_height(), Some(1));
+        assert_eq!(store.get_top_candidate_height().ok(), Some(1));
 
         // Top candidate is changed
-        assert_eq!(store.get_top_candidate(), Some(share2.block_hash()));
+        assert_eq!(
+            store.get_top_candidate().ok(),
+            Some((share2.block_hash(), 1, share2.header.get_work()))
+        );
     }
 
     #[test]
@@ -250,6 +366,12 @@ mod tests {
         let share1 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         let share2 = TestShareBlockBuilder::new().nonce(0xe9695792).build();
 
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share1, 0, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
         // Make share1 confirmed at height 0
         let mut batch = Store::get_write_batch();
         store
@@ -258,8 +380,14 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // Verify we can retrieve it
-        let confirmed = store.get_confirmed_at_height(0);
+        let confirmed = store.get_confirmed_at_height(0).ok();
         assert_eq!(confirmed, Some(share1.block_hash()));
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share2, 1, share2.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
 
         // Make share2 confirmed at height 1
         let mut batch = Store::get_write_batch();
@@ -269,21 +397,30 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // Verify both heights
-        assert_eq!(store.get_confirmed_at_height(0), Some(share1.block_hash()));
-        assert_eq!(store.get_confirmed_at_height(1), Some(share2.block_hash()));
+        assert_eq!(
+            store.get_confirmed_at_height(0).ok(),
+            Some(share1.block_hash())
+        );
+        assert_eq!(
+            store.get_confirmed_at_height(1).ok(),
+            Some(share2.block_hash())
+        );
 
         // Non-existent height should return None
-        assert_eq!(store.get_confirmed_at_height(999), None);
+        assert_eq!(store.get_confirmed_at_height(999).ok(), None);
 
         // Top confirmed height is changed
-        assert_eq!(store.get_top_confirmed_height(), Some(1));
+        assert_eq!(store.get_top_confirmed_height().ok(), Some(1));
 
         // Top confirmed is changed
-        assert_eq!(store.get_top_confirmed(), Some(share2.block_hash()));
+        let top_confirmed = store.get_top_confirmed().unwrap();
+        assert_eq!(top_confirmed.0, (share2.block_hash()));
+        assert_eq!(top_confirmed.1, 1);
+        assert_eq!(top_confirmed.2, share2.header.get_work());
     }
 
     #[test]
-    fn test_make_candidate_overwrites_previous() {
+    fn test_append_to_candidate_on_overwrite_previous_should_error() {
         // Each height should only have one candidate - new candidates replace old ones
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
@@ -294,21 +431,19 @@ mod tests {
         // Make share1 candidate at height 0
         let mut batch = Store::get_write_batch();
         store
-            .make_candidate(&share1.block_hash(), 0, &mut batch)
+            .append_to_candidates(&share1.block_hash(), 0, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        assert_eq!(store.get_candidate_at_height(0), Some(share1.block_hash()));
+        assert_eq!(
+            store.get_candidate_at_height(0).ok(),
+            Some(share1.block_hash())
+        );
 
         // Make share2 candidate at same height - should overwrite
         let mut batch = Store::get_write_batch();
-        store
-            .make_candidate(&share2.block_hash(), 0, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Should now return share2, not share1
-        assert_eq!(store.get_candidate_at_height(0), Some(share2.block_hash()));
+        let result = store.append_to_candidates(&share2.block_hash(), 0, &mut batch);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -319,6 +454,7 @@ mod tests {
 
         let share1 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         let share2 = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+        let share3 = TestShareBlockBuilder::new().nonce(0xe9695793).build();
 
         // Make share1 confirmed at height 0
         let mut batch = Store::get_write_batch();
@@ -327,17 +463,25 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        assert_eq!(store.get_confirmed_at_height(0), Some(share1.block_hash()));
+        assert_eq!(
+            store.get_confirmed_at_height(0).ok(),
+            Some(share1.block_hash())
+        );
 
-        // Try to make share2 confirmed at same height - should be ignored
+        // Confirm share2
         let mut batch = Store::get_write_batch();
         store
-            .make_confirmed(&share2.block_hash(), 0, &mut batch)
+            .make_confirmed(&share2.block_hash(), 1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Should still return share1, not share2
-        assert_eq!(store.get_confirmed_at_height(0), Some(share1.block_hash()));
+        // Confirm share3 at same height as share2, should error.
+        let mut batch = Store::get_write_batch();
+        assert!(
+            store
+                .make_confirmed(&share3.block_hash(), 1, &mut batch)
+                .is_err()
+        );
     }
 
     #[test]
@@ -352,7 +496,7 @@ mod tests {
         // Make different shares candidate and confirmed at same height
         let mut batch = Store::get_write_batch();
         store
-            .make_candidate(&candidate_share.block_hash(), 0, &mut batch)
+            .append_to_candidates(&candidate_share.block_hash(), 0, &mut batch)
             .unwrap();
         store
             .make_confirmed(&confirmed_share.block_hash(), 0, &mut batch)
@@ -361,11 +505,11 @@ mod tests {
 
         // Both should be retrievable independently
         assert_eq!(
-            store.get_candidate_at_height(0),
+            store.get_candidate_at_height(0).ok(),
             Some(candidate_share.block_hash())
         );
         assert_eq!(
-            store.get_confirmed_at_height(0),
+            store.get_confirmed_at_height(0).ok(),
             Some(confirmed_share.block_hash())
         );
     }
@@ -493,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn test_make_candidate_does_not_update_top_when_height_skips() {
+    fn test_append_to_candidate_does_not_update_top_when_height_skips() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -503,25 +647,23 @@ mod tests {
         // Make share0 candidate at height 0
         let mut batch = Store::get_write_batch();
         store
-            .make_candidate(&share0.block_hash(), 0, &mut batch)
+            .append_to_candidates(&share0.block_hash(), 0, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         // Verify top candidate height is 0
-        assert_eq!(store.get_top_candidate_height(), Some(0));
+        assert_eq!(store.get_top_candidate_height().ok(), Some(0));
 
         // Make share2 candidate at height 2 (skipping height 1)
         let mut batch = Store::get_write_batch();
-        store
-            .make_candidate(&share2.block_hash(), 2, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        let result = store.append_to_candidates(&share2.block_hash(), 2, &mut batch);
+        assert!(result.is_err());
 
         // Top candidate height should still be 0 (not updated because we skipped height 1)
-        assert_eq!(store.get_top_candidate_height(), Some(0));
+        assert_eq!(store.get_top_candidate_height().ok(), Some(0));
 
-        // But the candidate at height 2 should still be retrievable
-        assert_eq!(store.get_candidate_at_height(2), Some(share2.block_hash()));
+        // The candidate at height 2 is not there
+        assert!(store.get_candidate_at_height(2).is_err());
     }
 
     #[test]
@@ -540,19 +682,14 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // Verify top confirmed height is 0
-        assert_eq!(store.get_top_confirmed_height(), Some(0));
+        assert_eq!(store.get_top_confirmed_height().ok(), Some(0));
 
-        // Make share2 confirmed at height 2 (skipping height 1)
+        // Make share2 confirmed at height 2 (skipping height 1) should error
         let mut batch = Store::get_write_batch();
-        store
-            .make_confirmed(&share2.block_hash(), 2, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Top confirmed height should still be 0 (not updated because we skipped height 1)
-        assert_eq!(store.get_top_confirmed_height(), Some(0));
-
-        // But the confirmed at height 2 should not be retrievable
-        assert!(store.get_confirmed_at_height(2).is_none());
+        assert!(
+            store
+                .make_confirmed(&share2.block_hash(), 2, &mut batch)
+                .is_err()
+        );
     }
 }

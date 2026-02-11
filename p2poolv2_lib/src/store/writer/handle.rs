@@ -269,11 +269,11 @@ impl StoreHandle {
     }
 
     /// Organise a share: update candidate and confirmed indexes atomically.
-    pub async fn organise_share(&self, blockhash: BlockHash) -> Result<(), StoreError> {
+    pub async fn organise_share(&self, share: ShareBlock) -> Result<(), StoreError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.write_tx
             .send(WriteCommand::OrganiseShare {
-                blockhash,
+                share,
                 reply: reply_tx,
             })
             .map_err(|_| StoreError::ChannelClosed)?;

@@ -88,11 +88,10 @@ impl OrganiseWorker {
     pub async fn run(mut self) -> Result<(), OrganiseError> {
         info!("Organise worker started");
         while let Some(share_block) = self.organise_rx.recv().await {
-            let blockhash = share_block.block_hash();
-            debug!("Organising share: {:?}", blockhash);
-            match self.chain_store_handle.organise_share(blockhash).await {
+            debug!("Organising share: {:?}", share_block.block_hash());
+            match self.chain_store_handle.organise_share(share_block).await {
                 Ok(()) => {
-                    debug!("Organised share: {:?}", blockhash);
+                    debug!("Organised share");
                 }
                 Err(StoreError::ChannelClosed) => {
                     error!("Store writer channel closed during organise");
@@ -101,7 +100,7 @@ impl OrganiseWorker {
                     });
                 }
                 Err(e) => {
-                    error!("Error organising share {:?}: {e}", blockhash);
+                    error!("Error organising share {e}");
                 }
             }
         }
