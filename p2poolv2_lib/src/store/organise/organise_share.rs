@@ -25,6 +25,9 @@ use bitcoin::{BlockHash, Work};
 impl Store {
     /// Organise a share by updating candidate and confirmed indexes.
     ///
+    /// Appends to candidate chain if the share extends either the top
+    /// candidate or top confirmed chain (checked in that order).
+    ///
     /// All writes go into the provided `WriteBatch` so the caller can
     /// commit them atomically.
     ///
@@ -46,8 +49,11 @@ impl Store {
         let top_candidate = self.get_top_candidate().ok();
         let top_confirmed = self.get_top_confirmed().ok();
 
-        if let Some(extended_candidate_height) =
-            self.extend_candidates_at(&share, &metadata, top_candidate)?
+        // Append to candidate if share extends candidate or
+        // confirmed. We reorg candidate chain later.
+        if let Some(extended_candidate_height) = self
+            .extends_chain(&share, &metadata, top_candidate)?
+            .or(self.extends_chain(&share, &metadata, top_confirmed)?)
         {
             self.append_to_candidates(&blockhash, extended_candidate_height, batch)
         } else {
@@ -75,14 +81,17 @@ impl Store {
     /// 3. new share's chain work is more than top candidate's chain work.
     /// 4. Or, adds to candidate chain if it is empty.
     ///
+    /// The same function is used to check if the share extending the
+    /// top_candidate or top_confirmed chains using `top_at_chain` param.
+    ///
     /// Returns true if candidate chain is extended.
-    fn extend_candidates_at(
+    fn extends_chain(
         &self,
         share: &ShareBlock,
         metadata: &BlockMetadata,
-        top_candidate: Option<(BlockHash, u32, Work)>,
+        top_at_chain: Option<(BlockHash, u32, Work)>,
     ) -> Result<Option<u32>, StoreError> {
-        match top_candidate {
+        match top_at_chain {
             None => {
                 if metadata.expected_height.unwrap_or_default() == 1 {
                     Ok(Some(1))
@@ -90,10 +99,10 @@ impl Store {
                     Ok(None)
                 }
             }
-            Some((top_candidate_hash, top_candidate_height, top_work)) => {
+            Some((top_hash, top_height, top_work)) => {
                 let expected_height = metadata.expected_height.unwrap_or_default();
-                if top_candidate_hash == share.header.prev_share_blockhash
-                    && expected_height == top_candidate_height + 1
+                if top_hash == share.header.prev_share_blockhash
+                    && expected_height == top_height + 1
                     && metadata.chain_work > top_work
                 {
                     Ok(Some(expected_height))
@@ -125,7 +134,7 @@ mod tests {
             chain_work: share.header.get_work(),
         };
 
-        let result = store.extend_candidates_at(&share, &metadata, None);
+        let result = store.extends_chain(&share, &metadata, None);
         assert_eq!(result.unwrap(), None);
     }
 
@@ -150,7 +159,7 @@ mod tests {
         // height == top candidate height + 1 → 6 == 5 + 1
         let top_candidate = Some((parent_hash, 5, Work::from_hex("0x05").unwrap()));
 
-        let result = store.extend_candidates_at(&share, &metadata, top_candidate);
+        let result = store.extends_chain(&share, &metadata, top_candidate);
         assert_eq!(result.unwrap(), Some(6));
     }
 
@@ -171,7 +180,7 @@ mod tests {
         // Height condition met (6 == 5+1), but hash differs from prev_share_blockhash
         let top_candidate = Some((different_hash, 6, Work::from_hex("0x05").unwrap()));
 
-        let result = store.extend_candidates_at(&share, &metadata, top_candidate);
+        let result = store.extends_chain(&share, &metadata, top_candidate);
         assert_eq!(result.unwrap(), None);
     }
 
@@ -196,7 +205,7 @@ mod tests {
         // Hash matches but height doesn't (7 != 5+1)
         let top_candidate = Some((parent_hash, 5, Work::from_hex("0x05").unwrap()));
 
-        let result = store.extend_candidates_at(&share, &metadata, top_candidate);
+        let result = store.extends_chain(&share, &metadata, top_candidate);
         assert_eq!(result.unwrap(), None);
     }
 
@@ -217,7 +226,7 @@ mod tests {
         // Neither hash nor height matches
         let top_candidate = Some((different_hash, 10, Work::from_hex("0x05").unwrap()));
 
-        let result = store.extend_candidates_at(&share, &metadata, top_candidate);
+        let result = store.extends_chain(&share, &metadata, top_candidate);
         assert_eq!(result.unwrap(), None);
     }
 
@@ -362,5 +371,71 @@ mod tests {
             store.get_top_candidate().ok(),
             Some((genesis.block_hash(), 0, genesis.header.get_work()))
         );
+    }
+
+    #[test]
+    fn test_organise_share_extends_confirmed_when_candidate_not_extended() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Setup genesis (confirmed at height 0)
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Add share1 as child of genesis and make it confirmed at height 1, but NOT a candidate
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .make_confirmed(&share1.block_hash(), 1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Verify: no candidate chain exists, but confirmed chain has share1 at top
+        assert!(store.get_top_candidate().is_err());
+        assert_eq!(
+            store.get_top_confirmed().ok(),
+            Some((share1.block_hash(), 1, share1.header.get_work()))
+        );
+
+        // Create share_to_organise that extends confirmed chain (not candidate)
+        // prev_share_blockhash = share1, expected_height = 2, work > share1's work
+        let share_to_organise = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                &share_to_organise,
+                2,
+                share_to_organise.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // organise_share should fall back to extending confirmed chain
+        let mut batch = Store::get_write_batch();
+        store
+            .organise_share(share_to_organise.clone(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share_to_organise should now be a candidate at height 2
+        assert_eq!(
+            store.get_candidate_at_height(2).unwrap(),
+            share_to_organise.block_hash()
+        );
+        assert_eq!(store.get_top_candidate_height().ok(), Some(2));
     }
 }
