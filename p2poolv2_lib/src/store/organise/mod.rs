@@ -25,6 +25,7 @@ const CANDIDATE_SUFFIX: &str = ":c";
 const CONFIRMED_SUFFIX: &str = ":f";
 const TOP_CANDIDATE_KEY: &str = "meta:top_candidate_height";
 const TOP_CONFIRMED_KEY: &str = "meta:top_confirmed_height";
+const BRANCH_INITIAL_CAPACITY: usize = 16;
 
 /// Returns key for height with provided suffix
 fn height_to_key_with_suffix(height: u32, suffix: &str) -> Vec<u8> {
@@ -189,9 +190,9 @@ impl Store {
 
         match self.db.get_cf::<&[u8]>(&block_height_cf, key.as_ref()) {
             Ok(Some(blockhash_bytes)) => Ok(encode::deserialize(&blockhash_bytes)?),
-            Ok(None) => Err(StoreError::NotFound(
-                format!("No confirmed found at height {height}").into(),
-            )),
+            Ok(None) => Err(StoreError::NotFound(format!(
+                "No confirmed found at height {height}"
+            ))),
             Err(e) => Err(e.into()),
         }
     }
@@ -212,6 +213,53 @@ impl Store {
         match self.get_confirmed_at_height(height) {
             Ok(confirmed_blockhash) => confirmed_blockhash == *blockhash,
             Err(_) => false,
+        }
+    }
+
+    /// Check if a blockhash is in the candidate index
+    ///
+    /// Gets the expected height for the blockhash from block metadata,
+    /// then checks if the candidate blockhash at that height matches.
+    pub fn is_candidate(&self, blockhash: &BlockHash) -> bool {
+        let Ok(metadata) = self.get_block_metadata(blockhash) else {
+            return false;
+        };
+
+        let Some(height) = metadata.expected_height else {
+            return false;
+        };
+
+        match self.get_candidate_at_height(height) {
+            Ok(candidate_blockhash) => candidate_blockhash == *blockhash,
+            Err(_) => false,
+        }
+    }
+
+    /// Get branch from a blockhash back to the first ancestor in the candidate chain.
+    ///
+    /// Walks backwards through the chain collecting blockhashes until finding
+    /// one that's already a candidate. Returns the branch excluding the candidate
+    /// ancestor (since it's already in the chain).
+    ///
+    /// Returns empty vec if the starting blockhash is already a candidate.
+    pub fn get_branch_to_candidates(&self, blockhash: &BlockHash) -> Vec<BlockHash> {
+        let mut branch = Vec::with_capacity(BRANCH_INITIAL_CAPACITY);
+
+        let mut current = *blockhash;
+        loop {
+            if self.is_candidate(&current) {
+                // Found ancestor in candidate chain, stop here
+                return branch;
+            }
+
+            // Get the share to find its parent
+            let Some(share) = self.get_share(&current) else {
+                // Share not found, return what we have
+                return branch;
+            };
+
+            branch.push(current);
+            current = share.header.prev_share_blockhash;
         }
     }
 }
@@ -688,5 +736,183 @@ mod tests {
                 .make_confirmed(&share2.block_hash(), 2, &mut batch)
                 .is_err()
         );
+    }
+
+    // ── is_candidate tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_is_candidate_returns_true_when_candidate() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Add share and make it a candidate
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share, 1, share.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share.block_hash(), 1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert!(store.is_candidate(&share.block_hash()));
+    }
+
+    #[test]
+    fn test_is_candidate_returns_false_when_not_candidate() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Add share but don't make it a candidate
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share, 1, share.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert!(!store.is_candidate(&share.block_hash()));
+    }
+
+    // ── get_branch_to_candidates tests ────────────────────────────────
+
+    #[test]
+    fn test_get_branch_to_candidates_returns_empty_when_already_candidate() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Add share and make it a candidate
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share, 1, share.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share.block_hash(), 1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Branch should be empty since share is already a candidate
+        let branch = store.get_branch_to_candidates(&share.block_hash());
+        assert!(branch.is_empty());
+    }
+
+    #[test]
+    fn test_get_branch_to_candidates_returns_branch_to_candidate_ancestor() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Setup: genesis -> share1 (candidate) -> share2 -> share3
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1 is a candidate at height 1
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share1.block_hash(), 1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share2 extends share1 but is NOT on candidate chain
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share3 extends share2 and is NOT on candidate chain
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share3, 3, share3.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Branch from share3 should be [share3, share2] (excludes share1 which is candidate)
+        let branch = store.get_branch_to_candidates(&share3.block_hash());
+        assert_eq!(branch.len(), 2);
+        assert_eq!(branch[0], share3.block_hash());
+        assert_eq!(branch[1], share2.block_hash());
+    }
+
+    #[test]
+    fn test_get_branch_to_candidates_returns_single_share_branch() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Setup: genesis -> share1 (candidate) -> share2 (not on candidate chain)
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share1.block_hash(), 1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Branch from share2 should be just [share2]
+        let branch = store.get_branch_to_candidates(&share2.block_hash());
+        assert_eq!(branch.len(), 1);
+        assert_eq!(branch[0], share2.block_hash());
     }
 }
