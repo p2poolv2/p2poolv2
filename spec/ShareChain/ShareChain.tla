@@ -392,8 +392,6 @@ GetBranchInIndex(p, s, index) ==
 (* -- push chain from branch point to the new share on to candidate index   *)
 (****************************************************************************)
 ReorgCandidateChain(p, s) ==
-    \* \* Share must not be in candidate chain
-    \* /\ ~Contains(candidates[p], s)
     \* Share must have Candidate status
     /\ share_status[p, s] = "Candidate"
     \* Share must be valid
