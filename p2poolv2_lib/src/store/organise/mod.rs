@@ -95,7 +95,7 @@ impl Store {
             .get_cf(&block_height_cf, TOP_CONFIRMED_KEY.as_bytes().as_ref())
         {
             Ok(Some(height_bytes)) => Ok(encode::deserialize(&height_bytes)?),
-            Ok(None) => Err(StoreError::NotFound("No candidate found at top".into())),
+            Ok(None) => Err(StoreError::NotFound("No confirmed found at top".into())),
             Err(e) => Err(e.into()),
         }
     }
