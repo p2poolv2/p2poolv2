@@ -229,6 +229,8 @@ pub struct TestShareBlockBuilder {
     transactions: Vec<Transaction>,
     work: Option<u32>,
     nonce: Option<u32>,
+    bits:Option<u32>,
+    time:Option<u32>
 }
 
 #[cfg(test)]
@@ -271,7 +273,14 @@ impl TestShareBlockBuilder {
         self.work = Some(work);
         self
     }
-
+    pub fn bits(mut self,bits: u32) -> Self{
+        self.bits = Some(bits);
+        self
+    }
+    pub fn time(mut self,time:u32) -> Self{
+        self.time = Some(time);
+        self
+    }
     pub fn build(self) -> ShareBlock {
         let coinbase = match self.miner_pubkey {
             Some(ref pk) => {
@@ -299,6 +308,8 @@ impl TestShareBlockBuilder {
             all_transactions,
             self.work,
             self.nonce,
+            self.bits,
+            self.time,
         )
     }
 }
@@ -317,6 +328,8 @@ fn test_share_block(
     transactions: Vec<ShareTransaction>,
     work: Option<u32>,
     nonce: Option<u32>,
+    bits:Option<u32>,
+    time:Option<u32>,
 ) -> ShareBlock {
     let coinbase = test_coinbase_transaction();
 
@@ -324,7 +337,7 @@ fn test_share_block(
         bitcoin::merkle_tree::calculate_root([coinbase.clone()].iter().map(|tx| tx.compute_txid()))
             .unwrap()
             .into();
-
+    // bitcoin_block is pattern matched and mainchain block header and transction are parsed 
     let (bitcoin_header, bitcoin_transactions) = match bitcoin_block {
         Some(block) => (block.header, block.txdata),
         None => (
@@ -346,8 +359,8 @@ fn test_share_block(
         miner_pubkey: CompressedPublicKey::from_str(miner_pubkey).unwrap(),
         merkle_root: share_merkle_root,
         bitcoin_header,
-        time: 1700000000u32,
-        bits: CompactTarget::from_consensus(0x01e0377ae * work.unwrap_or(1)),
+        bits: CompactTarget::from_consensus(bits.unwrap_or(0x1a01ad7d)),
+        time:time.unwrap_or(1700000000),
     };
 
     ShareBlock {
