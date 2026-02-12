@@ -26,7 +26,7 @@
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::shares::share_block::ShareBlock;
+use crate::shares::share_block::{self, ShareBlock};
 use crate::store::writer::StoreError;
 use std::fmt;
 use tokio::sync::mpsc;
