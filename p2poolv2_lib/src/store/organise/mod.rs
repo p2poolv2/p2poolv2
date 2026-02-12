@@ -45,25 +45,21 @@ impl Store {
         let use_height = match self.get_top_candidate_height() {
             Ok(current_top_height) => {
                 if height.saturating_sub(current_top_height) == 1 {
-                    Ok(height)
+                    height
                 } else {
-                    Err(StoreError::Database("Mismatch in top height".into()))
+                    return Err(StoreError::Database("Mismatch in top height".into()));
                 }
             }
-            Err(StoreError::NotFound(_reason)) => Ok(height), // Use share height if no candidate top present
-            Err(e) => Err(e),
+            Err(StoreError::NotFound(_reason)) => height, // Use share height if no candidate top present
+            Err(e) => return Err(e),
         };
-        if let Ok(height) = use_height {
-            let serialized_height = consensus::serialize(&height);
-            batch.put_cf(
-                &block_height_cf,
-                TOP_CANDIDATE_KEY.as_bytes().as_ref(),
-                serialized_height,
-            );
-            Ok(height)
-        } else {
-            Err(StoreError::Database("Mismatch in top height".into()))
-        }
+        let serialized_height = consensus::serialize(&use_height);
+        batch.put_cf(
+            &block_height_cf,
+            TOP_CANDIDATE_KEY.as_bytes().as_ref(),
+            serialized_height,
+        );
+        Ok(use_height)
     }
 
     /// Set top confirmed height
