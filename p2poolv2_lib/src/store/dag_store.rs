@@ -363,16 +363,21 @@ impl Store {
         }
     }
 
-    /// Find uncles up to max depth and return a vector of all found
+    /// Finds uncles up to max depth and return a vector of all found
     /// uncle BlockHashes.
     ///
-    /// Find ancestors up to max uncle depth on the confirmed chain,
-    /// not counting the parent. Find all children of these ancestors
-    /// that are not on the confirmed chain and that are not already
-    /// included as uncles in other blocks.
+    /// Algorithm: Find ancestors up to max uncle depth on the
+    /// confirmed chain, not counting the parent. Find all children of
+    /// these ancestors that are not on the confirmed chain and that
+    /// are not already included as uncles in other blocks.
     pub fn find_uncles(&self) -> Result<Vec<BlockHash>, StoreError> {
-        let Ok(top_confirmed_height) = self.get_top_confirmed_height() else {
-            return Err(StoreError::Database("No top confirmation found".into()));
+        let top_confirmed_height = match self.get_top_confirmed_height() {
+            Ok(height) => height,
+            Err(StoreError::NotFound(_)) => {
+                // No top confirmation yet; no uncles can be found.
+                return Ok(Vec::new());
+            }
+            Err(e) => return Err(e),
         };
 
         // get all ancestors up to required depth on the confirmed index
@@ -2483,8 +2488,8 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // No confirmed blocks, should return error
-        let result = store.find_uncles();
-        assert!(result.is_err());
+        let result = store.find_uncles().unwrap();
+        assert!(result.is_empty());
     }
 
     #[test]

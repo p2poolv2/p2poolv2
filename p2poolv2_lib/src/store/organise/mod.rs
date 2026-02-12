@@ -138,7 +138,8 @@ impl Store {
     ///
     /// Only adds to the confirmed index if the height is one more than the
     /// current top confirmed height (or if there is no top yet).
-    /// Returns Ok(()) regardless of whether the entry was added.
+    ///
+    /// Returns error if no top found.
     pub(crate) fn make_confirmed(
         &self,
         blockhash: &BlockHash,
@@ -311,21 +312,21 @@ mod tests {
         let mut batch = Store::get_write_batch();
         store
             .add_share(&share1, 1, share1.header.get_work(), false, &mut batch)
-            .ok();
+            .unwrap();
         store
             .append_to_candidates(&share1.block_hash(), 0, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         // Verify we can retrieve it
-        let candidate = store.get_candidate_at_height(0).ok();
-        assert_eq!(candidate, Some(share1.block_hash()));
+        let candidate = store.get_candidate_at_height(0).unwrap();
+        assert_eq!(candidate, share1.block_hash());
 
         // Make share2 candidate at height 1
         let mut batch = Store::get_write_batch();
         store
             .add_share(&share2, 2, share2.header.get_work(), false, &mut batch)
-            .ok();
+            .unwrap();
         store
             .append_to_candidates(&share2.block_hash(), 1, &mut batch)
             .unwrap();
@@ -333,24 +334,24 @@ mod tests {
 
         // Verify both heights
         assert_eq!(
-            store.get_candidate_at_height(0).ok(),
-            Some(share1.block_hash())
+            store.get_candidate_at_height(0).unwrap(),
+            share1.block_hash()
         );
         assert_eq!(
-            store.get_candidate_at_height(1).ok(),
-            Some(share2.block_hash())
+            store.get_candidate_at_height(1).unwrap(),
+            share2.block_hash()
         );
 
         // Non-existent height should return None
-        assert_eq!(store.get_candidate_at_height(999).ok(), None);
+        assert!(store.get_candidate_at_height(999).is_err());
 
         // Top candidate height is changed
-        assert_eq!(store.get_top_candidate_height().ok(), Some(1));
+        assert_eq!(store.get_top_candidate_height().unwrap(), 1);
 
         // Top candidate is changed
         assert_eq!(
-            store.get_top_candidate().ok(),
-            Some((share2.block_hash(), 1, share2.header.get_work()))
+            store.get_top_candidate().unwrap(),
+            (share2.block_hash(), 1, share2.header.get_work())
         );
     }
 
@@ -376,8 +377,8 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // Verify we can retrieve it
-        let confirmed = store.get_confirmed_at_height(0).ok();
-        assert_eq!(confirmed, Some(share1.block_hash()));
+        let confirmed = store.get_confirmed_at_height(0).unwrap();
+        assert_eq!(confirmed, share1.block_hash());
 
         let mut batch = Store::get_write_batch();
         store
@@ -394,19 +395,19 @@ mod tests {
 
         // Verify both heights
         assert_eq!(
-            store.get_confirmed_at_height(0).ok(),
-            Some(share1.block_hash())
+            store.get_confirmed_at_height(0).unwrap(),
+            share1.block_hash()
         );
         assert_eq!(
-            store.get_confirmed_at_height(1).ok(),
-            Some(share2.block_hash())
+            store.get_confirmed_at_height(1).unwrap(),
+            share2.block_hash()
         );
 
         // Non-existent height should return None
-        assert_eq!(store.get_confirmed_at_height(999).ok(), None);
+        assert!(store.get_confirmed_at_height(999).is_err());
 
         // Top confirmed height is changed
-        assert_eq!(store.get_top_confirmed_height().ok(), Some(1));
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
 
         // Top confirmed is changed
         let top_confirmed = store.get_top_confirmed().unwrap();
@@ -432,8 +433,8 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         assert_eq!(
-            store.get_candidate_at_height(0).ok(),
-            Some(share1.block_hash())
+            store.get_candidate_at_height(0).unwrap(),
+            share1.block_hash()
         );
 
         // Make share2 candidate at same height - should overwrite
@@ -460,8 +461,8 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         assert_eq!(
-            store.get_confirmed_at_height(0).ok(),
-            Some(share1.block_hash())
+            store.get_confirmed_at_height(0).unwrap(),
+            share1.block_hash()
         );
 
         // Confirm share2
@@ -501,12 +502,12 @@ mod tests {
 
         // Both should be retrievable independently
         assert_eq!(
-            store.get_candidate_at_height(0).ok(),
-            Some(candidate_share.block_hash())
+            store.get_candidate_at_height(0).unwrap(),
+            candidate_share.block_hash()
         );
         assert_eq!(
-            store.get_confirmed_at_height(0).ok(),
-            Some(confirmed_share.block_hash())
+            store.get_confirmed_at_height(0).unwrap(),
+            confirmed_share.block_hash()
         );
     }
 
@@ -648,7 +649,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // Verify top candidate height is 0
-        assert_eq!(store.get_top_candidate_height().ok(), Some(0));
+        assert_eq!(store.get_top_candidate_height().unwrap(), 0);
 
         // Make share2 candidate at height 2 (skipping height 1)
         let mut batch = Store::get_write_batch();
@@ -656,7 +657,7 @@ mod tests {
         assert!(result.is_err());
 
         // Top candidate height should still be 0 (not updated because we skipped height 1)
-        assert_eq!(store.get_top_candidate_height().ok(), Some(0));
+        assert_eq!(store.get_top_candidate_height().unwrap(), 0);
 
         // The candidate at height 2 is not there
         assert!(store.get_candidate_at_height(2).is_err());
@@ -678,7 +679,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // Verify top confirmed height is 0
-        assert_eq!(store.get_top_confirmed_height().ok(), Some(0));
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 0);
 
         // Make share2 confirmed at height 2 (skipping height 1) should error
         let mut batch = Store::get_write_batch();

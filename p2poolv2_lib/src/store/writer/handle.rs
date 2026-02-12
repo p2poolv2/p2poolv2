@@ -352,7 +352,7 @@ mockall::mock! {
         pub fn get_children_blockhashes(&self, blockhash: &BlockHash) -> Result<Option<Vec<BlockHash>>, StoreError>;
 
         // Serialized writes (async)
-        pub async fn organise_share(&self, blockhash: BlockHash) -> Result<(), StoreError>;
+        pub async fn organise_share(&self, share: ShareBlock) -> Result<(), StoreError>;
         pub async fn add_share(&self, share: ShareBlock, height: u32, chain_work: Work, confirm_txs: bool) -> Result<(), StoreError>;
         pub async fn setup_genesis(&self, genesis: ShareBlock) -> Result<(), StoreError>;
         pub async fn init_chain_state_from_store(&self, genesis_hash: BlockHash) -> Result<(), StoreError>;

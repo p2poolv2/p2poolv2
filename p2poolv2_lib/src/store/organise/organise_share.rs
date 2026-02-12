@@ -42,7 +42,7 @@ impl Store {
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), StoreError> {
         let blockhash = share.block_hash();
-        tracing::debug!("organise_share called for {blockhash} (no-op)");
+        tracing::debug!("organise_share called for {blockhash}");
 
         // Read the metadata and share from store as this function is called from
         let metadata = self.get_block_metadata(&blockhash)?;
@@ -178,7 +178,7 @@ mod tests {
         };
 
         // Height condition met (6 == 5+1), but hash differs from prev_share_blockhash
-        let top_candidate = Some((different_hash, 6, Work::from_hex("0x05").unwrap()));
+        let top_candidate = Some((different_hash, 5, Work::from_hex("0x05").unwrap()));
 
         let result = store.extends_chain(&share, &metadata, top_candidate);
         assert_eq!(result.unwrap(), None);
