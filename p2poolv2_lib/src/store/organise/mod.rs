@@ -173,33 +173,7 @@ impl Store {
     /// Fetch a list of blockhashes on the candidates chain between
     /// the given heights, inclusive.
     pub(crate) fn get_candidates(&self, from: u32, to: u32) -> Result<Vec<BlockHash>, StoreError> {
-        if from > to {
-            return Ok(Vec::new());
-        }
-
-        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
-
-        let lower_key = height_to_key_with_suffix(from, CANDIDATE_SUFFIX);
-        // Upper bound is exclusive, so use to+1
-        let upper_key = height_to_key_with_suffix(to + 1, CANDIDATE_SUFFIX);
-
-        let mut read_opts = rocksdb::ReadOptions::default();
-        read_opts.set_iterate_lower_bound(lower_key.clone());
-        read_opts.set_iterate_upper_bound(upper_key);
-
-        let iter = self.db.iterator_cf_opt(
-            &block_height_cf,
-            read_opts,
-            rocksdb::IteratorMode::From(&lower_key, rocksdb::Direction::Forward),
-        );
-
-        let capacity = (to - from + 1) as usize;
-        let mut candidates = Vec::with_capacity(capacity);
-        for item in iter.flatten() {
-            let (_key, value) = item;
-            candidates.push(encode::deserialize(&value)?);
-        }
-        Ok(candidates)
+        self.get_chain_range(from, to, CANDIDATE_SUFFIX)
     }
 
     /// Get list of blockhashes from given blockhash up to top confirmed.
@@ -229,15 +203,29 @@ impl Store {
     /// Fetch a list of blockhashes on the confirmed chain between
     /// the given heights, inclusive.
     pub(crate) fn get_confirmed(&self, from: u32, to: u32) -> Result<Vec<BlockHash>, StoreError> {
+        self.get_chain_range(from, to, CONFIRMED_SUFFIX)
+    }
+
+    /// Fetch blockhashes from the BlockHeight CF for a given height range
+    /// and key suffix. Filters iterator results to only include keys whose
+    /// suffix matches, avoiding cross-contamination between candidate (":c")
+    /// and confirmed (":f") entries that share the same height prefix.
+    fn get_chain_range(
+        &self,
+        from: u32,
+        to: u32,
+        suffix: &str,
+    ) -> Result<Vec<BlockHash>, StoreError> {
         if from > to {
             return Ok(Vec::new());
         }
 
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+        let suffix_bytes = suffix.as_bytes();
 
-        let lower_key = height_to_key_with_suffix(from, CONFIRMED_SUFFIX);
+        let lower_key = height_to_key_with_suffix(from, suffix);
         // Upper bound is exclusive, so use to+1
-        let upper_key = height_to_key_with_suffix(to + 1, CONFIRMED_SUFFIX);
+        let upper_key = height_to_key_with_suffix(to + 1, suffix);
 
         let mut read_opts = rocksdb::ReadOptions::default();
         read_opts.set_iterate_lower_bound(lower_key.clone());
@@ -250,12 +238,14 @@ impl Store {
         );
 
         let capacity = (to - from + 1) as usize;
-        let mut confirmed = Vec::with_capacity(capacity);
+        let mut results = Vec::with_capacity(capacity);
         for item in iter.flatten() {
-            let (_key, value) = item;
-            confirmed.push(encode::deserialize(&value)?);
+            let (key, value) = item;
+            if key.ends_with(suffix_bytes) {
+                results.push(encode::deserialize(&value)?);
+            }
         }
-        Ok(confirmed)
+        Ok(results)
     }
 
     /// Add blockhash as a confirmed at provided height.
