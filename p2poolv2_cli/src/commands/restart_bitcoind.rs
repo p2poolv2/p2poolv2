@@ -49,7 +49,7 @@ pub async fn execute(
     let client =
         BitcoindRpcClient::new(&rpc_config.url, &rpc_config.username, &rpc_config.password)?;
 
-    // 1) Send stop RPC
+
     info!("Sending stop RPC to bitcoind at {}...", rpc_config.url);
     match client.stop().await {
         Ok(msg) => {
@@ -64,7 +64,7 @@ pub async fn execute(
         }
     }
 
-    // 2) Wait for bitcoind to stop by polling ping
+
     info!(
         "Waiting for bitcoind to shut down (timeout: {}s)...",
         STOP_TIMEOUT_SECS
@@ -81,8 +81,7 @@ pub async fn execute(
 
     info!("bitcoind has stopped successfully");
 
-    // 3) Check if we should restart
-    let restart_cmd = bitcoind_config.and_then(|c| c.restart_cmd.as_ref());
+
 
     if stop_only {
         info!("Stop-only mode: bitcoind will not be restarted automatically");
@@ -102,7 +101,7 @@ pub async fn execute(
         }
     };
 
-    // 4) Best-effort systemd detection
+
     if is_systemd_managed().await {
         warn!(
             "bitcoind appears to be managed by systemd. Skipping automatic restart \
@@ -112,7 +111,7 @@ pub async fn execute(
         return Ok(());
     }
 
-    // 5) Spawn bitcoind process
+
     info!("Starting bitcoind with command: {:?}", restart_cmd);
     let binary = &restart_cmd[0];
     let args = &restart_cmd[1..];
@@ -136,7 +135,7 @@ pub async fn execute(
         }
     }
 
-    // 6) Wait for bitcoind to become healthy
+
     info!(
         "Waiting for bitcoind to become responsive (timeout: {}s)...",
         START_TIMEOUT_SECS

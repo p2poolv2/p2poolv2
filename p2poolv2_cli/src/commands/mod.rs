@@ -90,7 +90,7 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
             crate::commands::gen_auth::execute(username.clone(), password.clone())?;
         }
         Some(Commands::RestartBitcoind { stop_only }) => {
-            // restart-bitcoind requires config but not store
+
             let config_path = cli
                 .config
                 .as_ref()
