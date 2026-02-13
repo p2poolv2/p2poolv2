@@ -84,6 +84,9 @@ pub struct StratumConfig<State = Raw> {
     #[serde(skip)]
     #[serde(default)]
     _state: PhantomData<State>,
+    /// Optional path to JSON file for fixed payouts (e.g., "/tmp/payouts.json"). If set, overrides PPLNS.
+    #[serde(default)]
+    pub payout_file_path: Option<String>
 }
 
 impl StratumConfig<Raw> {
@@ -131,6 +134,7 @@ impl StratumConfig<Raw> {
             donation_address_parsed,
             fee_address_parsed,
             _state: PhantomData,
+            payout_file_path: self.payout_file_path
         })
     }
 }
@@ -181,6 +185,7 @@ impl StratumConfig<Raw> {
             donation_address_parsed: None,
             fee_address_parsed: None,
             _state: PhantomData,
+            payout_file_path: None
         }
     }
 }

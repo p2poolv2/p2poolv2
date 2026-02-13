@@ -38,6 +38,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::debug;
+use std::fs;
+use serde_json::Value;
+use crate::stratum::work::coinbase::parse_address;
 
 #[cfg(not(test))]
 use crate::stratum::client_connections::ClientConnectionsHandle;
