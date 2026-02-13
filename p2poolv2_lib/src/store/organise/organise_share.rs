@@ -117,6 +117,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::block_tx_metadata::Status;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::Work;
     use tempfile::tempdir;
@@ -132,6 +133,7 @@ mod tests {
         let metadata = BlockMetadata {
             expected_height: Some(5),
             chain_work: share.header.get_work(),
+            status: Status::Pending,
         };
 
         let result = store.extends_chain(&share, &metadata, None);
@@ -154,6 +156,7 @@ mod tests {
         let metadata = BlockMetadata {
             expected_height: Some(6),
             chain_work: share.header.get_work(),
+            status: Status::Pending,
         };
 
         // height == top candidate height + 1 → 6 == 5 + 1
@@ -175,6 +178,7 @@ mod tests {
         let metadata = BlockMetadata {
             expected_height: Some(6),
             chain_work: share.header.get_work(),
+            status: Status::Pending,
         };
 
         // Height condition met (6 == 5+1), but hash differs from prev_share_blockhash
@@ -200,6 +204,7 @@ mod tests {
         let metadata = BlockMetadata {
             expected_height: Some(7),
             chain_work: share.header.get_work(),
+            status: Status::Pending,
         };
 
         // Hash matches but height doesn't (7 != 5+1)
@@ -221,6 +226,7 @@ mod tests {
         let metadata = BlockMetadata {
             expected_height: Some(5),
             chain_work: share.header.get_work(),
+            status: Status::Pending,
         };
 
         // Neither hash nor height matches
@@ -279,11 +285,11 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store
+        let mut metadata1 = store
             .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store
-            .append_to_candidates(&share1.block_hash(), 1, &mut batch)
+            .append_to_candidates(&share1.block_hash(), 1, &mut metadata1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -339,8 +345,9 @@ mod tests {
 
         // Make genesis a candidate at height 0
         let mut batch = Store::get_write_batch();
+        let mut genesis_metadata = store.get_block_metadata(&genesis.block_hash()).unwrap();
         store
-            .append_to_candidates(&genesis.block_hash(), 0, &mut batch)
+            .append_to_candidates(&genesis.block_hash(), 0, &mut genesis_metadata, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -390,11 +397,11 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store
+        let mut metadata1 = store
             .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store
-            .make_confirmed(&share1.block_hash(), 1, &mut batch)
+            .append_to_confirmed(&share1.block_hash(), 1, &mut metadata1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
