@@ -281,9 +281,9 @@ impl Store {
     ) -> Result<(), StoreError> {
         let blockhash = genesis.block_hash();
         let genesis_work = genesis.header.get_work();
-        self.add_share(genesis, 0, genesis_work, true, batch)?;
+        let mut metadata = self.add_share(genesis, 0, genesis_work, true, batch)?;
         *self.genesis_blockhash.write().unwrap() = Some(blockhash);
-        self.make_confirmed(&blockhash, 0, batch)?;
+        self.append_to_confirmed(&blockhash, 0, &mut metadata, batch)?;
         self.add_tip(blockhash);
         self.set_chain_tip(blockhash);
         Ok(())

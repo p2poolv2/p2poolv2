@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use super::block_tx_metadata::BlockMetadata;
+use super::block_tx_metadata::{BlockMetadata, Status};
 use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::share_block::{
     ShareBlock, ShareHeader, ShareTransaction, StorageShareBlock, Txids,
@@ -25,7 +25,8 @@ use std::collections::HashMap;
 use tracing::debug;
 
 impl Store {
-    /// Add a share to the store
+    /// Add a share to the store, returns the metadata created for the
+    /// share.
     ///
     /// Uses StorageShareBlock to serialize the share so that
     /// transactions are not serialized with the block.
@@ -42,7 +43,7 @@ impl Store {
         chain_work: Work,
         confirm_txs: bool,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), StoreError> {
+    ) -> Result<BlockMetadata, StoreError> {
         let blockhash = share.block_hash();
         debug!(
             "Adding share to store with {} txs: {:?} work: {:?}",
@@ -94,8 +95,9 @@ impl Store {
         let block_metadata = BlockMetadata {
             expected_height: Some(height),
             chain_work,
+            status: Status::Valid,
         };
-        self.set_block_metadata(&blockhash, &block_metadata, batch)?;
+        self.update_block_metadata(&blockhash, &block_metadata, batch)?;
         // Add the share block itself
         let storage_share_block: StorageShareBlock = share.into();
         let block_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
@@ -103,7 +105,7 @@ impl Store {
         storage_share_block.consensus_encode(&mut encoded_share_block)?;
         batch.put_cf::<&[u8], Vec<u8>>(&block_cf, blockhash.as_ref(), encoded_share_block);
 
-        Ok(())
+        Ok(block_metadata)
     }
 
     /// Get a share from the store
@@ -316,8 +318,8 @@ impl Store {
             .collect()
     }
 
-    /// Set the block metadata for a blockhash
-    fn set_block_metadata(
+    /// Update block metadata for a blockhash
+    pub(crate) fn update_block_metadata(
         &self,
         blockhash: &BlockHash,
         metadata: &BlockMetadata,
@@ -333,16 +335,6 @@ impl Store {
 
         batch.put_cf(&block_metadata_cf, &metadata_key, serialized);
         Ok(())
-    }
-
-    /// Mark a block as valid in the store
-    pub fn set_block_valid(
-        &self,
-        _blockhash: &BlockHash,
-        _valid: bool,
-        _batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), StoreError> {
-        Ok(()) // TODO
     }
 
     /// Get a share header from the store

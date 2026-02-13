@@ -45,24 +45,24 @@ impl Store {
         tracing::debug!("organise_share called for {blockhash}");
 
         // Read the metadata and share from store as this function is called from
-        let metadata = self.get_block_metadata(&blockhash)?;
+        let mut metadata = self.get_block_metadata(&blockhash)?;
         let top_candidate = self.get_top_candidate().ok();
         let top_confirmed = self.get_top_confirmed().ok();
 
         // Append to candidate if share extends candidate or
-        // confirmed. We reorg candidate chain later.
+        // confirmed. We reorg candidate and confirmed chains later.
         if let Some(extended_candidate_height) = self
             .extends_chain(&share, &metadata, top_candidate)?
             .or(self.extends_chain(&share, &metadata, top_confirmed)?)
         {
-            self.append_to_candidates(&blockhash, extended_candidate_height, batch)
-        } else {
-            Ok(())
+            self.append_to_candidates(&blockhash, extended_candidate_height, &mut metadata, batch)?;
         }
 
-        // if self.should_reorg_candidates(&share, &metadata, top_candidate) {
-        //     return self.reorg_candidates(&blockhash);
+        // if self.should_reorg_candidate(&blockhash, &metadata, top_candidate)? {
+        //     self.reorg_candidate(&blockhash, &share, &metadata, top_candidate, batch);
         // }
+
+        Ok(())
 
         // if let Some(extended_confirmed_height) =
         //     self.extend_confirmed_at(&share, &metadata, top_confirmed)?

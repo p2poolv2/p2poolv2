@@ -69,6 +69,50 @@ impl Decodable for TxMetadata {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum Status {
+    /// Not yet validated
+    Pending = 0,
+    /// Validation passed
+    Valid = 1,
+    /// Validation failed
+    Invalid = 2,
+    /// Is a candidate. Could be on candidate chain or not. Can later be reorged into confirmed.
+    Candidate = 3,
+    /// Is on confirmed chain. Can later be removed and this status can change on reorg.
+    Confirmed = 4,
+}
+
+impl Encodable for Status {
+    #[inline]
+    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+        &self,
+        w: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        (*self as u8).consensus_encode(w)
+    }
+}
+
+impl Decodable for Status {
+    #[inline]
+    fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
+        r: &mut R,
+    ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        let value = u8::consensus_decode(r)?;
+        match value {
+            0 => Ok(Status::Pending),
+            1 => Ok(Status::Valid),
+            2 => Ok(Status::Invalid),
+            3 => Ok(Status::Candidate),
+            4 => Ok(Status::Confirmed),
+            _ => Err(bitcoin::consensus::encode::Error::ParseFailed(
+                "Invalid Status value",
+            )),
+        }
+    }
+}
+
 /// ShareBlock metadata capturing the expected height and the chain
 /// work for the block. These values are computed when the block is
 /// received based on the height and chain work of the previous
@@ -82,6 +126,8 @@ pub struct BlockMetadata {
     pub expected_height: Option<u32>,
     /// Total chain work up to the share block
     pub chain_work: Work,
+    /// Share validation/candidate status
+    pub status: Status,
 }
 
 impl Encodable for BlockMetadata {
@@ -104,6 +150,7 @@ impl Encodable for BlockMetadata {
         }
 
         len += self.chain_work.to_le_bytes().consensus_encode(w)?;
+        len += self.status.consensus_encode(w)?;
         Ok(len)
     }
 }
@@ -121,10 +168,12 @@ impl Decodable for BlockMetadata {
         };
 
         let chain_work = Work::from_le_bytes(<[u8; 32]>::consensus_decode(r)?);
+        let status = Status::consensus_decode(r)?;
 
         Ok(BlockMetadata {
             expected_height: height,
             chain_work,
+            status,
         })
     }
 }

@@ -425,6 +425,7 @@ mod tests {
     use super::*;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::hashes::Hash;
+    use std::collections::HashMap;
     use tempfile::tempdir;
 
     #[test]
@@ -2510,19 +2511,19 @@ mod tests {
 
         // Add all shares
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata0 = store
             .add_share(&share0, 0, share0.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata1 = store
             .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata2 = store
             .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
@@ -2530,19 +2531,19 @@ mod tests {
         // Confirm all blocks sequentially
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share0.block_hash(), 0, &mut batch)
+            .append_to_confirmed(&share0.block_hash(), 0, &mut metadata0, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share1.block_hash(), 1, &mut batch)
+            .append_to_confirmed(&share1.block_hash(), 1, &mut metadata1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share2.block_hash(), 2, &mut batch)
+            .append_to_confirmed(&share2.block_hash(), 2, &mut metadata2, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -2574,13 +2575,13 @@ mod tests {
 
         // Add all shares
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata0 = store
             .add_share(&share0, 0, share0.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata1 = store
             .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
@@ -2594,13 +2595,13 @@ mod tests {
         // Confirm share0 and share1 only
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share0.block_hash(), 0, &mut batch)
+            .append_to_confirmed(&share0.block_hash(), 0, &mut metadata0, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share1.block_hash(), 1, &mut batch)
+            .append_to_confirmed(&share1.block_hash(), 1, &mut metadata1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -2655,13 +2656,13 @@ mod tests {
 
         // Add all shares
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata0 = store
             .add_share(&share0, 0, share0.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata1 = store
             .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
@@ -2673,7 +2674,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata2 = store
             .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
@@ -2685,7 +2686,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata3 = store
             .add_share(&share3, 3, share3.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
@@ -2699,25 +2700,25 @@ mod tests {
         // Confirm main chain only
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share0.block_hash(), 0, &mut batch)
+            .append_to_confirmed(&share0.block_hash(), 0, &mut metadata0, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share1.block_hash(), 1, &mut batch)
+            .append_to_confirmed(&share1.block_hash(), 1, &mut metadata1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share2.block_hash(), 2, &mut batch)
+            .append_to_confirmed(&share2.block_hash(), 2, &mut metadata2, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share3.block_hash(), 3, &mut batch)
+            .append_to_confirmed(&share3.block_hash(), 3, &mut metadata3, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -2781,7 +2782,8 @@ mod tests {
             .nonce(5)
             .build();
 
-        // Add all shares
+        // Add all shares, collecting metadata for main chain shares
+        let mut metadatas = HashMap::with_capacity(6);
         for (share, height) in [
             (&share0, 0u32),
             (&share1, 1),
@@ -2793,9 +2795,10 @@ mod tests {
             (&share5, 5),
         ] {
             let mut batch = rocksdb::WriteBatch::default();
-            store
+            let metadata = store
                 .add_share(&share, height, share.header.get_work(), true, &mut batch)
                 .unwrap();
+            metadatas.insert(share.block_hash(), metadata);
             store.commit_batch(batch).unwrap();
         }
 
@@ -2809,8 +2812,9 @@ mod tests {
             (&share5, 5),
         ] {
             let mut batch = rocksdb::WriteBatch::default();
+            let mut metadata = metadatas.remove(&share.block_hash()).unwrap();
             store
-                .make_confirmed(&share.block_hash(), height, &mut batch)
+                .append_to_confirmed(&share.block_hash(), height, &mut metadata, &mut batch)
                 .unwrap();
             store.commit_batch(batch).unwrap();
         }
@@ -2859,13 +2863,13 @@ mod tests {
 
         // Add all shares
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata0 = store
             .add_share(&share0, 0, share0.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata1 = store
             .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
@@ -2877,7 +2881,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata2 = store
             .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
@@ -2891,19 +2895,19 @@ mod tests {
         // Confirm main chain
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share0.block_hash(), 0, &mut batch)
+            .append_to_confirmed(&share0.block_hash(), 0, &mut metadata0, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share1.block_hash(), 1, &mut batch)
+            .append_to_confirmed(&share1.block_hash(), 1, &mut metadata1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share2.block_hash(), 2, &mut batch)
+            .append_to_confirmed(&share2.block_hash(), 2, &mut metadata2, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -2945,19 +2949,19 @@ mod tests {
 
         // Add all shares
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata0 = store
             .add_share(&share0, 0, share0.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata1 = store
             .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata2 = store
             .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
@@ -2965,19 +2969,19 @@ mod tests {
         // Confirm all
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share0.block_hash(), 0, &mut batch)
+            .append_to_confirmed(&share0.block_hash(), 0, &mut metadata0, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share1.block_hash(), 1, &mut batch)
+            .append_to_confirmed(&share1.block_hash(), 1, &mut metadata1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share2.block_hash(), 2, &mut batch)
+            .append_to_confirmed(&share2.block_hash(), 2, &mut metadata2, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -3028,13 +3032,13 @@ mod tests {
 
         // Add all shares
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata0 = store
             .add_share(&share0, 0, share0.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata1 = store
             .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
@@ -3058,7 +3062,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store
+        let mut metadata2 = store
             .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
@@ -3072,19 +3076,19 @@ mod tests {
         // Confirm main chain only
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share0.block_hash(), 0, &mut batch)
+            .append_to_confirmed(&share0.block_hash(), 0, &mut metadata0, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share1.block_hash(), 1, &mut batch)
+            .append_to_confirmed(&share1.block_hash(), 1, &mut metadata1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .make_confirmed(&share2.block_hash(), 2, &mut batch)
+            .append_to_confirmed(&share2.block_hash(), 2, &mut metadata2, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -3164,6 +3168,7 @@ mod tests {
             .build();
 
         // Add all shares
+        let mut metadatas = HashMap::with_capacity(12);
         for (share, height) in [
             (&share0, 0u32),
             (&share1, 1),
@@ -3179,9 +3184,10 @@ mod tests {
             (&share6, 6),
         ] {
             let mut batch = rocksdb::WriteBatch::default();
-            store
+            let metadata = store
                 .add_share(&share, height, share.header.get_work(), true, &mut batch)
                 .unwrap();
+            metadatas.insert(share.block_hash(), metadata);
             store.commit_batch(batch).unwrap();
         }
 
@@ -3196,8 +3202,9 @@ mod tests {
             (&share6, 6),
         ] {
             let mut batch = rocksdb::WriteBatch::default();
+            let mut metadata = metadatas.remove(&share.block_hash()).unwrap();
             store
-                .make_confirmed(&share.block_hash(), height, &mut batch)
+                .append_to_confirmed(&share.block_hash(), height, &mut metadata, &mut batch)
                 .unwrap();
             store.commit_batch(batch).unwrap();
         }
