@@ -145,6 +145,119 @@ impl Store {
         Ok(())
     }
 
+    /// Get list of blockhashes from given blockhash up to top candidate
+    /// If blockhash is None, returns empry vector
+    pub(crate) fn get_candidates_chain(
+        &self,
+        blockhash: &BlockHash,
+        top_candidate: Option<(BlockHash, u32, Work)>,
+    ) -> Result<Vec<BlockHash>, StoreError> {
+        let Ok(metadata) = self.get_block_metadata(&blockhash) else {
+            return Err(StoreError::NotFound(
+                "Block metadata not found for branch point".into(),
+            ));
+        };
+        let Some(height) = metadata.expected_height else {
+            return Err(StoreError::NotFound(
+                "Block metadata doesn't have an expected height".into(),
+            ));
+        };
+        let Some((_, top_candidate_height, _)) = top_candidate else {
+            return Err(StoreError::NotFound(
+                "No top candidate height found when reorging candidate chain".into(),
+            ));
+        };
+        self.get_candidates(height, top_candidate_height)
+    }
+
+    /// Fetch a list of blockhashes on the candidates chain between
+    /// the given heights, inclusive.
+    pub(crate) fn get_candidates(&self, from: u32, to: u32) -> Result<Vec<BlockHash>, StoreError> {
+        if from > to {
+            return Ok(Vec::new());
+        }
+
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+
+        let lower_key = height_to_key_with_suffix(from, CANDIDATE_SUFFIX);
+        // Upper bound is exclusive, so use to+1
+        let upper_key = height_to_key_with_suffix(to + 1, CANDIDATE_SUFFIX);
+
+        let mut read_opts = rocksdb::ReadOptions::default();
+        read_opts.set_iterate_lower_bound(lower_key.clone());
+        read_opts.set_iterate_upper_bound(upper_key);
+
+        let iter = self.db.iterator_cf_opt(
+            &block_height_cf,
+            read_opts,
+            rocksdb::IteratorMode::From(&lower_key, rocksdb::Direction::Forward),
+        );
+
+        let capacity = (to - from + 1) as usize;
+        let mut candidates = Vec::with_capacity(capacity);
+        for item in iter.flatten() {
+            let (_key, value) = item;
+            candidates.push(encode::deserialize(&value)?);
+        }
+        Ok(candidates)
+    }
+
+    /// Get list of blockhashes from given blockhash up to top confirmed.
+    pub(crate) fn get_confirmed_chain(
+        &self,
+        blockhash: &BlockHash,
+        top_confirmed: Option<(BlockHash, u32, Work)>,
+    ) -> Result<Vec<BlockHash>, StoreError> {
+        let Ok(metadata) = self.get_block_metadata(blockhash) else {
+            return Err(StoreError::NotFound(
+                "Block metadata not found for branch point".into(),
+            ));
+        };
+        let Some(height) = metadata.expected_height else {
+            return Err(StoreError::NotFound(
+                "Block metadata doesn't have an expected height".into(),
+            ));
+        };
+        let Some((_, top_confirmed_height, _)) = top_confirmed else {
+            return Err(StoreError::NotFound(
+                "No top confirmed height found when fetching confirmed chain".into(),
+            ));
+        };
+        self.get_confirmed(height, top_confirmed_height)
+    }
+
+    /// Fetch a list of blockhashes on the confirmed chain between
+    /// the given heights, inclusive.
+    pub(crate) fn get_confirmed(&self, from: u32, to: u32) -> Result<Vec<BlockHash>, StoreError> {
+        if from > to {
+            return Ok(Vec::new());
+        }
+
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+
+        let lower_key = height_to_key_with_suffix(from, CONFIRMED_SUFFIX);
+        // Upper bound is exclusive, so use to+1
+        let upper_key = height_to_key_with_suffix(to + 1, CONFIRMED_SUFFIX);
+
+        let mut read_opts = rocksdb::ReadOptions::default();
+        read_opts.set_iterate_lower_bound(lower_key.clone());
+        read_opts.set_iterate_upper_bound(upper_key);
+
+        let iter = self.db.iterator_cf_opt(
+            &block_height_cf,
+            read_opts,
+            rocksdb::IteratorMode::From(&lower_key, rocksdb::Direction::Forward),
+        );
+
+        let capacity = (to - from + 1) as usize;
+        let mut confirmed = Vec::with_capacity(capacity);
+        for item in iter.flatten() {
+            let (_key, value) = item;
+            confirmed.push(encode::deserialize(&value)?);
+        }
+        Ok(confirmed)
+    }
+
     /// Add blockhash as a confirmed at provided height.
     ///
     /// Only adds to the confirmed index if the height is one more than the
@@ -787,6 +900,251 @@ mod tests {
                 .append_to_confirmed(&share2.block_hash(), 2, &mut metadata2, &mut batch)
                 .is_err()
         );
+    }
+
+    // ── get_candidates / get_candidates_chain tests ───────────────────
+
+    #[test]
+    fn test_get_candidates_returns_blockhashes_in_range() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share0 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let share1 = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+        let share2 = TestShareBlockBuilder::new().nonce(0xe9695793).build();
+
+        let mut batch = Store::get_write_batch();
+        let mut m0 = store
+            .add_share(&share0, 0, share0.header.get_work(), false, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share0.block_hash(), 0, &mut m0, &mut batch)
+            .unwrap();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), false, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        let mut m2 = store
+            .add_share(&share2, 2, share2.header.get_work(), false, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share2.block_hash(), 2, &mut m2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Full range
+        let result = store.get_candidates(0, 2).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], share0.block_hash());
+        assert_eq!(result[1], share1.block_hash());
+        assert_eq!(result[2], share2.block_hash());
+
+        // Sub-range
+        let result = store.get_candidates(1, 2).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], share1.block_hash());
+        assert_eq!(result[1], share2.block_hash());
+
+        // Single height
+        let result = store.get_candidates(1, 1).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], share1.block_hash());
+    }
+
+    #[test]
+    fn test_get_candidates_returns_empty_when_from_greater_than_to() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let result = store.get_candidates(5, 3).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_candidates_chain_returns_candidates_from_blockhash_to_top() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+
+        let mut batch = Store::get_write_batch();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        let mut m2 = store
+            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share2.block_hash(), 2, &mut m2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top = store.get_top_candidate().ok();
+        let result = store
+            .get_candidates_chain(&share1.block_hash(), top)
+            .unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], share1.block_hash());
+        assert_eq!(result[1], share2.block_hash());
+    }
+
+    #[test]
+    fn test_get_candidates_chain_errors_when_no_top_candidate() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let result = store.get_candidates_chain(&genesis.block_hash(), None);
+        assert!(result.is_err());
+    }
+
+    // ── get_confirmed / get_confirmed_chain tests ───────────────────
+
+    #[test]
+    fn test_get_confirmed_returns_blockhashes_in_range() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share0 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let share1 = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+        let share2 = TestShareBlockBuilder::new().nonce(0xe9695793).build();
+
+        // append_to_confirmed checks top height against DB, so commit between each
+        let mut batch = Store::get_write_batch();
+        let mut m0 = store
+            .add_share(&share0, 0, share0.header.get_work(), false, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share0.block_hash(), 0, &mut m0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), false, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        let mut m2 = store
+            .add_share(&share2, 2, share2.header.get_work(), false, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share2.block_hash(), 2, &mut m2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Full range
+        let result = store.get_confirmed(0, 2).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], share0.block_hash());
+        assert_eq!(result[1], share1.block_hash());
+        assert_eq!(result[2], share2.block_hash());
+
+        // Sub-range
+        let result = store.get_confirmed(1, 2).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], share1.block_hash());
+        assert_eq!(result[1], share2.block_hash());
+
+        // Single height
+        let result = store.get_confirmed(1, 1).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], share1.block_hash());
+    }
+
+    #[test]
+    fn test_get_confirmed_returns_empty_when_from_greater_than_to() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let result = store.get_confirmed(5, 3).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_confirmed_chain_returns_confirmed_from_blockhash_to_top() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+
+        // append_to_confirmed checks top height against DB, so commit between each
+        let mut batch = Store::get_write_batch();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        let mut m2 = store
+            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share2.block_hash(), 2, &mut m2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top = store.get_top_confirmed().ok();
+        let result = store
+            .get_confirmed_chain(&share1.block_hash(), top)
+            .unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], share1.block_hash());
+        assert_eq!(result[1], share2.block_hash());
+    }
+
+    #[test]
+    fn test_get_confirmed_chain_errors_when_no_top_confirmed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let result = store.get_confirmed_chain(&genesis.block_hash(), None);
+        assert!(result.is_err());
     }
 
     // ── is_candidate tests ────────────────────────────────────────────
