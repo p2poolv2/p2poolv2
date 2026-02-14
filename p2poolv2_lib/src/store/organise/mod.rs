@@ -150,6 +150,27 @@ impl Store {
         Ok((hash, height, metadata.chain_work))
     }
 
+    /// Pop blockhash from candidate chain.
+    /// Deletes the candidate entry at the given height, decrements
+    /// top candidate, and sets block metadata status to Valid.
+    pub(crate) fn pop_candidate(
+        &self,
+        height: u32,
+        metadata: &mut BlockMetadata,
+        blockhash: &BlockHash,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), StoreError> {
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+        let key = height_to_key_with_suffix(height, CANDIDATE_SUFFIX);
+
+        batch.delete_cf(&block_height_cf, key);
+
+        self.decrement_top_candidate(height.saturating_sub(1), batch)?;
+
+        metadata.status = Status::Valid;
+        self.update_block_metadata(blockhash, metadata, batch)
+    }
+
     /// Add blockhash as a candidate at provided height.
     ///
     /// Also Updates the metadata status to Candidate.
@@ -559,6 +580,171 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(store.get_top_candidate_height().unwrap(), 3);
+    }
+
+    // ── pop_candidate tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_pop_candidate_deletes_entry_and_sets_status_to_valid() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share0 = TestShareBlockBuilder::new()
+            .nonce(0xe9695791)
+            .work(1)
+            .build();
+        let share1 = TestShareBlockBuilder::new()
+            .nonce(0xe9695792)
+            .work(2)
+            .build();
+
+        // Build candidate chain: share0 at height 0, share1 at height 1
+        let mut batch = Store::get_write_batch();
+        let mut m0 = store
+            .add_share(&share0, 0, share0.header.get_work(), false, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share0.block_hash(), 0, &mut m0, &mut batch)
+            .unwrap();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), false, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(store.get_top_candidate_height().unwrap(), 1);
+        assert!(store.is_candidate(&share1.block_hash()));
+
+        // Pop share1 at height 1
+        let mut batch = Store::get_write_batch();
+        let mut metadata = store.get_block_metadata(&share1.block_hash()).unwrap();
+        store
+            .pop_candidate(1, &mut metadata, &share1.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Top candidate decremented to 0
+        assert_eq!(store.get_top_candidate_height().unwrap(), 0);
+        // Entry at height 1 is deleted
+        assert!(store.get_candidate_at_height(1).is_err());
+        // Metadata status changed to Valid
+        let updated = store.get_block_metadata(&share1.block_hash()).unwrap();
+        assert_eq!(updated.status, Status::Valid);
+        // share0 still at height 0
+        assert_eq!(
+            store.get_candidate_at_height(0).unwrap(),
+            share0.block_hash()
+        );
+    }
+
+    #[test]
+    fn test_pop_candidate_errors_on_non_consecutive_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share0 = TestShareBlockBuilder::new()
+            .nonce(0xe9695791)
+            .work(1)
+            .build();
+        let share1 = TestShareBlockBuilder::new()
+            .nonce(0xe9695792)
+            .work(2)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .nonce(0xe9695793)
+            .work(3)
+            .build();
+
+        // Build candidate chain: heights 0, 1, 2
+        let mut batch = Store::get_write_batch();
+        let mut m0 = store
+            .add_share(&share0, 0, share0.header.get_work(), false, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share0.block_hash(), 0, &mut m0, &mut batch)
+            .unwrap();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), false, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        let mut m2 = store
+            .add_share(&share2, 2, share2.header.get_work(), false, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share2.block_hash(), 2, &mut m2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(store.get_top_candidate_height().unwrap(), 2);
+
+        // Pop at height 0 when top is 2: 2 - 0 = 2, not 1, resulting in an error
+        let mut batch = Store::get_write_batch();
+        let mut metadata = store.get_block_metadata(&share0.block_hash()).unwrap();
+        let result = store.pop_candidate(0, &mut metadata, &share0.block_hash(), &mut batch);
+
+        assert!(result.is_err());
+        assert_eq!(store.get_top_candidate_height().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_pop_candidate_then_re_append() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share0 = TestShareBlockBuilder::new()
+            .nonce(0xe9695791)
+            .work(1)
+            .build();
+        let share1 = TestShareBlockBuilder::new()
+            .nonce(0xe9695792)
+            .work(2)
+            .build();
+
+        // Build candidate chain: share0 at 0, share1 at 1
+        let mut batch = Store::get_write_batch();
+        let mut m0 = store
+            .add_share(&share0, 0, share0.header.get_work(), false, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share0.block_hash(), 0, &mut m0, &mut batch)
+            .unwrap();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), false, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Pop share1 at height 1
+        let mut batch = Store::get_write_batch();
+        let mut metadata = store.get_block_metadata(&share1.block_hash()).unwrap();
+        store
+            .pop_candidate(1, &mut metadata, &share1.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(store.get_top_candidate_height().unwrap(), 0);
+        assert!(store.get_candidate_at_height(1).is_err());
+
+        // Re-append share1 at height 1
+        let mut batch = Store::get_write_batch();
+        let mut metadata = store.get_block_metadata(&share1.block_hash()).unwrap();
+        store
+            .append_to_candidates(&share1.block_hash(), 1, &mut metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(store.get_top_candidate_height().unwrap(), 1);
+        assert!(store.is_candidate(&share1.block_hash()));
+        assert_eq!(
+            store.get_candidate_at_height(1).unwrap(),
+            share1.block_hash()
+        );
     }
 
     // ── append_to_candidate tests ─────────────────────────────────────────
