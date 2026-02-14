@@ -23,6 +23,7 @@ use bitcoin::{
     BlockHash, Work,
     consensus::{self, encode},
 };
+use std::collections::VecDeque;
 pub mod organise_share;
 
 const CANDIDATE_SUFFIX: &str = ":c";
@@ -145,7 +146,8 @@ impl Store {
         Ok(())
     }
 
-    /// Get list of blockhashes from given blockhash up to top candidate
+    /// Get list of blockhashes from given blockhash up to top candidate.
+    /// The blockhash is known to be on the candidates chain.
     /// If blockhash is None, returns empry vector
     pub(crate) fn get_candidates_chain(
         &self,
@@ -333,28 +335,29 @@ impl Store {
     /// Get branch from a blockhash back to the first ancestor in the candidate chain.
     ///
     /// Walks backwards through the chain collecting blockhashes until finding
-    /// one that's already a candidate. Returns the branch excluding the candidate
-    /// ancestor (since it's already in the chain).
-    ///
-    /// Returns empty vec if the starting blockhash is already a candidate.
-    pub fn get_branch_to_candidates(&self, blockhash: &BlockHash) -> Vec<BlockHash> {
-        let mut branch = Vec::with_capacity(BRANCH_INITIAL_CAPACITY);
+    /// one that's already a candidate. Returns the branch including the candidate.
+    pub fn get_branch_to_candidates(
+        &self,
+        blockhash: &BlockHash,
+    ) -> Result<Option<VecDeque<BlockHash>>, StoreError> {
+        let mut branch = VecDeque::with_capacity(BRANCH_INITIAL_CAPACITY);
 
         let mut current = *blockhash;
         loop {
             if self.is_candidate(&current) {
-                // Found ancestor in candidate chain, stop here
-                return branch;
+                // Found ancestor in candidate chain, include it and return
+                branch.push_front(current);
+                return Ok(Some(branch));
             }
 
             // Get the share to find its parent
-            let Some(share) = self.get_share(&current) else {
-                // Share not found, return what we have
-                return branch;
+            let Some(share_header) = self.get_share_header(&current)? else {
+                // Share not found, branch doesn't terminate on cadndidate chain, return empty chain
+                return Ok(None);
             };
 
-            branch.push(current);
-            current = share.header.prev_share_blockhash;
+            branch.push_front(current);
+            current = share_header.prev_share_blockhash;
         }
     }
 }
@@ -1217,8 +1220,9 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // Branch should be empty since share is already a candidate
-        let branch = store.get_branch_to_candidates(&share.block_hash());
-        assert!(branch.is_empty());
+        let branch = store.get_branch_to_candidates(&share.block_hash()).unwrap();
+        assert!(branch.is_some());
+        assert_eq!(branch, Some(VecDeque::from([share.block_hash()])));
     }
 
     #[test]
@@ -1268,11 +1272,15 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Branch from share3 should be [share3, share2] (excludes share1 which is candidate)
-        let branch = store.get_branch_to_candidates(&share3.block_hash());
-        assert_eq!(branch.len(), 2);
-        assert_eq!(branch[0], share3.block_hash());
+        // Branch from share3 should be [share1, share2, share3]
+        let branch = store
+            .get_branch_to_candidates(&share3.block_hash())
+            .unwrap()
+            .unwrap();
+        assert_eq!(branch.len(), 3);
+        assert_eq!(branch[0], share1.block_hash());
         assert_eq!(branch[1], share2.block_hash());
+        assert_eq!(branch[2], share3.block_hash());
     }
 
     #[test]
@@ -1309,9 +1317,13 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Branch from share2 should be just [share2]
-        let branch = store.get_branch_to_candidates(&share2.block_hash());
-        assert_eq!(branch.len(), 1);
-        assert_eq!(branch[0], share2.block_hash());
+        // Branch from share2 should be just [share1, share2]
+        let branch = store
+            .get_branch_to_candidates(&share2.block_hash())
+            .unwrap()
+            .unwrap();
+        assert_eq!(branch.len(), 2);
+        assert_eq!(branch[0], share1.block_hash());
+        assert_eq!(branch[1], share2.block_hash());
     }
 }
