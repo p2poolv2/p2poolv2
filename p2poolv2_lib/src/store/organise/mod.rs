@@ -146,13 +146,13 @@ impl Store {
         Ok(())
     }
 
-    /// Get list of blockhashes from given blockhash up to top candidate.
+    /// Get list of (height, blockhash) pairs from given blockhash up to top candidate.
     /// The blockhash is known to be on the candidates chain.
     pub(crate) fn get_candidates_chain(
         &self,
         blockhash: &BlockHash,
         top_candidate: Option<(BlockHash, u32, Work)>,
-    ) -> Result<Vec<BlockHash>, StoreError> {
+    ) -> Result<Vec<(u32, BlockHash)>, StoreError> {
         let Ok(metadata) = self.get_block_metadata(blockhash) else {
             return Err(StoreError::NotFound(
                 "Block metadata not found for branch point".into(),
@@ -171,19 +171,23 @@ impl Store {
         self.get_candidates(height, top_candidate_height)
     }
 
-    /// Fetch a list of blockhashes on the candidates chain between
+    /// Fetch a list of (height, blockhash) pairs on the candidates chain between
     /// the given heights, inclusive.
-    pub(crate) fn get_candidates(&self, from: u32, to: u32) -> Result<Vec<BlockHash>, StoreError> {
+    pub(crate) fn get_candidates(
+        &self,
+        from: u32,
+        to: u32,
+    ) -> Result<Vec<(u32, BlockHash)>, StoreError> {
         self.get_chain_range(from, to, CANDIDATE_SUFFIX)
     }
 
-    /// Get list of blockhashes from given blockhash up to top confirmed.
+    /// Get list of (height, blockhash) pairs from given blockhash up to top confirmed.
     /// The blockhash is known to be on the confirmed chain.
     pub(crate) fn get_confirmed_chain(
         &self,
         blockhash: &BlockHash,
         top_confirmed: Option<(BlockHash, u32, Work)>,
-    ) -> Result<Vec<BlockHash>, StoreError> {
+    ) -> Result<Vec<(u32, BlockHash)>, StoreError> {
         let Ok(metadata) = self.get_block_metadata(blockhash) else {
             return Err(StoreError::NotFound(
                 "Block metadata not found for branch point".into(),
@@ -202,9 +206,13 @@ impl Store {
         self.get_confirmed(height, top_confirmed_height)
     }
 
-    /// Fetch a list of blockhashes on the confirmed chain between
+    /// Fetch a list of (height, blockhash) pairs on the confirmed chain between
     /// the given heights, inclusive.
-    pub(crate) fn get_confirmed(&self, from: u32, to: u32) -> Result<Vec<BlockHash>, StoreError> {
+    pub(crate) fn get_confirmed(
+        &self,
+        from: u32,
+        to: u32,
+    ) -> Result<Vec<(u32, BlockHash)>, StoreError> {
         self.get_chain_range(from, to, CONFIRMED_SUFFIX)
     }
 
@@ -217,7 +225,7 @@ impl Store {
         from: u32,
         to: u32,
         suffix: &str,
-    ) -> Result<Vec<BlockHash>, StoreError> {
+    ) -> Result<Vec<(u32, BlockHash)>, StoreError> {
         if from > to {
             return Ok(Vec::new());
         }
@@ -247,7 +255,7 @@ impl Store {
                 results.push(encode::deserialize(&value)?);
             }
         }
-        Ok(results)
+        Ok((from..=to).zip(results).collect())
     }
 
     /// Add blockhash as a confirmed at provided height.
@@ -930,20 +938,20 @@ mod tests {
         // Full range
         let result = store.get_candidates(0, 2).unwrap();
         assert_eq!(result.len(), 3);
-        assert_eq!(result[0], share0.block_hash());
-        assert_eq!(result[1], share1.block_hash());
-        assert_eq!(result[2], share2.block_hash());
+        assert_eq!(result[0], (0, share0.block_hash()));
+        assert_eq!(result[1], (1, share1.block_hash()));
+        assert_eq!(result[2], (2, share2.block_hash()));
 
         // Sub-range
         let result = store.get_candidates(1, 2).unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0], share1.block_hash());
-        assert_eq!(result[1], share2.block_hash());
+        assert_eq!(result[0], (1, share1.block_hash()));
+        assert_eq!(result[1], (2, share2.block_hash()));
 
         // Single height
         let result = store.get_candidates(1, 1).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], share1.block_hash());
+        assert_eq!(result[0], (1, share1.block_hash()));
     }
 
     #[test]
@@ -994,8 +1002,8 @@ mod tests {
             .get_candidates_chain(&share1.block_hash(), top)
             .unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0], share1.block_hash());
-        assert_eq!(result[1], share2.block_hash());
+        assert_eq!(result[0], (1, share1.block_hash()));
+        assert_eq!(result[1], (2, share2.block_hash()));
     }
 
     #[test]
@@ -1054,20 +1062,20 @@ mod tests {
         // Full range
         let result = store.get_confirmed(0, 2).unwrap();
         assert_eq!(result.len(), 3);
-        assert_eq!(result[0], share0.block_hash());
-        assert_eq!(result[1], share1.block_hash());
-        assert_eq!(result[2], share2.block_hash());
+        assert_eq!(result[0], (0, share0.block_hash()));
+        assert_eq!(result[1], (1, share1.block_hash()));
+        assert_eq!(result[2], (2, share2.block_hash()));
 
         // Sub-range
         let result = store.get_confirmed(1, 2).unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0], share1.block_hash());
-        assert_eq!(result[1], share2.block_hash());
+        assert_eq!(result[0], (1, share1.block_hash()));
+        assert_eq!(result[1], (2, share2.block_hash()));
 
         // Single height
         let result = store.get_confirmed(1, 1).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], share1.block_hash());
+        assert_eq!(result[0], (1, share1.block_hash()));
     }
 
     #[test]
@@ -1122,8 +1130,8 @@ mod tests {
             .get_confirmed_chain(&share1.block_hash(), top)
             .unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0], share1.block_hash());
-        assert_eq!(result[1], share2.block_hash());
+        assert_eq!(result[0], (1, share1.block_hash()));
+        assert_eq!(result[1], (2, share2.block_hash()));
     }
 
     #[test]
