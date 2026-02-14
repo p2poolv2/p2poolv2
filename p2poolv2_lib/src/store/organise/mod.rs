@@ -148,13 +148,12 @@ impl Store {
 
     /// Get list of blockhashes from given blockhash up to top candidate.
     /// The blockhash is known to be on the candidates chain.
-    /// If blockhash is None, returns empry vector
     pub(crate) fn get_candidates_chain(
         &self,
         blockhash: &BlockHash,
         top_candidate: Option<(BlockHash, u32, Work)>,
     ) -> Result<Vec<BlockHash>, StoreError> {
-        let Ok(metadata) = self.get_block_metadata(&blockhash) else {
+        let Ok(metadata) = self.get_block_metadata(blockhash) else {
             return Err(StoreError::NotFound(
                 "Block metadata not found for branch point".into(),
             ));
@@ -179,6 +178,7 @@ impl Store {
     }
 
     /// Get list of blockhashes from given blockhash up to top confirmed.
+    /// The blockhash is known to be on the confirmed chain.
     pub(crate) fn get_confirmed_chain(
         &self,
         blockhash: &BlockHash,
