@@ -68,6 +68,33 @@ impl Store {
         Ok(use_height)
     }
 
+    /// Decrement top candidate key if height is one less than current height
+    fn decrement_top_candidate(
+        &self,
+        height: u32,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<u32, StoreError> {
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+
+        let use_height = match self.get_top_candidate_height() {
+            Ok(current_top_height) => {
+                if current_top_height.saturating_sub(height) == 1 {
+                    height
+                } else {
+                    return Err(StoreError::Database("Mismatch in top height".into()));
+                }
+            }
+            Err(e) => return Err(e),
+        };
+        let serialized_height = consensus::serialize(&use_height);
+        batch.put_cf(
+            &block_height_cf,
+            TOP_CANDIDATE_KEY.as_bytes().as_ref(),
+            serialized_height,
+        );
+        Ok(use_height)
+    }
+
     /// Set top confirmed height
     /// The required height checks are already made in make_confirmed
     pub(crate) fn set_top_confirmed_height(&self, height: u32, batch: &mut rocksdb::WriteBatch) {
@@ -444,6 +471,94 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(store.get_top_candidate_height().unwrap(), 2);
+    }
+
+    // ── decrement_top_candidate tests ──────────────────────────────────
+
+    #[test]
+    fn test_decrement_top_candidate_sets_top_to_given_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Bootstrap top to 5
+        let mut batch = Store::get_write_batch();
+        store.increment_top_candidate(5, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        assert_eq!(store.get_top_candidate_height().unwrap(), 5);
+
+        // Decrement: current_top(5) - height(4) == 1 → sets top to 4
+        let mut batch = Store::get_write_batch();
+        let result = store.decrement_top_candidate(4, &mut batch);
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(result.unwrap(), 4);
+        assert_eq!(store.get_top_candidate_height().unwrap(), 4);
+    }
+
+    #[test]
+    fn test_decrement_top_candidate_returns_error_when_no_top_candidate() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        assert!(store.get_top_candidate_height().is_err());
+
+        // No current top → uses given height
+        let mut batch = Store::get_write_batch();
+        let result = store.decrement_top_candidate(3, &mut batch);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decrement_top_candidate_errors_on_non_consecutive_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Bootstrap top to 5
+        let mut batch = Store::get_write_batch();
+        store.increment_top_candidate(5, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Height 2: current_top(5) - 2 = 3, not 1
+        let mut batch = Store::get_write_batch();
+        let result = store.decrement_top_candidate(2, &mut batch);
+
+        assert!(result.is_err());
+        assert_eq!(store.get_top_candidate_height().unwrap(), 5);
+    }
+
+    #[test]
+    fn test_decrement_top_candidate_errors_on_same_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store.increment_top_candidate(3, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // current_top(3) - 3 = 0, not 1
+        let mut batch = Store::get_write_batch();
+        let result = store.decrement_top_candidate(3, &mut batch);
+
+        assert!(result.is_err());
+        assert_eq!(store.get_top_candidate_height().unwrap(), 3);
+    }
+
+    #[test]
+    fn test_decrement_top_candidate_errors_when_height_above_top() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store.increment_top_candidate(3, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Height 5 > current_top(3), saturating_sub gives 0
+        let mut batch = Store::get_write_batch();
+        let result = store.decrement_top_candidate(5, &mut batch);
+
+        assert!(result.is_err());
+        assert_eq!(store.get_top_candidate_height().unwrap(), 3);
     }
 
     // ── append_to_candidate tests ─────────────────────────────────────────
