@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod gen_auth;
+pub mod restart_bitcoind;
 
 use clap::{Parser, Subcommand};
 use p2poolv2_lib::cli_commands;
@@ -61,6 +62,19 @@ pub enum Commands {
         /// Password (leave empty to auto-generate, or use "-" to prompt)
         password: Option<String>,
     },
+    /// Restart the bitcoind daemon to apply new configuration.
+    ///
+    /// Sends a graceful stop RPC to bitcoind and optionally re-launches it.
+    /// If [bitcoind] config section with restart_cmd is set, bitcoind will be
+    /// automatically restarted. Otherwise, only the stop is performed.
+    ///
+    /// NOTE: If bitcoind is managed by systemd, automatic restart is skipped
+    /// to avoid conflicts. Use 'systemctl restart bitcoind' instead.
+    RestartBitcoind {
+        /// Only stop bitcoind without attempting to restart it
+        #[arg(long, default_value = "false")]
+        stop_only: bool,
+    },
 }
 
 pub async fn run() -> Result<(), Box<dyn Error>> {
@@ -74,6 +88,17 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         Some(Commands::GenAuth { username, password }) => {
             // gen-auth doesn't need config or store
             crate::commands::gen_auth::execute(username.clone(), password.clone())?;
+        }
+        Some(Commands::RestartBitcoind { stop_only }) => {
+
+            let config_path = cli
+                .config
+                .as_ref()
+                .ok_or("Config file required for this command. Use --config")?;
+            let config = Config::load(config_path)?;
+
+            restart_bitcoind::execute(&config.bitcoinrpc, config.bitcoind.as_ref(), *stop_only)
+                .await?;
         }
         Some(Commands::Info) | Some(Commands::PplnsShares { .. }) => {
             // These commands require config and store
