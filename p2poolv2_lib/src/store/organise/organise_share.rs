@@ -51,9 +51,8 @@ impl Store {
 
         // Append to candidate if share extends candidate or
         // confirmed. We reorg candidate and confirmed chains later.
-        if let Some(extended_candidate_height) = self
-            .extends_chain(&share, &metadata, top_candidate)?
-            .or(self.extends_chain(&share, &metadata, top_confirmed)?)
+        if let Some(extended_candidate_height) =
+            self.extends_chain(&share, &metadata, top_candidate)?
         {
             self.append_to_candidates(&blockhash, extended_candidate_height, &mut metadata, batch)?;
         } else if self.should_reorg_candidate(&blockhash, &metadata, top_candidate) {
@@ -449,72 +448,6 @@ mod tests {
             store.get_top_candidate().ok(),
             Some((genesis.block_hash(), 0, genesis.header.get_work()))
         );
-    }
-
-    #[test]
-    fn test_organise_share_extends_confirmed_when_candidate_not_extended() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        // Setup genesis (confirmed at height 0)
-        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        let mut batch = Store::get_write_batch();
-        store.setup_genesis(&genesis, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Add share1 as child of genesis and make it confirmed at height 1, but NOT a candidate
-        let share1 = TestShareBlockBuilder::new()
-            .prev_share_blockhash(genesis.block_hash().to_string())
-            .nonce(0xe9695792)
-            .build();
-        let mut batch = Store::get_write_batch();
-        let mut metadata1 = store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_confirmed(&share1.block_hash(), 1, &mut metadata1, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Verify: no candidate chain exists, but confirmed chain has share1 at top
-        assert!(store.get_top_candidate().is_err());
-        assert_eq!(
-            store.get_top_confirmed().ok(),
-            Some((share1.block_hash(), 1, share1.header.get_work()))
-        );
-
-        // Create share_to_organise that extends confirmed chain (not candidate)
-        // prev_share_blockhash = share1, expected_height = 2, work > share1's work
-        let share_to_organise = TestShareBlockBuilder::new()
-            .prev_share_blockhash(share1.block_hash().to_string())
-            .work(2)
-            .nonce(0xe9695793)
-            .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share(
-                &share_to_organise,
-                2,
-                share_to_organise.header.get_work(),
-                true,
-                &mut batch,
-            )
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // organise_share should fall back to extending confirmed chain
-        let mut batch = Store::get_write_batch();
-        store
-            .organise_share(share_to_organise.clone(), &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // share_to_organise should now be a candidate at height 2
-        assert_eq!(
-            store.get_candidate_at_height(2).unwrap(),
-            share_to_organise.block_hash()
-        );
-        assert_eq!(store.get_top_candidate_height().ok(), Some(2));
     }
 
     // ── should_reorg_candidate unit tests ──────────────────────────────
