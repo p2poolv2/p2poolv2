@@ -337,9 +337,9 @@ MarkShareAsCandidate(p, s) ==
 
 (****************************************************************************)
 (* Append a received share to the top of candidates                         *)
-(* -- parent has to be top candidate or top confirmed share                  *)
-(* -- candidate is added to index at the top                                 *)
-(* -- share is removed from received shares queue                            *)
+(* -- parent has to be top candidate                                        *)
+(* -- candidate is added to index at the top                                *)
+(* -- share is removed from received shares queue                           *)
 (****************************************************************************)
 AppendShareToCandidates(p, s) == 
     /\ s \in stored_shares[p]
@@ -350,15 +350,12 @@ AppendShareToCandidates(p, s) ==
     \* Share must have Candidate status
     /\ share_status[p, s] = "Candidate"
     /\ ~Contains(candidates[p], s)                   \* Share must not be in candidate chain
-    /\ ~Contains(confirmed[p], s)                   \* Share must not be in candidate chain
-    \* Parent must be top candidate or top confirmed share
+    /\ ~Contains(confirmed[p], s)                    \* Share must not be in candidate chain
+    \* Parent must be top candidate
     \* include other sanity checks for height and work
     /\ \/ (/\ TopCandidate(p) = parent[s]
            /\ expected_height[p, s] = Len(candidates[p]) + 1 
            /\ chain_work[p, s] > chain_work[p, TopCandidate(p)])
-       \/ (/\ TopConfirmed(p) = parent[s]
-           /\ expected_height[p, s] = Len(confirmed[p]) + 1 
-           /\ chain_work[p, s] > chain_work[p, TopConfirmed(p)])
        \/ Len(candidates[p]) = 0
     /\ candidates' = [candidates EXCEPT ![p] = Append(@, s)]
     /\ UNCHANGED << stored_shares, parent, uncles, confirmed, bitcoin_height,
