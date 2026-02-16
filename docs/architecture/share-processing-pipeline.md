@@ -5,7 +5,7 @@ description: Documents the data flow for processing shares from stratum submissi
 
 # Share Processing Pipeline
 
-This skill documents the data flow for processing shares in p2pool-v2.
+This document describes the data flow for processing shares in p2pool-v2.
 
 ## Overview
 
@@ -140,6 +140,34 @@ The share processing pipeline is designed to:
 | organise_tx/rx | tokio mpsc | 256 | EmissionWorker -> OrganiseWorker |
 | swarm_tx/rx | tokio mpsc | 100 | EmissionWorker -> NodeActor (broadcast) |
 | write_tx/rx | std::sync mpsc | unbounded | StoreHandle -> StoreWriter (serialized writes) |
+
+## BlockHeight Column Family Key Schema
+
+The `BlockHeight` CF (`"block_height"`) stores three distinct namespaces in a single column family, distinguished by key format:
+
+| Key Format | Value | Purpose | Defined in |
+|---|---|---|---|
+| `h:` + `{height BE u32}` | `Vec<BlockHash>` (merge append) | All blocks at a given height | `share_store.rs` |
+| `{height BE u32}` + `:c` | Single `BlockHash` | Candidate chain index | `organise/mod.rs` |
+| `{height BE u32}` + `:f` | Single `BlockHash` | Confirmed chain index | `organise/mod.rs` |
+| `meta:top_candidate_height` | `u32` | Top candidate height tracker | `organise/mod.rs` |
+| `meta:top_confirmed_height` | `u32` | Top confirmed height tracker | `organise/mod.rs` |
+
+All values use Bitcoin consensus serialization.
+
+**Height-to-blocks index** (`h:{height}`): Written via RocksDB merge operator to atomically append blockhashes. Used by `get_blockhashes_for_height()` to find all blocks stored at a given height.
+
+**Candidate/confirmed chain indexes** (`{height}:c`, `{height}:f`): Map a single height to its chain-selected blockhash. The `:c` and `:f` suffixes share the same 4-byte height prefix, so range queries filter by `key.ends_with(suffix)` to avoid cross-contamination.
+
+**Metadata keys** (`meta:*`): Singleton keys that track the current top height of each chain. These are string keys that don't collide with the height-prefixed keys because `meta` is not a valid 4-byte BE height prefix.
+
+Constants (`organise/mod.rs`):
+```rust
+const CANDIDATE_SUFFIX: &str = ":c";
+const CONFIRMED_SUFFIX: &str = ":f";
+const TOP_CANDIDATE_KEY: &str = "meta:top_candidate_height";
+const TOP_CONFIRMED_KEY: &str = "meta:top_confirmed_height";
+```
 
 ## Organisation Logic (Store::organise_share)
 
