@@ -47,7 +47,7 @@ Stores share block headers (without transactions).
 **BlockMetadata Structure:**
 ```rust
 pub struct BlockMetadata {
-    pub height: Option<u32>,      // Block height in chain
+    pub expected_height: Option<u32>,      // Expected block height in chain, if known
     pub chain_work: Work,         // Cumulative chain work (32 bytes LE)
 }
 ```
