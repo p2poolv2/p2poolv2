@@ -791,9 +791,7 @@ mod tests {
 
         // organise_share(fork3) should trigger reorg
         let mut batch = Store::get_write_batch();
-        store
-            .organise_share(fork3.clone(), &mut batch)
-            .unwrap();
+        store.organise_share(fork3.clone(), &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // After reorg: share1(h:1) → fork2(h:2) → fork3(h:3)
