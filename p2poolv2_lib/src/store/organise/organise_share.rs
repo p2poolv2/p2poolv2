@@ -73,7 +73,7 @@ impl Store {
         // }
     }
 
-    /// Returns true if the share being organised has more cummulative
+    /// Returns true if the share being organised has more cumulative
     /// work than the top candidate. This identifies the case where
     /// share is not building on the current top_candidate, but is a
     /// different branch that needs to be reorged in.

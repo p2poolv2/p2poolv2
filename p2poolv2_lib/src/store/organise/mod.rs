@@ -72,7 +72,7 @@ impl Store {
     ///
     /// Used by `reorg_candidate` which computes the correct final height
     /// locally instead of reading stale DB state within a single WriteBatch.
-    pub(crate) fn set_top_candidate_height(&self, height: u32, batch: &mut rocksdb::WriteBatch) {
+    fn set_top_candidate_height(&self, height: u32, batch: &mut rocksdb::WriteBatch) {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let serialized_height = consensus::serialize(&height);
         batch.put_cf(
@@ -83,7 +83,7 @@ impl Store {
     }
 
     /// Write a candidate index entry directly into the batch.
-    pub(crate) fn put_candidate_entry(
+    fn put_candidate_entry(
         &self,
         height: u32,
         blockhash: &BlockHash,
@@ -96,7 +96,7 @@ impl Store {
     }
 
     /// Delete a candidate index entry from the batch.
-    pub(crate) fn delete_candidate_entry(&self, height: u32, batch: &mut rocksdb::WriteBatch) {
+    fn delete_candidate_entry(&self, height: u32, batch: &mut rocksdb::WriteBatch) {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let key = height_to_key_with_suffix(height, CANDIDATE_SUFFIX);
         batch.delete_cf(&block_height_cf, key);
