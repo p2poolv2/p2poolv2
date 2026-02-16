@@ -56,11 +56,9 @@ impl Store {
             .or(self.extends_chain(&share, &metadata, top_confirmed)?)
         {
             self.append_to_candidates(&blockhash, extended_candidate_height, &mut metadata, batch)?;
+        } else if self.should_reorg_candidate(&blockhash, &metadata, top_candidate) {
+            self.reorg_candidate(&blockhash, top_candidate, batch)?;
         }
-
-        // if self.should_reorg_candidate(&blockhash, &metadata, top_candidate)? {
-        //     self.reorg_candidate(&blockhash, &share, &metadata, top_candidate, batch);
-        // }
 
         Ok(())
 
@@ -73,6 +71,79 @@ impl Store {
         // if self.should_reorg_confirmed(&share, &metadata, top_confirmed) {
         //     return self.reorg_confirmed(&blockhash);
         // }
+    }
+
+    /// Returns true if the share being organised has more cummulative
+    /// work than the top candidate. This identifies the case where
+    /// share is not building on the current top_candidate, but is a
+    /// different branch that needs to be reorged in.
+    fn should_reorg_candidate(
+        &self,
+        share_blockhash: &BlockHash,
+        metadata: &BlockMetadata,
+        top_candidate: Option<(BlockHash, u32, Work)>,
+    ) -> bool {
+        match top_candidate {
+            Some((hash, _, work)) => metadata.chain_work > work && hash != *share_blockhash,
+            None => false,
+        }
+    }
+
+    /// Reorgs the candidate chain to the branch ending at `blockhash`.
+    ///
+    /// Directly manipulates candidate index entries and sets the final
+    /// top height in a single pass, avoiding stale reads from the DB
+    /// within the same WriteBatch. Reorged-out shares have their
+    /// metadata status set to Valid so `is_candidate()` stays correct.
+    fn reorg_candidate(
+        &self,
+        blockhash: &BlockHash,
+        top_candidate: Option<(BlockHash, u32, Work)>,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), StoreError> {
+        let branch = self.get_branch_to_candidates(blockhash)?.ok_or_else(|| {
+            StoreError::NotFound("Branch point to reorg candidate chain not found.".into())
+        })?;
+        let branch_point = branch.front().ok_or_else(|| {
+            StoreError::NotFound("Empty branch returned from get_branch_to_candidates.".into())
+        })?;
+        let reorged_out_chain = self.get_candidates_chain(branch_point, top_candidate)?;
+
+        // Collect new branch blockhashes for quick lookup when deciding
+        // whether to set reorged-out metadata to Valid
+        let branch_set: std::collections::HashSet<&BlockHash> = branch.iter().collect();
+
+        // Delete old candidate index entries and set reorged-out shares to Valid
+        for (height, uncandidate) in &reorged_out_chain {
+            self.delete_candidate_entry(*height, batch);
+            if !branch_set.contains(uncandidate) {
+                let mut metadata = self.get_block_metadata(uncandidate)?;
+                metadata.status = crate::store::block_tx_metadata::Status::Valid;
+                self.update_block_metadata(uncandidate, &metadata, batch)?;
+            }
+        }
+
+        // Write new branch entries and update metadata for shares
+        // that are not already candidates
+        let mut new_top_height = 0u32;
+        for candidate in &branch {
+            let mut metadata = self.get_block_metadata(candidate)?;
+            let height = metadata.expected_height.ok_or_else(|| {
+                StoreError::NotFound("Block metadata missing expected_height for candidate".into())
+            })?;
+            self.put_candidate_entry(height, candidate, batch);
+
+            if metadata.status != crate::store::block_tx_metadata::Status::Candidate {
+                metadata.status = crate::store::block_tx_metadata::Status::Candidate;
+                self.update_block_metadata(candidate, &metadata, batch)?;
+            }
+
+            new_top_height = height;
+        }
+
+        // Set the final top candidate height directly
+        self.set_top_candidate_height(new_top_height, batch);
+        Ok(())
     }
 
     /// Extends candidate chain, if:
@@ -444,5 +515,410 @@ mod tests {
             share_to_organise.block_hash()
         );
         assert_eq!(store.get_top_candidate_height().ok(), Some(2));
+    }
+
+    // ── should_reorg_candidate unit tests ──────────────────────────────
+
+    #[test]
+    fn test_should_reorg_candidate_true_when_more_work_different_hash() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let top_share = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+
+        let metadata = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: Work::from_hex("0x10").unwrap(),
+            status: Status::Valid,
+        };
+
+        let top_candidate = Some((top_share.block_hash(), 2, Work::from_hex("0x05").unwrap()));
+
+        assert!(store.should_reorg_candidate(&share.block_hash(), &metadata, top_candidate));
+    }
+
+    #[test]
+    fn test_should_reorg_candidate_false_when_less_work() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let top_share = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+
+        let metadata = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: Work::from_hex("0x03").unwrap(),
+            status: Status::Valid,
+        };
+
+        let top_candidate = Some((top_share.block_hash(), 2, Work::from_hex("0x05").unwrap()));
+
+        assert!(!store.should_reorg_candidate(&share.block_hash(), &metadata, top_candidate));
+    }
+
+    #[test]
+    fn test_should_reorg_candidate_false_when_equal_work() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let top_share = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+
+        let metadata = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: Work::from_hex("0x05").unwrap(),
+            status: Status::Valid,
+        };
+
+        let top_candidate = Some((top_share.block_hash(), 2, Work::from_hex("0x05").unwrap()));
+
+        assert!(!store.should_reorg_candidate(&share.block_hash(), &metadata, top_candidate));
+    }
+
+    #[test]
+    fn test_should_reorg_candidate_false_when_same_hash() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+
+        let metadata = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: Work::from_hex("0x10").unwrap(),
+            status: Status::Candidate,
+        };
+
+        // Same blockhash as share — should not reorg against itself
+        let top_candidate = Some((share.block_hash(), 2, Work::from_hex("0x05").unwrap()));
+
+        assert!(!store.should_reorg_candidate(&share.block_hash(), &metadata, top_candidate));
+    }
+
+    #[test]
+    fn test_should_reorg_candidate_false_when_no_top_candidate() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+
+        let metadata = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: Work::from_hex("0x10").unwrap(),
+            status: Status::Valid,
+        };
+
+        assert!(!store.should_reorg_candidate(&share.block_hash(), &metadata, None));
+    }
+
+    // ── reorg_candidate integration tests ──────────────────────────────
+
+    /// Test reorg replacing the top candidate with a sibling fork.
+    ///
+    /// Before:  share1(h:1) → share2(h:2)  [top at h:2]
+    /// Fork:    share1(h:1) → fork_share(h:2, more work)
+    /// After:   share1(h:1) → fork_share(h:2)  [top at h:2]
+    #[test]
+    fn test_organise_share_reorgs_when_fork_has_more_work() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Setup genesis (confirmed at h:0)
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1: child of genesis, candidate at h:1
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share2: child of share1, candidate at h:2
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m2 = store
+            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share2.block_hash(), 2, &mut m2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(
+            store.get_top_candidate().ok(),
+            Some((share2.block_hash(), 2, share2.header.get_work()))
+        );
+
+        // fork_share: child of share1, at h:2, with MORE cumulative work
+        let fork_share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695794)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                &fork_share,
+                2,
+                fork_share.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // organise_share should trigger reorg: replace share2 with fork_share
+        let mut batch = Store::get_write_batch();
+        store
+            .organise_share(fork_share.clone(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // After reorg: share1(h:1) → fork_share(h:2)
+        assert_eq!(
+            store.get_candidate_at_height(1).unwrap(),
+            share1.block_hash()
+        );
+        assert_eq!(
+            store.get_candidate_at_height(2).unwrap(),
+            fork_share.block_hash()
+        );
+        assert_eq!(
+            store.get_top_candidate().ok(),
+            Some((fork_share.block_hash(), 2, fork_share.header.get_work()))
+        );
+
+        // share2 is reorged out and has Valid status
+        let share2_metadata = store.get_block_metadata(&share2.block_hash()).unwrap();
+        assert_eq!(share2_metadata.status, Status::Valid);
+    }
+
+    /// Test deeper reorg replacing multiple candidates with a competing branch.
+    ///
+    /// Before:  share1(h:1) → share2(h:2) → share3(h:3)  [top at h:3]
+    /// Fork:    share1(h:1) → fork2(h:2) → fork3(h:3, more work)
+    /// After:   share1(h:1) → fork2(h:2) → fork3(h:3)  [top at h:3]
+    #[test]
+    fn test_organise_share_reorgs_deeper_fork() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Setup genesis
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Build candidate chain: share1(h:1) → share2(h:2) → share3(h:3)
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m2 = store
+            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share2.block_hash(), 2, &mut m2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m3 = store
+            .add_share(&share3, 3, share3.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share3.block_hash(), 3, &mut m3, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(
+            store.get_top_candidate().ok(),
+            Some((share3.block_hash(), 3, share3.header.get_work()))
+        );
+
+        // Build fork: share1 → fork2(h:2) → fork3(h:3, more work)
+        let fork2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695795)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&fork2, 2, fork2.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let fork3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork2.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695796)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&fork3, 3, fork3.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // organise_share(fork3) should trigger reorg
+        let mut batch = Store::get_write_batch();
+        store
+            .organise_share(fork3.clone(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // After reorg: share1(h:1) → fork2(h:2) → fork3(h:3)
+        assert_eq!(
+            store.get_candidate_at_height(1).unwrap(),
+            share1.block_hash()
+        );
+        assert_eq!(
+            store.get_candidate_at_height(2).unwrap(),
+            fork2.block_hash()
+        );
+        assert_eq!(
+            store.get_candidate_at_height(3).unwrap(),
+            fork3.block_hash()
+        );
+        assert_eq!(
+            store.get_top_candidate().ok(),
+            Some((fork3.block_hash(), 3, fork3.header.get_work()))
+        );
+
+        // Reorged-out shares have Valid status
+        let share2_meta = store.get_block_metadata(&share2.block_hash()).unwrap();
+        assert_eq!(share2_meta.status, Status::Valid);
+        let share3_meta = store.get_block_metadata(&share3.block_hash()).unwrap();
+        assert_eq!(share3_meta.status, Status::Valid);
+    }
+
+    /// Test reorg to a shorter fork (fork has fewer blocks but more work).
+    ///
+    /// Before:  share1(h:1) → share2(h:2) → share3(h:3)  [top at h:3]
+    /// Fork:    share1(h:1) → fork_share(h:2, much more work)
+    /// After:   share1(h:1) → fork_share(h:2)  [top at h:2]
+    #[test]
+    fn test_organise_share_reorgs_to_shorter_chain() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Setup genesis
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Build candidate chain: share1(h:1) → share2(h:2) → share3(h:3)
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m2 = store
+            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share2.block_hash(), 2, &mut m2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m3 = store
+            .add_share(&share3, 3, share3.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share3.block_hash(), 3, &mut m3, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(store.get_top_candidate_height().ok(), Some(3));
+
+        // fork_share: child of share1, h:2, much more cumulative work
+        let fork_share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695795)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                &fork_share,
+                2,
+                fork_share.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // organise_share should reorg to the shorter but heavier chain
+        let mut batch = Store::get_write_batch();
+        store
+            .organise_share(fork_share.clone(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // After reorg: share1(h:1) → fork_share(h:2), chain is shorter
+        assert_eq!(
+            store.get_candidate_at_height(1).unwrap(),
+            share1.block_hash()
+        );
+        assert_eq!(
+            store.get_candidate_at_height(2).unwrap(),
+            fork_share.block_hash()
+        );
+        assert_eq!(store.get_top_candidate_height().ok(), Some(2));
+
+        // Reorged-out shares have Valid status
+        let share2_meta = store.get_block_metadata(&share2.block_hash()).unwrap();
+        assert_eq!(share2_meta.status, Status::Valid);
+        let share3_meta = store.get_block_metadata(&share3.block_hash()).unwrap();
+        assert_eq!(share3_meta.status, Status::Valid);
     }
 }
