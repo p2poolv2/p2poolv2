@@ -19,8 +19,8 @@ use crate::{
     store::{block_tx_metadata::BlockMetadata, writer::StoreError},
 };
 
-use super::Store;
-use bitcoin::{BlockHash, Work};
+use super::{Chain, Height, Store, TopResult};
+use bitcoin::BlockHash;
 
 impl Store {
     /// Organise a share by updating candidate and confirmed indexes.
@@ -40,7 +40,7 @@ impl Store {
         &self,
         share: ShareBlock,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), StoreError> {
+    ) -> Result<Option<Height>, StoreError> {
         let blockhash = share.block_hash();
         tracing::debug!("organise_share called for {blockhash}");
 
@@ -80,10 +80,10 @@ impl Store {
         &self,
         share_blockhash: &BlockHash,
         metadata: &BlockMetadata,
-        top_candidate: Option<(BlockHash, u32, Work)>,
+        top_candidate: Option<&TopResult>,
     ) -> bool {
         match top_candidate {
-            Some((hash, _, work)) => metadata.chain_work > work && hash != *share_blockhash,
+            Some(top) => metadata.chain_work > top.work && top.hash != *share_blockhash,
             None => false,
         }
     }
@@ -97,7 +97,7 @@ impl Store {
     fn reorg_candidate(
         &self,
         blockhash: &BlockHash,
-        top_candidate: Option<(BlockHash, u32, Work)>,
+        top_candidate: Option<&TopResult>,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), StoreError> {
         let branch = self.get_branch_to_candidates(blockhash)?.ok_or_else(|| {
@@ -159,8 +159,8 @@ impl Store {
         &self,
         share: &ShareBlock,
         metadata: &BlockMetadata,
-        top_at_chain: Option<(BlockHash, u32, Work)>,
-    ) -> Result<Option<u32>, StoreError> {
+        top_at_chain: Option<&TopResult>,
+    ) -> Result<Option<Height>, StoreError> {
         match top_at_chain {
             None => {
                 if metadata.expected_height.unwrap_or_default() == 1 {
@@ -169,11 +169,11 @@ impl Store {
                     Ok(None)
                 }
             }
-            Some((top_hash, top_height, top_work)) => {
+            Some(top) => {
                 let expected_height = metadata.expected_height.unwrap_or_default();
-                if top_hash == share.header.prev_share_blockhash
-                    && expected_height == top_height + 1
-                    && metadata.chain_work > top_work
+                if top.hash == share.header.prev_share_blockhash
+                    && expected_height == top.height + 1
+                    && metadata.chain_work > top.work
                 {
                     Ok(Some(expected_height))
                 } else {
@@ -188,6 +188,7 @@ impl Store {
 mod tests {
     use super::*;
     use crate::store::block_tx_metadata::Status;
+    use crate::store::organise::TopResult;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::Work;
     use tempfile::tempdir;
@@ -230,9 +231,13 @@ mod tests {
         };
 
         // height == top candidate height + 1 → 6 == 5 + 1
-        let top_candidate = Some((parent_hash, 5, Work::from_hex("0x05").unwrap()));
+        let top_candidate = Some(TopResult {
+            hash: parent_hash,
+            height: 5,
+            work: Work::from_hex("0x05").unwrap(),
+        });
 
-        let result = store.extends_candidates(&share, &metadata, top_candidate);
+        let result = store.extends_candidates(&share, &metadata, top_candidate.as_ref());
         assert_eq!(result.unwrap(), Some(6));
     }
 
@@ -252,9 +257,13 @@ mod tests {
         };
 
         // Height condition met (6 == 5+1), but hash differs from prev_share_blockhash
-        let top_candidate = Some((different_hash, 5, Work::from_hex("0x05").unwrap()));
+        let top_candidate = Some(TopResult {
+            hash: different_hash,
+            height: 5,
+            work: Work::from_hex("0x05").unwrap(),
+        });
 
-        let result = store.extends_candidates(&share, &metadata, top_candidate);
+        let result = store.extends_candidates(&share, &metadata, top_candidate.as_ref());
         assert_eq!(result.unwrap(), None);
     }
 
@@ -278,9 +287,13 @@ mod tests {
         };
 
         // Hash matches but height doesn't (7 != 5+1)
-        let top_candidate = Some((parent_hash, 5, Work::from_hex("0x05").unwrap()));
+        let top_candidate = Some(TopResult {
+            hash: parent_hash,
+            height: 5,
+            work: Work::from_hex("0x05").unwrap(),
+        });
 
-        let result = store.extends_candidates(&share, &metadata, top_candidate);
+        let result = store.extends_candidates(&share, &metadata, top_candidate.as_ref());
         assert_eq!(result.unwrap(), None);
     }
 
@@ -300,9 +313,13 @@ mod tests {
         };
 
         // Neither hash nor height matches
-        let top_candidate = Some((different_hash, 10, Work::from_hex("0x05").unwrap()));
+        let top_candidate = Some(TopResult {
+            hash: different_hash,
+            height: 10,
+            work: Work::from_hex("0x05").unwrap(),
+        });
 
-        let result = store.extends_candidates(&share, &metadata, top_candidate);
+        let result = store.extends_candidates(&share, &metadata, top_candidate.as_ref());
         assert_eq!(result.unwrap(), None);
     }
 
@@ -365,7 +382,11 @@ mod tests {
 
         assert_eq!(
             store.get_top_candidate().ok(),
-            Some((share1.block_hash(), 1, share1.header.get_work()))
+            Some(TopResult {
+                hash: share1.block_hash(),
+                height: 1,
+                work: share1.header.get_work()
+            })
         );
 
         // create share_to_organise with prev_share_blockhash = share1 at expected_height 2.
@@ -423,7 +444,11 @@ mod tests {
 
         assert_eq!(
             store.get_top_candidate().ok(),
-            Some((genesis.block_hash(), 0, genesis.header.get_work()))
+            Some(TopResult {
+                hash: genesis.block_hash(),
+                height: 0,
+                work: genesis.header.get_work()
+            })
         );
 
         // Add share (child of genesis) at height 1.
@@ -446,7 +471,11 @@ mod tests {
         // Top candidate unchanged
         assert_eq!(
             store.get_top_candidate().ok(),
-            Some((genesis.block_hash(), 0, genesis.header.get_work()))
+            Some(TopResult {
+                hash: genesis.block_hash(),
+                height: 0,
+                work: genesis.header.get_work()
+            })
         );
     }
 
@@ -466,9 +495,17 @@ mod tests {
             status: Status::Valid,
         };
 
-        let top_candidate = Some((top_share.block_hash(), 2, Work::from_hex("0x05").unwrap()));
+        let top_candidate = Some(TopResult {
+            hash: top_share.block_hash(),
+            height: 2,
+            work: Work::from_hex("0x05").unwrap(),
+        });
 
-        assert!(store.should_reorg_candidate(&share.block_hash(), &metadata, top_candidate));
+        assert!(store.should_reorg_candidate(
+            &share.block_hash(),
+            &metadata,
+            top_candidate.as_ref()
+        ));
     }
 
     #[test]
@@ -485,9 +522,17 @@ mod tests {
             status: Status::Valid,
         };
 
-        let top_candidate = Some((top_share.block_hash(), 2, Work::from_hex("0x05").unwrap()));
+        let top_candidate = Some(TopResult {
+            hash: top_share.block_hash(),
+            height: 2,
+            work: Work::from_hex("0x05").unwrap(),
+        });
 
-        assert!(!store.should_reorg_candidate(&share.block_hash(), &metadata, top_candidate));
+        assert!(!store.should_reorg_candidate(
+            &share.block_hash(),
+            &metadata,
+            top_candidate.as_ref()
+        ));
     }
 
     #[test]
@@ -504,9 +549,17 @@ mod tests {
             status: Status::Valid,
         };
 
-        let top_candidate = Some((top_share.block_hash(), 2, Work::from_hex("0x05").unwrap()));
+        let top_candidate = Some(TopResult {
+            hash: top_share.block_hash(),
+            height: 2,
+            work: Work::from_hex("0x05").unwrap(),
+        });
 
-        assert!(!store.should_reorg_candidate(&share.block_hash(), &metadata, top_candidate));
+        assert!(!store.should_reorg_candidate(
+            &share.block_hash(),
+            &metadata,
+            top_candidate.as_ref()
+        ));
     }
 
     #[test]
@@ -523,9 +576,17 @@ mod tests {
         };
 
         // Same blockhash as share — should not reorg against itself
-        let top_candidate = Some((share.block_hash(), 2, Work::from_hex("0x05").unwrap()));
+        let top_candidate = Some(TopResult {
+            hash: share.block_hash(),
+            height: 2,
+            work: Work::from_hex("0x05").unwrap(),
+        });
 
-        assert!(!store.should_reorg_candidate(&share.block_hash(), &metadata, top_candidate));
+        assert!(!store.should_reorg_candidate(
+            &share.block_hash(),
+            &metadata,
+            top_candidate.as_ref()
+        ));
     }
 
     #[test]
@@ -592,7 +653,11 @@ mod tests {
 
         assert_eq!(
             store.get_top_candidate().ok(),
-            Some((share2.block_hash(), 2, share2.header.get_work()))
+            Some(TopResult {
+                hash: share2.block_hash(),
+                height: 2,
+                work: share2.header.get_work()
+            })
         );
 
         // fork_share: child of share1, at h:2, with MORE cumulative work
@@ -631,7 +696,11 @@ mod tests {
         );
         assert_eq!(
             store.get_top_candidate().ok(),
-            Some((fork_share.block_hash(), 2, fork_share.header.get_work()))
+            Some(TopResult {
+                hash: fork_share.block_hash(),
+                height: 2,
+                work: fork_share.header.get_work()
+            })
         );
 
         // share2 is reorged out and has Valid status
@@ -697,7 +766,11 @@ mod tests {
 
         assert_eq!(
             store.get_top_candidate().ok(),
-            Some((share3.block_hash(), 3, share3.header.get_work()))
+            Some(TopResult {
+                hash: share3.block_hash(),
+                height: 3,
+                work: share3.header.get_work()
+            })
         );
 
         // Build fork: share1 → fork2(h:2) → fork3(h:3, more work)
@@ -742,7 +815,11 @@ mod tests {
         );
         assert_eq!(
             store.get_top_candidate().ok(),
-            Some((fork3.block_hash(), 3, fork3.header.get_work()))
+            Some(TopResult {
+                hash: fork3.block_hash(),
+                height: 3,
+                work: fork3.header.get_work()
+            })
         );
 
         // Reorged-out shares have Valid status

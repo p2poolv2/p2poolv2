@@ -32,8 +32,23 @@ const TOP_CANDIDATE_KEY: &str = "meta:top_candidate_height";
 const TOP_CONFIRMED_KEY: &str = "meta:top_confirmed_height";
 const BRANCH_INITIAL_CAPACITY: usize = 16;
 
+/// Type to capture candidate and confirmed chains as vector of
+/// height, blockhash pairs
+type Chain = Vec<(u32, BlockHash)>;
+
+/// Height type to avoid using u32
+type Height = u32;
+
+/// Top of a candidate or confirmed chain: blockhash, height, and cumulative work.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TopResult {
+    pub hash: BlockHash,
+    pub height: Height,
+    pub work: Work,
+}
+
 /// Returns key for height with provided suffix
-fn height_to_key_with_suffix(height: u32, suffix: &str) -> Vec<u8> {
+fn height_to_key_with_suffix(height: Height, suffix: &str) -> Vec<u8> {
     [&height.to_be_bytes(), suffix.as_bytes()].concat()
 }
 
@@ -43,9 +58,9 @@ impl Store {
     /// Only updates top if it is more than one higher.
     fn increment_top_candidate(
         &self,
-        height: u32,
+        height: Height,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<u32, StoreError> {
+    ) -> Result<Height, StoreError> {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
 
         let use_height = match self.get_top_candidate_height() {
@@ -72,7 +87,7 @@ impl Store {
     ///
     /// Used by `reorg_candidate` which computes the correct final height
     /// locally instead of reading stale DB state within a single WriteBatch.
-    fn set_top_candidate_height(&self, height: u32, batch: &mut rocksdb::WriteBatch) {
+    fn set_top_candidate_height(&self, height: Height, batch: &mut rocksdb::WriteBatch) {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let serialized_height = consensus::serialize(&height);
         batch.put_cf(
@@ -85,7 +100,7 @@ impl Store {
     /// Write a candidate index entry directly into the batch.
     fn put_candidate_entry(
         &self,
-        height: u32,
+        height: Height,
         blockhash: &BlockHash,
         batch: &mut rocksdb::WriteBatch,
     ) {
@@ -96,7 +111,7 @@ impl Store {
     }
 
     /// Delete a candidate index entry from the batch.
-    fn delete_candidate_entry(&self, height: u32, batch: &mut rocksdb::WriteBatch) {
+    fn delete_candidate_entry(&self, height: Height, batch: &mut rocksdb::WriteBatch) {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let key = height_to_key_with_suffix(height, CANDIDATE_SUFFIX);
         batch.delete_cf(&block_height_cf, key);
@@ -104,7 +119,7 @@ impl Store {
 
     /// Set top confirmed height
     /// The required height checks are already made in make_confirmed
-    pub(crate) fn set_top_confirmed_height(&self, height: u32, batch: &mut rocksdb::WriteBatch) {
+    pub(crate) fn set_top_confirmed_height(&self, height: Height, batch: &mut rocksdb::WriteBatch) {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let serialized_height = consensus::serialize(&height);
         batch.put_cf(
@@ -114,8 +129,28 @@ impl Store {
         );
     }
 
+    /// Write a confirmed index entry directly into the batch.
+    fn put_confirmed_entry(
+        &self,
+        height: Height,
+        blockhash: &BlockHash,
+        batch: &mut rocksdb::WriteBatch,
+    ) {
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+        let key = height_to_key_with_suffix(height, CONFIRMED_SUFFIX);
+        let serialized = consensus::serialize(blockhash);
+        batch.put_cf(&block_height_cf, key, serialized);
+    }
+
+    /// Delete a confirmed index entry from the batch.
+    fn delete_confirmed_entry(&self, height: Height, batch: &mut rocksdb::WriteBatch) {
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+        let key = height_to_key_with_suffix(height, CONFIRMED_SUFFIX);
+        batch.delete_cf(&block_height_cf, key);
+    }
+
     /// Get top candidate height from candidates index
-    pub(crate) fn get_top_candidate_height(&self) -> Result<u32, StoreError> {
+    pub(crate) fn get_top_candidate_height(&self) -> Result<Height, StoreError> {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         match self
             .db
@@ -128,7 +163,7 @@ impl Store {
     }
 
     /// Get top confirmed height from confirmed index
-    pub(crate) fn get_top_confirmed_height(&self) -> Result<u32, StoreError> {
+    pub(crate) fn get_top_confirmed_height(&self) -> Result<Height, StoreError> {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         match self
             .db
@@ -141,20 +176,27 @@ impl Store {
     }
 
     /// Get top candidate after looking up top candidate height
-    /// Return both the blockhash and the height
-    pub(crate) fn get_top_candidate(&self) -> Result<(BlockHash, u32, Work), StoreError> {
+    pub(crate) fn get_top_candidate(&self) -> Result<TopResult, StoreError> {
         let height = self.get_top_candidate_height()?;
         let hash = self.get_candidate_at_height(height)?;
         let metadata = self.get_block_metadata(&hash)?;
-        Ok((hash, height, metadata.chain_work))
+        Ok(TopResult {
+            hash,
+            height,
+            work: metadata.chain_work,
+        })
     }
 
     /// Get top confirmed after looking up top confirmed height
-    pub(crate) fn get_top_confirmed(&self) -> Result<(BlockHash, u32, Work), StoreError> {
+    pub(crate) fn get_top_confirmed(&self) -> Result<TopResult, StoreError> {
         let height = self.get_top_confirmed_height()?;
         let hash = self.get_confirmed_at_height(height)?;
         let metadata = self.get_block_metadata(&hash)?;
-        Ok((hash, height, metadata.chain_work))
+        Ok(TopResult {
+            hash,
+            height,
+            work: metadata.chain_work,
+        })
     }
 
     /// Add blockhash as a candidate at provided height.
@@ -163,7 +205,7 @@ impl Store {
     pub(crate) fn append_to_candidates(
         &self,
         blockhash: &BlockHash,
-        height: u32,
+        height: Height,
         metadata: &mut BlockMetadata,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), StoreError> {
@@ -185,8 +227,8 @@ impl Store {
     pub(crate) fn get_candidates_chain(
         &self,
         blockhash: &BlockHash,
-        top_candidate: Option<(BlockHash, u32, Work)>,
-    ) -> Result<Vec<(u32, BlockHash)>, StoreError> {
+        top_candidate: Option<&TopResult>,
+    ) -> Result<Chain, StoreError> {
         let Ok(metadata) = self.get_block_metadata(blockhash) else {
             return Err(StoreError::NotFound(
                 "Block metadata not found for branch point".into(),
@@ -197,21 +239,17 @@ impl Store {
                 "Block metadata doesn't have an expected height".into(),
             ));
         };
-        let Some((_, top_candidate_height, _)) = top_candidate else {
+        let Some(top) = top_candidate else {
             return Err(StoreError::NotFound(
                 "No top candidate height found when reorging candidate chain".into(),
             ));
         };
-        self.get_candidates(height, top_candidate_height)
+        self.get_candidates(height, top.height)
     }
 
     /// Fetch a list of (height, blockhash) pairs on the candidates chain between
     /// the given heights, inclusive.
-    pub(crate) fn get_candidates(
-        &self,
-        from: u32,
-        to: u32,
-    ) -> Result<Vec<(u32, BlockHash)>, StoreError> {
+    pub(crate) fn get_candidates(&self, from: Height, to: Height) -> Result<Chain, StoreError> {
         self.get_chain_range(from, to, CANDIDATE_SUFFIX)
     }
 
@@ -220,8 +258,8 @@ impl Store {
     pub(crate) fn get_confirmed_chain(
         &self,
         blockhash: &BlockHash,
-        top_confirmed: Option<(BlockHash, u32, Work)>,
-    ) -> Result<Vec<(u32, BlockHash)>, StoreError> {
+        top_confirmed: Option<&TopResult>,
+    ) -> Result<Chain, StoreError> {
         let Ok(metadata) = self.get_block_metadata(blockhash) else {
             return Err(StoreError::NotFound(
                 "Block metadata not found for branch point".into(),
@@ -232,21 +270,17 @@ impl Store {
                 "Block metadata doesn't have an expected height".into(),
             ));
         };
-        let Some((_, top_confirmed_height, _)) = top_confirmed else {
+        let Some(top) = top_confirmed else {
             return Err(StoreError::NotFound(
                 "No top confirmed height found when fetching confirmed chain".into(),
             ));
         };
-        self.get_confirmed(height, top_confirmed_height)
+        self.get_confirmed(height, top.height)
     }
 
     /// Fetch a list of (height, blockhash) pairs on the confirmed chain between
     /// the given heights, inclusive.
-    pub(crate) fn get_confirmed(
-        &self,
-        from: u32,
-        to: u32,
-    ) -> Result<Vec<(u32, BlockHash)>, StoreError> {
+    pub(crate) fn get_confirmed(&self, from: Height, to: Height) -> Result<Chain, StoreError> {
         self.get_chain_range(from, to, CONFIRMED_SUFFIX)
     }
 
@@ -254,12 +288,7 @@ impl Store {
     /// and key suffix. Filters iterator results to only include keys whose
     /// suffix matches, avoiding cross-contamination between candidate (":c")
     /// and confirmed (":f") entries that share the same height prefix.
-    fn get_chain_range(
-        &self,
-        from: u32,
-        to: u32,
-        suffix: &str,
-    ) -> Result<Vec<(u32, BlockHash)>, StoreError> {
+    fn get_chain_range(&self, from: Height, to: Height, suffix: &str) -> Result<Chain, StoreError> {
         if from > to {
             return Ok(Vec::new());
         }
@@ -303,7 +332,7 @@ impl Store {
     pub(crate) fn append_to_confirmed(
         &self,
         blockhash: &BlockHash,
-        height: u32,
+        height: Height,
         metadata: &mut BlockMetadata,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), StoreError> {
@@ -333,7 +362,7 @@ impl Store {
     }
 
     /// Get the candidate blockhash at a specific height
-    pub fn get_candidate_at_height(&self, height: u32) -> Result<BlockHash, StoreError> {
+    pub fn get_candidate_at_height(&self, height: Height) -> Result<BlockHash, StoreError> {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let key = height_to_key_with_suffix(height, CANDIDATE_SUFFIX);
 
@@ -347,7 +376,7 @@ impl Store {
     }
 
     /// Get the confirmed blockhash at a specific height
-    pub fn get_confirmed_at_height(&self, height: u32) -> Result<BlockHash, StoreError> {
+    pub fn get_confirmed_at_height(&self, height: Height) -> Result<BlockHash, StoreError> {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let key = height_to_key_with_suffix(height, CONFIRMED_SUFFIX);
 
@@ -537,10 +566,10 @@ mod tests {
         assert_eq!(store.get_top_candidate_height().unwrap(), 1);
 
         // Top candidate is changed
-        assert_eq!(
-            store.get_top_candidate().unwrap(),
-            (share2.block_hash(), 1, share2.header.get_work())
-        );
+        let top = store.get_top_candidate().unwrap();
+        assert_eq!(top.hash, share2.block_hash());
+        assert_eq!(top.height, 1);
+        assert_eq!(top.work, share2.header.get_work());
     }
 
     #[test]
@@ -591,9 +620,9 @@ mod tests {
 
         // Top confirmed is changed
         let top_confirmed = store.get_top_confirmed().unwrap();
-        assert_eq!(top_confirmed.0, (share2.block_hash()));
-        assert_eq!(top_confirmed.1, 1);
-        assert_eq!(top_confirmed.2, share2.header.get_work());
+        assert_eq!(top_confirmed.hash, share2.block_hash());
+        assert_eq!(top_confirmed.height, 1);
+        assert_eq!(top_confirmed.work, share2.header.get_work());
     }
 
     #[test]
@@ -1033,7 +1062,7 @@ mod tests {
 
         let top = store.get_top_candidate().ok();
         let result = store
-            .get_candidates_chain(&share1.block_hash(), top)
+            .get_candidates_chain(&share1.block_hash(), top.as_ref())
             .unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], (1, share1.block_hash()));
@@ -1161,7 +1190,7 @@ mod tests {
 
         let top = store.get_top_confirmed().ok();
         let result = store
-            .get_confirmed_chain(&share1.block_hash(), top)
+            .get_confirmed_chain(&share1.block_hash(), top.as_ref())
             .unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], (1, share1.block_hash()));
