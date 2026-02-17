@@ -24,6 +24,7 @@ use bitcoin::{
     consensus::{self, encode},
 };
 use std::collections::VecDeque;
+use tracing::debug;
 pub mod organise_share;
 
 const CANDIDATE_SUFFIX: &str = ":c";
@@ -215,7 +216,7 @@ impl Store {
         height: Height,
         metadata: &mut BlockMetadata,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), StoreError> {
+    ) -> Result<Option<Height>, StoreError> {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let key = height_to_key_with_suffix(height, CANDIDATE_SUFFIX);
 
@@ -226,7 +227,7 @@ impl Store {
 
         metadata.status = Status::Candidate;
         self.update_block_metadata(blockhash, metadata, batch)?;
-        Ok(())
+        Ok(Some(height))
     }
 
     /// Get list of (height, blockhash) pairs from given blockhash up to top candidate.
@@ -257,6 +258,7 @@ impl Store {
     /// Fetch a list of (height, blockhash) pairs on the candidates chain between
     /// the given heights, inclusive.
     pub(crate) fn get_candidates(&self, from: Height, to: Height) -> Result<Chain, StoreError> {
+        debug!("Get candidates from {from} to {to}");
         self.get_chain_range(from, to, CANDIDATE_SUFFIX)
     }
 

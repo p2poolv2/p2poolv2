@@ -18,6 +18,7 @@ use crate::{
     shares::share_block::ShareBlock,
     store::{block_tx_metadata::BlockMetadata, writer::StoreError},
 };
+use tracing::debug;
 
 use super::{Chain, Height, Store, TopResult};
 use bitcoin::BlockHash;
@@ -44,32 +45,149 @@ impl Store {
         let blockhash = share.block_hash();
         tracing::debug!("organise_share called for {blockhash}");
 
-        // Read the metadata and share from store as this function is called from
         let mut metadata = self.get_block_metadata(&blockhash)?;
         let top_candidate = self.get_top_candidate().ok();
-        let top_confirmed = self.get_top_confirmed().ok();
+        let Some(top_confirmed) = self.get_top_confirmed().ok() else {
+            return Err(StoreError::Database(
+                "Organise share called without a genesis block".into(),
+            ));
+        };
 
-        // Append to candidate if share extends candidate or
-        // confirmed. We reorg candidate and confirmed chains later.
-        if let Some(extended_candidate_height) =
-            self.extends_candidates(&share, &metadata, top_candidate)?
+        debug!("top candidate {:?}", top_candidate);
+        debug!("top confirmed {:?}", top_confirmed);
+
+        let effective_candidates = self.update_candidate_chain(
+            &share,
+            &blockhash,
+            &mut metadata,
+            top_candidate.as_ref(),
+            &top_confirmed,
+            batch,
+        )?;
+
+        // Promote candidates to confirmed if they extend the confirmed chain.
+        match effective_candidates {
+            Some((nc_height, candidates)) => {
+                if self.should_extend_confirmed(
+                    &candidates,
+                    top_confirmed.height,
+                    top_confirmed.hash,
+                )? {
+                    self.extend_confirmed(nc_height, candidates, batch)
+                } else {
+                    Ok(Some(top_confirmed.height)) // TODO: reorg confirmed chain
+                }
+            }
+            None => Ok(Some(top_confirmed.height)),
+        }
+    }
+
+    /// Update the candidate chain (append or reorg) and return the
+    /// effective candidate chain built locally.
+    ///
+    /// Batch writes are not visible to DB reads within the same batch,
+    /// so this method reads committed state and patches in the new entries.
+    fn update_candidate_chain(
+        &self,
+        share: &ShareBlock,
+        blockhash: &BlockHash,
+        metadata: &mut BlockMetadata,
+        top_candidate: Option<&TopResult>,
+        top_confirmed: &TopResult,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<Option<(Height, Chain)>, StoreError> {
+        if let Some(extended_height) =
+            self.should_extend_candidates(share, metadata, top_candidate)?
         {
-            self.append_to_candidates(&blockhash, extended_candidate_height, &mut metadata, batch)?;
-        } else if self.should_reorg_candidate(&blockhash, &metadata, top_candidate) {
-            self.reorg_candidate(&blockhash, top_candidate, batch)?;
+            debug!("Should extend candidate");
+            self.append_to_candidates(blockhash, extended_height, metadata, batch)?;
+
+            // Committed candidates above confirmed are unaffected by the
+            // append; read them, then add the newly written entry.
+            let old_top = top_candidate
+                .map(|t| t.height)
+                .unwrap_or(top_confirmed.height);
+            let mut candidates = self.get_candidates(top_confirmed.height + 1, old_top)?;
+            candidates.push((extended_height, *blockhash));
+            debug!("new candidate height after extending candidates {extended_height}");
+            return Ok(Some((extended_height, candidates)));
         }
 
-        Ok(())
+        if self.should_reorg_candidate(blockhash, metadata, top_candidate) {
+            let (new_height, reorg_chain) =
+                self.reorg_candidate(blockhash, top_candidate, batch)?;
+            debug!("new candidate height after reorging candidates {new_height}");
 
-        // if let Some(extended_confirmed_height) =
-        //     self.extend_confirmed_at(&share, &metadata, top_confirmed)?
-        // {
-        //     return self.make_confirmed(&blockhash, extended_confirmed_height, &mut batch);
-        // }
+            // Include committed candidates below the reorg branch point
+            let branch_start = reorg_chain.first().map(|(h, _)| *h).unwrap_or(0);
+            let mut full_chain = if branch_start > top_confirmed.height + 1 {
+                self.get_candidates(top_confirmed.height + 1, branch_start - 1)?
+            } else {
+                Vec::new()
+            };
+            full_chain.extend(reorg_chain);
+            return Ok(Some((new_height, full_chain)));
+        }
 
-        // if self.should_reorg_confirmed(&share, &metadata, top_confirmed) {
-        //     return self.reorg_confirmed(&blockhash);
-        // }
+        Ok(None)
+    }
+
+    /// Check if the confirmed chain can be extended by the local candidate chain.
+    ///
+    /// Accepts the effective candidate chain built locally (avoiding stale
+    /// reads from the DB within the same WriteBatch).
+    /// Returns true if the first candidate is a child of the top confirmed.
+    fn should_extend_confirmed(
+        &self,
+        candidates: &Chain,
+        top_confirmed_height: Height,
+        top_confirmed_hash: BlockHash,
+    ) -> Result<bool, StoreError> {
+        debug!(
+            "top confirmed height {}, top confirmed hash {}",
+            top_confirmed_height, top_confirmed_hash
+        );
+
+        if candidates.is_empty() {
+            debug!("No candidates found");
+            return Ok(false);
+        }
+
+        let Some(first_candidate_header) = self.get_share_header(&candidates[0].1)? else {
+            return Err(StoreError::NotFound(
+                "No candidate header found in extending confirmed".into(),
+            ));
+        };
+
+        debug!("First candidate header {:?}", first_candidate_header);
+
+        // First candidate must be a child of top confirmed
+        Ok(
+            first_candidate_header.prev_share_blockhash == top_confirmed_hash
+                && top_confirmed_height + 1 == candidates[0].0,
+        )
+    }
+
+    /// Promote candidates to confirmed and clear the candidate chain.
+    ///
+    /// Moves each candidate entry to the confirmed index, updates metadata
+    /// to Confirmed status, and removes the top candidate height marker.
+    fn extend_confirmed(
+        &self,
+        to: Height,
+        candidates: Vec<(Height, BlockHash)>,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<Option<Height>, StoreError> {
+        for (candidate_height, candidate_hash) in candidates {
+            self.put_confirmed_entry(candidate_height, &candidate_hash, batch);
+            self.delete_candidate_entry(candidate_height, batch);
+            let mut metadata = self.get_block_metadata(&candidate_hash)?;
+            metadata.status = crate::store::block_tx_metadata::Status::Confirmed;
+            self.update_block_metadata(&candidate_hash, &metadata, batch)?;
+        }
+        self.delete_top_candidate_height(batch);
+        self.set_top_confirmed_height(to, batch);
+        Ok(Some(to))
     }
 
     /// Returns true if the share being organised has more cumulative
@@ -90,6 +208,10 @@ impl Store {
 
     /// Reorgs the candidate chain to the branch ending at `blockhash`.
     ///
+    /// Returns the new top candidate height and the new candidate chain
+    /// as `(height, blockhash)` pairs. The caller uses this local chain
+    /// to check confirmed extension without re-reading from the DB.
+    ///
     /// Directly manipulates candidate index entries and sets the final
     /// top height in a single pass, avoiding stale reads from the DB
     /// within the same WriteBatch. Reorged-out shares have their
@@ -99,7 +221,7 @@ impl Store {
         blockhash: &BlockHash,
         top_candidate: Option<&TopResult>,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), StoreError> {
+    ) -> Result<(Height, Chain), StoreError> {
         let branch = self.get_branch_to_candidates(blockhash)?.ok_or_else(|| {
             StoreError::NotFound("Branch point to reorg candidate chain not found.".into())
         })?;
@@ -122,9 +244,9 @@ impl Store {
             }
         }
 
-        // Write new branch entries and update metadata for shares
-        // that are not already candidates
+        // Write new branch entries, collect the chain, and update metadata
         let mut new_top_height = 0u32;
+        let mut new_chain = Vec::with_capacity(branch.len());
         for candidate in &branch {
             let mut metadata = self.get_block_metadata(candidate)?;
             let height = metadata.expected_height.ok_or_else(|| {
@@ -137,12 +259,13 @@ impl Store {
                 self.update_block_metadata(candidate, &metadata, batch)?;
             }
 
+            new_chain.push((height, *candidate));
             new_top_height = height;
         }
 
         // Set the final top candidate height directly
         self.set_top_candidate_height(new_top_height, batch);
-        Ok(())
+        Ok((new_top_height, new_chain))
     }
 
     /// Extends candidate chain, if:
@@ -155,20 +278,14 @@ impl Store {
     /// top_candidate or top_confirmed chains using `top_at_chain` param.
     ///
     /// Returns true if candidate chain is extended.
-    fn extends_candidates(
+    fn should_extend_candidates(
         &self,
         share: &ShareBlock,
         metadata: &BlockMetadata,
         top_at_chain: Option<&TopResult>,
     ) -> Result<Option<Height>, StoreError> {
         match top_at_chain {
-            None => {
-                if metadata.expected_height.unwrap_or_default() == 1 {
-                    Ok(Some(1))
-                } else {
-                    Ok(None)
-                }
-            }
+            None => Ok(metadata.expected_height),
             Some(top) => {
                 let expected_height = metadata.expected_height.unwrap_or_default();
                 if top.hash == share.header.prev_share_blockhash
@@ -196,7 +313,7 @@ mod tests {
     // ── extend_candidates_at unit tests ──────────────────────────────
 
     #[test]
-    fn test_extend_candidates_at_returns_none_when_no_top_candidate() {
+    fn test_extend_candidates_at_returns_share_expected_height_when_no_top_candidate() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -207,8 +324,8 @@ mod tests {
             status: Status::Pending,
         };
 
-        let result = store.extends_candidates(&share, &metadata, None);
-        assert_eq!(result.unwrap(), None);
+        let result = store.should_extend_candidates(&share, &metadata, None);
+        assert_eq!(result.unwrap(), metadata.expected_height);
     }
 
     #[test]
@@ -237,7 +354,7 @@ mod tests {
             work: Work::from_hex("0x05").unwrap(),
         });
 
-        let result = store.extends_candidates(&share, &metadata, top_candidate.as_ref());
+        let result = store.should_extend_candidates(&share, &metadata, top_candidate.as_ref());
         assert_eq!(result.unwrap(), Some(6));
     }
 
@@ -263,7 +380,7 @@ mod tests {
             work: Work::from_hex("0x05").unwrap(),
         });
 
-        let result = store.extends_candidates(&share, &metadata, top_candidate.as_ref());
+        let result = store.should_extend_candidates(&share, &metadata, top_candidate.as_ref());
         assert_eq!(result.unwrap(), None);
     }
 
@@ -293,7 +410,7 @@ mod tests {
             work: Work::from_hex("0x05").unwrap(),
         });
 
-        let result = store.extends_candidates(&share, &metadata, top_candidate.as_ref());
+        let result = store.should_extend_candidates(&share, &metadata, top_candidate.as_ref());
         assert_eq!(result.unwrap(), None);
     }
 
@@ -319,14 +436,14 @@ mod tests {
             work: Work::from_hex("0x05").unwrap(),
         });
 
-        let result = store.extends_candidates(&share, &metadata, top_candidate.as_ref());
+        let result = store.should_extend_candidates(&share, &metadata, top_candidate.as_ref());
         assert_eq!(result.unwrap(), None);
     }
 
     // ── organise_share integration tests ─────────────────────────────
 
     #[test]
-    fn test_organise_share_noop_when_no_top_candidate() {
+    fn test_organise_share_promotes_first_candidate_to_confirmed() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -353,7 +470,13 @@ mod tests {
         store.organise_share(share.clone(), &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        assert_eq!(store.get_top_candidate_height().ok(), Some(1));
+        // Candidate was promoted to confirmed
+        assert!(store.get_top_candidate().is_err());
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            share.block_hash()
+        );
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
     }
 
     #[test]
@@ -414,14 +537,17 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
+        // Both candidates promoted to confirmed
+        assert!(store.get_top_candidate().is_err());
         assert_eq!(
-            store.get_candidate_at_height(2).unwrap(),
+            store.get_confirmed_at_height(1).unwrap(),
+            share1.block_hash()
+        );
+        assert_eq!(
+            store.get_confirmed_at_height(2).unwrap(),
             share_to_organise.block_hash()
         );
-        assert_eq!(
-            store.get_candidate_at_height(1).ok(),
-            Some(share1.block_hash())
-        );
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 2);
     }
 
     #[test]
@@ -685,23 +811,17 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        // After reorg: share1(h:1) → fork_share(h:2)
+        // After reorg + confirmed promotion: all on confirmed chain
+        assert!(store.get_top_candidate().is_err());
         assert_eq!(
-            store.get_candidate_at_height(1).unwrap(),
+            store.get_confirmed_at_height(1).unwrap(),
             share1.block_hash()
         );
         assert_eq!(
-            store.get_candidate_at_height(2).unwrap(),
+            store.get_confirmed_at_height(2).unwrap(),
             fork_share.block_hash()
         );
-        assert_eq!(
-            store.get_top_candidate().ok(),
-            Some(TopResult {
-                hash: fork_share.block_hash(),
-                height: 2,
-                work: fork_share.header.get_work()
-            })
-        );
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 2);
 
         // share2 is reorged out and has Valid status
         let share2_metadata = store.get_block_metadata(&share2.block_hash()).unwrap();
@@ -712,7 +832,7 @@ mod tests {
     ///
     /// Before:  share1(h:1) → share2(h:2) → share3(h:3)  [top at h:3]
     /// Fork:    share1(h:1) → fork2(h:2) → fork3(h:3, more work)
-    /// After:   share1(h:1) → fork2(h:2) → fork3(h:3)  [top at h:3]
+    /// After:   all promoted to confirmed
     #[test]
     fn test_organise_share_reorgs_deeper_fork() {
         let temp_dir = tempdir().unwrap();
@@ -800,27 +920,21 @@ mod tests {
         store.organise_share(fork3.clone(), &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // After reorg: share1(h:1) → fork2(h:2) → fork3(h:3)
+        // After reorg + confirmed promotion: all on confirmed chain
+        assert!(store.get_top_candidate().is_err());
         assert_eq!(
-            store.get_candidate_at_height(1).unwrap(),
+            store.get_confirmed_at_height(1).unwrap(),
             share1.block_hash()
         );
         assert_eq!(
-            store.get_candidate_at_height(2).unwrap(),
+            store.get_confirmed_at_height(2).unwrap(),
             fork2.block_hash()
         );
         assert_eq!(
-            store.get_candidate_at_height(3).unwrap(),
+            store.get_confirmed_at_height(3).unwrap(),
             fork3.block_hash()
         );
-        assert_eq!(
-            store.get_top_candidate().ok(),
-            Some(TopResult {
-                hash: fork3.block_hash(),
-                height: 3,
-                work: fork3.header.get_work()
-            })
-        );
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 3);
 
         // Reorged-out shares have Valid status
         let share2_meta = store.get_block_metadata(&share2.block_hash()).unwrap();
@@ -833,7 +947,7 @@ mod tests {
     ///
     /// Before:  share1(h:1) → share2(h:2) → share3(h:3)  [top at h:3]
     /// Fork:    share1(h:1) → fork_share(h:2, much more work)
-    /// After:   share1(h:1) → fork_share(h:2)  [top at h:2]
+    /// After:   all promoted to confirmed
     #[test]
     fn test_organise_share_reorgs_to_shorter_chain() {
         let temp_dir = tempdir().unwrap();
@@ -912,21 +1026,75 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        // After reorg: share1(h:1) → fork_share(h:2), chain is shorter
+        // After reorg + confirmed promotion: shorter chain on confirmed
+        assert!(store.get_top_candidate().is_err());
         assert_eq!(
-            store.get_candidate_at_height(1).unwrap(),
+            store.get_confirmed_at_height(1).unwrap(),
             share1.block_hash()
         );
         assert_eq!(
-            store.get_candidate_at_height(2).unwrap(),
+            store.get_confirmed_at_height(2).unwrap(),
             fork_share.block_hash()
         );
-        assert_eq!(store.get_top_candidate_height().ok(), Some(2));
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 2);
 
         // Reorged-out shares have Valid status
         let share2_meta = store.get_block_metadata(&share2.block_hash()).unwrap();
         assert_eq!(share2_meta.status, Status::Valid);
         let share3_meta = store.get_block_metadata(&share3.block_hash()).unwrap();
         assert_eq!(share3_meta.status, Status::Valid);
+    }
+
+    #[test_log::test]
+    fn test_organise_share_extends_confirmed_and_removes_candidates() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Add share1 (child of genesis) at height 1 and make it a candidate
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let _metadata1 = store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store.organise_share(share1.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1 was promoted to confirmed immediately
+        assert!(store.get_top_candidate().is_err());
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            share1.block_hash()
+        );
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
+
+        // create share2 with prev_share_blockhash = share1 at expected_height 2.
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store.organise_share(share2.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // candidate chain should be empty as it is extended on to the confirmed chain
+        assert!(store.get_top_candidate().is_err());
     }
 }
