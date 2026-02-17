@@ -380,8 +380,9 @@ GetBranchInIndex(p, s, index) ==
 
 (****************************************************************************)
 (* For a share with Candidate status and more work than top, reorg          *)
-(* -- get a share that has more work than top candidate, is marked Candidate*)
-(* but not yet in candidates chain                                          *)
+(*                                                                          *)
+(* -- get a share that has more work than top candidate, is marked          *)
+(*    Candidate but not yet in candidates chain                             *)
 (* -- find common ancestor between top candidate and the new share, call it *)
 (*   branch point                                                           *)
 (* -- remove old chain, the chain from top candidate to branch point from   *)
@@ -418,8 +419,10 @@ ReorgCandidateChain(p, s) ==
 (****************************************************************************)
 (* For a share with Candidate status and more work than top confirmed,      *)
 (* reorg confirmed chain to include the new share                           *)
+(*                                                                          *)
 (* -- get a share that has more work than top confirmed, is marked Candidate*)
 (*   but not yet in confirmed chain                                         *)
+(* -- the candidate chain is not extending the confirmed chain              *)
 (* -- find common ancestor between top confirmed and the new share, call it *)
 (*   fork point                                                             *)
 (* -- remove old chain, the chain from top confirmed to fork point from the *)
@@ -429,12 +432,13 @@ ReorgCandidateChain(p, s) ==
 ReorgConfirmedChain(p, s) ==
     \* Chain tip being reorged in must be candidate
     /\ share_status[p, s] = "Candidate"
-    \* Share is not direct child of current confirmed tip
-    /\ parent[s] # TopConfirmed(p)
     \* Chain tip being reorged must have more work than current confirmed tip
     /\ chain_work[p, s] > chain_work[p, TopConfirmed(p)]
     \* Share must be in the candidate index
     /\ Contains(candidates[p], s)
+    \* If candidate chain extends from current confirmed tip, then we don't need to reorg confirmed chain,
+    \* instead we ConfirmCandidateChain to move the candidate chain on top of confirmed chain
+    /\ TopConfirmed(p) /= parent[Head(candidates[p])]
     \* Find branch point from chain tip being reorged in to confirmed chain
     /\ LET  confirmed_branch == GetBranchInIndex(p, s, confirmed)
             forkPoint == Head(confirmed_branch)
@@ -480,9 +484,9 @@ ConfirmCandidateChain(p) ==
     /\ Len(candidates[p]) > 0
     \* Confirm candidates can only extend from current confirmed tip
     \* Otherwise we reorg chain
-    /\ TopConfirmed(p) = parent[candidates[p][1]]
+    /\ TopConfirmed(p) = parent[Head(candidates[p])]
     /\ \A i \in 1..Len(candidates[p]) :
-        \A dep \in spend_dependencies[candidates[p][i]] :
+       \A dep \in spend_dependencies[candidates[p][i]] :
             GetCandidateHeight(p, dep) < GetCandidateHeight(p, candidates[p][i])
     /\ \A i \in 1..Len(candidates[p]) :
         share_status' = [share_status EXCEPT ![p, candidates[p][i]] = "Confirmed"]
