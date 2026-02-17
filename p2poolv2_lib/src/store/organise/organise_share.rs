@@ -52,7 +52,7 @@ impl Store {
         // Append to candidate if share extends candidate or
         // confirmed. We reorg candidate and confirmed chains later.
         if let Some(extended_candidate_height) =
-            self.extends_chain(&share, &metadata, top_candidate)?
+            self.extends_candidates(&share, &metadata, top_candidate)?
         {
             self.append_to_candidates(&blockhash, extended_candidate_height, &mut metadata, batch)?;
         } else if self.should_reorg_candidate(&blockhash, &metadata, top_candidate) {
@@ -155,7 +155,7 @@ impl Store {
     /// top_candidate or top_confirmed chains using `top_at_chain` param.
     ///
     /// Returns true if candidate chain is extended.
-    fn extends_chain(
+    fn extends_candidates(
         &self,
         share: &ShareBlock,
         metadata: &BlockMetadata,
@@ -206,7 +206,7 @@ mod tests {
             status: Status::Pending,
         };
 
-        let result = store.extends_chain(&share, &metadata, None);
+        let result = store.extends_candidates(&share, &metadata, None);
         assert_eq!(result.unwrap(), None);
     }
 
@@ -232,7 +232,7 @@ mod tests {
         // height == top candidate height + 1 → 6 == 5 + 1
         let top_candidate = Some((parent_hash, 5, Work::from_hex("0x05").unwrap()));
 
-        let result = store.extends_chain(&share, &metadata, top_candidate);
+        let result = store.extends_candidates(&share, &metadata, top_candidate);
         assert_eq!(result.unwrap(), Some(6));
     }
 
@@ -254,7 +254,7 @@ mod tests {
         // Height condition met (6 == 5+1), but hash differs from prev_share_blockhash
         let top_candidate = Some((different_hash, 5, Work::from_hex("0x05").unwrap()));
 
-        let result = store.extends_chain(&share, &metadata, top_candidate);
+        let result = store.extends_candidates(&share, &metadata, top_candidate);
         assert_eq!(result.unwrap(), None);
     }
 
@@ -280,7 +280,7 @@ mod tests {
         // Hash matches but height doesn't (7 != 5+1)
         let top_candidate = Some((parent_hash, 5, Work::from_hex("0x05").unwrap()));
 
-        let result = store.extends_chain(&share, &metadata, top_candidate);
+        let result = store.extends_candidates(&share, &metadata, top_candidate);
         assert_eq!(result.unwrap(), None);
     }
 
@@ -302,7 +302,7 @@ mod tests {
         // Neither hash nor height matches
         let top_candidate = Some((different_hash, 10, Work::from_hex("0x05").unwrap()));
 
-        let result = store.extends_chain(&share, &metadata, top_candidate);
+        let result = store.extends_candidates(&share, &metadata, top_candidate);
         assert_eq!(result.unwrap(), None);
     }
 
