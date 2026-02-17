@@ -97,6 +97,26 @@ impl Store {
         );
     }
 
+    /// Delete top candidate height
+    /// Used when entire candidate chain has been moved to confirmed chain
+    fn delete_top_candidate_height(&self, batch: &mut rocksdb::WriteBatch) {
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+        batch.delete_cf(&block_height_cf, TOP_CANDIDATE_KEY.as_bytes().as_ref());
+    }
+
+    /// Get top candidate height from candidates index
+    pub(crate) fn get_top_candidate_height(&self) -> Result<Height, StoreError> {
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+        match self
+            .db
+            .get_cf(&block_height_cf, TOP_CANDIDATE_KEY.as_bytes().as_ref())
+        {
+            Ok(Some(height_bytes)) => Ok(encode::deserialize(&height_bytes)?),
+            Ok(None) => Err(StoreError::NotFound("No candidate found at top".into())),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Write a candidate index entry directly into the batch.
     fn put_candidate_entry(
         &self,
@@ -115,18 +135,6 @@ impl Store {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let key = height_to_key_with_suffix(height, CANDIDATE_SUFFIX);
         batch.delete_cf(&block_height_cf, key);
-    }
-
-    /// Set top confirmed height
-    /// The required height checks are already made in make_confirmed
-    pub(crate) fn set_top_confirmed_height(&self, height: Height, batch: &mut rocksdb::WriteBatch) {
-        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
-        let serialized_height = consensus::serialize(&height);
-        batch.put_cf(
-            &block_height_cf,
-            TOP_CONFIRMED_KEY.as_bytes().as_ref(),
-            serialized_height,
-        );
     }
 
     /// Write a confirmed index entry directly into the batch.
@@ -149,17 +157,16 @@ impl Store {
         batch.delete_cf(&block_height_cf, key);
     }
 
-    /// Get top candidate height from candidates index
-    pub(crate) fn get_top_candidate_height(&self) -> Result<Height, StoreError> {
+    /// Set top confirmed height
+    /// The required height checks are already made in make_confirmed
+    pub(crate) fn set_top_confirmed_height(&self, height: Height, batch: &mut rocksdb::WriteBatch) {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
-        match self
-            .db
-            .get_cf(&block_height_cf, TOP_CANDIDATE_KEY.as_bytes().as_ref())
-        {
-            Ok(Some(height_bytes)) => Ok(encode::deserialize(&height_bytes)?),
-            Ok(None) => Err(StoreError::NotFound("No candidate found at top".into())),
-            Err(e) => Err(e.into()),
-        }
+        let serialized_height = consensus::serialize(&height);
+        batch.put_cf(
+            &block_height_cf,
+            TOP_CONFIRMED_KEY.as_bytes().as_ref(),
+            serialized_height,
+        );
     }
 
     /// Get top confirmed height from confirmed index
