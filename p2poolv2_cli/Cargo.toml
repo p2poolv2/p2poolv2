@@ -18,6 +18,7 @@ path = "src/lib.rs"
 
 [dependencies]
 p2poolv2_lib = { workspace = true }
+bitcoindrpc = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

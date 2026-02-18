@@ -315,6 +315,30 @@ impl BitcoindRpcClient {
         let result: serde_json::Value = self.request("submitblock", params).await?;
         Ok(result.to_string())
     }
+
+    /// Gracefully stop the bitcoind daemon via RPC.
+    ///
+    /// Calls the `stop` JSON-RPC method which initiates a clean shutdown
+    /// of the Bitcoin Core node. Returns the shutdown message from bitcoind
+    /// (typically "Bitcoin Core stopping" or similar).
+    pub async fn stop(&self) -> Result<String, BitcoindRpcError> {
+        let params: Vec<serde_json::Value> = vec![];
+        let result: String = self.request("stop", params).await?;
+        Ok(result)
+    }
+
+    /// Ping the bitcoind daemon to check if it is responsive.
+    ///
+    /// Calls the `ping` JSON-RPC method. This is useful for polling
+    /// whether bitcoind is still running (during shutdown) or has become
+    /// available (after restart). Returns `Ok(())` if responsive, or an
+    /// error if the connection fails or the RPC returns an error.
+    pub async fn ping(&self) -> Result<(), BitcoindRpcError> {
+        let params: Vec<serde_json::Value> = vec![];
+        // ping returns null on success
+        let _result: serde_json::Value = self.request("ping", params).await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -693,5 +717,57 @@ mod tests {
         } else {
             panic!("Expected BitcoindRpcError::HttpError, got {result:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn test_stop() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "stop",
+                "params": [],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": "Bitcoin Core stopping",
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client.stop().await.unwrap();
+
+        assert_eq!(result, "Bitcoin Core stopping");
+    }
+
+    #[tokio::test]
+    async fn test_ping() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "ping",
+                "params": [],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": null,
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client.ping().await;
+
+        assert!(result.is_ok());
     }
 }

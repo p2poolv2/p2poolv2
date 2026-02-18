@@ -313,6 +313,23 @@ pub struct ApiConfig {
     pub auth_token: Option<String>,
 }
 
+/// Configuration for managing the bitcoind process.
+///
+/// This section is optional. If provided with a `restart_cmd`, the
+/// `restart-bitcoind` CLI command can automatically re-launch bitcoind
+/// after stopping it. If absent, only the stop operation is performed.
+///
+/// **Security note:** Ensure `config.toml` has restrictive file
+/// permissions (e.g. `chmod 600`) since `restart_cmd` may reveal
+/// filesystem paths and arguments.
+#[derive(Debug, Deserialize, Clone)]
+pub struct BitcoindConfig {
+    /// Command and arguments to start bitcoind.
+    /// First element is the binary path, remaining elements are arguments.
+    /// Example: ["/usr/bin/bitcoind", "-datadir=/data/bitcoin", "-conf=/etc/bitcoin/bitcoin.conf"]
+    pub restart_cmd: Option<Vec<String>>,
+}
+
 /// Config for p2poolv2 nodes
 ///
 /// The network and miner configs switch to defaults if not
@@ -329,6 +346,8 @@ pub struct Config {
     pub bitcoinrpc: BitcoinRpcConfig,
     pub logging: LoggingConfig,
     pub api: ApiConfig,
+    /// Optional bitcoind process management configuration
+    pub bitcoind: Option<BitcoindConfig>,
 }
 
 #[allow(dead_code)]
