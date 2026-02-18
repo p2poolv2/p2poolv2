@@ -109,8 +109,15 @@ impl Store {
                 .unwrap_or(top_confirmed.height);
             let mut candidates = self.get_candidates(top_confirmed.height + 1, old_top)?;
             candidates.push((extended_height, *blockhash));
-            debug!("new candidate height after extending candidates {extended_height}");
-            return Ok(Some((extended_height, candidates)));
+
+            let final_height = self.extend_candidates_with_children(
+                extended_height,
+                blockhash,
+                &mut candidates,
+                batch,
+            )?;
+            debug!("new candidate height after extending candidates {final_height}");
+            return Ok(Some((final_height, candidates)));
         }
 
         if self.should_reorg_candidate(blockhash, metadata, top_candidate) {
@@ -126,7 +133,17 @@ impl Store {
                 Vec::new()
             };
             full_chain.extend(reorg_chain);
-            return Ok(Some((new_height, full_chain)));
+
+            // reorg_candidate always returns a non-empty chain
+            let reorg_tip_hash = full_chain.last().expect("reorg chain is non-empty").1;
+            let final_height = self.extend_candidates_with_children(
+                new_height,
+                &reorg_tip_hash,
+                &mut full_chain,
+                batch,
+            )?;
+            debug!("new candidate height after reorg + forward walk {final_height}");
+            return Ok(Some((final_height, full_chain)));
         }
 
         Ok(None)
@@ -266,6 +283,96 @@ impl Store {
         // Set the final top candidate height directly
         self.set_top_candidate_height(new_top_height, batch);
         Ok((new_top_height, new_chain))
+    }
+
+    /// Walk forward from the current candidate tip, discovering children
+    /// already stored with `Valid` status and appending them to the
+    /// candidate chain in the same WriteBatch.
+    ///
+    /// Among multiple children at the same height, selects the one with
+    /// the highest `chain_work`. Verifies parent hash to exclude uncle
+    /// relationships from the block index. Overwrites `top_candidate_height`
+    /// only if at least one child was appended.
+    fn extend_candidates_with_children(
+        &self,
+        current_top_height: Height,
+        current_top_hash: &BlockHash,
+        candidates: &mut Chain,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<Height, StoreError> {
+        let mut height = current_top_height;
+        let mut tip_hash = *current_top_hash;
+        let mut found_child = true;
+
+        while found_child {
+            found_child = false;
+
+            let children = self
+                .get_children_blockhashes(&tip_hash)?
+                .unwrap_or_default();
+
+            if let Some((best_hash, mut best_metadata)) =
+                self.pick_best_child(&children, &tip_hash, height + 1)?
+            {
+                let next_height = height + 1;
+                self.put_candidate_entry(next_height, &best_hash, batch);
+                best_metadata.status = crate::store::block_tx_metadata::Status::Candidate;
+                self.update_block_metadata(&best_hash, &best_metadata, batch)?;
+                candidates.push((next_height, best_hash));
+
+                height = next_height;
+                tip_hash = best_hash;
+                found_child = true;
+            }
+        }
+
+        if height > current_top_height {
+            self.set_top_candidate_height(height, batch);
+        }
+        Ok(height)
+    }
+
+    /// Select the best qualifying child from a list of children.
+    ///
+    /// Filters for `Valid` status, correct `expected_height`, and matching
+    /// parent hash (to exclude uncle links in the block index). Among
+    /// qualifying children, returns the one with the highest `chain_work`.
+    fn pick_best_child(
+        &self,
+        children: &[BlockHash],
+        parent_hash: &BlockHash,
+        expected_height: Height,
+    ) -> Result<Option<(BlockHash, BlockMetadata)>, StoreError> {
+        let mut top_work_child: Option<(BlockHash, BlockMetadata)> = None;
+
+        for child_hash in children {
+            let all_children = self
+                .get_block_metadata(child_hash)
+                .ok()
+                .filter(|m| m.status == crate::store::block_tx_metadata::Status::Valid)
+                .filter(|m| m.expected_height == Some(expected_height))
+                .and_then(|m| {
+                    self.get_share_header(child_hash)
+                        .ok()
+                        .flatten()
+                        .filter(|h| h.prev_share_blockhash == *parent_hash)
+                        .map(|_| (*child_hash, m))
+                });
+
+            if let Some((child_hash, child_metadata)) = all_children {
+                let has_more_work = top_work_child
+                    .as_ref()
+                    .map(|(_, current_top_metadata)| {
+                        child_metadata.chain_work > current_top_metadata.chain_work
+                    })
+                    .unwrap_or(true);
+                if has_more_work {
+                    top_work_child = Some((child_hash, child_metadata));
+                }
+            }
+        }
+
+        Ok(top_work_child)
     }
 
     /// Extends candidate chain, if:
@@ -1096,5 +1203,662 @@ mod tests {
 
         // candidate chain should be empty as it is extended on to the confirmed chain
         assert!(store.get_top_candidate().is_err());
+    }
+
+    // ── forward walk (extend_candidates_with_children) tests ─────────
+
+    /// share2 arrives filling the gap; forward walk discovers share3.
+    ///
+    /// Before: genesis(confirmed h:0) → share1(candidate h:1)
+    ///         share3(Valid, parent=share2) already in store
+    /// Action: add share2(parent=share1) and organise
+    /// After:  all promoted to confirmed through h:3
+    #[test]
+    fn test_forward_walk_single_child() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1: candidate at h:1
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share2: child of share1, NOT yet organised (will arrive later)
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share3: child of share2, stored as Valid (arrived out of order)
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .work(3)
+            .nonce(0xe9695794)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share3, 3, share3.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Organise share2: extends candidate to h:2, forward walk picks up share3
+        let mut batch = Store::get_write_batch();
+        store.organise_share(share2.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // All promoted to confirmed
+        assert!(store.get_top_candidate().is_err());
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            share1.block_hash()
+        );
+        assert_eq!(
+            store.get_confirmed_at_height(2).unwrap(),
+            share2.block_hash()
+        );
+        assert_eq!(
+            store.get_confirmed_at_height(3).unwrap(),
+            share3.block_hash()
+        );
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 3);
+    }
+
+    /// share2 fills gap; forward walk discovers share3 AND share4.
+    ///
+    /// Before: genesis(confirmed h:0) → share1(candidate h:1)
+    ///         share3, share4 stored as Valid
+    /// Action: add share2 and organise
+    /// After:  all promoted to confirmed through h:4
+    #[test]
+    fn test_forward_walk_chain_of_children() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1: candidate at h:1
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share2: gap filler (arrives last)
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695793)
+            .build();
+        // share3: child of share2
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .work(3)
+            .nonce(0xe9695794)
+            .build();
+        // share4: child of share3
+        let share4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share3.block_hash().to_string())
+            .work(4)
+            .nonce(0xe9695795)
+            .build();
+
+        // Store share3 and share4 first (out of order), then share2
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share3, 3, share3.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share4, 4, share4.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Organise share2: extends to h:2, forward walk fills h:3 and h:4
+        let mut batch = Store::get_write_batch();
+        store.organise_share(share2.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // All promoted to confirmed
+        assert!(store.get_top_candidate().is_err());
+        assert_eq!(
+            store.get_confirmed_at_height(2).unwrap(),
+            share2.block_hash()
+        );
+        assert_eq!(
+            store.get_confirmed_at_height(3).unwrap(),
+            share3.block_hash()
+        );
+        assert_eq!(
+            store.get_confirmed_at_height(4).unwrap(),
+            share4.block_hash()
+        );
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 4);
+    }
+
+    /// Reorg replaces candidate chain, then forward walk picks up a
+    /// child of the new branch tip.
+    ///
+    /// Before: genesis → share1(h:1) → share2(h:2)  [candidates]
+    ///         fork(h:2, more work, parent=share1) and
+    ///         fork_child(h:3, parent=fork) both stored as Valid
+    /// Action: organise fork
+    /// After:  reorg to share1→fork, forward walk adds fork_child,
+    ///         all promoted to confirmed through h:3
+    #[test]
+    fn test_forward_walk_after_reorg() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1: candidate at h:1
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share2: candidate at h:2
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m2 = store
+            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share2.block_hash(), 2, &mut m2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // fork: child of share1, h:2, more work
+        let fork = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695794)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&fork, 2, fork.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // fork_child: child of fork, h:3, stored as Valid
+        let fork_child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork.block_hash().to_string())
+            .work(3)
+            .nonce(0xe9695795)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                &fork_child,
+                3,
+                fork_child.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Organise fork: reorg replaces share2, forward walk picks up fork_child
+        let mut batch = Store::get_write_batch();
+        store.organise_share(fork.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // All promoted to confirmed
+        assert!(store.get_top_candidate().is_err());
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            share1.block_hash()
+        );
+        assert_eq!(store.get_confirmed_at_height(2).unwrap(), fork.block_hash());
+        assert_eq!(
+            store.get_confirmed_at_height(3).unwrap(),
+            fork_child.block_hash()
+        );
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 3);
+
+        // Reorged-out share2 has Valid status
+        let share2_meta = store.get_block_metadata(&share2.block_hash()).unwrap();
+        assert_eq!(share2_meta.status, Status::Valid);
+    }
+
+    /// Two children at the same height — forward walk picks the one
+    /// with more cumulative work.
+    ///
+    /// Before: genesis(confirmed h:0), no candidates
+    ///         share1(Valid, h:1), share2a(Valid, h:2, low work),
+    ///         share2b(Valid, h:2, high work) all stored
+    /// Action: organise share1 (becomes candidate, forward walk from h:1)
+    /// After:  share2b selected, all promoted to confirmed
+    #[test]
+    fn test_forward_walk_picks_heaviest_child() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1: child of genesis
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share2a: child of share1, low work
+        let share2a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share2a, 2, share2a.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share2b: child of share1, high work
+        let share2b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .work(3)
+            .nonce(0xe9695794)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share2b, 2, share2b.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Organise share1: becomes candidate at h:1, forward walk finds
+        // share2a and share2b — should pick share2b (higher work)
+        let mut batch = Store::get_write_batch();
+        store.organise_share(share1.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Both promoted to confirmed, share2b selected
+        assert!(store.get_top_candidate().is_err());
+        assert_eq!(
+            store.get_confirmed_at_height(2).unwrap(),
+            share2b.block_hash()
+        );
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 2);
+
+        // share2a stays Valid (not selected)
+        let share2a_meta = store.get_block_metadata(&share2a.block_hash()).unwrap();
+        assert_eq!(share2a_meta.status, Status::Valid);
+    }
+
+    /// Forward walk stops when no qualifying children exist.
+    ///
+    /// Before: genesis(confirmed h:0) → share1(candidate h:1)
+    ///         share2 stored but no share3
+    /// Action: organise share2
+    /// After:  chain extends to h:2 only, all promoted to confirmed
+    #[test]
+    fn test_forward_walk_stops_when_no_children() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1: candidate at h:1
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share2: child of share1
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Organise share2: extends to h:2, no children → stops
+        let mut batch = Store::get_write_batch();
+        store.organise_share(share2.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // All promoted to confirmed, stops at h:2
+        assert!(store.get_top_candidate().is_err());
+        assert_eq!(
+            store.get_confirmed_at_height(2).unwrap(),
+            share2.block_hash()
+        );
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 2);
+        assert!(store.get_confirmed_at_height(3).is_err());
+    }
+
+    // ── pick_best_child unit tests ──────────────────────────────────
+
+    #[test]
+    fn test_pick_best_child_returns_none_for_empty_children() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let result = store
+            .pick_best_child(&[], &genesis.block_hash(), 1)
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_pick_best_child_returns_none_when_no_metadata() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // A blockhash that was never added to the store
+        let fake_hash = TestShareBlockBuilder::new()
+            .nonce(0xe9695799)
+            .build()
+            .block_hash();
+        let parent = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+
+        let result = store
+            .pick_best_child(&[fake_hash], &parent.block_hash(), 1)
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_pick_best_child_skips_candidate_status() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m = store
+            .add_share(&child, 1, child.header.get_work(), true, &mut batch)
+            .unwrap();
+        // Mark as Candidate — should be skipped by pick_best_child
+        store
+            .append_to_candidates(&child.block_hash(), 1, &mut m, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let result = store
+            .pick_best_child(&[child.block_hash()], &genesis.block_hash(), 1)
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_pick_best_child_skips_wrong_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&child, 1, child.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Ask for height 5 — child is at height 1
+        let result = store
+            .pick_best_child(&[child.block_hash()], &genesis.block_hash(), 5)
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_pick_best_child_skips_wrong_parent() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // child's prev_share_blockhash is genesis, not some_other
+        let child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&child, 1, child.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let wrong_parent = TestShareBlockBuilder::new().nonce(0xe9695799).build();
+        let result = store
+            .pick_best_child(&[child.block_hash()], &wrong_parent.block_hash(), 1)
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_pick_best_child_returns_valid_child() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&child, 1, child.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let result = store
+            .pick_best_child(&[child.block_hash()], &genesis.block_hash(), 1)
+            .unwrap();
+        assert!(result.is_some());
+        let (hash, metadata) = result.unwrap();
+        assert_eq!(hash, child.block_hash());
+        assert_eq!(metadata.expected_height, Some(1));
+    }
+
+    #[test]
+    fn test_pick_best_child_selects_heaviest_among_multiple() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let light = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(1)
+            .nonce(0xe9695792)
+            .build();
+        let heavy = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(3)
+            .nonce(0xe9695793)
+            .build();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&light, 1, light.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&heavy, 1, heavy.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Both are valid children at height 1 — heavy has more work
+        let result = store
+            .pick_best_child(
+                &[light.block_hash(), heavy.block_hash()],
+                &genesis.block_hash(),
+                1,
+            )
+            .unwrap();
+        assert_eq!(result.unwrap().0, heavy.block_hash());
+
+        // Order shouldn't matter — reverse the input
+        let result = store
+            .pick_best_child(
+                &[heavy.block_hash(), light.block_hash()],
+                &genesis.block_hash(),
+                1,
+            )
+            .unwrap();
+        assert_eq!(result.unwrap().0, heavy.block_hash());
+    }
+
+    #[test]
+    fn test_pick_best_child_skips_invalid_among_valid() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // valid_child: Status::Valid (default from add_share)
+        let valid_child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(1)
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(
+                &valid_child,
+                1,
+                valid_child.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // candidate_child: marked Candidate (more work but ineligible)
+        let candidate_child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(3)
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m = store
+            .add_share(
+                &candidate_child,
+                1,
+                candidate_child.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store
+            .append_to_candidates(&candidate_child.block_hash(), 1, &mut m, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // candidate_child has more work but is Candidate status — should be skipped
+        let result = store
+            .pick_best_child(
+                &[candidate_child.block_hash(), valid_child.block_hash()],
+                &genesis.block_hash(),
+                1,
+            )
+            .unwrap();
+        assert_eq!(result.unwrap().0, valid_child.block_hash());
     }
 }
