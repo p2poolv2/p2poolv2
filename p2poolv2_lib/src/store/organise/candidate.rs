@@ -26,14 +26,12 @@ use bitcoin::{
     BlockHash,
     consensus::{self, encode},
 };
-use std::collections::VecDeque;
 use tracing::debug;
 
 use super::{Chain, Height, TopResult, height_to_key_with_suffix};
 
 const CANDIDATE_SUFFIX: &str = ":c";
 const TOP_CANDIDATE_KEY: &str = "meta:top_candidate_height";
-const BRANCH_INITIAL_CAPACITY: usize = 16;
 
 impl Store {
     /// Increment top candidate key if height is one more than current height
@@ -208,35 +206,6 @@ impl Store {
             .unwrap_or(false)
     }
 
-    /// Get branch from a blockhash back to the first ancestor in the candidate chain.
-    ///
-    /// Walks backwards through the chain collecting blockhashes until finding
-    /// one that's already a candidate. Returns the branch including the candidate.
-    pub fn get_branch_to_candidates(
-        &self,
-        blockhash: &BlockHash,
-    ) -> Result<Option<VecDeque<BlockHash>>, StoreError> {
-        let mut branch = VecDeque::with_capacity(BRANCH_INITIAL_CAPACITY);
-
-        let mut current = *blockhash;
-        loop {
-            if self.is_candidate(&current) {
-                // Found ancestor in candidate chain, include it and return
-                branch.push_front(current);
-                return Ok(Some(branch));
-            }
-
-            // Get the share to find its parent
-            let Some(share_header) = self.get_share_header(&current)? else {
-                // Share not found, branch doesn't terminate on cadndidate chain, return empty chain
-                return Ok(None);
-            };
-
-            branch.push_front(current);
-            current = share_header.prev_share_blockhash;
-        }
-    }
-
     /// Extends candidate chain, if:
     /// 1. new share's height is one more than top candidate
     /// 2. new share's prev hash is top candidate hash
@@ -301,11 +270,13 @@ impl Store {
         top_candidate: Option<&TopResult>,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(Height, Chain), StoreError> {
-        let branch = self.get_branch_to_candidates(blockhash)?.ok_or_else(|| {
-            StoreError::NotFound("Branch point to reorg candidate chain not found.".into())
-        })?;
+        let branch = self
+            .get_branch_to_chain(blockhash, |h| self.is_candidate(h))?
+            .ok_or_else(|| {
+                StoreError::NotFound("Branch point to reorg candidate chain not found.".into())
+            })?;
         let branch_point = branch.front().ok_or_else(|| {
-            StoreError::NotFound("Empty branch returned from get_branch_to_candidates.".into())
+            StoreError::NotFound("Empty branch returned from get_branch_to_chain.".into())
         })?;
         let reorged_out_chain = self.get_candidates_chain(branch_point, top_candidate)?;
 
@@ -444,7 +415,6 @@ mod tests {
     use crate::store::organise::TopResult;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::Work;
-    use std::collections::VecDeque;
     use tempfile::tempdir;
 
     // ── increment_top_candidate tests ────────────────────────────────
@@ -819,140 +789,6 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         assert!(!store.is_candidate(&share.block_hash()));
-    }
-
-    // ── get_branch_to_candidates tests ────────────────────────────────
-
-    #[test]
-    fn test_get_branch_to_candidates_returns_empty_when_already_candidate() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        let mut batch = Store::get_write_batch();
-        store.setup_genesis(&genesis, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Add share and make it a candidate
-        let share = TestShareBlockBuilder::new()
-            .prev_share_blockhash(genesis.block_hash().to_string())
-            .nonce(0xe9695792)
-            .build();
-        let mut batch = Store::get_write_batch();
-        let mut metadata = store
-            .add_share(&share, 1, share.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share.block_hash(), 1, &mut metadata, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Branch should be empty since share is already a candidate
-        let branch = store.get_branch_to_candidates(&share.block_hash()).unwrap();
-        assert!(branch.is_some());
-        assert_eq!(branch, Some(VecDeque::from([share.block_hash()])));
-    }
-
-    #[test]
-    fn test_get_branch_to_candidates_returns_branch_to_candidate_ancestor() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        // Setup: genesis -> share1 (candidate) -> share2 -> share3
-        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        let mut batch = Store::get_write_batch();
-        store.setup_genesis(&genesis, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // share1 is a candidate at height 1
-        let share1 = TestShareBlockBuilder::new()
-            .prev_share_blockhash(genesis.block_hash().to_string())
-            .nonce(0xe9695792)
-            .build();
-        let mut batch = Store::get_write_batch();
-        let mut metadata1 = store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share1.block_hash(), 1, &mut metadata1, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // share2 extends share1 but is NOT on candidate chain
-        let share2 = TestShareBlockBuilder::new()
-            .prev_share_blockhash(share1.block_hash().to_string())
-            .nonce(0xe9695793)
-            .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // share3 extends share2 and is NOT on candidate chain
-        let share3 = TestShareBlockBuilder::new()
-            .prev_share_blockhash(share2.block_hash().to_string())
-            .nonce(0xe9695794)
-            .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share(&share3, 3, share3.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Branch from share3 should be [share1, share2, share3]
-        let branch = store
-            .get_branch_to_candidates(&share3.block_hash())
-            .unwrap()
-            .unwrap();
-        assert_eq!(branch.len(), 3);
-        assert_eq!(branch[0], share1.block_hash());
-        assert_eq!(branch[1], share2.block_hash());
-        assert_eq!(branch[2], share3.block_hash());
-    }
-
-    #[test]
-    fn test_get_branch_to_candidates_returns_single_share_branch() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        // Setup: genesis -> share1 (candidate) -> share2 (not on candidate chain)
-        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        let mut batch = Store::get_write_batch();
-        store.setup_genesis(&genesis, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-
-        let share1 = TestShareBlockBuilder::new()
-            .prev_share_blockhash(genesis.block_hash().to_string())
-            .nonce(0xe9695792)
-            .build();
-        let mut batch = Store::get_write_batch();
-        let mut metadata1 = store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share1.block_hash(), 1, &mut metadata1, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        let share2 = TestShareBlockBuilder::new()
-            .prev_share_blockhash(share1.block_hash().to_string())
-            .nonce(0xe9695793)
-            .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Branch from share2 should be just [share1, share2]
-        let branch = store
-            .get_branch_to_candidates(&share2.block_hash())
-            .unwrap()
-            .unwrap();
-        assert_eq!(branch.len(), 2);
-        assert_eq!(branch[0], share1.block_hash());
-        assert_eq!(branch[1], share2.block_hash());
     }
 
     // ── extend_candidates_at unit tests ──────────────────────────────
