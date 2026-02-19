@@ -223,15 +223,15 @@ impl Store {
     pub(super) fn extend_confirmed(
         &self,
         to: Height,
-        candidates: Vec<(Height, BlockHash)>,
+        candidates: &Vec<(Height, BlockHash)>,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<Option<Height>, StoreError> {
         for (candidate_height, candidate_hash) in candidates {
-            self.put_confirmed_entry(candidate_height, &candidate_hash, batch);
-            self.delete_candidate_entry(candidate_height, batch);
-            let mut metadata = self.get_block_metadata(&candidate_hash)?;
+            self.put_confirmed_entry(*candidate_height, candidate_hash, batch);
+            self.delete_candidate_entry(*candidate_height, batch);
+            let mut metadata = self.get_block_metadata(candidate_hash)?;
             metadata.status = crate::store::block_tx_metadata::Status::Confirmed;
-            self.update_block_metadata(&candidate_hash, &metadata, batch)?;
+            self.update_block_metadata(candidate_hash, &metadata, batch)?;
         }
         self.delete_top_candidate_height(batch);
         self.set_top_confirmed_height(to, batch);
