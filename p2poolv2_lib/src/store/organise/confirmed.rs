@@ -78,6 +78,70 @@ impl Store {
         true
     }
 
+    /// Reorg confirmed chain to include the fork branch from the candidate chain.
+    ///
+    /// Walks from the candidate tip backward to the first confirmed ancestor
+    /// (fork point), replaces the confirmed entries from fork point to top
+    /// with the new branch, and cleans up the candidate index.
+    pub(super) fn reorg_confirmed(
+        &self,
+        top_confirmed: &TopResult,
+        candidates: &Chain,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<Option<Height>, StoreError> {
+        let (_, tip_hash) = candidates
+            .last()
+            .ok_or_else(|| StoreError::NotFound("Empty candidates in reorg_confirmed".into()))?;
+
+        // Walk from candidate tip backward to the confirmed chain
+        let fork_branch = self
+            .get_branch_to_chain(tip_hash, |h| self.is_confirmed(h))?
+            .ok_or_else(|| {
+                StoreError::NotFound("Fork point to reorg confirmed chain not found.".into())
+            })?;
+        let fork_point = fork_branch.front().ok_or_else(|| {
+            StoreError::NotFound("Empty branch returned from get_branch_to_chain.".into())
+        })?;
+        let reorged_out_chain = self.get_confirmed_chain(fork_point, Some(top_confirmed))?;
+
+        // Delete old confirmed index entries and set reorged-out shares to Candidate
+        for (height, unconfirm) in &reorged_out_chain {
+            self.delete_confirmed_entry(*height, batch);
+            let mut metadata = self.get_block_metadata(unconfirm)?;
+
+            // Mark as valid, because Candidate status is limited to those on candidate chain
+            // When these are again reorged into candidates chain, they will be marked as candidate again
+            metadata.status = Status::Valid;
+            self.update_block_metadata(unconfirm, &metadata, batch)?;
+        }
+
+        // Write new fork entries and update their metadata status to Confirmed
+        let mut new_top_height = 0u32;
+        for to_confirm in &fork_branch {
+            let mut metadata = self.get_block_metadata(to_confirm)?;
+            let height = metadata.expected_height.ok_or_else(|| {
+                StoreError::NotFound(
+                    "Block metadata missing expected_height for confirmed reorg".into(),
+                )
+            })?;
+            self.put_confirmed_entry(height, to_confirm, batch);
+
+            metadata.status = Status::Confirmed;
+            self.update_block_metadata(to_confirm, &metadata, batch)?;
+
+            new_top_height = height;
+        }
+
+        // Clean up candidate entries for promoted shares
+        for (height, _) in candidates {
+            self.delete_candidate_entry(*height, batch);
+        }
+        self.delete_top_candidate_height(batch);
+
+        self.set_top_confirmed_height(new_top_height, batch);
+        Ok(Some(new_top_height))
+    }
+
     /// Write a confirmed index entry directly into the batch.
     pub(super) fn put_confirmed_entry(
         &self,
@@ -996,5 +1060,445 @@ mod tests {
         // fork1's parent is genesis, not share2 (top confirmed)
         let candidates = vec![(1, fork1.block_hash()), (2, fork2.block_hash())];
         assert!(store.should_reorg_confirmed(&top_confirmed, &candidates));
+    }
+
+    // ── reorg_confirmed tests ───────────────────────────────────────
+
+    /// Simple reorg: fork replaces a single confirmed entry.
+    ///
+    /// Before: genesis(h:0, confirmed) → A(h:1, confirmed)
+    /// Fork:   genesis → F(h:1, candidate, more work)
+    /// After:  genesis(h:0, confirmed) → F(h:1, confirmed)
+    ///         A has Valid status, candidate index cleared
+    #[test]
+    fn test_reorg_confirmed_replaces_single_entry() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Confirm A at h:1
+        let a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut metadata_a = store
+            .add_share(&a, 1, a.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&a.block_hash(), 1, &mut metadata_a, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+
+        // Fork F from genesis with more work, stored as candidate
+        let fork_share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(3)
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut metadata_fork = store
+            .add_share(
+                &fork_share,
+                1,
+                fork_share.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store
+            .append_to_candidates(&fork_share.block_hash(), 1, &mut metadata_fork, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Reorg confirmed
+        let candidates = vec![(1, fork_share.block_hash())];
+        let mut batch = Store::get_write_batch();
+        let result = store
+            .reorg_confirmed(&top_confirmed, &candidates, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // New top confirmed is at h:1
+        assert_eq!(result, Some(1));
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            fork_share.block_hash()
+        );
+
+        // Genesis still confirmed at h:0
+        assert_eq!(
+            store.get_confirmed_at_height(0).unwrap(),
+            genesis.block_hash()
+        );
+
+        // A is reorged out with Valid status
+        let updated_metadata_a = store.get_block_metadata(&a.block_hash()).unwrap();
+        assert_eq!(updated_metadata_a.status, Status::Valid);
+
+        // F has Confirmed status
+        assert!(store.is_confirmed(&fork_share.block_hash()));
+
+        // Candidate index is cleared
+        assert!(store.get_top_candidate().is_err());
+        assert!(store.get_candidate_at_height(1).is_err());
+    }
+
+    /// Deeper reorg: fork replaces multiple confirmed entries.
+    ///
+    /// Before: genesis(h:0) → A(h:1) → B(h:2)  [all confirmed]
+    /// Fork:   genesis → F1(h:1) → F2(h:2, more work)  [candidates]
+    /// After:  genesis(h:0) → F1(h:1) → F2(h:2)  [all confirmed]
+    ///         A, B have Valid status
+    #[test]
+    fn test_reorg_confirmed_replaces_multiple_entries() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Build confirmed: genesis → A(h:1) → B(h:2)
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut metadata_a = store
+            .add_share(&share_a, 1, share_a.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share_a.block_hash(), 1, &mut metadata_a, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut metadata_b = store
+            .add_share(&share_b, 2, share_b.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share_b.block_hash(), 2, &mut metadata_b, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+
+        // Build fork: genesis → F1(h:1) → F2(h:2, more work)
+        let fork_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut metadata_fork_1 = store
+            .add_share(&fork_1, 1, fork_1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let fork_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_1.block_hash().to_string())
+            .work(4)
+            .nonce(0xe9695795)
+            .build();
+        let mut batch = Store::get_write_batch();
+
+        let mut metadata_fork_2 = store
+            .add_share(&fork_2, 2, fork_2.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&fork_1.block_hash(), 1, &mut metadata_fork_1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .append_to_candidates(&fork_2.block_hash(), 2, &mut metadata_fork_2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Reorg confirmed
+        let candidates = vec![(1, fork_1.block_hash()), (2, fork_2.block_hash())];
+        let mut batch = Store::get_write_batch();
+        let result = store
+            .reorg_confirmed(&top_confirmed, &candidates, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(result, Some(2));
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 2);
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            fork_1.block_hash()
+        );
+        assert_eq!(
+            store.get_confirmed_at_height(2).unwrap(),
+            fork_2.block_hash()
+        );
+
+        // Genesis still confirmed
+        assert_eq!(
+            store.get_confirmed_at_height(0).unwrap(),
+            genesis.block_hash()
+        );
+
+        // A and B reorged out with Valid status
+        let reloaded_metadata_a = store.get_block_metadata(&share_a.block_hash()).unwrap();
+        assert_eq!(reloaded_metadata_a.status, Status::Valid);
+        let reloaded_metadata_b = store.get_block_metadata(&share_b.block_hash()).unwrap();
+        assert_eq!(reloaded_metadata_b.status, Status::Valid);
+
+        // F1 and F2 confirmed
+        assert!(store.is_confirmed(&fork_1.block_hash()));
+        assert!(store.is_confirmed(&fork_2.block_hash()));
+
+        // Candidate index cleared
+        assert!(store.get_top_candidate().is_err());
+    }
+
+    /// Reorg to a shorter fork with more work.
+    ///
+    /// Before: genesis(h:0) → A(h:1) → B(h:2) → C(h:3)  [confirmed]
+    /// Fork:   genesis → F(h:1, much more work)  [candidate]
+    /// After:  genesis(h:0) → F(h:1)  [confirmed]
+    ///         A, B, C have Valid status
+    #[test]
+    fn test_reorg_confirmed_to_shorter_chain() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Build confirmed: genesis → A → B → C
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut metadata_a = store
+            .add_share(&share_a, 1, share_a.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share_a.block_hash(), 1, &mut metadata_a, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut metadata_b = store
+            .add_share(&share_b, 2, share_b.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share_b.block_hash(), 2, &mut metadata_b, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share_c = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_b.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut metadata_c = store
+            .add_share(&share_c, 3, share_c.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share_c.block_hash(), 3, &mut metadata_c, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+
+        // Fork F from genesis with much more work
+        let fork_share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(4)
+            .nonce(0xe9695795)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut metadata_fork_share = store
+            .add_share(
+                &fork_share,
+                1,
+                fork_share.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store
+            .append_to_candidates(
+                &fork_share.block_hash(),
+                1,
+                &mut metadata_fork_share,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let candidates = vec![(1, fork_share.block_hash())];
+        let mut batch = Store::get_write_batch();
+        let result = store
+            .reorg_confirmed(&top_confirmed, &candidates, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // New confirmed chain is shorter: genesis → F
+        assert_eq!(result, Some(1));
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            fork_share.block_hash()
+        );
+
+        // Old entries at h:2 and h:3 are gone
+        assert!(store.get_confirmed_at_height(2).is_err());
+        assert!(store.get_confirmed_at_height(3).is_err());
+
+        // A, B, C reorged out with Valid status
+        for hash in [
+            share_a.block_hash(),
+            share_b.block_hash(),
+            share_c.block_hash(),
+        ] {
+            let meta = store.get_block_metadata(&hash).unwrap();
+            assert_eq!(meta.status, Status::Valid);
+        }
+
+        // Candidate index cleared
+        assert!(store.get_top_candidate().is_err());
+    }
+
+    /// Partial reorg: fork branches from a middle confirmed share.
+    ///
+    /// Before: genesis(h:0) → A(h:1) → B(h:2)  [confirmed]
+    /// Fork:   A → F(h:2, more work)  [candidate]
+    /// After:  genesis(h:0) → A(h:1) → F(h:2)  [confirmed]
+    ///         B has Valid status, A stays Confirmed
+    #[test]
+    fn test_reorg_confirmed_partial_from_mid_chain() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Confirmed: genesis → A(h:1) → B(h:2)
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut metadata_a = store
+            .add_share(&share_a, 1, share_a.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share_a.block_hash(), 1, &mut metadata_a, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut metadata_b = store
+            .add_share(&share_b, 2, share_b.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share_b.block_hash(), 2, &mut metadata_b, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+
+        // Fork F from A (h:1, confirmed) with more work
+        let fork_share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .work(3)
+            .nonce(0xe9695794)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut metadata_fork = store
+            .add_share(
+                &fork_share,
+                2,
+                fork_share.header.get_work(),
+                true,
+                &mut batch,
+            )
+            .unwrap();
+        store
+            .append_to_candidates(&fork_share.block_hash(), 2, &mut metadata_fork, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let candidates = vec![(2, fork_share.block_hash())];
+        let mut batch = Store::get_write_batch();
+        let result = store
+            .reorg_confirmed(&top_confirmed, &candidates, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(result, Some(2));
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 2);
+
+        // A stays confirmed (fork_point's parent is still on confirmed)
+        assert!(store.is_confirmed(&share_a.block_hash()));
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            share_a.block_hash()
+        );
+
+        // F replaces B
+        assert_eq!(
+            store.get_confirmed_at_height(2).unwrap(),
+            fork_share.block_hash()
+        );
+        assert!(store.is_confirmed(&fork_share.block_hash()));
+
+        // B reorged out
+        let reloaded_metadata_b = store.get_block_metadata(&share_b.block_hash()).unwrap();
+        assert_eq!(reloaded_metadata_b.status, Status::Valid);
+
+        // Candidate index cleared
+        assert!(store.get_top_candidate().is_err());
+        assert!(store.get_candidate_at_height(2).is_err());
+    }
+
+    /// Reorg confirmed with empty candidates returns error.
+    #[test]
+    fn test_reorg_confirmed_errors_on_empty_candidates() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+        let candidates: Chain = Vec::new();
+
+        let mut batch = Store::get_write_batch();
+        let result = store.reorg_confirmed(&top_confirmed, &candidates, &mut batch);
+        assert!(result.is_err());
     }
 }
