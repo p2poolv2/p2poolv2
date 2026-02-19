@@ -67,18 +67,29 @@ impl Store {
 
         // Promote candidates to confirmed if they extend the confirmed chain.
         match effective_candidates {
-            Some((nc_height, candidates)) => {
-                if self.should_extend_confirmed(
-                    &candidates,
-                    top_confirmed.height,
-                    top_confirmed.hash,
-                )? {
-                    self.extend_confirmed(nc_height, candidates, batch)
-                } else {
-                    Ok(Some(top_confirmed.height)) // TODO: reorg confirmed chain
-                }
-            }
-            None => Ok(Some(top_confirmed.height)),
+            Some((new_candidate_height, candidates)) => self.update_confirmed_chain(
+                &top_confirmed,
+                new_candidate_height,
+                candidates.as_ref(),
+                batch,
+            ),
+            None => Ok(Some(top_confirmed.height)), // candidate chain is unchanged, nothing to do for confirmed
+        }
+    }
+
+    /// Update confirmed chain by either extending it or reorging confirmed chain.
+    /// Returns the top confirmed height if it changes, else None.
+    fn update_confirmed_chain(
+        &self,
+        top_confirmed: &TopResult,
+        new_candidate_height: Height,
+        candidates: &Chain,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<Option<Height>, StoreError> {
+        if self.should_extend_confirmed(candidates, top_confirmed.height, top_confirmed.hash)? {
+            self.extend_confirmed(new_candidate_height, candidates, batch)
+        } else {
+            Ok(Some(top_confirmed.height)) // TODO: reorg confirmed chain
         }
     }
 
