@@ -280,18 +280,12 @@ impl Store {
         })?;
         let reorged_out_chain = self.get_candidates_chain(branch_point, top_candidate)?;
 
-        // Collect new branch blockhashes for quick lookup when deciding
-        // whether to set reorged-out metadata to Valid
-        let branch_set: std::collections::HashSet<&BlockHash> = branch.iter().collect();
-
         // Delete old candidate index entries and set reorged-out shares to Valid
         for (height, uncandidate) in &reorged_out_chain {
             self.delete_candidate_entry(*height, batch);
-            if !branch_set.contains(uncandidate) {
-                let mut metadata = self.get_block_metadata(uncandidate)?;
-                metadata.status = crate::store::block_tx_metadata::Status::Valid;
-                self.update_block_metadata(uncandidate, &metadata, batch)?;
-            }
+            let mut metadata = self.get_block_metadata(uncandidate)?;
+            metadata.status = Status::Valid;
+            self.update_block_metadata(uncandidate, &metadata, batch)?;
         }
 
         // Write new branch entries, collect the chain, and update metadata
@@ -304,10 +298,8 @@ impl Store {
             })?;
             self.put_candidate_entry(height, candidate, batch);
 
-            if metadata.status != crate::store::block_tx_metadata::Status::Candidate {
-                metadata.status = crate::store::block_tx_metadata::Status::Candidate;
-                self.update_block_metadata(candidate, &metadata, batch)?;
-            }
+            metadata.status = Status::Candidate;
+            self.update_block_metadata(candidate, &metadata, batch)?;
 
             new_chain.push((height, *candidate));
             new_top_height = height;
@@ -349,7 +341,7 @@ impl Store {
             {
                 let next_height = height + 1;
                 self.put_candidate_entry(next_height, &best_hash, batch);
-                best_metadata.status = crate::store::block_tx_metadata::Status::Candidate;
+                best_metadata.status = Status::Candidate;
                 self.update_block_metadata(&best_hash, &best_metadata, batch)?;
                 candidates.push((next_height, best_hash));
 
@@ -382,7 +374,7 @@ impl Store {
             let all_children = self
                 .get_block_metadata(child_hash)
                 .ok()
-                .filter(|m| m.status == crate::store::block_tx_metadata::Status::Valid)
+                .filter(|m| m.status == Status::Valid)
                 .filter(|m| m.expected_height == Some(expected_height))
                 .and_then(|m| {
                     self.get_share_header(child_hash)
