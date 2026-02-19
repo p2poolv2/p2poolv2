@@ -31,6 +31,53 @@ const CONFIRMED_SUFFIX: &str = ":f";
 const TOP_CONFIRMED_KEY: &str = "meta:top_confirmed_height";
 
 impl Store {
+    /// Check if the candidate chain should reorg the confirmed chain.
+    ///
+    /// Returns true when the last candidate has more cumulative work
+    /// than the current top confirmed AND the candidates are not a
+    /// simple extension of the confirmed chain.
+    pub(super) fn should_reorg_confirmed(
+        &self,
+        top_confirmed: &TopResult,
+        candidates: &Chain,
+    ) -> bool {
+        let Some((_, last_hash)) = candidates.last() else {
+            return false;
+        };
+
+        let Ok(last_metadata) = self.get_block_metadata(last_hash) else {
+            return false;
+        };
+
+        // Last candidate must have more work than top confirmed
+        if last_metadata.chain_work <= top_confirmed.work {
+            debug!(
+                "Candidate chain work {:?} <= confirmed work {:?}, no reorg",
+                last_metadata.chain_work, top_confirmed.work
+            );
+            return false;
+        }
+
+        // Candidates must NOT be extending the confirmed chain
+        let (first_height, first_hash) = &candidates[0];
+        let Ok(Some(first_header)) = self.get_share_header(first_hash) else {
+            return false;
+        };
+
+        if first_header.prev_share_blockhash == top_confirmed.hash
+            && top_confirmed.height + 1 == *first_height
+        {
+            debug!("Candidates extend confirmed chain, no reorg needed");
+            return false;
+        }
+
+        debug!(
+            "Confirmed reorg needed: candidate work {:?} > confirmed work {:?}",
+            last_metadata.chain_work, top_confirmed.work
+        );
+        true
+    }
+
     /// Write a confirmed index entry directly into the batch.
     pub(super) fn put_confirmed_entry(
         &self,
@@ -700,5 +747,254 @@ mod tests {
 
         let result = store.get_confirmed_chain(&genesis.block_hash(), None);
         assert!(result.is_err());
+    }
+
+    // ── should_reorg_confirmed tests ─────────────────────────────────
+
+    #[test]
+    fn test_should_reorg_confirmed_false_when_candidates_empty() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+        let candidates: Chain = Vec::new();
+
+        assert!(!store.should_reorg_confirmed(&top_confirmed, &candidates));
+    }
+
+    #[test]
+    fn test_should_reorg_confirmed_false_when_less_work() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Confirm share1 with more work at h:1
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(3)
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+
+        // Candidate fork from genesis with less work
+        let fork = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&fork, 1, fork.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let candidates = vec![(1, fork.block_hash())];
+        assert!(!store.should_reorg_confirmed(&top_confirmed, &candidates));
+    }
+
+    #[test]
+    fn test_should_reorg_confirmed_false_when_equal_work() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Confirm share1 at h:1
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(5)
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+
+        // Candidate fork with equal work
+        let fork = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(5)
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&fork, 1, fork.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let candidates = vec![(1, fork.block_hash())];
+        assert!(!store.should_reorg_confirmed(&top_confirmed, &candidates));
+    }
+
+    #[test]
+    fn test_should_reorg_confirmed_false_when_extends_confirmed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+
+        // Candidate is a child of confirmed at height+1 (extends, not reorg)
+        let child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(5)
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&child, 1, child.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let candidates = vec![(1, child.block_hash())];
+        assert!(!store.should_reorg_confirmed(&top_confirmed, &candidates));
+    }
+
+    /// Candidate fork branches off genesis (not extending confirmed tip share1).
+    ///
+    /// Confirmed: genesis(h:0) → share1(h:1)
+    /// Candidates: fork(h:1, parent=genesis, more work)
+    #[test]
+    fn test_should_reorg_confirmed_true_when_more_work_and_not_extending() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Confirm share1 at h:1
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+
+        // Fork branches from genesis (NOT from share1), with more work
+        let fork = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(4)
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&fork, 1, fork.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // fork's parent is genesis, not share1 (top confirmed), so not extending
+        let candidates = vec![(1, fork.block_hash())];
+        assert!(store.should_reorg_confirmed(&top_confirmed, &candidates));
+    }
+
+    /// Multi-entry candidate chain with last entry having more work.
+    ///
+    /// Confirmed: genesis(h:0) → share1(h:1) → share2(h:2)
+    /// Candidates: fork1(h:1, parent=genesis) → fork2(h:2, more work)
+    #[test]
+    fn test_should_reorg_confirmed_true_for_deeper_fork() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Build confirmed: genesis → share1(h:1) → share2(h:2)
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m1 = store
+            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        let mut m2 = store
+            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share2.block_hash(), 2, &mut m2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+
+        // Build fork: genesis → fork1(h:1) → fork2(h:2, more work)
+        let fork1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&fork1, 1, fork1.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let fork2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork1.block_hash().to_string())
+            .work(4)
+            .nonce(0xe9695795)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share(&fork2, 2, fork2.header.get_work(), true, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // fork1's parent is genesis, not share2 (top confirmed)
+        let candidates = vec![(1, fork1.block_hash()), (2, fork2.block_hash())];
+        assert!(store.should_reorg_confirmed(&top_confirmed, &candidates));
     }
 }
