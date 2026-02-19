@@ -87,10 +87,14 @@ impl Store {
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<Option<Height>, StoreError> {
         if self.should_extend_confirmed(candidates, top_confirmed.height, top_confirmed.hash)? {
-            self.extend_confirmed(new_candidate_height, candidates, batch)
-        } else {
-            Ok(Some(top_confirmed.height)) // TODO: reorg confirmed chain
+            return self.extend_confirmed(new_candidate_height, candidates, batch);
         }
+
+        if self.should_reorg_confirmed(top_confirmed, candidates) {
+            // TODO: implement reorg_confirmed
+        }
+
+        Ok(None)
     }
 
     /// Update the candidate chain (append or reorg) and return the
