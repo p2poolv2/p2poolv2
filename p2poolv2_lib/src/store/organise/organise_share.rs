@@ -91,7 +91,7 @@ impl Store {
         }
 
         if self.should_reorg_confirmed(top_confirmed, candidates) {
-            // TODO: implement reorg_confirmed
+            return self.reorg_confirmed(top_confirmed, candidates, batch);
         }
 
         Ok(None)
