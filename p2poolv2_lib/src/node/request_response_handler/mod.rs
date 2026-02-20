@@ -21,6 +21,7 @@ use self::block_fetcher::BlockFetcherHandle;
 use self::peer_block_knowledge::PeerBlockKnowledge;
 use crate::config::NetworkConfig;
 use crate::node::SwarmSend;
+use crate::node::actor::NodeHandle;
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::{InventoryMessage, Message};
 use crate::node::p2p_message_handlers::handle_response;
@@ -74,6 +75,7 @@ where
     peer_block_knowledge: PeerBlockKnowledge,
     share_validator: Arc<SV>,
     peer_states: Arc<PeerStates>,
+    node_handle: NodeHandle,
 }
 
 /// Implementation for ResponseChannel<Message>, used in production.
@@ -92,6 +94,7 @@ where
         validation_tx: ValidationSender,
         share_validator: Arc<SV>,
         peer_states: Arc<PeerStates>,
+        node_handle: NodeHandle,
     ) -> Self {
         let service =
             build_service::<ResponseChannel<Message>, _, _>(network_config, swarm_tx.clone());
@@ -104,6 +107,7 @@ where
             peer_block_knowledge: PeerBlockKnowledge::default(),
             share_validator,
             peer_states,
+            node_handle,
         }
     }
 
@@ -245,6 +249,7 @@ impl<C: Send + Sync, SV: ShareValidator + Send + Sync + Debug + 'static>
             block_fetcher_handle: self.block_fetcher_handle.clone(),
             validation_tx: self.validation_tx.clone(),
             share_validator: self.share_validator.clone(),
+            node_handle: self.node_handle.clone(),
         };
 
         match tokio::time::timeout(Duration::from_secs(1), self.request_service.ready()).await {
@@ -296,6 +301,7 @@ impl<C: Send + Sync, SV: ShareValidator + Send + Sync + Debug + 'static>
             block_fetcher_handle: self.block_fetcher_handle.clone(),
             validation_tx: self.validation_tx.clone(),
             share_validator: self.share_validator.clone(),
+            node_handle: self.node_handle.clone(),
         };
         if let Err(err) = handle_response(ctx).await {
             error!("Error handling response from peer {}: {}", peer_id, err);
@@ -365,6 +371,7 @@ mod tests {
             peer_block_knowledge: PeerBlockKnowledge::default(),
             share_validator,
             peer_states: Default::default(),
+            node_handle: Default::default(),
         }
     }
 
@@ -556,6 +563,7 @@ mod tests {
             peer_block_knowledge: PeerBlockKnowledge::default(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
             peer_states: Default::default(),
+            node_handle: Default::default(),
         };
 
         let peer_state = Arc::from(PeerState::random());

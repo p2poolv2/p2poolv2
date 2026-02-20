@@ -27,6 +27,7 @@ pub mod p2p_message_handlers;
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender, PeerResponse, PeerStatus};
+use crate::node::actor::NodeHandle;
 use crate::node::bip152::CompactBlockRelay;
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::senders::{send_block_inventory, send_getheaders};
@@ -115,7 +116,8 @@ where
     request_response_handler: RequestResponseHandler<ResponseChannel<Message>, SV>,
     config: Config,
     monitoring_event_sender: MonitoringEventSender,
-    peer_states: Arc<PeerStates>,
+    pub(crate) peer_states: Arc<PeerStates>,
+    node_handle: NodeHandle,
 }
 
 impl<SV> Node<SV>
@@ -129,6 +131,7 @@ where
         validation_tx: ValidationSender,
         monitoring_event_sender: MonitoringEventSender,
         share_validator: Arc<SV>,
+        node_handle: NodeHandle,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
 
@@ -225,6 +228,7 @@ where
             validation_tx,
             share_validator.clone(),
             peer_states.clone(),
+            node_handle.clone(),
         );
 
         Ok(Self {
@@ -236,6 +240,7 @@ where
             config,
             monitoring_event_sender,
             peer_states,
+            node_handle,
         })
     }
 
@@ -460,7 +465,12 @@ where
             .connected_peers()
             .iter()
             .map(|p| self.get_peer_state(p))
-            .filter(|s| !matches!(s.compact_block_to, Some(CompactBlockRelay::Disabled) | None))
+            .filter(|s| {
+                !matches!(
+                    s.compact_block_from,
+                    Some(CompactBlockRelay::Disabled) | None
+                )
+            })
             .count();
 
         let has_few_cmpct_relays = connected_compactblock_peers < 3;
@@ -503,6 +513,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::ChainStoreHandle;
+    use super::NodeHandle;
     use super::PoolDifficulty;
     use crate::config::{
         ApiConfig, Config, LoggingConfig, NetworkConfig, StoreConfig, StratumConfig,
@@ -594,6 +605,7 @@ mod tests {
             validation_tx,
             monitoring_tx,
             MockDefaultShareValidator::default().into(),
+            NodeHandle::default(),
         )
         .expect("Node initialization failed");
 

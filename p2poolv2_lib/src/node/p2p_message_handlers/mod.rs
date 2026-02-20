@@ -30,6 +30,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::validation::ShareValidator;
 use crate::utils::time_provider::TimeProvider;
+use receivers::compact_block::handle_send_compact;
 use receivers::getblocks::handle_getblocks;
 use receivers::getdata::handle_getdata_block;
 use receivers::getheaders::handle_getheaders;
@@ -184,14 +185,7 @@ pub async fn handle_response<C: Send + Sync, SV: ShareValidator + Send + Sync + 
             Ok(())
         }
         Message::SendCompact(announce, version) => {
-            info!(
-                "SendCompact recv from {} announce={} v={}",
-                peer, announce, version
-            );
-            if announce && version >= 1 {
-                // TODO: impl
-            }
-            Ok(())
+            handle_send_compact(announce, version, peer, &ctx.node_handle).await
         }
         Message::GetBlockTxn(req) => {
             info!("GetBlockTxn recv from {}", peer);
@@ -215,6 +209,7 @@ pub async fn handle_response<C: Send + Sync, SV: ShareValidator + Send + Sync + 
 mod tests {
     use super::*;
     use crate::node::SwarmSend;
+    use crate::node::actor::NodeHandle;
     use crate::node::messages::InventoryMessage;
     use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
@@ -273,6 +268,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -320,6 +316,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -373,6 +370,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -422,6 +420,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -452,6 +451,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -491,6 +491,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -533,6 +534,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -570,6 +572,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -599,6 +602,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -636,6 +640,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -689,6 +694,7 @@ mod tests {
             block_fetcher_handle: block_fetcher_tx,
             validation_tx,
             share_validator: Arc::new(mock_validator),
+            node_handle: NodeHandle::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -751,6 +757,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(mock_validator),
+            node_handle: NodeHandle::default(),
         };
 
         let result = handle_request(ctx).await;
@@ -789,6 +796,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(mock_validator),
+            node_handle: NodeHandle::default(),
         };
 
         let result = handle_response(ctx).await;
@@ -811,6 +819,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let result = handle_response(ctx).await;
@@ -840,6 +849,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let result = handle_response(ctx).await;
@@ -862,6 +872,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let result = handle_response(ctx).await;
