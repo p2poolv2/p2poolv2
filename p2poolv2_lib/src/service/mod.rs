@@ -52,6 +52,7 @@ mod tests {
     use super::*;
     use crate::config::NetworkConfig;
     use crate::node::SwarmSend;
+    use crate::node::actor::NodeHandle;
     use crate::node::messages::Message;
     use crate::node::request_response_handler::block_fetcher;
     use crate::node::validation_worker;
@@ -178,6 +179,7 @@ mod tests {
             block_fetcher_handle: block_fetcher_handle.clone(),
             validation_tx: validation_tx.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let ctx2 = RequestContext {
@@ -190,6 +192,7 @@ mod tests {
             block_fetcher_handle: block_fetcher_handle.clone(),
             validation_tx: validation_tx.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let ctx3 = RequestContext {
@@ -202,6 +205,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         // First request should succeed
@@ -297,6 +301,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         // Try service.ready(), and on failure, trigger disconnect manually
@@ -364,6 +369,7 @@ mod tests {
             block_fetcher_handle: block_fetcher_handle.clone(),
             validation_tx: validation_tx.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let ctx1 = RequestContext {
@@ -376,6 +382,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let mut service = build_service::<Sender<Message>, _, _>(network_config.clone());
@@ -443,6 +450,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let mut service = build_service::<Sender<Message>, _, _>(network_config.clone());

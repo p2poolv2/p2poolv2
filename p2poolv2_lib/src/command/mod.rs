@@ -16,7 +16,9 @@
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::node::messages::Message;
+use crate::service::peer_state::PeerState;
 use std::error::Error;
+use std::sync::Arc;
 use tokio::sync::oneshot;
 
 /// Struct for queruying the PPLNS shares from the node
@@ -43,10 +45,15 @@ pub enum Command {
         Message,
         oneshot::Sender<Result<(), Box<dyn Error + Send + Sync>>>,
     ),
-    /// Command to get a list of connected peers
-    GetPeers(oneshot::Sender<Vec<libp2p::PeerId>>),
+    /// Command to get all connected peers with their states
+    GetPeers(oneshot::Sender<Vec<Arc<PeerState>>>),
     /// Command to shutdown node
     Shutdown(oneshot::Sender<()>),
     /// Get PPLNS shares from the node with optional filtering
     GetPplnsShares(GetPplnsShareQuery, oneshot::Sender<Vec<SimplePplnsShare>>),
+    /// Update peer state
+    UpdatePeerState(
+        Arc<PeerState>,
+        oneshot::Sender<Result<(), Box<dyn Error + Send + Sync>>>,
+    ),
 }

@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use std::error::Error;
+use std::fmt::Debug;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -24,19 +25,19 @@ use tokio::sync::mpsc;
 use tower::Service;
 
 use crate::node::SwarmSend;
+use crate::node::actor::NodeHandle;
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::handle_request;
 use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
 use crate::node::validation_worker::ValidationSender;
 use crate::service::peer_state::PeerState;
+#[cfg(not(test))]
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-#[cfg(not(test))]
-use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::validation::ShareValidator;
 use crate::utils::time_provider::TimeProvider;
-use std::fmt::Debug;
 
 /// Request context wrapping all inputs for the service call.
 #[derive(Debug)]
@@ -53,10 +54,10 @@ where
     pub block_fetcher_handle: BlockFetcherHandle,
     pub validation_tx: ValidationSender,
     pub share_validator: Arc<SV>,
+    pub node_handle: NodeHandle,
 }
 
-/// Request context wrapping all inputs for the service call.
-#[derive(Debug)]
+/// Response context wrapping all inputs for the service call.
 pub struct ResponseContext<C, SV>
 where
     SV: Debug,
@@ -68,6 +69,7 @@ where
     pub block_fetcher_handle: BlockFetcherHandle,
     pub validation_tx: ValidationSender,
     pub share_validator: Arc<SV>,
+    pub node_handle: NodeHandle,
 }
 
 /// The Tower service that processes inbound P2P requests.

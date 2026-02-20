@@ -44,6 +44,7 @@ mod message_discriminants {
 mod inventory_discriminants {
     pub const BLOCK_HASHES: u8 = 0;
     pub const TRANSACTION_HASHES: u8 = 1;
+    pub const COMPACT_BLOCK: u8 = 2;
 }
 
 /// GetData discriminants to determine the type of get data message
@@ -407,6 +408,10 @@ impl Decodable for InventoryMessage {
             TRANSACTION_HASHES => Ok(InventoryMessage::TransactionHashes(
                 Txids::consensus_decode(r)?,
             )),
+            COMPACT_BLOCK => {
+                // TODO: Implement low bandwidth block relay
+                Ok(InventoryMessage::CompactBlock)
+            }
             _ => Err(encode::Error::ParseFailed(
                 "Invalid InventoryMessage discriminant",
             )),
