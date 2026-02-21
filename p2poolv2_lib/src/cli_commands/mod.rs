@@ -16,6 +16,7 @@
 
 pub mod chain_info;
 pub mod pplns_shares;
+pub mod share_lookup;
 pub mod shares_info;
 
 // Re-export the shared store functionality
