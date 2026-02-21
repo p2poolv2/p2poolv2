@@ -349,8 +349,12 @@ impl ChainStoreHandle {
     }
 
     /// Organise a share: update candidate and confirmed indexes atomically.
-    pub async fn organise_share(&self, share: ShareBlock) -> Result<(), StoreError> {
-        self.store_handle.organise_share(share).await
+    /// Returns the confirmed chain height after organising, if changed.
+    pub async fn organise_share(&self, share: ShareBlock) -> Result<Option<u32>, StoreError> {
+        let blockhash = share.block_hash();
+        let height = self.store_handle.organise_share(share).await?;
+        info!("Organised share {blockhash} at confirmed height {height:?}");
+        Ok(height)
     }
 
     /// Add a PPLNS share for accounting.
@@ -421,7 +425,7 @@ mockall::mock! {
         pub fn is_confirmed(&self, share: &ShareBlock) -> bool;
         pub fn get_btcaddresses_for_user_ids(&self, user_ids: &[u64]) -> Result<Vec<(u64, String)>, StoreError>;
         pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError>;
-        pub async fn organise_share(&self, share: ShareBlock) -> Result<(), StoreError>;
+        pub async fn organise_share(&self, share: ShareBlock) -> Result<Option<u32>, StoreError>;
         pub async fn add_share(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), StoreError>;
         pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError>;
         pub async fn add_job(&self, serialized_notify: String) -> Result<(), StoreError>;
