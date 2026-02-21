@@ -23,7 +23,7 @@ use crate::shares::share_block::ShareBlock;
 use crate::shares::validation;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
-use tracing::{error, info};
+use tracing::{debug, error};
 
 /// Handle a ShareBlock received from a peer in response to a getblocks request.
 ///
@@ -35,7 +35,7 @@ pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
     chain_store_handle: &ChainStoreHandle,
     time_provider: &T,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    info!("Received share block: {:?}", share_block);
+    debug!("Received share block: {:?}", share_block);
     if let Err(e) = validation::validate(&share_block, chain_store_handle, time_provider).await {
         error!("Share block validation failed: {}", e);
         return Err("Share block validation failed".into());
@@ -47,7 +47,7 @@ pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
         return Err("Error adding share to chain".into());
     }
 
-    info!("Successfully added share blocks to chain");
+    debug!("Successfully added share blocks to chain");
     Ok(())
 }
 

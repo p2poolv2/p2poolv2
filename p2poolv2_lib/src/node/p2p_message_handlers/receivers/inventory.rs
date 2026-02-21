@@ -24,7 +24,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{debug, error, info};
 
 /// Handle Inventory message request from a peer.
 /// inv is sent unsolicited, or in response to getblocks message,
@@ -41,19 +41,19 @@ pub async fn handle_inventory<C: Clone + 'static>(
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     response_channel: C,
 ) -> Result<(), Box<dyn Error>> {
-    info!("Received inventory update: {:?}", inventory);
+    debug!("Received inventory update: {:?}", inventory);
 
     for inv_item in inventory {
         match inv_item {
             InventoryMessage::BlockHashes(locator) => {
-                info!("Received block hashes locator: {:?}", locator);
+                debug!("Received block hashes locator: {:?}", locator);
 
                 // Check which blocks we're missing and request them
                 let missing_blocks = chain_store_handle.get_missing_blockhashes(&locator);
 
                 // Request missing blocks from the peer
                 if !missing_blocks.is_empty() {
-                    info!(
+                    debug!(
                         "Requesting {} missing blocks from peer",
                         missing_blocks.len()
                     );
@@ -72,7 +72,7 @@ pub async fn handle_inventory<C: Clone + 'static>(
             }
             // Handle other inventory types as needed
             _ => {
-                info!("Unsupported inventory type: {:?}", inv_item);
+                error!("Unsupported inventory type: {:?}", inv_item);
             }
         }
     }
