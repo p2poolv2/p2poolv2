@@ -85,7 +85,7 @@ impl From<bitcoin::consensus::encode::Error> for StoreError {
 /// Commands for write operations on the Store.
 ///
 /// Each command that needs a response includes a oneshot sender.
-/// Fire-and-forget commands (like SetChainTip) don't need responses.
+/// Fire-and-forget commands don't need responses.
 #[derive(Debug)]
 pub enum WriteCommand {
     /// Add a share to the store
@@ -131,10 +131,11 @@ pub enum WriteCommand {
     /// Set genesis block hash (fire-and-forget)
     SetGenesisBlockHash { hash: BlockHash },
 
-    /// Organise a share: update candidate and confirmed indexes atomically
+    /// Organise a share: update candidate and confirmed indexes atomically.
+    /// Returns the confirmed chain height after organising, if changed.
     OrganiseShare {
         share: ShareBlock,
-        reply: oneshot::Sender<Result<(), StoreError>>,
+        reply: oneshot::Sender<Result<Option<u32>, StoreError>>,
     },
 }
 
@@ -250,7 +251,10 @@ impl StoreWriter {
                 let result = self
                     .store
                     .organise_share(share, &mut batch)
-                    .and_then(|_| self.store.commit_batch(batch).map_err(StoreError::from));
+                    .and_then(|height| {
+                        self.store.commit_batch(batch).map_err(StoreError::from)?;
+                        Ok(height)
+                    });
                 let _ = reply.send(result);
             }
         }

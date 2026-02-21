@@ -264,7 +264,8 @@ impl StoreHandle {
     }
 
     /// Organise a share: update candidate and confirmed indexes atomically.
-    pub async fn organise_share(&self, share: ShareBlock) -> Result<(), StoreError> {
+    /// Returns the confirmed chain height after organising, if changed.
+    pub async fn organise_share(&self, share: ShareBlock) -> Result<Option<u32>, StoreError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.write_tx
             .send(WriteCommand::OrganiseShare {
@@ -326,7 +327,7 @@ mockall::mock! {
         pub fn get_children_blockhashes(&self, blockhash: &BlockHash) -> Result<Option<Vec<BlockHash>>, StoreError>;
 
         // Serialized writes (async)
-        pub async fn organise_share(&self, share: ShareBlock) -> Result<(), StoreError>;
+        pub async fn organise_share(&self, share: ShareBlock) -> Result<Option<u32>, StoreError>;
         pub async fn add_share(&self, share: ShareBlock, height: u32, chain_work: Work, confirm_txs: bool) -> Result<(), StoreError>;
         pub async fn setup_genesis(&self, genesis: ShareBlock) -> Result<(), StoreError>;
         pub async fn init_chain_state_from_store(&self, genesis_hash: BlockHash) -> Result<(), StoreError>;
