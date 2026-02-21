@@ -25,7 +25,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use bitcoin::BlockHash;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::debug;
 
 const MAX_BLOCKS: usize = 500;
 
@@ -40,7 +40,7 @@ pub async fn handle_getblocks<C: 'static + Send + Sync>(
     response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    info!("Received getblocks: {:?}", locator);
+    debug!("Received getblocks: {:?}", locator);
     let response_block_hashes =
         chain_store_handle.get_blockhashes_for_locator(&locator, &stop_block_hash, MAX_BLOCKS)?;
     let inventory_message =

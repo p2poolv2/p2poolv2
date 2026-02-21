@@ -24,7 +24,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use bitcoin::BlockHash;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::debug;
 
 const MAX_HEADERS: usize = 2000;
 
@@ -39,11 +39,12 @@ pub async fn handle_getheaders<C: 'static + Send + Sync>(
     response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    info!("Received getheaders: {:?}", block_hashes);
+    debug!("Received getheaders: {:?}", block_hashes);
     let response_headers =
         chain_store_handle.get_headers_for_locator(&block_hashes, &stop_block_hash, MAX_HEADERS)?;
     let headers_message = Message::ShareHeaders(response_headers);
     // Send response and handle errors by logging them before returning
+    debug!("Sending Headers {headers_message:?}");
     if let Err(err) = swarm_tx
         .send(SwarmSend::Response(response_channel, headers_message))
         .await

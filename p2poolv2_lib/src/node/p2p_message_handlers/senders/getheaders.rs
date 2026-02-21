@@ -25,7 +25,7 @@ use bitcoin::BlockHash;
 use bitcoin::hashes::Hash;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::error;
+use tracing::{debug, error};
 
 /// Handle outbound connection established events
 /// Send a getheaders request to the peer
@@ -37,6 +37,7 @@ pub async fn send_getheaders<C: 'static>(
     let locator = chain_store_handle.build_locator()?;
     let stop_block_hash: BlockHash = BlockHash::all_zeros();
     let getheaders_request = Message::GetShareHeaders(locator.clone(), stop_block_hash);
+    debug!("Sending request to peer {peer_id}: {getheaders_request}");
     if let Err(e) = swarm_tx
         .send(SwarmSend::Request(peer_id, getheaders_request))
         .await
