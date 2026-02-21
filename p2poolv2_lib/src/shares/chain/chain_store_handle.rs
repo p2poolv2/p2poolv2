@@ -31,9 +31,6 @@ use tracing::{debug, info};
 /// The minimum number of shares that must be on the chain for a share to be considered confirmed
 const MIN_CONFIRMATION_DEPTH: usize = 100;
 
-/// The maximum depth up to which we include the uncles in the chain
-const MAX_UNCLE_DEPTH: usize = 3;
-
 /// Common ancestor depth we look at when finding common ancestors
 /// For now it is the same as PPLNS window
 pub(crate) const COMMON_ANCESTOR_DEPTH: usize = 2160; // 6 shares per minute * 60 * 6 hours.
@@ -213,15 +210,13 @@ impl ChainStoreHandle {
         Ok(locator)
     }
 
-    /// Get the chain tip and uncles (filtered by depth).
+    /// Get the chain tip and uncles from the confirmed chain.
+    ///
+    /// Delegates uncle selection to Store::find_uncles()
     pub fn get_chain_tip_and_uncles(&self) -> Result<(BlockHash, HashSet<BlockHash>), StoreError> {
-        let mut uncles = self.store_handle.get_tips();
-        uncles.retain(|uncle| {
-            self.get_depth(uncle).unwrap_or(MAX_UNCLE_DEPTH + 1) <= MAX_UNCLE_DEPTH
-        });
         let chain_tip = self.get_chain_tip()?;
-        uncles.remove(&chain_tip);
-        Ok((chain_tip, uncles))
+        let uncles = self.store_handle.store().find_uncles()?;
+        Ok((chain_tip, uncles.into_iter().collect()))
     }
 
     /// Check which blockhashes are missing from the chain.

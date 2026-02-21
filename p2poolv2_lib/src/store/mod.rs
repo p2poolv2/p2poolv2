@@ -340,7 +340,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
-        // Create test shares
+        // Create test shares in a linear chain
         let share1 = TestShareBlockBuilder::new().build();
 
         let share2 = TestShareBlockBuilder::new()

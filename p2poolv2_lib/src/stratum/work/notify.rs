@@ -435,7 +435,7 @@ mod tests {
         let genesis = genesis_for_tests().block_hash();
         chain_store_handle
             .expect_get_chain_tip_and_uncles()
-            .returning(move || (genesis, std::collections::HashSet::new()));
+            .returning(move || Ok((genesis, std::collections::HashSet::new())));
 
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
         let miner_pubkey: CompressedPublicKey =
@@ -528,7 +528,7 @@ mod tests {
         let genesis = genesis_for_tests().block_hash();
         chain_store_handle
             .expect_get_chain_tip_and_uncles()
-            .returning(move || (genesis, std::collections::HashSet::new()));
+            .returning(move || Ok((genesis, std::collections::HashSet::new())));
 
         chain_store_handle
             .expect_get_current_target()
