@@ -52,6 +52,7 @@ struct JsonRpcError {
 
 #[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
+#[cfg_attr(any(test, feature = "test-utils"), derive(Default, Serialize))]
 pub struct BitcoinRpcConfig {
     pub url: String,
     pub username: String,

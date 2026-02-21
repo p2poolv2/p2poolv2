@@ -34,8 +34,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/p2pool/target \
     cargo fetch --locked
 
-COPY config.toml .
-
 COPY --parents bitcoindrpc/ .
 COPY --parents p2poolv2_cli/ .
 COPY --parents p2poolv2_node/ .
@@ -49,15 +47,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/usr/local/rustup \
     --mount=type=cache,target=/p2pool/target \
-    cargo install -j $(nproc) --locked --offline --path ./p2poolv2_node && \
-    cargo install -j $(nproc) --locked --offline --path ./p2poolv2_cli
+    cargo install --locked --offline --path ./p2poolv2_node && \
+    cargo install --locked --offline --path ./p2poolv2_cli
 
 FROM debian:bullseye-slim AS runner
 
 WORKDIR /p2poolv2
-VOLUME /p2poolv2/data \
-    /p2poolv2/config \
-    /p2poolv2/logs
+VOLUME /p2poolv2
 
 # stratum, api, p2p
 EXPOSE 3333 \

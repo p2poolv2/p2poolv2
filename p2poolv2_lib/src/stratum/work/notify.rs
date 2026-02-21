@@ -339,7 +339,7 @@ mod tests {
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
-        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+        let stratum_config = StratumConfig::default().parse().unwrap();
 
         let output_distribution =
             build_output_distribution(&template, &chain_store_handle, &stratum_config).await;
@@ -437,7 +437,7 @@ mod tests {
             .expect_get_chain_tip_and_uncles()
             .returning(move || Ok((genesis, std::collections::HashSet::new())));
 
-        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+        let stratum_config = StratumConfig::default().parse().unwrap();
         let miner_pubkey: CompressedPublicKey =
             "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
@@ -535,7 +535,7 @@ mod tests {
             .returning(|| Ok(503543726));
 
         // Setup config and tracker
-        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+        let stratum_config = StratumConfig::default().parse().unwrap();
         let tracker_handle = start_tracker_actor();
         let miner_pubkey: CompressedPublicKey =
             "020202020202020202020202020202020202020202020202020202020202020202"

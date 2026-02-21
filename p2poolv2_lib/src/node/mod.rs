@@ -529,7 +529,7 @@ mod tests {
                 pplns_ttl_days: 3,
             },
 
-            stratum: StratumConfig::new_for_test_default(),
+            stratum: StratumConfig::default(),
             miner: Some(MinerConfig {
                 pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
                     .parse()
@@ -537,8 +537,8 @@ mod tests {
             }),
             logging: LoggingConfig {
                 console: Some(true),
-                level: "info".to_string(),
                 file: Some("./p2pool.log".to_string()),
+                level: "info".to_string(),
                 stats_dir: "./logs/stats".to_string(),
             },
             api: ApiConfig {

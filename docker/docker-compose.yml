@@ -2,25 +2,21 @@ name: p2poolv2
 
 services:
   bitcoind:
+    container_name: bitcoind
+    hostname: bitcoind-p2pool
     build:
       context: .
       dockerfile: Dockerfile.bitcoind
     volumes:
-      - bitcoin_data:/data-${NETWORK:-signet}
+      - bitcoin_data:/data
     ports:
       - "${BTC_P2P_PORT:-38333}:${BTC_P2P_PORT:-38333}" # P2P port
       - "${BTC_RPC_PORT:-38332}:${BTC_RPC_PORT:-38332}" # RPC port
       - "28332:28332" # ZMQ port is always the same
     environment:
       - NETWORK=${NETWORK:-signet}
-    command: bitcoind -conf=/etc/bitcoin/bitcoin-${NETWORK:-signet}.conf -datadir=/data
+    command: -conf=/etc/bitcoin/bitcoin-${NETWORK:-signet}.conf -datadir=/data
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "nc", "-z", "0.0.0.0", "${BTC_P2P_PORT:-38333}"]
-      interval: 5s
-      timeout: 3s
-      retries: 3
-      start_period: 10s
     networks:
       - p2pool_network
     logging:
@@ -30,13 +26,22 @@ services:
         max-file: "3"
 
   cpuminer:
+    scale: 3
     build:
       context: .
       dockerfile: Dockerfile.cpuminer
-    depends_on:
-      bitcoind:
-        condition: service_healthy
+    # depends_on:
+    #   bitcoind:
+    #     condition: service_healthy
     restart: unless-stopped
+    env_file: .env
+    environment:
+      - BTC_RPC_HOST=${BTC_RPC_HOST:-bitcoind}
+      - BTC_RPC_PASSWORD=${BTC_RPC_PASSWORD:-p2pool}
+      - BTC_RPC_USER=${BTC_RPC_USER:-p2pool}
+      - TARGET_HEIGHT=${TARGET_HEIGHT:-32}
+      - BTC_P2P_PORT=${BTC_P2P_PORT:-38333}
+      - BTC_NETWORK=${NETWORK:-signet}
     networks:
       - p2pool_network
     cpus: 1
@@ -50,18 +55,17 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.p2pool
+    env_file: .env
     environment:
       - P2POOL_BITCOIN_NETWORK=${NETWORK:-signet}
       - P2POOL_BITCOIN_URL=bitcoind:${BTC_RPC_PORT:-38332}
-      - P2POOL_STORE_PATH=/data/${NETWORK:-signet}
-      - RUST_LOG=info
-    command: /p2pool/target/debug/p2poolv2 --config=/p2pool/config-dev.toml
+      - P2POOL_STORE_PATH=/p2poolv2/data/${NETWORK:-signet}
+      - P2POOL_CONFIG=/p2poolv2/config/config.toml
+      - RUST_LOG=trace
     volumes:
-      - p2pool_data:/data
+      - p2pool_data:/p2poolv2
+      - ../config-dev.toml:/p2poolv2/config/config.toml:ro
     restart: unless-stopped
-    ports:
-      - "3333:3333"
-      - "46884:46884" # API server port
     networks:
       - p2pool_network
     logging:
