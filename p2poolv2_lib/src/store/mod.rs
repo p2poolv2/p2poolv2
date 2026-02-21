@@ -15,13 +15,11 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::shares::share_block::ShareBlock;
-use crate::store::block_tx_metadata::BlockMetadata;
 use crate::store::column_families::ColumnFamily;
 use bitcoin::consensus::{Encodable, encode};
-use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Work};
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::{Arc, RwLock};
 use tracing::debug;
 use writer::StoreError;
@@ -53,8 +51,6 @@ pub struct Store {
     db: DB,
     // Thread-safe chain state for use by ChainStore
     genesis_blockhash: Arc<RwLock<Option<BlockHash>>>,
-    chain_tip: Arc<RwLock<BlockHash>>,
-    tips: Arc<RwLock<HashSet<BlockHash>>>,
 }
 
 /// Merge operator for appending BlockHashes to a Vec<BlockHash>
@@ -177,8 +173,6 @@ impl Store {
             db,
             // Initialize chain state fields
             genesis_blockhash: Arc::new(RwLock::new(None)),
-            chain_tip: Arc::new(RwLock::new(BlockHash::all_zeros())),
-            tips: Arc::new(RwLock::new(HashSet::new())),
         };
         Ok(store)
     }
@@ -244,35 +238,11 @@ impl Store {
         self.get_confirmed_at_height(height)
     }
 
-    /// Set chain tip in chain state
-    pub fn set_chain_tip(&self, hash: BlockHash) {
-        *self.chain_tip.write().unwrap() = hash;
-    }
-
-    /// Get tips from chain state (returns clone of the set)
-    pub fn get_tips(&self) -> HashSet<BlockHash> {
-        self.tips.read().unwrap().clone()
-    }
-
-    /// Update tips in chain state
-    pub fn update_tips(&self, new_tips: HashSet<BlockHash>) {
-        *self.tips.write().unwrap() = new_tips;
-    }
-
-    /// Add a tip to the chain state
-    pub fn add_tip(&self, hash: BlockHash) {
-        self.tips.write().unwrap().insert(hash);
-    }
-
-    /// Remove a tip from the chain state
-    pub fn remove_tip(&self, hash: &BlockHash) -> bool {
-        self.tips.write().unwrap().remove(hash)
-    }
-
-    /// Get total work from chain state
+    /// Get total work of the confirmed chain tip
     pub fn get_total_work(&self) -> Result<Work, StoreError> {
-        let tip = self.get_block_metadata(&self.chain_tip.read().unwrap())?;
-        Ok(tip.chain_work)
+        let tip = self.get_chain_tip()?;
+        let metadata = self.get_block_metadata(&tip)?;
+        Ok(metadata.chain_work)
     }
 
     /// Setup genesis block for the store
@@ -287,41 +257,17 @@ impl Store {
         let mut metadata = self.add_share(genesis, 0, genesis_work, true, batch)?;
         *self.genesis_blockhash.write().unwrap() = Some(blockhash);
         self.append_to_confirmed(&blockhash, 0, &mut metadata, batch)?;
-        self.add_tip(blockhash);
-        self.set_chain_tip(blockhash);
         Ok(())
     }
 
-    /// Initialize chain state from existing data in the store
-    /// This should be called after opening an existing store to load cached state
+    /// Initialize chain state from existing data in the store.
+    /// Sets the genesis blockhash so chain tip and total work can be read from the confirmed chain index.
     pub fn init_chain_state_from_store(&self, genesis_hash: BlockHash) -> Result<(), StoreError> {
-        // Set genesis block hash
         self.set_genesis_blockhash(genesis_hash);
-
-        // Load main chain and total work
-        let (chain, tips) = self.load_chain(genesis_hash)?;
-        if !chain.is_empty() {
-            let metadatas: Vec<BlockMetadata> = tips
-                .iter()
-                .map(|tip| self.get_block_metadata(tip))
-                .collect::<Result<Vec<_>, _>>()?;
-
-            // Find tip with maximum chain work
-            let chain_tip = tips
-                .iter()
-                .zip(metadatas.iter())
-                .max_by_key(|(_, metadata)| metadata.chain_work)
-                .map(|(hash, _)| *hash)
-                .expect("No tips found in a non-empty chain");
-
-            self.set_chain_tip(chain_tip);
-            self.update_tips(tips);
-        }
         debug!(
-            "Initialized chain state: tip={:?}, work={}, tips_count={}",
+            "Initialized chain state: tip={:?}, work={}",
             self.get_chain_tip(),
             self.get_total_work()?,
-            self.get_tips().len()
         );
         Ok(())
     }
@@ -332,7 +278,7 @@ mod tests {
     use super::*;
     use crate::test_utils::TestShareBlockBuilder;
     use crate::test_utils::multiplied_compact_target_as_work;
-    use std::collections::HashSet;
+    use bitcoin::hashes::Hash;
     use tempfile::tempdir;
 
     #[test_log::test]
@@ -353,13 +299,19 @@ mod tests {
             .work(3)
             .build();
 
-        let mut batch = rocksdb::WriteBatch::default();
+        let genesis_hash = share1.block_hash();
 
-        // Store shares in linear chain 0 -> 1 -> 2
-        let mut metadata1 = store
-            .add_share(&share1, 0, share1.header.get_work(), true, &mut batch)
-            .unwrap();
-        let mut metadata2 = store
+        // Setup genesis (share1 confirmed at height 0)
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&share1, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(store.get_genesis_blockhash(), Some(genesis_hash));
+        assert_eq!(store.get_chain_tip().unwrap(), genesis_hash);
+
+        // Add and organise share2 (extends confirmed to height 1)
+        let mut batch = Store::get_write_batch();
+        store
             .add_share(
                 &share2,
                 1,
@@ -368,7 +320,15 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
-        let mut metadata3 = store
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store.organise_share(share2.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Add and organise share3 (extends confirmed to height 2)
+        let mut batch = Store::get_write_batch();
+        store
             .add_share(
                 &share3,
                 2,
@@ -377,49 +337,26 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
-
         store.commit_batch(batch).unwrap();
 
-        let genesis_hash = share1.block_hash();
-
-        // Test manual chain state operations
-        store.set_genesis_blockhash(genesis_hash);
-        assert_eq!(store.get_genesis_blockhash(), Some(genesis_hash));
-
-        store.set_chain_tip(share3.block_hash());
-        assert_eq!(store.get_chain_tip(), share3.block_hash());
-
-        let mut tips = HashSet::new();
-        tips.insert(share3.block_hash());
-        store.update_tips(tips.clone());
-        assert_eq!(store.get_tips(), tips);
-
-        store.add_tip(share2.block_hash());
-        assert!(store.get_tips().contains(&share2.block_hash()));
-
-        store.remove_tip(&share2.block_hash());
-        assert!(!store.get_tips().contains(&share2.block_hash()));
+        let mut batch = Store::get_write_batch();
+        store.organise_share(share3.clone(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
 
         // Test initialization from store
         store.init_chain_state_from_store(genesis_hash).unwrap();
 
-        // After initialization, tip should be set to last block in main chain
-        assert_eq!(store.get_chain_tip(), share3.block_hash());
-
+        // After initialization, tip and genesis should be readable from confirmed chain
+        assert_eq!(store.get_chain_tip().unwrap(), share3.block_hash());
         assert_eq!(store.get_genesis_blockhash(), Some(genesis_hash));
 
-        // Tips should include only blocks at highest height (height 2)
-        let tips_after_init = store.get_tips();
-        assert_eq!(tips_after_init.len(), 1);
-        assert!(tips_after_init.contains(&share3.block_hash()));
-
-        // Total work should reflect sum of work from main chain
+        // Total work should reflect sum of work from confirmed chain
         assert_eq!(
             store.get_total_work().unwrap(),
             multiplied_compact_target_as_work(0x01e0377ae, 1)
                 + multiplied_compact_target_as_work(0x01e0377ae, 2)
                 + multiplied_compact_target_as_work(0x01e0377ae, 3)
-        ); // 1 + 2 + 3 = 6
+        );
     }
 
     #[test]
