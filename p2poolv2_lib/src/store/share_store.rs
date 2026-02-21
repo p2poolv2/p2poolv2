@@ -135,9 +135,9 @@ impl Store {
         Some(share)
     }
 
-    /// Get current chain tip and find the ShareBlock for it
+    /// Get current confirmed chain tip and find the ShareBlock for it.
     pub fn get_share_at_tip(&self) -> Option<ShareBlock> {
-        let tip = self.get_chain_tip();
+        let tip = self.get_chain_tip().ok()?;
         self.get_share(&tip)
     }
 

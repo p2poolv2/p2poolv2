@@ -122,7 +122,7 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let tip = chain_store_handle.store_handle().get_chain_tip();
+    let tip = chain_store_handle.get_chain_tip();
     let height = chain_store_handle.get_tip_height();
     info!("Latest tip {:?} at height {:?}", tip, height);
 

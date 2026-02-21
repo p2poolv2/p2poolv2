@@ -112,8 +112,8 @@ impl StoreHandle {
         self.store.get_genesis_blockhash()
     }
 
-    /// Get the current chain tip.
-    pub fn get_chain_tip(&self) -> BlockHash {
+    /// Get the current chain tip from the confirmed chain.
+    pub fn get_chain_tip(&self) -> Result<BlockHash, StoreError> {
         self.store.get_chain_tip()
     }
 
@@ -340,7 +340,7 @@ mockall::mock! {
         pub fn get_blockhashes_for_height(&self, height: u32) -> Vec<BlockHash>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
         pub fn get_genesis_blockhash(&self) -> Option<BlockHash>;
-        pub fn get_chain_tip(&self) -> BlockHash;
+        pub fn get_chain_tip(&self) -> Result<BlockHash, StoreError>;
         pub fn get_tips(&self) -> HashSet<BlockHash>;
         pub fn get_total_work(&self) -> Result<Work, StoreError>;
         pub fn get_pplns_shares(&self) -> Vec<SimplePplnsShare>;

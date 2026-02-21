@@ -364,12 +364,13 @@ impl Store {
     }
 
     /// Finds uncles up to max depth and return a vector of all found
-    /// uncle BlockHashes.
+    /// uncle BlockHashes, sorted by chain_work descending.
     ///
     /// Algorithm: Find ancestors up to max uncle depth on the
     /// confirmed chain, not counting the parent. Find all children of
     /// these ancestors that are not on the confirmed chain and that
-    /// are not already included as uncles in other blocks.
+    /// are not already included as uncles in other blocks. Return the
+    /// top MAX_UNCLES by chain_work.
     pub fn find_uncles(&self) -> Result<Vec<BlockHash>, StoreError> {
         let top_confirmed_height = match self.get_top_confirmed_height() {
             Ok(height) => height,
@@ -392,25 +393,22 @@ impl Store {
             .flatten();
 
         // Only keep the non-confirmed blocks that are not used as uncles already
-        // Collect with height for sorting
-        let mut uncles_with_height: Vec<(BlockHash, u32)> = children
+        // Collect with chain_work for sorting
+        let mut uncles_with_work: Vec<(BlockHash, Work)> = children
             .filter_map(|blockhash| {
                 if !self.is_confirmed(&blockhash) && !self.is_already_uncle(&blockhash) {
-                    // Get height from metadata for sorting
                     self.get_block_metadata(&blockhash)
                         .ok()
-                        .and_then(|m| m.expected_height)
-                        .map(|height| Some((blockhash, height)))
+                        .map(|metadata| (blockhash, metadata.chain_work))
                 } else {
                     None
                 }
             })
-            .flatten()
             .collect();
 
-        // Sort by height descending and take top 3
-        uncles_with_height.sort_by(|a, b| b.1.cmp(&a.1));
-        let uncles = uncles_with_height
+        // Sort by chain_work descending and take top MAX_UNCLES
+        uncles_with_work.sort_by(|a, b| b.1.cmp(&a.1));
+        let uncles = uncles_with_work
             .into_iter()
             .take(MAX_UNCLES)
             .map(|(hash, _)| hash)
@@ -2643,6 +2641,7 @@ mod tests {
             .build();
         let uncle1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
+            .work(2)
             .nonce(101)
             .build();
         let share3 = TestShareBlockBuilder::new()
@@ -2651,6 +2650,7 @@ mod tests {
             .build();
         let uncle2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share2.block_hash().to_string())
+            .work(3)
             .nonce(102)
             .build();
 
@@ -2723,10 +2723,10 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // find_uncles should find uncle0, uncle1, uncle2
-        // Sorted by height descending: uncle2 (3), uncle1 (2), uncle0 (1)
+        // Sorted by chain_work descending: uncle2 (work=3), uncle1 (work=2), uncle0 (work=1)
         let uncles = store.find_uncles().unwrap();
         assert_eq!(uncles.len(), 3);
-        // Verify order - highest height first
+        // Verify order - highest chain_work first
         assert_eq!(uncles[0], uncle2.block_hash());
         assert_eq!(uncles[1], uncle1.block_hash());
         assert_eq!(uncles[2], uncle0.block_hash());
@@ -2991,11 +2991,11 @@ mod tests {
     }
 
     #[test]
-    fn test_find_uncles_returns_max_3_uncles_by_height() {
+    fn test_find_uncles_returns_max_3_uncles_by_chain_work() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
-        // Build chain with 4 uncles - should only return top 3 by height
+        // Build chain with 4 uncles - should only return top 3 by chain_work
         //   share0 (confirmed, height 0)
         //   / | \ \
         // share1 uncle_a uncle_b uncle_c (height 1)
@@ -3027,6 +3027,7 @@ mod tests {
             .build();
         let uncle_d = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
+            .work(2)
             .nonce(103)
             .build();
 
@@ -3092,15 +3093,15 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        // find_uncles should return exactly 3 uncles, prioritizing higher heights
-        // uncle_d is at height 2, uncle_a/b/c are at height 1
+        // find_uncles should return exactly 3 uncles, prioritizing higher chain_work
+        // uncle_d has work=2, uncle_a/b/c have default work=1
         let uncles = store.find_uncles().unwrap();
         assert_eq!(uncles.len(), 3);
 
-        // uncle_d should be first (height 2)
+        // uncle_d should be first (highest chain_work)
         assert_eq!(uncles[0], uncle_d.block_hash());
 
-        // The remaining 2 should be from uncle_a, uncle_b, uncle_c (all height 1)
+        // The remaining 2 should be from uncle_a, uncle_b, uncle_c (all same chain_work)
         let height_1_uncles: HashSet<BlockHash> = [
             uncle_a.block_hash(),
             uncle_b.block_hash(),
@@ -3160,6 +3161,7 @@ mod tests {
             .build();
         let uncle5 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share4.block_hash().to_string())
+            .work(2)
             .nonce(105)
             .build();
         let share6 = TestShareBlockBuilder::new()
@@ -3218,7 +3220,7 @@ mod tests {
         let uncles = store.find_uncles().unwrap();
 
         assert_eq!(uncles.len(), 2);
-        // Should be sorted by height descending: uncle5 (5), uncle4 (4)
+        // Should be sorted by chain_work descending: uncle5 (work=2), uncle4 (work=1)
         assert_eq!(uncles[0], uncle5.block_hash());
         assert_eq!(uncles[1], uncle4.block_hash());
 
@@ -3226,5 +3228,97 @@ mod tests {
         assert!(!uncles.contains(&uncle1.block_hash()));
         assert!(!uncles.contains(&uncle2.block_hash()));
         assert!(!uncles.contains(&uncle3.block_hash()));
+    }
+
+    /// Higher chain_work uncles at a lower height should be preferred
+    /// over lower chain_work uncles at a higher height.
+    ///
+    ///   share0 (confirmed, height 0)
+    ///     /        |           \
+    ///   share1     uncle_mid_a  uncle_mid_b
+    ///   (confirmed, h:1)  (h:1, work=2)  (h:1, work=2)
+    ///     /    |         \
+    ///   share2  uncle_high  uncle_low
+    ///   (confirmed, h:2)  (h:2, work=3)  (h:2, work=1)
+    ///
+    /// Result: uncle_high(work=3), uncle_mid_a(work=2), uncle_mid_b(work=2)
+    /// uncle_low(work=1) is excluded despite being at higher height
+    #[test]
+    fn test_find_uncles_prefers_higher_chain_work_over_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share0 = TestShareBlockBuilder::new().nonce(0).build();
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(1)
+            .build();
+        let uncle_mid_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .work(2)
+            .nonce(100)
+            .build();
+        let uncle_mid_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .work(2)
+            .nonce(101)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(2)
+            .build();
+        let uncle_high = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .work(3)
+            .nonce(200)
+            .build();
+        let uncle_low = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(201)
+            .build();
+
+        // Add all shares
+        for (share, height) in [
+            (&share0, 0u32),
+            (&share1, 1),
+            (&uncle_mid_a, 1),
+            (&uncle_mid_b, 1),
+            (&share2, 2),
+            (&uncle_high, 2),
+            (&uncle_low, 2),
+        ] {
+            let mut batch = rocksdb::WriteBatch::default();
+            store
+                .add_share(share, height, share.header.get_work(), true, &mut batch)
+                .unwrap();
+            store.commit_batch(batch).unwrap();
+        }
+
+        // Confirm main chain
+        for (share, height) in [(&share0, 0u32), (&share1, 1), (&share2, 2)] {
+            let mut metadata = store.get_block_metadata(&share.block_hash()).unwrap();
+            let mut batch = rocksdb::WriteBatch::default();
+            store
+                .append_to_confirmed(&share.block_hash(), height, &mut metadata, &mut batch)
+                .unwrap();
+            store.commit_batch(batch).unwrap();
+        }
+
+        let uncles = store.find_uncles().unwrap();
+        assert_eq!(uncles.len(), 3);
+
+        // uncle_high (work=3) should come first
+        assert_eq!(uncles[0], uncle_high.block_hash());
+
+        // uncle_mid_a and uncle_mid_b (both work=2) should be selected over uncle_low (work=1)
+        let mid_uncles: HashSet<BlockHash> =
+            [uncle_mid_a.block_hash(), uncle_mid_b.block_hash()]
+                .into_iter()
+                .collect();
+        assert!(mid_uncles.contains(&uncles[1]));
+        assert!(mid_uncles.contains(&uncles[2]));
+
+        // uncle_low at height 2 is excluded despite being at higher height than the mids
+        assert!(!uncles.contains(&uncle_low.block_hash()));
     }
 }
