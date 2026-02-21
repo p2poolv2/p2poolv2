@@ -25,7 +25,33 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::tempdir;
 
+use libp2p::PeerId;
+use std::error::Error;
+use std::time::Instant;
+
 use crate::common;
+
+async fn wait_for_peers(
+    handle: &NodeHandle,
+    expected: usize,
+    timeout: Duration,
+) -> Result<Vec<PeerId>, Box<dyn Error + Send + Sync>> {
+    let start = Instant::now();
+    loop {
+        let peers = handle.get_peers().await?;
+        if peers.len() >= expected {
+            return Ok(peers);
+        }
+        if start.elapsed() > timeout {
+            return Err(format!(
+                "Timed out waiting for peers (expected {expected}, got {}): {peers:?}",
+                peers.len()
+            )
+            .into());
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
 
 #[tokio::test]
 async fn test_three_nodes_connectivity() {
@@ -138,19 +164,16 @@ async fn test_three_nodes_connectivity() {
             .expect("Failed to create node 3");
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Get peer lists from each node
-    let peers1 = node1_handle
-        .get_peers()
+    // Get peer lists from each node (wait until expected peers are connected)
+    let peers1 = wait_for_peers(&node1_handle, 2, Duration::from_secs(5))
         .await
-        .expect("Failed to get peers from node 1");
-    let peers2 = node2_handle
-        .get_peers()
+        .expect("Node 1 failed to connect to peers");
+    let peers2 = wait_for_peers(&node2_handle, 2, Duration::from_secs(5))
         .await
-        .expect("Failed to get peers from node 2");
-    let peers3 = node3_handle
-        .get_peers()
+        .expect("Node 2 failed to connect to peers");
+    let peers3 = wait_for_peers(&node3_handle, 2, Duration::from_secs(5))
         .await
-        .expect("Failed to get peers from node 3");
+        .expect("Node 3 failed to connect to peers");
 
     // Assert that each node has exactly two peers
     assert_eq!(peers1.len(), 2, "Node 1 should have 2 peers");
