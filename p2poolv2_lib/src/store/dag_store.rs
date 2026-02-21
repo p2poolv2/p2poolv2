@@ -26,6 +26,23 @@ use tracing::debug;
 /// Max depth to look for uncles when building new share blocks
 const MAX_UNCLES_DEPTH: u8 = 3;
 
+/// Single confirmed share and its uncles.
+pub struct ShareInfo {
+    pub blockhash: BlockHash,
+    pub height: u32,
+    pub miner_pubkey: String,
+    pub timestamp: u32,
+    pub uncles: Vec<UncleInfo>,
+}
+
+/// Uncle share referenced by a confirmed share.
+pub struct UncleInfo {
+    pub blockhash: BlockHash,
+    pub miner_pubkey: String,
+    pub timestamp: u32,
+    pub height: Option<u32>,
+}
+
 impl Store {
     /// Update the block index so that we can easily find all the children of a block
     /// We store the next blockhashes for a block in a separate column family
@@ -336,6 +353,56 @@ impl Store {
             .collect();
 
         Ok(uncles)
+    }
+    /// Query confirmed shares from to_height down to from_height.
+    ///
+    /// Uses the confirmed chain range query to fetch all blockhashes in one call,
+    /// then resolves each share's header and uncle details.
+    /// Returns shares ordered from highest height to lowest.
+    pub fn query_shares(
+        &self,
+        from_height: u32,
+        to_height: u32,
+    ) -> Result<Vec<ShareInfo>, StoreError> {
+        let confirmed_chain = self.get_confirmed(from_height, to_height)?;
+
+        let mut shares = Vec::with_capacity(confirmed_chain.len());
+
+        for (height, blockhash) in confirmed_chain.iter().rev() {
+            let share_header = self.get_share_header(blockhash)?.ok_or_else(|| {
+                StoreError::NotFound(format!("Share header not found for {blockhash}"))
+            })?;
+
+            let uncle_infos: Vec<UncleInfo> = share_header
+                .uncles
+                .iter()
+                .filter_map(|uncle_hash| {
+                    let uncle_header = self.get_share_header(uncle_hash).ok().flatten()?;
+
+                    let uncle_height = self
+                        .get_block_metadata(uncle_hash)
+                        .ok()
+                        .and_then(|metadata| metadata.expected_height);
+
+                    Some(UncleInfo {
+                        blockhash: *uncle_hash,
+                        miner_pubkey: uncle_header.miner_pubkey.to_string(),
+                        timestamp: uncle_header.time,
+                        height: uncle_height,
+                    })
+                })
+                .collect();
+
+            shares.push(ShareInfo {
+                blockhash: *blockhash,
+                height: *height,
+                miner_pubkey: share_header.miner_pubkey.to_string(),
+                timestamp: share_header.time,
+                uncles: uncle_infos,
+            });
+        }
+
+        Ok(shares)
     }
 }
 

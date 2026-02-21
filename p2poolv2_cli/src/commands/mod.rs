@@ -54,6 +54,15 @@ pub enum Commands {
         #[arg(short, long)]
         end_time: Option<u64>,
     },
+    /// Display confirmed shares and their uncles for a height range
+    SharesInfo {
+        /// Height to get shares up to, inclusive. Default is chain tip.
+        #[arg(short, long)]
+        to: Option<u32>,
+        /// Number of shares to display going back from --to. Default 10.
+        #[arg(short, long, default_value = "10")]
+        num: u32,
+    },
     /// Generate API authentication credentials (salt, password, HMAC)
     GenAuth {
         /// Username for API authentication
@@ -75,7 +84,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
             // gen-auth doesn't need config or store
             crate::commands::gen_auth::execute(username.clone(), password.clone())?;
         }
-        Some(Commands::Info) | Some(Commands::PplnsShares { .. }) => {
+        Some(Commands::Info)
+        | Some(Commands::PplnsShares { .. })
+        | Some(Commands::SharesInfo { .. }) => {
             // These commands require config and store
             let config_path = cli
                 .config
@@ -118,6 +129,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                         *start_time,
                         *end_time,
                     )?;
+                }
+                Some(Commands::SharesInfo { to, num }) => {
+                    cli_commands::shares_info::execute(chain_store_handle, *to, *num)?;
                 }
                 _ => unreachable!(),
             }

@@ -14,21 +14,11 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod chain_info;
-pub mod pplns_shares;
-pub mod shares_info;
-
-// Re-export the shared store functionality
-pub mod store {
-    use crate::store::{Store, writer::StoreError};
-
-    /// Open a store from the given path
-    pub fn open_store(store_path: String) -> Result<Store, StoreError> {
-        tracing::info!("Opening store in read-only mode: {:?}", store_path);
-
-        Store::new(store_path, true).map_err(|e| {
-            tracing::error!("Failed to open store: {}", e);
-            e
-        })
+/// Return the first 8 hex characters of a string, git-style short ID.
+pub fn short_id(hex_string: &str) -> &str {
+    if hex_string.len() >= 8 {
+        &hex_string[..8]
+    } else {
+        hex_string
     }
 }
