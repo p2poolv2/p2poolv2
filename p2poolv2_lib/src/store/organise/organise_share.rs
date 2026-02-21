@@ -43,7 +43,10 @@ impl Store {
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<Option<Height>, StoreError> {
         let blockhash = share.block_hash();
-        tracing::debug!("organise_share called for {blockhash}");
+        tracing::debug!(
+            "organise_share called for {blockhash} with prev blockhash {}",
+            share.header.prev_share_blockhash
+        );
 
         let mut metadata = self.get_block_metadata(&blockhash)?;
         let top_candidate = self.get_top_candidate().ok();
@@ -114,7 +117,7 @@ impl Store {
         if let Some(extended_height) =
             self.should_extend_candidates(share, metadata, top_candidate)?
         {
-            debug!("Should extend candidate");
+            debug!("Extending candidate");
             self.append_to_candidates(blockhash, extended_height, metadata, batch)?;
 
             // Committed candidates above confirmed are unaffected by the

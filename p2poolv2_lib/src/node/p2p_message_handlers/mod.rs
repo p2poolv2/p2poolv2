@@ -153,7 +153,7 @@ mod tests {
 
         chain_store_handle
             .expect_setup_share_for_chain()
-            .returning(|share_block| share_block);
+            .returning(|share_block| Ok(share_block));
 
         time_provider.set_time(
             bitcoin::absolute::Time::from_consensus(share_block.header.bitcoin_header.time)
@@ -193,7 +193,7 @@ mod tests {
 
         chain_store_handle
             .expect_setup_share_for_chain()
-            .returning(|share_block| share_block);
+            .returning(|share_block| Ok(share_block));
 
         let ctx = RequestContext {
             peer: peer_id,
