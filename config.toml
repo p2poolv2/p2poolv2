@@ -61,7 +61,7 @@ password = "p2pool"
 
 [logging]
 # Specify a file path for the log file, if no log file is specified, console logging will be used
-# file = "./logs/p2pool.log"
+file = "./logs/p2pool.log"
 console = true
 level = "info"
 # Pool, user and worker stats are dumped for consumption by stats tools
