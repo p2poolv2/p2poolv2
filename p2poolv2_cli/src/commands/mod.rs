@@ -63,6 +63,14 @@ pub enum Commands {
         #[arg(short, long, default_value = "10")]
         num: u32,
     },
+    /// Look up a share by its blockhash
+    ShareLookup {
+        /// Share blockhash to look up
+        hash: String,
+        /// Show full share including transactions
+        #[arg(short, long, default_value = "false")]
+        full: bool,
+    },
     /// Generate API authentication credentials (salt, password, HMAC)
     GenAuth {
         /// Username for API authentication
@@ -86,7 +94,8 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         }
         Some(Commands::Info)
         | Some(Commands::PplnsShares { .. })
-        | Some(Commands::SharesInfo { .. }) => {
+        | Some(Commands::SharesInfo { .. })
+        | Some(Commands::ShareLookup { .. }) => {
             // These commands require config and store
             let config_path = cli
                 .config
@@ -132,6 +141,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                 }
                 Some(Commands::SharesInfo { to, num }) => {
                     cli_commands::shares_info::execute(chain_store_handle, *to, *num)?;
+                }
+                Some(Commands::ShareLookup { hash, full }) => {
+                    cli_commands::share_lookup::execute(chain_store_handle, hash, *full)?;
                 }
                 _ => unreachable!(),
             }
