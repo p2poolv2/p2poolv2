@@ -42,14 +42,14 @@ pub fn execute(chain_store_handle: ChainStoreHandle) -> Result<(), Box<dyn Error
 
     // Get chain tip blockhash
     let chain_tip_blockhash = format!(
-        "{:?}",
+        "{}",
         chain_store_handle
             .get_chain_tip()
             .unwrap_or(BlockHash::all_zeros())
     );
 
     // Get total work (difficulty)
-    let total_work = format!("{:?}", chain_store_handle.get_total_work());
+    let total_work = format!("{:#x}", chain_store_handle.get_total_work()?);
 
     // Count total number of shares in the chain
     let mut total_shares = 0;
