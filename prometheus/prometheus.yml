@@ -17,6 +17,7 @@ scrape_configs:
     static_configs:
       - targets:
           - host.docker.internal:46884
+          - p2pool:46884
 
     metrics_path: "/metrics"
     basic_auth:
