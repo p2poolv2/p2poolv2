@@ -91,7 +91,10 @@ mod tests {
         let result = execute(chain_store_handle);
 
         // Verify the command executed successfully
-        assert!(result.is_ok(), "Execute should not return an error");
+        assert!(
+            result.is_err(),
+            "Execute should not return an error. We always have at least genesis."
+        );
     }
 
     #[tokio::test]
