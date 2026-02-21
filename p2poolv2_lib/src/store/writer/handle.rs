@@ -26,7 +26,7 @@ use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
 use crate::store::stored_user::StoredUser;
 use bitcoin::{BlockHash, Work};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 
@@ -115,11 +115,6 @@ impl StoreHandle {
     /// Get the current chain tip from the confirmed chain.
     pub fn get_chain_tip(&self) -> Result<BlockHash, StoreError> {
         self.store.get_chain_tip()
-    }
-
-    /// Get all tips from chain state.
-    pub fn get_tips(&self) -> HashSet<BlockHash> {
-        self.store.get_tips()
     }
 
     /// Get the total work of the chain.
@@ -296,29 +291,9 @@ impl StoreHandle {
     // SYNC CHAIN STATE UPDATES - Direct in-memory operations (no serialization needed)
     // ========================================================================
 
-    /// Set the chain tip (sync, in-memory RwLock update).
-    pub fn set_chain_tip(&self, hash: BlockHash) {
-        self.store.set_chain_tip(hash);
-    }
-
     /// Set the genesis block hash (sync, in-memory RwLock update).
     pub fn set_genesis_blockhash(&self, hash: BlockHash) {
         self.store.set_genesis_blockhash(hash);
-    }
-
-    /// Update all tips (sync, in-memory RwLock update).
-    pub fn update_tips(&self, tips: HashSet<BlockHash>) {
-        self.store.update_tips(tips);
-    }
-
-    /// Add a tip (sync, in-memory RwLock update).
-    pub fn add_tip(&self, hash: BlockHash) {
-        self.store.add_tip(hash);
-    }
-
-    /// Remove a tip (sync, in-memory RwLock update).
-    pub fn remove_tip(&self, hash: &BlockHash) {
-        self.store.remove_tip(hash);
     }
 }
 
@@ -341,7 +316,6 @@ mockall::mock! {
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
         pub fn get_genesis_blockhash(&self) -> Option<BlockHash>;
         pub fn get_chain_tip(&self) -> Result<BlockHash, StoreError>;
-        pub fn get_tips(&self) -> HashSet<BlockHash>;
         pub fn get_total_work(&self) -> Result<Work, StoreError>;
         pub fn get_pplns_shares(&self) -> Vec<SimplePplnsShare>;
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
@@ -361,11 +335,7 @@ mockall::mock! {
         pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError>;
 
         // Sync chain state updates
-        pub fn set_chain_tip(&self, hash: BlockHash);
         pub fn set_genesis_blockhash(&self, hash: BlockHash);
-        pub fn update_tips(&self, tips: HashSet<BlockHash>);
-        pub fn add_tip(&self, hash: BlockHash);
-        pub fn remove_tip(&self, hash: &BlockHash);
     }
 
     impl Clone for StoreHandle {
@@ -389,7 +359,7 @@ mod tests {
         let handle = StoreHandle::new(store.clone(), write_tx);
 
         // Verify we can access the store
-        assert!(handle.store().get_tips().is_empty());
+        assert!(handle.get_genesis_blockhash().is_none());
     }
 
     #[tokio::test]
@@ -403,7 +373,6 @@ mod tests {
 
         // Test various read methods
         assert!(handle.get_genesis_blockhash().is_none());
-        assert!(handle.get_tips().is_empty());
         assert!(handle.get_pplns_shares().is_empty());
     }
 
@@ -418,6 +387,9 @@ mod tests {
         let handle2 = handle1.clone();
 
         // Both handles should read the same data
-        assert_eq!(handle1.get_tips(), handle2.get_tips());
+        assert_eq!(
+            handle1.get_genesis_blockhash(),
+            handle2.get_genesis_blockhash()
+        );
     }
 }

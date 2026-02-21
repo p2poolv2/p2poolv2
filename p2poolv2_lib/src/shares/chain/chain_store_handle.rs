@@ -301,10 +301,8 @@ impl ChainStoreHandle {
         let share_work = share.header.get_work();
         debug!("Share work: {}", share_work);
 
-        let tips = self.store_handle.get_tips();
-
         // Handle genesis case
-        if tips.is_empty() {
+        if self.store_handle.get_genesis_blockhash().is_none() {
             self.store_handle.setup_genesis(share.clone()).await?;
             return Ok(());
         }

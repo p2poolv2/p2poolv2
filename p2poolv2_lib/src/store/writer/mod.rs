@@ -31,7 +31,6 @@ use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::ShareBlock;
 use crate::store::Store;
 use bitcoin::{BlockHash, Work};
-use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -129,20 +128,8 @@ pub enum WriteCommand {
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
 
-    /// Set chain tip (fire-and-forget, updates in-memory state)
-    SetChainTip { hash: BlockHash },
-
     /// Set genesis block hash (fire-and-forget)
     SetGenesisBlockHash { hash: BlockHash },
-
-    /// Update all tips (fire-and-forget)
-    UpdateTips { tips: HashSet<BlockHash> },
-
-    /// Add a tip (fire-and-forget)
-    AddTip { hash: BlockHash },
-
-    /// Remove a tip (fire-and-forget)
-    RemoveTip { hash: BlockHash },
 
     /// Organise a share: update candidate and confirmed indexes atomically
     OrganiseShare {
@@ -254,24 +241,8 @@ impl StoreWriter {
             }
 
             // Fire-and-forget commands (in-memory state updates)
-            WriteCommand::SetChainTip { hash } => {
-                self.store.set_chain_tip(hash);
-            }
-
             WriteCommand::SetGenesisBlockHash { hash } => {
                 self.store.set_genesis_blockhash(hash);
-            }
-
-            WriteCommand::UpdateTips { tips } => {
-                self.store.update_tips(tips);
-            }
-
-            WriteCommand::AddTip { hash } => {
-                self.store.add_tip(hash);
-            }
-
-            WriteCommand::RemoveTip { hash } => {
-                self.store.remove_tip(&hash);
             }
 
             WriteCommand::OrganiseShare { share, reply } => {
