@@ -141,7 +141,7 @@ pub(crate) fn build_share_commitment(
         Ok(target) => target,
         Err(e) => return Err(format!("Failed to get current target: {e}").into()),
     };
-    let (tip, uncles) = chain_store_handle.get_chain_tip_and_uncles();
+    let (tip, uncles) = chain_store_handle.get_chain_tip_and_uncles()?;
     let merkle_root = template.get_merkle_root_without_coinbase();
     let time = SystemTimeProvider.seconds_since_epoch() as u32;
 
@@ -364,13 +364,13 @@ mod tests {
         chain_store_handle
             .expect_get_chain_tip_and_uncles()
             .returning(|| {
-                (
+                Ok((
                     BlockHash::from_str(
                         "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
                     )
                     .unwrap(),
                     HashSet::new(),
-                )
+                ))
             });
 
         let result = build_share_commitment(&chain_store_handle, &template, Some(miner_pubkey));
@@ -425,7 +425,7 @@ mod tests {
             .expect_get_chain_tip_and_uncles()
             .returning(move || {
                 let uncles = HashSet::from([uncle1, uncle2]);
-                (BlockHash::all_zeros(), uncles)
+                Ok((BlockHash::all_zeros(), uncles))
             });
 
         let result = build_share_commitment(&chain_store_handle, &template, Some(miner_pubkey));
@@ -488,7 +488,7 @@ mod tests {
             .expect_get_chain_tip_and_uncles()
             .returning(move || {
                 let uncles = HashSet::from([uncle1, uncle2]);
-                (BlockHash::all_zeros(), uncles)
+                Ok((BlockHash::all_zeros(), uncles))
             });
 
         chain_store_handle

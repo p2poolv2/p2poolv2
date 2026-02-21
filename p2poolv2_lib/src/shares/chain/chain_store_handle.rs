@@ -144,16 +144,20 @@ impl ChainStoreHandle {
         )
     }
 
-    /// Get the height of the chain tip.
+    /// Get the height of the chain tip from the confirmed chain.
     pub fn get_tip_height(&self) -> Result<Option<u32>, StoreError> {
-        let tip = self.store_handle.get_chain_tip();
-        debug!("Chain tip for height {}", tip);
-        let metadata = self.store_handle.store().get_block_metadata(&tip)?;
-        Ok(metadata.expected_height)
+        match self.store_handle.store().get_top_confirmed_height() {
+            Ok(height) => {
+                debug!("Confirmed chain tip height {}", height);
+                Ok(Some(height))
+            }
+            Err(StoreError::NotFound(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
-    /// Get the chain tip blockhash
-    pub fn get_chain_tip(&self) -> BlockHash {
+    /// Get the chain tip blockhash from the confirmed chain.
+    pub fn get_chain_tip(&self) -> Result<BlockHash, StoreError> {
         self.store_handle.get_chain_tip()
     }
 
@@ -210,14 +214,14 @@ impl ChainStoreHandle {
     }
 
     /// Get the chain tip and uncles (filtered by depth).
-    pub fn get_chain_tip_and_uncles(&self) -> (BlockHash, HashSet<BlockHash>) {
+    pub fn get_chain_tip_and_uncles(&self) -> Result<(BlockHash, HashSet<BlockHash>), StoreError> {
         let mut uncles = self.store_handle.get_tips();
         uncles.retain(|uncle| {
             self.get_depth(uncle).unwrap_or(MAX_UNCLE_DEPTH + 1) <= MAX_UNCLE_DEPTH
         });
-        let chain_tip = self.store_handle.get_chain_tip();
+        let chain_tip = self.get_chain_tip()?;
         uncles.remove(&chain_tip);
-        (chain_tip, uncles)
+        Ok((chain_tip, uncles))
     }
 
     /// Check which blockhashes are missing from the chain.
@@ -225,9 +229,9 @@ impl ChainStoreHandle {
         self.store_handle.get_missing_blockhashes(blockhashes)
     }
 
-    /// Get the depth of a blockhash from chain tip.
+    /// Get the depth of a blockhash from the confirmed chain tip.
     pub fn get_depth(&self, blockhash: &BlockHash) -> Option<usize> {
-        let tip = self.store_handle.get_chain_tip();
+        let tip = self.get_chain_tip().ok()?;
         if tip == *blockhash {
             return Some(0);
         }
@@ -262,7 +266,7 @@ impl ChainStoreHandle {
 
     /// Get the current target from the tip share block.
     pub fn get_current_target(&self) -> Result<u32, StoreError> {
-        let tip = self.store_handle.get_chain_tip();
+        let tip = self.get_chain_tip()?;
         let headers = self.get_share_headers(&[tip])?;
         match headers.first() {
             None => Err(StoreError::NotFound("No tips found".into())),
@@ -271,8 +275,11 @@ impl ChainStoreHandle {
     }
 
     /// Set up a share for the chain by setting prev_blockhash and uncles.
-    pub fn setup_share_for_chain(&self, mut share_block: ShareBlock) -> ShareBlock {
-        let (chain_tip, tips) = self.get_chain_tip_and_uncles();
+    pub fn setup_share_for_chain(
+        &self,
+        mut share_block: ShareBlock,
+    ) -> Result<ShareBlock, StoreError> {
+        let (chain_tip, tips) = self.get_chain_tip_and_uncles()?;
         debug!(
             "Setting up share for share blockhash: {:?} with chain_tip: {:?} and tips: {:?}",
             share_block.block_hash(),
@@ -281,7 +288,7 @@ impl ChainStoreHandle {
         );
         share_block.header.prev_share_blockhash = chain_tip;
         share_block.header.uncles = tips.into_iter().collect();
-        share_block
+        Ok(share_block)
     }
 
     // ========================================================================
@@ -330,63 +337,6 @@ impl ChainStoreHandle {
         self.store_handle
             .add_share(share, new_height, new_chain_work, confirm_txs)
             .await
-    }
-
-    /// Handle chain reorg logic.
-    async fn reorg(&self, share: &ShareBlock, new_chain_work: Work) -> Result<(), StoreError> {
-        let share_block_hash = share.block_hash();
-        info!("Reorging chain to share: {:?}", share_block_hash);
-
-        let current_total_work = self.store_handle.get_total_work()?;
-        debug!(
-            "new chain work: {}, Current total work: {}. New greater? {}",
-            new_chain_work,
-            current_total_work,
-            new_chain_work > current_total_work
-        );
-
-        let tip = self.store_handle.get_chain_tip();
-
-        match self
-            .store_handle
-            .store()
-            .get_common_ancestor(&share_block_hash, &tip)?
-        {
-            Some(common_ancestor) => {
-                debug!("Found common ancestor {common_ancestor}");
-                if new_chain_work > current_total_work {
-                    self.store_handle.set_chain_tip(share_block_hash);
-                }
-                self.store_handle.add_tip(share_block_hash);
-            }
-            None => {
-                debug!("No common ancestor found");
-                let old_chain_work = self.work_over_pplns_window(&tip)?;
-                let mut new_chain_work_calc = self.work_over_pplns_window(&share_block_hash)?;
-                if new_chain_work_calc == Work::from_hex("0x00").unwrap() {
-                    new_chain_work_calc = share.header.get_work();
-                }
-                debug!(
-                    "new chain work {}, old chain work {}. New greater? {}",
-                    new_chain_work_calc,
-                    old_chain_work,
-                    new_chain_work_calc > old_chain_work
-                );
-                if new_chain_work_calc > old_chain_work {
-                    self.store_handle.set_chain_tip(share_block_hash);
-                }
-                self.store_handle.add_tip(share_block_hash);
-            }
-        }
-
-        // Remove previous block and uncles from tips
-        self.store_handle
-            .remove_tip(&share.header.prev_share_blockhash);
-        for uncle in &share.header.uncles {
-            self.store_handle.remove_tip(uncle);
-        }
-
-        Ok(())
     }
 
     /// Calculate work over PPLNS window.
@@ -467,14 +417,14 @@ mockall::mock! {
         pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_tip_height(&self) -> Result<Option<u32>, StoreError>;
         pub fn build_locator(&self) -> Result<Vec<BlockHash>, StoreError>;
-        pub fn get_chain_tip(&self) -> BlockHash;
-        pub fn get_chain_tip_and_uncles(&self) -> (BlockHash, HashSet<BlockHash>);
+        pub fn get_chain_tip(&self) -> Result<BlockHash, StoreError>;
+        pub fn get_chain_tip_and_uncles(&self) -> Result<(BlockHash, HashSet<BlockHash>), StoreError>;
         pub fn get_genesis_blockhash(&self) -> Option<BlockHash>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
         pub fn get_depth(&self, blockhash: &BlockHash) -> Option<usize>;
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
         pub fn get_current_target(&self) -> Result<u32, StoreError>;
-        pub fn setup_share_for_chain(&self, share_block: ShareBlock) -> ShareBlock;
+        pub fn setup_share_for_chain(&self, share_block: ShareBlock) -> Result<ShareBlock, StoreError>;
         pub fn is_confirmed(&self, share: &ShareBlock) -> bool;
         pub fn get_btcaddresses_for_user_ids(&self, user_ids: &[u64]) -> Result<Vec<(u64, String)>, StoreError>;
         pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError>;

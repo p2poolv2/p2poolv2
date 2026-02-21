@@ -41,7 +41,12 @@ pub fn execute(chain_store_handle: ChainStoreHandle) -> Result<(), Box<dyn Error
         .unwrap_or_default();
 
     // Get chain tip blockhash
-    let chain_tip_blockhash = format!("{:?}", chain_store_handle.get_chain_tip());
+    let chain_tip_blockhash = format!(
+        "{:?}",
+        chain_store_handle
+            .get_chain_tip()
+            .unwrap_or(BlockHash::all_zeros())
+    );
 
     // Get total work (difficulty)
     let total_work = format!("{:?}", chain_store_handle.get_total_work());

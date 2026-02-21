@@ -236,9 +236,12 @@ impl Store {
         *self.genesis_blockhash.write().unwrap() = Some(hash);
     }
 
-    /// Get chain tip from chain state
-    pub fn get_chain_tip(&self) -> BlockHash {
-        *self.chain_tip.read().unwrap()
+    /// Get chain tip from the confirmed chain index.
+    ///
+    /// Returns the blockhash at the top confirmed height.
+    pub fn get_chain_tip(&self) -> Result<BlockHash, StoreError> {
+        let height = self.get_top_confirmed_height()?;
+        self.get_confirmed_at_height(height)
     }
 
     /// Set chain tip in chain state
@@ -353,10 +356,10 @@ mod tests {
         let mut batch = rocksdb::WriteBatch::default();
 
         // Store shares in linear chain 0 -> 1 -> 2
-        store
+        let mut metadata1 = store
             .add_share(&share1, 0, share1.header.get_work(), true, &mut batch)
             .unwrap();
-        store
+        let mut metadata2 = store
             .add_share(
                 &share2,
                 1,
@@ -365,7 +368,7 @@ mod tests {
                 &mut batch,
             )
             .unwrap();
-        store
+        let mut metadata3 = store
             .add_share(
                 &share3,
                 2,

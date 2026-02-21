@@ -350,7 +350,7 @@ mod tests {
 
         chain_store_handle
             .expect_setup_share_for_chain()
-            .returning(|share_block| share_block);
+            .returning(|share_block| Ok(share_block));
 
         let mut time_provider = TestTimeProvider::new(SystemTime::now());
         time_provider.set_time(
