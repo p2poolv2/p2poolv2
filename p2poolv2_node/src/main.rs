@@ -122,9 +122,15 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let tip = chain_store_handle.get_chain_tip();
-    let height = chain_store_handle.get_tip_height();
-    info!("Latest tip {:?} at height {:?}", tip, height);
+    let Ok(tip) = chain_store_handle.get_chain_tip() else {
+        error!("No chain tip found. Exiting.");
+        return ExitCode::FAILURE;
+    };
+    let Ok(Some(height)) = chain_store_handle.get_tip_height() else {
+        error!("No chain tip found. Exiting.");
+        return ExitCode::FAILURE;
+    };
+    info!("Latest tip {} at height {}", tip, height);
 
     let background_tasks_store = store.clone();
     p2poolv2_lib::store::background_tasks::start_background_tasks(
