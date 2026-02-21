@@ -90,9 +90,7 @@ impl OrganiseWorker {
         while let Some(share_block) = self.organise_rx.recv().await {
             debug!("Organising share: {:?}", share_block.block_hash());
             match self.chain_store_handle.organise_share(share_block).await {
-                Ok(()) => {
-                    debug!("Organised share");
-                }
+                Ok(_height) => {}
                 Err(StoreError::ChannelClosed) => {
                     error!("Store writer channel closed during organise");
                     return Err(OrganiseError {
@@ -133,7 +131,7 @@ mod tests {
         let (tx, rx) = organise_channel();
         let mut mock = MockChainStoreHandle::new();
         mock.expect_clone().return_once(MockChainStoreHandle::new);
-        mock.expect_organise_share().returning(|_| Ok(()));
+        mock.expect_organise_share().returning(|_| Ok(None));
 
         let worker = OrganiseWorker::new(rx, mock);
 

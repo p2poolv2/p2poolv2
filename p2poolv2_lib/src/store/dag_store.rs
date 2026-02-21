@@ -18,8 +18,8 @@ use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::chain::chain_store_handle::COMMON_ANCESTOR_DEPTH;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::shares::validation::MAX_UNCLES;
-use bitcoin::BlockHash;
 use bitcoin::consensus::{self, Encodable, encode};
+use bitcoin::{BlockHash, Work};
 use std::collections::{HashSet, VecDeque};
 use tracing::debug;
 
@@ -27,41 +27,6 @@ use tracing::debug;
 const MAX_UNCLES_DEPTH: u8 = 3;
 
 impl Store {
-    /// Iterate over the store from provided start blockhash
-    ///
-    /// Returns all shares along all branches from the genesis into
-    /// chain and all the shares without children as tips
-    pub fn load_chain(
-        &self,
-        genesis: BlockHash,
-    ) -> Result<(Vec<BlockHash>, HashSet<BlockHash>), StoreError> {
-        let mut chain = vec![genesis];
-        let mut tips = HashSet::new();
-        let mut to_visit = VecDeque::new();
-        to_visit.push_back(genesis);
-
-        while !to_visit.is_empty() {
-            if let Some(current) = to_visit.pop_front() {
-                match self.get_children_blockhashes(&current)? {
-                    Some(children) => {
-                        for child in children.iter() {
-                            if !to_visit.contains(child) {
-                                to_visit.push_back(*child);
-                            }
-                            if !chain.contains(child) {
-                                chain.push(*child);
-                            }
-                        }
-                    }
-                    None => {
-                        tips.insert(current);
-                    }
-                }
-            }
-        }
-        Ok((chain, tips))
-    }
-
     /// Update the block index so that we can easily find all the children of a block
     /// We store the next blockhashes for a block in a separate column family
     /// Uses merge operator for atomic append without read-modify-write

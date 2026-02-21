@@ -265,8 +265,9 @@ impl Store {
     pub fn init_chain_state_from_store(&self, genesis_hash: BlockHash) -> Result<(), StoreError> {
         self.set_genesis_blockhash(genesis_hash);
         debug!(
-            "Initialized chain state: tip={:?}, work={}",
-            self.get_chain_tip(),
+            "Initialized chain state: tip={}, height={}, work={}",
+            self.get_chain_tip()?,
+            self.get_top_confirmed_height()?,
             self.get_total_work()?,
         );
         Ok(())
