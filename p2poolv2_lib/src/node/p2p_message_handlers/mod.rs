@@ -17,6 +17,7 @@
 pub mod receivers;
 pub mod senders;
 
+use crate::node::SwarmSend;
 use crate::node::messages::{GetData, InventoryMessage, Message};
 use crate::service::p2p_service::RequestContext;
 #[cfg(test)]
@@ -30,6 +31,7 @@ use receivers::getheaders::handle_getheaders;
 use receivers::share_blocks::handle_share_block;
 use receivers::share_headers::handle_share_headers;
 use std::error::Error;
+use tokio::sync::mpsc;
 use tracing::{error, info};
 
 /// The Tower service that processes inbound P2P requests.
@@ -106,11 +108,16 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
 /// layers (rate limiting, inactivity tracking). Responses are solicited by
 /// us and libp2p only delivers them for matching outstanding requests, so
 /// peer-protection middleware is unnecessary.
-pub async fn handle_response<T: TimeProvider + Send + Sync + 'static>(
+///
+/// The swarm_tx channel is provided so that individual response handlers can
+/// send follow-up messages (e.g. GetShareBlocks after receiving ShareHeaders)
+/// back to the peer.
+pub async fn handle_response<C: Send + Sync + 'static, T: TimeProvider + Send + Sync + 'static>(
     peer: libp2p::PeerId,
     response: Message,
     chain_store_handle: ChainStoreHandle,
     time_provider: &T,
+    swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Handling response {} from peer: {}", response, peer);
     match response {
@@ -507,6 +514,7 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
+        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
         let block1 = TestShareBlockBuilder::new().build();
         let block2 = TestShareBlockBuilder::new().build();
@@ -517,6 +525,7 @@ mod tests {
             Message::ShareHeaders(share_headers),
             chain_store_handle,
             &time_provider,
+            swarm_tx,
         )
         .await;
 
@@ -528,12 +537,14 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
+        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
         let result = handle_response(
             peer_id,
             Message::NotFound(()),
             chain_store_handle,
             &time_provider,
+            swarm_tx,
         )
         .await;
 
@@ -545,6 +556,7 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
+        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
         let block_hashes = vec![
             "0000000000000000000000000000000000000000000000000000000000000001"
@@ -558,6 +570,7 @@ mod tests {
             Message::Inventory(inventory),
             chain_store_handle,
             &time_provider,
+            swarm_tx,
         )
         .await;
 
@@ -569,12 +582,14 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
+        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
         let result = handle_response(
             peer_id,
             Message::GetData(GetData::Block(BlockHash::all_zeros())),
             chain_store_handle,
             &time_provider,
+            swarm_tx,
         )
         .await;
 
