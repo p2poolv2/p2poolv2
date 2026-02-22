@@ -25,7 +25,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use bitcoin::BlockHash;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::debug;
+use tracing::{debug, error};
 
 const MAX_BLOCKS: usize = 500;
 
@@ -33,7 +33,7 @@ const MAX_BLOCKS: usize = 500;
 /// - use the locator to find the blockhashes to respond with
 /// - limit the number of blocks to MAX_BLOCKS
 /// - generate an inventory message to send blockhashes
-pub async fn handle_getblocks<C: 'static + Send + Sync>(
+pub async fn handle_getblocks<C: Send + Sync>(
     locator: Vec<BlockHash>,
     stop_block_hash: BlockHash,
     chain_store_handle: ChainStoreHandle,
@@ -45,9 +45,13 @@ pub async fn handle_getblocks<C: 'static + Send + Sync>(
         chain_store_handle.get_blockhashes_for_locator(&locator, &stop_block_hash, MAX_BLOCKS)?;
     let inventory_message =
         Message::Inventory(InventoryMessage::BlockHashes(response_block_hashes));
-    swarm_tx
+    if let Err(err) = swarm_tx
         .send(SwarmSend::Response(response_channel, inventory_message))
-        .await?;
+        .await
+    {
+        error!("Failed to send inventory response: {}", err);
+        return Err(format!("Failed to send inventory response: {err}").into());
+    }
     Ok(())
 }
 
