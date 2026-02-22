@@ -24,18 +24,15 @@ pub mod messages;
 pub mod p2p_message_handlers;
 
 use crate::accounting::simple_pplns::SimplePplnsShare;
-use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::senders::{send_blocks_inventory, send_getheaders};
-use crate::service::build_service;
-use crate::service::p2p_service::RequestContext;
+use crate::node::request_response_handler::RequestResponseHandler;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
-use crate::utils::time_provider::SystemTimeProvider;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::PeerId;
 use libp2p::SwarmBuilder;
@@ -51,7 +48,6 @@ use libp2p::{
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tower::{Service, ServiceExt, util::BoxService};
 use tracing::{debug, error, info, warn};
 
 pub struct SwarmResponseChannel<T> {
@@ -91,11 +87,7 @@ struct Node {
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     swarm_rx: mpsc::Receiver<SwarmSend<ResponseChannel<Message>>>,
     chain_store_handle: ChainStoreHandle,
-    service: BoxService<
-        RequestContext<ResponseChannel<Message>, SystemTimeProvider>,
-        (),
-        Box<dyn Error + Send + Sync>,
-    >,
+    request_response_handler: RequestResponseHandler,
     config: Config,
 }
 
@@ -188,16 +180,18 @@ impl Node {
 
         let (swarm_tx, swarm_rx) = mpsc::channel(100);
 
-        // Initialize the service field before constructing the Node
-        let service =
-            build_service::<ResponseChannel<Message>, _>(config.network.clone(), swarm_tx.clone());
+        let request_response_handler = RequestResponseHandler::new(
+            config.network.clone(),
+            chain_store_handle.clone(),
+            swarm_tx.clone(),
+        );
 
         Ok(Self {
             swarm,
             swarm_tx,
             swarm_rx,
             chain_store_handle,
-            service,
+            request_response_handler,
             config,
         })
     }
@@ -316,7 +310,8 @@ impl Node {
                     Ok(())
                 }
                 P2PoolBehaviourEvent::RequestResponse(request_response_event) => {
-                    self.handle_request_response_event(request_response_event)
+                    self.request_response_handler
+                        .handle_event(request_response_event)
                         .await
                 }
             },
@@ -390,65 +385,6 @@ impl Node {
             self.swarm_tx.clone(),
         )
         .await;
-    }
-
-    /// Handle request-response events from the libp2p network
-    async fn handle_request_response_event(
-        &mut self,
-        request_response_event: RequestResponseEvent,
-    ) -> Result<(), Box<dyn Error>> {
-        if let RequestResponseEvent::Message {
-            peer,
-            message:
-                libp2p::request_response::Message::Request {
-                    request_id: _,
-                    request,
-                    channel,
-                },
-        } = request_response_event
-        {
-            // Create the RequestContext
-            let ctx = RequestContext::<ResponseChannel<Message>, _> {
-                peer,
-                request: request.clone(),
-                chain_store_handle: self.chain_store_handle.clone(),
-                response_channel: channel,
-                swarm_tx: self.swarm_tx.clone(),
-                time_provider: SystemTimeProvider,
-            };
-
-            // Check readiness with a timeout
-            match tokio::time::timeout(Duration::from_secs(1), self.service.ready()).await {
-                Ok(Ok(_)) => {
-                    // Service is ready, call it
-                    if let Err(err) = self.service.call(ctx).await {
-                        error!("Service call failed for peer {}: {}", peer, err);
-                    }
-                }
-                Ok(Err(err)) => {
-                    // Service failed permanently
-                    error!("Service not ready for peer {}: {}", peer, err);
-                    if let Err(send_err) = self.swarm_tx.send(SwarmSend::Disconnect(peer)).await {
-                        error!(
-                            "Failed to send disconnect command for peer {}: {:?}",
-                            peer, send_err
-                        );
-                    }
-                }
-
-                Err(_) => {
-                    // Timeout due to rate limit or other delay
-                    error!("Service readiness timed out for peer {}", peer);
-                    if let Err(send_err) = self.swarm_tx.send(SwarmSend::Disconnect(peer)).await {
-                        error!(
-                            "Failed to send disconnect command for peer {}: {:?}",
-                            peer, send_err
-                        );
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 }
 
@@ -550,7 +486,10 @@ mod tests {
         };
         config.network = network_config;
 
-        let chain_store_handle = ChainStoreHandle::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_clone()
+            .returning(|| ChainStoreHandle::default());
 
         let mut node =
             Node::new(config.clone(), chain_store_handle).expect("Node initialization failed");
