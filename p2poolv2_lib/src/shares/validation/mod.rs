@@ -122,7 +122,7 @@ mod tests {
     use super::*;
     use crate::test_utils::{TestShareBlockBuilder, genesis_for_tests};
     use crate::utils::time_provider::TestTimeProvider;
-    use bitcoin::{BlockHash, CompactTarget, Target, hashes::Hash};
+    use bitcoin::{BlockHash, hashes::Hash};
     use mockall::predicate::*;
     use std::time::SystemTime;
 
@@ -308,31 +308,22 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    /// Build a share block with max target bits and find a nonce whose
-    /// block hash meets the target. With ~50% probability per nonce,
-    /// this returns within a handful of attempts.
-    fn build_share_meeting_target(builder: TestShareBlockBuilder) -> ShareBlock {
-        // Maximum regtest compact target -- roughly 50% of hashes meet this
-        let max_target_bits = CompactTarget::from_consensus(0x207fffff);
-        let target = Target::from_compact(max_target_bits);
-        for nonce in 0..100u32 {
-            let share_block = builder.clone().nonce(nonce).bits(max_target_bits).build();
-            if target.is_met_by(share_block.header.block_hash()) {
-                return share_block;
-            }
-        }
-        panic!("Could not find a valid nonce within 100 attempts");
+    /// Load share headers test data from JSON fixture file
+    fn load_share_headers_test_data() -> serde_json::Value {
+        let json_string =
+            std::fs::read_to_string("../p2poolv2_tests/test_data/validation/share_headers.json")
+                .expect("Failed to read share_headers.json");
+        serde_json::from_str(&json_string).unwrap()
     }
 
     #[test]
     fn test_validate_share_header_valid() {
         let chain_store_handle = ChainStoreHandle::default();
-        let share_block = build_share_meeting_target(
-            TestShareBlockBuilder::new()
-                .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202"),
-        );
+        let test_data = load_share_headers_test_data();
+        let header: ShareHeader =
+            serde_json::from_value(test_data["valid_header"].clone()).unwrap();
 
-        let result = validate_share_header(&share_block.header, &chain_store_handle);
+        let result = validate_share_header(&header, &chain_store_handle);
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
@@ -340,13 +331,11 @@ mod tests {
     #[test]
     fn test_validate_share_header_fails_for_hash_not_meeting_target() {
         let chain_store_handle = ChainStoreHandle::default();
-        // Use an impossibly tight target so no hash can meet it
-        let share_block = TestShareBlockBuilder::new()
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .bits(CompactTarget::from_consensus(0x01010000))
-            .build();
+        let test_data = load_share_headers_test_data();
+        let header: ShareHeader =
+            serde_json::from_value(test_data["tight_target_header"].clone()).unwrap();
 
-        let result = validate_share_header(&share_block.header, &chain_store_handle);
+        let result = validate_share_header(&header, &chain_store_handle);
         assert!(result.is_err());
         assert!(
             result
@@ -359,21 +348,11 @@ mod tests {
     #[test]
     fn test_validate_share_header_fails_for_too_many_uncles() {
         let chain_store_handle = ChainStoreHandle::default();
-        let uncle_hashes: Vec<BlockHash> = (0..=MAX_UNCLES)
-            .map(|index| {
-                TestShareBlockBuilder::new()
-                    .nonce(index as u32)
-                    .build()
-                    .block_hash()
-            })
-            .collect();
+        let test_data = load_share_headers_test_data();
+        let header: ShareHeader =
+            serde_json::from_value(test_data["too_many_uncles_header"].clone()).unwrap();
 
-        let share_block = TestShareBlockBuilder::new()
-            .uncles(uncle_hashes)
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .build();
-
-        let result = validate_share_header(&share_block.header, &chain_store_handle);
+        let result = validate_share_header(&header, &chain_store_handle);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Too many uncles"));
     }
@@ -381,22 +360,11 @@ mod tests {
     #[test]
     fn test_validate_share_header_succeeds_with_max_uncles() {
         let chain_store_handle = ChainStoreHandle::default();
-        let uncle_hashes: Vec<BlockHash> = (0..MAX_UNCLES)
-            .map(|index| {
-                TestShareBlockBuilder::new()
-                    .nonce(index as u32)
-                    .build()
-                    .block_hash()
-            })
-            .collect();
+        let test_data = load_share_headers_test_data();
+        let header: ShareHeader =
+            serde_json::from_value(test_data["max_uncles_header"].clone()).unwrap();
 
-        let share_block = build_share_meeting_target(
-            TestShareBlockBuilder::new()
-                .uncles(uncle_hashes)
-                .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202"),
-        );
-
-        let result = validate_share_header(&share_block.header, &chain_store_handle);
+        let result = validate_share_header(&header, &chain_store_handle);
         assert!(result.is_ok(), "Expected Ok but got: {:?}", result.err());
     }
 }
