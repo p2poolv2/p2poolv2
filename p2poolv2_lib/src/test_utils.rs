@@ -229,6 +229,7 @@ pub struct TestShareBlockBuilder {
     transactions: Vec<Transaction>,
     work: Option<u32>,
     nonce: Option<u32>,
+    bits: Option<CompactTarget>,
 }
 
 #[cfg(test)]
@@ -272,6 +273,11 @@ impl TestShareBlockBuilder {
         self
     }
 
+    pub fn bits(mut self, bits: CompactTarget) -> Self {
+        self.bits = Some(bits);
+        self
+    }
+
     pub fn build(self) -> ShareBlock {
         let coinbase = match self.miner_pubkey {
             Some(ref pk) => {
@@ -299,6 +305,7 @@ impl TestShareBlockBuilder {
             all_transactions,
             self.work,
             self.nonce,
+            self.bits,
         )
     }
 }
@@ -317,6 +324,7 @@ fn test_share_block(
     transactions: Vec<ShareTransaction>,
     work: Option<u32>,
     nonce: Option<u32>,
+    bits: Option<CompactTarget>,
 ) -> ShareBlock {
     let coinbase = test_coinbase_transaction();
 
@@ -340,6 +348,10 @@ fn test_share_block(
         ),
     };
 
+    let share_bits = bits.unwrap_or(CompactTarget::from_consensus(
+        0x01e0377ae * work.unwrap_or(1),
+    ));
+
     let header = ShareHeader {
         prev_share_blockhash: BlockHash::from_str(prev_share_blockhash).unwrap(),
         uncles,
@@ -347,7 +359,7 @@ fn test_share_block(
         merkle_root: share_merkle_root,
         bitcoin_header,
         time: 1700000000u32,
-        bits: CompactTarget::from_consensus(0x01e0377ae * work.unwrap_or(1)),
+        bits: share_bits,
     };
 
     ShareBlock {
