@@ -58,22 +58,6 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
             )
             .await
         }
-        Message::ShareHeaders(share_headers) => {
-            handle_share_headers(share_headers, ctx.chain_store_handle, &ctx.time_provider)
-                .await
-                .map_err(|e| {
-                    error!("Error handling received shares {}", e);
-                    e
-                })
-        }
-        Message::ShareBlock(share_block) => {
-            handle_share_block(share_block, &ctx.chain_store_handle, &ctx.time_provider)
-                .await
-                .map_err(|e| {
-                    error!("Failed to add share: {}", e);
-                    format!("Failed to add share: {e}").into()
-                })
-        }
         Message::Inventory(inventory) => {
             info!("Received inventory: {:?}", inventory);
             match inventory {
@@ -107,6 +91,10 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
         }
         Message::Transaction(transaction) => {
             info!("Received transaction: {:?}", transaction);
+            Ok(())
+        }
+        other => {
+            info!("Unexpected request type {other}");
             Ok(())
         }
     }
@@ -222,45 +210,6 @@ mod tests {
         let result = handle_request(ctx).await;
 
         assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_handle_request_share_block_error() {
-        let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
-        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let mut chain_store_handle = ChainStoreHandle::default();
-        let time_provider = TestTimeProvider::new(SystemTime::now());
-
-        let share_block = TestShareBlockBuilder::new()
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .build();
-
-        chain_store_handle
-            .expect_add_share()
-            .with(eq(share_block.clone()), eq(true))
-            .returning(|_, _| Err(StoreError::Database("Failed to add share".to_string())));
-
-        chain_store_handle
-            .expect_setup_share_for_chain()
-            .returning(|share_block| Ok(share_block));
-
-        let ctx = RequestContext {
-            peer: peer_id,
-            request: Message::ShareBlock(share_block),
-            chain_store_handle,
-            response_channel: response_channel_tx,
-            swarm_tx,
-            time_provider,
-        };
-
-        let result = handle_request(ctx).await;
-
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "Failed to add share: Share block validation failed"
-        );
     }
 
     #[tokio::test]
