@@ -24,7 +24,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use libp2p::PeerId;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{debug, info};
 
 /// Send blocks inventory update to a peer. This is not a response, but is triggered
 /// by the node when it has new data to share.
@@ -38,6 +38,7 @@ pub async fn send_blocks_inventory<C: 'static + Send + Sync>(
         .build_locator()
         .map_err(|e| format!("Failed to build locator {e}"))?;
     let inventory_message = Message::Inventory(InventoryMessage::BlockHashes(locator));
+    debug!("Sending request to peer {peer_id}: {inventory_message}");
     swarm_tx
         .send(SwarmSend::Request(peer_id, inventory_message))
         .await

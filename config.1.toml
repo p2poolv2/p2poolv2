@@ -61,7 +61,7 @@ password = "p2pool"
 
 [logging]
 # For system run services you can specify a file path
-# file = "./logs/p2pool.2.log"
+file = "./logs/p2pool.1.log"
 # For container or local run it is recommended to use console output
 level = "debug"
 # Pool, user and worker stats are dumped for consumption by stats tools

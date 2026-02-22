@@ -19,6 +19,11 @@ pub mod senders;
 
 use crate::node::messages::{GetData, InventoryMessage, Message};
 use crate::service::p2p_service::RequestContext;
+#[cfg(test)]
+#[mockall_double::double]
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+#[cfg(not(test))]
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::utils::time_provider::TimeProvider;
 use receivers::getblocks::handle_getblocks;
 use receivers::getheaders::handle_getheaders;
@@ -102,6 +107,51 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
         }
         Message::Transaction(transaction) => {
             info!("Received transaction: {:?}", transaction);
+            Ok(())
+        }
+    }
+}
+
+/// Handle a response message received from a peer.
+///
+/// Unlike handle_request, this is called directly without the Tower service
+/// layers (rate limiting, inactivity tracking). Responses are solicited by
+/// us and libp2p only delivers them for matching outstanding requests, so
+/// peer-protection middleware is unnecessary.
+pub async fn handle_response<T: TimeProvider + Send + Sync + 'static>(
+    peer: libp2p::PeerId,
+    response: Message,
+    chain_store_handle: ChainStoreHandle,
+    time_provider: &T,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    info!("Handling response {} from peer: {}", response, peer);
+    match response {
+        Message::ShareHeaders(share_headers) => {
+            handle_share_headers(share_headers, chain_store_handle, time_provider)
+                .await
+                .map_err(|e| {
+                    error!("Error handling received share headers: {}", e);
+                    e
+                })
+        }
+        Message::ShareBlock(share_block) => {
+            handle_share_block(share_block, &chain_store_handle, time_provider)
+                .await
+                .map_err(|e| {
+                    error!("Failed to add share from response: {}", e);
+                    format!("Failed to add share from response: {e}").into()
+                })
+        }
+        Message::Inventory(inventory) => {
+            info!("Received inventory response: {:?}", inventory);
+            Ok(())
+        }
+        Message::NotFound(_) => {
+            info!("Received not found response from peer: {}", peer);
+            Ok(())
+        }
+        other => {
+            info!("Unexpected response type from peer {}: {}", peer, other);
             Ok(())
         }
     }
@@ -499,6 +549,85 @@ mod tests {
         };
 
         let result = handle_request(ctx).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_response_share_headers() {
+        let peer_id = libp2p::PeerId::random();
+        let chain_store_handle = ChainStoreHandle::default();
+        let time_provider = TestTimeProvider::new(SystemTime::now());
+
+        let block1 = TestShareBlockBuilder::new().build();
+        let block2 = TestShareBlockBuilder::new().build();
+        let share_headers = vec![block1.header.clone(), block2.header.clone()];
+
+        let result = handle_response(
+            peer_id,
+            Message::ShareHeaders(share_headers),
+            chain_store_handle,
+            &time_provider,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_response_not_found() {
+        let peer_id = libp2p::PeerId::random();
+        let chain_store_handle = ChainStoreHandle::default();
+        let time_provider = TestTimeProvider::new(SystemTime::now());
+
+        let result = handle_response(
+            peer_id,
+            Message::NotFound(()),
+            chain_store_handle,
+            &time_provider,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_response_inventory() {
+        let peer_id = libp2p::PeerId::random();
+        let chain_store_handle = ChainStoreHandle::default();
+        let time_provider = TestTimeProvider::new(SystemTime::now());
+
+        let block_hashes = vec![
+            "0000000000000000000000000000000000000000000000000000000000000001"
+                .parse::<BlockHash>()
+                .unwrap(),
+        ];
+        let inventory = InventoryMessage::BlockHashes(block_hashes);
+
+        let result = handle_response(
+            peer_id,
+            Message::Inventory(inventory),
+            chain_store_handle,
+            &time_provider,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_response_unexpected_message() {
+        let peer_id = libp2p::PeerId::random();
+        let chain_store_handle = ChainStoreHandle::default();
+        let time_provider = TestTimeProvider::new(SystemTime::now());
+
+        let result = handle_response(
+            peer_id,
+            Message::GetData(GetData::Block(BlockHash::all_zeros())),
+            chain_store_handle,
+            &time_provider,
+        )
+        .await;
 
         assert!(result.is_ok());
     }

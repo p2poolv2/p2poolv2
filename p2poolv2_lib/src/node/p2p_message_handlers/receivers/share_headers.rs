@@ -22,7 +22,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareHeader;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
-use tracing::info;
+use tracing::debug;
 
 /// Handle ShareHeaders received from a peer
 /// We need to:
@@ -35,6 +35,6 @@ pub async fn handle_share_headers<T: TimeProvider + Send + Sync>(
     _chain_store_handle: ChainStoreHandle,
     _time_provider: &T,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    info!("Received share headers: {:?}", share_headers);
+    debug!("Received share headers: {:?}", share_headers);
     Ok(())
 }

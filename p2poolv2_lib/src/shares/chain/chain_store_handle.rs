@@ -21,6 +21,7 @@
 //! are synchronous and direct, while writes are serialized through the store writer.
 
 use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::shares::genesis;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::writer::{StoreError, StoreHandle};
 use bitcoin::hashes::Hash;
@@ -179,7 +180,12 @@ impl ChainStoreHandle {
         match tip_height {
             Some(tip_height) => {
                 if tip_height == 0 {
-                    return Ok(vec![]);
+                    let Some(genesis) = self.get_genesis_blockhash() else {
+                        return Err(StoreError::NotFound(
+                            "No genesis found when building locator for empty chain".into(),
+                        ));
+                    };
+                    return Ok(vec![genesis]);
                 }
             }
             None => {
@@ -487,6 +493,25 @@ mod tests {
         // Verify share is stored
         let stored_share = chain_handle.get_share(&share1.block_hash());
         assert!(stored_share.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_build_locator_genesis_only() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        let locator = chain_handle.build_locator().unwrap();
+        assert_eq!(locator.len(), 1, "Locator should contain exactly genesis");
+        assert_eq!(
+            locator[0],
+            genesis.block_hash(),
+            "Locator should contain the genesis blockhash"
+        );
     }
 
     #[tokio::test]
