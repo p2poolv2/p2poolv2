@@ -408,7 +408,7 @@ mod tests {
         }
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn test_dispatch_request_service_timeout_disconnects_peer() {
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
         let mut chain_store_handle = ChainStoreHandle::default();
