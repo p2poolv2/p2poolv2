@@ -32,7 +32,7 @@ const MAX_HEADERS: usize = 2000;
 /// - start from chain tip, find blockhashes up to the stop block hash
 /// - limit the number of blocks to MAX_HEADERS
 /// - respond with send all headers found
-pub async fn handle_getheaders<C: 'static + Send + Sync>(
+pub async fn handle_getheaders<C: Send + Sync>(
     block_hashes: Vec<BlockHash>,
     stop_block_hash: BlockHash,
     chain_store_handle: ChainStoreHandle,
@@ -49,8 +49,8 @@ pub async fn handle_getheaders<C: 'static + Send + Sync>(
         .send(SwarmSend::Response(response_channel, headers_message))
         .await
     {
-        tracing::error!("Failed to send ShareHeaders response: {}", err);
-        return Err(Box::new(err));
+        tracing::error!("Failed to send getheaders response: {}", err);
+        return Err(format!("Failed to send getheaders response: {err}").into());
     }
     Ok(())
 }
@@ -137,11 +137,7 @@ mod tests {
 
         assert!(result.is_err());
         if let Err(e) = result {
-            assert_eq!(
-                e.to_string(),
-                "channel closed".to_string(),
-                "Expected channel closed error"
-            );
+            assert!(e.to_string().contains("Failed to send getheaders response"));
         } else {
             panic!("Expected an error due to send failure");
         }

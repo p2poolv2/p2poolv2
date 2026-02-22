@@ -35,7 +35,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 
 /// The Tower service that processes inbound P2P requests.
-pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + Sync + 'static>(
+pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
     ctx: RequestContext<C, T>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Handling request {} from peer: {}", ctx.request, ctx.peer);
@@ -112,7 +112,7 @@ pub async fn handle_request<C: Send + Sync + 'static, T: TimeProvider + Send + S
 /// The swarm_tx channel is provided so that individual response handlers can
 /// send follow-up messages (e.g. GetShareBlocks after receiving ShareHeaders)
 /// back to the peer.
-pub async fn handle_response<C: Send + Sync + 'static, T: TimeProvider + Send + Sync + 'static>(
+pub async fn handle_response<C: Send + Sync, T: TimeProvider + Send + Sync>(
     peer: libp2p::PeerId,
     response: Message,
     chain_store_handle: ChainStoreHandle,
@@ -122,7 +122,7 @@ pub async fn handle_response<C: Send + Sync + 'static, T: TimeProvider + Send + 
     info!("Handling response {} from peer: {}", response, peer);
     match response {
         Message::ShareHeaders(share_headers) => {
-            handle_share_headers(share_headers, chain_store_handle, time_provider)
+            handle_share_headers(share_headers, chain_store_handle, time_provider, swarm_tx)
                 .await
                 .map_err(|e| {
                     error!("Error handling received share headers: {}", e);
@@ -159,7 +159,6 @@ mod tests {
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::share_block::Txids;
-    use crate::store::writer::StoreError;
     use crate::test_utils::{
         TestShareBlockBuilder, build_block_from_work_components, genesis_for_tests,
     };

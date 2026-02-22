@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::node::SwarmSend;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -22,6 +23,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareHeader;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
+use tokio::sync::mpsc;
 use tracing::debug;
 
 /// Handle ShareHeaders received from a peer
@@ -30,10 +32,11 @@ use tracing::debug;
 /// 2. TODO: Store the headers
 /// 2. TODO: Push the header into a task queue to fetch txs to build the ShareBlock
 /// 3. TODO: We need to start a task in node to pull from the task queue and send getData message for txs
-pub async fn handle_share_headers<T: TimeProvider + Send + Sync>(
+pub async fn handle_share_headers<T: TimeProvider + Send + Sync, C: Send + Sync>(
     share_headers: Vec<ShareHeader>,
     _chain_store_handle: ChainStoreHandle,
     _time_provider: &T,
+    _swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Received share headers: {:?}", share_headers);
     Ok(())
