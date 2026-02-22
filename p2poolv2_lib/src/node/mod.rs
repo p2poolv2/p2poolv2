@@ -87,7 +87,7 @@ struct Node {
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     swarm_rx: mpsc::Receiver<SwarmSend<ResponseChannel<Message>>>,
     chain_store_handle: ChainStoreHandle,
-    request_response_handler: RequestResponseHandler,
+    request_response_handler: RequestResponseHandler<ResponseChannel<Message>>,
     config: Config,
 }
 
