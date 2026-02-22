@@ -31,12 +31,12 @@ pub const MAX_UNCLES: usize = 3;
 pub const MAX_TIME_DIFF: u64 = 60;
 
 /// Validate the share block, returning Error in case of failure to validate
-/// validate nonce and blockhash meets difficulty
+/// TODO: validate nonce and blockhash meets pool difficulty
 /// validate prev_share_blockhash is in store
 /// validate uncles are in store and no more than MAX_UNCLES
 /// validate timestamp is within the last 10 minutes
-/// validate merkle root
-/// validate coinbase transaction
+/// TODO: validate merkle root
+/// TODO: validate coinbase transaction
 pub async fn validate(
     share: &ShareBlock,
     chain_store_handle: &ChainStoreHandle,
@@ -45,32 +45,11 @@ pub async fn validate(
     if let Err(e) = validate_timestamp(share, time_provider).await {
         return Err(format!("Share timestamp validation failed: {e}").into());
     }
-    if let Err(e) = validate_prev_share_blockhash(share, &chain_store_handle).await {
-        return Err(format!("Share prev_share_blockhash validation failed: {e}").into());
-    }
-    if let Err(e) = validate_uncles(share, &chain_store_handle).await {
+    if let Err(e) = validate_uncles(share, chain_store_handle).await {
         return Err(format!("Share uncles validation failed: {e}").into());
     }
     // TODO: Populate bitcoin block from ShortIDs in share and use bitcoin_block_validation to validate difficulty
     // OR - Fetch diffculty from bitcoind rpc and validate share blockhash meets difficulty
-    Ok(())
-}
-
-/// Validate prev_share_blockhash is in store or block is genesis
-pub async fn validate_prev_share_blockhash(
-    share: &ShareBlock,
-    chain_store_handle: &ChainStoreHandle,
-) -> Result<(), Box<dyn Error>> {
-    if chain_store_handle
-        .get_share(&share.header.prev_share_blockhash)
-        .is_none()
-    {
-        return Err(format!(
-            "Prev share blockhash {} not found in store",
-            share.header.prev_share_blockhash
-        )
-        .into());
-    }
     Ok(())
 }
 
@@ -173,58 +152,6 @@ mod tests {
             .build();
 
         assert!(validate_timestamp(&share, &time_provider).await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_validate_prev_blockhash_exists() {
-        // Create and add initial share to chain
-        let initial_share = TestShareBlockBuilder::new()
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .build();
-
-        // Create new share pointing to existing share - should validate
-        let valid_share = TestShareBlockBuilder::new()
-            .prev_share_blockhash(initial_share.block_hash().to_string())
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .build();
-
-        let mut chain_store_handle = ChainStoreHandle::default();
-
-        chain_store_handle
-            .expect_get_share()
-            .with(mockall::predicate::eq(initial_share.block_hash()))
-            .returning(move |_| Some(initial_share.clone()));
-
-        assert!(
-            validate_prev_share_blockhash(&valid_share, &chain_store_handle)
-                .await
-                .is_ok()
-        );
-    }
-
-    #[tokio::test]
-    async fn test_validate_prev_blockhash_non_existing() {
-        // Create share pointing to non-existent previous hash - should fail validation
-        let non_existent_hash =
-            "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7".to_string();
-        let invalid_share = TestShareBlockBuilder::new()
-            .prev_share_blockhash(non_existent_hash.clone())
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .build();
-
-        let mut chain_store_handle = ChainStoreHandle::default();
-        chain_store_handle
-            .expect_get_share()
-            .with(mockall::predicate::eq(
-                non_existent_hash.parse::<BlockHash>().unwrap(),
-            ))
-            .returning(move |_| None);
-
-        assert!(
-            validate_prev_share_blockhash(&invalid_share, &chain_store_handle)
-                .await
-                .is_err()
-        );
     }
 
     #[tokio::test]
