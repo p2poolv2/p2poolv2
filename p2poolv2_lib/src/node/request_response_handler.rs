@@ -209,6 +209,7 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
             response,
             self.chain_store_handle.clone(),
             &time_provider,
+            self.swarm_tx.clone(),
         )
         .await
         {
