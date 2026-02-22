@@ -21,23 +21,27 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareHeader;
-use crate::utils::time_provider::TimeProvider;
+use crate::shares::validation::validate_share_header;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::debug;
 
 /// Handle ShareHeaders received from a peer
-/// We need to:
-/// 1. TODO: Validate the PoW on the share header
-/// 2. TODO: Store the headers
-/// 2. TODO: Push the header into a task queue to fetch txs to build the ShareBlock
-/// 3. TODO: We need to start a task in node to pull from the task queue and send getData message for txs
-pub async fn handle_share_headers<T: TimeProvider + Send + Sync, C: Send + Sync>(
+///
+/// - validate: received share header using shares::validation::validate_share_header
+///
+/// - getheader: If MAX_HEADERS headers are received, send getheaders to request next batch
+///
+/// - getdata: If less than MAX_HEADERs received, request first set of
+///   blocks. Then respose for blocks will ask for next set of blocks.
+pub async fn handle_share_headers<C: Send + Sync>(
     share_headers: Vec<ShareHeader>,
-    _chain_store_handle: ChainStoreHandle,
-    _time_provider: &T,
-    _swarm_tx: mpsc::Sender<SwarmSend<C>>,
+    chain_store_handle: ChainStoreHandle,
+    swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let all_valid = share_headers
+        .iter()
+        .all(|header| validate_share_header(header, &chain_store_handle).is_ok());
     debug!("Received share headers: {:?}", share_headers);
     Ok(())
 }

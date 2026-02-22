@@ -122,7 +122,7 @@ pub async fn handle_response<C: Send + Sync, T: TimeProvider + Send + Sync>(
     info!("Handling response {} from peer: {}", response, peer);
     match response {
         Message::ShareHeaders(share_headers) => {
-            handle_share_headers(share_headers, chain_store_handle, time_provider, swarm_tx)
+            handle_share_headers(share_headers, chain_store_handle, swarm_tx)
                 .await
                 .map_err(|e| {
                     error!("Error handling received share headers: {}", e);

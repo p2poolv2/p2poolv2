@@ -36,7 +36,9 @@ pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
     time_provider: &T,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Received share block: {:?}", share_block);
-    if let Err(e) = validation::validate(&share_block, chain_store_handle, time_provider).await {
+    if let Err(e) =
+        validation::validate_share_block(&share_block, chain_store_handle, time_provider)
+    {
         error!("Share block validation failed: {}", e);
         return Err("Share block validation failed".into());
     }

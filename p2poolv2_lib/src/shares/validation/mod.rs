@@ -16,6 +16,7 @@
 
 mod bitcoin_block_validation;
 
+use super::share_block::ShareHeader;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -23,12 +24,40 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::utils::time_provider::TimeProvider;
+use bitcoin::Target;
 use std::error::Error;
 
 /// Maximum uncles in a share block header
 pub const MAX_UNCLES: usize = 3;
 /// Maximum time difference allowed between current tip and received shares
 pub const MAX_TIME_DIFF: u64 = 60;
+
+/// Validate the share header by checking proof of work and uncle count.
+///
+/// Verifies that the share's block hash meets its compact target (bits)
+/// and that the number of uncles does not exceed MAX_UNCLES.
+pub fn validate_share_header(
+    share: &ShareHeader,
+    _chain_store_handle: &ChainStoreHandle,
+) -> Result<bool, Box<dyn Error + Send + Sync>> {
+    if share.uncles.len() > MAX_UNCLES {
+        return Err(format!(
+            "Too many uncles: {} exceeds maximum of {MAX_UNCLES}",
+            share.uncles.len()
+        )
+        .into());
+    }
+
+    let target = Target::from_compact(share.bits);
+    let block_hash = share.block_hash();
+    if !target.is_met_by(block_hash) {
+        return Err(
+            format!("Share block hash {block_hash} does not meet share target {target}").into(),
+        );
+    }
+
+    Ok(true)
+}
 
 /// Validate the share block, returning Error in case of failure to validate
 /// TODO: validate nonce and blockhash meets pool difficulty
@@ -37,15 +66,15 @@ pub const MAX_TIME_DIFF: u64 = 60;
 /// validate timestamp is within the last 10 minutes
 /// TODO: validate merkle root
 /// TODO: validate coinbase transaction
-pub async fn validate(
+pub fn validate_share_block(
     share: &ShareBlock,
     chain_store_handle: &ChainStoreHandle,
     time_provider: &impl TimeProvider,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    if let Err(e) = validate_timestamp(share, time_provider).await {
+    if let Err(e) = validate_timestamp(share, time_provider) {
         return Err(format!("Share timestamp validation failed: {e}").into());
     }
-    if let Err(e) = validate_uncles(share, chain_store_handle).await {
+    if let Err(e) = validate_uncles(share, chain_store_handle) {
         return Err(format!("Share uncles validation failed: {e}").into());
     }
     // TODO: Populate bitcoin block from ShortIDs in share and use bitcoin_block_validation to validate difficulty
@@ -54,7 +83,7 @@ pub async fn validate(
 }
 
 /// Validate the share uncles are in store and no more than MAX_UNCLES
-pub async fn validate_uncles(
+pub fn validate_uncles(
     share: &ShareBlock,
     chain_store_handle: &ChainStoreHandle,
 ) -> Result<(), Box<dyn Error>> {
@@ -70,7 +99,7 @@ pub async fn validate_uncles(
 }
 
 /// Validate the share timestamp is within the last 60 seconds
-pub async fn validate_timestamp(
+pub fn validate_timestamp(
     share: &ShareBlock,
     time_provider: &impl TimeProvider,
 ) -> Result<(), Box<dyn Error>> {
@@ -93,7 +122,7 @@ mod tests {
     use super::*;
     use crate::test_utils::{TestShareBlockBuilder, genesis_for_tests};
     use crate::utils::time_provider::TestTimeProvider;
-    use bitcoin::{BlockHash, hashes::Hash};
+    use bitcoin::{BlockHash, CompactTarget, Target, hashes::Hash};
     use mockall::predicate::*;
     use std::time::SystemTime;
 
@@ -109,7 +138,7 @@ mod tests {
         time_provider
             .set_time(bitcoin::absolute::Time::from_consensus(share_timestamp as u32).unwrap());
 
-        let result = validate_timestamp(&share, &time_provider).await;
+        let result = validate_timestamp(&share, &time_provider);
         assert_eq!(
             result.err().unwrap().to_string(),
             format!(
@@ -134,7 +163,7 @@ mod tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
-        assert!(validate_timestamp(&share, &time_provider).await.is_err());
+        assert!(validate_timestamp(&share, &time_provider).is_err());
     }
 
     #[tokio::test]
@@ -151,7 +180,7 @@ mod tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
-        assert!(validate_timestamp(&share, &time_provider).await.is_ok());
+        assert!(validate_timestamp(&share, &time_provider).is_ok());
     }
 
     #[tokio::test]
@@ -224,11 +253,7 @@ mod tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
-        assert!(
-            validate_uncles(&valid_share, &chain_store_handle)
-                .await
-                .is_ok()
-        );
+        assert!(validate_uncles(&valid_share, &chain_store_handle).is_ok());
 
         // Test share with too many uncles (> MAX_UNCLES)
         let invalid_share = TestShareBlockBuilder::new()
@@ -241,17 +266,9 @@ mod tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
-        assert!(
-            validate_uncles(&invalid_share, &chain_store_handle)
-                .await
-                .is_err()
-        );
+        assert!(validate_uncles(&invalid_share, &chain_store_handle).is_err());
 
-        assert!(
-            validate_uncles(&invalid_share, &chain_store_handle)
-                .await
-                .is_err()
-        );
+        assert!(validate_uncles(&invalid_share, &chain_store_handle).is_err());
     }
 
     #[tokio::test]
@@ -286,8 +303,100 @@ mod tests {
         );
 
         // Test handle_request directly without request_id
-        let result = validate(&share_block, &chain_store_handle, &time_provider).await;
+        let result = validate_share_block(&share_block, &chain_store_handle, &time_provider);
 
         assert!(result.is_ok());
+    }
+
+    /// Build a share block with max target bits and find a nonce whose
+    /// block hash meets the target. With ~50% probability per nonce,
+    /// this returns within a handful of attempts.
+    fn build_share_meeting_target(builder: TestShareBlockBuilder) -> ShareBlock {
+        // Maximum regtest compact target -- roughly 50% of hashes meet this
+        let max_target_bits = CompactTarget::from_consensus(0x207fffff);
+        let target = Target::from_compact(max_target_bits);
+        for nonce in 0..100u32 {
+            let share_block = builder.clone().nonce(nonce).bits(max_target_bits).build();
+            if target.is_met_by(share_block.header.block_hash()) {
+                return share_block;
+            }
+        }
+        panic!("Could not find a valid nonce within 100 attempts");
+    }
+
+    #[test]
+    fn test_validate_share_header_valid() {
+        let chain_store_handle = ChainStoreHandle::default();
+        let share_block = build_share_meeting_target(
+            TestShareBlockBuilder::new()
+                .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202"),
+        );
+
+        let result = validate_share_header(&share_block.header, &chain_store_handle);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_validate_share_header_fails_for_hash_not_meeting_target() {
+        let chain_store_handle = ChainStoreHandle::default();
+        // Use an impossibly tight target so no hash can meet it
+        let share_block = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .bits(CompactTarget::from_consensus(0x01010000))
+            .build();
+
+        let result = validate_share_header(&share_block.header, &chain_store_handle);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("does not meet share target")
+        );
+    }
+
+    #[test]
+    fn test_validate_share_header_fails_for_too_many_uncles() {
+        let chain_store_handle = ChainStoreHandle::default();
+        let uncle_hashes: Vec<BlockHash> = (0..=MAX_UNCLES)
+            .map(|index| {
+                TestShareBlockBuilder::new()
+                    .nonce(index as u32)
+                    .build()
+                    .block_hash()
+            })
+            .collect();
+
+        let share_block = TestShareBlockBuilder::new()
+            .uncles(uncle_hashes)
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+
+        let result = validate_share_header(&share_block.header, &chain_store_handle);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Too many uncles"));
+    }
+
+    #[test]
+    fn test_validate_share_header_succeeds_with_max_uncles() {
+        let chain_store_handle = ChainStoreHandle::default();
+        let uncle_hashes: Vec<BlockHash> = (0..MAX_UNCLES)
+            .map(|index| {
+                TestShareBlockBuilder::new()
+                    .nonce(index as u32)
+                    .build()
+                    .block_hash()
+            })
+            .collect();
+
+        let share_block = build_share_meeting_target(
+            TestShareBlockBuilder::new()
+                .uncles(uncle_hashes)
+                .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202"),
+        );
+
+        let result = validate_share_header(&share_block.header, &chain_store_handle);
+        assert!(result.is_ok(), "Expected Ok but got: {:?}", result.err());
     }
 }
