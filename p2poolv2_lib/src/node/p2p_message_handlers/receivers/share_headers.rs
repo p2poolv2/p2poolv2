@@ -33,7 +33,8 @@ use tracing::debug;
 /// - getheader: If MAX_HEADERS headers are received, send getheaders to request next batch
 ///
 /// - getdata: If less than MAX_HEADERs received, request first set of
-///   blocks. Then respose for blocks will ask for next set of blocks.
+///   blocks. Then response for blocks will ask for next set of
+///   blocks.
 pub async fn handle_share_headers<C: Send + Sync>(
     share_headers: Vec<ShareHeader>,
     chain_store_handle: ChainStoreHandle,

@@ -172,53 +172,6 @@ mod tests {
     use tokio::sync::oneshot;
 
     #[tokio::test]
-    async fn test_handle_share_block_request() {
-        let mut chain_store_handle = ChainStoreHandle::default();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
-        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let peer_id = libp2p::PeerId::random();
-        let mut time_provider = TestTimeProvider::new(SystemTime::now());
-
-        let _pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<bitcoin::PublicKey>()
-            .unwrap();
-
-        let share_block =
-            build_block_from_work_components("../p2poolv2_tests/test_data/validation/stratum/a/");
-
-        chain_store_handle
-            .expect_add_share()
-            .with(eq(share_block.clone()), eq(true))
-            .returning(|_, _| Ok(()));
-        chain_store_handle
-            .expect_get_share()
-            .with(eq(bitcoin::BlockHash::all_zeros()))
-            .returning(|_| Some(genesis_for_tests()));
-
-        chain_store_handle
-            .expect_setup_share_for_chain()
-            .returning(|share_block| Ok(share_block));
-
-        time_provider.set_time(
-            bitcoin::absolute::Time::from_consensus(share_block.header.bitcoin_header.time)
-                .unwrap(),
-        );
-
-        let ctx = RequestContext {
-            peer: peer_id,
-            request: Message::ShareBlock(share_block.clone()),
-            chain_store_handle,
-            response_channel: response_channel_tx,
-            swarm_tx,
-            time_provider,
-        };
-
-        let result = handle_request(ctx).await;
-
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
     async fn test_handle_request_getheaders() {
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);

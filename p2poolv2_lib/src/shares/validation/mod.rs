@@ -130,7 +130,7 @@ pub fn validate_share_block(
     validate_timestamp(share, time_provider)?;
     validate_uncles(share, chain_store_handle)?;
     // TODO: Populate bitcoin block from ShortIDs in share and use bitcoin_block_validation to validate difficulty
-    // OR - Fetch diffculty from bitcoind rpc and validate share blockhash meets difficulty
+    // OR - Fetch difficulty from bitcoind rpc and validate share blockhash meets difficulty
     Ok(())
 }
 
