@@ -23,6 +23,7 @@
 use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::shares::genesis;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
+use crate::store::block_tx_metadata::BlockMetadata;
 use crate::store::writer::{StoreError, StoreHandle};
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Work};
@@ -169,6 +170,11 @@ impl ChainStoreHandle {
         self.store_handle.get_total_work()
     }
 
+    /// Get the confirmed blockhash at the height
+    pub fn get_confirmed_at_height(&self, height: u32) -> Result<BlockHash, StoreError> {
+        self.store_handle.get_confirmed_at_height(height)
+    }
+
     /// Get blockhashes for a specific height.
     pub fn get_blockhashes_for_height(&self, height: u32) -> Vec<BlockHash> {
         self.store_handle.get_blockhashes_for_height(height)
@@ -228,6 +234,11 @@ impl ChainStoreHandle {
     /// Check which blockhashes are missing from the chain.
     pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash> {
         self.store_handle.get_missing_blockhashes(blockhashes)
+    }
+
+    /// Get metadata for blockhash
+    pub fn get_block_metadata(&self, hash: &BlockHash) -> Result<BlockMetadata, StoreError> {
+        self.store_handle.store().get_block_metadata(hash)
     }
 
     /// Get the depth of a blockhash from the confirmed chain tip.
@@ -412,6 +423,8 @@ impl ChainStoreHandle {
 #[cfg(test)]
 mockall::mock! {
     pub ChainStoreHandle {
+        pub fn get_block_metadata(&self, hash: &BlockHash) -> Result<BlockMetadata, StoreError>;
+        pub fn get_blockhashes_for_height(&self, height: u32) -> Vec<BlockHash>;
         pub fn network(&self) -> bitcoin::Network;
         pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock>;
         pub fn get_shares_at_height(&self, height: u32) -> Result<HashMap<BlockHash, ShareBlock>, StoreError>;
@@ -426,6 +439,7 @@ mockall::mock! {
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
         pub fn get_depth(&self, blockhash: &BlockHash) -> Option<usize>;
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
+        pub fn get_confirmed_at_height(&self, height: u32) -> Result<BlockHash, StoreError>;
         pub fn get_current_target(&self) -> Result<u32, StoreError>;
         pub fn setup_share_for_chain(&self, share_block: ShareBlock) -> Result<ShareBlock, StoreError>;
         pub fn is_confirmed(&self, share: &ShareBlock) -> bool;
@@ -518,7 +532,10 @@ mod tests {
     async fn test_build_locator_empty_chain() {
         let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let locator = chain_handle.build_locator().unwrap();
-        assert!(locator.is_empty(), "Locator for empty chain should be empty");
+        assert!(
+            locator.is_empty(),
+            "Locator for empty chain should be empty"
+        );
     }
 
     #[tokio::test]
@@ -537,16 +554,11 @@ mod tests {
         for _ in 0..5 {
             let share = TestShareBlockBuilder::new()
                 .prev_share_blockhash(prev_hash.to_string())
-                .miner_pubkey(
-                    "020202020202020202020202020202020202020202020202020202020202020202",
-                )
+                .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
                 .work(2)
                 .build();
             chain_handle.add_share(share.clone(), true).await.unwrap();
-            chain_handle
-                .organise_share(share.clone())
-                .await
-                .unwrap();
+            chain_handle.organise_share(share.clone()).await.unwrap();
             prev_hash = share.block_hash();
             shares.push(share);
         }
@@ -562,6 +574,31 @@ mod tests {
         assert_eq!(locator[0], shares[4].block_hash());
         // Last entry should be genesis (height 0)
         assert_eq!(locator[locator.len() - 1], genesis.block_hash());
+
+        // Validate get_confirmed_at_height returns the correct blockhash for each height
+        let confirmed_genesis = chain_handle.get_confirmed_at_height(0).unwrap();
+        assert_eq!(
+            confirmed_genesis,
+            genesis.block_hash(),
+            "Confirmed at height 0 should be genesis"
+        );
+        for (index, share) in shares.iter().enumerate() {
+            let height = (index + 1) as u32;
+            let confirmed = chain_handle.get_confirmed_at_height(height).unwrap();
+            assert_eq!(
+                confirmed,
+                share.block_hash(),
+                "Confirmed at height {} should match share {}",
+                height,
+                index
+            );
+        }
+
+        // Querying beyond the tip should return an error
+        assert!(
+            chain_handle.get_confirmed_at_height(6).is_err(),
+            "Querying beyond tip height should return an error"
+        );
     }
 
     #[tokio::test]
@@ -580,16 +617,11 @@ mod tests {
         for _ in 0..20 {
             let share = TestShareBlockBuilder::new()
                 .prev_share_blockhash(prev_hash.to_string())
-                .miner_pubkey(
-                    "020202020202020202020202020202020202020202020202020202020202020202",
-                )
+                .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
                 .work(2)
                 .build();
             chain_handle.add_share(share.clone(), true).await.unwrap();
-            chain_handle
-                .organise_share(share.clone())
-                .await
-                .unwrap();
+            chain_handle.organise_share(share.clone()).await.unwrap();
             prev_hash = share.block_hash();
             shares.push(share);
         }

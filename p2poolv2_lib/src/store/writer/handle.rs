@@ -122,6 +122,11 @@ impl StoreHandle {
         self.store.get_total_work()
     }
 
+    /// Get the confirmed blockhash at a specific height.
+    pub fn get_confirmed_at_height(&self, height: u32) -> Result<BlockHash, StoreError> {
+        self.store.get_confirmed_at_height(height)
+    }
+
     /// Get all PPLNS shares.
     pub fn get_pplns_shares(&self) -> Vec<SimplePplnsShare> {
         self.store.get_pplns_shares()
@@ -318,6 +323,7 @@ mockall::mock! {
         pub fn get_genesis_blockhash(&self) -> Option<BlockHash>;
         pub fn get_chain_tip(&self) -> Result<BlockHash, StoreError>;
         pub fn get_total_work(&self) -> Result<Work, StoreError>;
+        pub fn get_confirmed_at_height(&self, height: u32) -> Result<BlockHash, StoreError>;
         pub fn get_pplns_shares(&self) -> Vec<SimplePplnsShare>;
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
         pub fn get_jobs(&self, start_time: Option<u64>, end_time: Option<u64>, limit: usize) -> Result<Vec<(u64, String)>, StoreError>;
