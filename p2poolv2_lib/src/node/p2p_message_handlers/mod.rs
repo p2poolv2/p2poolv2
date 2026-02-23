@@ -34,6 +34,8 @@ use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
+const MAX_HEADERS: usize = 2000;
+
 /// The Tower service that processes inbound P2P requests.
 pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
     ctx: RequestContext<C, T>,
@@ -122,7 +124,7 @@ pub async fn handle_response<C: Send + Sync, T: TimeProvider + Send + Sync>(
     info!("Handling response {} from peer: {}", response, peer);
     match response {
         Message::ShareHeaders(share_headers) => {
-            handle_share_headers(share_headers, chain_store_handle, swarm_tx)
+            handle_share_headers(peer, share_headers, chain_store_handle, swarm_tx)
                 .await
                 .map_err(|e| {
                     error!("Error handling received share headers: {}", e);
@@ -130,7 +132,7 @@ pub async fn handle_response<C: Send + Sync, T: TimeProvider + Send + Sync>(
                 })
         }
         Message::ShareBlock(share_block) => {
-            handle_share_block(share_block, &chain_store_handle, time_provider)
+            handle_share_block(peer, share_block, &chain_store_handle, time_provider)
                 .await
                 .map_err(|e| {
                     error!("Failed to add share from response: {}", e);

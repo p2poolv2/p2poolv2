@@ -27,10 +27,14 @@ use tracing::{debug, error};
 
 /// Handle a ShareBlock received from a peer in response to a getblocks request.
 ///
+/// The peer_id identifies the peer that sent the block, allowing
+/// follow-up requests to be directed back to the same peer.
+///
 /// Validate the ShareBlock and store it in the chain.
 /// We do not send any inventory message as we do not want to gossip the share block.
 /// Share blocks are gossiped using the libp2p gossipsub protocol.
 pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
+    peer_id: libp2p::PeerId,
     share_block: ShareBlock,
     chain_store_handle: &ChainStoreHandle,
     time_provider: &T,
@@ -67,6 +71,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_share_block_success() {
+        let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
         let share_block =
             build_block_from_work_components("../p2poolv2_tests/test_data/validation/stratum/b/");
@@ -87,18 +92,21 @@ mod tests {
                 .unwrap(),
         );
 
-        let result = handle_share_block(share_block, &chain_store_handle, &time_provider).await;
+        let result =
+            handle_share_block(peer_id, share_block, &chain_store_handle, &time_provider).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_handle_share_block_validation_error() {
+        let peer_id = libp2p::PeerId::random();
         let chain_store_handle = ChainStoreHandle::default();
         let share_block = TestShareBlockBuilder::new().build();
 
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
-        let result = handle_share_block(share_block, &chain_store_handle, &time_provider).await;
+        let result =
+            handle_share_block(peer_id, share_block, &chain_store_handle, &time_provider).await;
         assert!(result.is_err());
         let error_message = result.unwrap_err().to_string();
         assert!(
@@ -109,6 +117,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_share_block_add_share_error() {
+        let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
         let share_block =
             build_block_from_work_components("../p2poolv2_tests/test_data/validation/stratum/b/");
@@ -129,7 +138,8 @@ mod tests {
                 .unwrap(),
         );
 
-        let result = handle_share_block(share_block, &chain_store_handle, &time_provider).await;
+        let result =
+            handle_share_block(peer_id, share_block, &chain_store_handle, &time_provider).await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
