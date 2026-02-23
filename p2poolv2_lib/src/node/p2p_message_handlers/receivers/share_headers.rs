@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::node::p2p_message_handlers::MAX_HEADERS;
+use crate::node::p2p_message_handlers::MAX_HEADERS_IN_RESPONSE;
 use crate::node::{SwarmSend, messages::Message};
 #[cfg(test)]
 #[mockall_double::double]
@@ -35,11 +35,11 @@ use tracing::{debug, error, info};
 ///
 /// - validate: received share header using shares::validation::validate_share_header
 ///
-/// - getheader: If MAX_HEADERS headers are received, send getheaders to request next batch
+/// - getheader: If MAX_HEADERS_IN_RESPONSE headers are received, send getheaders to request next batch
 ///
-/// - getdata: If less than MAX_HEADERs received, request first set of
-///   blocks. Then response for blocks will ask for next set of
-///   blocks.
+/// - getdata: If less than MAX_HEADERS_IN_RESPONSE received, request
+///   first set of blocks. Then response for blocks will ask for next
+///   set of blocks.
 pub async fn handle_share_headers<C: Send + Sync>(
     peer_id: libp2p::PeerId,
     share_headers: Vec<ShareHeader>,
@@ -55,8 +55,8 @@ pub async fn handle_share_headers<C: Send + Sync>(
     }
 
     // When less than max headers are received, we have reached the
-    // end of the chain. Even if the chain is shorter than MAX_HEADERS
-    if share_headers.len() < MAX_HEADERS {
+    // end of the chain. Even if the chain is shorter than MAX_HEADERS_IN_RESPONSE
+    if share_headers.len() < MAX_HEADERS_IN_RESPONSE {
         debug!("Start requesting blocks using getdata");
     } else {
         debug!("Requesting more share header");
@@ -72,7 +72,7 @@ pub async fn handle_share_headers<C: Send + Sync>(
             return Err(format!("Failed to send getheaders request: {e}").into());
         }
     }
-    debug!("Received share headers: {:?}", share_headers);
+    debug!("Received {} share headers", share_headers.len());
     Ok(())
 }
 
@@ -132,7 +132,7 @@ mod tests {
         let chain_store_handle = ChainStoreHandle::default();
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
-        let share_headers = build_share_headers(MAX_HEADERS);
+        let share_headers = build_share_headers(MAX_HEADERS_IN_RESPONSE);
         let last_block_hash = share_headers.last().unwrap().block_hash();
 
         let result =
