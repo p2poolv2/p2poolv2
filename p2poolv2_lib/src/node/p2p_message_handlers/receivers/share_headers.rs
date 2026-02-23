@@ -62,10 +62,7 @@ pub async fn handle_share_headers<C: Send + Sync>(
         debug!("Requesting more share header");
         let stop_block_hash = BlockHash::all_zeros();
         let last_block_hash = share_headers.last().unwrap().block_hash();
-        let last_block_height = chain_store_handle.get_block_metadata(&last_block_hash)?;
-        let start_block_hash = chain_store_handle
-            .get_confirmed_at_height(last_block_height.expected_height.unwrap_or_default() + 1)?;
-        let getheaders_request = Message::GetShareHeaders(vec![start_block_hash], stop_block_hash);
+        let getheaders_request = Message::GetShareHeaders(vec![last_block_hash], stop_block_hash);
         debug!("Sending getheaders {getheaders_request}");
         if let Err(e) = swarm_tx
             .send(SwarmSend::Request(peer_id, getheaders_request))
@@ -135,30 +132,11 @@ mod tests {
     #[tokio::test]
     async fn test_max_headers_sends_getheaders_to_same_peer() {
         let peer_id = libp2p::PeerId::random();
-        let mut chain_store_handle = ChainStoreHandle::default();
+        let chain_store_handle = ChainStoreHandle::default();
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
         let share_headers = build_share_headers(MAX_HEADERS);
         let last_block_hash = share_headers.last().unwrap().block_hash();
-        let expected_next_height = 42_u32;
-        let expected_start_hash =
-            BlockHash::from_raw_hash(bitcoin::hashes::sha256d::Hash::hash(b"next_confirmed"));
-
-        chain_store_handle
-            .expect_get_block_metadata()
-            .with(eq(last_block_hash))
-            .returning(move |_| {
-                Ok(BlockMetadata {
-                    expected_height: Some(expected_next_height - 1),
-                    chain_work: Work::from_hex("0x01").unwrap(),
-                    status: Status::Confirmed,
-                })
-            });
-
-        chain_store_handle
-            .expect_get_confirmed_at_height()
-            .with(eq(expected_next_height))
-            .returning(move |_| Ok(expected_start_hash));
 
         let result =
             handle_share_headers(peer_id, share_headers, chain_store_handle, swarm_tx).await;
@@ -171,114 +149,10 @@ mod tests {
         match swarm_message {
             SwarmSend::Request(sent_peer_id, Message::GetShareHeaders(locator, stop_hash)) => {
                 assert_eq!(sent_peer_id, peer_id, "request must target the same peer");
-                assert_eq!(locator, vec![expected_start_hash]);
+                assert_eq!(locator, vec![last_block_hash]);
                 assert_eq!(stop_hash, BlockHash::all_zeros());
             }
             other => panic!("expected SwarmSend::Request with GetShareHeaders, got: {other:?}"),
         }
-    }
-
-    #[tokio::test]
-    async fn test_max_headers_with_none_expected_height_uses_default() {
-        let peer_id = libp2p::PeerId::random();
-        let mut chain_store_handle = ChainStoreHandle::default();
-        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
-
-        let share_headers = build_share_headers(MAX_HEADERS);
-        let last_block_hash = share_headers.last().unwrap().block_hash();
-        let expected_start_hash =
-            BlockHash::from_raw_hash(bitcoin::hashes::sha256d::Hash::hash(b"height_one"));
-
-        // Return None for expected_height -- unwrap_or_default produces 0, so
-        // the handler should request confirmed_at_height(1).
-        chain_store_handle
-            .expect_get_block_metadata()
-            .with(eq(last_block_hash))
-            .returning(move |_| {
-                Ok(BlockMetadata {
-                    expected_height: None,
-                    chain_work: Work::from_hex("0x01").unwrap(),
-                    status: Status::Confirmed,
-                })
-            });
-
-        chain_store_handle
-            .expect_get_confirmed_at_height()
-            .with(eq(1_u32))
-            .returning(move |_| Ok(expected_start_hash));
-
-        let result =
-            handle_share_headers(peer_id, share_headers, chain_store_handle, swarm_tx).await;
-
-        assert!(result.is_ok());
-
-        let swarm_message = swarm_rx
-            .try_recv()
-            .expect("expected a follow-up getheaders request");
-        match swarm_message {
-            SwarmSend::Request(_, Message::GetShareHeaders(locator, _)) => {
-                assert_eq!(locator, vec![expected_start_hash]);
-            }
-            other => panic!("expected SwarmSend::Request with GetShareHeaders, got: {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_max_headers_get_block_metadata_error_propagates() {
-        let peer_id = libp2p::PeerId::random();
-        let mut chain_store_handle = ChainStoreHandle::default();
-        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
-
-        let share_headers = build_share_headers(MAX_HEADERS);
-        let last_block_hash = share_headers.last().unwrap().block_hash();
-
-        chain_store_handle
-            .expect_get_block_metadata()
-            .with(eq(last_block_hash))
-            .returning(|_| {
-                Err(crate::store::writer::StoreError::Database(
-                    "metadata not found".to_string(),
-                ))
-            });
-
-        let result =
-            handle_share_headers(peer_id, share_headers, chain_store_handle, swarm_tx).await;
-
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_max_headers_get_confirmed_at_height_error_propagates() {
-        let peer_id = libp2p::PeerId::random();
-        let mut chain_store_handle = ChainStoreHandle::default();
-        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
-
-        let share_headers = build_share_headers(MAX_HEADERS);
-        let last_block_hash = share_headers.last().unwrap().block_hash();
-
-        chain_store_handle
-            .expect_get_block_metadata()
-            .with(eq(last_block_hash))
-            .returning(move |_| {
-                Ok(BlockMetadata {
-                    expected_height: Some(10),
-                    chain_work: Work::from_hex("0x01").unwrap(),
-                    status: Status::Confirmed,
-                })
-            });
-
-        chain_store_handle
-            .expect_get_confirmed_at_height()
-            .with(eq(11_u32))
-            .returning(|_| {
-                Err(crate::store::writer::StoreError::Database(
-                    "height not found".to_string(),
-                ))
-            });
-
-        let result =
-            handle_share_headers(peer_id, share_headers, chain_store_handle, swarm_tx).await;
-
-        assert!(result.is_err());
     }
 }
