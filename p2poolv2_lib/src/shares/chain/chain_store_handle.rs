@@ -515,6 +515,99 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_build_locator_empty_chain() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let locator = chain_handle.build_locator().unwrap();
+        assert!(locator.is_empty(), "Locator for empty chain should be empty");
+    }
+
+    #[tokio::test]
+    async fn test_build_locator_short_chain() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        // Build a chain of 5 shares after genesis
+        let mut prev_hash = genesis.block_hash();
+        let mut shares = Vec::with_capacity(5);
+        for _ in 0..5 {
+            let share = TestShareBlockBuilder::new()
+                .prev_share_blockhash(prev_hash.to_string())
+                .miner_pubkey(
+                    "020202020202020202020202020202020202020202020202020202020202020202",
+                )
+                .work(2)
+                .build();
+            chain_handle.add_share(share.clone(), true).await.unwrap();
+            chain_handle
+                .organise_share(share.clone())
+                .await
+                .unwrap();
+            prev_hash = share.block_hash();
+            shares.push(share);
+        }
+
+        let locator = chain_handle.build_locator().unwrap();
+        // With tip at height 5, step=1 for all entries: heights 5,4,3,2,1,0
+        assert_eq!(
+            locator.len(),
+            6,
+            "Short chain locator should include all heights"
+        );
+        // First entry should be the tip (height 5)
+        assert_eq!(locator[0], shares[4].block_hash());
+        // Last entry should be genesis (height 0)
+        assert_eq!(locator[locator.len() - 1], genesis.block_hash());
+    }
+
+    #[tokio::test]
+    async fn test_build_locator_long_chain_step_doubling() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        // Build a chain of 20 shares
+        let mut prev_hash = genesis.block_hash();
+        let mut shares = Vec::with_capacity(20);
+        for _ in 0..20 {
+            let share = TestShareBlockBuilder::new()
+                .prev_share_blockhash(prev_hash.to_string())
+                .miner_pubkey(
+                    "020202020202020202020202020202020202020202020202020202020202020202",
+                )
+                .work(2)
+                .build();
+            chain_handle.add_share(share.clone(), true).await.unwrap();
+            chain_handle
+                .organise_share(share.clone())
+                .await
+                .unwrap();
+            prev_hash = share.block_hash();
+            shares.push(share);
+        }
+
+        let locator = chain_handle.build_locator().unwrap();
+        // The locator should have fewer entries than the chain length
+        // due to step doubling after 10 entries
+        assert!(
+            locator.len() < 21,
+            "Long chain locator should be shorter than total chain height + 1"
+        );
+        // First should be tip
+        assert_eq!(locator[0], shares[19].block_hash());
+        // Last should be genesis
+        assert_eq!(locator[locator.len() - 1], genesis.block_hash());
+    }
+
+    #[tokio::test]
     async fn test_chain_store_handle_get_depth() {
         let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let genesis = genesis_for_tests();
