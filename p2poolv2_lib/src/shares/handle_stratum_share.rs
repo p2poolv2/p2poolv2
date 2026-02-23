@@ -77,7 +77,7 @@ pub async fn handle_stratum_share(
 
         // Store share block via ChainStoreHandle
         chain_store_handle
-            .add_share(share_block.clone(), true)
+            .add_share_block(share_block.clone(), true)
             .await
             .map_err(|e| format!("Failed to add share to chain: {e}"))?;
 
@@ -237,7 +237,9 @@ mod tests {
         let mut mock_chain_store = ChainStoreHandle::default();
 
         // Mock add_share to succeed
-        mock_chain_store.expect_add_share().returning(|_, _| Ok(()));
+        mock_chain_store
+            .expect_add_share_block()
+            .returning(|_, _| Ok(()));
 
         let emission = create_test_emission_with_commitment();
 
@@ -279,7 +281,9 @@ mod tests {
         let mut mock_chain_store = ChainStoreHandle::default();
 
         // Mock add_share to succeed
-        mock_chain_store.expect_add_share().returning(|_, _| Ok(()));
+        mock_chain_store
+            .expect_add_share_block()
+            .returning(|_, _| Ok(()));
 
         let emission = create_test_emission_with_commitment();
         let expected_commitment = emission.share_commitment.clone().unwrap();
@@ -316,7 +320,9 @@ mod tests {
         let mut mock_chain_store = ChainStoreHandle::default();
 
         // Mock add_share to succeed
-        mock_chain_store.expect_add_share().returning(|_, _| Ok(()));
+        mock_chain_store
+            .expect_add_share_block()
+            .returning(|_, _| Ok(()));
 
         // Create emission with some bitcoin transactions
         let pplns = SimplePplnsShare {

@@ -254,7 +254,7 @@ impl Store {
     ) -> Result<(), StoreError> {
         let blockhash = genesis.block_hash();
         let genesis_work = genesis.header.get_work();
-        let mut metadata = self.add_share(genesis, 0, genesis_work, true, batch)?;
+        let mut metadata = self.add_share_block(genesis, 0, genesis_work, true, batch)?;
         *self.genesis_blockhash.write().unwrap() = Some(blockhash);
         self.append_to_confirmed(&blockhash, 0, &mut metadata, batch)?;
         Ok(())
@@ -313,7 +313,7 @@ mod tests {
         // Add and organise share2 (extends confirmed to height 1)
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share2,
                 1,
                 share1.header.get_work() + share2.header.get_work(),
@@ -330,7 +330,7 @@ mod tests {
         // Add and organise share3 (extends confirmed to height 2)
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share3,
                 2,
                 share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),

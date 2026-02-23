@@ -368,7 +368,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         let mut metadata1 = store
-            .add_share(&share1, 0, share1.header.get_work(), true, &mut batch)
+            .add_share_block(&share1, 0, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share1.block_hash(), 0, &mut metadata1, &mut batch)
@@ -381,7 +381,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         let mut metadata2 = store
-            .add_share(&share2, 1, share2.header.get_work(), true, &mut batch)
+            .add_share_block(&share2, 1, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share2.block_hash(), 1, &mut metadata2, &mut batch)
@@ -424,13 +424,13 @@ mod tests {
         // Add all shares first
         let mut batch = Store::get_write_batch();
         let mut metadata1 = store
-            .add_share(&share1, 0, share1.header.get_work(), false, &mut batch)
+            .add_share_block(&share1, 0, share1.header.get_work(), false, &mut batch)
             .unwrap();
         let mut metadata2 = store
-            .add_share(&share2, 1, share2.header.get_work(), false, &mut batch)
+            .add_share_block(&share2, 1, share2.header.get_work(), false, &mut batch)
             .unwrap();
         let mut metadata3 = store
-            .add_share(&share3, 1, share3.header.get_work(), false, &mut batch)
+            .add_share_block(&share3, 1, share3.header.get_work(), false, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share1.block_hash(), 0, &mut metadata1, &mut batch)
@@ -469,10 +469,10 @@ mod tests {
         // Add shares first
         let mut batch = Store::get_write_batch();
         let mut metadata0 = store
-            .add_share(&share0, 0, share0.header.get_work(), false, &mut batch)
+            .add_share_block(&share0, 0, share0.header.get_work(), false, &mut batch)
             .unwrap();
         let mut metadata2 = store
-            .add_share(&share2, 2, share2.header.get_work(), false, &mut batch)
+            .add_share_block(&share2, 2, share2.header.get_work(), false, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share0.block_hash(), 0, &mut metadata0, &mut batch)
@@ -505,7 +505,7 @@ mod tests {
         // Add shares first
         let mut batch = Store::get_write_batch();
         let mut candidate_metadata = store
-            .add_share(
+            .add_share_block(
                 &candidate_share,
                 0,
                 candidate_share.header.get_work(),
@@ -514,7 +514,7 @@ mod tests {
             )
             .unwrap();
         let mut confirmed_metadata = store
-            .add_share(
+            .add_share_block(
                 &confirmed_share,
                 0,
                 confirmed_share.header.get_work(),
@@ -574,7 +574,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut metadata = store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share1.block_hash(), 1, &mut metadata, &mut batch)
@@ -618,7 +618,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&share2, 1, share2.header.get_work(), true, &mut batch)
+            .add_share_block(&share2, 1, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -644,7 +644,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut metadata2 = store
-            .add_share(&share2, 1, share2.header.get_work(), true, &mut batch)
+            .add_share_block(&share2, 1, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -655,7 +655,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&share3, 1, share3.header.get_work(), true, &mut batch)
+            .add_share_block(&share3, 1, share3.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -699,7 +699,7 @@ mod tests {
         // append_to_confirmed checks top height against DB, so commit between each
         let mut batch = Store::get_write_batch();
         let mut m0 = store
-            .add_share(&share0, 0, share0.header.get_work(), false, &mut batch)
+            .add_share_block(&share0, 0, share0.header.get_work(), false, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share0.block_hash(), 0, &mut m0, &mut batch)
@@ -708,7 +708,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         let mut m1 = store
-            .add_share(&share1, 1, share1.header.get_work(), false, &mut batch)
+            .add_share_block(&share1, 1, share1.header.get_work(), false, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
@@ -717,7 +717,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         let mut m2 = store
-            .add_share(&share2, 2, share2.header.get_work(), false, &mut batch)
+            .add_share_block(&share2, 2, share2.header.get_work(), false, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share2.block_hash(), 2, &mut m2, &mut batch)
@@ -774,7 +774,7 @@ mod tests {
         // append_to_confirmed checks top height against DB, so commit between each
         let mut batch = Store::get_write_batch();
         let mut m1 = store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
@@ -783,7 +783,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         let mut m2 = store
-            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share2.block_hash(), 2, &mut m2, &mut batch)
@@ -849,7 +849,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut m1 = store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
@@ -866,7 +866,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&fork, 1, fork.header.get_work(), true, &mut batch)
+            .add_share_block(&fork, 1, fork.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -892,7 +892,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut m1 = store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
@@ -909,7 +909,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&fork, 1, fork.header.get_work(), true, &mut batch)
+            .add_share_block(&fork, 1, fork.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -937,7 +937,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&child, 1, child.header.get_work(), true, &mut batch)
+            .add_share_block(&child, 1, child.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -966,7 +966,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut m1 = store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
@@ -983,7 +983,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&fork, 1, fork.header.get_work(), true, &mut batch)
+            .add_share_block(&fork, 1, fork.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1013,7 +1013,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut m1 = store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
@@ -1026,7 +1026,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut m2 = store
-            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share2.block_hash(), 2, &mut m2, &mut batch)
@@ -1042,7 +1042,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&fork1, 1, fork1.header.get_work(), true, &mut batch)
+            .add_share_block(&fork1, 1, fork1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1053,7 +1053,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&fork2, 2, fork2.header.get_work(), true, &mut batch)
+            .add_share_block(&fork2, 2, fork2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1087,7 +1087,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut metadata_a = store
-            .add_share(&a, 1, a.header.get_work(), true, &mut batch)
+            .add_share_block(&a, 1, a.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&a.block_hash(), 1, &mut metadata_a, &mut batch)
@@ -1104,7 +1104,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut metadata_fork = store
-            .add_share(
+            .add_share_block(
                 &fork_share,
                 1,
                 fork_share.header.get_work(),
@@ -1174,7 +1174,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut metadata_a = store
-            .add_share(&share_a, 1, share_a.header.get_work(), true, &mut batch)
+            .add_share_block(&share_a, 1, share_a.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share_a.block_hash(), 1, &mut metadata_a, &mut batch)
@@ -1187,7 +1187,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut metadata_b = store
-            .add_share(&share_b, 2, share_b.header.get_work(), true, &mut batch)
+            .add_share_block(&share_b, 2, share_b.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share_b.block_hash(), 2, &mut metadata_b, &mut batch)
@@ -1203,7 +1203,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut metadata_fork_1 = store
-            .add_share(&fork_1, 1, fork_1.header.get_work(), true, &mut batch)
+            .add_share_block(&fork_1, 1, fork_1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1215,7 +1215,7 @@ mod tests {
         let mut batch = Store::get_write_batch();
 
         let mut metadata_fork_2 = store
-            .add_share(&fork_2, 2, fork_2.header.get_work(), true, &mut batch)
+            .add_share_block(&fork_2, 2, fork_2.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_candidates(&fork_1.block_hash(), 1, &mut metadata_fork_1, &mut batch)
@@ -1290,7 +1290,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut metadata_a = store
-            .add_share(&share_a, 1, share_a.header.get_work(), true, &mut batch)
+            .add_share_block(&share_a, 1, share_a.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share_a.block_hash(), 1, &mut metadata_a, &mut batch)
@@ -1303,7 +1303,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut metadata_b = store
-            .add_share(&share_b, 2, share_b.header.get_work(), true, &mut batch)
+            .add_share_block(&share_b, 2, share_b.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share_b.block_hash(), 2, &mut metadata_b, &mut batch)
@@ -1316,7 +1316,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut metadata_c = store
-            .add_share(&share_c, 3, share_c.header.get_work(), true, &mut batch)
+            .add_share_block(&share_c, 3, share_c.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share_c.block_hash(), 3, &mut metadata_c, &mut batch)
@@ -1333,7 +1333,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut metadata_fork_share = store
-            .add_share(
+            .add_share_block(
                 &fork_share,
                 1,
                 fork_share.header.get_work(),
@@ -1407,7 +1407,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut metadata_a = store
-            .add_share(&share_a, 1, share_a.header.get_work(), true, &mut batch)
+            .add_share_block(&share_a, 1, share_a.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share_a.block_hash(), 1, &mut metadata_a, &mut batch)
@@ -1420,7 +1420,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut metadata_b = store
-            .add_share(&share_b, 2, share_b.header.get_work(), true, &mut batch)
+            .add_share_block(&share_b, 2, share_b.header.get_work(), true, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share_b.block_hash(), 2, &mut metadata_b, &mut batch)
@@ -1437,7 +1437,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         let mut metadata_fork = store
-            .add_share(
+            .add_share_block(
                 &fork_share,
                 2,
                 fork_share.header.get_work(),
