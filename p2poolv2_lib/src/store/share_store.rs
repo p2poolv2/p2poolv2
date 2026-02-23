@@ -36,7 +36,7 @@ impl Store {
     ///
     /// Should be called for shares that have been validated for PoW
     /// and other static checks.
-    pub fn add_share(
+    pub fn add_share_block(
         &self,
         share: &ShareBlock,
         height: u32,
@@ -404,7 +404,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -416,7 +416,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&uncle1, 1, uncle1.header.get_work(), false, &mut batch)
+            .add_share_block(&uncle1, 1, uncle1.header.get_work(), false, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -429,7 +429,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -475,7 +475,7 @@ mod tests {
         let txs = block.transactions.clone();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&block, 0, block.header.get_work(), true, &mut batch)
+            .add_share_block(&block, 0, block.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -496,7 +496,7 @@ mod tests {
         let block = TestShareBlockBuilder::new().build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&block, 0, block.header.get_work(), true, &mut batch)
+            .add_share_block(&block, 0, block.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 

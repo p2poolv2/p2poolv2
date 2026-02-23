@@ -343,7 +343,7 @@ mod tests {
 
         // Set up mock expectations
         chain_store_handle
-            .expect_add_share()
+            .expect_add_share_block()
             .with(
                 mockall::predicate::eq(share_block.clone()),
                 mockall::predicate::eq(true),

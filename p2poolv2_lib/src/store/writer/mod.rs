@@ -89,7 +89,7 @@ impl From<bitcoin::consensus::encode::Error> for StoreError {
 #[derive(Debug)]
 pub enum WriteCommand {
     /// Add a share to the store
-    AddShare {
+    AddShareBlock {
         share: ShareBlock,
         height: u32,
         chain_work: Work,
@@ -184,7 +184,7 @@ impl StoreWriter {
     /// Handle a single write command
     fn handle_command(&self, cmd: WriteCommand) {
         match cmd {
-            WriteCommand::AddShare {
+            WriteCommand::AddShareBlock {
                 share,
                 height,
                 chain_work,
@@ -195,7 +195,7 @@ impl StoreWriter {
                 let mut batch = Store::get_write_batch();
                 let result = self
                     .store
-                    .add_share(&share, height, chain_work, confirm_txs, &mut batch)
+                    .add_share_block(&share, height, chain_work, confirm_txs, &mut batch)
                     .and_then(|_| self.store.commit_batch(batch).map_err(StoreError::from));
                 let _ = reply.send(result);
             }

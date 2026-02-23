@@ -48,7 +48,7 @@ pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
     }
 
     // TODO: Check if this will be an uncle, for now add to main chain
-    if let Err(e) = chain_store_handle.add_share(share_block, true).await {
+    if let Err(e) = chain_store_handle.add_share_block(share_block, true).await {
         error!("Failed to add share: {}", e);
         return Err("Error adding share to chain".into());
     }
@@ -78,7 +78,7 @@ mod tests {
 
         // Set up mock expectations
         chain_store_handle
-            .expect_add_share()
+            .expect_add_share_block()
             .with(eq(share_block.clone()), eq(true))
             .returning(|_, _| Ok(()));
         chain_store_handle
@@ -124,7 +124,7 @@ mod tests {
 
         // Set up mock expectations
         chain_store_handle
-            .expect_add_share()
+            .expect_add_share_block()
             .with(eq(share_block.clone()), eq(true))
             .returning(|_, _| Err(StoreError::Database("Failed to add share".to_string())));
         chain_store_handle

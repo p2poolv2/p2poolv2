@@ -447,13 +447,13 @@ mod tests {
         let mut batch = rocksdb::WriteBatch::default();
         // Add all shares to store
         store
-            .add_share(&share1, 0, share1.header.get_work(), true, &mut batch)
+            .add_share_block(&share1, 0, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(
+            .add_share_block(
                 &uncle1_share2,
                 1,
                 share1.header.get_work() + uncle1_share2.header.get_work(),
@@ -465,7 +465,7 @@ mod tests {
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(
+            .add_share_block(
                 &uncle2_share2,
                 1,
                 share1.header.get_work() + uncle2_share2.header.get_work(),
@@ -477,7 +477,7 @@ mod tests {
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(
+            .add_share_block(
                 &share2,
                 1,
                 share1.header.get_work() + share2.header.get_work(),
@@ -489,7 +489,7 @@ mod tests {
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(
+            .add_share_block(
                 &share3,
                 2,
                 share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
@@ -574,10 +574,10 @@ mod tests {
         let mut batch = rocksdb::WriteBatch::default();
         // Add all shares to store
         store
-            .add_share(&share1, 0, genesis_work, true, &mut batch)
+            .add_share_block(&share1, 0, genesis_work, true, &mut batch)
             .unwrap();
         store
-            .add_share(
+            .add_share_block(
                 &uncle1_share2,
                 1,
                 genesis_work + uncle1_share2.header.get_work(),
@@ -589,7 +589,7 @@ mod tests {
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(
+            .add_share_block(
                 &uncle2_share2,
                 1,
                 genesis_work + uncle2_share2.header.get_work(),
@@ -601,7 +601,7 @@ mod tests {
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(
+            .add_share_block(
                 &share2,
                 1,
                 genesis_work + share2.header.get_work(),
@@ -613,7 +613,7 @@ mod tests {
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(
+            .add_share_block(
                 &share3,
                 2,
                 genesis_work + share2.header.get_work() + share3.header.get_work(),
@@ -679,7 +679,7 @@ mod tests {
                 TestShareBlockBuilder::new().prev_share_blockhash(prev_blockhash.to_string());
             let block = builder.build();
             store
-                .add_share(&block, height, block.header.get_work(), true, &mut batch)
+                .add_share_block(&block, height, block.header.get_work(), true, &mut batch)
                 .unwrap();
             store.commit_batch(batch).unwrap();
 
@@ -720,7 +720,7 @@ mod tests {
             let block = builder.build();
             blocks.push(block.clone());
             store
-                .add_share(
+                .add_share_block(
                     &block,
                     height as u32,
                     block.header.get_work(),
@@ -772,7 +772,7 @@ mod tests {
             block_hashes.push(blockhash);
             let work = block.header.get_work();
             store
-                .add_share(&block, height as u32, work, true, &mut batch)
+                .add_share_block(&block, height as u32, work, true, &mut batch)
                 .unwrap();
             prev_blockhash = blockhash;
         }
@@ -815,14 +815,14 @@ mod tests {
         // Add share a
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(&share_a, 0, share_a.header.get_work(), true, &mut batch)
+            .add_share_block(&share_a, 0, share_a.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         // Add share b
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(
+            .add_share_block(
                 &share_b,
                 1,
                 share_a.header.get_work() + share_b.header.get_work(),
@@ -835,7 +835,7 @@ mod tests {
         // Add share c
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(
+            .add_share_block(
                 &share_c,
                 2,
                 share_a.header.get_work() + share_b.header.get_work() + share_c.header.get_work(),
@@ -848,7 +848,7 @@ mod tests {
         // Add share d (fork from b)
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(
+            .add_share_block(
                 &share_d,
                 2,
                 share_a.header.get_work() + share_b.header.get_work() + share_d.header.get_work(),
@@ -911,7 +911,7 @@ mod tests {
 
             let mut batch = Store::get_write_batch();
             store
-                .add_share(&share, i, share.header.get_work(), true, &mut batch)
+                .add_share_block(&share, i, share.header.get_work(), true, &mut batch)
                 .unwrap();
             store.commit_batch(batch).unwrap();
 
@@ -963,7 +963,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -973,7 +973,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -983,7 +983,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&share3, 3, share3.header.get_work(), true, &mut batch)
+            .add_share_block(&share3, 3, share3.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1034,7 +1034,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1044,7 +1044,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&uncle1, 1, uncle1.header.get_work(), false, &mut batch)
+            .add_share_block(&uncle1, 1, uncle1.header.get_work(), false, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1054,7 +1054,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1086,14 +1086,14 @@ mod tests {
         let genesis1 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&genesis1, 0, genesis1.header.get_work(), true, &mut batch)
+            .add_share_block(&genesis1, 0, genesis1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let genesis2 = TestShareBlockBuilder::new().nonce(0xe9695792).build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(&genesis2, 0, genesis2.header.get_work(), false, &mut batch)
+            .add_share_block(&genesis2, 0, genesis2.header.get_work(), false, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1138,7 +1138,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &uncle1,
                 1,
                 share1.header.get_work() + uncle1.header.get_work(),
@@ -1154,7 +1154,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share2,
                 1,
                 share1.header.get_work() + share2.header.get_work(),
@@ -1171,7 +1171,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share3,
                 2,
                 share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
@@ -1229,7 +1229,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &uncle1,
                 1,
                 share1.header.get_work() + uncle1.header.get_work(),
@@ -1245,7 +1245,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &uncle2,
                 1,
                 share1.header.get_work() + uncle2.header.get_work(),
@@ -1260,7 +1260,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share2,
                 1,
                 share1.header.get_work() + share2.header.get_work(),
@@ -1276,7 +1276,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share3,
                 2,
                 share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
@@ -1335,7 +1335,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &uncle1,
                 1,
                 share1.header.get_work() + uncle1.header.get_work(),
@@ -1350,7 +1350,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share2,
                 1,
                 share1.header.get_work() + share2.header.get_work(),
@@ -1367,7 +1367,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &uncle2,
                 2,
                 share1.header.get_work() + share2.header.get_work() + uncle2.header.get_work(),
@@ -1384,7 +1384,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share3,
                 2,
                 share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
@@ -1401,7 +1401,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share4,
                 3,
                 share1.header.get_work()
@@ -1465,7 +1465,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &uncle1,
                 1,
                 share1.header.get_work() + uncle1.header.get_work(),
@@ -1480,7 +1480,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share2,
                 1,
                 share1.header.get_work() + share2.header.get_work(),
@@ -1496,7 +1496,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share3,
                 2,
                 share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
@@ -1569,7 +1569,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &uncle1,
                 1,
                 share1.header.get_work() + uncle1.header.get_work(),
@@ -1585,7 +1585,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &uncle2,
                 1,
                 share1.header.get_work() + uncle2.header.get_work(),
@@ -1600,7 +1600,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share2,
                 1,
                 share1.header.get_work() + share2.header.get_work(),
@@ -1616,7 +1616,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share3,
                 2,
                 share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
@@ -1631,7 +1631,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share4,
                 3,
                 share1.header.get_work()
@@ -1697,7 +1697,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &uncle1,
                 1,
                 share1.header.get_work() + uncle1.header.get_work(),
@@ -1712,7 +1712,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share2,
                 1,
                 share1.header.get_work() + share2.header.get_work(),
@@ -1728,7 +1728,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &uncle2,
                 2,
                 share1.header.get_work() + share2.header.get_work() + uncle2.header.get_work(),
@@ -1744,7 +1744,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share3,
                 2,
                 share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
@@ -1760,7 +1760,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share4,
                 3,
                 share1.header.get_work()
@@ -1815,7 +1815,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share2,
                 1,
                 share1.header.get_work() + share2.header.get_work(),
@@ -1830,7 +1830,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share3,
                 2,
                 share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
@@ -1845,7 +1845,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share4,
                 3,
                 share1.header.get_work()
@@ -1863,7 +1863,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share(
+            .add_share_block(
                 &share5,
                 4,
                 share1.header.get_work()
@@ -1900,7 +1900,7 @@ mod tests {
         let share = TestShareBlockBuilder::new().build();
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(&share, 0, share.header.get_work(), true, &mut batch)
+            .add_share_block(&share, 0, share.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1918,10 +1918,10 @@ mod tests {
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(&uncle, 0, uncle.header.get_work(), false, &mut batch)
+            .add_share_block(&uncle, 0, uncle.header.get_work(), false, &mut batch)
             .unwrap();
         store
-            .add_share(&nephew, 0, nephew.header.get_work(), true, &mut batch)
+            .add_share_block(&nephew, 0, nephew.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1947,7 +1947,7 @@ mod tests {
         let share = TestShareBlockBuilder::new().build();
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(&share, 0, share.header.get_work(), true, &mut batch)
+            .add_share_block(&share, 0, share.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1966,13 +1966,13 @@ mod tests {
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(&uncle, 0, uncle.header.get_work(), false, &mut batch)
+            .add_share_block(&uncle, 0, uncle.header.get_work(), false, &mut batch)
             .unwrap();
         store
-            .add_share(&nephew1, 0, nephew1.header.get_work(), true, &mut batch)
+            .add_share_block(&nephew1, 0, nephew1.header.get_work(), true, &mut batch)
             .unwrap();
         store
-            .add_share(&nephew2, 0, nephew2.header.get_work(), true, &mut batch)
+            .add_share_block(&nephew2, 0, nephew2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -2004,7 +2004,7 @@ mod tests {
         let share = TestShareBlockBuilder::new().build();
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(&share, 0, share.header.get_work(), true, &mut batch)
+            .add_share_block(&share, 0, share.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -2032,19 +2032,19 @@ mod tests {
         // Add all shares
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata0 = store
-            .add_share(&share0, 0, share0.header.get_work(), true, &mut batch)
+            .add_share_block(&share0, 0, share0.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata1 = store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata2 = store
-            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -2096,19 +2096,19 @@ mod tests {
         // Add all shares
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata0 = store
-            .add_share(&share0, 0, share0.header.get_work(), true, &mut batch)
+            .add_share_block(&share0, 0, share0.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata1 = store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(&uncle1, 1, uncle1.header.get_work(), true, &mut batch)
+            .add_share_block(&uncle1, 1, uncle1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -2179,43 +2179,43 @@ mod tests {
         // Add all shares
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata0 = store
-            .add_share(&share0, 0, share0.header.get_work(), true, &mut batch)
+            .add_share_block(&share0, 0, share0.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata1 = store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(&uncle0, 1, uncle0.header.get_work(), true, &mut batch)
+            .add_share_block(&uncle0, 1, uncle0.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata2 = store
-            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(&uncle1, 2, uncle1.header.get_work(), true, &mut batch)
+            .add_share_block(&uncle1, 2, uncle1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata3 = store
-            .add_share(&share3, 3, share3.header.get_work(), true, &mut batch)
+            .add_share_block(&share3, 3, share3.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(&uncle2, 3, uncle2.header.get_work(), true, &mut batch)
+            .add_share_block(&uncle2, 3, uncle2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -2318,7 +2318,7 @@ mod tests {
         ] {
             let mut batch = rocksdb::WriteBatch::default();
             let metadata = store
-                .add_share(&share, height, share.header.get_work(), true, &mut batch)
+                .add_share_block(&share, height, share.header.get_work(), true, &mut batch)
                 .unwrap();
             metadatas.insert(share.block_hash(), metadata);
             store.commit_batch(batch).unwrap();
@@ -2386,31 +2386,31 @@ mod tests {
         // Add all shares
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata0 = store
-            .add_share(&share0, 0, share0.header.get_work(), true, &mut batch)
+            .add_share_block(&share0, 0, share0.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata1 = store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(&uncle1, 1, uncle1.header.get_work(), true, &mut batch)
+            .add_share_block(&uncle1, 1, uncle1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata2 = store
-            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(&uncle2, 2, uncle2.header.get_work(), true, &mut batch)
+            .add_share_block(&uncle2, 2, uncle2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -2472,19 +2472,19 @@ mod tests {
         // Add all shares
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata0 = store
-            .add_share(&share0, 0, share0.header.get_work(), true, &mut batch)
+            .add_share_block(&share0, 0, share0.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata1 = store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata2 = store
-            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -2556,43 +2556,43 @@ mod tests {
         // Add all shares
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata0 = store
-            .add_share(&share0, 0, share0.header.get_work(), true, &mut batch)
+            .add_share_block(&share0, 0, share0.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata1 = store
-            .add_share(&share1, 1, share1.header.get_work(), true, &mut batch)
+            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(&uncle_a, 1, uncle_a.header.get_work(), true, &mut batch)
+            .add_share_block(&uncle_a, 1, uncle_a.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(&uncle_b, 1, uncle_b.header.get_work(), true, &mut batch)
+            .add_share_block(&uncle_b, 1, uncle_b.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(&uncle_c, 1, uncle_c.header.get_work(), true, &mut batch)
+            .add_share_block(&uncle_c, 1, uncle_c.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         let mut metadata2 = store
-            .add_share(&share2, 2, share2.header.get_work(), true, &mut batch)
+            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share(&uncle_d, 2, uncle_d.header.get_work(), true, &mut batch)
+            .add_share_block(&uncle_d, 2, uncle_d.header.get_work(), true, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -2709,7 +2709,7 @@ mod tests {
         ] {
             let mut batch = rocksdb::WriteBatch::default();
             let metadata = store
-                .add_share(&share, height, share.header.get_work(), true, &mut batch)
+                .add_share_block(&share, height, share.header.get_work(), true, &mut batch)
                 .unwrap();
             metadatas.insert(share.block_hash(), metadata);
             store.commit_batch(batch).unwrap();
@@ -2811,7 +2811,7 @@ mod tests {
         ] {
             let mut batch = rocksdb::WriteBatch::default();
             store
-                .add_share(share, height, share.header.get_work(), true, &mut batch)
+                .add_share_block(share, height, share.header.get_work(), true, &mut batch)
                 .unwrap();
             store.commit_batch(batch).unwrap();
         }

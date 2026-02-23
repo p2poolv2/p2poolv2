@@ -71,7 +71,7 @@ impl ChainStoreHandle {
 
         if genesis_in_store.is_none() {
             // Set up new chain with genesis
-            self.add_share(genesis_block, true).await?;
+            self.add_share_block(genesis_block, true).await?;
         } else {
             // Initialize chain state from existing store data
             self.store_handle
@@ -309,7 +309,11 @@ impl ChainStoreHandle {
     /// Add a share to the chain.
     ///
     /// Calculates height and chain work and stores the share. Reorgs are handled by OrganiseWorker
-    pub async fn add_share(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), StoreError> {
+    pub async fn add_share_block(
+        &self,
+        share: ShareBlock,
+        confirm_txs: bool,
+    ) -> Result<(), StoreError> {
         debug!("Adding share to chain: {:?}", share.block_hash());
 
         let blockhash = share.block_hash();
@@ -344,7 +348,7 @@ impl ChainStoreHandle {
 
         // Store the share
         self.store_handle
-            .add_share(share, new_height, new_chain_work, confirm_txs)
+            .add_share_block(share, new_height, new_chain_work, confirm_txs)
             .await
     }
 
@@ -443,7 +447,7 @@ mockall::mock! {
         pub fn get_btcaddresses_for_user_ids(&self, user_ids: &[u64]) -> Result<Vec<(u64, String)>, StoreError>;
         pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError>;
         pub async fn organise_share(&self, share: ShareBlock) -> Result<Option<u32>, StoreError>;
-        pub async fn add_share(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), StoreError>;
+        pub async fn add_share_block(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), StoreError>;
         pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError>;
         pub async fn add_job(&self, serialized_notify: String) -> Result<(), StoreError>;
         pub async fn add_user(&self, btcaddress: String) -> Result<u64, StoreError>;
@@ -483,7 +487,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_chain_store_handle_add_share() {
+    async fn test_chain_store_handle_add_share_block() {
         let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let genesis = genesis_for_tests();
 
@@ -499,7 +503,10 @@ mod tests {
             .work(2)
             .build();
 
-        chain_handle.add_share(share1.clone(), true).await.unwrap();
+        chain_handle
+            .add_share_block(share1.clone(), true)
+            .await
+            .unwrap();
 
         // Verify share is stored
         let stored_share = chain_handle.get_share(&share1.block_hash());
@@ -554,7 +561,10 @@ mod tests {
                 .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
                 .work(2)
                 .build();
-            chain_handle.add_share(share.clone(), true).await.unwrap();
+            chain_handle
+                .add_share_block(share.clone(), true)
+                .await
+                .unwrap();
             chain_handle.organise_share(share.clone()).await.unwrap();
             prev_hash = share.block_hash();
             shares.push(share);
@@ -617,7 +627,10 @@ mod tests {
                 .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
                 .work(2)
                 .build();
-            chain_handle.add_share(share.clone(), true).await.unwrap();
+            chain_handle
+                .add_share_block(share.clone(), true)
+                .await
+                .unwrap();
             chain_handle.organise_share(share.clone()).await.unwrap();
             prev_hash = share.block_hash();
             shares.push(share);
@@ -653,7 +666,10 @@ mod tests {
             .work(1)
             .build();
 
-        chain_handle.add_share(share1.clone(), true).await.unwrap();
+        chain_handle
+            .add_share_block(share1.clone(), true)
+            .await
+            .unwrap();
 
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
@@ -661,6 +677,6 @@ mod tests {
             .work(1)
             .build();
 
-        chain_handle.add_share(share2, true).await.unwrap();
+        chain_handle.add_share_block(share2, true).await.unwrap();
     }
 }
