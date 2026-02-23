@@ -16,7 +16,7 @@
 
 use crate::node::Message;
 use crate::node::SwarmSend;
-use crate::node::p2p_message_handlers::MAX_HEADERS;
+use crate::node::p2p_message_handlers::MAX_HEADERS_IN_RESPONSE;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -29,7 +29,7 @@ use tracing::debug;
 
 /// Handle a GetHeaders request from a peer
 /// - start from chain tip, find blockhashes up to the stop block hash
-/// - limit the number of blocks to MAX_HEADERS
+/// - limit the number of blocks to MAX_HEADERS_IN_RESPONSE
 /// - respond with send all headers found
 pub async fn handle_getheaders<C: Send + Sync>(
     block_hashes: Vec<BlockHash>,
@@ -39,8 +39,11 @@ pub async fn handle_getheaders<C: Send + Sync>(
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Received getheaders: {:?}", block_hashes);
-    let response_headers =
-        chain_store_handle.get_headers_for_locator(&block_hashes, &stop_block_hash, MAX_HEADERS)?;
+    let response_headers = chain_store_handle.get_headers_for_locator(
+        &block_hashes,
+        &stop_block_hash,
+        MAX_HEADERS_IN_RESPONSE,
+    )?;
     let headers_message = Message::ShareHeaders(response_headers);
     // Send response and handle errors by logging them before returning
     debug!("Sending Headers {headers_message:?}");
