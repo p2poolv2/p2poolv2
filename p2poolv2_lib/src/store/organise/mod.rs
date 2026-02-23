@@ -123,8 +123,6 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::block_tx_metadata::Status;
-    use crate::store::organise::TopResult;
     use crate::test_utils::TestShareBlockBuilder;
     use tempfile::tempdir;
 

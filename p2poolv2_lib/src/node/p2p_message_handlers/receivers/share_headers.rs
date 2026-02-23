@@ -83,10 +83,7 @@ mod tests {
     use crate::node::messages::Message;
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-    use crate::store::block_tx_metadata::{BlockMetadata, Status};
     use crate::test_utils::TestShareBlockBuilder;
-    use bitcoin::Work;
-    use mockall::predicate::*;
     use tokio::sync::{mpsc, oneshot};
 
     /// Build a Vec of share headers with the given count by cloning a
