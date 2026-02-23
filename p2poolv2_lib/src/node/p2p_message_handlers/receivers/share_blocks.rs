@@ -27,7 +27,7 @@ use tracing::{debug, error};
 
 /// Handle a ShareBlock received from a peer in response to a getblocks request.
 ///
-/// Validate the ShareBlock and store it in the chain
+/// Validate the ShareBlock and store it in the chain.
 /// We do not send any inventory message as we do not want to gossip the share block.
 /// Share blocks are gossiped using the libp2p gossipsub protocol.
 pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
@@ -36,11 +36,11 @@ pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
     time_provider: &T,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Received share block: {:?}", share_block);
-    if let Err(e) =
+    if let Err(validation_error) =
         validation::validate_share_block(&share_block, chain_store_handle, time_provider)
     {
-        error!("Share block validation failed: {}", e);
-        return Err("Share block validation failed".into());
+        error!("Share block validation failed: {}", validation_error);
+        return Err(validation_error.into());
     }
 
     // TODO: Check if this will be an uncle, for now add to main chain
@@ -100,9 +100,10 @@ mod tests {
 
         let result = handle_share_block(share_block, &chain_store_handle, &time_provider).await;
         assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "Share block validation failed"
+        let error_message = result.unwrap_err().to_string();
+        assert!(
+            error_message.contains("seconds from current time"),
+            "Expected timestamp validation error, got: {error_message}"
         );
     }
 
