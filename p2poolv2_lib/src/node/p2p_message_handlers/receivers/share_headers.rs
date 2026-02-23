@@ -14,7 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::node::SwarmSend;
+use crate::node::p2p_message_handlers::MAX_HEADERS;
+use crate::node::{SwarmSend, messages::Message};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -22,11 +23,15 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareHeader;
 use crate::shares::validation::validate_share_header;
+use bitcoin::{BlockHash, hashes::Hash};
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::debug;
+use tracing::{debug, info};
 
-/// Handle ShareHeaders received from a peer
+/// Handle ShareHeaders received from a peer.
+///
+/// The peer_id identifies the peer that sent the headers, allowing
+/// follow-up requests to be directed back to the same peer.
 ///
 /// - validate: received share header using shares::validation::validate_share_header
 ///
@@ -36,6 +41,7 @@ use tracing::debug;
 ///   blocks. Then response for blocks will ask for next set of
 ///   blocks.
 pub async fn handle_share_headers<C: Send + Sync>(
+    peer_id: libp2p::PeerId,
     share_headers: Vec<ShareHeader>,
     chain_store_handle: ChainStoreHandle,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,

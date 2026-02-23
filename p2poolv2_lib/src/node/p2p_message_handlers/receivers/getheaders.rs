@@ -16,6 +16,7 @@
 
 use crate::node::Message;
 use crate::node::SwarmSend;
+use crate::node::p2p_message_handlers::MAX_HEADERS;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -25,8 +26,6 @@ use bitcoin::BlockHash;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::debug;
-
-const MAX_HEADERS: usize = 2000;
 
 /// Handle a GetHeaders request from a peer
 /// - start from chain tip, find blockhashes up to the stop block hash
