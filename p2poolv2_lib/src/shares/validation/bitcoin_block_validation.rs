@@ -14,18 +14,18 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use super::ValidationError;
 use bitcoin::consensus::encode::serialize;
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use serde_json::json;
-use std::error::Error;
 
-/// Validate the bitcoin block
-/// Expect the block to exist in the chain, if it does not, return an error and the client should retry
+/// Validate the bitcoin block.
+/// Expect the block to exist in the chain, if it does not, return an error and the client should retry.
 #[allow(dead_code)]
 pub async fn validate_bitcoin_block(
     block: &bitcoin::Block,
     config: &BitcoinRpcConfig,
-) -> Result<bool, Box<dyn Error>> {
+) -> Result<bool, ValidationError> {
     // Serialize block to hex string for RPC call
     let block_hex = hex::encode(serialize(block));
 
@@ -36,17 +36,13 @@ pub async fn validate_bitcoin_block(
     })];
 
     // Call getblocktemplate RPC method using config values
-    let bitcoind = BitcoindRpcClient::new(&config.url, &config.username, &config.password)?;
+    let bitcoind = BitcoindRpcClient::new(&config.url, &config.username, &config.password)
+        .map_err(|e| ValidationError::BitcoinBlockValidation(e.to_string()))?;
     let result: Result<serde_json::Value, _> = bitcoind.request("getblocktemplate", params).await;
 
-    if let Err(e) = result {
-        return Err(format!("Bitcoin block validation failed: {e}").into());
-    }
-
-    if let Ok(response) = result {
-        Ok(response == "duplicate")
-    } else {
-        Err(format!("Bitcoin block validation failed: {result:?}").into())
+    match result {
+        Ok(response) => Ok(response == "duplicate"),
+        Err(e) => Err(ValidationError::BitcoinBlockValidation(e.to_string())),
     }
 }
 
