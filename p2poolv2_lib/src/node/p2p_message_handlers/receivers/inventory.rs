@@ -24,7 +24,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 /// Handle Inventory message request from a peer.
 /// inv is sent unsolicited, or in response to getblocks message,

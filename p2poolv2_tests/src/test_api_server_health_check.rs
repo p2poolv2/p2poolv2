@@ -20,7 +20,6 @@ use p2poolv2_api::api::error::ApiError;
 use p2poolv2_api::start_api_server;
 use p2poolv2_lib::accounting::{simple_pplns::SimplePplnsShare, stats::metrics::start_metrics};
 use p2poolv2_lib::config::ApiConfig;
-use p2poolv2_lib::shares::share_block::ShareBlock;
 use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
 use p2poolv2_lib::test_utils::setup_test_chain_store_handle;
 use reqwest::{Client, header};

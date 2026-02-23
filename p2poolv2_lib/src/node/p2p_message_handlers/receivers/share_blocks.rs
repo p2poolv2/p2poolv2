@@ -34,7 +34,7 @@ use tracing::{debug, error};
 /// We do not send any inventory message as we do not want to gossip the share block.
 /// Share blocks are gossiped using the libp2p gossipsub protocol.
 pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
-    peer_id: libp2p::PeerId,
+    _peer_id: libp2p::PeerId,
     share_block: ShareBlock,
     chain_store_handle: &ChainStoreHandle,
     time_provider: &T,

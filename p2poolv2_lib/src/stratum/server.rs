@@ -1222,7 +1222,7 @@ mod stratum_server_tests {
                 "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
                 Some("test_password".to_string()),
             );
-            let authorize_str = serde_json::to_string(&authorize_message).unwrap();
+            let _authorize_str = serde_json::to_string(&authorize_message).unwrap();
 
             // Wait for a long while for new messages
             let mut mock_reader = tokio_test::io::Builder::new()

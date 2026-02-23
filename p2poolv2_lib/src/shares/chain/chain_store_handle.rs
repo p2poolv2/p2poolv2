@@ -21,7 +21,6 @@
 //! are synchronous and direct, while writes are serialized through the store writer.
 
 use crate::accounting::simple_pplns::SimplePplnsShare;
-use crate::shares::genesis;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::block_tx_metadata::BlockMetadata;
 use crate::store::writer::{StoreError, StoreHandle};
@@ -400,8 +399,6 @@ impl ChainStoreHandle {
 
     /// Check if a share is confirmed.
     pub fn is_confirmed(&self, share: &ShareBlock) -> bool {
-        const MIN_CONFIRMATION_DEPTH: usize = 100;
-
         if share.header.prev_share_blockhash == BlockHash::all_zeros() {
             return true;
         }

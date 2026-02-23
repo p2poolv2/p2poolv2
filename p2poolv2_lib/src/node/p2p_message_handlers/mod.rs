@@ -161,14 +161,10 @@ mod tests {
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::share_block::Txids;
-    use crate::test_utils::{
-        TestShareBlockBuilder, build_block_from_work_components, genesis_for_tests,
-    };
+    use crate::test_utils::TestShareBlockBuilder;
     use crate::utils::time_provider::TestTimeProvider;
-    use crate::utils::time_provider::TimeProvider;
     use bitcoin::BlockHash;
     use bitcoin::hashes::Hash as _;
-    use mockall::predicate::*;
     use std::time::SystemTime;
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
