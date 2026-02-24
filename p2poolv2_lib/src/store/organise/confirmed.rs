@@ -132,12 +132,6 @@ impl Store {
             new_top_height = height;
         }
 
-        // Clean up candidate entries for promoted shares
-        for (height, _) in candidates {
-            self.delete_candidate_entry(*height, batch);
-        }
-        self.delete_top_candidate_height(batch);
-
         self.set_top_confirmed_height(new_top_height, batch);
         Ok(Some(new_top_height))
     }
@@ -327,10 +321,11 @@ impl Store {
         )
     }
 
-    /// Promote candidates to confirmed and clear the candidate chain.
+    /// Promote candidates to confirmed.
     ///
-    /// Moves each candidate entry to the confirmed index, updates metadata
-    /// to Confirmed status, and removes the top candidate height marker.
+    /// Writes each candidate entry to the confirmed index and updates
+    /// metadata to Confirmed status. The candidate chain is left intact
+    /// so it coexists with the confirmed chain.
     pub(super) fn extend_confirmed(
         &self,
         to: Height,
@@ -339,12 +334,10 @@ impl Store {
     ) -> Result<Option<Height>, StoreError> {
         for (candidate_height, candidate_hash) in candidates {
             self.put_confirmed_entry(*candidate_height, candidate_hash, batch);
-            self.delete_candidate_entry(*candidate_height, batch);
             let mut metadata = self.get_block_metadata(candidate_hash)?;
             metadata.status = crate::store::block_tx_metadata::Status::Confirmed;
             self.update_block_metadata(candidate_hash, &metadata, batch)?;
         }
-        self.delete_top_candidate_height(batch);
         self.set_top_confirmed_height(to, batch);
         Ok(Some(to))
     }
@@ -1069,7 +1062,7 @@ mod tests {
     /// Before: genesis(h:0, confirmed) → A(h:1, confirmed)
     /// Fork:   genesis → F(h:1, candidate, more work)
     /// After:  genesis(h:0, confirmed) → F(h:1, confirmed)
-    ///         A has Valid status, candidate index cleared
+    ///         A has Valid status, candidate chain still present
     #[test]
     fn test_reorg_confirmed_replaces_single_entry() {
         let temp_dir = tempdir().unwrap();
@@ -1146,9 +1139,12 @@ mod tests {
         // F has Confirmed status
         assert!(store.is_confirmed(&fork_share.block_hash()));
 
-        // Candidate index is cleared
-        assert!(store.get_top_candidate().is_err());
-        assert!(store.get_candidate_at_height(1).is_err());
+        // Candidate chain coexists with confirmed
+        assert!(store.get_top_candidate().is_ok());
+        assert_eq!(
+            store.get_candidate_at_height(1).unwrap(),
+            fork_share.block_hash()
+        );
     }
 
     /// Deeper reorg: fork replaces multiple confirmed entries.
@@ -1156,7 +1152,7 @@ mod tests {
     /// Before: genesis(h:0) → A(h:1) → B(h:2)  [all confirmed]
     /// Fork:   genesis → F1(h:1) → F2(h:2, more work)  [candidates]
     /// After:  genesis(h:0) → F1(h:1) → F2(h:2)  [all confirmed]
-    ///         A, B have Valid status
+    ///         A, B have Valid status, candidate chain still present
     #[test]
     fn test_reorg_confirmed_replaces_multiple_entries() {
         let temp_dir = tempdir().unwrap();
@@ -1263,8 +1259,16 @@ mod tests {
         assert!(store.is_confirmed(&fork_1.block_hash()));
         assert!(store.is_confirmed(&fork_2.block_hash()));
 
-        // Candidate index cleared
-        assert!(store.get_top_candidate().is_err());
+        // Candidate chain coexists with confirmed
+        assert!(store.get_top_candidate().is_ok());
+        assert_eq!(
+            store.get_candidate_at_height(1).unwrap(),
+            fork_1.block_hash()
+        );
+        assert_eq!(
+            store.get_candidate_at_height(2).unwrap(),
+            fork_2.block_hash()
+        );
     }
 
     /// Reorg to a shorter fork with more work.
@@ -1272,7 +1276,7 @@ mod tests {
     /// Before: genesis(h:0) → A(h:1) → B(h:2) → C(h:3)  [confirmed]
     /// Fork:   genesis → F(h:1, much more work)  [candidate]
     /// After:  genesis(h:0) → F(h:1)  [confirmed]
-    ///         A, B, C have Valid status
+    ///         A, B, C have Valid status, candidate chain still present
     #[test]
     fn test_reorg_confirmed_to_shorter_chain() {
         let temp_dir = tempdir().unwrap();
@@ -1380,8 +1384,12 @@ mod tests {
             assert_eq!(meta.status, Status::Valid);
         }
 
-        // Candidate index cleared
-        assert!(store.get_top_candidate().is_err());
+        // Candidate chain coexists with confirmed
+        assert!(store.get_top_candidate().is_ok());
+        assert_eq!(
+            store.get_candidate_at_height(1).unwrap(),
+            fork_share.block_hash()
+        );
     }
 
     /// Partial reorg: fork branches from a middle confirmed share.
@@ -1389,7 +1397,7 @@ mod tests {
     /// Before: genesis(h:0) → A(h:1) → B(h:2)  [confirmed]
     /// Fork:   A → F(h:2, more work)  [candidate]
     /// After:  genesis(h:0) → A(h:1) → F(h:2)  [confirmed]
-    ///         B has Valid status, A stays Confirmed
+    ///         B has Valid status, A stays Confirmed, candidate chain still present
     #[test]
     fn test_reorg_confirmed_partial_from_mid_chain() {
         let temp_dir = tempdir().unwrap();
@@ -1478,9 +1486,12 @@ mod tests {
         let reloaded_metadata_b = store.get_block_metadata(&share_b.block_hash()).unwrap();
         assert_eq!(reloaded_metadata_b.status, Status::Valid);
 
-        // Candidate index cleared
-        assert!(store.get_top_candidate().is_err());
-        assert!(store.get_candidate_at_height(2).is_err());
+        // Candidate chain coexists with confirmed
+        assert!(store.get_top_candidate().is_ok());
+        assert_eq!(
+            store.get_candidate_at_height(2).unwrap(),
+            fork_share.block_hash()
+        );
     }
 
     /// Reorg confirmed with empty candidates returns error.
