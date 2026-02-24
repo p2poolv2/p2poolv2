@@ -206,8 +206,8 @@ mod tests {
         store.organise_share(share.clone(), &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Candidate was promoted to confirmed
-        assert!(store.get_top_candidate().is_err());
+        // Candidate coexists with confirmed
+        assert!(store.get_top_candidate().is_ok());
         assert_eq!(
             store.get_confirmed_at_height(1).unwrap(),
             share.block_hash()
@@ -273,8 +273,8 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Both candidates promoted to confirmed
-        assert!(store.get_top_candidate().is_err());
+        // Candidates coexist with confirmed
+        assert!(store.get_top_candidate().is_ok());
         assert_eq!(
             store.get_confirmed_at_height(1).unwrap(),
             share1.block_hash()
@@ -421,8 +421,8 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        // After reorg + confirmed promotion: all on confirmed chain
-        assert!(store.get_top_candidate().is_err());
+        // After reorg + confirmed promotion: candidate chain coexists
+        assert!(store.get_top_candidate().is_ok());
         assert_eq!(
             store.get_confirmed_at_height(1).unwrap(),
             share1.block_hash()
@@ -530,8 +530,8 @@ mod tests {
         store.organise_share(fork3.clone(), &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // After reorg + confirmed promotion: all on confirmed chain
-        assert!(store.get_top_candidate().is_err());
+        // After reorg + confirmed promotion: candidate chain coexists
+        assert!(store.get_top_candidate().is_ok());
         assert_eq!(
             store.get_confirmed_at_height(1).unwrap(),
             share1.block_hash()
@@ -636,8 +636,8 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        // After reorg + confirmed promotion: shorter chain on confirmed
-        assert!(store.get_top_candidate().is_err());
+        // After reorg + confirmed promotion: candidate chain coexists
+        assert!(store.get_top_candidate().is_ok());
         assert_eq!(
             store.get_confirmed_at_height(1).unwrap(),
             share1.block_hash()
@@ -656,7 +656,7 @@ mod tests {
     }
 
     #[test_log::test]
-    fn test_organise_share_extends_confirmed_and_removes_candidates() {
+    fn test_organise_share_extends_confirmed_and_keeps_candidates() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -680,8 +680,8 @@ mod tests {
         store.organise_share(share1.clone(), &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // share1 was promoted to confirmed immediately
-        assert!(store.get_top_candidate().is_err());
+        // share1 promoted to confirmed, candidate chain coexists
+        assert!(store.get_top_candidate().is_ok());
         assert_eq!(
             store.get_confirmed_at_height(1).unwrap(),
             share1.block_hash()
@@ -704,8 +704,8 @@ mod tests {
         store.organise_share(share2.clone(), &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // candidate chain should be empty as it is extended on to the confirmed chain
-        assert!(store.get_top_candidate().is_err());
+        // candidate chain coexists with confirmed chain
+        assert!(store.get_top_candidate().is_ok());
     }
 
     // ── forward walk (extend_candidates_with_children) tests ─────────
@@ -769,8 +769,8 @@ mod tests {
         store.organise_share(share2.clone(), &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // All promoted to confirmed
-        assert!(store.get_top_candidate().is_err());
+        // All promoted to confirmed, candidate chain coexists
+        assert!(store.get_top_candidate().is_ok());
         assert_eq!(
             store.get_confirmed_at_height(1).unwrap(),
             share1.block_hash()
@@ -859,8 +859,8 @@ mod tests {
         store.organise_share(share2.clone(), &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // All promoted to confirmed
-        assert!(store.get_top_candidate().is_err());
+        // All promoted to confirmed, candidate chain coexists
+        assert!(store.get_top_candidate().is_ok());
         assert_eq!(
             store.get_confirmed_at_height(2).unwrap(),
             share2.block_hash()
@@ -958,8 +958,8 @@ mod tests {
         store.organise_share(fork.clone(), &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // All promoted to confirmed
-        assert!(store.get_top_candidate().is_err());
+        // All promoted to confirmed, candidate chain coexists
+        assert!(store.get_top_candidate().is_ok());
         assert_eq!(
             store.get_confirmed_at_height(1).unwrap(),
             share1.block_hash()
@@ -1035,8 +1035,8 @@ mod tests {
         store.organise_share(share1.clone(), &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Both promoted to confirmed, share2b selected
-        assert!(store.get_top_candidate().is_err());
+        // Both promoted to confirmed, candidate chain coexists, share2b selected
+        assert!(store.get_top_candidate().is_ok());
         assert_eq!(
             store.get_confirmed_at_height(2).unwrap(),
             share2b.block_hash()
@@ -1095,8 +1095,8 @@ mod tests {
         store.organise_share(share2.clone(), &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // All promoted to confirmed, stops at h:2
-        assert!(store.get_top_candidate().is_err());
+        // All promoted to confirmed, candidate chain coexists, stops at h:2
+        assert!(store.get_top_candidate().is_ok());
         assert_eq!(
             store.get_confirmed_at_height(2).unwrap(),
             share2.block_hash()
