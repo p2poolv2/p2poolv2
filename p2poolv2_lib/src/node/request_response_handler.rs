@@ -280,9 +280,11 @@ mod tests {
     async fn test_dispatch_response_share_headers() {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let mut chain_store_handle = ChainStoreHandle::default();
-        chain_store_handle
-            .expect_clone()
-            .returning(ChainStoreHandle::default);
+        chain_store_handle.expect_clone().returning(|| {
+            let mut cloned = ChainStoreHandle::default();
+            cloned.expect_organise_header().returning(|_| Ok(None));
+            cloned
+        });
 
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
