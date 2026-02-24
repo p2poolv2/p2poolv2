@@ -657,27 +657,29 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
-        let mut blocks = Vec::new();
-        let mut locator = vec![];
-
         let num_blockhashes = 3;
-        let mut hashes: Vec<BlockHash> = vec![];
-
+        let mut blocks = Vec::with_capacity(num_blockhashes);
         let mut prev_blockhash = BlockHash::all_zeros();
 
-        for _height in 0..num_blockhashes {
-            let mut batch = rocksdb::WriteBatch::default();
-            let builder =
-                TestShareBlockBuilder::new().prev_share_blockhash(prev_blockhash.to_string());
-            let block = builder.build();
-            blocks.push(block.clone());
-            store.add_share_block(&block, true, &mut batch).unwrap();
+        for nonce in 0..num_blockhashes {
+            let block = TestShareBlockBuilder::new()
+                .prev_share_blockhash(prev_blockhash.to_string())
+                .nonce(nonce as u32)
+                .build();
             prev_blockhash = block.block_hash();
-            hashes.push(prev_blockhash);
-            store.commit_batch(batch).unwrap();
+            blocks.push(block);
         }
 
-        locator.push(blocks[0].block_hash()); // locator = tip
+        // Setup genesis and push remaining to confirmed chain
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&blocks[0], &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        for block in &blocks[1..] {
+            store.push_to_confirmed_chain(block, true).unwrap();
+        }
+
+        let locator = vec![blocks[0].block_hash()];
 
         // Use a stop block hash that doesn't exist in our chain
         let non_existent_stop_block =
@@ -685,7 +687,7 @@ mod tests {
                 .parse::<BlockHash>()
                 .unwrap();
 
-        // Call get_headers_for_block_locator with non-existent stop block
+        // Call get_headers_for_locator with non-existent stop block
         let result = store
             .get_headers_for_locator(&locator, &non_existent_stop_block, 10)
             .unwrap();
@@ -742,74 +744,82 @@ mod tests {
         assert_eq!(result[1], block_hashes[2]);
     }
 
+    /// Test that get_descendant_blockhashes walks the confirmed chain
+    /// and includes uncle blockhashes before the nephew that references them.
+    ///
+    /// Chain:
+    ///   genesis(h:0) -> share_a(h:1) -> share_b(h:2, uncles=[uncle1])
+    ///                \-> uncle1(h:1)
+    ///
+    /// uncle1 is a child of genesis (same height as share_a) that lost
+    /// the candidate race. share_b at h:2 references uncle1 as an uncle.
     #[test]
-    fn test_get_descendant_blockhashes_with_fork() {
+    fn test_get_descendant_blockhashes_returns_confirmed_and_uncles() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
-        // Create four shares: a -> b -> c and b -> d (fork at b)
-        let share_a = TestShareBlockBuilder::new().build();
-        let share_b = TestShareBlockBuilder::new()
-            .prev_share_blockhash(share_a.block_hash().to_string())
-            .build();
-        let share_c = TestShareBlockBuilder::new()
-            .prev_share_blockhash(share_b.block_hash().to_string())
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // uncle1: child of genesis, same height as share_a, not confirmed
+        let uncle1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(100)
             .build();
-        let share_d = TestShareBlockBuilder::new()
-            .prev_share_blockhash(share_b.block_hash().to_string())
-            .nonce(200)
+        store.store_with_valid_metadata(&uncle1);
+
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(1)
             .build();
+        store.push_to_confirmed_chain(&share_a, true).unwrap();
 
-        // Add share a
-        let mut batch = rocksdb::WriteBatch::default();
-        store.add_share_block(&share_a, true, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .uncles(vec![uncle1.block_hash()])
+            .nonce(2)
+            .build();
+        store.push_to_confirmed_chain(&share_b, true).unwrap();
 
-        // Add share b
-        let mut batch = rocksdb::WriteBatch::default();
-        store.add_share_block(&share_b, true, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
+        // Descendants from genesis: should get share_a, uncle1, share_b
+        let descendants = store
+            .get_descendant_blockhashes(&genesis.block_hash(), &BlockHash::all_zeros(), 10)
+            .unwrap();
+        assert_eq!(descendants.len(), 3);
+        assert_eq!(descendants[0], share_a.block_hash());
+        // uncle1 must appear before share_b (its nephew)
+        assert_eq!(descendants[1], uncle1.block_hash());
+        assert_eq!(descendants[2], share_b.block_hash());
 
-        // Add share c
-        let mut batch = rocksdb::WriteBatch::default();
-        store.add_share_block(&share_c, true, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Add share d (fork from b)
-        let mut batch = rocksdb::WriteBatch::default();
-        store.add_share_block(&share_d, true, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Test getting all descendants from a (should get b, c, d)
+        // Descendants from share_a: should get uncle1 then share_b
         let descendants = store
             .get_descendant_blockhashes(&share_a.block_hash(), &BlockHash::all_zeros(), 10)
             .unwrap();
-        assert_eq!(descendants.len(), 3);
-        assert!(descendants.contains(&share_b.block_hash()));
-        assert!(descendants.contains(&share_c.block_hash()));
-        assert!(descendants.contains(&share_d.block_hash()));
-
-        // Test getting descendants from b (should get c and d)
-        let descendants = store
-            .get_descendant_blockhashes(&share_b.block_hash(), &BlockHash::all_zeros(), 10)
-            .unwrap();
         assert_eq!(descendants.len(), 2);
-        assert!(descendants.contains(&share_c.block_hash()));
-        assert!(descendants.contains(&share_d.block_hash()));
+        assert_eq!(descendants[0], uncle1.block_hash());
+        assert_eq!(descendants[1], share_b.block_hash());
 
         // Test with limit
         let descendants = store
-            .get_descendant_blockhashes(&share_a.block_hash(), &BlockHash::all_zeros(), 2)
+            .get_descendant_blockhashes(&genesis.block_hash(), &BlockHash::all_zeros(), 2)
             .unwrap();
         assert_eq!(descendants.len(), 2);
+        assert_eq!(descendants[0], share_a.block_hash());
+        assert_eq!(descendants[1], uncle1.block_hash());
 
-        // Test with stop_blockhash - should return just share_b
+        // Test with stop_blockhash - stop at share_a includes share_a
         let descendants = store
-            .get_descendant_blockhashes(&share_a.block_hash(), &share_b.block_hash(), 10)
+            .get_descendant_blockhashes(
+                &genesis.block_hash(),
+                &share_a.block_hash(),
+                10,
+            )
             .unwrap();
         assert_eq!(descendants.len(), 1);
-        assert!(descendants.contains(&share_b.block_hash()));
+        assert_eq!(descendants[0], share_a.block_hash());
     }
 
     #[test]

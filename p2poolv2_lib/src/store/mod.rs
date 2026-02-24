@@ -20,7 +20,7 @@ use crate::store::column_families::ColumnFamily;
 use bitcoin::consensus::{Encodable, encode};
 use bitcoin::{BlockHash, Work};
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
-use std::collections::VecDeque;
+use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 use tracing::debug;
 use writer::StoreError;
@@ -189,7 +189,13 @@ impl Store {
         self.db.write(batch)
     }
 
-    /// Get all descendant blockhashes of a given blockhash
+    /// Get confirmed chain blockhashes descending from a given blockhash,
+    /// including uncle blockhashes referenced by each confirmed block.
+    ///
+    /// Walks the confirmed chain from the starting block's height + 1 up
+    /// to the top confirmed height. For each confirmed block, its uncle
+    /// blockhashes are inserted before the confirmed blockhash so that a
+    /// peer receives uncle data before the share that depends on it.
     fn get_descendant_blockhashes(
         &self,
         blockhash: &BlockHash,
@@ -197,27 +203,45 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<BlockHash>, StoreError> {
         let mut blockhashes = Vec::with_capacity(limit);
-        let mut next_children = VecDeque::new();
-        next_children.push_back(*blockhash);
+        let mut seen = HashSet::with_capacity(limit);
 
-        while !next_children.is_empty() && blockhashes.len() < limit {
-            match next_children.pop_front() {
-                Some(current) => {
-                    if current == *stop_blockhash {
-                        break;
+        let start_height = match self.get_block_metadata(blockhash) {
+            Ok(metadata) => metadata.expected_height.unwrap_or(0),
+            Err(_) => 0,
+        };
+
+        let top_confirmed_height = match self.get_top_confirmed_height() {
+            Ok(height) => height,
+            Err(_) => return Ok(blockhashes),
+        };
+
+        let mut height = start_height + 1;
+        while height <= top_confirmed_height && blockhashes.len() < limit {
+            let confirmed_hash = self.get_confirmed_at_height(height)?;
+
+            // Insert uncle blockhashes before the confirmed block
+            if let Ok(Some(header)) = self.get_share_header(&confirmed_hash) {
+                for uncle_blockhash in &header.uncles {
+                    if blockhashes.len() >= limit {
+                        return Ok(blockhashes);
                     }
-                    if let Some(children) = self.get_children_blockhashes(&current)? {
-                        for child in children {
-                            if blockhashes.len() < limit {
-                                blockhashes.push(child);
-                                next_children.push_back(child);
-                            }
-                        }
+                    if seen.insert(*uncle_blockhash) {
+                        blockhashes.push(*uncle_blockhash);
                     }
                 }
-                None => break, // no more in next_children
             }
+
+            if blockhashes.len() < limit && seen.insert(confirmed_hash) {
+                blockhashes.push(confirmed_hash);
+            }
+
+            if confirmed_hash == *stop_blockhash {
+                return Ok(blockhashes);
+            }
+
+            height += 1;
         }
+
         Ok(blockhashes)
     }
 
