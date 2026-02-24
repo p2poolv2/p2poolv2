@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::{
-    shares::share_block::ShareBlock,
+    shares::share_block::ShareHeader,
     store::{
         ColumnFamily, Store,
         block_tx_metadata::{BlockMetadata, Status},
@@ -218,7 +218,7 @@ impl Store {
     /// Returns true if candidate chain is extended.
     pub(super) fn should_extend_candidates(
         &self,
-        share: &ShareBlock,
+        header: &ShareHeader,
         metadata: &BlockMetadata,
         top_at_chain: Option<&TopResult>,
     ) -> Result<Option<Height>, StoreError> {
@@ -226,7 +226,7 @@ impl Store {
             None => Ok(metadata.expected_height),
             Some(top) => {
                 let expected_height = metadata.expected_height.unwrap_or_default();
-                if top.hash == share.header.prev_share_blockhash
+                if top.hash == header.prev_share_blockhash
                     && expected_height == top.height + 1
                     && metadata.chain_work > top.work
                 {
@@ -797,7 +797,7 @@ mod tests {
             status: Status::Pending,
         };
 
-        let result = store.should_extend_candidates(&share, &metadata, None);
+        let result = store.should_extend_candidates(&share.header, &metadata, None);
         assert_eq!(result.unwrap(), metadata.expected_height);
     }
 
@@ -827,7 +827,8 @@ mod tests {
             work: Work::from_hex("0x05").unwrap(),
         });
 
-        let result = store.should_extend_candidates(&share, &metadata, top_candidate.as_ref());
+        let result =
+            store.should_extend_candidates(&share.header, &metadata, top_candidate.as_ref());
         assert_eq!(result.unwrap(), Some(6));
     }
 
@@ -853,7 +854,8 @@ mod tests {
             work: Work::from_hex("0x05").unwrap(),
         });
 
-        let result = store.should_extend_candidates(&share, &metadata, top_candidate.as_ref());
+        let result =
+            store.should_extend_candidates(&share.header, &metadata, top_candidate.as_ref());
         assert_eq!(result.unwrap(), None);
     }
 
@@ -883,7 +885,8 @@ mod tests {
             work: Work::from_hex("0x05").unwrap(),
         });
 
-        let result = store.should_extend_candidates(&share, &metadata, top_candidate.as_ref());
+        let result =
+            store.should_extend_candidates(&share.header, &metadata, top_candidate.as_ref());
         assert_eq!(result.unwrap(), None);
     }
 
@@ -909,7 +912,8 @@ mod tests {
             work: Work::from_hex("0x05").unwrap(),
         });
 
-        let result = store.should_extend_candidates(&share, &metadata, top_candidate.as_ref());
+        let result =
+            store.should_extend_candidates(&share.header, &metadata, top_candidate.as_ref());
         assert_eq!(result.unwrap(), None);
     }
 

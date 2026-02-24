@@ -28,7 +28,7 @@ mod handle;
 pub use handle::StoreHandle;
 
 use crate::accounting::simple_pplns::SimplePplnsShare;
-use crate::shares::share_block::ShareBlock;
+use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
 use bitcoin::{BlockHash, Work};
 use std::error::Error;
@@ -131,10 +131,16 @@ pub enum WriteCommand {
     /// Set genesis block hash (fire-and-forget)
     SetGenesisBlockHash { hash: BlockHash },
 
-    /// Organise a share: update candidate and confirmed indexes atomically.
+    /// Organise a header into the candidate chain.
+    /// Returns the new candidate height and chain if changed.
+    OrganiseHeader {
+        header: ShareHeader,
+        reply: oneshot::Sender<Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>>,
+    },
+
+    /// Promote candidates to confirmed.
     /// Returns the confirmed chain height after organising, if changed.
-    OrganiseShare {
-        share: ShareBlock,
+    OrganiseBlock {
         reply: oneshot::Sender<Result<Option<u32>, StoreError>>,
     },
 }
@@ -246,15 +252,24 @@ impl StoreWriter {
                 self.store.set_genesis_blockhash(hash);
             }
 
-            WriteCommand::OrganiseShare { share, reply } => {
+            WriteCommand::OrganiseHeader { header, reply } => {
                 let mut batch = Store::get_write_batch();
                 let result = self
                     .store
-                    .organise_share(share, &mut batch)
-                    .and_then(|height| {
+                    .organise_header(&header, &mut batch)
+                    .and_then(|result| {
                         self.store.commit_batch(batch).map_err(StoreError::from)?;
-                        Ok(height)
+                        Ok(result)
                     });
+                let _ = reply.send(result);
+            }
+
+            WriteCommand::OrganiseBlock { reply } => {
+                let mut batch = Store::get_write_batch();
+                let result = self.store.organise_block(&mut batch).and_then(|height| {
+                    self.store.commit_batch(batch).map_err(StoreError::from)?;
+                    Ok(height)
+                });
                 let _ = reply.send(result);
             }
         }

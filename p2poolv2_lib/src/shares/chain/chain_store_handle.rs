@@ -368,12 +368,23 @@ impl ChainStoreHandle {
         Ok(sum)
     }
 
-    /// Organise a share: update candidate and confirmed indexes atomically.
+    /// Organise a header into the candidate chain.
+    /// Returns the new candidate height and chain if the candidate chain changed.
+    pub async fn organise_header(
+        &self,
+        header: ShareHeader,
+    ) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError> {
+        let blockhash = header.block_hash();
+        let result = self.store_handle.organise_header(header).await?;
+        info!("Organised header {blockhash} into candidate chain: {result:?}");
+        Ok(result)
+    }
+
+    /// Promote candidates to confirmed.
     /// Returns the confirmed chain height after organising, if changed.
-    pub async fn organise_share(&self, share: ShareBlock) -> Result<Option<u32>, StoreError> {
-        let blockhash = share.block_hash();
-        let height = self.store_handle.organise_share(share).await?;
-        info!("Organised share {blockhash} at confirmed height {height:?}");
+    pub async fn organise_block(&self) -> Result<Option<u32>, StoreError> {
+        let height = self.store_handle.organise_block().await?;
+        info!("Organised block at confirmed height {height:?}");
         Ok(height)
     }
 
@@ -446,7 +457,8 @@ mockall::mock! {
         pub fn is_confirmed(&self, share: &ShareBlock) -> bool;
         pub fn get_btcaddresses_for_user_ids(&self, user_ids: &[u64]) -> Result<Vec<(u64, String)>, StoreError>;
         pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError>;
-        pub async fn organise_share(&self, share: ShareBlock) -> Result<Option<u32>, StoreError>;
+        pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;
+        pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
         pub async fn add_share_block(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), StoreError>;
         pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError>;
         pub async fn add_job(&self, serialized_notify: String) -> Result<(), StoreError>;
@@ -565,7 +577,11 @@ mod tests {
                 .add_share_block(share.clone(), true)
                 .await
                 .unwrap();
-            chain_handle.organise_share(share.clone()).await.unwrap();
+            chain_handle
+                .organise_header(share.header.clone())
+                .await
+                .unwrap();
+            chain_handle.organise_block().await.unwrap();
             prev_hash = share.block_hash();
             shares.push(share);
         }
@@ -631,7 +647,11 @@ mod tests {
                 .add_share_block(share.clone(), true)
                 .await
                 .unwrap();
-            chain_handle.organise_share(share.clone()).await.unwrap();
+            chain_handle
+                .organise_header(share.header.clone())
+                .await
+                .unwrap();
+            chain_handle.organise_block().await.unwrap();
             prev_hash = share.block_hash();
             shares.push(share);
         }
