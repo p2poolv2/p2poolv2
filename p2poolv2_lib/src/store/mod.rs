@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::shares::share_block::ShareBlock;
+use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::column_families::ColumnFamily;
 use bitcoin::consensus::{Encodable, encode};
 use bitcoin::{BlockHash, Work};
@@ -254,7 +255,16 @@ impl Store {
     ) -> Result<(), StoreError> {
         let blockhash = genesis.block_hash();
         let genesis_work = genesis.header.get_work();
-        let mut metadata = self.add_share_block(genesis, 0, genesis_work, true, batch)?;
+        self.add_share_block(genesis, true, batch)?;
+
+        self.set_height_to_blockhash(&blockhash, 0, batch)?;
+        let mut metadata = BlockMetadata {
+            expected_height: Some(0),
+            chain_work: genesis_work,
+            status: Status::Valid,
+        };
+        self.update_block_metadata(&blockhash, &metadata, batch)?;
+
         *self.genesis_blockhash.write().unwrap() = Some(blockhash);
         self.append_to_confirmed(&blockhash, 0, &mut metadata, batch)?;
         Ok(())
@@ -271,6 +281,105 @@ impl Store {
             self.get_total_work()?,
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl Store {
+    /// Organise a share header into the candidate chain.
+    ///
+    /// Computes height and chain_work from parent metadata, creates
+    /// BlockMetadata, and updates the candidate chain.
+    /// Returns the new candidate height and chain if changed, or None.
+    pub fn push_to_candidate_chain(
+        &self,
+        share: &ShareBlock,
+    ) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError> {
+        let mut batch = Store::get_write_batch();
+        let result = self.organise_header(&share.header, &mut batch)?;
+        self.commit_batch(batch)?;
+        Ok(result)
+    }
+
+    /// Push a share to the confirmed chain: organise header, store
+    /// the full block, then promote candidates to confirmed.
+    /// Returns the new confirmed height if changed, or None.
+    pub fn push_to_confirmed_chain(
+        &self,
+        share: &ShareBlock,
+        confirm_txs: bool,
+    ) -> Result<Option<u32>, StoreError> {
+        self.push_to_candidate_chain(share)?;
+        let mut batch = Store::get_write_batch();
+        self.add_share_block(share, confirm_txs, &mut batch)?;
+        self.commit_batch(batch)?;
+        let mut batch = Store::get_write_batch();
+        let result = self.organise_block(&mut batch)?;
+        self.commit_batch(batch)?;
+        Ok(result)
+    }
+
+    /// Store a share block and create Valid metadata for it.
+    ///
+    /// Used for shares that arrive out of order and need to be
+    /// discoverable by forward walks and uncle lookups. The metadata
+    /// height and chain_work are computed from the parent if available,
+    /// or default to height 1 with just the share's own work.
+    /// Does NOT go through organise_header, so it avoids candidate
+    /// chain side effects.
+    pub fn store_with_valid_metadata(&self, share: &ShareBlock) {
+        let blockhash = share.block_hash();
+        let share_work = share.header.get_work();
+        let (height, chain_work) = match self.get_block_metadata(&share.header.prev_share_blockhash)
+        {
+            Ok(parent_metadata) => {
+                let parent_height = parent_metadata.expected_height.unwrap_or_default();
+                (parent_height + 1, parent_metadata.chain_work + share_work)
+            }
+            Err(_) => (1, share_work),
+        };
+        let mut batch = Store::get_write_batch();
+        self.add_share_block(share, true, &mut batch).unwrap();
+        self.set_height_to_blockhash(&blockhash, height, &mut batch)
+            .unwrap();
+        let metadata = BlockMetadata {
+            expected_height: Some(height),
+            chain_work,
+            status: Status::Valid,
+        };
+        self.update_block_metadata(&blockhash, &metadata, &mut batch)
+            .unwrap();
+        self.commit_batch(batch).unwrap();
+    }
+
+    /// Create Valid metadata for a share without storing its block data.
+    ///
+    /// Used to set up metadata for intermediate shares so that
+    /// downstream children can compute their cumulative height and work
+    /// correctly, even when the intermediate share has not arrived yet
+    /// in the test scenario.
+    pub fn create_valid_metadata_only(&self, share: &ShareBlock) {
+        let blockhash = share.block_hash();
+        let share_work = share.header.get_work();
+        let (height, chain_work) = match self.get_block_metadata(&share.header.prev_share_blockhash)
+        {
+            Ok(parent_metadata) => {
+                let parent_height = parent_metadata.expected_height.unwrap_or_default();
+                (parent_height + 1, parent_metadata.chain_work + share_work)
+            }
+            Err(_) => (1, share_work),
+        };
+        let mut batch = Store::get_write_batch();
+        self.set_height_to_blockhash(&blockhash, height, &mut batch)
+            .unwrap();
+        let metadata = BlockMetadata {
+            expected_height: Some(height),
+            chain_work,
+            status: Status::Valid,
+        };
+        self.update_block_metadata(&blockhash, &metadata, &mut batch)
+            .unwrap();
+        self.commit_batch(batch).unwrap();
     }
 }
 
@@ -310,45 +419,11 @@ mod tests {
         assert_eq!(store.get_genesis_blockhash(), Some(genesis_hash));
         assert_eq!(store.get_chain_tip().unwrap(), genesis_hash);
 
-        // Add and organise share2 (extends confirmed to height 1)
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(
-                &share2,
-                1,
-                share1.header.get_work() + share2.header.get_work(),
-                true,
-                &mut batch,
-            )
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        // Push share2 to confirmed (extends confirmed to height 1)
+        store.push_to_confirmed_chain(&share2, true).unwrap();
 
-        let mut batch = Store::get_write_batch();
-        store.organise_header(&share2.header, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-        let mut batch = Store::get_write_batch();
-        store.organise_block(&mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Add and organise share3 (extends confirmed to height 2)
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(
-                &share3,
-                2,
-                share1.header.get_work() + share2.header.get_work() + share3.header.get_work(),
-                true,
-                &mut batch,
-            )
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        let mut batch = Store::get_write_batch();
-        store.organise_header(&share3.header, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-        let mut batch = Store::get_write_batch();
-        store.organise_block(&mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
+        // Push share3 to confirmed (extends confirmed to height 2)
+        store.push_to_confirmed_chain(&share3, true).unwrap();
 
         // Test initialization from store
         store.init_chain_state_from_store(genesis_hash).unwrap();

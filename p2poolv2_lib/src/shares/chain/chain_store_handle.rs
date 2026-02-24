@@ -317,7 +317,6 @@ impl ChainStoreHandle {
         debug!("Adding share to chain: {:?}", share.block_hash());
 
         let blockhash = share.block_hash();
-        let prev_share_blockhash = share.header.prev_share_blockhash;
         let share_work = share.header.get_work();
         debug!("Share work: {}", share_work);
 
@@ -327,29 +326,8 @@ impl ChainStoreHandle {
             return Ok(());
         }
 
-        // Calculate height and chain work
-        let (new_height, new_chain_work) = match self
-            .store_handle
-            .store()
-            .get_block_metadata(&prev_share_blockhash)
-        {
-            Ok(prev_metadata) => {
-                let prev_height = prev_metadata.expected_height.unwrap_or_default();
-                let new_chain_work = prev_metadata.chain_work + share_work;
-                (prev_height + 1, new_chain_work)
-            }
-            Err(_) => (1, share_work),
-        };
-
-        debug!(
-            "Adding share to store: {:?} at height: {}",
-            blockhash, new_height
-        );
-
         // Store the share
-        self.store_handle
-            .add_share_block(share, new_height, new_chain_work, confirm_txs)
-            .await
+        self.store_handle.add_share_block(share, confirm_txs).await
     }
 
     /// Calculate work over PPLNS window.

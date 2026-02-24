@@ -409,8 +409,6 @@ mod tests {
     use bitcoin::Work;
     use tempfile::tempdir;
 
-    // ── increment_top_candidate tests ────────────────────────────────
-
     #[test]
     fn test_increment_top_candidate_sets_initial_top_from_height() {
         let temp_dir = tempdir().unwrap();
@@ -486,46 +484,39 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
         let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695791)
             .work(1)
             .build();
         let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
             .nonce(0xe9695792)
             .work(2)
             .build();
 
-        // Make share1 candidate at height 0
-        let mut batch = Store::get_write_batch();
-        let mut metadata1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), false, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share1.block_hash(), 0, &mut metadata1, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        // Make share1 candidate at height 1
+        store.push_to_candidate_chain(&share1).unwrap();
 
         // Verify we can retrieve it
-        let candidate = store.get_candidate_at_height(0).unwrap();
+        let candidate = store.get_candidate_at_height(1).unwrap();
         assert_eq!(candidate, share1.block_hash());
 
-        // Make share2 candidate at height 1
-        let mut batch = Store::get_write_batch();
-        let mut metadata2 = store
-            .add_share_block(&share2, 2, share2.header.get_work(), false, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share2.block_hash(), 1, &mut metadata2, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        // Make share2 candidate at height 2
+        store.push_to_candidate_chain(&share2).unwrap();
 
         // Verify both heights
         assert_eq!(
-            store.get_candidate_at_height(0).unwrap(),
+            store.get_candidate_at_height(1).unwrap(),
             share1.block_hash()
         );
         assert_eq!(
-            store.get_candidate_at_height(1).unwrap(),
+            store.get_candidate_at_height(2).unwrap(),
             share2.block_hash()
         );
 
@@ -533,84 +524,87 @@ mod tests {
         assert!(store.get_candidate_at_height(999).is_err());
 
         // Top candidate height is changed
-        assert_eq!(store.get_top_candidate_height().unwrap(), 1);
+        assert_eq!(store.get_top_candidate_height().unwrap(), 2);
 
         // Top candidate is changed
         let top = store.get_top_candidate().unwrap();
         assert_eq!(top.hash, share2.block_hash());
-        assert_eq!(top.height, 1);
-        assert_eq!(top.work, share2.header.get_work());
+        assert_eq!(top.height, 2);
     }
 
     #[test]
-    fn test_append_to_candidate_on_overwrite_previous_should_error() {
-        // Each height should only have one candidate - new candidates replace old ones
+    fn test_append_to_candidate_on_overwrite_previous_should_not_extend() {
+        // Two sibling shares at the same height: push_to_candidate_chain should not
+        // extend the candidate chain for the second share (equal work, same
+        // height as existing candidate).
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
-        let share1 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        let share2 = TestShareBlockBuilder::new().nonce(0xe9695792).build();
-
-        // Add shares first
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
         let mut batch = Store::get_write_batch();
-        let mut metadata1 = store
-            .add_share_block(&share1, 0, share1.header.get_work(), false, &mut batch)
-            .unwrap();
-        let mut metadata2 = store
-            .add_share_block(&share2, 0, share2.header.get_work(), false, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share1.block_hash(), 0, &mut metadata1, &mut batch)
-            .unwrap();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695791)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+
+        // Organise share1 -- becomes candidate at height 1
+        store.push_to_candidate_chain(&share1).unwrap();
+
         assert_eq!(
-            store.get_candidate_at_height(0).unwrap(),
+            store.get_candidate_at_height(1).unwrap(),
             share1.block_hash()
         );
 
-        // Make share2 candidate at same height - should error (height mismatch)
-        let mut batch = Store::get_write_batch();
-        let result =
-            store.append_to_candidates(&share2.block_hash(), 0, &mut metadata2, &mut batch);
-        assert!(result.is_err());
+        // Organise share2 at same height with equal work -- should not extend or reorg
+        let result = store.push_to_candidate_chain(&share2).unwrap();
+        assert!(result.is_none());
     }
 
     #[test]
-    fn test_append_to_candidate_does_not_update_top_when_height_skips() {
+    fn test_push_to_candidate_chain_does_not_extend_when_parent_is_not_top_candidate() {
+        // A share whose parent is not the current top candidate and
+        // whose cumulative work is not greater should not extend or
+        // reorg the candidate chain.
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
-        let share0 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        let share2 = TestShareBlockBuilder::new().nonce(0xe9695792).build();
-
-        // Add shares first
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
         let mut batch = Store::get_write_batch();
-        let mut metadata0 = store
-            .add_share_block(&share0, 0, share0.header.get_work(), false, &mut batch)
-            .unwrap();
-        let mut metadata2 = store
-            .add_share_block(&share2, 2, share2.header.get_work(), false, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share0.block_hash(), 0, &mut metadata0, &mut batch)
-            .unwrap();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Verify top candidate height is 0
-        assert_eq!(store.get_top_candidate_height().unwrap(), 0);
+        // share1 extends genesis to height 1
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695791)
+            .build();
+        store.push_to_candidate_chain(&share1).unwrap();
 
-        // Make share2 candidate at height 2 (skipping height 1)
-        let mut batch = Store::get_write_batch();
-        let result =
-            store.append_to_candidates(&share2.block_hash(), 2, &mut metadata2, &mut batch);
-        assert!(result.is_err());
+        // share2 extends share1 to height 2
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share2).unwrap();
 
-        // Top candidate height should still be 0 (not updated because we skipped height 1)
-        assert_eq!(store.get_top_candidate_height().unwrap(), 0);
+        assert_eq!(store.get_top_candidate_height().unwrap(), 2);
 
-        // The candidate at height 2 is not there
-        assert!(store.get_candidate_at_height(2).is_err());
+        // orphan_share has an unknown parent (not on the chain) so
+        // push_to_candidate_chain computes height 1 with only its own work,
+        // which is not enough to extend or reorg.
+        let orphan_share = TestShareBlockBuilder::new().nonce(0xe9695793).build();
+        let result = store.push_to_candidate_chain(&orphan_share).unwrap();
+
+        // Should not change the candidate chain
+        assert!(result.is_none());
+        assert_eq!(store.get_top_candidate_height().unwrap(), 2);
     }
 
     // ── get_candidates / get_candidates_chain tests ───────────────────
@@ -620,48 +614,46 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
-        let share0 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        let share1 = TestShareBlockBuilder::new().nonce(0xe9695792).build();
-        let share2 = TestShareBlockBuilder::new().nonce(0xe9695793).build();
-
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
         let mut batch = Store::get_write_batch();
-        let mut m0 = store
-            .add_share_block(&share0, 0, share0.header.get_work(), false, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share0.block_hash(), 0, &mut m0, &mut batch)
-            .unwrap();
-        let mut m1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), false, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share1.block_hash(), 1, &mut m1, &mut batch)
-            .unwrap();
-        let mut m2 = store
-            .add_share_block(&share2, 2, share2.header.get_work(), false, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share2.block_hash(), 2, &mut m2, &mut batch)
-            .unwrap();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Full range
-        let result = store.get_candidates(0, 2).unwrap();
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[0], (0, share0.block_hash()));
-        assert_eq!(result[1], (1, share1.block_hash()));
-        assert_eq!(result[2], (2, share2.block_hash()));
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695791)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
 
-        // Sub-range
-        let result = store.get_candidates(1, 2).unwrap();
-        assert_eq!(result.len(), 2);
+        // Add and organise each share sequentially
+        for share in [&share1, &share2, &share3] {
+            store.push_to_candidate_chain(share).unwrap();
+        }
+
+        // Full range (heights 1, 2, 3)
+        let result = store.get_candidates(1, 3).unwrap();
+        assert_eq!(result.len(), 3);
         assert_eq!(result[0], (1, share1.block_hash()));
         assert_eq!(result[1], (2, share2.block_hash()));
+        assert_eq!(result[2], (3, share3.block_hash()));
+
+        // Sub-range
+        let result = store.get_candidates(2, 3).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], (2, share2.block_hash()));
+        assert_eq!(result[1], (3, share3.block_hash()));
 
         // Single height
-        let result = store.get_candidates(1, 1).unwrap();
+        let result = store.get_candidates(2, 2).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], (1, share1.block_hash()));
+        assert_eq!(result[0], (2, share2.block_hash()));
     }
 
     #[test]
@@ -692,20 +684,10 @@ mod tests {
             .nonce(0xe9695793)
             .build();
 
-        let mut batch = Store::get_write_batch();
-        let mut m1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share1.block_hash(), 1, &mut m1, &mut batch)
-            .unwrap();
-        let mut m2 = store
-            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share2.block_hash(), 2, &mut m2, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        // Add and organise each share sequentially
+        for share in [&share1, &share2] {
+            store.push_to_candidate_chain(share).unwrap();
+        }
 
         let top = store.get_top_candidate().ok();
         let result = store
@@ -747,14 +729,7 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-        let mut batch = Store::get_write_batch();
-        let mut metadata = store
-            .add_share_block(&share, 1, share.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share.block_hash(), 1, &mut metadata, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share).unwrap();
 
         assert!(store.is_candidate(&share.block_hash()));
     }
@@ -769,15 +744,13 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Add share but don't make it a candidate
+        // Add share but don't make it a candidate (no push_to_candidate_chain call)
         let share = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share, 1, share.header.get_work(), true, &mut batch)
-            .unwrap();
+        store.add_share_block(&share, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         assert!(!store.is_candidate(&share.block_hash()));
@@ -1089,15 +1062,8 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-        let mut batch = Store::get_write_batch();
-        let mut m = store
-            .add_share_block(&child, 1, child.header.get_work(), true, &mut batch)
-            .unwrap();
-        // Mark as Candidate — should be skipped by pick_best_child
-        store
-            .append_to_candidates(&child.block_hash(), 1, &mut m, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        // Mark as Candidate via push_to_candidate_chain -- should be skipped by pick_best_child
+        store.push_to_candidate_chain(&child).unwrap();
 
         let result = store
             .pick_best_child(&[child.block_hash()], &genesis.block_hash(), 1)
@@ -1119,13 +1085,18 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
+        // Use push_to_candidate_chain to set metadata (height 1, status Candidate)
+        // then manually reset status to Valid so pick_best_child sees it
+        store.push_to_candidate_chain(&child).unwrap();
+        let mut metadata = store.get_block_metadata(&child.block_hash()).unwrap();
+        metadata.status = Status::Valid;
         let mut batch = Store::get_write_batch();
         store
-            .add_share_block(&child, 1, child.header.get_work(), true, &mut batch)
+            .update_block_metadata(&child.block_hash(), &metadata, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Ask for height 5 — child is at height 1
+        // Ask for height 5 -- child is at height 1
         let result = store
             .pick_best_child(&[child.block_hash()], &genesis.block_hash(), 5)
             .unwrap();
@@ -1147,9 +1118,13 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
+        // Use push_to_candidate_chain to set metadata, then reset status to Valid
+        store.push_to_candidate_chain(&child).unwrap();
+        let mut metadata = store.get_block_metadata(&child.block_hash()).unwrap();
+        metadata.status = Status::Valid;
         let mut batch = Store::get_write_batch();
         store
-            .add_share_block(&child, 1, child.header.get_work(), true, &mut batch)
+            .update_block_metadata(&child.block_hash(), &metadata, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1174,19 +1149,16 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&child, 1, child.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        // Store block data and create Valid metadata directly
+        store.store_with_valid_metadata(&child);
 
         let result = store
             .pick_best_child(&[child.block_hash()], &genesis.block_hash(), 1)
             .unwrap();
         assert!(result.is_some());
-        let (hash, metadata) = result.unwrap();
+        let (hash, result_metadata) = result.unwrap();
         assert_eq!(hash, child.block_hash());
-        assert_eq!(metadata.expected_height, Some(1));
+        assert_eq!(result_metadata.expected_height, Some(1));
     }
 
     #[test]
@@ -1210,19 +1182,12 @@ mod tests {
             .nonce(0xe9695793)
             .build();
 
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&light, 1, light.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        // Store block data and create Valid metadata directly (avoids
+        // candidate chain side effects from push_to_candidate_chain).
+        store.store_with_valid_metadata(&light);
+        store.store_with_valid_metadata(&heavy);
 
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&heavy, 1, heavy.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Both are valid children at height 1 — heavy has more work
+        // Both are valid children at height 1 -- heavy has more work
         let result = store
             .pick_best_child(
                 &[light.block_hash(), heavy.block_hash()],
@@ -1232,7 +1197,7 @@ mod tests {
             .unwrap();
         assert_eq!(result.unwrap().0, heavy.block_hash());
 
-        // Order shouldn't matter — reverse the input
+        // Order should not matter -- reverse the input
         let result = store
             .pick_best_child(
                 &[heavy.block_hash(), light.block_hash()],
@@ -1253,46 +1218,34 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // valid_child: Status::Valid (default from add_share)
+        // valid_child: stored with Status::Valid
         let valid_child = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .work(1)
             .nonce(0xe9695792)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(
-                &valid_child,
-                1,
-                valid_child.header.get_work(),
-                true,
-                &mut batch,
-            )
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&valid_child);
 
-        // candidate_child: marked Candidate (more work but ineligible)
+        // candidate_child: stored with Status::Valid initially, then set to Candidate
         let candidate_child = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .work(3)
             .nonce(0xe9695793)
             .build();
-        let mut batch = Store::get_write_batch();
-        let mut m = store
-            .add_share_block(
-                &candidate_child,
-                1,
-                candidate_child.header.get_work(),
-                true,
-                &mut batch,
-            )
+        store.store_with_valid_metadata(&candidate_child);
+
+        // Override candidate_child status to Candidate (more work but ineligible)
+        let mut metadata = store
+            .get_block_metadata(&candidate_child.block_hash())
             .unwrap();
+        metadata.status = Status::Candidate;
+        let mut batch = Store::get_write_batch();
         store
-            .append_to_candidates(&candidate_child.block_hash(), 1, &mut m, &mut batch)
+            .update_block_metadata(&candidate_child.block_hash(), &metadata, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        // candidate_child has more work but is Candidate status — should be skipped
+        // candidate_child has more work but is Candidate status -- should be skipped
         let result = store
             .pick_best_child(
                 &[candidate_child.block_hash(), valid_child.block_hash()],

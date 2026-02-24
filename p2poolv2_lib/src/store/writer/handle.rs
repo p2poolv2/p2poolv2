@@ -195,16 +195,12 @@ impl StoreHandle {
     pub async fn add_share_block(
         &self,
         share: ShareBlock,
-        height: u32,
-        chain_work: Work,
         confirm_txs: bool,
     ) -> Result<(), StoreError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.write_tx
             .send(WriteCommand::AddShareBlock {
                 share,
-                height,
-                chain_work,
                 confirm_txs,
                 reply: reply_tx,
             })
@@ -348,7 +344,7 @@ mockall::mock! {
         // Serialized writes (async)
         pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;
         pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
-        pub async fn add_share_block(&self, share: ShareBlock, height: u32, chain_work: Work, confirm_txs: bool) -> Result<(), StoreError>;
+        pub async fn add_share_block(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), StoreError>;
         pub async fn setup_genesis(&self, genesis: ShareBlock) -> Result<(), StoreError>;
         pub async fn init_chain_state_from_store(&self, genesis_hash: BlockHash) -> Result<(), StoreError>;
         pub async fn add_job(&self, timestamp: u64, serialized_notify: String) -> Result<(), StoreError>;

@@ -91,8 +91,6 @@ pub enum WriteCommand {
     /// Add a share to the store
     AddShareBlock {
         share: ShareBlock,
-        height: u32,
-        chain_work: Work,
         confirm_txs: bool,
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
@@ -192,8 +190,6 @@ impl StoreWriter {
         match cmd {
             WriteCommand::AddShareBlock {
                 share,
-                height,
-                chain_work,
                 confirm_txs,
                 reply,
             } => {
@@ -201,7 +197,7 @@ impl StoreWriter {
                 let mut batch = Store::get_write_batch();
                 let result = self
                     .store
-                    .add_share_block(&share, height, chain_work, confirm_txs, &mut batch)
+                    .add_share_block(&share, confirm_txs, &mut batch)
                     .and_then(|_| self.store.commit_batch(batch).map_err(StoreError::from));
                 let _ = reply.send(result);
             }
