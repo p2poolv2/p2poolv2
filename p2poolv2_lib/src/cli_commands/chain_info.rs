@@ -26,6 +26,8 @@ struct ChainInfo {
     chain_tip_height: Option<u32>,
     total_work: String,
     chain_tip_blockhash: String,
+    top_candidate_height: Option<u32>,
+    top_candidate_blockhash: Option<String>,
     total_shares: u64,
 }
 
@@ -51,6 +53,15 @@ pub fn execute(chain_store_handle: ChainStoreHandle) -> Result<(), Box<dyn Error
     // Get total work (difficulty)
     let total_work = format!("{:#x}", chain_store_handle.get_total_work()?);
 
+    // Get top candidate info
+    let top_candidate = chain_store_handle
+        .store_handle()
+        .store()
+        .get_top_candidate()
+        .ok();
+    let top_candidate_height = top_candidate.as_ref().map(|top| top.height);
+    let top_candidate_blockhash = top_candidate.as_ref().map(|top| top.hash.to_string());
+
     // Count total number of shares in the chain
     let mut total_shares = 0;
     for h in 0..=chain_tip_height {
@@ -68,6 +79,8 @@ pub fn execute(chain_store_handle: ChainStoreHandle) -> Result<(), Box<dyn Error
         chain_tip_height: Some(chain_tip_height),
         total_work,
         chain_tip_blockhash,
+        top_candidate_height,
+        top_candidate_blockhash,
         total_shares,
     };
 

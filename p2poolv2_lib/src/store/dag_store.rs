@@ -812,11 +812,7 @@ mod tests {
 
         // Test with stop_blockhash - stop at share_a includes share_a
         let descendants = store
-            .get_descendant_blockhashes(
-                &genesis.block_hash(),
-                &share_a.block_hash(),
-                10,
-            )
+            .get_descendant_blockhashes(&genesis.block_hash(), &share_a.block_hash(), 10)
             .unwrap();
         assert_eq!(descendants.len(), 1);
         assert_eq!(descendants[0], share_a.block_hash());
