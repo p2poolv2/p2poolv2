@@ -20,7 +20,8 @@ use std::collections::VecDeque;
 
 mod candidate;
 mod confirmed;
-pub mod organise_share;
+pub mod organise_block;
+pub mod organise_header;
 
 const BRANCH_INITIAL_CAPACITY: usize = 16;
 

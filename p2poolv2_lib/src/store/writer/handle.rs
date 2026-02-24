@@ -268,15 +268,28 @@ impl StoreHandle {
         reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
     }
 
-    /// Organise a share: update candidate and confirmed indexes atomically.
-    /// Returns the confirmed chain height after organising, if changed.
-    pub async fn organise_share(&self, share: ShareBlock) -> Result<Option<u32>, StoreError> {
+    /// Organise a header into the candidate chain.
+    /// Returns the new candidate height and chain if changed.
+    pub async fn organise_header(
+        &self,
+        header: ShareHeader,
+    ) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.write_tx
-            .send(WriteCommand::OrganiseShare {
-                share,
+            .send(WriteCommand::OrganiseHeader {
+                header,
                 reply: reply_tx,
             })
+            .map_err(|_| StoreError::ChannelClosed)?;
+        reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
+    }
+
+    /// Promote candidates to confirmed.
+    /// Returns the confirmed chain height after organising, if changed.
+    pub async fn organise_block(&self) -> Result<Option<u32>, StoreError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.write_tx
+            .send(WriteCommand::OrganiseBlock { reply: reply_tx })
             .map_err(|_| StoreError::ChannelClosed)?;
         reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
     }
@@ -333,7 +346,8 @@ mockall::mock! {
         pub fn get_children_blockhashes(&self, blockhash: &BlockHash) -> Result<Option<Vec<BlockHash>>, StoreError>;
 
         // Serialized writes (async)
-        pub async fn organise_share(&self, share: ShareBlock) -> Result<Option<u32>, StoreError>;
+        pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;
+        pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
         pub async fn add_share_block(&self, share: ShareBlock, height: u32, chain_work: Work, confirm_txs: bool) -> Result<(), StoreError>;
         pub async fn setup_genesis(&self, genesis: ShareBlock) -> Result<(), StoreError>;
         pub async fn init_chain_state_from_store(&self, genesis_hash: BlockHash) -> Result<(), StoreError>;

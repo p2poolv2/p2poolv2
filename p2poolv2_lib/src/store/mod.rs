@@ -324,7 +324,10 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         let mut batch = Store::get_write_batch();
-        store.organise_share(share2.clone(), &mut batch).unwrap();
+        store.organise_header(&share2.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let mut batch = Store::get_write_batch();
+        store.organise_block(&mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Add and organise share3 (extends confirmed to height 2)
@@ -341,7 +344,10 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         let mut batch = Store::get_write_batch();
-        store.organise_share(share3.clone(), &mut batch).unwrap();
+        store.organise_header(&share3.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let mut batch = Store::get_write_batch();
+        store.organise_block(&mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Test initialization from store
