@@ -462,7 +462,10 @@ mod tests {
     #[tokio::test]
     async fn test_handle_response_share_headers() {
         let peer_id = libp2p::PeerId::random();
-        let chain_store_handle = ChainStoreHandle::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_organise_header()
+            .returning(|_| Ok(None));
         let time_provider = TestTimeProvider::new(SystemTime::now());
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 

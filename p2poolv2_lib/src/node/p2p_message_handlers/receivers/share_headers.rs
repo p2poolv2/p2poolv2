@@ -54,6 +54,10 @@ pub async fn handle_share_headers<C: Send + Sync>(
         info!("Peer sent invalid share headers. We should try a different peer");
     }
 
+    for header in &share_headers {
+        chain_store_handle.organise_header(header.clone()).await?;
+    }
+
     // When less than max headers are received, we have reached the
     // end of the chain. Even if the chain is shorter than MAX_HEADERS_IN_RESPONSE
     if share_headers.len() < MAX_HEADERS_IN_RESPONSE {
@@ -97,7 +101,10 @@ mod tests {
     #[tokio::test]
     async fn test_fewer_than_max_headers_does_not_send_getheaders() {
         let peer_id = libp2p::PeerId::random();
-        let chain_store_handle = ChainStoreHandle::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_organise_header()
+            .returning(|_| Ok(None));
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
         let share_headers = build_share_headers(10);
@@ -129,7 +136,10 @@ mod tests {
     #[tokio::test]
     async fn test_max_headers_sends_getheaders_to_same_peer() {
         let peer_id = libp2p::PeerId::random();
-        let chain_store_handle = ChainStoreHandle::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_organise_header()
+            .returning(|_| Ok(None));
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
         let share_headers = build_share_headers(MAX_HEADERS_IN_RESPONSE);
