@@ -144,14 +144,7 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-        let mut batch = Store::get_write_batch();
-        let mut metadata = store
-            .add_share_block(&share, 1, share.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share.block_hash(), 1, &mut metadata, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share).unwrap();
 
         // Branch should contain just the share since it is already a candidate
         let branch = store
@@ -177,14 +170,7 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-        let mut batch = Store::get_write_batch();
-        let mut metadata1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share1.block_hash(), 1, &mut metadata1, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share1).unwrap();
 
         // share2 extends share1 but is NOT on candidate chain
         let share2 = TestShareBlockBuilder::new()
@@ -192,9 +178,7 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
-            .unwrap();
+        store.add_share_block(&share2, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // share3 extends share2 and is NOT on candidate chain
@@ -203,9 +187,7 @@ mod tests {
             .nonce(0xe9695794)
             .build();
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share3, 3, share3.header.get_work(), true, &mut batch)
-            .unwrap();
+        store.add_share_block(&share3, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Branch from share3 should be [share1, share2, share3]
@@ -234,23 +216,14 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-        let mut batch = Store::get_write_batch();
-        let mut metadata1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share1.block_hash(), 1, &mut metadata1, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share1).unwrap();
 
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
-            .unwrap();
+        store.add_share_block(&share2, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Branch from share2 should be just [share1, share2]

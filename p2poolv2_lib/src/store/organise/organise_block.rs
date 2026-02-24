@@ -64,20 +64,6 @@ mod tests {
     use crate::test_utils::TestShareBlockBuilder;
     use tempfile::tempdir;
 
-    /// Helper: organise a header into the candidate chain and commit.
-    fn organise_header_and_commit(store: &Store, header: &crate::shares::share_block::ShareHeader) {
-        let mut batch = Store::get_write_batch();
-        store.organise_header(header, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-    }
-
-    /// Helper: promote candidates to confirmed and commit.
-    fn organise_block_and_commit(store: &Store) {
-        let mut batch = Store::get_write_batch();
-        store.organise_block(&mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-    }
-
     // -- organise_block integration tests --
 
     #[test]
@@ -90,22 +76,16 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Add a child share so its metadata is available
+        // Add a child share and push it through candidate and confirmed chains
         let share = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share, 1, share.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
 
         // setup_genesis does not call append_to_candidate, so no top candidate
         assert!(store.get_top_candidate().is_err());
 
-        organise_header_and_commit(&store, &share.header);
-        organise_block_and_commit(&store);
+        store.push_to_confirmed_chain(&share, true).unwrap();
 
         // Candidate coexists with confirmed
         assert!(store.get_top_candidate().is_ok());
@@ -126,26 +106,26 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Add share1 (child of genesis) at height 1 and make it a candidate
+        // Add share1 (child of genesis) at height 1 and make it a candidate.
+        // Store the block first so chain walks can find its header.
         let share1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share1.block_hash(), 1, &mut metadata1, &mut batch)
-            .unwrap();
+        store.add_share_block(&share1, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share1).unwrap();
 
+        // Work in TopResult is cumulative: genesis_work + share1_work
+        let genesis_work = genesis.header.get_work();
+        let share1_cumulative_work = genesis_work + share1.header.get_work();
         assert_eq!(
             store.get_top_candidate().ok(),
             Some(TopResult {
                 hash: share1.block_hash(),
                 height: 1,
-                work: share1.header.get_work()
+                work: share1_cumulative_work,
             })
         );
 
@@ -155,20 +135,9 @@ mod tests {
             .work(2)
             .nonce(0xe9695793)
             .build();
-        let mut batch = Store::get_write_batch();
         store
-            .add_share_block(
-                &share_to_organise,
-                2,
-                share_to_organise.header.get_work(),
-                true,
-                &mut batch,
-            )
+            .push_to_confirmed_chain(&share_to_organise, true)
             .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        organise_header_and_commit(&store, &share_to_organise.header);
-        organise_block_and_commit(&store);
 
         // Candidates coexist with confirmed
         assert!(store.get_top_candidate().is_ok());
@@ -183,6 +152,13 @@ mod tests {
         assert_eq!(store.get_top_confirmed_height().unwrap(), 2);
     }
 
+    /// Pushing a share that neither extends nor reorgs the candidate
+    /// chain leaves the chain unchanged.
+    ///
+    /// Scenario: genesis -> share1(h:1) -> share2(h:2) as candidates.
+    /// Then push orphan_share (unknown parent, h:1, low work) which
+    /// cannot extend (parent is not top candidate) and cannot reorg
+    /// (cumulative work is less than the top candidate).
     #[test]
     fn test_organise_block_noop_when_height_condition_not_met() {
         let temp_dir = tempdir().unwrap();
@@ -193,48 +169,34 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Make genesis a candidate at height 0
-        let mut batch = Store::get_write_batch();
-        let mut genesis_metadata = store.get_block_metadata(&genesis.block_hash()).unwrap();
-        store
-            .append_to_candidates(&genesis.block_hash(), 0, &mut genesis_metadata, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        assert_eq!(
-            store.get_top_candidate().ok(),
-            Some(TopResult {
-                hash: genesis.block_hash(),
-                height: 0,
-                work: genesis.header.get_work()
-            })
-        );
-
-        // Add share (child of genesis) at height 1.
-        let share = TestShareBlockBuilder::new()
+        // Build candidate chain: share1(h:1) -> share2(h:2)
+        let share1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share, 1, share.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share1).unwrap();
 
-        // organise_header does not extend (conditions not met)
-        organise_header_and_commit(&store, &share.header);
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.push_to_candidate_chain(&share2).unwrap();
 
-        // No candidate at height 1
-        assert!(store.get_candidate_at_height(1).is_err());
-        // Top candidate unchanged
-        assert_eq!(
-            store.get_top_candidate().ok(),
-            Some(TopResult {
-                hash: genesis.block_hash(),
-                height: 0,
-                work: genesis.header.get_work()
-            })
-        );
+        let top_before = store.get_top_candidate().unwrap();
+        assert_eq!(top_before.hash, share2.block_hash());
+        assert_eq!(top_before.height, 2);
+
+        // orphan_share has an unknown parent so organise_header computes
+        // height 1 with only its own work. That work is less than the
+        // top candidate cumulative work, so neither extend nor reorg fires.
+        let orphan_share = TestShareBlockBuilder::new().nonce(0xe9695794).build();
+        let result = store.push_to_candidate_chain(&orphan_share).unwrap();
+
+        // Candidate chain unchanged
+        assert!(result.is_none());
+        let top_after = store.get_top_candidate().unwrap();
+        assert_eq!(top_after.hash, share2.block_hash());
+        assert_eq!(top_after.height, 2);
     }
 
     // -- reorg_candidate integration tests --
@@ -255,64 +217,50 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // share1: child of genesis, candidate at h:1
+        // share1: child of genesis, candidate at h:1.
+        // Store block first so reorg chain walks can find its header.
         let share1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share1.block_hash(), 1, &mut metadata1, &mut batch)
-            .unwrap();
+        store.add_share_block(&share1, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share1).unwrap();
 
         // share2: child of share1, candidate at h:2
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .nonce(0xe9695793)
             .build();
-        let mut batch = Store::get_write_batch();
-        let mut metadata2 = store
-            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share2.block_hash(), 2, &mut metadata2, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share2).unwrap();
 
+        // Work in TopResult is cumulative: genesis + share1 + share2
+        let genesis_work = genesis.header.get_work();
+        let share2_cumulative_work =
+            genesis_work + share1.header.get_work() + share2.header.get_work();
         assert_eq!(
             store.get_top_candidate().ok(),
             Some(TopResult {
                 hash: share2.block_hash(),
                 height: 2,
-                work: share2.header.get_work()
+                work: share2_cumulative_work,
             })
         );
 
-        // fork_share: child of share1, at h:2, with MORE cumulative work
+        // fork_share: child of share1, at h:2, with MORE cumulative work.
+        // Store block and create Valid metadata so reorg_candidate can
+        // read the metadata from committed DB state (the WriteBatch
+        // inside organise_header is not yet committed when reorg runs).
         let fork_share = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .work(2)
             .nonce(0xe9695794)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(
-                &fork_share,
-                2,
-                fork_share.header.get_work(),
-                true,
-                &mut batch,
-            )
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&fork_share);
 
-        // organise_header reorgs candidate chain, organise_block promotes
-        organise_header_and_commit(&store, &fork_share.header);
-        organise_block_and_commit(&store);
+        // push_to_confirmed_chain reorgs candidate chain and promotes to confirmed
+        store.push_to_confirmed_chain(&fork_share, true).unwrap();
 
         // After reorg + confirmed promotion: candidate chain coexists
         assert!(store.get_top_candidate().is_ok());
@@ -347,80 +295,62 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Build candidate chain: share1(h:1) -> share2(h:2) -> share3(h:3)
+        // Build candidate chain: share1(h:1) -> share2(h:2) -> share3(h:3).
+        // Store share1 block so reorg chain walks can find its header.
         let share1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share1.block_hash(), 1, &mut metadata1, &mut batch)
-            .unwrap();
+        store.add_share_block(&share1, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share1).unwrap();
 
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .nonce(0xe9695793)
             .build();
-        let mut batch = Store::get_write_batch();
-        let mut metadata2 = store
-            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share2.block_hash(), 2, &mut metadata2, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share2).unwrap();
 
         let share3 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share2.block_hash().to_string())
             .nonce(0xe9695794)
             .build();
-        let mut batch = Store::get_write_batch();
-        let mut metadata3 = store
-            .add_share_block(&share3, 3, share3.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share3.block_hash(), 3, &mut metadata3, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share3).unwrap();
 
+        // Work in TopResult is cumulative: genesis + share1 + share2 + share3
+        let genesis_work = genesis.header.get_work();
+        let share3_cumulative_work = genesis_work
+            + share1.header.get_work()
+            + share2.header.get_work()
+            + share3.header.get_work();
         assert_eq!(
             store.get_top_candidate().ok(),
             Some(TopResult {
                 hash: share3.block_hash(),
                 height: 3,
-                work: share3.header.get_work()
+                work: share3_cumulative_work,
             })
         );
 
-        // Build fork: share1 -> fork2(h:2) -> fork3(h:3, more work)
+        // Build fork: share1 -> fork2(h:2) -> fork3(h:3, more work).
+        // Store both with Valid metadata so reorg_candidate can read
+        // their metadata from committed DB state.
         let fork2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .nonce(0xe9695795)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&fork2, 2, fork2.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&fork2);
 
         let fork3 = TestShareBlockBuilder::new()
             .prev_share_blockhash(fork2.block_hash().to_string())
             .work(2)
             .nonce(0xe9695796)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&fork3, 3, fork3.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&fork3);
 
-        // organise_header reorgs candidate chain, organise_block promotes
-        organise_header_and_commit(&store, &fork3.header);
-        organise_block_and_commit(&store);
+        // push_to_confirmed_chain reorgs candidate chain and promotes to confirmed
+        store.push_to_confirmed_chain(&fork3, true).unwrap();
 
         // After reorg + confirmed promotion: candidate chain coexists
         assert!(store.get_top_candidate().is_ok());
@@ -461,69 +391,43 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Build candidate chain: share1(h:1) -> share2(h:2) -> share3(h:3)
+        // Build candidate chain: share1(h:1) -> share2(h:2) -> share3(h:3).
+        // Store share1 block so reorg chain walks can find its header.
         let share1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share1.block_hash(), 1, &mut metadata1, &mut batch)
-            .unwrap();
+        store.add_share_block(&share1, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share1).unwrap();
 
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .nonce(0xe9695793)
             .build();
-        let mut batch = Store::get_write_batch();
-        let mut metadata2 = store
-            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share2.block_hash(), 2, &mut metadata2, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share2).unwrap();
 
         let share3 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share2.block_hash().to_string())
             .nonce(0xe9695794)
             .build();
-        let mut batch = Store::get_write_batch();
-        let mut metadata3 = store
-            .add_share_block(&share3, 3, share3.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share3.block_hash(), 3, &mut metadata3, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share3).unwrap();
 
         assert_eq!(store.get_top_candidate_height().ok(), Some(3));
 
-        // fork_share: child of share1, h:2, much more cumulative work
+        // fork_share: child of share1, h:2, much more cumulative work.
+        // Store block and create Valid metadata so reorg_candidate can
+        // read the metadata from committed DB state.
         let fork_share = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .work(2)
             .nonce(0xe9695795)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(
-                &fork_share,
-                2,
-                fork_share.header.get_work(),
-                true,
-                &mut batch,
-            )
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&fork_share);
 
-        // organise_header reorgs candidate chain, organise_block promotes
-        organise_header_and_commit(&store, &fork_share.header);
-        organise_block_and_commit(&store);
+        // push_to_confirmed_chain reorgs candidate chain and promotes to confirmed
+        store.push_to_confirmed_chain(&fork_share, true).unwrap();
 
         // After reorg + confirmed promotion: candidate chain coexists
         assert!(store.get_top_candidate().is_ok());
@@ -559,14 +463,7 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-        let mut batch = Store::get_write_batch();
-        let _metadata1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        organise_header_and_commit(&store, &share1.header);
-        organise_block_and_commit(&store);
+        store.push_to_confirmed_chain(&share1, true).unwrap();
 
         // share1 promoted to confirmed, candidate chain coexists
         assert!(store.get_top_candidate().is_ok());
@@ -582,14 +479,7 @@ mod tests {
             .work(2)
             .nonce(0xe9695793)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        organise_header_and_commit(&store, &share2.header);
-        organise_block_and_commit(&store);
+        store.push_to_confirmed_chain(&share2, true).unwrap();
 
         // candidate chain coexists with confirmed chain
         assert!(store.get_top_candidate().is_ok());
@@ -613,47 +503,37 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // share1: candidate at h:1
+        // share1: candidate at h:1.
+        // Store block first so confirmed extension can find its header.
         let share1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share1.block_hash(), 1, &mut metadata1, &mut batch)
-            .unwrap();
+        store.add_share_block(&share1, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share1).unwrap();
 
-        // share2: child of share1, NOT yet organised (will arrive later)
+        // share2: child of share1, NOT yet organised (will arrive later).
+        // Create metadata only so share3 can compute its cumulative
+        // height and work from share2.
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .work(2)
             .nonce(0xe9695793)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.create_valid_metadata_only(&share2);
 
-        // share3: child of share2, stored as Valid (arrived out of order)
+        // share3: child of share2, stored as Valid with metadata (arrived out of order)
         let share3 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share2.block_hash().to_string())
             .work(3)
             .nonce(0xe9695794)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share3, 3, share3.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&share3);
 
-        // Organise share2 header: extends candidate to h:2, forward walk picks up share3
-        organise_header_and_commit(&store, &share2.header);
-        organise_block_and_commit(&store);
+        // Push share2 to confirmed chain: extends candidate to h:2, forward walk picks up share3
+        store.push_to_confirmed_chain(&share2, true).unwrap();
 
         // All promoted to confirmed, candidate chain coexists
         assert!(store.get_top_candidate().is_ok());
@@ -688,26 +568,27 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // share1: candidate at h:1
+        // share1: candidate at h:1.
+        // Store block first so confirmed extension can find its header.
         let share1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share1.block_hash(), 1, &mut metadata1, &mut batch)
-            .unwrap();
+        store.add_share_block(&share1, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share1).unwrap();
 
-        // share2: gap filler (arrives last)
+        // share2: gap filler (arrives last).
+        // Create metadata only so share3 can compute its cumulative
+        // height and work from share2.
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .work(2)
             .nonce(0xe9695793)
             .build();
+        store.create_valid_metadata_only(&share2);
+
         // share3: child of share2
         let share3 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share2.block_hash().to_string())
@@ -721,28 +602,12 @@ mod tests {
             .nonce(0xe9695795)
             .build();
 
-        // Store share3 and share4 first (out of order), then share2
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share3, 3, share3.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        // Store share3 and share4 first (out of order) with Valid metadata
+        store.store_with_valid_metadata(&share3);
+        store.store_with_valid_metadata(&share4);
 
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share4, 4, share4.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Organise share2 header: extends to h:2, forward walk fills h:3 and h:4
-        organise_header_and_commit(&store, &share2.header);
-        organise_block_and_commit(&store);
+        // Push share2 to confirmed chain: extends to h:2, forward walk fills h:3 and h:4
+        store.push_to_confirmed_chain(&share2, true).unwrap();
 
         // All promoted to confirmed, candidate chain coexists
         assert!(store.get_top_candidate().is_ok());
@@ -780,67 +645,49 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // share1: candidate at h:1
+        // share1: candidate at h:1.
+        // Store block first so reorg chain walks and confirmed extension can find its header.
         let share1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share1.block_hash(), 1, &mut metadata1, &mut batch)
-            .unwrap();
+        store.add_share_block(&share1, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share1).unwrap();
 
         // share2: candidate at h:2
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .nonce(0xe9695793)
             .build();
-        let mut batch = Store::get_write_batch();
-        let mut metadata2 = store
-            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share2.block_hash(), 2, &mut metadata2, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share2).unwrap();
 
-        // fork: child of share1, h:2, more work
+        // fork: child of share1, h:2, more work.
+        // Store block first so reorg chain walk can find its header.
         let fork = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .work(2)
             .nonce(0xe9695794)
             .build();
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&fork, 2, fork.header.get_work(), true, &mut batch)
-            .unwrap();
+        store.add_share_block(&fork, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // fork_child: child of fork, h:3, stored as Valid
+        // fork_child: child of fork, h:3, stored as Valid with metadata.
+        // fork's metadata must exist for fork_child to compute correct
+        // cumulative height and work. Create fork's metadata only.
+        store.create_valid_metadata_only(&fork);
+
         let fork_child = TestShareBlockBuilder::new()
             .prev_share_blockhash(fork.block_hash().to_string())
             .work(3)
             .nonce(0xe9695795)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(
-                &fork_child,
-                3,
-                fork_child.header.get_work(),
-                true,
-                &mut batch,
-            )
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&fork_child);
 
-        // Organise fork header: reorg replaces share2, forward walk picks up fork_child
-        organise_header_and_commit(&store, &fork.header);
-        organise_block_and_commit(&store);
+        // Push fork to confirmed chain: reorg replaces share2, forward walk picks up fork_child
+        store.push_to_confirmed_chain(&fork, true).unwrap();
 
         // All promoted to confirmed, candidate chain coexists
         assert!(store.get_top_candidate().is_ok());
@@ -863,11 +710,15 @@ mod tests {
     /// Two children at the same height -- forward walk picks the one
     /// with more cumulative work.
     ///
-    /// Before: genesis(confirmed h:0), no candidates
-    ///         share1(Valid, h:1), share2a(Valid, h:2, low work),
-    ///         share2b(Valid, h:2, high work) all stored
-    /// Action: organise share1 (becomes candidate, forward walk from h:1)
-    /// After:  share2b selected, all promoted to confirmed
+    /// Setup: genesis(confirmed h:0)
+    ///        share1(stored with Valid metadata at h:1)
+    ///        share2a(Valid, h:2, low work) and share2b(Valid, h:2, high work)
+    ///        all stored with metadata before organising.
+    /// Action: push share1 to confirmed chain -- organise_header makes
+    ///         share1 candidate, forward walk discovers share2a and share2b,
+    ///         picks share2b (heaviest). Then organise_block promotes all
+    ///         to confirmed.
+    /// After:  share2b selected at h:2, all promoted to confirmed
     #[test]
     fn test_forward_walk_picks_heaviest_child() {
         let temp_dir = tempdir().unwrap();
@@ -878,47 +729,37 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // share1: child of genesis
+        // share1: child of genesis. Store with Valid metadata so
+        // share2a/share2b can compute their cumulative work from it.
         let share1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&share1);
 
-        // share2a: child of share1, low work
+        // share2a: child of share1, low work (stored as Valid with metadata)
         let share2a = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .work(2)
             .nonce(0xe9695793)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share2a, 2, share2a.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&share2a);
 
-        // share2b: child of share1, high work
+        // share2b: child of share1, high work (stored as Valid with metadata)
         let share2b = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .work(3)
             .nonce(0xe9695794)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share2b, 2, share2b.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&share2b);
 
-        // Organise share1 header: becomes candidate at h:1, forward walk finds
-        // share2a and share2b -- should pick share2b (higher work)
-        organise_header_and_commit(&store, &share1.header);
-        organise_block_and_commit(&store);
+        // Push share1 to confirmed chain. organise_header makes share1
+        // candidate at h:1, forward walk discovers share2a and share2b
+        // and picks share2b (higher cumulative work). Then organise_block
+        // promotes candidates to confirmed.
+        store.push_to_confirmed_chain(&share1, true).unwrap();
 
-        // Both promoted to confirmed, candidate chain coexists, share2b selected
+        // share2b promoted to confirmed, candidate chain coexists
         assert!(store.get_top_candidate().is_ok());
         assert_eq!(
             store.get_confirmed_at_height(2).unwrap(),
@@ -947,19 +788,16 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // share1: candidate at h:1
+        // share1: candidate at h:1.
+        // Store block first so confirmed extension can find its header.
         let share1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
-        store
-            .append_to_candidates(&share1.block_hash(), 1, &mut metadata1, &mut batch)
-            .unwrap();
+        store.add_share_block(&share1, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share1).unwrap();
 
         // share2: child of share1
         let share2 = TestShareBlockBuilder::new()
@@ -967,15 +805,9 @@ mod tests {
             .work(2)
             .nonce(0xe9695793)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
 
-        // Organise share2 header: extends to h:2, no children -> stops
-        organise_header_and_commit(&store, &share2.header);
-        organise_block_and_commit(&store);
+        // Push share2 to confirmed chain: extends to h:2, no children -> stops
+        store.push_to_confirmed_chain(&share2, true).unwrap();
 
         // All promoted to confirmed, candidate chain coexists, stops at h:2
         assert!(store.get_top_candidate().is_ok());

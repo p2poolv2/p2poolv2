@@ -443,9 +443,7 @@ mod tests {
         let blockhash = block.block_hash();
 
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&block, 0, block.header.get_work(), true, &mut batch)
-            .unwrap();
+        store.add_share_block(&block, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Verify block -> txids index (forward lookup)
@@ -498,9 +496,7 @@ mod tests {
         let blockhash1 = block1.block_hash();
 
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&block1, 0, block1.header.get_work(), true, &mut batch)
-            .unwrap();
+        store.add_share_block(&block1, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Verify the txid maps to the first blockhash
@@ -521,9 +517,7 @@ mod tests {
         );
 
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&block2, 0, block2.header.get_work(), false, &mut batch)
-            .unwrap();
+        store.add_share_block(&block2, false, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Verify the txid now maps to both blockhashes
@@ -546,9 +540,7 @@ mod tests {
         let blockhash3 = block3.block_hash();
 
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&block3, 0, block3.header.get_work(), false, &mut batch)
-            .unwrap();
+        store.add_share_block(&block3, false, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Verify the txid now maps to all three blockhashes

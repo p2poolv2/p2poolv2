@@ -33,17 +33,12 @@ impl Store {
     ///
     /// Transactions are stored separately. All writes are done in a
     /// single atomic batch.
-    ///
-    /// Should be called for shares that have been validated for PoW
-    /// and other static checks.
     pub fn add_share_block(
         &self,
         share: &ShareBlock,
-        height: u32,
-        chain_work: Work,
         confirm_txs: bool,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<BlockMetadata, StoreError> {
+    ) -> Result<(), StoreError> {
         let blockhash = share.block_hash();
         debug!(
             "Adding share to store with {} txs: {:?} work: {:?}",
@@ -86,18 +81,6 @@ impl Store {
         // Update block index for parent
         self.update_block_index(&share.header.prev_share_blockhash, &blockhash, batch)?;
 
-        // Update block index for uncles
-        for uncle_blockhash in &share.header.uncles {
-            self.update_block_index(uncle_blockhash, &blockhash, batch)?;
-        }
-
-        self.set_height_to_blockhash(&blockhash, height, batch)?;
-        let block_metadata = BlockMetadata {
-            expected_height: Some(height),
-            chain_work,
-            status: Status::Valid,
-        };
-        self.update_block_metadata(&blockhash, &block_metadata, batch)?;
         // Add the share block itself
         let storage_share_block: StorageShareBlock = share.into();
         let block_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
@@ -105,7 +88,7 @@ impl Store {
         storage_share_block.consensus_encode(&mut encoded_share_block)?;
         batch.put_cf::<&[u8], Vec<u8>>(&block_cf, blockhash.as_ref(), encoded_share_block);
 
-        Ok(block_metadata)
+        Ok(())
     }
 
     /// Get a share from the store
@@ -403,9 +386,7 @@ mod tests {
             .build();
 
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
+        store.add_share_block(&share1, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Create uncle (also child of genesis)
@@ -415,9 +396,7 @@ mod tests {
             .build();
 
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&uncle1, 1, uncle1.header.get_work(), false, &mut batch)
-            .unwrap();
+        store.add_share_block(&uncle1, false, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Create share2 referencing uncle1
@@ -428,9 +407,14 @@ mod tests {
             .build();
 
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
-            .unwrap();
+        store.add_share_block(&share2, true, &mut batch).unwrap();
+        // Uncle block index updates are handled by organise_header, not
+        // add_share_block. Manually register uncle->nephew entries here.
+        for uncle_blockhash in &share2.header.uncles {
+            store
+                .update_block_index(uncle_blockhash, &share2.block_hash(), &mut batch)
+                .unwrap();
+        }
         store.commit_batch(batch).unwrap();
 
         // Verify chain structure
@@ -474,9 +458,7 @@ mod tests {
         let num_txs = block.transactions.len();
         let txs = block.transactions.clone();
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&block, 0, block.header.get_work(), true, &mut batch)
-            .unwrap();
+        store.add_share_block(&block, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let blockhash = block.block_hash();
@@ -495,9 +477,7 @@ mod tests {
 
         let block = TestShareBlockBuilder::new().build();
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&block, 0, block.header.get_work(), true, &mut batch)
-            .unwrap();
+        store.add_share_block(&block, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let header = store.get_share_header(&block.block_hash()).unwrap();

@@ -360,8 +360,14 @@ mod tests {
         let share2 = TestShareBlockBuilder::new().nonce(0xe9695792).build();
 
         let mut batch = Store::get_write_batch();
-        let mut metadata1 = store
-            .add_share_block(&share1, 0, share1.header.get_work(), true, &mut batch)
+        store.add_share_block(&share1, true, &mut batch).unwrap();
+        let mut metadata1 = BlockMetadata {
+            expected_height: Some(0),
+            chain_work: share1.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&share1.block_hash(), &metadata1, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share1.block_hash(), 0, &mut metadata1, &mut batch)
@@ -373,8 +379,14 @@ mod tests {
         assert_eq!(confirmed, share1.block_hash());
 
         let mut batch = Store::get_write_batch();
-        let mut metadata2 = store
-            .add_share_block(&share2, 1, share2.header.get_work(), true, &mut batch)
+        store.add_share_block(&share2, true, &mut batch).unwrap();
+        let mut metadata2 = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: share2.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&share2.block_hash(), &metadata2, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share2.block_hash(), 1, &mut metadata2, &mut batch)
@@ -416,14 +428,32 @@ mod tests {
 
         // Add all shares first
         let mut batch = Store::get_write_batch();
-        let mut metadata1 = store
-            .add_share_block(&share1, 0, share1.header.get_work(), false, &mut batch)
+        store.add_share_block(&share1, false, &mut batch).unwrap();
+        store.add_share_block(&share2, false, &mut batch).unwrap();
+        store.add_share_block(&share3, false, &mut batch).unwrap();
+        let mut metadata1 = BlockMetadata {
+            expected_height: Some(0),
+            chain_work: share1.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&share1.block_hash(), &metadata1, &mut batch)
             .unwrap();
-        let mut metadata2 = store
-            .add_share_block(&share2, 1, share2.header.get_work(), false, &mut batch)
+        let mut metadata2 = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: share2.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&share2.block_hash(), &metadata2, &mut batch)
             .unwrap();
-        let mut metadata3 = store
-            .add_share_block(&share3, 1, share3.header.get_work(), false, &mut batch)
+        let mut metadata3 = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: share3.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&share3.block_hash(), &metadata3, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share1.block_hash(), 0, &mut metadata1, &mut batch)
@@ -461,11 +491,23 @@ mod tests {
 
         // Add shares first
         let mut batch = Store::get_write_batch();
-        let mut metadata0 = store
-            .add_share_block(&share0, 0, share0.header.get_work(), false, &mut batch)
+        store.add_share_block(&share0, false, &mut batch).unwrap();
+        store.add_share_block(&share2, false, &mut batch).unwrap();
+        let mut metadata0 = BlockMetadata {
+            expected_height: Some(0),
+            chain_work: share0.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&share0.block_hash(), &metadata0, &mut batch)
             .unwrap();
-        let mut metadata2 = store
-            .add_share_block(&share2, 2, share2.header.get_work(), false, &mut batch)
+        let mut metadata2 = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: share2.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&share2.block_hash(), &metadata2, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share0.block_hash(), 0, &mut metadata0, &mut batch)
@@ -497,21 +539,33 @@ mod tests {
 
         // Add shares first
         let mut batch = Store::get_write_batch();
-        let mut candidate_metadata = store
-            .add_share_block(
-                &candidate_share,
-                0,
-                candidate_share.header.get_work(),
-                false,
+        store
+            .add_share_block(&candidate_share, false, &mut batch)
+            .unwrap();
+        store
+            .add_share_block(&confirmed_share, false, &mut batch)
+            .unwrap();
+        let mut candidate_metadata = BlockMetadata {
+            expected_height: Some(0),
+            chain_work: candidate_share.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(
+                &candidate_share.block_hash(),
+                &candidate_metadata,
                 &mut batch,
             )
             .unwrap();
-        let mut confirmed_metadata = store
-            .add_share_block(
-                &confirmed_share,
-                0,
-                confirmed_share.header.get_work(),
-                false,
+        let mut confirmed_metadata = BlockMetadata {
+            expected_height: Some(0),
+            chain_work: confirmed_share.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(
+                &confirmed_share.block_hash(),
+                &confirmed_metadata,
                 &mut batch,
             )
             .unwrap();
@@ -565,12 +619,16 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
+        store.push_to_candidate_chain(&share1).unwrap();
         let mut batch = Store::get_write_batch();
-        let mut metadata = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
+        let mut metadata = store.get_block_metadata(&share1.block_hash()).unwrap();
         store
-            .append_to_confirmed(&share1.block_hash(), 1, &mut metadata, &mut batch)
+            .append_to_confirmed(
+                &share1.block_hash(),
+                metadata.expected_height.unwrap(),
+                &mut metadata,
+                &mut batch,
+            )
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -610,9 +668,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share2, 1, share2.header.get_work(), true, &mut batch)
-            .unwrap();
+        store.add_share_block(&share2, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Don't mark it as confirmed - is_confirmed should return false
@@ -635,11 +691,7 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-        let mut batch = Store::get_write_batch();
-        let mut metadata2 = store
-            .add_share_block(&share2, 1, share2.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&share2).unwrap();
 
         // Create a third share at the same height as share2
         let share3 = TestShareBlockBuilder::new()
@@ -647,15 +699,19 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&share3, 1, share3.header.get_work(), true, &mut batch)
-            .unwrap();
+        store.add_share_block(&share3, true, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Mark share2 as confirmed at height 1
         let mut batch = Store::get_write_batch();
+        let mut metadata2 = store.get_block_metadata(&share2.block_hash()).unwrap();
         store
-            .append_to_confirmed(&share2.block_hash(), 1, &mut metadata2, &mut batch)
+            .append_to_confirmed(
+                &share2.block_hash(),
+                metadata2.expected_height.unwrap(),
+                &mut metadata2,
+                &mut batch,
+            )
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -691,8 +747,14 @@ mod tests {
 
         // append_to_confirmed checks top height against DB, so commit between each
         let mut batch = Store::get_write_batch();
-        let mut m0 = store
-            .add_share_block(&share0, 0, share0.header.get_work(), false, &mut batch)
+        store.add_share_block(&share0, false, &mut batch).unwrap();
+        let mut m0 = BlockMetadata {
+            expected_height: Some(0),
+            chain_work: share0.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&share0.block_hash(), &m0, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share0.block_hash(), 0, &mut m0, &mut batch)
@@ -700,8 +762,14 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         let mut batch = Store::get_write_batch();
-        let mut m1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), false, &mut batch)
+        store.add_share_block(&share1, false, &mut batch).unwrap();
+        let mut m1 = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: share1.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&share1.block_hash(), &m1, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
@@ -709,8 +777,14 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         let mut batch = Store::get_write_batch();
-        let mut m2 = store
-            .add_share_block(&share2, 2, share2.header.get_work(), false, &mut batch)
+        store.add_share_block(&share2, false, &mut batch).unwrap();
+        let mut m2 = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: share2.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&share2.block_hash(), &m2, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share2.block_hash(), 2, &mut m2, &mut batch)
@@ -765,21 +839,29 @@ mod tests {
             .build();
 
         // append_to_confirmed checks top height against DB, so commit between each
+        store.push_to_candidate_chain(&share1).unwrap();
         let mut batch = Store::get_write_batch();
-        let mut m1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
+        let mut m1 = store.get_block_metadata(&share1.block_hash()).unwrap();
         store
-            .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .append_to_confirmed(
+                &share1.block_hash(),
+                m1.expected_height.unwrap(),
+                &mut m1,
+                &mut batch,
+            )
             .unwrap();
         store.commit_batch(batch).unwrap();
 
+        store.push_to_candidate_chain(&share2).unwrap();
         let mut batch = Store::get_write_batch();
-        let mut m2 = store
-            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
-            .unwrap();
+        let mut m2 = store.get_block_metadata(&share2.block_hash()).unwrap();
         store
-            .append_to_confirmed(&share2.block_hash(), 2, &mut m2, &mut batch)
+            .append_to_confirmed(
+                &share2.block_hash(),
+                m2.expected_height.unwrap(),
+                &mut m2,
+                &mut batch,
+            )
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -840,12 +922,16 @@ mod tests {
             .work(3)
             .nonce(0xe9695792)
             .build();
+        store.push_to_candidate_chain(&share1).unwrap();
         let mut batch = Store::get_write_batch();
-        let mut m1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
+        let mut m1 = store.get_block_metadata(&share1.block_hash()).unwrap();
         store
-            .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .append_to_confirmed(
+                &share1.block_hash(),
+                m1.expected_height.unwrap(),
+                &mut m1,
+                &mut batch,
+            )
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -857,11 +943,7 @@ mod tests {
             .work(2)
             .nonce(0xe9695793)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&fork, 1, fork.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&fork).unwrap();
 
         let candidates = vec![(1, fork.block_hash())];
         assert!(!store.should_reorg_confirmed(&top_confirmed, &candidates));
@@ -883,12 +965,16 @@ mod tests {
             .work(5)
             .nonce(0xe9695792)
             .build();
+        store.push_to_candidate_chain(&share1).unwrap();
         let mut batch = Store::get_write_batch();
-        let mut m1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
+        let mut m1 = store.get_block_metadata(&share1.block_hash()).unwrap();
         store
-            .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .append_to_confirmed(
+                &share1.block_hash(),
+                m1.expected_height.unwrap(),
+                &mut m1,
+                &mut batch,
+            )
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -900,11 +986,7 @@ mod tests {
             .work(5)
             .nonce(0xe9695793)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&fork, 1, fork.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&fork).unwrap();
 
         let candidates = vec![(1, fork.block_hash())];
         assert!(!store.should_reorg_confirmed(&top_confirmed, &candidates));
@@ -928,11 +1010,7 @@ mod tests {
             .work(5)
             .nonce(0xe9695792)
             .build();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&child, 1, child.header.get_work(), true, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
+        store.push_to_candidate_chain(&child).unwrap();
 
         let candidates = vec![(1, child.block_hash())];
         assert!(!store.should_reorg_confirmed(&top_confirmed, &candidates));
@@ -957,12 +1035,16 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
+        store.push_to_candidate_chain(&share1).unwrap();
         let mut batch = Store::get_write_batch();
-        let mut m1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
+        let mut m1 = store.get_block_metadata(&share1.block_hash()).unwrap();
         store
-            .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .append_to_confirmed(
+                &share1.block_hash(),
+                m1.expected_height.unwrap(),
+                &mut m1,
+                &mut batch,
+            )
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -975,8 +1057,14 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
+        store.add_share_block(&fork, true, &mut batch).unwrap();
+        let fork_metadata = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: fork.header.get_work(),
+            status: Status::Valid,
+        };
         store
-            .add_share_block(&fork, 1, fork.header.get_work(), true, &mut batch)
+            .update_block_metadata(&fork.block_hash(), &fork_metadata, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -999,17 +1087,21 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Build confirmed: genesis → share1(h:1) → share2(h:2)
+        // Build confirmed: genesis -> share1(h:1) -> share2(h:2)
         let share1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
+        store.push_to_candidate_chain(&share1).unwrap();
         let mut batch = Store::get_write_batch();
-        let mut m1 = store
-            .add_share_block(&share1, 1, share1.header.get_work(), true, &mut batch)
-            .unwrap();
+        let mut m1 = store.get_block_metadata(&share1.block_hash()).unwrap();
         store
-            .append_to_confirmed(&share1.block_hash(), 1, &mut m1, &mut batch)
+            .append_to_confirmed(
+                &share1.block_hash(),
+                m1.expected_height.unwrap(),
+                &mut m1,
+                &mut batch,
+            )
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1017,25 +1109,35 @@ mod tests {
             .prev_share_blockhash(share1.block_hash().to_string())
             .nonce(0xe9695793)
             .build();
+        store.push_to_candidate_chain(&share2).unwrap();
         let mut batch = Store::get_write_batch();
-        let mut m2 = store
-            .add_share_block(&share2, 2, share2.header.get_work(), true, &mut batch)
-            .unwrap();
+        let mut m2 = store.get_block_metadata(&share2.block_hash()).unwrap();
         store
-            .append_to_confirmed(&share2.block_hash(), 2, &mut m2, &mut batch)
+            .append_to_confirmed(
+                &share2.block_hash(),
+                m2.expected_height.unwrap(),
+                &mut m2,
+                &mut batch,
+            )
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let top_confirmed = store.get_top_confirmed().unwrap();
 
-        // Build fork: genesis → fork1(h:1) → fork2(h:2, more work)
+        // Build fork: genesis -> fork1(h:1) -> fork2(h:2, more work)
         let fork1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695794)
             .build();
         let mut batch = Store::get_write_batch();
+        store.add_share_block(&fork1, true, &mut batch).unwrap();
+        let fork1_metadata = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: fork1.header.get_work(),
+            status: Status::Valid,
+        };
         store
-            .add_share_block(&fork1, 1, fork1.header.get_work(), true, &mut batch)
+            .update_block_metadata(&fork1.block_hash(), &fork1_metadata, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1045,8 +1147,14 @@ mod tests {
             .nonce(0xe9695795)
             .build();
         let mut batch = Store::get_write_batch();
+        store.add_share_block(&fork2, true, &mut batch).unwrap();
+        let fork2_metadata = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: fork1_metadata.chain_work + fork2.header.get_work(),
+            status: Status::Valid,
+        };
         store
-            .add_share_block(&fork2, 2, fork2.header.get_work(), true, &mut batch)
+            .update_block_metadata(&fork2.block_hash(), &fork2_metadata, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1079,8 +1187,14 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata_a = store
-            .add_share_block(&a, 1, a.header.get_work(), true, &mut batch)
+        store.add_share_block(&a, true, &mut batch).unwrap();
+        let mut metadata_a = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: a.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&a.block_hash(), &metadata_a, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&a.block_hash(), 1, &mut metadata_a, &mut batch)
@@ -1096,17 +1210,19 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata_fork = store
-            .add_share_block(
-                &fork_share,
-                1,
-                fork_share.header.get_work(),
-                true,
-                &mut batch,
-            )
+        store
+            .add_share_block(&fork_share, true, &mut batch)
+            .unwrap();
+        let mut fork_metadata = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: fork_share.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&fork_share.block_hash(), &fork_metadata, &mut batch)
             .unwrap();
         store
-            .append_to_candidates(&fork_share.block_hash(), 1, &mut metadata_fork, &mut batch)
+            .append_to_candidates(&fork_share.block_hash(), 1, &mut fork_metadata, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1163,14 +1279,20 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Build confirmed: genesis → A(h:1) → B(h:2)
+        // Build confirmed: genesis -> A(h:1) -> B(h:2)
         let share_a = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata_a = store
-            .add_share_block(&share_a, 1, share_a.header.get_work(), true, &mut batch)
+        store.add_share_block(&share_a, true, &mut batch).unwrap();
+        let mut metadata_a = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: share_a.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share_a.block_hash(), 1, &mut metadata_a, &mut batch)
@@ -1182,8 +1304,14 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata_b = store
-            .add_share_block(&share_b, 2, share_b.header.get_work(), true, &mut batch)
+        store.add_share_block(&share_b, true, &mut batch).unwrap();
+        let mut metadata_b = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: metadata_a.chain_work + share_b.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&share_b.block_hash(), &metadata_b, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share_b.block_hash(), 2, &mut metadata_b, &mut batch)
@@ -1192,14 +1320,23 @@ mod tests {
 
         let top_confirmed = store.get_top_confirmed().unwrap();
 
-        // Build fork: genesis → F1(h:1) → F2(h:2, more work)
+        // Build fork: genesis -> F1(h:1) -> F2(h:2, more work)
         let fork_1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695794)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata_fork_1 = store
-            .add_share_block(&fork_1, 1, fork_1.header.get_work(), true, &mut batch)
+        store.add_share_block(&fork_1, true, &mut batch).unwrap();
+        let mut fork_1_metadata = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: fork_1.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&fork_1.block_hash(), &fork_1_metadata, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&fork_1.block_hash(), 1, &mut fork_1_metadata, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1209,18 +1346,17 @@ mod tests {
             .nonce(0xe9695795)
             .build();
         let mut batch = Store::get_write_batch();
-
-        let mut metadata_fork_2 = store
-            .add_share_block(&fork_2, 2, fork_2.header.get_work(), true, &mut batch)
+        store.add_share_block(&fork_2, true, &mut batch).unwrap();
+        let mut fork_2_metadata = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: fork_1_metadata.chain_work + fork_2.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&fork_2.block_hash(), &fork_2_metadata, &mut batch)
             .unwrap();
         store
-            .append_to_candidates(&fork_1.block_hash(), 1, &mut metadata_fork_1, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        let mut batch = Store::get_write_batch();
-        store
-            .append_to_candidates(&fork_2.block_hash(), 2, &mut metadata_fork_2, &mut batch)
+            .append_to_candidates(&fork_2.block_hash(), 2, &mut fork_2_metadata, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1287,14 +1423,20 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Build confirmed: genesis → A → B → C
+        // Build confirmed: genesis -> A -> B -> C
         let share_a = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata_a = store
-            .add_share_block(&share_a, 1, share_a.header.get_work(), true, &mut batch)
+        store.add_share_block(&share_a, true, &mut batch).unwrap();
+        let mut metadata_a = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: share_a.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share_a.block_hash(), 1, &mut metadata_a, &mut batch)
@@ -1306,8 +1448,14 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata_b = store
-            .add_share_block(&share_b, 2, share_b.header.get_work(), true, &mut batch)
+        store.add_share_block(&share_b, true, &mut batch).unwrap();
+        let mut metadata_b = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: metadata_a.chain_work + share_b.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&share_b.block_hash(), &metadata_b, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share_b.block_hash(), 2, &mut metadata_b, &mut batch)
@@ -1319,8 +1467,14 @@ mod tests {
             .nonce(0xe9695794)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata_c = store
-            .add_share_block(&share_c, 3, share_c.header.get_work(), true, &mut batch)
+        store.add_share_block(&share_c, true, &mut batch).unwrap();
+        let mut metadata_c = BlockMetadata {
+            expected_height: Some(3),
+            chain_work: metadata_b.chain_work + share_c.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&share_c.block_hash(), &metadata_c, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share_c.block_hash(), 3, &mut metadata_c, &mut batch)
@@ -1336,22 +1490,19 @@ mod tests {
             .nonce(0xe9695795)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata_fork_share = store
-            .add_share_block(
-                &fork_share,
-                1,
-                fork_share.header.get_work(),
-                true,
-                &mut batch,
-            )
+        store
+            .add_share_block(&fork_share, true, &mut batch)
+            .unwrap();
+        let mut fork_metadata = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: fork_share.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&fork_share.block_hash(), &fork_metadata, &mut batch)
             .unwrap();
         store
-            .append_to_candidates(
-                &fork_share.block_hash(),
-                1,
-                &mut metadata_fork_share,
-                &mut batch,
-            )
+            .append_to_candidates(&fork_share.block_hash(), 1, &mut fork_metadata, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1408,14 +1559,20 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Confirmed: genesis → A(h:1) → B(h:2)
+        // Confirmed: genesis -> A(h:1) -> B(h:2)
         let share_a = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata_a = store
-            .add_share_block(&share_a, 1, share_a.header.get_work(), true, &mut batch)
+        store.add_share_block(&share_a, true, &mut batch).unwrap();
+        let mut metadata_a = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: share_a.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share_a.block_hash(), 1, &mut metadata_a, &mut batch)
@@ -1427,8 +1584,14 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata_b = store
-            .add_share_block(&share_b, 2, share_b.header.get_work(), true, &mut batch)
+        store.add_share_block(&share_b, true, &mut batch).unwrap();
+        let mut metadata_b = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: metadata_a.chain_work + share_b.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&share_b.block_hash(), &metadata_b, &mut batch)
             .unwrap();
         store
             .append_to_confirmed(&share_b.block_hash(), 2, &mut metadata_b, &mut batch)
@@ -1444,17 +1607,19 @@ mod tests {
             .nonce(0xe9695794)
             .build();
         let mut batch = Store::get_write_batch();
-        let mut metadata_fork = store
-            .add_share_block(
-                &fork_share,
-                2,
-                fork_share.header.get_work(),
-                true,
-                &mut batch,
-            )
+        store
+            .add_share_block(&fork_share, true, &mut batch)
+            .unwrap();
+        let mut fork_metadata = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: metadata_a.chain_work + fork_share.header.get_work(),
+            status: Status::Valid,
+        };
+        store
+            .update_block_metadata(&fork_share.block_hash(), &fork_metadata, &mut batch)
             .unwrap();
         store
-            .append_to_candidates(&fork_share.block_hash(), 2, &mut metadata_fork, &mut batch)
+            .append_to_candidates(&fork_share.block_hash(), 2, &mut fork_metadata, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
