@@ -23,7 +23,6 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::shares::validation;
-use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
 use tracing::{debug, error, info};
 
@@ -35,17 +34,16 @@ use tracing::{debug, error, info};
 /// Validates the ShareBlock, stores it in the chain, notifies the block
 /// fetcher that this block was received, and sends it to the organise
 /// worker for candidate-to-confirmed promotion.
-pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
+pub async fn handle_share_block(
     _peer_id: libp2p::PeerId,
     share_block: ShareBlock,
     chain_store_handle: &ChainStoreHandle,
-    time_provider: &T,
     block_fetcher_handle: BlockFetcherHandle,
     organise_tx: OrganiseSender,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Received share block: {:?}", share_block);
     if let Err(validation_error) =
-        validation::validate_share_block(&share_block, chain_store_handle, time_provider)
+        validation::validate_share_block(&share_block, chain_store_handle)
     {
         error!("Share block validation failed: {}", validation_error);
         return Err(validation_error.into());
@@ -92,10 +90,8 @@ mod tests {
     use crate::test_utils::{
         TestShareBlockBuilder, build_block_from_work_components, genesis_for_tests,
     };
-    use crate::utils::time_provider::TestTimeProvider;
     use bitcoin::hashes::Hash as _;
     use mockall::predicate::*;
-    use std::time::SystemTime;
 
     /// Create test block fetcher and organise handles.
     fn test_handles() -> (BlockFetcherHandle, OrganiseSender) {
@@ -121,18 +117,11 @@ mod tests {
             .with(eq(bitcoin::BlockHash::all_zeros()))
             .returning(|_| Some(genesis_for_tests()));
 
-        let mut time_provider = TestTimeProvider::new(SystemTime::now());
-        time_provider.set_time(
-            bitcoin::absolute::Time::from_consensus(share_block.header.bitcoin_header.time)
-                .unwrap(),
-        );
-
         let (block_fetcher_handle, organise_tx) = test_handles();
         let result = handle_share_block(
             peer_id,
             share_block,
             &chain_store_handle,
-            &time_provider,
             block_fetcher_handle,
             organise_tx,
         )
@@ -143,17 +132,26 @@ mod tests {
     #[tokio::test]
     async fn test_handle_share_block_validation_error() {
         let peer_id = libp2p::PeerId::random();
-        let chain_store_handle = ChainStoreHandle::default();
-        let share_block = TestShareBlockBuilder::new().build();
+        let mut chain_store_handle = ChainStoreHandle::default();
 
-        let time_provider = TestTimeProvider::new(SystemTime::now());
+        // Build a share with an uncle that does not exist in the store
+        let uncle_hash = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
+            .parse::<bitcoin::BlockHash>()
+            .unwrap();
+        let share_block = TestShareBlockBuilder::new()
+            .uncles(vec![uncle_hash])
+            .build();
+
+        chain_store_handle
+            .expect_get_share()
+            .with(eq(uncle_hash))
+            .returning(|_| None);
 
         let (block_fetcher_handle, organise_tx) = test_handles();
         let result = handle_share_block(
             peer_id,
             share_block,
             &chain_store_handle,
-            &time_provider,
             block_fetcher_handle,
             organise_tx,
         )
@@ -161,8 +159,8 @@ mod tests {
         assert!(result.is_err());
         let error_message = result.unwrap_err().to_string();
         assert!(
-            error_message.contains("seconds from current time"),
-            "Expected timestamp validation error, got: {error_message}"
+            error_message.contains("not found in store"),
+            "Expected uncle not found error, got: {error_message}"
         );
     }
 
@@ -183,18 +181,11 @@ mod tests {
             .with(eq(bitcoin::BlockHash::all_zeros()))
             .returning(|_| Some(genesis_for_tests()));
 
-        let mut time_provider = TestTimeProvider::new(SystemTime::now());
-        time_provider.set_time(
-            bitcoin::absolute::Time::from_consensus(share_block.header.bitcoin_header.time)
-                .unwrap(),
-        );
-
         let (block_fetcher_handle, organise_tx) = test_handles();
         let result = handle_share_block(
             peer_id,
             share_block,
             &chain_store_handle,
-            &time_provider,
             block_fetcher_handle,
             organise_tx,
         )

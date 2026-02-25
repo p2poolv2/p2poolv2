@@ -211,12 +211,10 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
         peer: libp2p::PeerId,
         response: Message,
     ) -> Result<(), Box<dyn Error>> {
-        let time_provider = SystemTimeProvider;
         if let Err(err) = handle_response(
             peer,
             response,
             self.chain_store_handle.clone(),
-            &time_provider,
             self.swarm_tx.clone(),
             self.block_fetcher_handle.clone(),
             self.organise_tx.clone(),
