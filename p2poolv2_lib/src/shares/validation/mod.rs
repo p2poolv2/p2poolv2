@@ -119,15 +119,12 @@ pub fn validate_share_header(
 /// TODO: validate nonce and blockhash meets pool difficulty
 /// validate prev_share_blockhash is in store
 /// validate uncles are in store and no more than MAX_UNCLES
-/// validate timestamp is within the last 10 minutes
 /// TODO: validate merkle root
 /// TODO: validate coinbase transaction
 pub fn validate_share_block(
     share: &ShareBlock,
     chain_store_handle: &ChainStoreHandle,
-    time_provider: &impl TimeProvider,
 ) -> Result<(), ValidationError> {
-    validate_timestamp(share, time_provider)?;
     validate_uncles(share, chain_store_handle)?;
     // TODO: Populate bitcoin block from ShortIDs in share and use bitcoin_block_validation to validate difficulty
     // OR - Fetch difficulty from bitcoind rpc and validate share blockhash meets difficulty
@@ -358,14 +355,7 @@ mod tests {
             .expect_setup_share_for_chain()
             .returning(|share_block| Ok(share_block));
 
-        let mut time_provider = TestTimeProvider::new(SystemTime::now());
-        time_provider.set_time(
-            bitcoin::absolute::Time::from_consensus(share_block.header.bitcoin_header.time)
-                .unwrap(),
-        );
-
-        // Test handle_request directly without request_id
-        let result = validate_share_block(&share_block, &chain_store_handle, &time_provider);
+        let result = validate_share_block(&share_block, &chain_store_handle);
 
         assert!(result.is_ok());
     }

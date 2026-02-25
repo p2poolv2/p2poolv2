@@ -123,11 +123,10 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
 /// The swarm_tx channel is provided so that individual response handlers can
 /// send follow-up messages (e.g. GetShareBlocks after receiving ShareHeaders)
 /// back to the peer.
-pub async fn handle_response<C: Send + Sync, T: TimeProvider + Send + Sync>(
+pub async fn handle_response<C: Send + Sync>(
     peer: libp2p::PeerId,
     response: Message,
     chain_store_handle: ChainStoreHandle,
-    time_provider: &T,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     block_fetcher_handle: BlockFetcherHandle,
     organise_tx: OrganiseSender,
@@ -150,7 +149,6 @@ pub async fn handle_response<C: Send + Sync, T: TimeProvider + Send + Sync>(
             peer,
             share_block,
             &chain_store_handle,
-            time_provider,
             block_fetcher_handle,
             organise_tx,
         )
@@ -430,9 +428,7 @@ mod tests {
             .parse::<BlockHash>()
             .unwrap();
 
-        chain_store_handle
-            .expect_get_share()
-            .returning(|_| None);
+        chain_store_handle.expect_get_share().returning(|_| None);
 
         let get_data = GetData::Block(block_hash);
 
@@ -551,7 +547,6 @@ mod tests {
         chain_store_handle
             .expect_get_candidate_blocks_missing_data()
             .returning(|| Ok(Vec::new()));
-        let time_provider = TestTimeProvider::new(SystemTime::now());
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
         let block1 = TestShareBlockBuilder::new().build();
@@ -563,7 +558,6 @@ mod tests {
             peer_id,
             Message::ShareHeaders(share_headers),
             chain_store_handle,
-            &time_provider,
             swarm_tx,
             block_fetcher_handle,
             organise_tx,
@@ -577,7 +571,6 @@ mod tests {
     async fn test_handle_response_not_found() {
         let peer_id = libp2p::PeerId::random();
         let chain_store_handle = ChainStoreHandle::default();
-        let time_provider = TestTimeProvider::new(SystemTime::now());
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
         let (block_fetcher_handle, organise_tx) = test_handles();
@@ -585,7 +578,6 @@ mod tests {
             peer_id,
             Message::NotFound(()),
             chain_store_handle,
-            &time_provider,
             swarm_tx,
             block_fetcher_handle,
             organise_tx,
@@ -599,7 +591,6 @@ mod tests {
     async fn test_handle_response_inventory() {
         let peer_id = libp2p::PeerId::random();
         let chain_store_handle = ChainStoreHandle::default();
-        let time_provider = TestTimeProvider::new(SystemTime::now());
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
         let block_hashes = vec![
@@ -614,7 +605,6 @@ mod tests {
             peer_id,
             Message::Inventory(inventory),
             chain_store_handle,
-            &time_provider,
             swarm_tx,
             block_fetcher_handle,
             organise_tx,
@@ -628,7 +618,6 @@ mod tests {
     async fn test_handle_response_unexpected_message() {
         let peer_id = libp2p::PeerId::random();
         let chain_store_handle = ChainStoreHandle::default();
-        let time_provider = TestTimeProvider::new(SystemTime::now());
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
         let (block_fetcher_handle, organise_tx) = test_handles();
@@ -636,7 +625,6 @@ mod tests {
             peer_id,
             Message::GetData(GetData::Block(BlockHash::all_zeros())),
             chain_store_handle,
-            &time_provider,
             swarm_tx,
             block_fetcher_handle,
             organise_tx,

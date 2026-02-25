@@ -40,9 +40,7 @@ pub async fn handle_getdata_block<C: Send + Sync>(
     debug!("Handling getdata block request for {}", block_hash);
 
     let response_message = match chain_store_handle.get_share(&block_hash) {
-        Some(share_block)
-            if chain_store_handle.is_confirmed_or_confirmed_uncle(&block_hash) =>
-        {
+        Some(share_block) if chain_store_handle.is_confirmed_or_confirmed_uncle(&block_hash) => {
             info!("Serving block {} to peer", block_hash);
             Message::ShareBlock(share_block)
         }
@@ -94,13 +92,8 @@ mod tests {
             .expect_is_confirmed_or_confirmed_uncle()
             .returning(|_| true);
 
-        let result = handle_getdata_block(
-            block_hash,
-            chain_store_handle,
-            response_channel,
-            swarm_tx,
-        )
-        .await;
+        let result =
+            handle_getdata_block(block_hash, chain_store_handle, response_channel, swarm_tx).await;
 
         assert!(result.is_ok());
 
@@ -130,13 +123,8 @@ mod tests {
             .expect_is_confirmed_or_confirmed_uncle()
             .returning(|_| false);
 
-        let result = handle_getdata_block(
-            block_hash,
-            chain_store_handle,
-            response_channel,
-            swarm_tx,
-        )
-        .await;
+        let result =
+            handle_getdata_block(block_hash, chain_store_handle, response_channel, swarm_tx).await;
 
         assert!(result.is_ok());
 
@@ -157,17 +145,10 @@ mod tests {
             .parse::<BlockHash>()
             .unwrap();
 
-        chain_store_handle
-            .expect_get_share()
-            .returning(|_| None);
+        chain_store_handle.expect_get_share().returning(|_| None);
 
-        let result = handle_getdata_block(
-            block_hash,
-            chain_store_handle,
-            response_channel,
-            swarm_tx,
-        )
-        .await;
+        let result =
+            handle_getdata_block(block_hash, chain_store_handle, response_channel, swarm_tx).await;
 
         assert!(result.is_ok());
 
@@ -188,26 +169,21 @@ mod tests {
             .parse::<BlockHash>()
             .unwrap();
 
-        chain_store_handle
-            .expect_get_share()
-            .returning(|_| None);
+        chain_store_handle.expect_get_share().returning(|_| None);
 
         // Drop receiver to cause send failure
         drop(swarm_rx);
 
-        let result = handle_getdata_block(
-            block_hash,
-            chain_store_handle,
-            response_channel,
-            swarm_tx,
-        )
-        .await;
+        let result =
+            handle_getdata_block(block_hash, chain_store_handle, response_channel, swarm_tx).await;
 
         assert!(result.is_err());
         if let Err(error) = result {
-            assert!(error
-                .to_string()
-                .contains("Failed to send getdata block response"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("Failed to send getdata block response")
+            );
         }
     }
 }
