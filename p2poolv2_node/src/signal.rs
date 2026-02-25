@@ -18,7 +18,7 @@
 use tokio::signal::unix::{self, SignalKind};
 
 use tokio::{sync::watch, task::JoinHandle};
-use tracing::info;
+use tracing::debug;
 
 /// Reason for shutdown - used to determine exit code
 /// Correct exit code will help service runners
@@ -50,7 +50,7 @@ pub fn setup_signal_handler(exit_sender: watch::Sender<ShutdownReason>) -> JoinH
         };
 
         if let Some(sig) = sig {
-            info!("Received signal {sig:?}. Stopping...");
+            debug!("Received signal {sig:?}. Stopping...");
             let _ = exit_sender.send(ShutdownReason::Signal);
         };
     })
@@ -63,7 +63,7 @@ pub fn setup_signal_handler(exit_sender: watch::Sender<ShutdownReason>) -> JoinH
         tokio::select! {
             _ = exit_receiver.changed() => {},
             _ = tokio::signal::ctrl_c() => {
-                info!("Received ctrl-c signal. Stopping...");
+                debug!("Received ctrl-c signal. Stopping...");
                 let _ = exit_sender.send(ShutdownReason::Signal);
             },
         };

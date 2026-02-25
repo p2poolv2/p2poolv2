@@ -32,7 +32,7 @@ use p2poolv2_lib::{
 use serde::Deserialize;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
-use tracing::info;
+use tracing::debug;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -110,18 +110,18 @@ pub async fn start_api_server(
         Err(e) => return Err(e),
     };
 
-    info!("API server listening on {}", addr);
+    debug!("API server listening on {}", addr);
 
     tokio::spawn(async move {
         axum::serve(listener, app)
             .with_graceful_shutdown(async move {
                 let _ = shutdown_rx.await;
-                info!("API server shutdown signal received");
+                debug!("API server shutdown signal received");
             })
             .await
             .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
-        info!("API server stopped");
+        debug!("API server stopped");
         Ok::<(), ApiError>(())
     });
     Ok(shutdown_tx)

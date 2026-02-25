@@ -16,7 +16,7 @@
 
 use crate::config::LoggingConfig;
 use std::error::Error;
-use tracing::info;
+use tracing::debug;
 use tracing_appender::non_blocking;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, Registry, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -65,7 +65,7 @@ pub fn setup_logging(
     };
 
     let (file_layer, guard) = if let Some(file_path) = &logging_config.file {
-        info!("File logging is enabled, writing to: {}", file_path);
+        debug!("File logging is enabled, writing to: {}", file_path);
         // Create directory structure if it doesn't exist
         if let Some(parent) = std::path::Path::new(file_path).parent() {
             std::fs::create_dir_all(parent)?;
@@ -81,7 +81,7 @@ pub fn setup_logging(
             .to_str()
             .unwrap_or("p2pool.log");
 
-        info!(
+        debug!(
             "Logging to directory: {}, filename: {}",
             directory.display(),
             filename

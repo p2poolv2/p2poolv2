@@ -34,7 +34,7 @@ use p2poolv2_lib::stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info, trace};
+use tracing::{debug, error, trace};
 
 use crate::signal::{ShutdownReason, setup_signal_handler};
 
@@ -65,7 +65,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    info!("Starting P2Pool v2...");
+    debug!("Starting P2Pool v2...");
     // Parse command line arguments
     let args = Args::parse();
 
@@ -81,7 +81,7 @@ async fn main() -> ExitCode {
     // hold guard to ensure logging is set up correctly
     let _guard = match setup_logging(&config.logging) {
         Ok(guard) => {
-            info!("Logging set up successfully");
+            debug!("Logging set up successfully");
             guard
         }
         Err(e) => {
@@ -90,7 +90,7 @@ async fn main() -> ExitCode {
         }
     };
 
-    info!("Running on {} network", &config.stratum.network);
+    debug!("Running on {} network", &config.stratum.network);
 
     let exit_sender = tokio::sync::watch::Sender::new(ShutdownReason::None);
 
@@ -130,7 +130,7 @@ async fn main() -> ExitCode {
         error!("No chain tip found. Exiting.");
         return ExitCode::FAILURE;
     };
-    info!("Latest tip {} at height {}", tip, height);
+    debug!("Latest tip {} at height {}", tip, height);
 
     let background_tasks_store = store.clone();
     p2poolv2_lib::store::background_tasks::start_background_tasks(
@@ -185,7 +185,7 @@ async fn main() -> ExitCode {
 
     let cloned_stratum_config = stratum_config.clone();
     tokio::spawn(async move {
-        info!("Starting Stratum notifier...");
+        debug!("Starting Stratum notifier...");
         // This will run indefinitely, sending new block templates to the Stratum server as they arrive
         start_notify(
             notify_rx,
@@ -235,7 +235,7 @@ async fn main() -> ExitCode {
             .build()
             .await
             .unwrap();
-        info!("Starting Stratum server...");
+        debug!("Starting Stratum server...");
         let result = stratum_server
             .start(
                 None,
@@ -249,7 +249,7 @@ async fn main() -> ExitCode {
             error!("Failed to start Stratum server: {}", result.unwrap_err());
             let _ = exit_sender_stratum.send(ShutdownReason::Error);
         }
-        info!("Stratum server stopped");
+        debug!("Stratum server stopped");
     });
 
     let api_shutdown_tx = match start_api_server(
@@ -268,7 +268,7 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    info!(
+    debug!(
         "API server started on host {} port {}",
         config.api.hostname, config.api.port
     );
@@ -282,11 +282,11 @@ async fn main() -> ExitCode {
             }
         };
 
-    info!("Node started");
+    debug!("Node started");
 
     let mut exit_receiver = exit_sender.subscribe();
     let stop_all = async move |reason: ShutdownReason| -> ShutdownReason {
-        info!("Node shutting down...");
+        debug!("Node shutting down...");
 
         // Save metrics before shutdown to prevent data loss
         let metrics = metrics_for_shutdown.get_metrics().await;
@@ -296,7 +296,7 @@ async fn main() -> ExitCode {
         ) {
             error!("Failed to save metrics on shutdown: {e}");
         } else {
-            info!("Metrics saved on shutdown");
+            debug!("Metrics saved on shutdown");
         }
 
         // Shutdown node gracefully

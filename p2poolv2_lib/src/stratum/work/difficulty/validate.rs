@@ -23,7 +23,7 @@ use bitcoin::consensus::Decodable;
 use bitcoin::hex::DisplayHex;
 use hex::FromHex;
 use std::str::FromStr;
-use tracing::{debug, info};
+use tracing::debug;
 
 /// Share validation result
 ///
@@ -157,7 +157,7 @@ pub fn validate_submission_difficulty(
 
     let meets_bitcoin_difficulty = match header.validate_pow(target) {
         Ok(_) => {
-            info!("Header meets current bitcoin target");
+            debug!("Header meets current bitcoin target");
             true
         }
         Err(e) => {

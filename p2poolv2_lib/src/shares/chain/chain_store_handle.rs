@@ -27,7 +27,7 @@ use crate::store::writer::{StoreError, StoreHandle};
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Work};
 use std::collections::{HashMap, HashSet};
-use tracing::{debug, info};
+use tracing::debug;
 
 /// The minimum number of shares that must be on the chain for a share to be considered confirmed
 const MIN_CONFIRMATION_DEPTH: usize = 100;
@@ -354,7 +354,7 @@ impl ChainStoreHandle {
     ) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError> {
         let blockhash = header.block_hash();
         let result = self.store_handle.organise_header(header).await?;
-        info!("Organised header {blockhash} into candidate chain: {result:?}");
+        debug!("Organised header {blockhash} into candidate chain: {result:?}");
         Ok(result)
     }
 
@@ -362,7 +362,7 @@ impl ChainStoreHandle {
     /// Returns the confirmed chain height after organising, if changed.
     pub async fn organise_block(&self) -> Result<Option<u32>, StoreError> {
         let height = self.store_handle.organise_block().await?;
-        info!("Organised block at confirmed height {height:?}");
+        debug!("Organised block at confirmed height {height:?}");
         Ok(height)
     }
 

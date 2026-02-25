@@ -32,7 +32,7 @@ use crate::shares::handle_stratum_share::handle_stratum_share;
 use crate::stratum::emission::EmissionReceiver;
 use libp2p::request_response::ResponseChannel;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 /// Worker that processes emissions from the stratum server.
 ///
@@ -66,7 +66,7 @@ impl EmissionWorker {
 
     /// Runs the emission worker until the emissions channel is closed.
     pub async fn run(mut self) {
-        info!("Emission worker started");
+        debug!("Emission worker started");
         while let Some(emission) = self.emissions_rx.recv().await {
             debug!("Processing emission");
             // Pass a references to chain store handle to avoid clones on each loop
@@ -102,6 +102,6 @@ impl EmissionWorker {
                 }
             }
         }
-        info!("Emission worker stopped - channel closed");
+        debug!("Emission worker stopped - channel closed");
     }
 }

@@ -30,7 +30,7 @@ use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::writer::StoreError;
 use std::fmt;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 /// Channel capacity for shares pending organisation.
 const ORGANISE_CHANNEL_CAPACITY: usize = 256;
@@ -94,7 +94,7 @@ impl OrganiseWorker {
     /// Returns `Ok(())` on clean shutdown (channel closed).
     /// Returns `Err(OrganiseError)` on fatal failure (store writer dead).
     pub async fn run(mut self) -> Result<(), OrganiseError> {
-        info!("Organise worker started");
+        debug!("Organise worker started");
         while let Some(event) = self.organise_rx.recv().await {
             match event {
                 OrganiseEvent::Header(header) => {
@@ -131,7 +131,7 @@ impl OrganiseWorker {
                 }
             }
         }
-        info!("Organise worker stopped - channel closed");
+        debug!("Organise worker stopped - channel closed");
         Ok(())
     }
 }

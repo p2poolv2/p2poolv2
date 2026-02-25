@@ -137,7 +137,7 @@ impl Node {
             match config.network.listen_address.parse() {
                 Ok(addr) => match swarm.listen_on(addr) {
                     Ok(_) => {
-                        info!("Node listening on {}", config.network.listen_address);
+                        debug!("Node listening on {}", config.network.listen_address);
                     }
                     Err(e) => {
                         error!(
@@ -170,7 +170,7 @@ impl Node {
                         if let Err(e) = swarm.dial(remote) {
                             debug!("Failed to dial {}: {}", peer_addr, e);
                         } else {
-                            info!("Dialed {}", peer_addr);
+                            debug!("Dialed {}", peer_addr);
                         }
                     }
                     Err(e) => debug!("Invalid multiaddr {}: {}", peer_addr, e),
@@ -226,7 +226,7 @@ impl Node {
         peer_id: &libp2p::PeerId,
         message: Message,
     ) -> Result<(), Box<dyn Error>> {
-        info!("Sending message to peer: {peer_id}, message: {message:?}");
+        debug!("Sending message to peer: {peer_id}, message: {message:?}");
         self.swarm
             .behaviour_mut()
             .request_response
@@ -253,7 +253,7 @@ impl Node {
     ) -> Result<(), Box<dyn Error>> {
         match event {
             SwarmEvent::NewListenAddr { address, .. } => {
-                info!("Listening on {address:?}");
+                debug!("Listening on {address:?}");
                 Ok(())
             }
             SwarmEvent::ConnectionEstablished {
@@ -323,7 +323,7 @@ impl Node {
     fn handle_identify_event(&mut self, event: identify::Event) {
         match event {
             identify::Event::Received { peer_id, info } => {
-                info!(
+                debug!(
                     "Identified Peer {} with protocol version {}",
                     peer_id, info.protocol_version
                 );
@@ -335,12 +335,12 @@ impl Node {
                         .add_address(&peer_id, addr.clone());
                 }
                 // Also add our observed address to Kademlia so other peers can reach us
-                info!("Peer {} observed us as {}", peer_id, info.observed_addr);
+                debug!("Peer {} observed us as {}", peer_id, info.observed_addr);
                 self.swarm.add_external_address(info.observed_addr);
                 if let Err(e) = self.swarm.behaviour_mut().kademlia.bootstrap() {
                     warn!("Failed to bootstrap Kademlia: {}", e);
                 } else {
-                    info!("Successfully started Kademlia bootstrap");
+                    debug!("Successfully started Kademlia bootstrap");
                 }
             }
             _ => {
@@ -359,7 +359,7 @@ impl Node {
                 bucket_range,
                 old_peer,
             } => {
-                info!(
+                debug!(
                     "Routing updated for peer: {peer}, is_new_peer: {is_new_peer}, addresses: {addresses:?}, bucket_range: {bucket_range:?}, old_peer: {old_peer:?}"
                 );
             }
@@ -378,7 +378,7 @@ impl Node {
 
     /// Handle connection established events, these are events that are generated when a connection is established
     async fn handle_connection_established(&mut self, peer_id: libp2p::PeerId) {
-        info!("Connection established with peer: {peer_id}");
+        debug!("Connection established with peer: {peer_id}");
         let _ = send_blocks_inventory::<ResponseChannel<Message>>(
             peer_id,
             self.chain_store_handle.clone(),

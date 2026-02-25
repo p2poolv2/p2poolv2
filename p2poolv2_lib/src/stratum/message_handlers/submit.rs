@@ -109,6 +109,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     }
 
     if validation_result.meets_bitcoin_difficulty {
+        info!("Bitcoin block found! Hash: {}", validation_result.header.block_hash());
         // Submit block asap - decode transactions only for this rare case
         let block = build_full_block(
             validation_result.header,
@@ -156,11 +157,13 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         || truediff >= session.difficulty_adjuster.get_current_difficulty() as u128;
 
     if meets_session_difficulty {
+        info!("P2Pool share found! Hash: {}", validation_result.header.block_hash());
         let _ = stratum_context
             .metrics
             .record_share_accepted(stratum_share, truediff as u64)
             .await;
     } else {
+        info!("P2Pool share rejected (below difficulty)! Hash: {}", validation_result.header.block_hash());
         let _ = stratum_context.metrics.record_share_rejected().await;
     }
 

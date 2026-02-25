@@ -36,7 +36,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::mpsc;
 use tokio::sync::oneshot;
-use tracing::{debug, info};
+use tracing::debug;
 
 /// Error type for store operations
 #[derive(Debug, Clone)]
@@ -176,13 +176,13 @@ impl StoreWriter {
     ///
     /// This is a blocking function - spawn with `tokio::task::spawn_blocking`.
     pub fn run(self) {
-        info!("Store writer started on dedicated thread");
+        debug!("Store writer started on dedicated thread");
 
         while let Ok(cmd) = self.command_rx.recv() {
             self.handle_command(cmd);
         }
 
-        info!("Store writer stopped - channel closed");
+        debug!("Store writer stopped - channel closed");
     }
 
     /// Handle a single write command
