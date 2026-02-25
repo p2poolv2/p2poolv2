@@ -29,6 +29,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::utils::time_provider::TimeProvider;
 use receivers::getblocks::handle_getblocks;
+use receivers::getdata::handle_getdata_block;
 use receivers::getheaders::handle_getheaders;
 use receivers::share_blocks::handle_share_block;
 use receivers::share_headers::handle_share_headers;
@@ -87,13 +88,19 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
             info!("Received get data: {:?}", get_data);
             match get_data {
                 GetData::Block(block_hash) => {
-                    info!("Received block hash: {:?}", block_hash);
+                    handle_getdata_block(
+                        block_hash,
+                        ctx.chain_store_handle,
+                        ctx.response_channel,
+                        ctx.swarm_tx,
+                    )
+                    .await
                 }
                 GetData::Txid(txid) => {
                     info!("Received txid: {:?}", txid);
+                    Ok(())
                 }
             }
-            Ok(())
         }
         Message::Transaction(transaction) => {
             info!("Received transaction: {:?}", transaction);
@@ -369,30 +376,83 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_request_get_data_for_block() {
+    async fn test_handle_request_get_data_for_block_confirmed() {
         let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
-        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let chain_store_handle = ChainStoreHandle::default();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let response_channel = 1u32;
+        let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
-        let block_hash = "0000000000000000000000000000000000000000000000000000000000000001"
-            .parse::<BlockHash>()
-            .unwrap();
+        let block = TestShareBlockBuilder::new().build();
+        let block_hash = block.block_hash();
+        let expected_block = block.clone();
+
+        chain_store_handle
+            .expect_get_share()
+            .returning(move |_| Some(block.clone()));
+        chain_store_handle
+            .expect_is_confirmed_or_confirmed_uncle()
+            .returning(|_| true);
+
         let get_data = GetData::Block(block_hash);
 
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::GetData(get_data),
             chain_store_handle,
-            response_channel: response_channel_tx,
+            response_channel,
             swarm_tx,
             time_provider,
         };
 
         let result = handle_request(ctx).await;
-
         assert!(result.is_ok());
+
+        if let Some(SwarmSend::Response(channel, Message::ShareBlock(share_block))) =
+            swarm_rx.recv().await
+        {
+            assert_eq!(channel, response_channel);
+            assert_eq!(share_block, expected_block);
+        } else {
+            panic!("Expected SwarmSend::Response with ShareBlock message");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_get_data_for_block_not_found() {
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let response_channel = 1u32;
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let time_provider = TestTimeProvider::new(SystemTime::now());
+
+        let block_hash = "0000000000000000000000000000000000000000000000000000000000000001"
+            .parse::<BlockHash>()
+            .unwrap();
+
+        chain_store_handle
+            .expect_get_share()
+            .returning(|_| None);
+
+        let get_data = GetData::Block(block_hash);
+
+        let ctx = RequestContext {
+            peer: peer_id,
+            request: Message::GetData(get_data),
+            chain_store_handle,
+            response_channel,
+            swarm_tx,
+            time_provider,
+        };
+
+        let result = handle_request(ctx).await;
+        assert!(result.is_ok());
+
+        if let Some(SwarmSend::Response(channel, Message::NotFound(()))) = swarm_rx.recv().await {
+            assert_eq!(channel, response_channel);
+        } else {
+            panic!("Expected SwarmSend::Response with NotFound message");
+        }
     }
 
     #[tokio::test]
