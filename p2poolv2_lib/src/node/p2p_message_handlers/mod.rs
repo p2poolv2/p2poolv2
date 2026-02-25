@@ -18,7 +18,9 @@ pub mod receivers;
 pub mod senders;
 
 use crate::node::SwarmSend;
+use crate::node::block_fetcher::BlockFetcherHandle;
 use crate::node::messages::{GetData, InventoryMessage, Message};
+use crate::node::organise_worker::OrganiseSender;
 use crate::service::p2p_service::RequestContext;
 #[cfg(test)]
 #[mockall_double::double]
@@ -120,25 +122,36 @@ pub async fn handle_response<C: Send + Sync, T: TimeProvider + Send + Sync>(
     chain_store_handle: ChainStoreHandle,
     time_provider: &T,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
+    block_fetcher_handle: BlockFetcherHandle,
+    organise_tx: OrganiseSender,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Handling response {} from peer: {}", response, peer);
     match response {
-        Message::ShareHeaders(share_headers) => {
-            handle_share_headers(peer, share_headers, chain_store_handle, swarm_tx)
-                .await
-                .map_err(|e| {
-                    error!("Error handling received share headers: {}", e);
-                    e
-                })
-        }
-        Message::ShareBlock(share_block) => {
-            handle_share_block(peer, share_block, &chain_store_handle, time_provider)
-                .await
-                .map_err(|e| {
-                    error!("Failed to add share from response: {}", e);
-                    format!("Failed to add share from response: {e}").into()
-                })
-        }
+        Message::ShareHeaders(share_headers) => handle_share_headers(
+            peer,
+            share_headers,
+            chain_store_handle,
+            swarm_tx,
+            block_fetcher_handle,
+        )
+        .await
+        .map_err(|e| {
+            error!("Error handling received share headers: {}", e);
+            e
+        }),
+        Message::ShareBlock(share_block) => handle_share_block(
+            peer,
+            share_block,
+            &chain_store_handle,
+            time_provider,
+            block_fetcher_handle,
+            organise_tx,
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to add share from response: {}", e);
+            format!("Failed to add share from response: {e}").into()
+        }),
         Message::Inventory(inventory) => {
             info!("Received inventory response: {:?}", inventory);
             Ok(())
@@ -158,6 +171,8 @@ pub async fn handle_response<C: Send + Sync, T: TimeProvider + Send + Sync>(
 mod tests {
     use super::*;
     use crate::node::SwarmSend;
+    use crate::node::block_fetcher::BlockFetcherHandle;
+    use crate::node::organise_worker::OrganiseSender;
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::share_block::Txids;
@@ -168,6 +183,13 @@ mod tests {
     use std::time::SystemTime;
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
+
+    /// Create test block fetcher and organise handles for handle_response tests.
+    fn test_handles() -> (BlockFetcherHandle, OrganiseSender) {
+        let (block_fetcher_tx, _) = crate::node::block_fetcher::create_block_fetcher_channel();
+        let (organise_tx, _) = crate::node::organise_worker::create_organise_channel();
+        (block_fetcher_tx, organise_tx)
+    }
 
     #[tokio::test]
     async fn test_handle_request_getheaders() {
@@ -466,6 +488,9 @@ mod tests {
         chain_store_handle
             .expect_organise_header()
             .returning(|_| Ok(None));
+        chain_store_handle
+            .expect_get_candidate_blocks_missing_data()
+            .returning(|| Ok(Vec::new()));
         let time_provider = TestTimeProvider::new(SystemTime::now());
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
@@ -473,12 +498,15 @@ mod tests {
         let block2 = TestShareBlockBuilder::new().build();
         let share_headers = vec![block1.header.clone(), block2.header.clone()];
 
+        let (block_fetcher_handle, organise_tx) = test_handles();
         let result = handle_response(
             peer_id,
             Message::ShareHeaders(share_headers),
             chain_store_handle,
             &time_provider,
             swarm_tx,
+            block_fetcher_handle,
+            organise_tx,
         )
         .await;
 
@@ -492,12 +520,15 @@ mod tests {
         let time_provider = TestTimeProvider::new(SystemTime::now());
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
+        let (block_fetcher_handle, organise_tx) = test_handles();
         let result = handle_response(
             peer_id,
             Message::NotFound(()),
             chain_store_handle,
             &time_provider,
             swarm_tx,
+            block_fetcher_handle,
+            organise_tx,
         )
         .await;
 
@@ -518,12 +549,15 @@ mod tests {
         ];
         let inventory = InventoryMessage::BlockHashes(block_hashes);
 
+        let (block_fetcher_handle, organise_tx) = test_handles();
         let result = handle_response(
             peer_id,
             Message::Inventory(inventory),
             chain_store_handle,
             &time_provider,
             swarm_tx,
+            block_fetcher_handle,
+            organise_tx,
         )
         .await;
 
@@ -537,12 +571,15 @@ mod tests {
         let time_provider = TestTimeProvider::new(SystemTime::now());
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
+        let (block_fetcher_handle, organise_tx) = test_handles();
         let result = handle_response(
             peer_id,
             Message::GetData(GetData::Block(BlockHash::all_zeros())),
             chain_store_handle,
             &time_provider,
             swarm_tx,
+            block_fetcher_handle,
+            organise_tx,
         )
         .await;
 

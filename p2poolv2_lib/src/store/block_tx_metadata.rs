@@ -108,6 +108,7 @@ impl Decodable for Status {
             2 => Ok(Status::Invalid),
             3 => Ok(Status::Candidate),
             4 => Ok(Status::Confirmed),
+            5 => Ok(Status::BlockValid),
             _ => Err(bitcoin::consensus::encode::Error::ParseFailed(
                 "Invalid Status value",
             )),

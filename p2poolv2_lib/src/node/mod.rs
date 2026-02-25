@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod behaviour;
+pub mod block_fetcher;
 pub mod emission_worker;
 pub mod organise_worker;
 pub mod request_response_handler;
@@ -24,7 +25,9 @@ pub mod messages;
 pub mod p2p_message_handlers;
 
 use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::node::block_fetcher::BlockFetcherHandle;
 use crate::node::messages::Message;
+use crate::node::organise_worker::OrganiseSender;
 use crate::node::p2p_message_handlers::senders::{send_blocks_inventory, send_getheaders};
 use crate::node::request_response_handler::RequestResponseHandler;
 #[cfg(test)]
@@ -95,6 +98,8 @@ impl Node {
     pub fn new(
         config: Config,
         chain_store_handle: ChainStoreHandle,
+        block_fetcher_handle: BlockFetcherHandle,
+        organise_tx: OrganiseSender,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
 
@@ -184,6 +189,8 @@ impl Node {
             config.network.clone(),
             chain_store_handle.clone(),
             swarm_tx.clone(),
+            block_fetcher_handle,
+            organise_tx,
         );
 
         Ok(Self {
@@ -420,6 +427,7 @@ mod tests {
         ApiConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig, StratumConfig,
     };
     use crate::node::Node;
+    use crate::node::organise_worker::create_organise_channel;
     use bitcoindrpc::BitcoinRpcConfig;
     use futures::StreamExt;
     use std::time::{Duration, Instant};
@@ -489,10 +497,18 @@ mod tests {
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle
             .expect_clone()
-            .returning(|| ChainStoreHandle::default());
+            .returning(ChainStoreHandle::default);
 
-        let mut node =
-            Node::new(config.clone(), chain_store_handle).expect("Node initialization failed");
+        let (block_fetcher_tx, _block_fetcher_rx) =
+            crate::node::block_fetcher::create_block_fetcher_channel();
+        let (organise_tx, _organise_rx) = create_organise_channel();
+        let mut node = Node::new(
+            config.clone(),
+            chain_store_handle,
+            block_fetcher_tx,
+            organise_tx,
+        )
+        .expect("Node initialization failed");
 
         //  Initiate the dial manually!
         let unreachable_peer_multiaddr: libp2p::Multiaddr =

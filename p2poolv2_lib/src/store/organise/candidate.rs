@@ -199,6 +199,49 @@ impl Store {
         }
     }
 
+    /// Returns blockhashes on the candidate chain that do not yet have
+    /// full block data. Walks from confirmed_height+1 to the candidate
+    /// tip and collects entries whose status is not BlockValid or Confirmed.
+    pub fn get_candidate_blocks_missing_data(&self) -> Result<Vec<BlockHash>, StoreError> {
+        let confirmed_height = match self.get_top_confirmed_height() {
+            Ok(height) => height,
+            Err(StoreError::NotFound(_)) => 0,
+            Err(error) => return Err(error),
+        };
+
+        let candidate_height = match self.get_top_candidate_height() {
+            Ok(height) => height,
+            Err(StoreError::NotFound(_)) => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+
+        if candidate_height <= confirmed_height {
+            return Ok(Vec::new());
+        }
+
+        let candidates = self.get_candidates(confirmed_height + 1, candidate_height)?;
+        let mut missing = Vec::with_capacity(candidates.len());
+
+        for (_height, blockhash) in candidates {
+            // Check if the block has full data (BlockValid or Confirmed status)
+            match self.get_block_metadata(&blockhash) {
+                Ok(metadata) => {
+                    if metadata.status != Status::BlockValid && metadata.status != Status::Confirmed
+                    {
+                        // Header-only or candidate status -- needs full block
+                        missing.push(blockhash);
+                    }
+                }
+                Err(_) => {
+                    // No metadata means definitely missing
+                    missing.push(blockhash);
+                }
+            }
+        }
+
+        Ok(missing)
+    }
+
     /// Check if a blockhash has Candidate status in its metadata.
     pub fn is_candidate(&self, blockhash: &BlockHash) -> bool {
         self.get_block_metadata(blockhash)
@@ -1206,6 +1249,174 @@ mod tests {
             )
             .unwrap();
         assert_eq!(result.unwrap().0, heavy.block_hash());
+    }
+
+    // -- get_candidate_blocks_missing_data tests --
+
+    #[test]
+    fn test_missing_data_returns_empty_when_no_candidates() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let result = store.get_candidate_blocks_missing_data().unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_missing_data_returns_all_candidates_when_none_confirmed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695791)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+
+        store.push_to_candidate_chain(&share1).unwrap();
+        store.push_to_candidate_chain(&share2).unwrap();
+
+        // Both candidates have Candidate status (not BlockValid), so both are missing data
+        let missing = store.get_candidate_blocks_missing_data().unwrap();
+        assert_eq!(missing.len(), 2);
+        assert_eq!(missing[0], share1.block_hash());
+        assert_eq!(missing[1], share2.block_hash());
+    }
+
+    #[test]
+    fn test_missing_data_skips_block_valid_candidates() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695791)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+
+        store.push_to_candidate_chain(&share1).unwrap();
+        store.push_to_candidate_chain(&share2).unwrap();
+
+        // Mark share1 as BlockValid
+        let mut metadata = store.get_block_metadata(&share1.block_hash()).unwrap();
+        metadata.status = Status::BlockValid;
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(&share1.block_hash(), &metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let missing = store.get_candidate_blocks_missing_data().unwrap();
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0], share2.block_hash());
+    }
+
+    #[test]
+    fn test_missing_data_returns_empty_when_all_block_valid() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695791)
+            .build();
+        store.push_to_candidate_chain(&share1).unwrap();
+
+        // Mark as BlockValid
+        let mut metadata = store.get_block_metadata(&share1.block_hash()).unwrap();
+        metadata.status = Status::BlockValid;
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(&share1.block_hash(), &metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let missing = store.get_candidate_blocks_missing_data().unwrap();
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn test_missing_data_returns_empty_when_candidate_at_or_below_confirmed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695791)
+            .build();
+        store.push_to_candidate_chain(&share1).unwrap();
+
+        // Set confirmed height to match candidate height (both at 1)
+        let mut batch = Store::get_write_batch();
+        store.set_top_confirmed_height(1, &mut batch);
+        store.commit_batch(batch).unwrap();
+
+        let missing = store.get_candidate_blocks_missing_data().unwrap();
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn test_missing_data_only_returns_candidates_above_confirmed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695791)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+
+        store.push_to_candidate_chain(&share1).unwrap();
+        store.push_to_candidate_chain(&share2).unwrap();
+        store.push_to_candidate_chain(&share3).unwrap();
+
+        // Confirmed height is 1, so only candidates at height 2 and 3 are checked
+        let mut batch = Store::get_write_batch();
+        store.set_top_confirmed_height(1, &mut batch);
+        store.commit_batch(batch).unwrap();
+
+        let missing = store.get_candidate_blocks_missing_data().unwrap();
+        assert_eq!(missing.len(), 2);
+        assert_eq!(missing[0], share2.block_hash());
+        assert_eq!(missing[1], share3.block_hash());
     }
 
     #[test]

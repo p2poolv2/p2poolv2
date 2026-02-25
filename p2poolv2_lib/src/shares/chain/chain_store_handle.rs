@@ -235,6 +235,14 @@ impl ChainStoreHandle {
         self.store_handle.get_missing_blockhashes(blockhashes)
     }
 
+    /// Returns blockhashes on the candidate chain that do not yet have
+    /// full block data (status is not BlockValid or Confirmed).
+    pub fn get_candidate_blocks_missing_data(&self) -> Result<Vec<BlockHash>, StoreError> {
+        self.store_handle
+            .store()
+            .get_candidate_blocks_missing_data()
+    }
+
     /// Get metadata for blockhash
     pub fn get_block_metadata(&self, hash: &BlockHash) -> Result<BlockMetadata, StoreError> {
         self.store_handle.store().get_block_metadata(hash)
@@ -427,6 +435,7 @@ mockall::mock! {
         pub fn get_chain_tip_and_uncles(&self) -> Result<(BlockHash, HashSet<BlockHash>), StoreError>;
         pub fn get_genesis_blockhash(&self) -> Option<BlockHash>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
+        pub fn get_candidate_blocks_missing_data(&self) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_depth(&self, blockhash: &BlockHash) -> Option<usize>;
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
         pub fn get_confirmed_at_height(&self, height: u32) -> Result<BlockHash, StoreError>;
