@@ -20,9 +20,11 @@ use crate::command::Command;
 use crate::config::Config;
 use crate::node::Node;
 use crate::node::SwarmSend;
+use crate::node::block_fetcher::{BlockFetcher, BlockFetcherError, create_block_fetcher_channel};
 use crate::node::emission_worker::EmissionWorker;
 use crate::node::messages::Message;
-use crate::node::organise_worker::{OrganiseWorker, organise_channel};
+use crate::node::organise_worker::{OrganiseError, OrganiseSender};
+use crate::node::organise_worker::{OrganiseWorker, create_organise_channel};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -131,6 +133,9 @@ struct NodeActor {
     chain_store_handle: ChainStoreHandle,
     #[allow(dead_code)]
     metrics: MetricsHandle,
+    organise_tx: OrganiseSender,
+    organise_handle: tokio::task::JoinHandle<Result<(), OrganiseError>>,
+    block_fetcher_handle: tokio::task::JoinHandle<Result<(), BlockFetcherError>>,
 }
 
 impl NodeActor {
@@ -141,7 +146,27 @@ impl NodeActor {
         emissions_rx: EmissionReceiver,
         metrics: MetricsHandle,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>> {
-        let node = Node::new(config, chain_store_handle.clone())?;
+        // Create organise channel
+        let (organise_tx, organise_rx) = create_organise_channel();
+
+        // Create block fetcher channel
+        let (block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
+
+        let node = Node::new(
+            config,
+            chain_store_handle.clone(),
+            block_fetcher_tx,
+            organise_tx.clone(),
+        )?;
+
+        // Spawn organise worker
+        let organise_worker = OrganiseWorker::new(organise_rx, chain_store_handle.clone());
+        let organise_handle = tokio::spawn(organise_worker.run());
+
+        // Spawn block fetcher
+        let block_fetcher = BlockFetcher::new(block_fetcher_rx, node.swarm_tx.clone());
+        let block_fetcher_handle = tokio::spawn(block_fetcher.run());
+
         let (stopping_tx, stopping_rx) = oneshot::channel();
         Ok((
             Self {
@@ -151,24 +176,22 @@ impl NodeActor {
                 emissions_rx,
                 chain_store_handle,
                 metrics,
+                organise_tx,
+                organise_handle,
+                block_fetcher_handle,
             },
             stopping_rx,
         ))
     }
 
     async fn run(mut self) {
-        // Create organise channel and spawn organise worker
-        let (organise_tx, organise_rx) = organise_channel();
-        let organise_worker = OrganiseWorker::new(organise_rx, self.chain_store_handle.clone());
-        let mut organise_handle = tokio::spawn(organise_worker.run());
-
         // Spawn emission worker - processes shares in separate task and enqueues SwarmSend::Broadcast
         let emission_worker = EmissionWorker::new(
             self.emissions_rx,
             self.node.swarm_tx.clone(),
             self.chain_store_handle.clone(),
             self.node.config.stratum.network,
-            organise_tx,
+            self.organise_tx,
         );
         tokio::spawn(emission_worker.run());
 
@@ -284,7 +307,7 @@ impl NodeActor {
                         }
                     }
                 },
-                organise_result = &mut organise_handle => {
+                organise_result = &mut self.organise_handle => {
                     match organise_result {
                         Ok(Err(e)) => {
                             error!("Organise worker fatal error: {e}");
@@ -298,6 +321,27 @@ impl NodeActor {
                         }
                         Err(e) => {
                             error!("Organise worker panicked: {e}");
+                            if self.stopping_tx.send(()).is_err() {
+                                error!("Failed to send stopping signal - receiver dropped");
+                            }
+                            return;
+                        }
+                    }
+                }
+                block_fetcher_result = &mut self.block_fetcher_handle => {
+                    match block_fetcher_result {
+                        Ok(Err(e)) => {
+                            error!("Block fetcher fatal error: {e}");
+                            if self.stopping_tx.send(()).is_err() {
+                                error!("Failed to send stopping signal - receiver dropped");
+                            }
+                            return;
+                        }
+                        Ok(Ok(())) => {
+                            info!("Block fetcher stopped cleanly");
+                        }
+                        Err(e) => {
+                            error!("Block fetcher panicked: {e}");
                             if self.stopping_tx.send(()).is_err() {
                                 error!("Failed to send stopping signal - receiver dropped");
                             }

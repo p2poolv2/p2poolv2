@@ -49,7 +49,7 @@ pub type OrganiseSender = mpsc::Sender<OrganiseEvent>;
 pub type OrganiseReceiver = mpsc::Receiver<OrganiseEvent>;
 
 /// Create an organise channel with bounded capacity.
-pub fn organise_channel() -> (OrganiseSender, OrganiseReceiver) {
+pub fn create_organise_channel() -> (OrganiseSender, OrganiseReceiver) {
     mpsc::channel(ORGANISE_CHANNEL_CAPACITY)
 }
 
@@ -143,13 +143,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_organise_worker_stops_on_channel_close() {
-        let (_tx, rx) = organise_channel();
-        let mut mock = MockChainStoreHandle::new();
-        mock.expect_clone().return_once(MockChainStoreHandle::new);
-        let worker = OrganiseWorker::new(rx, mock);
+        let (_organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_clone()
+            .return_once(MockChainStoreHandle::new);
+        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle);
 
         // Drop sender so recv() returns None immediately
-        drop(_tx);
+        drop(_organise_tx);
 
         let result = worker.run().await;
         assert!(result.is_ok());
@@ -157,18 +159,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_organise_worker_calls_organise_header() {
-        let (tx, rx) = organise_channel();
-        let mut mock = MockChainStoreHandle::new();
-        mock.expect_clone().return_once(MockChainStoreHandle::new);
-        mock.expect_organise_header().returning(|_| Ok(None));
+        let (organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_clone()
+            .return_once(MockChainStoreHandle::new);
+        mock_chain_handle
+            .expect_organise_header()
+            .returning(|_| Ok(None));
 
-        let worker = OrganiseWorker::new(rx, mock);
+        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle);
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
             .nonce(0xe9695791)
             .build();
-        tx.send(OrganiseEvent::Header(share.header)).await.unwrap();
-        drop(tx);
+        organise_tx
+            .send(OrganiseEvent::Header(share.header))
+            .await
+            .unwrap();
+        drop(organise_tx);
 
         let result = worker.run().await;
         assert!(result.is_ok());
@@ -176,18 +185,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_organise_worker_calls_organise_block() {
-        let (tx, rx) = organise_channel();
-        let mut mock = MockChainStoreHandle::new();
-        mock.expect_clone().return_once(MockChainStoreHandle::new);
-        mock.expect_organise_block().returning(|| Ok(None));
+        let (organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_clone()
+            .return_once(MockChainStoreHandle::new);
+        mock_chain_handle
+            .expect_organise_block()
+            .returning(|| Ok(None));
 
-        let worker = OrganiseWorker::new(rx, mock);
+        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle);
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
             .nonce(0xe9695791)
             .build();
-        tx.send(OrganiseEvent::Block(share)).await.unwrap();
-        drop(tx);
+        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        drop(organise_tx);
 
         let result = worker.run().await;
         assert!(result.is_ok());
@@ -195,19 +208,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_organise_worker_fatal_on_channel_closed() {
-        let (tx, rx) = organise_channel();
-        let mut mock = MockChainStoreHandle::new();
-        mock.expect_clone().return_once(MockChainStoreHandle::new);
-        mock.expect_organise_block()
+        let (organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_clone()
+            .return_once(MockChainStoreHandle::new);
+        mock_chain_handle
+            .expect_organise_block()
             .returning(|| Err(StoreError::ChannelClosed));
 
-        let worker = OrganiseWorker::new(rx, mock);
+        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle);
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
             .nonce(0xe9695791)
             .build();
-        tx.send(OrganiseEvent::Block(share)).await.unwrap();
-        drop(tx);
+        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        drop(organise_tx);
 
         let result = worker.run().await;
         assert!(result.is_err());
@@ -215,13 +231,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_organise_worker_continues_on_non_fatal_error() {
-        let (tx, rx) = organise_channel();
-        let mut mock = MockChainStoreHandle::new();
-        mock.expect_clone().return_once(MockChainStoreHandle::new);
-        mock.expect_organise_block()
+        let (tx, rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_clone()
+            .return_once(MockChainStoreHandle::new);
+        mock_chain_handle
+            .expect_organise_block()
             .returning(|| Err(StoreError::Database("test error".to_string())));
 
-        let worker = OrganiseWorker::new(rx, mock);
+        let worker = OrganiseWorker::new(rx, mock_chain_handle);
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
             .nonce(0xe9695791)

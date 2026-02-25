@@ -17,7 +17,9 @@
 use crate::config::NetworkConfig;
 use crate::node::SwarmSend;
 use crate::node::behaviour::request_response::RequestResponseEvent;
+use crate::node::block_fetcher::BlockFetcherHandle;
 use crate::node::messages::Message;
+use crate::node::organise_worker::OrganiseSender;
 use crate::node::p2p_message_handlers::handle_response;
 use crate::service::build_service;
 use crate::service::p2p_service::RequestContext;
@@ -55,6 +57,8 @@ pub struct RequestResponseHandler<C: Send + Sync + 'static> {
         BoxService<RequestContext<C, SystemTimeProvider>, (), Box<dyn Error + Send + Sync>>,
     chain_store_handle: ChainStoreHandle,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
+    block_fetcher_handle: BlockFetcherHandle,
+    organise_tx: OrganiseSender,
 }
 
 /// Implementation of ResponseChannel<Message>, used in production.
@@ -66,6 +70,8 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
         network_config: NetworkConfig,
         chain_store_handle: ChainStoreHandle,
         swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
+        block_fetcher_handle: BlockFetcherHandle,
+        organise_tx: OrganiseSender,
     ) -> Self {
         let service =
             build_service::<ResponseChannel<Message>, _>(network_config, swarm_tx.clone());
@@ -73,6 +79,8 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
             request_service: service,
             chain_store_handle,
             swarm_tx,
+            block_fetcher_handle,
+            organise_tx,
         }
     }
 
@@ -210,6 +218,8 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
             self.chain_store_handle.clone(),
             &time_provider,
             self.swarm_tx.clone(),
+            self.block_fetcher_handle.clone(),
+            self.organise_tx.clone(),
         )
         .await
         {
@@ -251,10 +261,15 @@ mod tests {
         swarm_tx: mpsc::Sender<SwarmSend<TestChannel>>,
     ) -> RequestResponseHandler<TestChannel> {
         let service = build_service::<TestChannel, _>(test_network_config(), swarm_tx.clone());
+        let (block_fetcher_tx, _block_fetcher_rx) =
+            crate::node::block_fetcher::create_block_fetcher_channel();
+        let (organise_tx, _organise_rx) = crate::node::organise_worker::create_organise_channel();
         RequestResponseHandler {
             request_service: service,
             chain_store_handle,
             swarm_tx,
+            block_fetcher_handle: block_fetcher_tx,
+            organise_tx,
         }
     }
 
@@ -283,6 +298,9 @@ mod tests {
         chain_store_handle.expect_clone().returning(|| {
             let mut cloned = ChainStoreHandle::default();
             cloned.expect_organise_header().returning(|_| Ok(None));
+            cloned
+                .expect_get_candidate_blocks_missing_data()
+                .returning(|| Ok(Vec::new()));
             cloned
         });
 
@@ -421,10 +439,15 @@ mod tests {
 
         // Use a service that never becomes ready, guaranteeing the 1-second
         // timeout in dispatch_request fires and triggers a disconnect.
+        let (block_fetcher_tx, _block_fetcher_rx) =
+            crate::node::block_fetcher::create_block_fetcher_channel();
+        let (organise_tx, _organise_rx) = crate::node::organise_worker::create_organise_channel();
         let mut handler = RequestResponseHandler {
             request_service: BoxService::new(NeverReadyService),
             chain_store_handle,
             swarm_tx,
+            block_fetcher_handle: block_fetcher_tx,
+            organise_tx,
         };
 
         let peer_id = libp2p::PeerId::random();

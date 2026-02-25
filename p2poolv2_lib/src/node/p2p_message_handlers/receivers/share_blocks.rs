@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::node::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
+use crate::node::organise_worker::{OrganiseEvent, OrganiseSender};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -23,21 +25,23 @@ use crate::shares::share_block::ShareBlock;
 use crate::shares::validation;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 /// Handle a ShareBlock received from a peer in response to a getblocks request.
 ///
 /// The peer_id identifies the peer that sent the block, allowing
 /// follow-up requests to be directed back to the same peer.
 ///
-/// Validate the ShareBlock and store it in the chain.
-/// We do not send any inventory message as we do not want to gossip the share block.
-/// Share blocks are gossiped using the libp2p gossipsub protocol.
+/// Validates the ShareBlock, stores it in the chain, notifies the block
+/// fetcher that this block was received, and sends it to the organise
+/// worker for candidate-to-confirmed promotion.
 pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
     _peer_id: libp2p::PeerId,
     share_block: ShareBlock,
     chain_store_handle: &ChainStoreHandle,
     time_provider: &T,
+    block_fetcher_handle: BlockFetcherHandle,
+    organise_tx: OrganiseSender,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Received share block: {:?}", share_block);
     if let Err(validation_error) =
@@ -47,19 +51,43 @@ pub async fn handle_share_block<T: TimeProvider + Send + Sync>(
         return Err(validation_error.into());
     }
 
+    let block_hash = share_block.block_hash();
+
     // TODO: Check if this will be an uncle, for now add to main chain
-    if let Err(e) = chain_store_handle.add_share_block(share_block, true).await {
-        error!("Failed to add share: {}", e);
+    if let Err(store_error) = chain_store_handle
+        .add_share_block(share_block.clone(), true)
+        .await
+    {
+        error!("Failed to add share: {}", store_error);
         return Err("Error adding share to chain".into());
     }
 
-    debug!("Successfully added share blocks to chain");
+    // Notify block fetcher that this block was received (removes from in-flight)
+    if let Err(send_error) = block_fetcher_handle
+        .send(BlockFetcherEvent::BlockReceived(block_hash))
+        .await
+    {
+        error!(
+            "Failed to send BlockReceived to block fetcher: {}",
+            send_error
+        );
+    }
+
+    // Send to organise worker for candidate-to-confirmed promotion
+    info!("Sending block to organise worker for promotion");
+    if let Err(send_error) = organise_tx.send(OrganiseEvent::Block(share_block)).await {
+        error!("Failed to send block to organise worker: {}", send_error);
+    }
+
+    debug!("Successfully added share block to chain");
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node::block_fetcher;
+    use crate::node::organise_worker;
     use crate::store::writer::StoreError;
     use crate::test_utils::{
         TestShareBlockBuilder, build_block_from_work_components, genesis_for_tests,
@@ -68,6 +96,13 @@ mod tests {
     use bitcoin::hashes::Hash as _;
     use mockall::predicate::*;
     use std::time::SystemTime;
+
+    /// Create test block fetcher and organise handles.
+    fn test_handles() -> (BlockFetcherHandle, OrganiseSender) {
+        let (block_fetcher_tx, _) = block_fetcher::create_block_fetcher_channel();
+        let (organise_tx, _) = organise_worker::create_organise_channel();
+        (block_fetcher_tx, organise_tx)
+    }
 
     #[tokio::test]
     async fn test_handle_share_block_success() {
@@ -92,8 +127,16 @@ mod tests {
                 .unwrap(),
         );
 
-        let result =
-            handle_share_block(peer_id, share_block, &chain_store_handle, &time_provider).await;
+        let (block_fetcher_handle, organise_tx) = test_handles();
+        let result = handle_share_block(
+            peer_id,
+            share_block,
+            &chain_store_handle,
+            &time_provider,
+            block_fetcher_handle,
+            organise_tx,
+        )
+        .await;
         assert!(result.is_ok());
     }
 
@@ -105,8 +148,16 @@ mod tests {
 
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
-        let result =
-            handle_share_block(peer_id, share_block, &chain_store_handle, &time_provider).await;
+        let (block_fetcher_handle, organise_tx) = test_handles();
+        let result = handle_share_block(
+            peer_id,
+            share_block,
+            &chain_store_handle,
+            &time_provider,
+            block_fetcher_handle,
+            organise_tx,
+        )
+        .await;
         assert!(result.is_err());
         let error_message = result.unwrap_err().to_string();
         assert!(
@@ -138,8 +189,16 @@ mod tests {
                 .unwrap(),
         );
 
-        let result =
-            handle_share_block(peer_id, share_block, &chain_store_handle, &time_provider).await;
+        let (block_fetcher_handle, organise_tx) = test_handles();
+        let result = handle_share_block(
+            peer_id,
+            share_block,
+            &chain_store_handle,
+            &time_provider,
+            block_fetcher_handle,
+            organise_tx,
+        )
+        .await;
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
