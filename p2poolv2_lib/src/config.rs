@@ -492,6 +492,11 @@ impl Config {
         self.api.auth_token = auth_token;
         self
     }
+
+    pub fn with_max_requests_per_second(mut self, max_requests_per_second: u64) -> Self {
+        self.network.max_requests_per_second = max_requests_per_second;
+        self
+    }
 }
 
 #[cfg(test)]
