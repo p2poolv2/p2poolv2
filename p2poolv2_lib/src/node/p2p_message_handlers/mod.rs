@@ -32,7 +32,7 @@ use receivers::share_blocks::handle_share_block;
 use receivers::share_headers::handle_share_headers;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{debug, error};
 
 const MAX_HEADERS_IN_RESPONSE: usize = 2000;
 
@@ -40,7 +40,7 @@ const MAX_HEADERS_IN_RESPONSE: usize = 2000;
 pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
     ctx: RequestContext<C, T>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    info!("Handling request {} from peer: {}", ctx.request, ctx.peer);
+    debug!("Handling request {} from peer: {}", ctx.request, ctx.peer);
     match ctx.request {
         Message::GetShareHeaders(block_hashes, stop_block_hash) => {
             handle_getheaders(
@@ -63,13 +63,13 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
             .await
         }
         Message::Inventory(inventory) => {
-            info!("Received inventory: {:?}", inventory);
+            debug!("Received inventory: {:?}", inventory);
             match inventory {
                 InventoryMessage::BlockHashes(have_blocks) => {
-                    info!("Received share block inventory: {:?}", have_blocks);
+                    debug!("Received share block inventory: {:?}", have_blocks);
                 }
                 InventoryMessage::TransactionHashes(have_transactions) => {
-                    info!(
+                    debug!(
                         "Received share transaction inventory: {:?}",
                         have_transactions
                     );
@@ -78,27 +78,27 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
             Ok(())
         }
         Message::NotFound(_) => {
-            info!("Received not found message");
+            debug!("Received not found message");
             Ok(())
         }
         Message::GetData(get_data) => {
-            info!("Received get data: {:?}", get_data);
+            debug!("Received get data: {:?}", get_data);
             match get_data {
                 GetData::Block(block_hash) => {
-                    info!("Received block hash: {:?}", block_hash);
+                    debug!("Received block hash: {:?}", block_hash);
                 }
                 GetData::Txid(txid) => {
-                    info!("Received txid: {:?}", txid);
+                    debug!("Received txid: {:?}", txid);
                 }
             }
             Ok(())
         }
         Message::Transaction(transaction) => {
-            info!("Received transaction: {:?}", transaction);
+            debug!("Received transaction: {:?}", transaction);
             Ok(())
         }
         other => {
-            info!("Unexpected request type {other}");
+            debug!("Unexpected request type {other}");
             Ok(())
         }
     }
@@ -121,7 +121,7 @@ pub async fn handle_response<C: Send + Sync, T: TimeProvider + Send + Sync>(
     time_provider: &T,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    info!("Handling response {} from peer: {}", response, peer);
+    debug!("Handling response {} from peer: {}", response, peer);
     match response {
         Message::ShareHeaders(share_headers) => {
             handle_share_headers(peer, share_headers, chain_store_handle, swarm_tx)
@@ -140,15 +140,15 @@ pub async fn handle_response<C: Send + Sync, T: TimeProvider + Send + Sync>(
                 })
         }
         Message::Inventory(inventory) => {
-            info!("Received inventory response: {:?}", inventory);
+            debug!("Received inventory response: {:?}", inventory);
             Ok(())
         }
         Message::NotFound(_) => {
-            info!("Received not found response from peer: {}", peer);
+            debug!("Received not found response from peer: {}", peer);
             Ok(())
         }
         other => {
-            info!("Unexpected response type from peer {}: {}", peer, other);
+            debug!("Unexpected response type from peer {}: {}", peer, other);
             Ok(())
         }
     }

@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use tracing::info;
+use tracing::error;
 
 const BLOCK_HASH_SIZE: usize = 32;
 
@@ -76,12 +76,12 @@ impl ZmqListenerTrait for ZmqListener {
                             continue; // Skip empty messages
                         }
                         if let Err(e) = rt.block_on(tx.send(())) {
-                            info!("Failed to send ZMQ message: {}", e);
+                            error!("Failed to send ZMQ message: {}", e);
                             break; // Exit if the channel is closed
                         }
                     }
                     Err(e) => {
-                        info!("Failed to receive ZMQ message: {}", e);
+                        error!("Failed to receive ZMQ message: {}", e);
                     }
                 }
             }

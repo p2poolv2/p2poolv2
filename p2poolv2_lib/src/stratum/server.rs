@@ -188,7 +188,7 @@ impl StratumServer {
         bitcoinrpc_config: BitcoinRpcConfig,
         metrics: metrics::MetricsHandle,
     ) -> Result<(), Box<dyn std::error::Error + Send>> {
-        info!("Starting Stratum server at {}:{}", self.hostname, self.port);
+        debug!("Starting Stratum server at {}:{}", self.hostname, self.port);
 
         let bind_address = format!("{}:{}", self.hostname, self.port);
         let listener = match TcpListener::bind(&bind_address).await {
@@ -201,7 +201,7 @@ impl StratumServer {
 
         if let Some(ready_tx) = ready_tx {
             // Notify that the server is ready to accept connections
-            info!(
+            debug!(
                 "Stratum server is ready to accept connections on {}",
                 bind_address
             );
@@ -211,7 +211,7 @@ impl StratumServer {
             tokio::select! {
                 // Check for shutdown signal
                 _ = &mut self.shutdown_rx => {
-                    info!("Shutdown signal received");
+                    debug!("Shutdown signal received");
                     break;
                 }
                 connection = listener.accept() => {
@@ -265,7 +265,7 @@ impl StratumServer {
                             });
                         }
                         Err(e) => {
-                            info!("Connection failed: {}", e);
+                            debug!("Connection failed: {}", e);
                             continue;
                         }
                     }
@@ -333,7 +333,7 @@ where
         tokio::select! {
             // Check for shutdown signal
             _ = &mut shutdown_rx => {
-                info!("Shutdown signal received, closing connection from {}", addr);
+                debug!("Shutdown signal received, closing connection from {}", addr);
                 break;
             }
             // receive a message on the channel used by server to send_to_all
@@ -341,7 +341,7 @@ where
                 if session.username.is_none() {
                     continue; // Ignore messages until the user has authorized
                 }
-                info!("Tx {addr} {message:?}");
+                debug!("Tx {addr} {message:?}");
                 if let Err(e) = writer.write_all(format!("{message}\n").as_bytes()).await {
                     error!("Failed to write to {}: {}", addr, e);
                     break;
@@ -349,7 +349,7 @@ where
             }
             // Read a line from the stream
             line = framed.next() => {
-                info!("Rx {} {:?}", addr, line);
+                debug!("Rx {} {:?}", addr, line);
                 match line {
                     Some(Ok(line)) => {
                         if line.is_empty() {
@@ -429,7 +429,7 @@ where
                         }
                     };
 
-                    info!("Tx {addr} {response_json:?}");
+                    debug!("Tx {addr} {response_json:?}");
                     if let Err(e) = writer
                         .write_all(format!("{response_json}\n").as_bytes())
                         .await

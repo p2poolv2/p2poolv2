@@ -20,7 +20,7 @@ use crate::store::column_families::ColumnFamily;
 use crate::store::writer::StoreError;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 const MIN_TIMESTAMP: u64 = 0;
 
@@ -65,7 +65,7 @@ impl Store {
             .as_micros() as u64;
         let cutoff_micros = now.saturating_sub(pplns_ttl.as_micros() as u64);
 
-        info!(
+        debug!(
             "Cleaning up PPLNS shares older than {} seconds (cutoff: {})",
             pplns_ttl.as_secs(),
             cutoff_micros
@@ -82,7 +82,7 @@ impl Store {
         self.db
             .delete_range_cf(&pplns_share_cf, &start_key, &end_key)?;
 
-        info!("Deleted PPLNS shares older than cutoff time");
+        debug!("Deleted PPLNS shares older than cutoff time");
 
         Ok(())
     }
@@ -101,7 +101,7 @@ impl Store {
             .as_micros() as u64;
         let cutoff_micros = now.saturating_sub(job_ttl.as_micros() as u64);
 
-        info!(
+        debug!(
             "Cleaning up jobs older than {} seconds (cutoff: {})",
             job_ttl.as_secs(),
             cutoff_micros
@@ -116,7 +116,7 @@ impl Store {
         // delete_range_cf deletes all keys in [start_key, end_key)
         self.db.delete_range_cf(&job_cf, &start_key, &end_key)?;
 
-        info!("Deleted jobs older than cutoff time");
+        debug!("Deleted jobs older than cutoff time");
 
         Ok(())
     }

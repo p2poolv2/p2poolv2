@@ -26,7 +26,7 @@ use crate::shares::validation::validate_share_header;
 use bitcoin::{BlockHash, hashes::Hash};
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, warn};
 
 /// Handle ShareHeaders received from a peer.
 ///
@@ -51,7 +51,7 @@ pub async fn handle_share_headers<C: Send + Sync>(
         .all(|header| validate_share_header(header, &chain_store_handle).is_ok());
     if !all_valid {
         // TODO - Request headers from another peer
-        info!("Peer sent invalid share headers. We should try a different peer");
+        warn!("Peer sent invalid share headers. We should try a different peer");
     }
 
     for header in &share_headers {

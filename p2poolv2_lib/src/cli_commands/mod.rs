@@ -25,7 +25,7 @@ pub mod store {
 
     /// Open a store from the given path
     pub fn open_store(store_path: String) -> Result<Store, StoreError> {
-        tracing::info!("Opening store in read-only mode: {:?}", store_path);
+        tracing::debug!("Opening store in read-only mode: {:?}", store_path);
 
         Store::new(store_path, true).map_err(|e| {
             tracing::error!("Failed to open store: {}", e);

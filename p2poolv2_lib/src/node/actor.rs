@@ -32,7 +32,7 @@ use crate::stratum::emission::EmissionReceiver;
 use libp2p::futures::StreamExt;
 use std::error::Error;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 /// NodeHandle provides an interface to interact with a Node running in a separate task
 #[derive(Clone)]
@@ -196,7 +196,7 @@ impl NodeActor {
                         }
                         Some(SwarmSend::Inv(_share_block)) => {
                             // Handle inventory message (optional logging or processing)
-                            tracing::info!("Received SwarmSend::Inv message");
+                            tracing::debug!("Received SwarmSend::Inv message");
                         }
                         Some(SwarmSend::Disconnect(peer_id)) => {
                             if let Err(_e) = self.node.swarm.disconnect_peer_id(peer_id) {
@@ -216,7 +216,7 @@ impl NodeActor {
                             }
                         }
                         None => {
-                            info!("Stopping node actor on swarm channel close");
+                            debug!("Stopping node actor on swarm channel close");
                             if self.stopping_tx.send(()).is_err() {
                                 error!("Failed to send stopping signal - receiver dropped");
                             }
@@ -266,7 +266,7 @@ impl NodeActor {
                             return;
                         },
                         Some(Command::GetPplnsShares(query, tx)) => {
-                            info!(
+                            debug!(
                                 "Received GetPplnsShares command with limit: {}",
                                 query.limit
                             );
@@ -276,7 +276,7 @@ impl NodeActor {
                             }
                         },
                         None => {
-                            info!("Stopping node actor on channel close");
+                            debug!("Stopping node actor on channel close");
                             if self.stopping_tx.send(()).is_err() {
                                 error!("Failed to send stopping signal - receiver dropped");
                             }
@@ -294,7 +294,7 @@ impl NodeActor {
                             return;
                         }
                         Ok(Ok(())) => {
-                            info!("Organise worker stopped cleanly");
+                            debug!("Organise worker stopped cleanly");
                         }
                         Err(e) => {
                             error!("Organise worker panicked: {e}");
