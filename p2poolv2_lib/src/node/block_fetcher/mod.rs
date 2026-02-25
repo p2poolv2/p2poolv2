@@ -163,6 +163,7 @@ impl BlockFetcher {
                         }
                         Some(BlockFetcherEvent::BlockReceived(blockhash)) => {
                             self.handle_block_received(blockhash);
+                            self.dispatch_pending_requests().await;
                         }
                         Some(BlockFetcherEvent::PeersUpdated(peers)) => {
                             debug!("Peers list updated in block fetcher");
@@ -204,6 +205,8 @@ impl BlockFetcher {
     }
 
     /// Remove a blockhash from in-flight tracking when the block is received.
+    /// The caller should dispatch pending requests afterwards since capacity
+    /// may have been freed.
     fn handle_block_received(&mut self, blockhash: BlockHash) {
         if let Some(request) = self.in_flight.remove(&blockhash) {
             debug!("Block received, removed from in-flight: {blockhash}");
