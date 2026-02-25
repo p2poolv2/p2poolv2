@@ -284,7 +284,7 @@ impl Store {
         for (height, uncandidate) in &reorged_out_chain {
             self.delete_candidate_entry(*height, batch);
             let mut metadata = self.get_block_metadata(uncandidate)?;
-            metadata.status = Status::Valid;
+            metadata.status = Status::HeaderValid;
             self.update_block_metadata(uncandidate, &metadata, batch)?;
         }
 
@@ -374,7 +374,7 @@ impl Store {
             let all_children = self
                 .get_block_metadata(child_hash)
                 .ok()
-                .filter(|m| m.status == Status::Valid)
+                .filter(|m| m.status == Status::HeaderValid)
                 .filter(|m| m.expected_height == Some(expected_height))
                 .and_then(|m| {
                     self.get_share_header(child_hash)
@@ -903,7 +903,7 @@ mod tests {
         let metadata = BlockMetadata {
             expected_height: Some(2),
             chain_work: Work::from_hex("0x10").unwrap(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
 
         let top_candidate = Some(TopResult {
@@ -930,7 +930,7 @@ mod tests {
         let metadata = BlockMetadata {
             expected_height: Some(2),
             chain_work: Work::from_hex("0x03").unwrap(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
 
         let top_candidate = Some(TopResult {
@@ -957,7 +957,7 @@ mod tests {
         let metadata = BlockMetadata {
             expected_height: Some(2),
             chain_work: Work::from_hex("0x05").unwrap(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
 
         let top_candidate = Some(TopResult {
@@ -1010,7 +1010,7 @@ mod tests {
         let metadata = BlockMetadata {
             expected_height: Some(2),
             chain_work: Work::from_hex("0x10").unwrap(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
 
         assert!(!store.should_reorg_candidate(&share.block_hash(), &metadata, None));
@@ -1089,7 +1089,7 @@ mod tests {
         // then manually reset status to Valid so pick_best_child sees it
         store.push_to_candidate_chain(&child).unwrap();
         let mut metadata = store.get_block_metadata(&child.block_hash()).unwrap();
-        metadata.status = Status::Valid;
+        metadata.status = Status::HeaderValid;
         let mut batch = Store::get_write_batch();
         store
             .update_block_metadata(&child.block_hash(), &metadata, &mut batch)
@@ -1121,7 +1121,7 @@ mod tests {
         // Use push_to_candidate_chain to set metadata, then reset status to Valid
         store.push_to_candidate_chain(&child).unwrap();
         let mut metadata = store.get_block_metadata(&child.block_hash()).unwrap();
-        metadata.status = Status::Valid;
+        metadata.status = Status::HeaderValid;
         let mut batch = Store::get_write_batch();
         store
             .update_block_metadata(&child.block_hash(), &metadata, &mut batch)

@@ -276,7 +276,7 @@ mod tests {
 
         // share2 is reorged out and has Valid status
         let share2_metadata = store.get_block_metadata(&share2.block_hash()).unwrap();
-        assert_eq!(share2_metadata.status, Status::Valid);
+        assert_eq!(share2_metadata.status, Status::HeaderValid);
     }
 
     /// Test deeper reorg replacing multiple candidates with a competing branch.
@@ -370,9 +370,9 @@ mod tests {
 
         // Reorged-out shares have Valid status
         let share2_meta = store.get_block_metadata(&share2.block_hash()).unwrap();
-        assert_eq!(share2_meta.status, Status::Valid);
+        assert_eq!(share2_meta.status, Status::HeaderValid);
         let share3_meta = store.get_block_metadata(&share3.block_hash()).unwrap();
-        assert_eq!(share3_meta.status, Status::Valid);
+        assert_eq!(share3_meta.status, Status::HeaderValid);
     }
 
     /// Test reorg to a shorter fork (fork has fewer blocks but more work).
@@ -443,9 +443,9 @@ mod tests {
 
         // Reorged-out shares have Valid status
         let share2_meta = store.get_block_metadata(&share2.block_hash()).unwrap();
-        assert_eq!(share2_meta.status, Status::Valid);
+        assert_eq!(share2_meta.status, Status::HeaderValid);
         let share3_meta = store.get_block_metadata(&share3.block_hash()).unwrap();
-        assert_eq!(share3_meta.status, Status::Valid);
+        assert_eq!(share3_meta.status, Status::HeaderValid);
     }
 
     #[test_log::test]
@@ -704,7 +704,7 @@ mod tests {
 
         // Reorged-out share2 has Valid status
         let share2_meta = store.get_block_metadata(&share2.block_hash()).unwrap();
-        assert_eq!(share2_meta.status, Status::Valid);
+        assert_eq!(share2_meta.status, Status::HeaderValid);
     }
 
     /// Two children at the same height -- forward walk picks the one
@@ -769,7 +769,7 @@ mod tests {
 
         // share2a stays Valid (not selected)
         let share2a_meta = store.get_block_metadata(&share2a.block_hash()).unwrap();
-        assert_eq!(share2a_meta.status, Status::Valid);
+        assert_eq!(share2a_meta.status, Status::HeaderValid);
     }
 
     /// Forward walk stops when no qualifying children exist.

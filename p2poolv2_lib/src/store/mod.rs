@@ -285,7 +285,7 @@ impl Store {
         let mut metadata = BlockMetadata {
             expected_height: Some(0),
             chain_work: genesis_work,
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         self.update_block_metadata(&blockhash, &metadata, batch)?;
 
@@ -369,7 +369,7 @@ impl Store {
         let metadata = BlockMetadata {
             expected_height: Some(height),
             chain_work,
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         self.update_block_metadata(&blockhash, &metadata, &mut batch)
             .unwrap();
@@ -399,7 +399,7 @@ impl Store {
         let metadata = BlockMetadata {
             expected_height: Some(height),
             chain_work,
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         self.update_block_metadata(&blockhash, &metadata, &mut batch)
             .unwrap();

@@ -111,7 +111,7 @@ impl Store {
 
             // Mark as valid, because Candidate status is limited to those on candidate chain
             // When these are again reorged into candidates chain, they will be marked as candidate again
-            metadata.status = Status::Valid;
+            metadata.status = Status::HeaderValid;
             self.update_block_metadata(unconfirm, &metadata, batch)?;
         }
 
@@ -364,7 +364,7 @@ mod tests {
         let mut metadata1 = BlockMetadata {
             expected_height: Some(0),
             chain_work: share1.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&share1.block_hash(), &metadata1, &mut batch)
@@ -383,7 +383,7 @@ mod tests {
         let mut metadata2 = BlockMetadata {
             expected_height: Some(1),
             chain_work: share2.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&share2.block_hash(), &metadata2, &mut batch)
@@ -434,7 +434,7 @@ mod tests {
         let mut metadata1 = BlockMetadata {
             expected_height: Some(0),
             chain_work: share1.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&share1.block_hash(), &metadata1, &mut batch)
@@ -442,7 +442,7 @@ mod tests {
         let mut metadata2 = BlockMetadata {
             expected_height: Some(1),
             chain_work: share2.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&share2.block_hash(), &metadata2, &mut batch)
@@ -450,7 +450,7 @@ mod tests {
         let mut metadata3 = BlockMetadata {
             expected_height: Some(1),
             chain_work: share3.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&share3.block_hash(), &metadata3, &mut batch)
@@ -496,7 +496,7 @@ mod tests {
         let mut metadata0 = BlockMetadata {
             expected_height: Some(0),
             chain_work: share0.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&share0.block_hash(), &metadata0, &mut batch)
@@ -504,7 +504,7 @@ mod tests {
         let mut metadata2 = BlockMetadata {
             expected_height: Some(2),
             chain_work: share2.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&share2.block_hash(), &metadata2, &mut batch)
@@ -548,7 +548,7 @@ mod tests {
         let mut candidate_metadata = BlockMetadata {
             expected_height: Some(0),
             chain_work: candidate_share.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(
@@ -560,7 +560,7 @@ mod tests {
         let mut confirmed_metadata = BlockMetadata {
             expected_height: Some(0),
             chain_work: confirmed_share.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(
@@ -751,7 +751,7 @@ mod tests {
         let mut m0 = BlockMetadata {
             expected_height: Some(0),
             chain_work: share0.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&share0.block_hash(), &m0, &mut batch)
@@ -766,7 +766,7 @@ mod tests {
         let mut m1 = BlockMetadata {
             expected_height: Some(1),
             chain_work: share1.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&share1.block_hash(), &m1, &mut batch)
@@ -781,7 +781,7 @@ mod tests {
         let mut m2 = BlockMetadata {
             expected_height: Some(2),
             chain_work: share2.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&share2.block_hash(), &m2, &mut batch)
@@ -1061,7 +1061,7 @@ mod tests {
         let fork_metadata = BlockMetadata {
             expected_height: Some(1),
             chain_work: fork.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&fork.block_hash(), &fork_metadata, &mut batch)
@@ -1134,7 +1134,7 @@ mod tests {
         let fork1_metadata = BlockMetadata {
             expected_height: Some(1),
             chain_work: fork1.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&fork1.block_hash(), &fork1_metadata, &mut batch)
@@ -1151,7 +1151,7 @@ mod tests {
         let fork2_metadata = BlockMetadata {
             expected_height: Some(2),
             chain_work: fork1_metadata.chain_work + fork2.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&fork2.block_hash(), &fork2_metadata, &mut batch)
@@ -1191,7 +1191,7 @@ mod tests {
         let mut metadata_a = BlockMetadata {
             expected_height: Some(1),
             chain_work: a.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&a.block_hash(), &metadata_a, &mut batch)
@@ -1216,7 +1216,7 @@ mod tests {
         let mut fork_metadata = BlockMetadata {
             expected_height: Some(1),
             chain_work: fork_share.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&fork_share.block_hash(), &fork_metadata, &mut batch)
@@ -1250,7 +1250,7 @@ mod tests {
 
         // A is reorged out with Valid status
         let updated_metadata_a = store.get_block_metadata(&a.block_hash()).unwrap();
-        assert_eq!(updated_metadata_a.status, Status::Valid);
+        assert_eq!(updated_metadata_a.status, Status::HeaderValid);
 
         // F has Confirmed status
         assert!(store.is_confirmed(&fork_share.block_hash()));
@@ -1289,7 +1289,7 @@ mod tests {
         let mut metadata_a = BlockMetadata {
             expected_height: Some(1),
             chain_work: share_a.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
@@ -1308,7 +1308,7 @@ mod tests {
         let mut metadata_b = BlockMetadata {
             expected_height: Some(2),
             chain_work: metadata_a.chain_work + share_b.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&share_b.block_hash(), &metadata_b, &mut batch)
@@ -1330,7 +1330,7 @@ mod tests {
         let mut fork_1_metadata = BlockMetadata {
             expected_height: Some(1),
             chain_work: fork_1.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&fork_1.block_hash(), &fork_1_metadata, &mut batch)
@@ -1350,7 +1350,7 @@ mod tests {
         let mut fork_2_metadata = BlockMetadata {
             expected_height: Some(2),
             chain_work: fork_1_metadata.chain_work + fork_2.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&fork_2.block_hash(), &fork_2_metadata, &mut batch)
@@ -1387,9 +1387,9 @@ mod tests {
 
         // A and B reorged out with Valid status
         let reloaded_metadata_a = store.get_block_metadata(&share_a.block_hash()).unwrap();
-        assert_eq!(reloaded_metadata_a.status, Status::Valid);
+        assert_eq!(reloaded_metadata_a.status, Status::HeaderValid);
         let reloaded_metadata_b = store.get_block_metadata(&share_b.block_hash()).unwrap();
-        assert_eq!(reloaded_metadata_b.status, Status::Valid);
+        assert_eq!(reloaded_metadata_b.status, Status::HeaderValid);
 
         // F1 and F2 confirmed
         assert!(store.is_confirmed(&fork_1.block_hash()));
@@ -1433,7 +1433,7 @@ mod tests {
         let mut metadata_a = BlockMetadata {
             expected_height: Some(1),
             chain_work: share_a.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
@@ -1452,7 +1452,7 @@ mod tests {
         let mut metadata_b = BlockMetadata {
             expected_height: Some(2),
             chain_work: metadata_a.chain_work + share_b.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&share_b.block_hash(), &metadata_b, &mut batch)
@@ -1471,7 +1471,7 @@ mod tests {
         let mut metadata_c = BlockMetadata {
             expected_height: Some(3),
             chain_work: metadata_b.chain_work + share_c.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&share_c.block_hash(), &metadata_c, &mut batch)
@@ -1496,7 +1496,7 @@ mod tests {
         let mut fork_metadata = BlockMetadata {
             expected_height: Some(1),
             chain_work: fork_share.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&fork_share.block_hash(), &fork_metadata, &mut batch)
@@ -1532,7 +1532,7 @@ mod tests {
             share_c.block_hash(),
         ] {
             let meta = store.get_block_metadata(&hash).unwrap();
-            assert_eq!(meta.status, Status::Valid);
+            assert_eq!(meta.status, Status::HeaderValid);
         }
 
         // Candidate chain coexists with confirmed
@@ -1569,7 +1569,7 @@ mod tests {
         let mut metadata_a = BlockMetadata {
             expected_height: Some(1),
             chain_work: share_a.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
@@ -1588,7 +1588,7 @@ mod tests {
         let mut metadata_b = BlockMetadata {
             expected_height: Some(2),
             chain_work: metadata_a.chain_work + share_b.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&share_b.block_hash(), &metadata_b, &mut batch)
@@ -1613,7 +1613,7 @@ mod tests {
         let mut fork_metadata = BlockMetadata {
             expected_height: Some(2),
             chain_work: metadata_a.chain_work + fork_share.header.get_work(),
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         store
             .update_block_metadata(&fork_share.block_hash(), &fork_metadata, &mut batch)
@@ -1649,7 +1649,7 @@ mod tests {
 
         // B reorged out
         let reloaded_metadata_b = store.get_block_metadata(&share_b.block_hash()).unwrap();
-        assert_eq!(reloaded_metadata_b.status, Status::Valid);
+        assert_eq!(reloaded_metadata_b.status, Status::HeaderValid);
 
         // Candidate chain coexists with confirmed
         assert!(store.get_top_candidate().is_ok());
