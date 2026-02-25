@@ -74,14 +74,16 @@ impl Decodable for TxMetadata {
 pub enum Status {
     /// Not yet validated
     Pending = 0,
-    /// Validation passed
-    Valid = 1,
+    /// PoW validated
+    HeaderValid = 1,
     /// Validation failed
     Invalid = 2,
     /// Is a candidate. Could be on candidate chain or not. Can later be reorged into confirmed.
     Candidate = 3,
     /// Is on confirmed chain. Can later be removed and this status can change on reorg.
     Confirmed = 4,
+    /// Block is fully validated, including checks for previous blocks, transaction spending checks etc
+    BlockValid = 5,
 }
 
 impl Encodable for Status {
@@ -102,7 +104,7 @@ impl Decodable for Status {
         let value = u8::consensus_decode(r)?;
         match value {
             0 => Ok(Status::Pending),
-            1 => Ok(Status::Valid),
+            1 => Ok(Status::HeaderValid),
             2 => Ok(Status::Invalid),
             3 => Ok(Status::Candidate),
             4 => Ok(Status::Confirmed),

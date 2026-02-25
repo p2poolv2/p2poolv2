@@ -64,7 +64,7 @@ impl Store {
         let mut metadata = BlockMetadata {
             expected_height: Some(new_height),
             chain_work: new_chain_work,
-            status: Status::Valid,
+            status: Status::HeaderValid,
         };
         self.update_block_metadata(&blockhash, &metadata, batch)?;
 
@@ -290,7 +290,7 @@ mod tests {
             let metadata = BlockMetadata {
                 expected_height: Some(height),
                 chain_work,
-                status: Status::Valid,
+                status: Status::HeaderValid,
             };
             store
                 .update_block_metadata(&blockhash, &metadata, &mut batch)

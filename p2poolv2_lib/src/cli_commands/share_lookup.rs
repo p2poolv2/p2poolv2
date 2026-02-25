@@ -42,9 +42,11 @@ struct ShareLookupOutput {
 fn format_status(status: &Status) -> &'static str {
     match status {
         Status::Pending => "Pending",
-        Status::Valid => "Valid",
+        Status::HeaderValid => "HeaderValid",
+        Status::HeaderValid => "HeaderValid",
         Status::Invalid => "Invalid",
         Status::Candidate => "Candidate",
+        Status::BlockValid => "BlockValid",
         Status::Confirmed => "Confirmed",
     }
 }
@@ -126,7 +128,8 @@ mod tests {
     #[test]
     fn test_format_status_all_variants() {
         assert_eq!(format_status(&Status::Pending), "Pending");
-        assert_eq!(format_status(&Status::Valid), "Valid");
+        assert_eq!(format_status(&Status::HeaderValid), "HeaderValid");
+        assert_eq!(format_status(&Status::BlockValid), "BlockValid");
         assert_eq!(format_status(&Status::Invalid), "Invalid");
         assert_eq!(format_status(&Status::Candidate), "Candidate");
         assert_eq!(format_status(&Status::Confirmed), "Confirmed");
