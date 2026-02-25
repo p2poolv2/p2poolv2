@@ -406,6 +406,22 @@ impl ChainStoreHandle {
         self.get_depth(&share.block_hash()).unwrap_or_default() > MIN_CONFIRMATION_DEPTH
     }
 
+    /// Check if a block is on the confirmed chain or is an uncle of a confirmed block.
+    ///
+    /// Returns true when the block's metadata status is Confirmed, or when
+    /// any nephew that references this block as an uncle is itself confirmed.
+    pub fn is_confirmed_or_confirmed_uncle(&self, blockhash: &BlockHash) -> bool {
+        if self.store_handle.store().is_confirmed(blockhash) {
+            return true;
+        }
+        if let Some(nephews) = self.store_handle.store().get_nephews(blockhash) {
+            return nephews
+                .iter()
+                .any(|nephew| self.store_handle.store().is_confirmed(nephew));
+        }
+        false
+    }
+
     /// Get bitcoin addresses for user IDs
     pub fn get_btcaddresses_for_user_ids(
         &self,
@@ -442,6 +458,7 @@ mockall::mock! {
         pub fn get_current_target(&self) -> Result<u32, StoreError>;
         pub fn setup_share_for_chain(&self, share_block: ShareBlock) -> Result<ShareBlock, StoreError>;
         pub fn is_confirmed(&self, share: &ShareBlock) -> bool;
+        pub fn is_confirmed_or_confirmed_uncle(&self, blockhash: &BlockHash) -> bool;
         pub fn get_btcaddresses_for_user_ids(&self, user_ids: &[u64]) -> Result<Vec<(u64, String)>, StoreError>;
         pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError>;
         pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;

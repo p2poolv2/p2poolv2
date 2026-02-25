@@ -168,7 +168,6 @@ impl Store {
     }
 
     /// Get multiple shares from the store
-    /// TODO: Refactor to use get_share
     pub fn get_shares(
         &self,
         blockhashes: &[BlockHash],
