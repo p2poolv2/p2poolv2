@@ -18,9 +18,9 @@ pub mod receivers;
 pub mod senders;
 
 use crate::node::SwarmSend;
-use crate::node::block_fetcher::BlockFetcherHandle;
 use crate::node::messages::{GetData, InventoryMessage, Message};
 use crate::node::organise_worker::OrganiseSender;
+use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
 use crate::service::p2p_service::RequestContext;
 #[cfg(test)]
 #[mockall_double::double]
@@ -176,8 +176,9 @@ pub async fn handle_response<C: Send + Sync>(
 mod tests {
     use super::*;
     use crate::node::SwarmSend;
-    use crate::node::block_fetcher::BlockFetcherHandle;
     use crate::node::organise_worker::OrganiseSender;
+    use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
+    use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::share_block::Txids;
@@ -191,7 +192,7 @@ mod tests {
 
     /// Create test block fetcher and organise handles for handle_response tests.
     fn test_handles() -> (BlockFetcherHandle, OrganiseSender) {
-        let (block_fetcher_tx, _) = crate::node::block_fetcher::create_block_fetcher_channel();
+        let (block_fetcher_tx, _) = create_block_fetcher_channel();
         let (organise_tx, _) = crate::node::organise_worker::create_organise_channel();
         (block_fetcher_tx, organise_tx)
     }

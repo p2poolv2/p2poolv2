@@ -14,8 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::node::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
 use crate::node::organise_worker::{OrganiseEvent, OrganiseSender};
+use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -84,8 +84,8 @@ pub async fn handle_share_block(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node::block_fetcher;
     use crate::node::organise_worker;
+    use crate::node::request_response_handler::block_fetcher;
     use crate::store::writer::StoreError;
     use crate::test_utils::{
         TestShareBlockBuilder, build_block_from_work_components, genesis_for_tests,
