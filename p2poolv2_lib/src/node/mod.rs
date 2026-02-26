@@ -28,7 +28,7 @@ use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::node::block_fetcher::BlockFetcherHandle;
 use crate::node::messages::Message;
 use crate::node::organise_worker::OrganiseSender;
-use crate::node::p2p_message_handlers::senders::{send_blocks_inventory, send_getheaders};
+use crate::node::p2p_message_handlers::senders::{send_block_inventory, send_getheaders};
 use crate::node::request_response_handler::RequestResponseHandler;
 #[cfg(test)]
 #[mockall_double::double]
@@ -386,7 +386,7 @@ impl Node {
     /// Handle connection established events, these are events that are generated when a connection is established
     async fn handle_connection_established(&mut self, peer_id: libp2p::PeerId) {
         info!("Connection established with peer: {peer_id}");
-        let _ = send_blocks_inventory::<ResponseChannel<Message>>(
+        let _ = send_block_inventory::<ResponseChannel<Message>>(
             peer_id,
             self.chain_store_handle.clone(),
             self.swarm_tx.clone(),
