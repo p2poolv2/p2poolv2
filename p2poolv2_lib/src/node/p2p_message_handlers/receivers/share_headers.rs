@@ -14,8 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::node::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
 use crate::node::p2p_message_handlers::MAX_HEADERS_IN_RESPONSE;
+use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
 use crate::node::{SwarmSend, messages::Message};
 #[cfg(test)]
 #[mockall_double::double]
@@ -127,8 +127,8 @@ async fn request_next_headers<C: Send + Sync>(
 mod tests {
     use super::*;
     use crate::node::SwarmSend;
-    use crate::node::block_fetcher;
     use crate::node::messages::Message;
+    use crate::node::request_response_handler::block_fetcher;
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::test_utils::TestShareBlockBuilder;

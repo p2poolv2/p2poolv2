@@ -20,11 +20,13 @@ use crate::command::Command;
 use crate::config::Config;
 use crate::node::Node;
 use crate::node::SwarmSend;
-use crate::node::block_fetcher::{BlockFetcher, BlockFetcherError, create_block_fetcher_channel};
 use crate::node::emission_worker::EmissionWorker;
 use crate::node::messages::Message;
 use crate::node::organise_worker::{OrganiseError, OrganiseSender};
 use crate::node::organise_worker::{OrganiseWorker, create_organise_channel};
+use crate::node::request_response_handler::block_fetcher::{
+    BlockFetcher, BlockFetcherError, create_block_fetcher_channel,
+};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;

@@ -14,11 +14,15 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+pub mod block_fetcher;
+pub mod peer_block_knowledge;
+
+use self::block_fetcher::BlockFetcherHandle;
+use self::peer_block_knowledge::PeerBlockKnowledge;
 use crate::config::NetworkConfig;
 use crate::node::SwarmSend;
 use crate::node::behaviour::request_response::RequestResponseEvent;
-use crate::node::block_fetcher::BlockFetcherHandle;
-use crate::node::messages::Message;
+use crate::node::messages::{InventoryMessage, Message};
 use crate::node::organise_worker::OrganiseSender;
 use crate::node::p2p_message_handlers::handle_response;
 use crate::service::build_service;
@@ -59,6 +63,7 @@ pub struct RequestResponseHandler<C: Send + Sync + 'static> {
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     block_fetcher_handle: BlockFetcherHandle,
     organise_tx: OrganiseSender,
+    peer_block_knowledge: PeerBlockKnowledge,
 }
 
 /// Implementation of ResponseChannel<Message>, used in production.
@@ -81,6 +86,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
             swarm_tx,
             block_fetcher_handle,
             organise_tx,
+            peer_block_knowledge: PeerBlockKnowledge::default(),
         }
     }
 
@@ -153,9 +159,39 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
 /// Generic implementation. The dispatch.* functions can be tested as
 /// here we don't depend on the the tokio opaque types.
 impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
+    /// Returns a reference to the peer block knowledge tracker.
+    pub fn peer_block_knowledge(&self) -> &PeerBlockKnowledge {
+        &self.peer_block_knowledge
+    }
+
+    /// Removes all tracked block knowledge for a disconnected peer.
+    pub fn remove_peer_knowledge(&mut self, peer_id: &libp2p::PeerId) {
+        self.peer_block_knowledge.remove_peer(peer_id);
+    }
+
+    /// Records which blocks a peer knows about based on a message.
+    ///
+    /// Called before dispatching both requests and responses so that
+    /// subsequent inv sends can avoid redundant announcements.
+    fn record_peer_knowledge(&mut self, peer: &libp2p::PeerId, message: &Message) {
+        match message {
+            Message::Inventory(InventoryMessage::BlockHashes(hashes)) => {
+                for hash in hashes {
+                    self.peer_block_knowledge.record_block_known(peer, *hash);
+                }
+            }
+            Message::ShareBlock(block) => {
+                self.peer_block_knowledge
+                    .record_block_known(peer, block.block_hash());
+            }
+            _ => {}
+        }
+    }
+
     /// Dispatch an inbound request through the Tower service stack.
     ///
-    /// Creates a `RequestContext` and attempts to call the service within a
+    /// Records peer block knowledge before processing, then creates a
+    /// `RequestContext` and attempts to call the service within a
     /// 1-second timeout. If the service is not ready in time or returns an
     /// error, the peer is disconnected.
     async fn dispatch_request(
@@ -164,6 +200,8 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
         request: Message,
         channel: C,
     ) -> Result<(), Box<dyn Error>> {
+        self.record_peer_knowledge(&peer, &request);
+
         let ctx = RequestContext::<C, _> {
             peer,
             request: request.clone(),
@@ -203,14 +241,17 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
 
     /// Dispatch a response by calling handle_response directly.
     ///
-    /// Responses bypass the Tower service layers (rate limiting, inactivity
-    /// tracking) because they are solicited by us and libp2p only delivers
-    /// them for matching outstanding requests.
+    /// Records peer block knowledge before processing. Responses bypass
+    /// the Tower service layers (rate limiting, inactivity tracking)
+    /// because they are solicited by us and libp2p only delivers them
+    /// for matching outstanding requests.
     async fn dispatch_response(
         &mut self,
         peer: libp2p::PeerId,
         response: Message,
     ) -> Result<(), Box<dyn Error>> {
+        self.record_peer_knowledge(&peer, &response);
+
         if let Err(err) = handle_response(
             peer,
             response,
@@ -259,8 +300,7 @@ mod tests {
         swarm_tx: mpsc::Sender<SwarmSend<TestChannel>>,
     ) -> RequestResponseHandler<TestChannel> {
         let service = build_service::<TestChannel, _>(test_network_config(), swarm_tx.clone());
-        let (block_fetcher_tx, _block_fetcher_rx) =
-            crate::node::block_fetcher::create_block_fetcher_channel();
+        let (block_fetcher_tx, _block_fetcher_rx) = block_fetcher::create_block_fetcher_channel();
         let (organise_tx, _organise_rx) = crate::node::organise_worker::create_organise_channel();
         RequestResponseHandler {
             request_service: service,
@@ -268,6 +308,7 @@ mod tests {
             swarm_tx,
             block_fetcher_handle: block_fetcher_tx,
             organise_tx,
+            peer_block_knowledge: PeerBlockKnowledge::default(),
         }
     }
 
@@ -437,8 +478,7 @@ mod tests {
 
         // Use a service that never becomes ready, guaranteeing the 1-second
         // timeout in dispatch_request fires and triggers a disconnect.
-        let (block_fetcher_tx, _block_fetcher_rx) =
-            crate::node::block_fetcher::create_block_fetcher_channel();
+        let (block_fetcher_tx, _block_fetcher_rx) = block_fetcher::create_block_fetcher_channel();
         let (organise_tx, _organise_rx) = crate::node::organise_worker::create_organise_channel();
         let mut handler = RequestResponseHandler {
             request_service: BoxService::new(NeverReadyService),
@@ -446,6 +486,7 @@ mod tests {
             swarm_tx,
             block_fetcher_handle: block_fetcher_tx,
             organise_tx,
+            peer_block_knowledge: PeerBlockKnowledge::default(),
         };
 
         let peer_id = libp2p::PeerId::random();
@@ -468,5 +509,122 @@ mod tests {
         } else {
             panic!("Expected SwarmSend::Disconnect, got {received:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_request_records_inventory_knowledge() {
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_clone()
+            .returning(ChainStoreHandle::default);
+        let mut handler = build_test_handler(chain_store_handle, swarm_tx);
+
+        let peer_id = libp2p::PeerId::random();
+        let block_hash = BlockHash::all_zeros();
+        let inventory = InventoryMessage::BlockHashes(vec![block_hash]);
+        let (channel_tx, _channel_rx) = oneshot::channel::<Message>();
+
+        let result = handler
+            .dispatch_request(peer_id, Message::Inventory(inventory), channel_tx)
+            .await;
+        assert!(result.is_ok());
+
+        assert!(
+            handler
+                .peer_block_knowledge()
+                .peer_knows_block(&peer_id, &block_hash)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_response_records_share_block_knowledge() {
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let mut chain_store_handle = ChainStoreHandle::default();
+        // The cloned handle is used by handle_response -> handle_share_block,
+        // which validates and stores the block. We mock the minimum needed.
+        chain_store_handle.expect_clone().returning(|| {
+            let mut cloned = ChainStoreHandle::default();
+            cloned
+                .expect_get_share()
+                .returning(|_| Some(TestShareBlockBuilder::new().build()));
+            cloned.expect_add_share_block().returning(|_, _| Ok(()));
+            cloned
+        });
+
+        let mut handler = build_test_handler(chain_store_handle, swarm_tx);
+
+        let peer_id = libp2p::PeerId::random();
+        let block = TestShareBlockBuilder::new().build();
+        let block_hash = block.block_hash();
+
+        let result = handler
+            .dispatch_response(peer_id, Message::ShareBlock(block))
+            .await;
+        assert!(result.is_ok());
+
+        // Knowledge is recorded before handle_response processes the block
+        assert!(
+            handler
+                .peer_block_knowledge()
+                .peer_knows_block(&peer_id, &block_hash)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_response_records_inventory_knowledge() {
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_clone()
+            .returning(ChainStoreHandle::default);
+
+        let mut handler = build_test_handler(chain_store_handle, swarm_tx);
+
+        let peer_id = libp2p::PeerId::random();
+        let block_hash = BlockHash::all_zeros();
+        let inventory = InventoryMessage::BlockHashes(vec![block_hash]);
+
+        let result = handler
+            .dispatch_response(peer_id, Message::Inventory(inventory))
+            .await;
+        assert!(result.is_ok());
+
+        assert!(
+            handler
+                .peer_block_knowledge()
+                .peer_knows_block(&peer_id, &block_hash)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_remove_peer_knowledge() {
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_clone()
+            .returning(ChainStoreHandle::default);
+        let mut handler = build_test_handler(chain_store_handle, swarm_tx);
+
+        let peer_id = libp2p::PeerId::random();
+        let block_hash = BlockHash::all_zeros();
+        let inventory = InventoryMessage::BlockHashes(vec![block_hash]);
+        let (channel_tx, _channel_rx) = oneshot::channel::<Message>();
+
+        let _ = handler
+            .dispatch_request(peer_id, Message::Inventory(inventory), channel_tx)
+            .await;
+        assert!(
+            handler
+                .peer_block_knowledge()
+                .peer_knows_block(&peer_id, &block_hash)
+        );
+
+        handler.remove_peer_knowledge(&peer_id);
+        assert!(
+            !handler
+                .peer_block_knowledge()
+                .peer_knows_block(&peer_id, &block_hash)
+        );
     }
 }

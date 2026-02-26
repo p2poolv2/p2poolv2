@@ -15,7 +15,6 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod behaviour;
-pub mod block_fetcher;
 pub mod emission_worker;
 pub mod organise_worker;
 pub mod request_response_handler;
@@ -25,11 +24,11 @@ pub mod messages;
 pub mod p2p_message_handlers;
 
 use crate::accounting::simple_pplns::SimplePplnsShare;
-use crate::node::block_fetcher::BlockFetcherHandle;
 use crate::node::messages::Message;
 use crate::node::organise_worker::OrganiseSender;
-use crate::node::p2p_message_handlers::senders::{send_block_inventory, send_getheaders};
+use crate::node::p2p_message_handlers::senders::send_getheaders;
 use crate::node::request_response_handler::RequestResponseHandler;
+use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -292,6 +291,8 @@ impl Node {
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
                 info!("Disconnected from peer: {peer_id}");
                 self.swarm.behaviour_mut().remove_peer(&peer_id);
+                self.request_response_handler
+                    .remove_peer_knowledge(&peer_id);
                 Ok(())
             }
             SwarmEvent::OutgoingConnectionError {
@@ -382,17 +383,6 @@ impl Node {
             _ => debug!("Other Kademlia event: {:?}", event),
         }
     }
-
-    /// Handle connection established events, these are events that are generated when a connection is established
-    async fn handle_connection_established(&mut self, peer_id: libp2p::PeerId) {
-        info!("Connection established with peer: {peer_id}");
-        let _ = send_block_inventory::<ResponseChannel<Message>>(
-            peer_id,
-            self.chain_store_handle.clone(),
-            self.swarm_tx.clone(),
-        )
-        .await;
-    }
 }
 
 /// This test verifies that dialing an unreachable peer does not hang indefinitely,
@@ -428,6 +418,7 @@ mod tests {
     };
     use crate::node::Node;
     use crate::node::organise_worker::create_organise_channel;
+    use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
     use bitcoindrpc::BitcoinRpcConfig;
     use futures::StreamExt;
     use std::time::{Duration, Instant};
@@ -499,8 +490,7 @@ mod tests {
             .expect_clone()
             .returning(ChainStoreHandle::default);
 
-        let (block_fetcher_tx, _block_fetcher_rx) =
-            crate::node::block_fetcher::create_block_fetcher_channel();
+        let (block_fetcher_tx, _block_fetcher_rx) = create_block_fetcher_channel();
         let (organise_tx, _organise_rx) = create_organise_channel();
         let mut node = Node::new(
             config.clone(),
