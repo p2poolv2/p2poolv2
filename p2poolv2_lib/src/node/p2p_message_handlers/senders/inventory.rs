@@ -28,7 +28,7 @@ use tracing::{debug, info};
 
 /// Send blocks inventory update to a peer. This is not a response, but is triggered
 /// by the node when it has new data to share.
-pub async fn send_blocks_inventory<C: 'static + Send + Sync>(
+pub async fn send_block_inventory<C: 'static + Send + Sync>(
     peer_id: PeerId,
     chain_store_handle: ChainStoreHandle,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
@@ -75,7 +75,7 @@ mod tests {
             .returning(move || Ok(cloned_expected_hashes.clone()));
 
         // Send inventory
-        let result = send_blocks_inventory(peer_id, chain_store_handle, swarm_tx).await;
+        let result = send_block_inventory(peer_id, chain_store_handle, swarm_tx).await;
         assert!(result.is_ok());
 
         // Check the message sent to swarm_tx
@@ -103,7 +103,7 @@ mod tests {
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
         let peer_id = PeerId::random();
 
-        let result = send_blocks_inventory(peer_id, mock_chain_store, swarm_tx).await;
+        let result = send_block_inventory(peer_id, mock_chain_store, swarm_tx).await;
         assert!(result.is_err());
     }
 }

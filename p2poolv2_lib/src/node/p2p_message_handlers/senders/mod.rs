@@ -18,4 +18,4 @@ pub mod getheaders;
 pub mod inventory;
 
 pub use getheaders::send_getheaders;
-pub use inventory::send_blocks_inventory;
+pub use inventory::send_block_inventory;
