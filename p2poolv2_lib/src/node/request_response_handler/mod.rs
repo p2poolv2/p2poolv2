@@ -45,8 +45,8 @@ use tracing::{debug, error};
 ///
 /// Generic over the channel type `C` to allow testing with substitute
 /// types.  In production, `C` is `ResponseChannel<Message>` from
-/// libp2p. In tests, `C` can be any `Send + Sync + 'static` type such
-/// as `oneshot::Sender<Message>`.
+/// libp2p. In tests, `C` can be any `Send + Sync` type such as
+/// `oneshot::Sender<Message>`.
 ///
 /// We need to do this as ResponseChannel is an opaque type and we
 /// can't write tests for modules that directly use these types.
@@ -56,7 +56,7 @@ use tracing::{debug, error};
 /// it. Responses are handled directly without the service layers
 /// since they are solicited by us and do not need peer-protection
 /// middleware.
-pub struct RequestResponseHandler<C: Send + Sync + 'static> {
+pub struct RequestResponseHandler<C: Send + Sync> {
     request_service:
         BoxService<RequestContext<C, SystemTimeProvider>, (), Box<dyn Error + Send + Sync>>,
     chain_store_handle: ChainStoreHandle,
@@ -158,7 +158,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
 
 /// Generic implementation. The dispatch.* functions can be tested as
 /// here we don't depend on the the tokio opaque types.
-impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
+impl<C: Send + Sync> RequestResponseHandler<C> {
     /// Returns a reference to the peer block knowledge tracker.
     pub fn peer_block_knowledge(&self) -> &PeerBlockKnowledge {
         &self.peer_block_knowledge
