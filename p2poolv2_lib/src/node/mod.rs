@@ -36,6 +36,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
+use bitcoin::BlockHash;
 use libp2p::PeerId;
 use libp2p::SwarmBuilder;
 use libp2p::core::transport::Transport;
@@ -77,7 +78,10 @@ impl<T> SwarmResponseChannelTrait<T> for SwarmResponseChannel<T> {
 pub enum SwarmSend<C> {
     Request(PeerId, Message),
     Response(C, Message),
-    Inv(ShareBlock),
+    /// Relay a block inventory announcement to connected peers.
+    /// Sent after a ShareBlock is successfully validated and stored, so
+    /// that other peers learn about the block and can request it via GetData.
+    Inv(BlockHash),
     Disconnect(PeerId),
     /// Broadcast a share block to all connected peers (from emission worker)
     Broadcast(ShareBlock),

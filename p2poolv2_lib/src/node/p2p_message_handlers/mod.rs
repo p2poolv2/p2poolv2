@@ -151,6 +151,7 @@ pub async fn handle_response<C: Send + Sync>(
             &chain_store_handle,
             block_fetcher_handle,
             organise_tx,
+            swarm_tx,
         )
         .await
         .map_err(|e| {

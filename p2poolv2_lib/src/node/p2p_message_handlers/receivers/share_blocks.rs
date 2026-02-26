@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::node::SwarmSend;
 use crate::node::organise_worker::{OrganiseEvent, OrganiseSender};
 use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
 #[cfg(test)]
@@ -24,22 +25,22 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::shares::validation;
 use std::error::Error;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 /// Handle a ShareBlock received from a peer in response to a getblocks request.
 ///
-/// The peer_id identifies the peer that sent the block, allowing
-/// follow-up requests to be directed back to the same peer.
-///
 /// Validates the ShareBlock, stores it in the chain, notifies the block
-/// fetcher that this block was received, and sends it to the organise
-/// worker for candidate-to-confirmed promotion.
-pub async fn handle_share_block(
+/// fetcher that this block was received, sends it to the organise worker
+/// for candidate-to-confirmed promotion, and signals an inv relay to
+/// announce the block to other connected peers.
+pub async fn handle_share_block<C: Send + Sync>(
     _peer_id: libp2p::PeerId,
     share_block: ShareBlock,
     chain_store_handle: &ChainStoreHandle,
     block_fetcher_handle: BlockFetcherHandle,
     organise_tx: OrganiseSender,
+    swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Received share block: {:?}", share_block);
     if let Err(validation_error) =
@@ -77,6 +78,11 @@ pub async fn handle_share_block(
         error!("Failed to send block to organise worker: {}", send_error);
     }
 
+    // Signal the actor loop to relay an inv announcement to other peers
+    if let Err(send_error) = swarm_tx.send(SwarmSend::Inv(block_hash)).await {
+        error!("Failed to send inv relay for block {block_hash}: {send_error}");
+    }
+
     debug!("Successfully added share block to chain");
     Ok(())
 }
@@ -84,6 +90,7 @@ pub async fn handle_share_block(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node::messages::Message;
     use crate::node::organise_worker;
     use crate::node::request_response_handler::block_fetcher;
     use crate::store::writer::StoreError;
@@ -92,12 +99,21 @@ mod tests {
     };
     use bitcoin::hashes::Hash as _;
     use mockall::predicate::*;
+    use tokio::sync::oneshot;
 
-    /// Create test block fetcher and organise handles.
-    fn test_handles() -> (BlockFetcherHandle, OrganiseSender) {
+    type TestChannel = oneshot::Sender<Message>;
+
+    /// Create test block fetcher, organise, and swarm handles.
+    fn test_handles() -> (
+        BlockFetcherHandle,
+        OrganiseSender,
+        mpsc::Sender<SwarmSend<TestChannel>>,
+        mpsc::Receiver<SwarmSend<TestChannel>>,
+    ) {
         let (block_fetcher_tx, _) = block_fetcher::create_block_fetcher_channel();
         let (organise_tx, _) = organise_worker::create_organise_channel();
-        (block_fetcher_tx, organise_tx)
+        let (swarm_tx, swarm_rx) = mpsc::channel(32);
+        (block_fetcher_tx, organise_tx, swarm_tx, swarm_rx)
     }
 
     #[tokio::test]
@@ -117,16 +133,53 @@ mod tests {
             .with(eq(bitcoin::BlockHash::all_zeros()))
             .returning(|_| Some(genesis_for_tests()));
 
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, organise_tx, swarm_tx, _swarm_rx) = test_handles();
         let result = handle_share_block(
             peer_id,
             share_block,
             &chain_store_handle,
             block_fetcher_handle,
             organise_tx,
+            swarm_tx,
         )
         .await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_share_block_sends_inv_on_success() {
+        let peer_id = libp2p::PeerId::random();
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let share_block = TestShareBlockBuilder::new().build();
+        let block_hash = share_block.block_hash();
+
+        // Mock validation: parent block exists
+        chain_store_handle
+            .expect_get_share()
+            .returning(|_| Some(TestShareBlockBuilder::new().build()));
+        // Mock storage: add block succeeds
+        chain_store_handle
+            .expect_add_share_block()
+            .returning(|_, _| Ok(()));
+
+        let (block_fetcher_handle, organise_tx, swarm_tx, mut swarm_rx) = test_handles();
+        let result = handle_share_block(
+            peer_id,
+            share_block,
+            &chain_store_handle,
+            block_fetcher_handle,
+            organise_tx,
+            swarm_tx,
+        )
+        .await;
+        assert!(result.is_ok());
+
+        // Verify inv relay was sent after successful block handling
+        if let Some(SwarmSend::Inv(sent_block_hash)) = swarm_rx.recv().await {
+            assert_eq!(sent_block_hash, block_hash);
+        } else {
+            panic!("Expected SwarmSend::Inv message after successful ShareBlock handling");
+        }
     }
 
     #[tokio::test]
@@ -147,13 +200,14 @@ mod tests {
             .with(eq(uncle_hash))
             .returning(|_| None);
 
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, organise_tx, swarm_tx, _swarm_rx) = test_handles();
         let result = handle_share_block(
             peer_id,
             share_block,
             &chain_store_handle,
             block_fetcher_handle,
             organise_tx,
+            swarm_tx,
         )
         .await;
         assert!(result.is_err());
@@ -162,6 +216,39 @@ mod tests {
             error_message.contains("not found in store"),
             "Expected uncle not found error, got: {error_message}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_share_block_no_inv_on_validation_error() {
+        let peer_id = libp2p::PeerId::random();
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        let uncle_hash = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
+            .parse::<bitcoin::BlockHash>()
+            .unwrap();
+        let share_block = TestShareBlockBuilder::new()
+            .uncles(vec![uncle_hash])
+            .build();
+
+        chain_store_handle
+            .expect_get_share()
+            .with(eq(uncle_hash))
+            .returning(|_| None);
+
+        let (block_fetcher_handle, organise_tx, swarm_tx, mut swarm_rx) = test_handles();
+        let result = handle_share_block(
+            peer_id,
+            share_block,
+            &chain_store_handle,
+            block_fetcher_handle,
+            organise_tx,
+            swarm_tx,
+        )
+        .await;
+        assert!(result.is_err());
+
+        // No inv should be sent when validation fails
+        assert!(swarm_rx.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -181,13 +268,14 @@ mod tests {
             .with(eq(bitcoin::BlockHash::all_zeros()))
             .returning(|_| Some(genesis_for_tests()));
 
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, organise_tx, swarm_tx, _swarm_rx) = test_handles();
         let result = handle_share_block(
             peer_id,
             share_block,
             &chain_store_handle,
             block_fetcher_handle,
             organise_tx,
+            swarm_tx,
         )
         .await;
         assert!(result.is_err());
