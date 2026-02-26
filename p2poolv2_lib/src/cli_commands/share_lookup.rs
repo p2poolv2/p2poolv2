@@ -43,7 +43,6 @@ fn format_status(status: &Status) -> &'static str {
     match status {
         Status::Pending => "Pending",
         Status::HeaderValid => "HeaderValid",
-        Status::HeaderValid => "HeaderValid",
         Status::Invalid => "Invalid",
         Status::Candidate => "Candidate",
         Status::BlockValid => "BlockValid",

@@ -29,7 +29,7 @@ use bitcoin::BlockHash;
 use libp2p::PeerId;
 use libp2p::request_response::ResponseChannel;
 use peer_selector::PeerSelector;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -129,7 +129,7 @@ pub struct BlockFetcher {
     /// Blockhashes that have been requested -- inflight
     in_flight: HashMap<BlockHash, InFlightRequest>,
     /// Blockhashes waiting to be requested (not yet in-flight).
-    pending: Vec<BlockHash>,
+    pending: VecDeque<BlockHash>,
     /// Peer selection with round-robin distribution and capacity tracking.
     peer_selector: PeerSelector,
 }
@@ -144,7 +144,7 @@ impl BlockFetcher {
             event_rx,
             swarm_tx,
             in_flight: HashMap::with_capacity(INITIAL_IN_FLIGHT_CAPACITY),
-            pending: Vec::new(),
+            pending: VecDeque::new(),
             peer_selector: PeerSelector::new(),
         }
     }
@@ -197,7 +197,7 @@ impl BlockFetcher {
         // Add blockhashes that are not already in-flight or pending
         for blockhash in blockhashes {
             if !self.in_flight.contains_key(&blockhash) && !self.pending.contains(&blockhash) {
-                self.pending.push(blockhash);
+                self.pending.push_back(blockhash);
             }
         }
 
@@ -225,7 +225,7 @@ impl BlockFetcher {
 
         let mut dispatch_count = 0usize;
 
-        while let Some(&blockhash) = self.pending.first() {
+        while let Some(&blockhash) = self.pending.front() {
             let peer_id = match self.peer_selector.select_peer() {
                 Some(peer_id) => peer_id,
                 None => {
@@ -244,7 +244,7 @@ impl BlockFetcher {
                 return;
             }
 
-            self.pending.remove(0);
+            self.pending.pop_front();
             self.in_flight.insert(
                 blockhash,
                 InFlightRequest {
@@ -291,7 +291,7 @@ impl BlockFetcher {
             self.peer_selector.record_completion(old_request.peer_id);
             // Re-add to pending for retry from a different peer
             if !self.pending.contains(&blockhash) {
-                self.pending.push(blockhash);
+                self.pending.push_back(blockhash);
             }
         }
     }
