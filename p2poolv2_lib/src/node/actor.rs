@@ -24,6 +24,7 @@ use crate::node::emission_worker::EmissionWorker;
 use crate::node::messages::Message;
 use crate::node::organise_worker::{OrganiseError, OrganiseSender};
 use crate::node::organise_worker::{OrganiseWorker, create_organise_channel};
+use crate::node::p2p_message_handlers::senders::send_block_inventory;
 use crate::node::request_response_handler::block_fetcher::{
     BlockFetcher, BlockFetcherError, create_block_fetcher_channel,
 };
@@ -219,9 +220,22 @@ impl NodeActor {
                                 .send_response(response_channel, msg);
                             debug!("Sent message to response channel: {:?}", request_id);
                         }
-                        Some(SwarmSend::Inv(_share_block)) => {
-                            // Handle inventory message (optional logging or processing)
-                            tracing::info!("Received SwarmSend::Inv message");
+                        Some(SwarmSend::Inv(block_hash)) => {
+                            let connected_peers = self.node.connected_peers();
+                            let peer_knowledge = self.node
+                                .request_response_handler
+                                .peer_block_knowledge();
+                            if let Err(relay_error) = send_block_inventory(
+                                block_hash,
+                                None,
+                                &connected_peers,
+                                peer_knowledge,
+                                self.node.swarm_tx.clone(),
+                            )
+                            .await
+                            {
+                                error!("Failed to relay inv for block {block_hash}: {relay_error}");
+                            }
                         }
                         Some(SwarmSend::Disconnect(peer_id)) => {
                             if let Err(_e) = self.node.swarm.disconnect_peer_id(peer_id) {
