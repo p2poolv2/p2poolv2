@@ -26,13 +26,23 @@ use std::sync::Arc;
 #[cfg(any(test, feature = "test-utils"))]
 use tempfile::{TempDir, tempdir};
 
+// Imports for TestShareBlockBuilder and related helpers (available with test-utils feature)
+#[cfg(any(test, feature = "test-utils"))]
+use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
+#[cfg(any(test, feature = "test-utils"))]
+use crate::shares::transactions::coinbase::create_coinbase_transaction;
+#[cfg(any(test, feature = "test-utils"))]
+use bitcoin::CompressedPublicKey;
+#[cfg(any(test, feature = "test-utils"))]
+use bitcoin::hashes::Hash;
+#[cfg(any(test, feature = "test-utils"))]
+use bitcoin::{Block, BlockHash, CompactTarget, Transaction, block::Header};
+#[cfg(any(test, feature = "test-utils"))]
+use std::str::FromStr;
+
 // Imports only needed for internal tests
 #[cfg(test)]
-use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
-#[cfg(test)]
 use crate::shares::share_commitment::ShareCommitment;
-#[cfg(test)]
-use crate::shares::transactions::coinbase::create_coinbase_transaction;
 #[cfg(test)]
 use crate::stratum::messages::Notify;
 #[cfg(test)]
@@ -42,13 +52,7 @@ use crate::stratum::messages::SimpleRequest;
 #[cfg(test)]
 use crate::stratum::work::block_template::BlockTemplate;
 #[cfg(test)]
-use bitcoin::CompressedPublicKey;
-#[cfg(test)]
-use bitcoin::hashes::Hash;
-#[cfg(test)]
-use bitcoin::{Block, BlockHash, CompactTarget, Transaction, TxMerkleNode, block::Header};
-#[cfg(test)]
-use std::str::FromStr;
+use bitcoin::TxMerkleNode;
 
 /// Setup returns both chain handle and tempdir (tempdir must stay alive)
 ///
@@ -72,7 +76,7 @@ pub async fn setup_test_chain_store_handle(start_writer: bool) -> (ChainStoreHan
     (chain_handle, temp_dir)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub fn genesis_for_tests() -> ShareBlock {
     TestShareBlockBuilder::new().build()
 }
@@ -110,7 +114,7 @@ pub fn random_hex_string(length: usize, leading_zeroes: usize) -> String {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub fn test_coinbase_transaction() -> bitcoin::Transaction {
     let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
         .parse::<bitcoin::CompressedPublicKey>()
@@ -219,7 +223,7 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[derive(Debug, Clone, Default)]
 pub struct TestShareBlockBuilder {
     bitcoin_block: Option<Block>,
@@ -232,7 +236,7 @@ pub struct TestShareBlockBuilder {
     bits: Option<CompactTarget>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 impl TestShareBlockBuilder {
     pub fn new() -> Self {
         Self::default()
@@ -315,7 +319,7 @@ pub fn multiplied_compact_target_as_work(bits: u32, multiplier: u32) -> bitcoin:
     bitcoin::Target::from_compact(CompactTarget::from_consensus(bits * multiplier)).to_work()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 fn test_share_block(
     bitcoin_block: Option<Block>,
     prev_share_blockhash: &str,
