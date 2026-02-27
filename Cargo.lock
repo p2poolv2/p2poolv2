@@ -3122,6 +3122,7 @@ dependencies = [
  "hmac",
  "p2poolv2_lib",
  "rand 0.8.5",
+ "reqwest",
  "rpassword",
  "serde",
  "sha2",

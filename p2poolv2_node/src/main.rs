@@ -252,11 +252,29 @@ async fn main() -> ExitCode {
         info!("Stratum server stopped");
     });
 
+    let (node_handle, stopping_rx) = match NodeHandle::new(
+        config.clone(),
+        chain_store_handle.clone(),
+        emissions_rx,
+        metrics_handle.clone(),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            error!("Failed to start node: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    info!("Node started");
+
     let api_shutdown_tx = match start_api_server(
         config.api.clone(),
         chain_store_handle.clone(),
         metrics_handle.clone(),
         tracker_handle,
+        node_handle.clone(),
         stratum_config.network,
         stratum_config.pool_signature,
     )
@@ -272,17 +290,6 @@ async fn main() -> ExitCode {
         "API server started on host {} port {}",
         config.api.hostname, config.api.port
     );
-
-    let (node_handle, stopping_rx) =
-        match NodeHandle::new(config, chain_store_handle, emissions_rx, metrics_handle).await {
-            Ok(result) => result,
-            Err(e) => {
-                error!("Failed to start node: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
-
-    info!("Node started");
 
     let mut exit_receiver = exit_sender.subscribe();
     let stop_all = async move |reason: ShutdownReason| -> ShutdownReason {
