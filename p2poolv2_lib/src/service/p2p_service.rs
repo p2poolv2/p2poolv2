@@ -24,7 +24,9 @@ use tower::Service;
 
 use crate::node::SwarmSend;
 use crate::node::messages::Message;
+use crate::node::organise_worker::OrganiseSender;
 use crate::node::p2p_message_handlers::handle_request;
+use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -40,6 +42,8 @@ pub struct RequestContext<C, T> {
     pub response_channel: C,
     pub swarm_tx: mpsc::Sender<SwarmSend<C>>,
     pub time_provider: T,
+    pub block_fetcher_handle: BlockFetcherHandle,
+    pub organise_tx: OrganiseSender,
 }
 
 /// The Tower service that processes inbound P2P requests.

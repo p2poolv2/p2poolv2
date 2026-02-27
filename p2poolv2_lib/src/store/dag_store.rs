@@ -420,7 +420,6 @@ impl Store {
         let mut shares = Vec::with_capacity(candidate_chain.len());
 
         for (height, blockhash) in candidate_chain.iter().rev() {
-            println!("height {height}, hash {blockhash}");
             let share_header = self.get_share_header(blockhash)?.ok_or_else(|| {
                 StoreError::NotFound(format!("Share header not found for {blockhash}"))
             })?;

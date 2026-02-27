@@ -116,16 +116,20 @@ impl OrganiseWorker {
                 OrganiseEvent::Block(share_block) => {
                     let blockhash = share_block.block_hash();
                     debug!("Organising block: {blockhash:?}");
-                    match self.chain_store_handle.organise_block().await {
+                    match self
+                        .chain_store_handle
+                        .promote_block(share_block.header)
+                        .await
+                    {
                         Ok(_height) => {}
                         Err(StoreError::ChannelClosed) => {
-                            error!("Store writer channel closed during organise block");
+                            error!("Store writer channel closed during promote block");
                             return Err(OrganiseError {
                                 message: "Store writer channel closed".to_string(),
                             });
                         }
                         Err(error) => {
-                            error!("Error organising block {error}");
+                            error!("Error promoting block {blockhash}: {error}");
                         }
                     }
                 }
@@ -191,8 +195,8 @@ mod tests {
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
         mock_chain_handle
-            .expect_organise_block()
-            .returning(|| Ok(None));
+            .expect_promote_block()
+            .returning(|_| Ok(None));
 
         let worker = OrganiseWorker::new(organise_rx, mock_chain_handle);
 
@@ -214,8 +218,8 @@ mod tests {
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
         mock_chain_handle
-            .expect_organise_block()
-            .returning(|| Err(StoreError::ChannelClosed));
+            .expect_promote_block()
+            .returning(|_| Err(StoreError::ChannelClosed));
 
         let worker = OrganiseWorker::new(organise_rx, mock_chain_handle);
 
@@ -237,8 +241,8 @@ mod tests {
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
         mock_chain_handle
-            .expect_organise_block()
-            .returning(|| Err(StoreError::Database("test error".to_string())));
+            .expect_promote_block()
+            .returning(|_| Err(StoreError::Database("test error".to_string())));
 
         let worker = OrganiseWorker::new(rx, mock_chain_handle);
 
