@@ -29,7 +29,7 @@ use tracing::{debug, info};
 /// If `target_peer` is None, sends the inv to all `connected_peers`.
 /// Peers that are already known to have the block (tracked in
 /// `peer_block_knowledge`) are skipped.
-pub async fn send_block_inventory<C: 'static + Send + Sync>(
+pub async fn send_block_inventory<C: Send + Sync>(
     block_hash: BlockHash,
     target_peer: Option<PeerId>,
     connected_peers: &[PeerId],
