@@ -386,6 +386,20 @@ impl ChainStoreHandle {
         Ok(height)
     }
 
+    /// Add a block to the candidate chain and promote candidates to confirmed.
+    ///
+    /// Combines organise_header (which places the block on the candidate
+    /// chain) with organise_block (which promotes qualifying candidates to
+    /// confirmed). This is the full promotion pipeline for a newly received
+    /// share block.
+    pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError> {
+        let blockhash = header.block_hash();
+        self.organise_header(header).await?;
+        let height = self.organise_block().await?;
+        info!("Promoted block {blockhash} to confirmed height {height:?}");
+        Ok(height)
+    }
+
     /// Add a PPLNS share for accounting.
     pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError> {
         self.store_handle.add_pplns_share(pplns_share).await
@@ -476,6 +490,7 @@ mockall::mock! {
         pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError>;
         pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;
         pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
+        pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
         pub async fn add_share_block(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), StoreError>;
         pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError>;
         pub async fn add_job(&self, serialized_notify: String) -> Result<(), StoreError>;
