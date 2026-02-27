@@ -63,6 +63,15 @@ pub enum Commands {
         #[arg(short, long, default_value = "10")]
         num: u32,
     },
+    /// Display candidate shares and their uncles for a height range
+    CandidatesInfo {
+        /// Height to get candidates up to, inclusive. Default is candidate tip.
+        #[arg(short, long)]
+        to: Option<u32>,
+        /// Number of candidates to display going back from --to. Default 10.
+        #[arg(short, long, default_value = "10")]
+        num: u32,
+    },
     /// Look up a share by its blockhash
     ShareLookup {
         /// Share blockhash to look up
@@ -95,6 +104,7 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         Some(Commands::Info)
         | Some(Commands::PplnsShares { .. })
         | Some(Commands::SharesInfo { .. })
+        | Some(Commands::CandidatesInfo { .. })
         | Some(Commands::ShareLookup { .. }) => {
             // These commands require config and store
             let config_path = cli
@@ -141,6 +151,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                 }
                 Some(Commands::SharesInfo { to, num }) => {
                     cli_commands::shares_info::execute(chain_store_handle, *to, *num)?;
+                }
+                Some(Commands::CandidatesInfo { to, num }) => {
+                    cli_commands::candidates_info::execute(chain_store_handle, *to, *num)?;
                 }
                 Some(Commands::ShareLookup { hash, full }) => {
                     cli_commands::share_lookup::execute(chain_store_handle, hash, *full)?;

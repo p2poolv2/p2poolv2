@@ -154,6 +154,18 @@ impl ChainStoreHandle {
         }
     }
 
+    /// Get the height of the candidate chain tip.
+    pub fn get_candidate_tip_height(&self) -> Result<Option<u32>, StoreError> {
+        match self.store_handle.store().get_top_candidate_height() {
+            Ok(height) => {
+                debug!("Candidate chain tip height {}", height);
+                Ok(Some(height))
+            }
+            Err(StoreError::NotFound(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Get the chain tip blockhash from the confirmed chain.
     pub fn get_chain_tip(&self) -> Result<BlockHash, StoreError> {
         self.store_handle.get_chain_tip()
@@ -446,6 +458,7 @@ mockall::mock! {
         pub fn get_headers_for_locator(&self, block_hashes: &[BlockHash], stop_block_hash: &BlockHash, limit: usize) -> Result<Vec<ShareHeader>, StoreError>;
         pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_tip_height(&self) -> Result<Option<u32>, StoreError>;
+        pub fn get_candidate_tip_height(&self) -> Result<Option<u32>, StoreError>;
         pub fn build_locator(&self) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_chain_tip(&self) -> Result<BlockHash, StoreError>;
         pub fn get_chain_tip_and_uncles(&self) -> Result<(BlockHash, HashSet<BlockHash>), StoreError>;

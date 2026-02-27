@@ -404,6 +404,58 @@ impl Store {
 
         Ok(shares)
     }
+
+    /// Query candidate shares from to_height down to from_height.
+    ///
+    /// Uses the candidate chain range query to fetch all blockhashes in one call,
+    /// then resolves each share's header and uncle details.
+    /// Returns shares ordered from highest height to lowest.
+    pub fn query_candidates(
+        &self,
+        from_height: u32,
+        to_height: u32,
+    ) -> Result<Vec<ShareInfo>, StoreError> {
+        let candidate_chain = self.get_candidates(from_height, to_height)?;
+
+        let mut shares = Vec::with_capacity(candidate_chain.len());
+
+        for (height, blockhash) in candidate_chain.iter().rev() {
+            println!("height {height}, hash {blockhash}");
+            let share_header = self.get_share_header(blockhash)?.ok_or_else(|| {
+                StoreError::NotFound(format!("Share header not found for {blockhash}"))
+            })?;
+
+            let uncle_infos: Vec<UncleInfo> = share_header
+                .uncles
+                .iter()
+                .filter_map(|uncle_hash| {
+                    let uncle_header = self.get_share_header(uncle_hash).ok().flatten()?;
+
+                    let uncle_height = self
+                        .get_block_metadata(uncle_hash)
+                        .ok()
+                        .and_then(|metadata| metadata.expected_height);
+
+                    Some(UncleInfo {
+                        blockhash: *uncle_hash,
+                        miner_pubkey: uncle_header.miner_pubkey.to_string(),
+                        timestamp: uncle_header.time,
+                        height: uncle_height,
+                    })
+                })
+                .collect();
+
+            shares.push(ShareInfo {
+                blockhash: *blockhash,
+                height: *height,
+                miner_pubkey: share_header.miner_pubkey.to_string(),
+                timestamp: share_header.time,
+                uncles: uncle_infos,
+            });
+        }
+
+        Ok(shares)
+    }
 }
 
 #[cfg(test)]
