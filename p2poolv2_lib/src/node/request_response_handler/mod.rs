@@ -209,6 +209,8 @@ impl<C: Send + Sync> RequestResponseHandler<C> {
             response_channel: channel,
             swarm_tx: self.swarm_tx.clone(),
             time_provider: SystemTimeProvider,
+            block_fetcher_handle: self.block_fetcher_handle.clone(),
+            organise_tx: self.organise_tx.clone(),
         };
 
         match tokio::time::timeout(Duration::from_secs(1), self.request_service.ready()).await {
