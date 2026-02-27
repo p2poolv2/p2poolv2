@@ -93,6 +93,31 @@ impl NodeHandle {
         }
     }
 
+    /// Create a stub NodeHandle for tests that responds to commands with defaults.
+    pub fn new_for_test() -> Self {
+        let (command_tx, mut command_rx) = mpsc::channel::<Command>(32);
+        tokio::spawn(async move {
+            while let Some(command) = command_rx.recv().await {
+                match command {
+                    Command::GetPeers(reply) => {
+                        let _ = reply.send(Vec::new());
+                    }
+                    Command::Shutdown(reply) => {
+                        let _ = reply.send(());
+                        return;
+                    }
+                    Command::GetPplnsShares(_, reply) => {
+                        let _ = reply.send(Vec::new());
+                    }
+                    Command::SendToPeer(_, _, reply) => {
+                        let _ = reply.send(Ok(()));
+                    }
+                }
+            }
+        });
+        Self { command_tx }
+    }
+
     /// Get PPLNS shares with filtering
     pub async fn get_pplns_shares(
         &self,

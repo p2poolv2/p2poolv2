@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod gen_auth;
+pub mod peers_info;
 
 use clap::{Parser, Subcommand};
 use p2poolv2_lib::cli_commands;
@@ -80,6 +81,8 @@ pub enum Commands {
         #[arg(short, long, default_value = "false")]
         full: bool,
     },
+    /// Show connected peers by querying the running node's API
+    PeersInfo,
     /// Generate API authentication credentials (salt, password, HMAC)
     GenAuth {
         /// Username for API authentication
@@ -100,6 +103,15 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         Some(Commands::GenAuth { username, password }) => {
             // gen-auth doesn't need config or store
             crate::commands::gen_auth::execute(username.clone(), password.clone())?;
+        }
+        Some(Commands::PeersInfo) => {
+            // peers-info needs config (for API host/port) but not the store
+            let config_path = cli
+                .config
+                .as_ref()
+                .ok_or("Config file required for this command. Use --config")?;
+            let config = Config::load(config_path)?;
+            crate::commands::peers_info::execute(&config.api).await?;
         }
         Some(Commands::Info)
         | Some(Commands::PplnsShares { .. })

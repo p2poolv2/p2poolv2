@@ -30,6 +30,7 @@ base64 = "0.22"
 hmac = "0.12"
 sha2 = "0.10"
 rpassword = "7.3"
+reqwest = { workspace = true, features = ["json"] }
 
 [[bin]]
 name = "p2poolv2_cli"

@@ -20,6 +20,7 @@ use p2poolv2_api::api::error::ApiError;
 use p2poolv2_api::start_api_server;
 use p2poolv2_lib::accounting::{simple_pplns::SimplePplnsShare, stats::metrics::start_metrics};
 use p2poolv2_lib::config::ApiConfig;
+use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
 use p2poolv2_lib::test_utils::setup_test_chain_store_handle;
 use reqwest::{Client, header};
@@ -43,11 +44,13 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
     };
 
     // Start API server with the new signature
+    let node_handle = NodeHandle::new_for_test();
     let shutdown_tx = start_api_server(
         api_config.clone(),
         chain_store_handle,
         metrics_handle,
         tracker_handle,
+        node_handle,
         bitcoin::Network::Signet,
         Some("p2poolv2".to_string()),
     )
@@ -122,11 +125,13 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
     };
 
     // Start API server with authentication
+    let node_handle = NodeHandle::new_for_test();
     let shutdown_tx = start_api_server(
         api_config.clone(),
         chain_store_handle,
         metrics_handle,
         tracker_handle,
+        node_handle,
         bitcoin::Network::Signet,
         Some("p2poolv2".to_string()),
     )
@@ -235,11 +240,13 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
     };
 
     // Start API server
+    let node_handle = NodeHandle::new_for_test();
     let shutdown_tx = p2poolv2_api::start_api_server(
         api_config.clone(),
         chain_store_handle.clone(),
         metrics_handle,
         tracker_handle,
+        node_handle,
         bitcoin::Network::Signet,
         Some("p2poolv2".to_string()),
     )
@@ -345,11 +352,13 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
     };
 
     // Start API server
+    let node_handle = NodeHandle::new_for_test();
     let shutdown_tx = p2poolv2_api::start_api_server(
         api_config.clone(),
         chain_store_handle.clone(),
         metrics_handle,
         tracker_handle,
+        node_handle,
         bitcoin::Network::Signet,
         Some("p2poolv2".to_string()),
     )
@@ -450,11 +459,13 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
     };
 
     // Start API server
+    let node_handle = NodeHandle::new_for_test();
     let shutdown_tx = p2poolv2_api::start_api_server(
         api_config.clone(),
         chain_store_handle.clone(),
         metrics_handle,
         tracker_handle,
+        node_handle,
         bitcoin::Network::Signet,
         Some("p2poolv2".to_string()),
     )

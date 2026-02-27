@@ -23,13 +23,14 @@ use axum::{
     routing::get,
 };
 use chrono::DateTime;
+use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::stratum::work::tracker::{JobTracker, parse_coinbase};
 use p2poolv2_lib::{
     accounting::{simple_pplns::SimplePplnsShare, stats::metrics::MetricsHandle},
     config::ApiConfig,
     shares::chain::chain_store_handle::ChainStoreHandle,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
 use tracing::info;
@@ -40,6 +41,7 @@ pub(crate) struct AppState {
     pub(crate) chain_store_handle: ChainStoreHandle,
     pub(crate) metrics_handle: MetricsHandle,
     pub(crate) tracker_handle: Arc<JobTracker>,
+    pub(crate) node_handle: NodeHandle,
     pub(crate) auth_user: Option<String>,
     pub(crate) auth_token: Option<String>,
 }
@@ -72,6 +74,7 @@ pub async fn start_api_server(
     chain_store_handle: ChainStoreHandle,
     metrics_handle: MetricsHandle,
     tracker_handle: Arc<JobTracker>,
+    node_handle: NodeHandle,
     network: bitcoin::Network,
     pool_signature: Option<String>,
 ) -> Result<oneshot::Sender<()>, std::io::Error> {
@@ -85,6 +88,7 @@ pub async fn start_api_server(
         chain_store_handle,
         metrics_handle,
         tracker_handle,
+        node_handle,
         auth_user: config.auth_user.clone(),
         auth_token: config.auth_token.clone(),
     });
@@ -98,6 +102,7 @@ pub async fn start_api_server(
         .route("/health", get(health_check))
         .route("/metrics", get(metrics))
         .route("/pplns_shares", get(pplns_shares))
+        .route("/peers", get(peers))
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth_middleware,
@@ -149,6 +154,30 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
         exposition.push_str(&coinbase_distribution);
     }
     exposition
+}
+
+/// Response type for the /peers endpoint.
+#[derive(Serialize)]
+struct PeerResponse {
+    peer_id: String,
+}
+
+/// Returns the list of currently connected peers.
+async fn peers(State(state): State<Arc<AppState>>) -> Result<Json<Vec<PeerResponse>>, ApiError> {
+    let peer_ids = state
+        .node_handle
+        .get_peers()
+        .await
+        .map_err(|error| ApiError::ServerError(format!("Failed to get peers: {error}")))?;
+
+    let peers: Vec<PeerResponse> = peer_ids
+        .into_iter()
+        .map(|peer_id| PeerResponse {
+            peer_id: peer_id.to_string(),
+        })
+        .collect();
+
+    Ok(Json(peers))
 }
 
 async fn pplns_shares(
@@ -296,6 +325,7 @@ mod tests {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         //  Prepare AppState
+        let node_handle = NodeHandle::new_for_test();
         let state = Arc::new(AppState {
             app_config: AppConfig {
                 pool_signature_length: 8,
@@ -304,6 +334,7 @@ mod tests {
             chain_store_handle,
             metrics_handle,
             tracker_handle,
+            node_handle,
             auth_user: None,
             auth_token: None,
         });
