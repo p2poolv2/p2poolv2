@@ -72,16 +72,7 @@ impl EmissionWorker {
             // Pass a references to chain store handle to avoid clones on each loop
             match handle_stratum_share(emission, &self.chain_store_handle, self.network).await {
                 Ok(Some(share_block)) => {
-                    // Send header to organise worker for candidate chain building
-                    if let Err(e) = self
-                        .organise_tx
-                        .send(OrganiseEvent::Header(share_block.header.clone()))
-                        .await
-                    {
-                        error!("Failed to send header to organise worker: {e}");
-                    }
-                    // Send block to organise worker for confirmed promotion
-                    // TODO - this should be an even to a to be built ConfirmationWorker.
+                    // Send block to organise worker for confirmed promotion.
                     if let Err(e) = self
                         .organise_tx
                         .send(OrganiseEvent::Block(share_block.clone()))
