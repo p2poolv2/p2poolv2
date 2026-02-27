@@ -515,9 +515,13 @@ mod tests {
     async fn test_dispatch_request_records_inventory_knowledge() {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let mut chain_store_handle = ChainStoreHandle::default();
-        chain_store_handle
-            .expect_clone()
-            .returning(ChainStoreHandle::default);
+        chain_store_handle.expect_clone().returning(|| {
+            let mut cloned = ChainStoreHandle::default();
+            cloned
+                .expect_get_missing_blockhashes()
+                .returning(|_| Vec::with_capacity(0));
+            cloned
+        });
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
         let peer_id = libp2p::PeerId::random();
@@ -601,9 +605,13 @@ mod tests {
     async fn test_remove_peer_knowledge() {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let mut chain_store_handle = ChainStoreHandle::default();
-        chain_store_handle
-            .expect_clone()
-            .returning(ChainStoreHandle::default);
+        chain_store_handle.expect_clone().returning(|| {
+            let mut cloned = ChainStoreHandle::default();
+            cloned
+                .expect_get_missing_blockhashes()
+                .returning(|_| Vec::with_capacity(0));
+            cloned
+        });
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
         let peer_id = libp2p::PeerId::random();
