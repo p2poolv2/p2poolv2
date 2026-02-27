@@ -28,7 +28,10 @@ use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
-/// Handle a ShareBlock received from a peer in response to a getblocks request.
+/// Handle a ShareBlock received from a peer.
+///
+/// Called both when a peer broadcasts a new share directly (inbound request)
+/// and when we receive a share in response to a GetData request (response).
 ///
 /// Validates the ShareBlock, stores it in the chain, notifies the block
 /// fetcher that this block was received, sends it to the organise worker
