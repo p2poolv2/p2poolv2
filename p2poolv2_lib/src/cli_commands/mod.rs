@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+pub mod candidates_info;
 pub mod chain_info;
 pub mod pplns_shares;
 pub mod share_lookup;

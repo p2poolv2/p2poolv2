@@ -82,10 +82,15 @@ impl Store {
         for item in iter.flatten() {
             let (key, value) = item;
             if key.ends_with(suffix_bytes) {
-                results.push(encode::deserialize(&value)?);
+                let height_bytes: [u8; 4] = key[..4]
+                    .try_into()
+                    .map_err(|_| StoreError::Database("Invalid height key length".into()))?;
+                let height = u32::from_be_bytes(height_bytes);
+                let blockhash = encode::deserialize(&value)?;
+                results.push((height, blockhash));
             }
         }
-        Ok((from..=to).zip(results).collect())
+        Ok(results)
     }
 
     /// Get branch from a blockhash back to the first ancestor on a target chain.
