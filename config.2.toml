@@ -1,6 +1,6 @@
 [network]
 listen_address = "/ip4/127.0.0.1/tcp/6886"
-dial_peers = ["/ip4/127.0.0.1/tcp/6884"]
+dial_peers = ["/ip4/127.0.0.1/tcp/6885"]
 max_pending_incoming = 10
 max_pending_outgoing = 10
 max_established_incoming = 50

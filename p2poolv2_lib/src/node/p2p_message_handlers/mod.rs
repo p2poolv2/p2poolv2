@@ -18,7 +18,7 @@ pub mod receivers;
 pub mod senders;
 
 use crate::node::SwarmSend;
-use crate::node::messages::{GetData, InventoryMessage, Message};
+use crate::node::messages::{GetData, Message};
 use crate::node::organise_worker::OrganiseSender;
 use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
 use crate::service::p2p_service::RequestContext;
@@ -31,6 +31,7 @@ use crate::utils::time_provider::TimeProvider;
 use receivers::getblocks::handle_getblocks;
 use receivers::getdata::handle_getdata_block;
 use receivers::getheaders::handle_getheaders;
+use receivers::inventory::handle_inventory;
 use receivers::share_blocks::handle_share_block;
 use receivers::share_headers::handle_share_headers;
 use std::error::Error;
@@ -66,19 +67,7 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
             .await
         }
         Message::Inventory(inventory) => {
-            info!("Received inventory: {:?}", inventory);
-            match inventory {
-                InventoryMessage::BlockHashes(have_blocks) => {
-                    info!("Received share block inventory: {:?}", have_blocks);
-                }
-                InventoryMessage::TransactionHashes(have_transactions) => {
-                    info!(
-                        "Received share transaction inventory: {:?}",
-                        have_transactions
-                    );
-                }
-            }
-            Ok(())
+            handle_inventory(inventory, ctx.peer, ctx.chain_store_handle, ctx.swarm_tx).await
         }
         Message::NotFound(_) => {
             info!("Received not found message");
@@ -158,10 +147,6 @@ pub async fn handle_response<C: Send + Sync>(
             error!("Failed to add share from response: {}", e);
             format!("Failed to add share from response: {e}").into()
         }),
-        Message::Inventory(inventory) => {
-            info!("Received inventory response: {:?}", inventory);
-            Ok(())
-        }
         Message::NotFound(_) => {
             info!("Received not found response from peer: {}", peer);
             Ok(())
@@ -177,6 +162,7 @@ pub async fn handle_response<C: Send + Sync>(
 mod tests {
     use super::*;
     use crate::node::SwarmSend;
+    use crate::node::messages::InventoryMessage;
     use crate::node::organise_worker::OrganiseSender;
     use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
@@ -290,20 +276,25 @@ mod tests {
     #[tokio::test]
     async fn test_handle_request_inventory_for_blocks() {
         let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let chain_store_handle = ChainStoreHandle::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
-        // Test BlockHashes inventory
-        let block_hashes = vec![
-            "0000000000000000000000000000000000000000000000000000000000000001"
-                .parse::<BlockHash>()
-                .unwrap(),
-            "0000000000000000000000000000000000000000000000000000000000000002"
-                .parse::<BlockHash>()
-                .unwrap(),
-        ];
+        let block_hash1 = "0000000000000000000000000000000000000000000000000000000000000001"
+            .parse::<BlockHash>()
+            .unwrap();
+        let block_hash2 = "0000000000000000000000000000000000000000000000000000000000000002"
+            .parse::<BlockHash>()
+            .unwrap();
+
+        let block_hashes = vec![block_hash1, block_hash2];
+        let missing = vec![block_hash1];
+
+        chain_store_handle
+            .expect_get_missing_blockhashes()
+            .returning(move |_| missing.clone());
+
         let inventory = InventoryMessage::BlockHashes(block_hashes);
 
         let ctx = RequestContext {
@@ -316,19 +307,31 @@ mod tests {
         };
 
         let result = handle_request(ctx).await;
-
         assert!(result.is_ok());
+
+        if let Some(SwarmSend::Request(sent_peer, Message::GetData(GetData::Block(hash)))) =
+            swarm_rx.recv().await
+        {
+            assert_eq!(sent_peer, peer_id);
+            assert_eq!(hash, block_hash1);
+        } else {
+            panic!("Expected SwarmSend::Request with GetData::Block message");
+        }
+
+        assert!(
+            swarm_rx.try_recv().is_err(),
+            "No additional messages expected"
+        );
     }
 
     #[tokio::test]
     async fn test_handle_request_inventory_for_txns() {
         let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
-        // Test TransactionHashes inventory
         let tx_hashes: Vec<bitcoin::Txid> = vec![
             "0000000000000000000000000000000000000000000000000000000000000001"
                 .parse()
@@ -349,8 +352,12 @@ mod tests {
         };
 
         let result = handle_request(ctx).await;
-
         assert!(result.is_ok());
+
+        assert!(
+            swarm_rx.try_recv().is_err(),
+            "No messages expected for TransactionHashes inventory"
+        );
     }
 
     #[tokio::test]
