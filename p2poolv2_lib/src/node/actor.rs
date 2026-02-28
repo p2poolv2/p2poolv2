@@ -93,6 +93,22 @@ impl NodeHandle {
         }
     }
 
+    /// Get PPLNS shares with filtering
+    pub async fn get_pplns_shares(
+        &self,
+        query: crate::command::GetPplnsShareQuery,
+    ) -> Vec<SimplePplnsShare> {
+        let (tx, rx) = oneshot::channel();
+        let _ = self
+            .command_tx
+            .send(Command::GetPplnsShares(query, tx))
+            .await;
+        rx.await.unwrap_or_default()
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl NodeHandle {
     /// Create a stub NodeHandle for tests that responds to commands with defaults.
     pub fn new_for_test() -> Self {
         let (command_tx, mut command_rx) = mpsc::channel::<Command>(32);
@@ -118,17 +134,40 @@ impl NodeHandle {
         Self { command_tx }
     }
 
-    /// Get PPLNS shares with filtering
-    pub async fn get_pplns_shares(
-        &self,
-        query: crate::command::GetPplnsShareQuery,
-    ) -> Vec<SimplePplnsShare> {
-        let (tx, rx) = oneshot::channel();
-        let _ = self
-            .command_tx
-            .send(Command::GetPplnsShares(query, tx))
-            .await;
-        rx.await.unwrap_or_default()
+    /// Create a stub NodeHandle for tests pre-loaded with a set of generated peers.
+    ///
+    /// Returns the handle and the string representations of the generated peer IDs
+    /// so callers can assert on expected values without depending on libp2p directly.
+    pub fn new_for_test_with_peer_count(count: usize) -> (Self, Vec<String>) {
+        let peer_ids: Vec<libp2p::PeerId> = (0..count)
+            .map(|_| {
+                libp2p::identity::Keypair::generate_ed25519()
+                    .public()
+                    .to_peer_id()
+            })
+            .collect();
+        let peer_id_strings: Vec<String> = peer_ids.iter().map(|id| id.to_string()).collect();
+        let (command_tx, mut command_rx) = mpsc::channel::<Command>(32);
+        tokio::spawn(async move {
+            while let Some(command) = command_rx.recv().await {
+                match command {
+                    Command::GetPeers(reply) => {
+                        let _ = reply.send(peer_ids.clone());
+                    }
+                    Command::Shutdown(reply) => {
+                        let _ = reply.send(());
+                        return;
+                    }
+                    Command::GetPplnsShares(_, reply) => {
+                        let _ = reply.send(Vec::new());
+                    }
+                    Command::SendToPeer(_, _, reply) => {
+                        let _ = reply.send(Ok(()));
+                    }
+                }
+            }
+        });
+        (Self { command_tx }, peer_id_strings)
     }
 }
 
