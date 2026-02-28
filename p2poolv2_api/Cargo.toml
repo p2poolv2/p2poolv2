@@ -28,6 +28,7 @@ serde_json = "1"
 chrono = { workspace = true }
 
 [dev-dependencies]
+p2poolv2_lib = { workspace = true, features = ["test-utils"] }
 tempfile.workspace = true
 test-log = { version = "0.2", features = ["trace"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

@@ -157,7 +157,7 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
 }
 
 /// Response type for the /peers endpoint.
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct PeerResponse {
     peer_id: String,
 }
@@ -237,7 +237,62 @@ mod tests {
     use std::str::FromStr;
     use std::sync::Arc;
 
-    #[test_log::test(tokio::test)]
+    /// Helper to build an AppState with the given NodeHandle for endpoint tests.
+    async fn build_test_state(node_handle: NodeHandle) -> (Arc<AppState>, tempfile::TempDir) {
+        let (chain_store_handle, temp_dir) = setup_test_chain_store_handle(true).await;
+        let metrics_temp = tempfile::tempdir().unwrap();
+        let metrics_handle =
+            metrics::start_metrics(metrics_temp.path().to_str().unwrap().to_string())
+                .await
+                .unwrap();
+        let tracker_handle = start_tracker_actor();
+        let state = Arc::new(AppState {
+            app_config: AppConfig {
+                pool_signature_length: 0,
+                network: bitcoin::Network::Signet,
+            },
+            chain_store_handle,
+            metrics_handle,
+            tracker_handle,
+            node_handle,
+            auth_user: None,
+            auth_token: None,
+        });
+        (state, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn test_peers_endpoint_returns_empty_list() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let response = peers(State(state)).await.unwrap();
+        assert!(response.0.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_peers_endpoint_returns_peer_list() {
+        let (node_handle, expected_peer_ids) = NodeHandle::new_for_test_with_peer_count(3);
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let response = peers(State(state)).await.unwrap();
+        let peer_responses = &response.0;
+
+        assert_eq!(peer_responses.len(), 3);
+
+        let returned_ids: Vec<&str> = peer_responses
+            .iter()
+            .map(|peer| peer.peer_id.as_str())
+            .collect();
+        for expected_id in &expected_peer_ids {
+            assert!(
+                returned_ids.contains(&expected_id.as_str()),
+                "Expected peer ID {expected_id} not found in response"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn test_metrics_endpoint_exposes_coinbase_split() {
         let tracker_handle = start_tracker_actor();
 
