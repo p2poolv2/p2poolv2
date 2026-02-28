@@ -65,3 +65,5 @@ port = 3000
 # Optional authentication credentials
 # auth_user = "admin"
 # auth_token = "your_secret_token"
+# auth_password is the raw password for p2poolv2_cli client auth only. Do not set on server config.
+# auth_password = "your_password"

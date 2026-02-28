@@ -309,8 +309,10 @@ pub struct ApiConfig {
     pub port: u16,
     /// Optional authentication username
     pub auth_user: Option<String>,
-    /// Optional authentication token
+    /// Optional authentication token (salt$hmac format, used by the server)
     pub auth_token: Option<String>,
+    /// Optional raw password for CLI client authentication (not used by server)
+    pub auth_password: Option<String>,
 }
 
 /// Config for p2poolv2 nodes

@@ -22,12 +22,9 @@ use axum::{
     response::Response,
 };
 use base64::Engine;
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use p2poolv2_lib::auth::password_to_hmac;
 use std::sync::Arc;
 use tracing::warn;
-
-type HmacSha256 = Hmac<Sha256>;
 
 /// Validate password against stored salt$hmac token
 fn validate_password(password: &str, stored_token: &str) -> bool {
@@ -41,13 +38,13 @@ fn validate_password(password: &str, stored_token: &str) -> bool {
     let salt = parts[0];
     let expected_hmac = parts[1];
 
-    // Compute HMAC-SHA256 of password using salt as key
-    let Ok(mut mac) = HmacSha256::new_from_slice(salt.as_bytes()) else {
-        warn!("Failed to create HMAC");
-        return false;
+    let computed_hmac = match password_to_hmac(salt, password) {
+        Ok(hmac) => hmac,
+        Err(error) => {
+            warn!("Failed to compute HMAC: {error}");
+            return false;
+        }
     };
-    mac.update(password.as_bytes());
-    let computed_hmac = hex::encode(mac.finalize().into_bytes());
 
     computed_hmac == expected_hmac
 }

@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use p2poolv2_lib::auth::build_basic_auth_header;
 use p2poolv2_lib::config::ApiConfig;
 use serde::Deserialize;
 use std::error::Error;
@@ -48,7 +49,12 @@ pub async fn execute(api_config: &ApiConfig) -> Result<(), Box<dyn Error>> {
     let url = format!("http://{}:{}/peers", api_config.hostname, api_config.port);
 
     let client = reqwest::Client::new();
-    let request = client.get(&url);
+    let mut request = client.get(&url);
+
+    if let (Some(username), Some(password)) = (&api_config.auth_user, &api_config.auth_password) {
+        let auth_header = build_basic_auth_header(username, password);
+        request = request.header("Authorization", auth_header);
+    }
 
     let response = request.send().await.map_err(|error| {
         format!("Failed to connect to API at {url}: {error}. Is the node running?")

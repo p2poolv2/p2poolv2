@@ -25,10 +25,10 @@ clap = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
 rand = "0.8"
-hex = "0.4"
-base64 = "0.22"
-hmac = "0.12"
-sha2 = "0.10"
+hex = { workspace = true }
+base64 = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
 rpassword = "7.3"
 reqwest = { workspace = true, features = ["json"] }
 
