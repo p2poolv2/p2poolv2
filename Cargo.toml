@@ -52,6 +52,8 @@ config = "0.13"
 serde = { version = "1.0", features = ["derive"] }
 clap = { version = "4.0", features = ["derive", "env"] }
 hex = "0.4.3"
+hmac = "0.12"
+sha2 = "0.10"
 rocksdb = { version = "0.24.0", features = ["multi-threaded-cf"] }
 async-trait = "0.1.83"
 thiserror = "2.0.8"

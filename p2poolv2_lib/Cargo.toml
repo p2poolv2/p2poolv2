@@ -27,6 +27,8 @@ tracing-subscriber = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
 hex = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
 rocksdb = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }

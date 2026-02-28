@@ -74,3 +74,5 @@ port = 46884
 # auth_user = "admin"
 # auth_token is of the format salt:password-hmac. Use can p2poolv2_cli gen-auth to generate a token.
 # auth_token = "your_secret_token"
+# auth_password is the raw password for p2poolv2_cli client auth only. Do not set on server config.
+# auth_password = "your_password"

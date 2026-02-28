@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod accounting;
+pub mod auth;
 pub mod cli_commands;
 pub mod command;
 pub mod config;

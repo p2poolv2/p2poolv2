@@ -485,6 +485,7 @@ mod tests {
                 port: 3000,
                 auth_user: None,
                 auth_token: None,
+                auth_password: None,
             },
         };
         config.network = network_config;
