@@ -31,15 +31,19 @@ use tracing::{debug, error, info, warn};
 /// Called both when a peer broadcasts a new share directly (inbound request)
 /// and when we receive a share in response to a GetData request (response).
 ///
-/// Before storing, checks that the block is not a duplicate and that the
-/// header is already on the candidate chain or has valid proof of work.
-/// This prevents peers from flooding the database with invalid headers.
-/// During sync, headers arrive before full blocks so the candidate chain
-/// check passes. For broadcast blocks, PoW is verified. After storing,
-/// notifies the block
-/// fetcher and sends the block to the validation worker for full
-/// asynchronous validation. On successful validation the worker emits
-/// OrganiseEvent::Block and SwarmSend::Inv.
+/// Before storing, checks that the block is not a duplicate and that
+/// the header is already on the candidate chain or has valid proof of
+/// work.
+///
+/// This prevents peers from flooding the database with invalid
+/// headers. During sync, headers arrive before full blocks so the
+/// candidate chain check passes. For broadcast blocks, PoW is
+/// verified.
+///
+/// After storing, notifies the block fetcher and sends the block to
+/// the validation worker for full asynchronous validation. On
+/// successful validation the worker emits OrganiseEvent::Block and
+/// SwarmSend::Inv.
 pub async fn handle_share_block(
     _peer_id: libp2p::PeerId,
     share_block: ShareBlock,
