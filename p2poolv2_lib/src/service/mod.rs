@@ -60,8 +60,8 @@ mod tests {
     use crate::config::NetworkConfig;
     use crate::node::SwarmSend;
     use crate::node::messages::Message;
-    use crate::node::organise_worker;
     use crate::node::request_response_handler::block_fetcher;
+    use crate::node::validation_worker;
     use crate::service::p2p_service::{P2PService, RequestContext};
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -79,13 +79,13 @@ mod tests {
     use tower::limit::RateLimit;
     use tower::{Service, ServiceBuilder, ServiceExt, limit::RateLimitLayer};
 
-    fn fetcher_organiser_handles_for_tests() -> (
+    fn fetcher_validation_handles_for_tests() -> (
         block_fetcher::BlockFetcherHandle,
-        organise_worker::OrganiseSender,
+        validation_worker::ValidationSender,
     ) {
         let (block_fetcher_tx, _) = block_fetcher::create_block_fetcher_channel();
-        let (organise_tx, _) = organise_worker::create_organise_channel();
-        (block_fetcher_tx, organise_tx)
+        let (validation_tx, _) = validation_worker::create_validation_channel();
+        (block_fetcher_tx, validation_tx)
     }
 
     // This struct simulates a service that always fails on poll_ready()
@@ -172,7 +172,7 @@ mod tests {
             .service(P2PService::new(swarm_tx.clone()));
 
         // Inline RequestContext construction
-        let (block_fetcher_handle, organise_tx) = fetcher_organiser_handles_for_tests();
+        let (block_fetcher_handle, validation_tx) = fetcher_validation_handles_for_tests();
         let ctx1 = RequestContext {
             peer: PeerId::random(),
             request: Message::NotFound(()),
@@ -181,7 +181,7 @@ mod tests {
             swarm_tx: swarm_tx.clone(),
             time_provider: time_provider.clone(),
             block_fetcher_handle: block_fetcher_handle.clone(),
-            organise_tx: organise_tx.clone(),
+            validation_tx: validation_tx.clone(),
         };
 
         let ctx2 = RequestContext {
@@ -192,7 +192,7 @@ mod tests {
             swarm_tx: swarm_tx.clone(),
             time_provider: time_provider.clone(),
             block_fetcher_handle: block_fetcher_handle.clone(),
-            organise_tx: organise_tx.clone(),
+            validation_tx: validation_tx.clone(),
         };
 
         let ctx3 = RequestContext {
@@ -203,7 +203,7 @@ mod tests {
             swarm_tx: swarm_tx.clone(),
             time_provider: time_provider.clone(),
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         };
 
         // First request should succeed
@@ -284,7 +284,7 @@ mod tests {
 
         // Build a request context
         let peer_id = PeerId::random();
-        let (block_fetcher_handle, organise_tx) = fetcher_organiser_handles_for_tests();
+        let (block_fetcher_handle, validation_tx) = fetcher_validation_handles_for_tests();
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::NotFound(()),
@@ -293,7 +293,7 @@ mod tests {
             swarm_tx: swarm_tx.clone(),
             time_provider: time_provider.clone(),
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         };
 
         // Try service.ready(), and on failure, trigger disconnect manually
@@ -360,7 +360,7 @@ mod tests {
         };
 
         let peer_id = PeerId::random();
-        let (block_fetcher_handle, organise_tx) = fetcher_organiser_handles_for_tests();
+        let (block_fetcher_handle, validation_tx) = fetcher_validation_handles_for_tests();
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::NotFound(()),
@@ -369,7 +369,7 @@ mod tests {
             swarm_tx: swarm_tx.clone(),
             time_provider: time_provider.clone(),
             block_fetcher_handle: block_fetcher_handle.clone(),
-            organise_tx: organise_tx.clone(),
+            validation_tx: validation_tx.clone(),
         };
 
         let ctx1 = RequestContext {
@@ -380,7 +380,7 @@ mod tests {
             swarm_tx: swarm_tx.clone(),
             time_provider: time_provider.clone(),
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         };
 
         let mut service =
@@ -452,7 +452,7 @@ mod tests {
         };
 
         let peer_id = PeerId::random();
-        let (block_fetcher_handle, organise_tx) = fetcher_organiser_handles_for_tests();
+        let (block_fetcher_handle, validation_tx) = fetcher_validation_handles_for_tests();
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::NotFound(()),
@@ -461,7 +461,7 @@ mod tests {
             swarm_tx: swarm_tx.clone(),
             time_provider: time_provider.clone(),
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         };
 
         let mut service =

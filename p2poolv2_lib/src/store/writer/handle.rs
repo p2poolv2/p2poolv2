@@ -55,6 +55,11 @@ impl StoreHandle {
     // DIRECT READS - These delegate directly to Store (may block briefly)
     // ========================================================================
 
+    /// Check whether a share block exists without deserializing it.
+    pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool {
+        self.store.share_block_exists(blockhash)
+    }
+
     /// Get a share from the store.
     pub fn get_share(&self, blockhash: &BlockHash) -> Option<ShareBlock> {
         self.store.get_share(blockhash)
@@ -321,6 +326,7 @@ mockall::mock! {
         pub fn new(store: Arc<Store>, write_tx: WriteSender) -> Self;
 
         // Direct reads
+        pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool;
         pub fn get_share(&self, blockhash: &BlockHash) -> Option<ShareBlock>;
         pub fn get_share_at_tip(&self) -> Option<ShareBlock>;
         pub fn get_share_headers(&self, blockhashes: &[BlockHash]) -> Result<Vec<ShareHeader>, StoreError>;

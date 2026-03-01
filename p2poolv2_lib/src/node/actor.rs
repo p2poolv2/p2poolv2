@@ -28,6 +28,9 @@ use crate::node::p2p_message_handlers::senders::send_block_inventory;
 use crate::node::request_response_handler::block_fetcher::{
     BlockFetcher, BlockFetcherError, create_block_fetcher_channel,
 };
+use crate::node::validation_worker::{
+    ValidationWorker, ValidationWorkerError, create_validation_channel,
+};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -203,6 +206,7 @@ struct NodeActor {
     organise_tx: OrganiseSender,
     organise_handle: tokio::task::JoinHandle<Result<(), OrganiseError>>,
     block_fetcher_handle: tokio::task::JoinHandle<Result<(), BlockFetcherError>>,
+    validation_handle: tokio::task::JoinHandle<Result<(), ValidationWorkerError>>,
 }
 
 impl NodeActor {
@@ -216,6 +220,9 @@ impl NodeActor {
         // Create organise channel
         let (organise_tx, organise_rx) = create_organise_channel();
 
+        // Create validation channel
+        let (validation_tx, validation_rx) = create_validation_channel();
+
         // Create block fetcher channel
         let (block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
 
@@ -223,12 +230,21 @@ impl NodeActor {
             config,
             chain_store_handle.clone(),
             block_fetcher_tx,
-            organise_tx.clone(),
+            validation_tx,
         )?;
 
         // Spawn organise worker
         let organise_worker = OrganiseWorker::new(organise_rx, chain_store_handle.clone());
         let organise_handle = tokio::spawn(organise_worker.run());
+
+        // Spawn validation worker
+        let validation_worker = ValidationWorker::new(
+            validation_rx,
+            chain_store_handle.clone(),
+            organise_tx.clone(),
+            node.swarm_tx.clone(),
+        );
+        let validation_handle = tokio::spawn(validation_worker.run());
 
         // Spawn block fetcher
         let block_fetcher = BlockFetcher::new(block_fetcher_rx, node.swarm_tx.clone());
@@ -246,6 +262,7 @@ impl NodeActor {
                 organise_tx,
                 organise_handle,
                 block_fetcher_handle,
+                validation_handle,
             },
             stopping_rx,
         ))
@@ -422,6 +439,27 @@ impl NodeActor {
                         }
                         Err(e) => {
                             error!("Block fetcher panicked: {e}");
+                            if self.stopping_tx.send(()).is_err() {
+                                error!("Failed to send stopping signal - receiver dropped");
+                            }
+                            return;
+                        }
+                    }
+                }
+                validation_result = &mut self.validation_handle => {
+                    match validation_result {
+                        Ok(Err(e)) => {
+                            error!("Validation worker fatal error: {e}");
+                            if self.stopping_tx.send(()).is_err() {
+                                error!("Failed to send stopping signal - receiver dropped");
+                            }
+                            return;
+                        }
+                        Ok(Ok(())) => {
+                            info!("Validation worker stopped cleanly");
+                        }
+                        Err(e) => {
+                            error!("Validation worker panicked: {e}");
                             if self.stopping_tx.send(()).is_err() {
                                 error!("Failed to send stopping signal - receiver dropped");
                             }
