@@ -22,6 +22,14 @@ use serde::Serialize;
 use std::error::Error;
 use std::str::FromStr;
 
+/// Specifies how to look up shares.
+pub enum LookupQuery<'a> {
+    /// Look up by full blockhash.
+    Hash(&'a str),
+    /// Look up all shares at a given height.
+    Height(u32),
+}
+
 /// JSON output structure for share lookup.
 #[derive(Serialize)]
 struct ShareLookupOutput {
@@ -50,26 +58,19 @@ fn format_status(status: &Status) -> &'static str {
     }
 }
 
-/// Execute the share-lookup command.
-///
-/// Looks up a share by its blockhash and prints its header fields,
-/// height, and status as JSON. With full=true, also includes
-/// share chain transaction IDs.
-pub fn execute(
-    chain_store_handle: ChainStoreHandle,
-    hash_string: &str,
+/// Build the JSON output for a single share identified by its blockhash.
+fn build_share_output(
+    chain_store_handle: &ChainStoreHandle,
+    blockhash: &BlockHash,
     full: bool,
-) -> Result<(), Box<dyn Error>> {
-    let blockhash = BlockHash::from_str(hash_string)
-        .map_err(|error| format!("Invalid blockhash '{hash_string}': {error}"))?;
-
+) -> Result<ShareLookupOutput, Box<dyn Error>> {
     let store = chain_store_handle.store_handle().store();
 
     let share_header = store
-        .get_share_header(&blockhash)?
+        .get_share_header(blockhash)?
         .ok_or_else(|| format!("Share not found for blockhash {blockhash}"))?;
 
-    let metadata = store.get_block_metadata(&blockhash).ok();
+    let metadata = store.get_block_metadata(blockhash).ok();
 
     let height = metadata
         .as_ref()
@@ -81,7 +82,7 @@ pub fn execute(
 
     let transaction_ids = if full {
         let share_block = chain_store_handle
-            .get_share(&blockhash)
+            .get_share(blockhash)
             .ok_or_else(|| format!("Full share not found for blockhash {blockhash}"))?;
 
         let txids: Vec<String> = share_block
@@ -95,7 +96,7 @@ pub fn execute(
         None
     };
 
-    let output = ShareLookupOutput {
+    Ok(ShareLookupOutput {
         blockhash: blockhash.to_string(),
         height,
         status: status.to_string(),
@@ -110,10 +111,55 @@ pub fn execute(
         bits: format!("{:#x}", share_header.bits.to_consensus()),
         time: format_timestamp(share_header.time as u64),
         transactions: transaction_ids,
-    };
+    })
+}
 
+/// Execute the share-lookup command.
+///
+/// Dispatches to the appropriate lookup method based on the query type.
+/// Hash lookup prints a single JSON object. Height lookup prints a JSON
+/// array of all shares at that height.
+pub fn execute(
+    chain_store_handle: ChainStoreHandle,
+    query: LookupQuery,
+    full: bool,
+) -> Result<(), Box<dyn Error>> {
+    match query {
+        LookupQuery::Hash(hash_string) => execute_by_hash(&chain_store_handle, hash_string, full),
+        LookupQuery::Height(height) => execute_by_height(&chain_store_handle, height, full),
+    }
+}
+
+/// Look up a single share by its full blockhash and print it as JSON.
+fn execute_by_hash(
+    chain_store_handle: &ChainStoreHandle,
+    hash_string: &str,
+    full: bool,
+) -> Result<(), Box<dyn Error>> {
+    let blockhash = BlockHash::from_str(hash_string)
+        .map_err(|error| format!("Invalid blockhash '{hash_string}': {error}"))?;
+
+    let output = build_share_output(chain_store_handle, &blockhash, full)?;
     println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
 
+/// Look up all shares at a given height and print them as a JSON array.
+fn execute_by_height(
+    chain_store_handle: &ChainStoreHandle,
+    height: u32,
+    full: bool,
+) -> Result<(), Box<dyn Error>> {
+    let blockhashes = chain_store_handle.get_blockhashes_for_height(height);
+    if blockhashes.is_empty() {
+        return Err(format!("No shares found at height {height}").into());
+    }
+
+    let mut outputs = Vec::with_capacity(blockhashes.len());
+    for blockhash in &blockhashes {
+        outputs.push(build_share_output(chain_store_handle, blockhash, full)?);
+    }
+    println!("{}", serde_json::to_string_pretty(&outputs)?);
     Ok(())
 }
 
@@ -135,7 +181,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_execute_not_found() {
+    async fn test_execute_hash_not_found() {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let genesis = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
@@ -145,12 +191,12 @@ mod tests {
             .expect("Failed to initialize genesis");
 
         let random_hash = BlockHash::all_zeros().to_string();
-        let result = execute(chain_store_handle, &random_hash, false);
+        let result = execute(chain_store_handle, LookupQuery::Hash(&random_hash), false);
         assert!(result.is_err(), "Should error for unknown blockhash");
     }
 
     #[tokio::test]
-    async fn test_execute_genesis_header() {
+    async fn test_execute_hash_genesis_header() {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let genesis = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
@@ -160,7 +206,7 @@ mod tests {
             .await
             .expect("Failed to initialize genesis");
 
-        let result = execute(chain_store_handle, &genesis_hash, false);
+        let result = execute(chain_store_handle, LookupQuery::Hash(&genesis_hash), false);
         assert!(
             result.is_ok(),
             "Should succeed for genesis: {:?}",
@@ -169,7 +215,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_execute_genesis_full() {
+    async fn test_execute_hash_genesis_full() {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let genesis = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
@@ -179,7 +225,7 @@ mod tests {
             .await
             .expect("Failed to initialize genesis");
 
-        let result = execute(chain_store_handle, &genesis_hash, true);
+        let result = execute(chain_store_handle, LookupQuery::Hash(&genesis_hash), true);
         assert!(
             result.is_ok(),
             "Should succeed with --full for genesis: {:?}",
@@ -191,7 +237,43 @@ mod tests {
     async fn test_execute_invalid_hash() {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
-        let result = execute(chain_store_handle, "not_a_valid_hash", false);
+        let result = execute(
+            chain_store_handle,
+            LookupQuery::Hash("not_a_valid_hash"),
+            false,
+        );
         assert!(result.is_err(), "Should error for invalid hash string");
+    }
+
+    #[tokio::test]
+    async fn test_execute_height_genesis() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+
+        let genesis = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
+        chain_store_handle
+            .init_or_setup_genesis(genesis)
+            .await
+            .expect("Failed to initialize genesis");
+
+        let result = execute(chain_store_handle, LookupQuery::Height(0), false);
+        assert!(
+            result.is_ok(),
+            "Should find genesis at height 0: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_height_not_found() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+
+        let genesis = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
+        chain_store_handle
+            .init_or_setup_genesis(genesis)
+            .await
+            .expect("Failed to initialize genesis");
+
+        let result = execute(chain_store_handle, LookupQuery::Height(999), false);
+        assert!(result.is_err(), "Should error for height with no shares");
     }
 }

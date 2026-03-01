@@ -17,7 +17,7 @@
 pub mod gen_auth;
 pub mod peers_info;
 
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand};
 use p2poolv2_lib::cli_commands;
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -73,10 +73,15 @@ pub enum Commands {
         #[arg(short, long, default_value = "10")]
         num: u32,
     },
-    /// Look up a share by its blockhash
+    /// Look up a share by its blockhash or height
+    #[command(group(ArgGroup::new("query").required(true).args(["hash", "height"])))]
     ShareLookup {
         /// Share blockhash to look up
-        hash: String,
+        #[arg(short = 'a', long)]
+        hash: Option<String>,
+        /// Share height to look up (prints all shares at that height)
+        #[arg(short = 'H', long)]
+        height: Option<u32>,
         /// Show full share including transactions
         #[arg(short, long, default_value = "false")]
         full: bool,
@@ -167,8 +172,15 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                 Some(Commands::CandidatesInfo { to, num }) => {
                     cli_commands::candidates_info::execute(chain_store_handle, *to, *num)?;
                 }
-                Some(Commands::ShareLookup { hash, full }) => {
-                    cli_commands::share_lookup::execute(chain_store_handle, hash, *full)?;
+                Some(Commands::ShareLookup { hash, height, full }) => {
+                    let query = if let Some(hash_value) = hash {
+                        cli_commands::share_lookup::LookupQuery::Hash(hash_value)
+                    } else if let Some(height_value) = height {
+                        cli_commands::share_lookup::LookupQuery::Height(*height_value)
+                    } else {
+                        unreachable!("Provide at least one of hash or height")
+                    };
+                    cli_commands::share_lookup::execute(chain_store_handle, query, *full)?;
                 }
                 _ => unreachable!(),
             }

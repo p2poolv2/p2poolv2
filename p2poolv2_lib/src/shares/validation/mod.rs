@@ -96,18 +96,18 @@ pub const MAX_TIME_DIFF: u64 = 60;
 /// Verifies that the share's block hash meets its compact target (bits)
 /// and that the number of uncles does not exceed MAX_UNCLES.
 pub fn validate_share_header(
-    share: &ShareHeader,
+    share_header: &ShareHeader,
     _chain_store_handle: &ChainStoreHandle,
 ) -> Result<(), ValidationError> {
-    if share.uncles.len() > MAX_UNCLES {
+    if share_header.uncles.len() > MAX_UNCLES {
         return Err(ValidationError::TooManyUncles {
-            count: share.uncles.len(),
+            count: share_header.uncles.len(),
             maximum: MAX_UNCLES,
         });
     }
 
-    let target = Target::from_compact(share.bits);
-    let block_hash = share.block_hash();
+    let target = Target::from_compact(share_header.bits);
+    let block_hash = share_header.block_hash();
     if !target.is_met_by(block_hash) {
         return Err(ValidationError::InsufficientWork { block_hash, target });
     }
