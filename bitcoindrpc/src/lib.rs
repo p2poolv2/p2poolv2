@@ -50,12 +50,24 @@ struct JsonRpcError {
     message: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Deserialize, Clone)]
 #[allow(dead_code)]
 pub struct BitcoinRpcConfig {
     pub url: String,
     pub username: String,
     pub password: String,
+}
+
+/// Custom Debug to redact passwords
+impl std::fmt::Debug for BitcoinRpcConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BitcoinRpcConfig")
+            .field("url", &self.url)
+            .field("username", &self.username)
+            .field("password", &"[redacted]")
+            .finish()
+    }
 }
 
 /// Error type for the BitcoindRpcClient
