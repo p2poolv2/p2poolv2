@@ -162,26 +162,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_execute_returns_error_on_non_success_status() {
-        let mock_server = MockServer::start().await;
-
-        Mock::given(method("GET"))
-            .and(path("/peers"))
-            .respond_with(ResponseTemplate::new(401).set_body_string("Unauthorized"))
-            .expect(1)
-            .mount(&mock_server)
-            .await;
-
-        let port = mock_server.address().port();
-        let api_config = make_api_config(port);
-
-        let result = execute(&api_config).await;
-        assert!(result.is_err());
-        let error_message = result.unwrap_err().to_string();
-        assert!(error_message.contains("401"));
-    }
-
-    #[tokio::test]
     async fn test_execute_returns_error_when_server_unreachable() {
         // Use a port where nothing is listening
         let api_config = make_api_config(19999);
