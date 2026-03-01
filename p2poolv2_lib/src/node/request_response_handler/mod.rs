@@ -23,8 +23,8 @@ use crate::config::NetworkConfig;
 use crate::node::SwarmSend;
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::{InventoryMessage, Message};
-use crate::node::organise_worker::OrganiseSender;
 use crate::node::p2p_message_handlers::handle_response;
+use crate::node::validation_worker::ValidationSender;
 use crate::service::build_service;
 use crate::service::p2p_service::RequestContext;
 #[cfg(test)]
@@ -62,7 +62,7 @@ pub struct RequestResponseHandler<C: Send + Sync> {
     chain_store_handle: ChainStoreHandle,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     block_fetcher_handle: BlockFetcherHandle,
-    organise_tx: OrganiseSender,
+    validation_tx: ValidationSender,
     peer_block_knowledge: PeerBlockKnowledge,
 }
 
@@ -76,7 +76,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
         chain_store_handle: ChainStoreHandle,
         swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
         block_fetcher_handle: BlockFetcherHandle,
-        organise_tx: OrganiseSender,
+        validation_tx: ValidationSender,
     ) -> Self {
         let service =
             build_service::<ResponseChannel<Message>, _>(network_config, swarm_tx.clone());
@@ -85,7 +85,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
             peer_block_knowledge: PeerBlockKnowledge::default(),
         }
     }
@@ -210,7 +210,7 @@ impl<C: Send + Sync> RequestResponseHandler<C> {
             swarm_tx: self.swarm_tx.clone(),
             time_provider: SystemTimeProvider,
             block_fetcher_handle: self.block_fetcher_handle.clone(),
-            organise_tx: self.organise_tx.clone(),
+            validation_tx: self.validation_tx.clone(),
         };
 
         match tokio::time::timeout(Duration::from_secs(1), self.request_service.ready()).await {
@@ -260,7 +260,7 @@ impl<C: Send + Sync> RequestResponseHandler<C> {
             self.chain_store_handle.clone(),
             self.swarm_tx.clone(),
             self.block_fetcher_handle.clone(),
-            self.organise_tx.clone(),
+            self.validation_tx.clone(),
         )
         .await
         {
@@ -303,13 +303,14 @@ mod tests {
     ) -> RequestResponseHandler<TestChannel> {
         let service = build_service::<TestChannel, _>(test_network_config(), swarm_tx.clone());
         let (block_fetcher_tx, _block_fetcher_rx) = block_fetcher::create_block_fetcher_channel();
-        let (organise_tx, _organise_rx) = crate::node::organise_worker::create_organise_channel();
+        let (validation_tx, _validation_rx) =
+            crate::node::validation_worker::create_validation_channel();
         RequestResponseHandler {
             request_service: service,
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle: block_fetcher_tx,
-            organise_tx,
+            validation_tx,
             peer_block_knowledge: PeerBlockKnowledge::default(),
         }
     }
@@ -481,13 +482,14 @@ mod tests {
         // Use a service that never becomes ready, guaranteeing the 1-second
         // timeout in dispatch_request fires and triggers a disconnect.
         let (block_fetcher_tx, _block_fetcher_rx) = block_fetcher::create_block_fetcher_channel();
-        let (organise_tx, _organise_rx) = crate::node::organise_worker::create_organise_channel();
+        let (validation_tx, _validation_rx) =
+            crate::node::validation_worker::create_validation_channel();
         let mut handler = RequestResponseHandler {
             request_service: BoxService::new(NeverReadyService),
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle: block_fetcher_tx,
-            organise_tx,
+            validation_tx,
             peer_block_knowledge: PeerBlockKnowledge::default(),
         };
 
@@ -548,12 +550,9 @@ mod tests {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let mut chain_store_handle = ChainStoreHandle::default();
         // The cloned handle is used by handle_response -> handle_share_block,
-        // which validates and stores the block. We mock the minimum needed.
+        // which stores the block. We mock the minimum needed.
         chain_store_handle.expect_clone().returning(|| {
             let mut cloned = ChainStoreHandle::default();
-            cloned
-                .expect_get_share()
-                .returning(|_| Some(TestShareBlockBuilder::new().build()));
             cloned.expect_add_share_block().returning(|_, _| Ok(()));
             cloned
         });

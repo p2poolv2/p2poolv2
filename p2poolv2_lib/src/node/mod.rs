@@ -18,6 +18,7 @@ pub mod behaviour;
 pub mod emission_worker;
 pub mod organise_worker;
 pub mod request_response_handler;
+pub mod validation_worker;
 pub use crate::config::Config;
 pub mod actor;
 pub mod messages;
@@ -25,10 +26,10 @@ pub mod p2p_message_handlers;
 
 use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::node::messages::Message;
-use crate::node::organise_worker::OrganiseSender;
 use crate::node::p2p_message_handlers::senders::send_getheaders;
 use crate::node::request_response_handler::RequestResponseHandler;
 use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
+use crate::node::validation_worker::ValidationSender;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -102,7 +103,7 @@ impl Node {
         config: Config,
         chain_store_handle: ChainStoreHandle,
         block_fetcher_handle: BlockFetcherHandle,
-        organise_tx: OrganiseSender,
+        validation_tx: ValidationSender,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
 
@@ -193,7 +194,7 @@ impl Node {
             chain_store_handle.clone(),
             swarm_tx.clone(),
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         );
 
         Ok(Self {
@@ -421,8 +422,8 @@ mod tests {
         ApiConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig, StratumConfig,
     };
     use crate::node::Node;
-    use crate::node::organise_worker::create_organise_channel;
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
+    use crate::node::validation_worker::create_validation_channel;
     use bitcoindrpc::BitcoinRpcConfig;
     use futures::StreamExt;
     use std::time::{Duration, Instant};
@@ -496,12 +497,12 @@ mod tests {
             .returning(ChainStoreHandle::default);
 
         let (block_fetcher_tx, _block_fetcher_rx) = create_block_fetcher_channel();
-        let (organise_tx, _organise_rx) = create_organise_channel();
+        let (validation_tx, _validation_rx) = create_validation_channel();
         let mut node = Node::new(
             config.clone(),
             chain_store_handle,
             block_fetcher_tx,
-            organise_tx,
+            validation_tx,
         )
         .expect("Node initialization failed");
 

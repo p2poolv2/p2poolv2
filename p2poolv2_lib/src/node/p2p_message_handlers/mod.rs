@@ -19,8 +19,8 @@ pub mod senders;
 
 use crate::node::SwarmSend;
 use crate::node::messages::{GetData, Message};
-use crate::node::organise_worker::OrganiseSender;
 use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
+use crate::node::validation_worker::ValidationSender;
 use crate::service::p2p_service::RequestContext;
 #[cfg(test)]
 #[mockall_double::double]
@@ -100,8 +100,7 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
             share_block,
             &ctx.chain_store_handle,
             ctx.block_fetcher_handle,
-            ctx.organise_tx,
-            ctx.swarm_tx,
+            ctx.validation_tx,
         )
         .await
         .map_err(|e| {
@@ -131,7 +130,7 @@ pub async fn handle_response<C: Send + Sync>(
     chain_store_handle: ChainStoreHandle,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     block_fetcher_handle: BlockFetcherHandle,
-    organise_tx: OrganiseSender,
+    validation_tx: ValidationSender,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Handling response {} from peer: {}", response, peer);
     match response {
@@ -152,8 +151,7 @@ pub async fn handle_response<C: Send + Sync>(
             share_block,
             &chain_store_handle,
             block_fetcher_handle,
-            organise_tx,
-            swarm_tx,
+            validation_tx,
         )
         .await
         .map_err(|e| {
@@ -176,9 +174,9 @@ mod tests {
     use super::*;
     use crate::node::SwarmSend;
     use crate::node::messages::InventoryMessage;
-    use crate::node::organise_worker::OrganiseSender;
     use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
+    use crate::node::validation_worker::ValidationSender;
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::share_block::Txids;
@@ -190,11 +188,11 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
 
-    /// Create test block fetcher and organise handles for handle_response tests.
-    fn test_handles() -> (BlockFetcherHandle, OrganiseSender) {
+    /// Create test block fetcher and validation handles for handle_response tests.
+    fn test_handles() -> (BlockFetcherHandle, ValidationSender) {
         let (block_fetcher_tx, _) = create_block_fetcher_channel();
-        let (organise_tx, _) = crate::node::organise_worker::create_organise_channel();
-        (block_fetcher_tx, organise_tx)
+        let (validation_tx, _) = crate::node::validation_worker::create_validation_channel();
+        (block_fetcher_tx, validation_tx)
     }
 
     #[tokio::test]
@@ -204,7 +202,7 @@ mod tests {
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx) = test_handles();
 
         // Mock the response headers
         let block1 = TestShareBlockBuilder::new().build();
@@ -227,7 +225,7 @@ mod tests {
             swarm_tx,
             time_provider,
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         };
 
         let result = handle_request(ctx).await;
@@ -251,7 +249,7 @@ mod tests {
         let (response_channel, _response_channel_rx) = oneshot::channel::<Message>();
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx) = test_handles();
 
         // Create test blocks that will be returned
         let block1 = TestShareBlockBuilder::new().build();
@@ -273,7 +271,7 @@ mod tests {
             swarm_tx,
             time_provider,
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         };
 
         let result = handle_request(ctx).await;
@@ -299,7 +297,7 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx) = test_handles();
 
         let block_hash1 = "0000000000000000000000000000000000000000000000000000000000000001"
             .parse::<BlockHash>()
@@ -325,7 +323,7 @@ mod tests {
             swarm_tx,
             time_provider,
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         };
 
         let result = handle_request(ctx).await;
@@ -353,7 +351,7 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx) = test_handles();
 
         let tx_hashes: Vec<bitcoin::Txid> = vec![
             "0000000000000000000000000000000000000000000000000000000000000001"
@@ -373,7 +371,7 @@ mod tests {
             swarm_tx,
             time_provider,
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         };
 
         let result = handle_request(ctx).await;
@@ -392,7 +390,7 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx) = test_handles();
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -402,7 +400,7 @@ mod tests {
             swarm_tx,
             time_provider,
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         };
 
         let result = handle_request(ctx).await;
@@ -417,7 +415,7 @@ mod tests {
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx) = test_handles();
 
         let block = TestShareBlockBuilder::new().build();
         let block_hash = block.block_hash();
@@ -440,7 +438,7 @@ mod tests {
             swarm_tx,
             time_provider,
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         };
 
         let result = handle_request(ctx).await;
@@ -463,7 +461,7 @@ mod tests {
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx) = test_handles();
 
         let block_hash = "0000000000000000000000000000000000000000000000000000000000000001"
             .parse::<BlockHash>()
@@ -481,7 +479,7 @@ mod tests {
             swarm_tx,
             time_provider,
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         };
 
         let result = handle_request(ctx).await;
@@ -501,7 +499,7 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx) = test_handles();
 
         // Test GetData message with txid
         let txid = "0000000000000000000000000000000000000000000000000000000000000001"
@@ -517,7 +515,7 @@ mod tests {
             swarm_tx,
             time_provider,
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         };
 
         let result = handle_request(ctx).await;
@@ -532,7 +530,7 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx) = test_handles();
 
         // Create a test transaction
         let transaction = crate::test_utils::test_coinbase_transaction();
@@ -545,7 +543,7 @@ mod tests {
             swarm_tx,
             time_provider,
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         };
 
         let result = handle_request(ctx).await;
@@ -560,7 +558,7 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx) = test_handles();
 
         // Create test share headers
         let block1 = TestShareBlockBuilder::new().build();
@@ -581,7 +579,7 @@ mod tests {
             swarm_tx,
             time_provider,
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         };
 
         let result = handle_request(ctx).await;
@@ -592,19 +590,18 @@ mod tests {
     #[tokio::test]
     async fn test_handle_request_share_block() {
         let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_tx, _) =
+            crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, mut validation_rx) =
+            crate::node::validation_worker::create_validation_channel();
 
         let share_block = TestShareBlockBuilder::new().build();
         let block_hash = share_block.block_hash();
 
-        // Mock validation: parent block exists
-        chain_store_handle
-            .expect_get_share()
-            .returning(|_| Some(TestShareBlockBuilder::new().build()));
         // Mock storage: add block succeeds
         chain_store_handle
             .expect_add_share_block()
@@ -617,42 +614,43 @@ mod tests {
             response_channel,
             swarm_tx,
             time_provider,
-            block_fetcher_handle,
-            organise_tx,
+            block_fetcher_handle: block_fetcher_tx,
+            validation_tx,
         };
 
         let result = handle_request(ctx).await;
         assert!(result.is_ok());
 
-        // Verify inv relay was sent after successful block handling
-        if let Some(SwarmSend::Inv(sent_block_hash)) = swarm_rx.recv().await {
+        // Verify validation event was sent after successful store
+        if let Some(crate::node::validation_worker::ValidationEvent::ValidateBlock(
+            sent_block_hash,
+        )) = validation_rx.recv().await
+        {
             assert_eq!(sent_block_hash, block_hash);
         } else {
-            panic!("Expected SwarmSend::Inv message after successful ShareBlock request handling");
+            panic!("Expected ValidationEvent::ValidateBlock after successful ShareBlock handling");
         }
     }
 
     #[tokio::test]
-    async fn test_handle_request_share_block_validation_error() {
+    async fn test_handle_request_share_block_store_error() {
         let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx) = test_handles();
 
-        // Build a share with an uncle that does not exist in the store
-        let uncle_hash = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
-            .parse::<BlockHash>()
-            .unwrap();
-        let share_block = TestShareBlockBuilder::new()
-            .uncles(vec![uncle_hash])
-            .build();
+        let share_block = TestShareBlockBuilder::new().build();
 
+        // Mock storage: add block fails
         chain_store_handle
-            .expect_get_share()
-            .with(mockall::predicate::eq(uncle_hash))
-            .returning(|_| None);
+            .expect_add_share_block()
+            .returning(|_, _| {
+                Err(crate::store::writer::StoreError::Database(
+                    "test error".to_string(),
+                ))
+            });
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -662,14 +660,11 @@ mod tests {
             swarm_tx,
             time_provider,
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         };
 
         let result = handle_request(ctx).await;
         assert!(result.is_err());
-
-        // No inv should be sent when validation fails
-        assert!(swarm_rx.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -688,14 +683,14 @@ mod tests {
         let block2 = TestShareBlockBuilder::new().build();
         let share_headers = vec![block1.header.clone(), block2.header.clone()];
 
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx) = test_handles();
         let result = handle_response(
             peer_id,
             Message::ShareHeaders(share_headers),
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         )
         .await;
 
@@ -708,14 +703,14 @@ mod tests {
         let chain_store_handle = ChainStoreHandle::default();
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx) = test_handles();
         let result = handle_response(
             peer_id,
             Message::NotFound(()),
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         )
         .await;
 
@@ -735,14 +730,14 @@ mod tests {
         ];
         let inventory = InventoryMessage::BlockHashes(block_hashes);
 
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx) = test_handles();
         let result = handle_response(
             peer_id,
             Message::Inventory(inventory),
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         )
         .await;
 
@@ -755,14 +750,14 @@ mod tests {
         let chain_store_handle = ChainStoreHandle::default();
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
-        let (block_fetcher_handle, organise_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx) = test_handles();
         let result = handle_response(
             peer_id,
             Message::GetData(GetData::Block(BlockHash::all_zeros())),
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,
-            organise_tx,
+            validation_tx,
         )
         .await;
 

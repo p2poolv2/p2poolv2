@@ -25,9 +25,9 @@ use std::collections::HashMap;
 use tracing::debug;
 
 impl Store {
-    /// Add a share to the store, returns the metadata created for the
-    /// share.
+    /// Add a share to the store.
     ///
+    /// Returns early if the block already exists (duplicate guard).
     /// Uses StorageShareBlock to serialize the share so that
     /// transactions are not serialized with the block.
     ///
@@ -40,6 +40,13 @@ impl Store {
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), StoreError> {
         let blockhash = share.block_hash();
+
+        // Skip if this block already exists in the store
+        if self.share_block_exists(&blockhash) {
+            debug!("Share block {blockhash} already exists in store, skipping");
+            return Ok(());
+        }
+
         debug!(
             "Adding share to store with {} txs: {:?} work: {:?}",
             share.transactions.len(),
@@ -89,6 +96,16 @@ impl Store {
         batch.put_cf::<&[u8], Vec<u8>>(&block_cf, blockhash.as_ref(), encoded_share_block);
 
         Ok(())
+    }
+
+    /// Check whether a share block exists in the store without deserializing it.
+    pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool {
+        let block_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
+        self.db
+            .get_cf::<&[u8]>(&block_cf, blockhash.as_ref())
+            .ok()
+            .flatten()
+            .is_some()
     }
 
     /// Get a share from the store
@@ -501,5 +518,56 @@ mod tests {
         let nonexistent_hash = BlockHash::all_zeros();
         let share = store.get_share(&nonexistent_hash);
         assert!(share.is_none());
+    }
+
+    #[test]
+    fn test_share_block_exists_returns_false_for_missing_block() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let nonexistent_hash = BlockHash::all_zeros();
+        assert!(!store.share_block_exists(&nonexistent_hash));
+    }
+
+    #[test]
+    fn test_share_block_exists_returns_true_for_stored_block() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block = TestShareBlockBuilder::new().build();
+        let blockhash = block.block_hash();
+
+        assert!(!store.share_block_exists(&blockhash));
+
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&block, true, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert!(store.share_block_exists(&blockhash));
+    }
+
+    #[test]
+    fn test_add_share_block_skips_duplicate() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block = TestShareBlockBuilder::new().build();
+        let blockhash = block.block_hash();
+
+        // First add succeeds and stores the block
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&block, true, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        assert!(store.get_share(&blockhash).is_some());
+
+        // Second add of the same block returns Ok without error
+        let mut batch = Store::get_write_batch();
+        let result = store.add_share_block(&block, true, &mut batch);
+        assert!(result.is_ok());
+
+        // The batch should be empty (no writes for duplicate)
+        // We verify by checking the block is still retrievable and unchanged
+        store.commit_batch(batch).unwrap();
+        assert!(store.get_share(&blockhash).is_some());
     }
 }
