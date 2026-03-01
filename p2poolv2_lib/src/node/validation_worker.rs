@@ -175,6 +175,7 @@ impl ValidationWorker {
             error!("Failed to send validated block to organise worker: {send_error}");
         }
 
+        // Relay block once context free validations are run. If later the block is not confirmed, peers should have a copy of this block anyway.
         if let Err(send_error) = swarm_tx.send(SwarmSend::Inv(block_hash)).await {
             error!("Failed to send inv relay for validated block {block_hash}: {send_error}");
         }
