@@ -180,7 +180,7 @@ mod tests {
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::share_block::Txids;
-    use crate::test_utils::TestShareBlockBuilder;
+    use crate::test_utils::{TestShareBlockBuilder, valid_share_block_from_fixture};
     use crate::utils::time_provider::TestTimeProvider;
     use bitcoin::BlockHash;
     use bitcoin::hashes::Hash as _;
@@ -599,8 +599,18 @@ mod tests {
         let (validation_tx, mut validation_rx) =
             crate::node::validation_worker::create_validation_channel();
 
-        let share_block = TestShareBlockBuilder::new().build();
+        let share_block = valid_share_block_from_fixture();
         let block_hash = share_block.block_hash();
+
+        // Block not yet in store
+        chain_store_handle
+            .expect_share_block_exists()
+            .returning(|_| false);
+
+        // Not on candidate chain, PoW checked (valid fixture passes)
+        chain_store_handle
+            .expect_is_candidate()
+            .returning(|_| false);
 
         // Mock storage: add block succeeds
         chain_store_handle
@@ -641,7 +651,17 @@ mod tests {
         let time_provider = TestTimeProvider::new(SystemTime::now());
         let (block_fetcher_handle, validation_tx) = test_handles();
 
-        let share_block = TestShareBlockBuilder::new().build();
+        let share_block = valid_share_block_from_fixture();
+
+        // Block not yet in store
+        chain_store_handle
+            .expect_share_block_exists()
+            .returning(|_| false);
+
+        // Not on candidate chain, PoW checked (valid fixture passes)
+        chain_store_handle
+            .expect_is_candidate()
+            .returning(|_| false);
 
         // Mock storage: add block fails
         chain_store_handle

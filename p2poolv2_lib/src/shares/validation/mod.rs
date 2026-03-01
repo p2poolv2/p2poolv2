@@ -173,7 +173,9 @@ pub fn validate_timestamp(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{TestShareBlockBuilder, genesis_for_tests};
+    use crate::test_utils::{
+        TestShareBlockBuilder, genesis_for_tests, load_share_headers_test_data,
+    };
     use crate::utils::time_provider::TestTimeProvider;
     use bitcoin::{BlockHash, hashes::Hash};
     use mockall::predicate::*;
@@ -358,14 +360,6 @@ mod tests {
         let result = validate_share_block(&share_block, &chain_store_handle);
 
         assert!(result.is_ok());
-    }
-
-    /// Load share headers test data from JSON fixture file
-    fn load_share_headers_test_data() -> serde_json::Value {
-        let json_string =
-            std::fs::read_to_string("../p2poolv2_tests/test_data/validation/share_headers.json")
-                .expect("Failed to read share_headers.json");
-        serde_json::from_str(&json_string).unwrap()
     }
 
     #[test]

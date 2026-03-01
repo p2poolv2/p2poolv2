@@ -260,6 +260,11 @@ impl ChainStoreHandle {
             .get_candidate_blocks_missing_data()
     }
 
+    /// Check if a blockhash has Candidate status in its metadata.
+    pub fn is_candidate(&self, blockhash: &BlockHash) -> bool {
+        self.store_handle.store().is_candidate(blockhash)
+    }
+
     /// Get metadata for blockhash
     pub fn get_block_metadata(&self, hash: &BlockHash) -> Result<BlockMetadata, StoreError> {
         self.store_handle.store().get_block_metadata(hash)
@@ -468,6 +473,7 @@ impl ChainStoreHandle {
 #[cfg(test)]
 mockall::mock! {
     pub ChainStoreHandle {
+        pub fn is_candidate(&self, blockhash: &BlockHash) -> bool;
         pub fn get_block_metadata(&self, hash: &BlockHash) -> Result<BlockMetadata, StoreError>;
         pub fn get_blockhashes_for_height(&self, height: u32) -> Vec<BlockHash>;
         pub fn network(&self) -> bitcoin::Network;
