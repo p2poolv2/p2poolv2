@@ -278,7 +278,7 @@ mod tests {
     use crate::node::messages::{InventoryMessage, Message};
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-    use crate::test_utils::TestShareBlockBuilder;
+    use crate::test_utils::{TestShareBlockBuilder, valid_share_block_from_fixture};
     use bitcoin::BlockHash;
     use bitcoin::hashes::Hash as _;
     use std::future::Future;
@@ -550,9 +550,11 @@ mod tests {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let mut chain_store_handle = ChainStoreHandle::default();
         // The cloned handle is used by handle_response -> handle_share_block,
-        // which stores the block. We mock the minimum needed.
+        // which checks for duplicates, validates header, and stores the block.
         chain_store_handle.expect_clone().returning(|| {
             let mut cloned = ChainStoreHandle::default();
+            cloned.expect_share_block_exists().returning(|_| false);
+            cloned.expect_is_candidate().returning(|_| false);
             cloned.expect_add_share_block().returning(|_, _| Ok(()));
             cloned
         });
@@ -560,7 +562,7 @@ mod tests {
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
         let peer_id = libp2p::PeerId::random();
-        let block = TestShareBlockBuilder::new().build();
+        let block = valid_share_block_from_fixture();
         let block_hash = block.block_hash();
 
         let result = handler

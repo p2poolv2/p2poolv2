@@ -51,6 +51,25 @@ pub async fn handle_share_block(
 
     let block_hash = share_block.block_hash();
 
+    // Skip blocks we already have in the store (cheap key-existence check,
+    // avoids deserializing the full share block).
+    if chain_store_handle.share_block_exists(&block_hash) {
+        debug!("Share block {block_hash} already in store, skipping");
+        return Ok(());
+    }
+
+    // Allow blocks whose header is already on the candidate chain (synced
+    // headers arrive before full blocks). Otherwise require valid proof of
+    // work to prevent peers from flooding our database with garbage headers.
+    if !chain_store_handle.is_candidate(&block_hash) {
+        if let Err(validation_error) =
+            validation::validate_share_header(&share_block.header, chain_store_handle)
+        {
+            warn!("Rejecting share block {block_hash} with invalid header: {validation_error}");
+            return Err(format!("Invalid share header: {validation_error}").into());
+        }
+    }
+
     // TODO: Check if this will be an uncle, for now add to main chain
     if let Err(store_error) = chain_store_handle
         .add_share_block(share_block.clone(), true)
@@ -89,8 +108,9 @@ mod tests {
     use super::*;
     use crate::node::request_response_handler::block_fetcher;
     use crate::node::validation_worker;
+    use crate::shares::share_block::ShareHeader;
     use crate::store::writer::StoreError;
-    use crate::test_utils::{TestShareBlockBuilder, build_block_from_work_components};
+    use crate::test_utils::{empty_share_block_from_header, load_share_headers_test_data};
     use mockall::predicate::*;
 
     /// Create test block fetcher and validation handles.
@@ -108,9 +128,23 @@ mod tests {
     async fn test_handle_share_block_success() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
-        let share_block =
-            build_block_from_work_components("../p2poolv2_tests/test_data/validation/stratum/b/");
+        let test_data = load_share_headers_test_data();
+        let header: ShareHeader =
+            serde_json::from_value(test_data["valid_header"].clone()).unwrap();
+        let share_block = empty_share_block_from_header(header);
         let block_hash = share_block.block_hash();
+
+        // Block not yet in store
+        chain_store_handle
+            .expect_share_block_exists()
+            .with(eq(block_hash))
+            .returning(|_| false);
+
+        // Not on candidate chain, so PoW will be checked (valid_header passes)
+        chain_store_handle
+            .expect_is_candidate()
+            .with(eq(block_hash))
+            .returning(|_| false);
 
         chain_store_handle
             .expect_add_share_block()
@@ -140,8 +174,23 @@ mod tests {
     async fn test_handle_share_block_add_share_error() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
-        let share_block =
-            build_block_from_work_components("../p2poolv2_tests/test_data/validation/stratum/b/");
+        let test_data = load_share_headers_test_data();
+        let header: ShareHeader =
+            serde_json::from_value(test_data["valid_header"].clone()).unwrap();
+        let share_block = empty_share_block_from_header(header);
+        let block_hash = share_block.block_hash();
+
+        // Block not yet in store
+        chain_store_handle
+            .expect_share_block_exists()
+            .with(eq(block_hash))
+            .returning(|_| false);
+
+        // Not on candidate chain, so PoW will be checked (valid_header passes)
+        chain_store_handle
+            .expect_is_candidate()
+            .with(eq(block_hash))
+            .returning(|_| false);
 
         chain_store_handle
             .expect_add_share_block()
@@ -167,6 +216,89 @@ mod tests {
         assert!(
             validation_rx.try_recv().is_err(),
             "No validation event expected on store error"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_share_block_duplicate_skips() {
+        let peer_id = libp2p::PeerId::random();
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let test_data = load_share_headers_test_data();
+        let header: ShareHeader =
+            serde_json::from_value(test_data["valid_header"].clone()).unwrap();
+        let share_block = empty_share_block_from_header(header);
+        let block_hash = share_block.block_hash();
+
+        // Block already in store
+        chain_store_handle
+            .expect_share_block_exists()
+            .with(eq(block_hash))
+            .returning(|_| true);
+
+        // add_share_block should NOT be called for a duplicate
+        let (block_fetcher_handle, validation_tx, mut validation_rx) = test_handles();
+        let result = handle_share_block(
+            peer_id,
+            share_block,
+            &chain_store_handle,
+            block_fetcher_handle,
+            validation_tx,
+        )
+        .await;
+        assert!(result.is_ok());
+
+        // No validation event should be sent for a duplicate
+        assert!(
+            validation_rx.try_recv().is_err(),
+            "No validation event expected for duplicate block"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_share_block_invalid_header_rejected() {
+        let peer_id = libp2p::PeerId::random();
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let test_data = load_share_headers_test_data();
+        let header: ShareHeader =
+            serde_json::from_value(test_data["tight_target_header"].clone()).unwrap();
+        let share_block = empty_share_block_from_header(header);
+        let block_hash = share_block.block_hash();
+
+        // Block not yet in store
+        chain_store_handle
+            .expect_share_block_exists()
+            .with(eq(block_hash))
+            .returning(|_| false);
+
+        // Not on candidate chain, so PoW will be checked (tight_target fails)
+        chain_store_handle
+            .expect_is_candidate()
+            .with(eq(block_hash))
+            .returning(|_| false);
+
+        // add_share_block should NOT be called for invalid header
+        let (block_fetcher_handle, validation_tx, mut validation_rx) = test_handles();
+        let result = handle_share_block(
+            peer_id,
+            share_block,
+            &chain_store_handle,
+            block_fetcher_handle,
+            validation_tx,
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid share header"),
+            "Expected invalid share header error"
+        );
+
+        // No validation event should be sent for invalid header
+        assert!(
+            validation_rx.try_recv().is_err(),
+            "No validation event expected for invalid header"
         );
     }
 }

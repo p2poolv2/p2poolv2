@@ -314,6 +314,37 @@ impl TestShareBlockBuilder {
     }
 }
 
+/// Load share headers test data from the JSON fixture file.
+#[cfg(test)]
+pub fn load_share_headers_test_data() -> serde_json::Value {
+    let json_string =
+        std::fs::read_to_string("../p2poolv2_tests/test_data/validation/share_headers.json")
+            .expect("Failed to read share_headers.json");
+    serde_json::from_str(&json_string).unwrap()
+}
+
+/// Build a ShareBlock from a header with empty transactions.
+#[cfg(test)]
+pub fn empty_share_block_from_header(header: ShareHeader) -> ShareBlock {
+    ShareBlock {
+        header,
+        transactions: Vec::new(),
+        bitcoin_transactions: Vec::new(),
+    }
+}
+
+/// Build a ShareBlock with valid PoW from the fixture "valid_header".
+#[cfg(test)]
+pub fn valid_share_block_from_fixture() -> ShareBlock {
+    let test_data = load_share_headers_test_data();
+    let header: ShareHeader = serde_json::from_value(test_data["valid_header"].clone()).unwrap();
+    ShareBlock {
+        header,
+        transactions: Vec::new(),
+        bitcoin_transactions: Vec::new(),
+    }
+}
+
 #[cfg(test)]
 pub fn multiplied_compact_target_as_work(bits: u32, multiplier: u32) -> bitcoin::Work {
     bitcoin::Target::from_compact(CompactTarget::from_consensus(bits * multiplier)).to_work()
