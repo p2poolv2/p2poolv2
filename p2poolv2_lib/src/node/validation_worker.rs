@@ -31,6 +31,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::validation;
+use crate::utils::cpu::available_cpus;
 use bitcoin::BlockHash;
 use libp2p::request_response::ResponseChannel;
 use std::fmt;
@@ -40,9 +41,6 @@ use tracing::{error, info};
 
 /// Channel capacity for blocks pending validation.
 const VALIDATION_CHANNEL_CAPACITY: usize = 256;
-
-/// Maximum number of concurrent validation tasks.
-const MAX_CONCURRENT_VALIDATIONS: usize = 4;
 
 /// Events for the validation worker.
 pub enum ValidationEvent {
@@ -104,7 +102,7 @@ impl ValidationWorker {
             chain_store_handle,
             organise_tx,
             swarm_tx,
-            semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_VALIDATIONS)),
+            semaphore: Arc::new(Semaphore::new(available_cpus())),
         }
     }
 
