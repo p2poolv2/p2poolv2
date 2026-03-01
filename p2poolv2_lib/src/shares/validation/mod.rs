@@ -32,7 +32,7 @@ use std::fmt;
 pub enum ValidationError {
     /// The number of uncles exceeds MAX_UNCLES
     TooManyUncles { count: usize, maximum: usize },
-    /// The block hash does not meet the share target
+    /// The bitcoin block hash does not meet the share target
     InsufficientWork {
         block_hash: BlockHash,
         target: Target,
@@ -61,7 +61,7 @@ impl fmt::Display for ValidationError {
             Self::InsufficientWork { block_hash, target } => {
                 write!(
                     formatter,
-                    "Share block hash {block_hash} does not meet share target {target}"
+                    "Bitcoin block hash {block_hash} does not meet share target {target}"
                 )
             }
             Self::TimestampOutOfRange {
@@ -93,8 +93,9 @@ pub const MAX_TIME_DIFF: u64 = 60;
 
 /// Validate the share header by checking proof of work and uncle count.
 ///
-/// Verifies that the share's block hash meets its compact target (bits)
-/// and that the number of uncles does not exceed MAX_UNCLES.
+/// Verifies that the bitcoin block hash meets the share chain compact target (bits),
+/// since the bitcoin block header is what the miner actually mines with proof of work.
+/// Also verifies that the number of uncles does not exceed MAX_UNCLES.
 pub fn validate_share_header(
     share_header: &ShareHeader,
     _chain_store_handle: &ChainStoreHandle,
@@ -107,9 +108,12 @@ pub fn validate_share_header(
     }
 
     let target = Target::from_compact(share_header.bits);
-    let block_hash = share_header.block_hash();
-    if !target.is_met_by(block_hash) {
-        return Err(ValidationError::InsufficientWork { block_hash, target });
+    let bitcoin_block_hash = share_header.bitcoin_header.block_hash();
+    if !target.is_met_by(bitcoin_block_hash) {
+        return Err(ValidationError::InsufficientWork {
+            block_hash: bitcoin_block_hash,
+            target,
+        });
     }
 
     Ok(())
