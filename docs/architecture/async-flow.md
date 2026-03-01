@@ -20,6 +20,7 @@ Heavy work is offloaded to dedicated spawned workers via bounded channels:
 - **BlockFetcher** -- distributes GetData requests across peers with timeouts
 - **EmissionWorker** -- processes stratum shares (CPU-intensive merkle work)
 - **StoreWriter** -- serializes all RocksDB writes on a `spawn_blocking` thread
+- **ValidationWorker** -- context-free share block validation in parallel
 
 Request handlers enqueue work to these workers and return quickly.
 
