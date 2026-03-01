@@ -301,7 +301,7 @@ fn default_stats_dir() -> String {
     "./logs/stats".to_string()
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Deserialize, Clone)]
 pub struct ApiConfig {
     /// The hostname for the API server
     pub hostname: String,
@@ -313,6 +313,20 @@ pub struct ApiConfig {
     pub auth_token: Option<String>,
     /// Optional raw password for CLI client authentication (not used by server)
     pub auth_password: Option<String>,
+}
+
+/// Custom Debug to redact password
+impl std::fmt::Debug for ApiConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ApiConfig")
+            .field("hostname", &self.hostname)
+            .field("port", &self.port)
+            .field("auth_user", &self.auth_user)
+            .field("auth_token", &"[redacted]")
+            .field("auth_password", &"[redacted]")
+            .finish()
+    }
 }
 
 /// Config for p2poolv2 nodes
