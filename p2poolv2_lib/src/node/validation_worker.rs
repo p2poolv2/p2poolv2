@@ -186,6 +186,7 @@ mod tests {
     use crate::node::organise_worker;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
     use crate::test_utils::TestShareBlockBuilder;
+    use std::time::Duration;
 
     #[tokio::test]
     async fn test_validation_worker_stops_on_channel_close() {
@@ -237,9 +238,6 @@ mod tests {
         let result = worker.run().await;
         assert!(result.is_ok());
 
-        // Allow spawned task in run to complete
-        tokio::task::yield_now().await;
-
         if let Some(OrganiseEvent::Block(received_block)) = organise_rx.recv().await {
             assert_eq!(received_block.block_hash(), block_hash);
         } else {
@@ -278,9 +276,6 @@ mod tests {
         let result = worker.run().await;
         assert!(result.is_ok());
 
-        // Allow spawned task to complete
-        tokio::task::yield_now().await;
-
         if let Some(SwarmSend::Inv(sent_block_hash)) = swarm_rx.recv().await {
             assert_eq!(sent_block_hash, block_hash);
         } else {
@@ -315,15 +310,18 @@ mod tests {
         let result = worker.run().await;
         assert!(result.is_ok());
 
-        // Allow spawned task to complete
-        tokio::task::yield_now().await;
-
+        // The spawned task holds the last sender clones. When it finishes
+        // without sending (block not found), recv() returns None.
+        let organise_result =
+            tokio::time::timeout(Duration::from_millis(500), organise_rx.recv()).await;
         assert!(
-            organise_rx.try_recv().is_err(),
+            matches!(organise_result, Ok(None)),
             "No OrganiseEvent expected for missing block"
         );
+
+        let swarm_result = tokio::time::timeout(Duration::from_millis(500), swarm_rx.recv()).await;
         assert!(
-            swarm_rx.try_recv().is_err(),
+            matches!(swarm_result, Ok(None)),
             "No SwarmSend expected for missing block"
         );
     }
@@ -370,15 +368,18 @@ mod tests {
         let result = worker.run().await;
         assert!(result.is_ok());
 
-        // Allow spawned task to complete
-        tokio::task::yield_now().await;
-
+        // The spawned task holds the last sender clones. When it finishes
+        // without sending (validation failed), recv() returns None.
+        let organise_result =
+            tokio::time::timeout(Duration::from_millis(500), organise_rx.recv()).await;
         assert!(
-            organise_rx.try_recv().is_err(),
+            matches!(organise_result, Ok(None)),
             "No OrganiseEvent expected for invalid block"
         );
+
+        let swarm_result = tokio::time::timeout(Duration::from_millis(500), swarm_rx.recv()).await;
         assert!(
-            swarm_rx.try_recv().is_err(),
+            matches!(swarm_result, Ok(None)),
             "No SwarmSend expected for invalid block"
         );
     }
