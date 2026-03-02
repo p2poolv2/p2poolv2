@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::pool_difficulty::PoolDifficulty;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -130,18 +131,20 @@ impl Decodable for ShareCommitment {
 
 /// Build share commitment by querying the database for fields to set.
 ///
-/// Query the chain store for previous share and uncles.
-/// Uses the current timestamp
+/// Computes the share chain target using the ASERT algorithm via
+/// pool_difficulty, based on the current tip height and parent time.
+/// Uses the current timestamp for the share.
 pub(crate) fn build_share_commitment(
     chain_store_handle: &ChainStoreHandle,
     template: &Arc<BlockTemplate>,
     miner_pubkey: Option<CompressedPublicKey>,
+    pool_difficulty: &PoolDifficulty,
 ) -> Result<Option<ShareCommitment>, Box<dyn Error + Send + Sync>> {
-    let target = match chain_store_handle.get_current_target() {
-        Ok(target) => target,
-        Err(e) => return Err(format!("Failed to get current target: {e}").into()),
-    };
     let (tip, uncles) = chain_store_handle.get_chain_tip_and_uncles()?;
+
+    let (tip_height, parent_time) = chain_store_handle.get_tip_height_and_time()?;
+    let target = pool_difficulty.calculate_target(parent_time, tip_height + 1);
+
     let merkle_root = template.get_merkle_root_without_coinbase();
     let time = SystemTimeProvider.seconds_since_epoch() as u32;
 
@@ -151,7 +154,7 @@ pub(crate) fn build_share_commitment(
             uncles: uncles.into_iter().collect(),
             miner_pubkey: key,
             merkle_root,
-            bits: CompactTarget::from_consensus(target),
+            bits: target,
             time,
         })),
         None => Ok(None),
@@ -163,7 +166,7 @@ mod tests {
     use super::*;
     use crate::store::writer::StoreError;
     use crate::stratum::work::block_template::BlockTemplate;
-    use crate::test_utils::create_test_commitment;
+    use crate::test_utils::{TEST_TIP_TIME, create_test_commitment, on_schedule_pool_difficulty};
     use bitcoin::hashes::Hash;
     use std::collections::HashSet;
     use std::str::FromStr;
@@ -356,24 +359,27 @@ mod tests {
             .parse::<CompressedPublicKey>()
             .unwrap();
 
+        let pool_difficulty = on_schedule_pool_difficulty();
+
+        let tip_hash =
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
+                .unwrap();
+
         // Set up mock expectations
         chain_store_handle
-            .expect_get_current_target()
-            .returning(|| Ok(0x207fffff));
+            .expect_get_chain_tip_and_uncles()
+            .returning(move || Ok((tip_hash, HashSet::new())));
 
         chain_store_handle
-            .expect_get_chain_tip_and_uncles()
-            .returning(|| {
-                Ok((
-                    BlockHash::from_str(
-                        "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
-                    )
-                    .unwrap(),
-                    HashSet::new(),
-                ))
-            });
+            .expect_get_tip_height_and_time()
+            .returning(|| Ok((0, TEST_TIP_TIME)));
 
-        let result = build_share_commitment(&chain_store_handle, &template, Some(miner_pubkey));
+        let result = build_share_commitment(
+            &chain_store_handle,
+            &template,
+            Some(miner_pubkey),
+            &pool_difficulty,
+        );
 
         assert!(result.is_ok());
         let commitment = result.unwrap().unwrap();
@@ -409,10 +415,7 @@ mod tests {
             .parse::<CompressedPublicKey>()
             .unwrap();
 
-        // Set up mock expectations
-        chain_store_handle
-            .expect_get_current_target()
-            .returning(|| Ok(0x207fffff));
+        let pool_difficulty = on_schedule_pool_difficulty();
 
         let uncle1 =
             BlockHash::from_str("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6")
@@ -428,7 +431,16 @@ mod tests {
                 Ok((BlockHash::all_zeros(), uncles))
             });
 
-        let result = build_share_commitment(&chain_store_handle, &template, Some(miner_pubkey));
+        chain_store_handle
+            .expect_get_tip_height_and_time()
+            .returning(|| Ok((0, TEST_TIP_TIME)));
+
+        let result = build_share_commitment(
+            &chain_store_handle,
+            &template,
+            Some(miner_pubkey),
+            &pool_difficulty,
+        );
 
         assert!(result.is_ok());
         let commitment = result.unwrap().unwrap();
@@ -440,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_share_commitment_error_on_get_target_failure() {
+    fn test_build_share_commitment_error_on_chain_tip_failure() {
         let mut chain_store_handle = ChainStoreHandle::default();
 
         // Load template from file
@@ -455,12 +467,19 @@ mod tests {
             .parse::<CompressedPublicKey>()
             .unwrap();
 
-        // Set up mock to return error
-        chain_store_handle
-            .expect_get_current_target()
-            .returning(|| Err(StoreError::Database("Failed to get target".to_string())));
+        let pool_difficulty = on_schedule_pool_difficulty();
 
-        let result = build_share_commitment(&chain_store_handle, &template, Some(miner_pubkey));
+        // Set up mock to return error on chain tip query
+        chain_store_handle
+            .expect_get_chain_tip_and_uncles()
+            .returning(|| Err(StoreError::Database("Failed to get chain tip".to_string())));
+
+        let result = build_share_commitment(
+            &chain_store_handle,
+            &template,
+            Some(miner_pubkey),
+            &pool_difficulty,
+        );
 
         assert!(result.is_err());
     }
@@ -477,6 +496,8 @@ mod tests {
                 .expect("Failed to parse JSON into BlockTemplate"),
         );
 
+        let pool_difficulty = on_schedule_pool_difficulty();
+
         let uncle1 =
             BlockHash::from_str("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6")
                 .unwrap();
@@ -492,10 +513,10 @@ mod tests {
             });
 
         chain_store_handle
-            .expect_get_current_target()
-            .returning(|| Ok(0x207fffff));
+            .expect_get_tip_height_and_time()
+            .returning(|| Ok((0, TEST_TIP_TIME)));
 
-        let result = build_share_commitment(&chain_store_handle, &template, None);
+        let result = build_share_commitment(&chain_store_handle, &template, None, &pool_difficulty);
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());

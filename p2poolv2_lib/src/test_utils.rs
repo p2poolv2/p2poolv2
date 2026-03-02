@@ -28,6 +28,8 @@ use tempfile::{TempDir, tempdir};
 
 // Imports for TestShareBlockBuilder and related helpers (available with test-utils feature)
 #[cfg(any(test, feature = "test-utils"))]
+use crate::pool_difficulty::PoolDifficulty;
+#[cfg(any(test, feature = "test-utils"))]
 use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
 #[cfg(any(test, feature = "test-utils"))]
 use crate::shares::transactions::coinbase::create_coinbase_transaction;
@@ -79,6 +81,24 @@ pub async fn setup_test_chain_store_handle(start_writer: bool) -> (ChainStoreHan
 #[cfg(any(test, feature = "test-utils"))]
 pub fn genesis_for_tests() -> ShareBlock {
     TestShareBlockBuilder::new().build()
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub const TEST_ANCHOR_TIME: u32 = 1_700_000_000;
+
+/// On-schedule tip time for height 1: anchor_time + ideal_block_time * (height_delta + 1) = anchor_time + 20
+#[cfg(any(test, feature = "test-utils"))]
+pub const TEST_TIP_TIME: u32 = TEST_ANCHOR_TIME + 20;
+
+/// Build a PoolDifficulty anchored on-schedule so that
+/// calculate_target(TEST_TIP_TIME, 1) returns the anchor target (0x207fffff).
+#[cfg(any(test, feature = "test-utils"))]
+pub fn on_schedule_pool_difficulty() -> PoolDifficulty {
+    PoolDifficulty::new(
+        CompactTarget::from_consensus(0x207fffff),
+        TEST_ANCHOR_TIME,
+        0,
+    )
 }
 
 #[cfg(test)]
