@@ -22,6 +22,7 @@ use super::tracker::{JobId, JobTracker};
 use crate::accounting::OutputPair;
 use crate::accounting::simple_pplns::payout::Payout;
 use crate::config::StratumConfig;
+use crate::pool_difficulty;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -37,13 +38,25 @@ use bitcoin::transaction::Version;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::debug;
+use tracing::{debug, error};
 
 #[cfg(not(test))]
 use crate::stratum::client_connections::ClientConnectionsHandle;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::stratum::client_connections::ClientConnectionsHandle;
+
+/// Session-level context for building notify messages.
+///
+/// Groups parameters that remain constant across the notifier loop.
+pub(crate) struct NotifyContext {
+    pub chain_store_handle: ChainStoreHandle,
+    pub config: StratumConfig<crate::config::Parsed>,
+    pub miner_pubkey: Option<CompressedPublicKey>,
+    pub pool_signature: Vec<u8>,
+    pub tracker_handle: Arc<JobTracker>,
+    pub pool_difficulty: pool_difficulty::PoolDifficulty,
+}
 
 /// Extract flags from template coinbaseaux and convert to PushBytesBuf
 /// If flags are empty, use a single byte with value 0
@@ -140,19 +153,17 @@ pub fn build_notify(
 async fn build_notify_and_commitment(
     template: &Arc<BlockTemplate>,
     clean_jobs: bool,
-    chain_store_handle: &ChainStoreHandle,
-    config: &StratumConfig<crate::config::Parsed>,
-    miner_pubkey: Option<CompressedPublicKey>,
-    pool_signature: &[u8],
-    tracker_handle: &Arc<JobTracker>,
+    context: &NotifyContext,
 ) -> Result<(String, Option<ShareCommitment>), WorkError> {
-    let job_id = tracker_handle.get_next_job_id();
-    let output_distribution = build_output_distribution(template, chain_store_handle, config).await;
+    let job_id = context.tracker_handle.get_next_job_id();
+    let output_distribution =
+        build_output_distribution(template, &context.chain_store_handle, &context.config).await;
 
-    let share_commitment = build_share_commitment(chain_store_handle, template, miner_pubkey)
-        .map_err(|_| WorkError {
-            message: "Failed to build share commitment".to_string(),
-        })?;
+    let share_commitment =
+        build_share_commitment(&context.chain_store_handle, template, context.miner_pubkey)
+            .map_err(|_| WorkError {
+                message: "Failed to build share commitment".to_string(),
+            })?;
     let commitment_hash = share_commitment
         .as_ref()
         .map(|commitment| commitment.hash());
@@ -162,14 +173,14 @@ async fn build_notify_and_commitment(
         output_distribution,
         job_id,
         clean_jobs,
-        pool_signature,
+        &context.pool_signature,
         commitment_hash,
     )?;
 
     let serialized_notify =
         serde_json::to_string(&notify).expect("Failed to serialize Notify message");
 
-    tracker_handle.insert_job(
+    context.tracker_handle.insert_job(
         Arc::clone(template),
         notify.params.coinbase1.to_string(),
         notify.params.coinbase2.to_string(),
@@ -195,7 +206,7 @@ pub enum NotifyCmd {
 }
 
 /// Start a task that listens for new block template events.
-/// As new templates arrives, the tasks build new Notify messages and sends them to all connected clients.
+/// As new templates arrive, build new Notify messages and send them to all connected clients.
 pub async fn start_notify(
     mut notifier_rx: mpsc::Receiver<NotifyCmd>,
     connections: ClientConnectionsHandle,
@@ -204,11 +215,29 @@ pub async fn start_notify(
     config: &StratumConfig<crate::config::Parsed>,
     miner_pubkey: Option<CompressedPublicKey>,
 ) {
-    let mut latest_template: Option<Arc<BlockTemplate>> = None;
-    let pool_signature = match config.pool_signature {
-        Some(ref sig) => sig.as_bytes(),
-        None => &[],
+    let pool_difficulty = match pool_difficulty::PoolDifficulty::build(&chain_store_handle) {
+        Ok(pool_difficulty) => pool_difficulty,
+        Err(build_error) => {
+            error!("Failed to build pool difficulty: {build_error}. Cannot start notifier.");
+            return;
+        }
     };
+
+    let pool_signature = match config.pool_signature {
+        Some(ref sig) => sig.as_bytes().to_vec(),
+        None => Vec::new(),
+    };
+
+    let context = NotifyContext {
+        chain_store_handle,
+        config: config.clone(),
+        miner_pubkey,
+        pool_signature,
+        tracker_handle,
+        pool_difficulty,
+    };
+
+    let mut latest_template: Option<Arc<BlockTemplate>> = None;
 
     while let Some(cmd) = notifier_rx.recv().await {
         match cmd {
@@ -217,26 +246,22 @@ pub async fn start_notify(
                     || latest_template.unwrap().previousblockhash != template.previousblockhash;
                 latest_template = Some(Arc::clone(&template));
 
-                let (notify_str, _share_commitment) = match build_notify_and_commitment(
-                    &template,
-                    clean_jobs,
-                    &chain_store_handle,
-                    config,
-                    miner_pubkey,
-                    pool_signature,
-                    &tracker_handle,
-                )
-                .await
-                {
-                    Ok(serialized) => serialized,
-                    Err(e) => {
-                        tracing::error!("Failed to build notify: {}. Skipping.", e);
-                        continue;
-                    }
-                };
+                let (notify_str, _share_commitment) =
+                    match build_notify_and_commitment(&template, clean_jobs, &context).await {
+                        Ok(serialized) => serialized,
+                        Err(e) => {
+                            tracing::error!("Failed to build notify: {}. Skipping.", e);
+                            continue;
+                        }
+                    };
 
                 connections.send_to_all(Arc::new(notify_str.clone())).await;
-                if chain_store_handle.add_job(notify_str).await.is_err() {
+                if context
+                    .chain_store_handle
+                    .add_job(notify_str)
+                    .await
+                    .is_err()
+                {
                     tracing::warn!("Couldn't save job when sending to all");
                 }
             }
@@ -253,28 +278,24 @@ pub async fn start_notify(
                 }
 
                 let template = latest_template.as_ref().unwrap();
-                let (notify_str, _share_commitment) = match build_notify_and_commitment(
-                    template,
-                    clean_jobs,
-                    &chain_store_handle,
-                    config,
-                    miner_pubkey,
-                    pool_signature,
-                    &tracker_handle,
-                )
-                .await
-                {
-                    Ok(serialized) => serialized,
-                    Err(e) => {
-                        tracing::error!("Failed to build notify: {}. Skipping.", e);
-                        continue;
-                    }
-                };
+                let (notify_str, _share_commitment) =
+                    match build_notify_and_commitment(template, clean_jobs, &context).await {
+                        Ok(serialized) => serialized,
+                        Err(e) => {
+                            tracing::error!("Failed to build notify: {}. Skipping.", e);
+                            continue;
+                        }
+                    };
 
                 connections
                     .send_to_client(client_address, Arc::new(notify_str.clone()))
                     .await;
-                if chain_store_handle.add_job(notify_str).await.is_err() {
+                if context
+                    .chain_store_handle
+                    .add_job(notify_str)
+                    .await
+                    .is_err()
+                {
                     tracing::warn!("Couldn't save job when sending to client");
                 }
             }
@@ -432,10 +453,16 @@ mod tests {
             .expect_get_current_target()
             .returning(|| Ok(503543726));
 
-        let genesis = genesis_for_tests().block_hash();
+        let genesis = genesis_for_tests();
+        let genesis_hash = genesis.block_hash();
+        let genesis_header = genesis.header.clone();
         chain_store_handle
             .expect_get_chain_tip_and_uncles()
-            .returning(move || Ok((genesis, std::collections::HashSet::new())));
+            .returning(move || Ok((genesis_hash, std::collections::HashSet::new())));
+
+        chain_store_handle
+            .expect_get_genesis_header()
+            .returning(move || Ok(genesis_header.clone()));
 
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
         let miner_pubkey: CompressedPublicKey =
@@ -541,19 +568,23 @@ mod tests {
             "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap();
-        let pool_signature = b"test_pool";
+
+        let genesis = genesis_for_tests();
+        let pool_difficulty =
+            pool_difficulty::PoolDifficulty::new(genesis.header.bits, genesis.header.time, 0);
+
+        let context = NotifyContext {
+            chain_store_handle,
+            config: stratum_config,
+            miner_pubkey: Some(miner_pubkey),
+            pool_signature: b"test_pool".to_vec(),
+            tracker_handle,
+            pool_difficulty,
+        };
 
         // Call build_notify_and_commitment
-        let result = build_notify_and_commitment(
-            &Arc::new(template.clone()),
-            false,
-            &chain_store_handle,
-            &stratum_config,
-            Some(miner_pubkey),
-            pool_signature,
-            &tracker_handle,
-        )
-        .await;
+        let result =
+            build_notify_and_commitment(&Arc::new(template.clone()), false, &context).await;
 
         // Verify the result
         assert!(result.is_ok());
@@ -572,7 +603,7 @@ mod tests {
 
         // Verify the job was inserted in the tracker
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
-        let job_details = tracker_handle.get_job(job_id);
+        let job_details = context.tracker_handle.get_job(job_id);
         assert!(job_details.is_some());
         let details = job_details.unwrap();
 
@@ -580,7 +611,7 @@ mod tests {
         assert!(details.share_commitment.is_some());
         let stored_commitment = details.share_commitment.unwrap();
         assert_eq!(stored_commitment.miner_pubkey, miner_pubkey);
-        assert_eq!(stored_commitment.prev_share_blockhash, genesis);
+        assert_eq!(stored_commitment.prev_share_blockhash, genesis.block_hash());
     }
 
     /// This test build_notify, parse then verify
