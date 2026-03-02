@@ -14,6 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+#[cfg(test)]
+#[mockall_double::double]
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+#[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use bitcoin::{CompactTarget, Target};
 use std::error::Error;
