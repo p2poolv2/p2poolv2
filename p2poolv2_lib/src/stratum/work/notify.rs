@@ -159,11 +159,15 @@ async fn build_notify_and_commitment(
     let output_distribution =
         build_output_distribution(template, &context.chain_store_handle, &context.config).await;
 
-    let share_commitment =
-        build_share_commitment(&context.chain_store_handle, template, context.miner_pubkey)
-            .map_err(|_| WorkError {
-                message: "Failed to build share commitment".to_string(),
-            })?;
+    let share_commitment = build_share_commitment(
+        &context.chain_store_handle,
+        template,
+        context.miner_pubkey,
+        &context.pool_difficulty,
+    )
+    .map_err(|_| WorkError {
+        message: "Failed to build share commitment".to_string(),
+    })?;
     let commitment_hash = share_commitment
         .as_ref()
         .map(|commitment| commitment.hash());
@@ -449,10 +453,6 @@ mod tests {
 
         chain_store_handle.expect_add_job().returning(|_| Ok(()));
 
-        chain_store_handle
-            .expect_get_current_target()
-            .returning(|| Ok(503543726));
-
         let genesis = genesis_for_tests();
         let genesis_hash = genesis.block_hash();
         let genesis_header = genesis.header.clone();
@@ -463,6 +463,10 @@ mod tests {
         chain_store_handle
             .expect_get_genesis_header()
             .returning(move || Ok(genesis_header.clone()));
+
+        chain_store_handle
+            .expect_get_tip_height_and_time()
+            .returning(|| Ok((0, genesis_for_tests().header.time)));
 
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
         let miner_pubkey: CompressedPublicKey =
@@ -552,14 +556,15 @@ mod tests {
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
 
-        let genesis = genesis_for_tests().block_hash();
+        let genesis = genesis_for_tests();
+        let genesis_hash = genesis.block_hash();
         chain_store_handle
             .expect_get_chain_tip_and_uncles()
-            .returning(move || Ok((genesis, std::collections::HashSet::new())));
+            .returning(move || Ok((genesis_hash, std::collections::HashSet::new())));
 
         chain_store_handle
-            .expect_get_current_target()
-            .returning(|| Ok(503543726));
+            .expect_get_tip_height_and_time()
+            .returning(|| Ok((0, genesis_for_tests().header.time)));
 
         // Setup config and tracker
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
@@ -569,7 +574,6 @@ mod tests {
                 .parse()
                 .unwrap();
 
-        let genesis = genesis_for_tests();
         let pool_difficulty =
             pool_difficulty::PoolDifficulty::new(genesis.header.bits, genesis.header.time, 0);
 

@@ -186,6 +186,18 @@ impl ChainStoreHandle {
             .ok_or_else(|| StoreError::NotFound("No header found for chain tip".into()))
     }
 
+    /// Get the confirmed tip height and parent time for ASERT target calculation.
+    ///
+    /// Returns (tip_height, tip_time) where tip_time is the share chain
+    /// tip's timestamp (the parent time for the next share being built).
+    pub fn get_tip_height_and_time(&self) -> Result<(u32, u32), StoreError> {
+        let tip_header = self.get_chain_tip_header()?;
+        let tip_height = self
+            .get_tip_height()?
+            .ok_or_else(|| StoreError::NotFound("No tip height available".into()))?;
+        Ok((tip_height, tip_header.time))
+    }
+
     /// Get the genesis blockhash from the chain.
     pub fn get_genesis_blockhash(&self) -> Option<BlockHash> {
         self.store_handle.get_genesis_blockhash()
@@ -512,6 +524,7 @@ mockall::mock! {
         pub fn get_chain_tip(&self) -> Result<BlockHash, StoreError>;
         pub fn get_chain_tip_header(&self) -> Result<ShareHeader, StoreError>;
         pub fn get_chain_tip_and_uncles(&self) -> Result<(BlockHash, HashSet<BlockHash>), StoreError>;
+        pub fn get_tip_height_and_time(&self) -> Result<(u32, u32), StoreError>;
         pub fn get_genesis_blockhash(&self) -> Option<BlockHash>;
         pub fn get_genesis_header(&self) -> Result<ShareHeader, StoreError>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
