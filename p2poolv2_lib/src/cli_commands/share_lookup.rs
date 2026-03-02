@@ -16,6 +16,7 @@
 
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::store::block_tx_metadata::Status;
+use crate::store::column_families::ColumnFamily;
 use crate::utils::time_provider::format_timestamp;
 use bitcoin::BlockHash;
 use serde::Serialize;
@@ -30,6 +31,18 @@ pub enum LookupQuery<'a> {
     Height(u32),
 }
 
+/// JSON output structure for the bitcoin block header embedded in a share.
+#[derive(Serialize)]
+struct BitcoinHeaderOutput {
+    block_hash: String,
+    version: i32,
+    prev_blockhash: String,
+    merkle_root: String,
+    time: String,
+    bits: String,
+    nonce: u32,
+}
+
 /// JSON output structure for share lookup.
 #[derive(Serialize)]
 struct ShareLookupOutput {
@@ -42,6 +55,8 @@ struct ShareLookupOutput {
     merkle_root: String,
     bits: String,
     time: String,
+    bitcoin_header: BitcoinHeaderOutput,
+    bitcoin_transaction_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     transactions: Option<Vec<String>>,
 }
@@ -80,6 +95,20 @@ fn build_share_output(
         .map(|metadata| format_status(&metadata.status))
         .unwrap_or("Unknown");
 
+    let bitcoin_header = &share_header.bitcoin_header;
+    let bitcoin_header_output = BitcoinHeaderOutput {
+        block_hash: bitcoin_header.block_hash().to_string(),
+        version: bitcoin_header.version.to_consensus(),
+        prev_blockhash: bitcoin_header.prev_blockhash.to_string(),
+        merkle_root: bitcoin_header.merkle_root.to_string(),
+        time: format_timestamp(bitcoin_header.time as u64),
+        bits: format!("{:#x}", bitcoin_header.bits.to_consensus()),
+        nonce: bitcoin_header.nonce,
+    };
+
+    let bitcoin_txids = store.get_txids_for_blockhash(blockhash, ColumnFamily::BitcoinTxids);
+    let bitcoin_transaction_count = bitcoin_txids.0.len();
+
     let transaction_ids = if full {
         let share_block = chain_store_handle
             .get_share(blockhash)
@@ -110,6 +139,8 @@ fn build_share_output(
         merkle_root: share_header.merkle_root.to_string(),
         bits: format!("{:#x}", share_header.bits.to_consensus()),
         time: format_timestamp(share_header.time as u64),
+        bitcoin_header: bitcoin_header_output,
+        bitcoin_transaction_count,
         transactions: transaction_ids,
     })
 }
