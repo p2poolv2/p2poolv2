@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use bitcoin::{CompactTarget, Target};
 use std::error::Error;
 use std::fmt;
@@ -202,6 +203,21 @@ impl PoolDifficulty {
             anchor_parent_time,
             anchor_height,
         }
+    }
+
+    /// Build a PoolDifficulty anchored at the genesis block from the chain store.
+    ///
+    /// Reads the genesis header to obtain the anchor target and timestamp.
+    /// The anchor height is always 0 since the anchor is genesis.
+    pub fn build(chain_store_handle: &ChainStoreHandle) -> Result<Self, PoolDifficultyError> {
+        let genesis_header = chain_store_handle
+            .get_genesis_header()
+            .map_err(|error| PoolDifficultyError::AnchorNotFound(error.to_string()))?;
+        Ok(Self {
+            anchor_target: genesis_header.bits,
+            anchor_parent_time: genesis_header.time,
+            anchor_height: 0,
+        })
     }
 
     /// Calculate the required target for a block at the given height and time.

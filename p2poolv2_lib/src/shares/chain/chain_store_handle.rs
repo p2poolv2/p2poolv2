@@ -191,6 +191,19 @@ impl ChainStoreHandle {
         self.store_handle.get_genesis_blockhash()
     }
 
+    /// Get the ShareHeader at genesis.
+    pub fn get_genesis_header(&self) -> Result<ShareHeader, StoreError> {
+        let genesis_blockhash = self
+            .store_handle
+            .get_genesis_blockhash()
+            .ok_or_else(|| StoreError::NotFound("No genesis blockhash found".into()))?;
+        let headers = self.get_share_headers(&[genesis_blockhash])?;
+        headers
+            .into_iter()
+            .next()
+            .ok_or_else(|| StoreError::NotFound("No header found at genesis".into()))
+    }
+
     /// Get total work from chain state
     pub fn get_total_work(&self) -> Result<Work, StoreError> {
         self.store_handle.get_total_work()
@@ -500,6 +513,7 @@ mockall::mock! {
         pub fn get_chain_tip_header(&self) -> Result<ShareHeader, StoreError>;
         pub fn get_chain_tip_and_uncles(&self) -> Result<(BlockHash, HashSet<BlockHash>), StoreError>;
         pub fn get_genesis_blockhash(&self) -> Option<BlockHash>;
+        pub fn get_genesis_header(&self) -> Result<ShareHeader, StoreError>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
         pub fn get_candidate_blocks_missing_data(&self) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_depth(&self, blockhash: &BlockHash) -> Option<usize>;
