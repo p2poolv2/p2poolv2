@@ -22,7 +22,6 @@ pub mod config;
 pub mod logging;
 pub mod middleware;
 pub mod node;
-pub mod pool_difficulty;
 pub mod service;
 pub mod shares;
 pub mod store;
