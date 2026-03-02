@@ -3168,6 +3168,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "uint",
  "void",
  "wiremock",
  "zmq",
