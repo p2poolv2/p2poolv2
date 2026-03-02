@@ -176,6 +176,16 @@ impl ChainStoreHandle {
         self.store_handle.get_chain_tip()
     }
 
+    /// Get the ShareHeader at the confirmed tip.
+    pub fn get_chain_tip_header(&self) -> Result<ShareHeader, StoreError> {
+        let tip_blockhash = self.store_handle.get_chain_tip()?;
+        let headers = self.get_share_headers(&[tip_blockhash])?;
+        headers
+            .into_iter()
+            .next()
+            .ok_or_else(|| StoreError::NotFound("No header found for chain tip".into()))
+    }
+
     /// Get the genesis blockhash from the chain.
     pub fn get_genesis_blockhash(&self) -> Option<BlockHash> {
         self.store_handle.get_genesis_blockhash()
@@ -487,6 +497,7 @@ mockall::mock! {
         pub fn get_candidate_tip_height(&self) -> Result<Option<u32>, StoreError>;
         pub fn build_locator(&self) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_chain_tip(&self) -> Result<BlockHash, StoreError>;
+        pub fn get_chain_tip_header(&self) -> Result<ShareHeader, StoreError>;
         pub fn get_chain_tip_and_uncles(&self) -> Result<(BlockHash, HashSet<BlockHash>), StoreError>;
         pub fn get_genesis_blockhash(&self) -> Option<BlockHash>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
