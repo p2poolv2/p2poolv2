@@ -186,15 +186,31 @@ impl ChainStoreHandle {
             .ok_or_else(|| StoreError::NotFound("No header found for chain tip".into()))
     }
 
-    /// Get the confirmed tip height and parent time for ASERT target calculation.
+    /// Get the confirmed tip height and parent time for ASERT target
+    /// calculation.
     ///
-    /// Returns (tip_height, tip_time) where tip_time is the share chain
-    /// tip's timestamp (the parent time for the next share being built).
+    /// Reads the tip blockhash once and derives both height (from
+    /// block metadata) and time (from share header) from that same
+    /// hash. This avoids a race where the confirmed tip advances
+    /// between two independent store queries
+    ///
+    /// Returns (tip_height, tip_time) where tip_time is the share
+    /// chain tip's timestamp (the parent time for the next share
+    /// being built).
     pub fn get_tip_height_and_time(&self) -> Result<(u32, u32), StoreError> {
-        let tip_header = self.get_chain_tip_header()?;
-        let tip_height = self
-            .get_tip_height()?
-            .ok_or_else(|| StoreError::NotFound("No tip height available".into()))?;
+        let tip_blockhash = self.store_handle.get_chain_tip()?;
+
+        let headers = self.get_share_headers(&[tip_blockhash])?;
+        let tip_header = headers
+            .into_iter()
+            .next()
+            .ok_or_else(|| StoreError::NotFound("No header found for chain tip".into()))?;
+
+        let metadata = self.get_block_metadata(&tip_blockhash)?;
+        let tip_height = metadata
+            .expected_height
+            .ok_or_else(|| StoreError::NotFound("No height in tip metadata".into()))?;
+
         Ok((tip_height, tip_header.time))
     }
 
