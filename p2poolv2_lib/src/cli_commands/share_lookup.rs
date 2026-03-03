@@ -17,6 +17,7 @@
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::store::block_tx_metadata::Status;
 use crate::store::column_families::ColumnFamily;
+use crate::store::dag_store::MAX_UNCLES_DEPTH;
 use crate::utils::time_provider::format_timestamp;
 use bitcoin::BlockHash;
 use serde::Serialize;
@@ -175,13 +176,49 @@ fn execute_by_hash(
     Ok(())
 }
 
-/// Look up all shares at a given height and print them as a JSON array.
+/// Look up the confirmed share at a given height and any uncles at that
+/// height, then print as a JSON array.
+///
+/// Queries the confirmed chain index (put-based) which is reliable in the
+/// CLI's read-only database mode. Scans confirmed shares from the given
+/// height up to height + MAX_UNCLES_DEPTH to find uncles whose
+/// metadata height matches the requested height.
 fn execute_by_height(
     chain_store_handle: &ChainStoreHandle,
     height: u32,
     full: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let blockhashes = chain_store_handle.get_blockhashes_for_height(height);
+    let store = chain_store_handle.store_handle().store();
+    let mut blockhashes = Vec::with_capacity(4);
+
+    // Get the confirmed share at the requested height.
+    if let Ok(confirmed_hash) = chain_store_handle.get_confirmed_at_height(height) {
+        blockhashes.push(confirmed_hash);
+    }
+
+    // Scan confirmed shares above the requested height for uncles at this height.
+    let upper_height = height.saturating_add(MAX_UNCLES_DEPTH as u32);
+    for scan_height in (height + 1)..=upper_height {
+        let Ok(scan_hash) = chain_store_handle.get_confirmed_at_height(scan_height) else {
+            continue;
+        };
+        let Ok(Some(header)) = store.get_share_header(&scan_hash) else {
+            continue;
+        };
+        for uncle_hash in &header.uncles {
+            if blockhashes.contains(uncle_hash) {
+                continue;
+            }
+            let uncle_height = store
+                .get_block_metadata(uncle_hash)
+                .ok()
+                .and_then(|metadata| metadata.expected_height);
+            if uncle_height == Some(height) {
+                blockhashes.push(*uncle_hash);
+            }
+        }
+    }
+
     if blockhashes.is_empty() {
         return Err(format!("No shares found at height {height}").into());
     }

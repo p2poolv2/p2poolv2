@@ -24,7 +24,7 @@ use std::collections::{HashSet, VecDeque};
 use tracing::debug;
 
 /// Max depth to look for uncles when building new share blocks
-const MAX_UNCLES_DEPTH: u8 = 3;
+pub const MAX_UNCLES_DEPTH: u8 = 3;
 
 /// Single confirmed share and its uncles.
 pub struct ShareInfo {
