@@ -129,13 +129,13 @@ pub(crate) fn asert_calculate_target(
     let mut next_target = anchor_wide * U512::from(factor);
 
     // Step 5: Apply integer shifts.
-    // Guard against U512 overflow: anchor (~256 bits) * factor (~17 bits)
-    // = ~273 bits. A left shift >= 239 would exceed 512 bits and wrap to
-    // zero, bypassing the max_target clamp below. Any such shift guarantees
-    // the result exceeds max_target, so clamp directly.
-    const MAX_LEFT_SHIFT: i32 = 238;
+    // Guard against U512 overflow: left-shifting next_target beyond its
+    // available headroom wraps to zero, bypassing the max_target clamp.
+    // Compute the safe limit dynamically from the actual bit width so
+    // non-max anchors are not clamped unnecessarily.
     if num_shifts >= 0 {
-        if num_shifts > MAX_LEFT_SHIFT {
+        let available_bits = 512 - next_target.bits();
+        if num_shifts as usize > available_bits {
             return CompactTarget::from_consensus(MAX_TARGET_CONSENSUS);
         }
         next_target <<= num_shifts as usize;
