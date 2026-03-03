@@ -307,9 +307,9 @@ impl Store {
     ///
     /// Algorithm: Find ancestors up to max uncle depth on the
     /// confirmed chain, not counting the parent. Find all children of
-    /// these ancestors that are not on the confirmed chain and that
-    /// are not already included as uncles in other blocks. Return the
-    /// top MAX_UNCLES by chain_work.
+    /// these ancestors that are not on the confirmed chain, not the
+    /// chain tip (parent), and not already included as uncles in other
+    /// blocks. Return the top MAX_UNCLES by chain_work.
     pub fn find_uncles(&self) -> Result<Vec<BlockHash>, StoreError> {
         let top_confirmed_height = match self.get_top_confirmed_height() {
             Ok(height) => height,
@@ -319,6 +319,8 @@ impl Store {
             }
             Err(e) => return Err(e),
         };
+
+        let chain_tip = self.get_chain_tip()?;
 
         // get all ancestors up to required depth on the confirmed index
         let ancestors = (top_confirmed_height.saturating_sub(MAX_UNCLES_DEPTH as u32)
@@ -331,17 +333,18 @@ impl Store {
             .flatten()
             .flatten();
 
-        // Only keep the non-confirmed blocks that are not used as uncles already
-        // Collect with chain_work for sorting
+        // Only keep the non-confirmed blocks that are not used as
+        // uncles already and that are not the chain tip (parent).
         let mut uncles_with_work: Vec<(BlockHash, Work)> = children
+            .filter(|blockhash| {
+                *blockhash != chain_tip
+                    && !self.is_confirmed(blockhash)
+                    && !self.is_already_uncle(blockhash)
+            })
             .filter_map(|blockhash| {
-                if !self.is_confirmed(&blockhash) && !self.is_already_uncle(&blockhash) {
-                    self.get_block_metadata(&blockhash)
-                        .ok()
-                        .map(|metadata| (blockhash, metadata.chain_work))
-                } else {
-                    None
-                }
+                self.get_block_metadata(&blockhash)
+                    .ok()
+                    .map(|metadata| (blockhash, metadata.chain_work))
             })
             .collect();
 
@@ -2273,5 +2276,57 @@ mod tests {
 
         // uncle_low at height 2 is excluded despite being at higher height than the mids
         assert!(!uncles.contains(&uncle_low.block_hash()));
+    }
+
+    /// The chain tip (parent of the next share) must never appear as
+    /// an uncle even if it is a non-confirmed child of a confirmed
+    /// ancestor within the depth window.
+    ///
+    /// Scenario: genesis -> share1(h:1) -> share2(h:2, chain tip)
+    /// with fork_uncle as a sibling of share2 (also child of share1).
+    /// find_uncles should return fork_uncle but never the chain tip.
+    #[test]
+    fn test_find_uncles_excludes_chain_tip() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(1)
+            .build();
+        store.push_to_confirmed_chain(&share1, true).unwrap();
+
+        // fork_uncle: sibling of share2, child of share1
+        let fork_uncle = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(99)
+            .build();
+        store.store_with_valid_metadata(&fork_uncle);
+
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(2)
+            .build();
+        store.push_to_confirmed_chain(&share2, true).unwrap();
+
+        // Verify chain tip is share2
+        assert_eq!(store.get_chain_tip().unwrap(), share2.block_hash());
+
+        let uncles = store.find_uncles().unwrap();
+
+        // fork_uncle should be found
+        assert_eq!(uncles.len(), 1);
+        assert_eq!(uncles[0], fork_uncle.block_hash());
+
+        // chain tip must never appear as an uncle
+        assert!(
+            !uncles.contains(&share2.block_hash()),
+            "chain tip must never appear as an uncle"
+        );
     }
 }
