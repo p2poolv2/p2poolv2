@@ -129,7 +129,15 @@ pub(crate) fn asert_calculate_target(
     let mut next_target = anchor_wide * U512::from(factor);
 
     // Step 5: Apply integer shifts.
+    // Guard against U512 overflow: anchor (~256 bits) * factor (~17 bits)
+    // = ~273 bits. A left shift >= 239 would exceed 512 bits and wrap to
+    // zero, bypassing the max_target clamp below. Any such shift guarantees
+    // the result exceeds max_target, so clamp directly.
+    const MAX_LEFT_SHIFT: i32 = 238;
     if num_shifts >= 0 {
+        if num_shifts > MAX_LEFT_SHIFT {
+            return CompactTarget::from_consensus(MAX_TARGET_CONSENSUS);
+        }
         next_target <<= num_shifts as usize;
     } else {
         next_target >>= (-num_shifts) as usize;
@@ -607,6 +615,28 @@ mod tests {
     // =======================================================================
     // Error type tests
     // =======================================================================
+
+    #[test]
+    fn test_asert_large_positive_time_delta_clamps_to_max() {
+        // Reproduces a live signet bug: chain started Nov 2023, now March 2026.
+        // Only 3033 shares mined in ~2.3 years. Blocks are massively behind
+        // schedule, so the target should clamp to max (easiest difficulty).
+        //
+        // Actual debug output from the node:
+        //   anchor_target = CompactTarget(545259519)  = 0x207fffff
+        //   time_delta    = 72393399
+        //   height_delta  = 3033
+        //
+        // Bug: num_shifts ≈ 120,605. Left-shifting U512 by >= 512 wraps to 0,
+        // then the "ensure not zero" clamp sets target to 1 (hardest).
+        let anchor = CompactTarget::from_consensus(0x207fffff);
+        let result = asert_calculate_target(anchor, 72_393_399, 3033, 600, 10);
+        assert_eq!(
+            result.to_consensus(),
+            0x207fffff,
+            "target should clamp to max when blocks are far behind schedule"
+        );
+    }
 
     #[test]
     fn test_pool_difficulty_error_display() {
