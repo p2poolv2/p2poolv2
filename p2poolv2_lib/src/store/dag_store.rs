@@ -29,6 +29,7 @@ const MAX_UNCLES_DEPTH: u8 = 3;
 /// Single confirmed share and its uncles.
 pub struct ShareInfo {
     pub blockhash: BlockHash,
+    pub prev_blockhash: BlockHash,
     pub height: u32,
     pub miner_pubkey: String,
     pub timestamp: u32,
@@ -39,6 +40,7 @@ pub struct ShareInfo {
 /// Uncle share referenced by a confirmed share.
 pub struct UncleInfo {
     pub blockhash: BlockHash,
+    pub prev_blockhash: BlockHash,
     pub miner_pubkey: String,
     pub timestamp: u32,
     pub height: Option<u32>,
@@ -390,6 +392,7 @@ impl Store {
 
                     Some(UncleInfo {
                         blockhash: *uncle_hash,
+                        prev_blockhash: uncle_header.prev_share_blockhash,
                         miner_pubkey: uncle_header.miner_pubkey.to_string(),
                         timestamp: uncle_header.time,
                         height: uncle_height,
@@ -399,6 +402,7 @@ impl Store {
 
             shares.push(ShareInfo {
                 blockhash: *blockhash,
+                prev_blockhash: share_header.prev_share_blockhash,
                 height: *height,
                 miner_pubkey: share_header.miner_pubkey.to_string(),
                 timestamp: share_header.time,
@@ -442,6 +446,7 @@ impl Store {
 
                     Some(UncleInfo {
                         blockhash: *uncle_hash,
+                        prev_blockhash: uncle_header.prev_share_blockhash,
                         miner_pubkey: uncle_header.miner_pubkey.to_string(),
                         timestamp: uncle_header.time,
                         height: uncle_height,
@@ -451,6 +456,7 @@ impl Store {
 
             shares.push(ShareInfo {
                 blockhash: *blockhash,
+                prev_blockhash: share_header.prev_share_blockhash,
                 height: *height,
                 miner_pubkey: share_header.miner_pubkey.to_string(),
                 timestamp: share_header.time,

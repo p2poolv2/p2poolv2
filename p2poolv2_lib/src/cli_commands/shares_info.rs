@@ -17,7 +17,7 @@
 use bitcoin::CompactTarget;
 
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::store::dag_store::ShareInfo;
+use crate::store::dag_store::{ShareInfo, UncleInfo};
 use crate::utils::short_hex::short_id;
 use crate::utils::time_provider::format_timestamp;
 use std::error::Error;
@@ -41,11 +41,27 @@ fn compact_target_to_difficulty(bits: CompactTarget) -> f64 {
 
 /// Format collected shares as a human-readable text table.
 ///
-/// Each share is displayed with its height, short blockhash, short miner ID,
-/// difficulty, and formatted timestamp. Uncles are shown indented below their
-/// parent share.
+/// Each share is displayed with its height, short blockhash, parent short hash,
+/// short miner ID, difficulty, timestamp, and uncle information. Nephew rows
+/// (shares that reference uncles) show up to three uncle short hashes in the
+/// Uncles column. Uncle rows are marked with `*` in the Uncles column.
 fn format_table(shares: &[ShareInfo], from_height: u32, to_height: u32) -> String {
-    let mut output = String::with_capacity(shares.len() * 120);
+    // Collect all uncle blockhashes so we can mark uncle rows with *
+    let uncle_blockhash_count: usize = shares.iter().map(|share| share.uncles.len()).sum();
+    let mut uncle_blockhashes =
+        std::collections::HashSet::with_capacity(uncle_blockhash_count);
+    for share in shares {
+        for uncle in &share.uncles {
+            uncle_blockhashes.insert(uncle.blockhash);
+        }
+    }
+
+    // Pre-compute total row count for capacity: each share + its uncles
+    let total_rows: usize = shares
+        .iter()
+        .map(|share| 1 + share.uncles.len())
+        .sum();
+    let mut output = String::with_capacity(total_rows * 160);
 
     output.push_str(&format!(
         "Shares from height {} to {} ({} shares):\n",
@@ -54,39 +70,69 @@ fn format_table(shares: &[ShareInfo], from_height: u32, to_height: u32) -> Strin
         shares.len()
     ));
     output.push_str(&format!(
-        "{:>6} | {:8} | {:8} | {:>12} | {}\n",
-        "Height", "Hash", "Miner", "Difficulty", "Time"
+        "{:>6} | {:8} | {:8} | {:8} | {:>12} | {:19} | {}\n",
+        "Height", "Hash", "Parent", "Miner", "Difficulty", "Time", "Uncles"
     ));
-    output.push_str(&format!("{}\n", "-".repeat(72)));
+    output.push_str(&format!("{}\n", "-".repeat(101)));
 
     for share in shares {
         let blockhash_string = share.blockhash.to_string();
         let share_short_hash = short_id(&blockhash_string);
+        let prev_blockhash_string = share.prev_blockhash.to_string();
+        let parent_short_hash = short_id(&prev_blockhash_string);
         let miner_short_id = short_id(&share.miner_pubkey);
         let formatted_time = format_timestamp(share.timestamp as u64);
         let difficulty = compact_target_to_difficulty(share.bits);
 
+        let is_uncle = uncle_blockhashes.contains(&share.blockhash);
+        let uncle_column = build_uncle_column(is_uncle, &share.uncles);
+
         output.push_str(&format!(
-            "{:>6} | {} | {} | {:>12.4} | {}\n",
-            share.height, share_short_hash, miner_short_id, difficulty, formatted_time
+            "{:>6} | {} | {} | {} | {:>12.4} | {} | {}\n",
+            share.height, share_short_hash, parent_short_hash, miner_short_id,
+            difficulty, formatted_time, uncle_column
         ));
 
         for uncle in &share.uncles {
             let uncle_blockhash_string = uncle.blockhash.to_string();
             let uncle_short_hash = short_id(&uncle_blockhash_string);
+            let uncle_prev_string = uncle.prev_blockhash.to_string();
+            let uncle_parent_short_hash = short_id(&uncle_prev_string);
             let uncle_miner_short_id = short_id(&uncle.miner_pubkey);
             let uncle_height_display = uncle
                 .height
                 .map(|height| format!("{height}"))
                 .unwrap_or_else(|| "?".to_string());
+            let uncle_formatted_time = format_timestamp(uncle.timestamp as u64);
 
             output.push_str(&format!(
-                "  uncle h={uncle_height_display:<6} | {uncle_short_hash} | miner: {uncle_miner_short_id}\n"
+                "{:>6} | {} | {} | {} | {:>12} | {} | *\n",
+                uncle_height_display, uncle_short_hash, uncle_parent_short_hash,
+                uncle_miner_short_id, "-", uncle_formatted_time
             ));
         }
     }
 
     output
+}
+
+/// Build the uncle column string for a share row.
+///
+/// If the share is itself an uncle, prepends `*`. If the share references
+/// uncles (is a nephew), appends up to three uncle short hashes.
+fn build_uncle_column(is_uncle: bool, uncles: &[UncleInfo]) -> String {
+    let mut parts = Vec::with_capacity(4);
+
+    if is_uncle {
+        parts.push("*".to_string());
+    }
+
+    for uncle in uncles.iter().take(3) {
+        let uncle_blockhash_string = uncle.blockhash.to_string();
+        parts.push(short_id(&uncle_blockhash_string).to_string());
+    }
+
+    parts.join(" ")
 }
 
 /// Execute the shares-info command.
