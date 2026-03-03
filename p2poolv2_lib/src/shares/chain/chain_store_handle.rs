@@ -275,11 +275,19 @@ impl ChainStoreHandle {
 
     /// Get the chain tip and uncles from the confirmed chain.
     ///
-    /// Delegates uncle selection to Store::find_uncles()
+    /// Delegates uncle selection to Store::find_uncles() and removes
+    /// the chain tip from the result to guarantee the parent is never
+    /// also listed as an uncle.
     pub fn get_chain_tip_and_uncles(&self) -> Result<(BlockHash, HashSet<BlockHash>), StoreError> {
         let chain_tip = self.get_chain_tip()?;
-        let uncles = self.store_handle.store().find_uncles()?;
-        Ok((chain_tip, uncles.into_iter().collect()))
+        let uncles: HashSet<BlockHash> = self
+            .store_handle
+            .store()
+            .find_uncles()?
+            .into_iter()
+            .filter(|uncle| *uncle != chain_tip)
+            .collect();
+        Ok((chain_tip, uncles))
     }
 
     /// Check which blockhashes are missing from the chain.
