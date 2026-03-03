@@ -450,7 +450,7 @@ mod tests {
             max_transaction_per_second: 10,
             rate_limit_window_secs: 1,
             max_requests_per_second: 1,
-            peer_inactivity_timeout_secs: 30,
+            peer_inactivity_timeout_secs: Some(30),
             dial_timeout_secs: 2,
         };
         network_config.dial_peers = vec![unreachable_peer];

@@ -292,7 +292,7 @@ mod tests {
     fn test_network_config() -> NetworkConfig {
         NetworkConfig {
             max_requests_per_second: 10,
-            peer_inactivity_timeout_secs: 60,
+            peer_inactivity_timeout_secs: Some(60),
             ..NetworkConfig::default()
         }
     }
