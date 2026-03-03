@@ -171,6 +171,8 @@ mod tests {
     use super::*;
     use crate::shares::share_block::ShareBlock;
     use crate::test_utils::setup_test_chain_store_handle;
+    use bitcoin::BlockHash;
+    use bitcoin::hashes::Hash;
 
     #[test]
     fn test_short_id_normal() {
@@ -243,5 +245,67 @@ mod tests {
         let shares: Vec<ShareInfo> = Vec::new();
         let output = format_table(&shares, 0, 0);
         assert!(output.contains("0 shares"));
+    }
+
+    #[test]
+    fn test_format_table_with_uncles() {
+        let uncle_hash = BlockHash::from_byte_array([0xaa; 32]);
+        let uncle_parent = BlockHash::from_byte_array([0xbb; 32]);
+        let nephew_hash = BlockHash::from_byte_array([0xcc; 32]);
+        let nephew_parent = BlockHash::from_byte_array([0xdd; 32]);
+
+        let uncle_info = UncleInfo {
+            blockhash: uncle_hash,
+            prev_blockhash: uncle_parent,
+            miner_pubkey: "030303030303030303030303030303030303030303030303030303030303030303"
+                .to_string(),
+            timestamp: 1_700_000_010,
+            height: Some(5),
+        };
+
+        let nephew = ShareInfo {
+            blockhash: nephew_hash,
+            prev_blockhash: nephew_parent,
+            height: 6,
+            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
+                .to_string(),
+            timestamp: 1_700_000_020,
+            bits: CompactTarget::from_consensus(0x1b4188f5),
+            uncles: vec![uncle_info],
+        };
+
+        let output = format_table(&[nephew], 5, 6);
+
+        // Table header should include Uncles column
+        assert!(
+            output.contains("Uncles"),
+            "header should have Uncles column"
+        );
+
+        // Nephew row should show uncle short hash in its Uncles column
+        let uncle_hash_string = uncle_hash.to_string();
+        let uncle_short = short_id(&uncle_hash_string);
+        assert!(
+            output.contains(uncle_short),
+            "nephew row should show uncle short hash"
+        );
+
+        // Uncle sub-row should be marked with *
+        assert!(output.contains("| *"), "uncle row should be marked with *");
+
+        // Uncle sub-row should show its parent hash
+        let uncle_parent_string = uncle_parent.to_string();
+        let uncle_parent_short = short_id(&uncle_parent_string);
+        // The uncle parent short hash should appear in the uncle sub-row
+        let lines: Vec<&str> = output.lines().collect();
+        let uncle_row = lines
+            .iter()
+            .find(|line| line.contains("| *"))
+            .expect("should have an uncle row");
+        assert!(
+            uncle_row.contains(uncle_parent_short),
+            "uncle row should show its parent hash"
+        );
+        assert!(uncle_row.contains("5"), "uncle row should show its height");
     }
 }
