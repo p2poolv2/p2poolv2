@@ -152,7 +152,7 @@ mod tests {
             prev_blockhash: BlockHash::all_zeros(),
             merkle_root: bitcoin::TxMerkleNode::all_zeros(),
             time: 1700000000,
-            bits: CompactTarget::from_consensus(0x207fffff),
+            bits: CompactTarget::from_consensus(0x1b4188f5),
             nonce: 12345,
         };
 
@@ -191,7 +191,7 @@ mod tests {
             prev_blockhash: BlockHash::all_zeros(),
             merkle_root: bitcoin::TxMerkleNode::all_zeros(),
             time: 1700000000,
-            bits: CompactTarget::from_consensus(0x207fffff),
+            bits: CompactTarget::from_consensus(0x1b4188f5),
             nonce: 12345,
         };
 
@@ -341,7 +341,7 @@ mod tests {
             prev_blockhash: BlockHash::all_zeros(),
             merkle_root: bitcoin::TxMerkleNode::all_zeros(),
             time: 1700000000,
-            bits: CompactTarget::from_consensus(0x207fffff),
+            bits: CompactTarget::from_consensus(0x1b4188f5),
             nonce: 12345,
         };
 

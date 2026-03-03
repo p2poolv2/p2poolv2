@@ -392,7 +392,7 @@ mod tests {
         );
         assert_eq!(commitment.uncles.len(), 0);
         assert_eq!(commitment.miner_pubkey, miner_pubkey);
-        assert_eq!(commitment.bits, CompactTarget::from_consensus(0x207fffff));
+        assert_eq!(commitment.bits, CompactTarget::from_consensus(0x1b4188f5));
         // Time should be current, so just verify it's set
         assert!(commitment.time > 0);
         // Merkle root should be None for template with no transactions

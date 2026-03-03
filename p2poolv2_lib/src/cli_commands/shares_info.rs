@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use bitcoin::CompactTarget;
+use bitcoin::{CompactTarget, Target};
 
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::store::dag_store::{ShareInfo, UncleInfo};
@@ -22,21 +22,12 @@ use crate::utils::short_hex::short_id;
 use crate::utils::time_provider::format_timestamp;
 use std::error::Error;
 
-/// Compute share chain difficulty from a compact target.
+/// Compute difficulty from a compact target using Bitcoin's true difficulty.
 ///
-/// Difficulty is the ratio of the maximum (easiest) share chain target
-/// to the given target: `difficulty = max_target / target`.
-/// Uses the compact encoding directly: mantissa * 2^(8*(exponent-3)).
+/// Uses `Target::difficulty_float()` which computes difficulty relative to
+/// Bitcoin mainnet's difficulty-1 target, making it chain-neutral.
 fn compact_target_to_difficulty(bits: CompactTarget) -> f64 {
-    let compact = bits.to_consensus();
-    let exponent = (compact >> 24) as i32;
-    let mantissa = (compact & 0x007f_ffff) as f64;
-    if mantissa == 0.0 {
-        return f64::INFINITY;
-    }
-    let max_exponent: i32 = 0x20; // 32, from max target 0x207fffff
-    let max_mantissa: f64 = 0x7f_ffff as f64;
-    (max_mantissa / mantissa) * 2_f64.powi(8 * (max_exponent - exponent))
+    Target::from_compact(bits).difficulty_float()
 }
 
 /// Format collected shares as a human-readable text table.
@@ -48,8 +39,7 @@ fn compact_target_to_difficulty(bits: CompactTarget) -> f64 {
 fn format_table(shares: &[ShareInfo], from_height: u32, to_height: u32) -> String {
     // Collect all uncle blockhashes so we can mark uncle rows with *
     let uncle_blockhash_count: usize = shares.iter().map(|share| share.uncles.len()).sum();
-    let mut uncle_blockhashes =
-        std::collections::HashSet::with_capacity(uncle_blockhash_count);
+    let mut uncle_blockhashes = std::collections::HashSet::with_capacity(uncle_blockhash_count);
     for share in shares {
         for uncle in &share.uncles {
             uncle_blockhashes.insert(uncle.blockhash);
@@ -57,10 +47,7 @@ fn format_table(shares: &[ShareInfo], from_height: u32, to_height: u32) -> Strin
     }
 
     // Pre-compute total row count for capacity: each share + its uncles
-    let total_rows: usize = shares
-        .iter()
-        .map(|share| 1 + share.uncles.len())
-        .sum();
+    let total_rows: usize = shares.iter().map(|share| 1 + share.uncles.len()).sum();
     let mut output = String::with_capacity(total_rows * 160);
 
     output.push_str(&format!(
@@ -89,8 +76,13 @@ fn format_table(shares: &[ShareInfo], from_height: u32, to_height: u32) -> Strin
 
         output.push_str(&format!(
             "{:>6} | {} | {} | {} | {:>12.4} | {} | {}\n",
-            share.height, share_short_hash, parent_short_hash, miner_short_id,
-            difficulty, formatted_time, uncle_column
+            share.height,
+            share_short_hash,
+            parent_short_hash,
+            miner_short_id,
+            difficulty,
+            formatted_time,
+            uncle_column
         ));
 
         for uncle in &share.uncles {
@@ -107,8 +99,12 @@ fn format_table(shares: &[ShareInfo], from_height: u32, to_height: u32) -> Strin
 
             output.push_str(&format!(
                 "{:>6} | {} | {} | {} | {:>12} | {} | *\n",
-                uncle_height_display, uncle_short_hash, uncle_parent_short_hash,
-                uncle_miner_short_id, "-", uncle_formatted_time
+                uncle_height_display,
+                uncle_short_hash,
+                uncle_parent_short_hash,
+                uncle_miner_short_id,
+                "-",
+                uncle_formatted_time
             ));
         }
     }
