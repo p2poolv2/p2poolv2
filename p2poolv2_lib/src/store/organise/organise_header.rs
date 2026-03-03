@@ -27,7 +27,9 @@ impl Store {
     /// Organise a share header into the candidate chain.
     ///
     /// Reads block metadata, top candidate, and top confirmed from the store,
-    /// then extends or reorgs the candidate chain as needed.
+    /// then extends or reorgs the candidate chain as needed. Also marks any
+    /// uncles referenced by the header in the uncles index so that
+    /// find_uncles will not select them again.
     ///
     /// Returns the new candidate height and chain if the candidate chain
     /// changed, or None if unchanged.
@@ -55,9 +57,10 @@ impl Store {
                 Err(_) => (1, share_work),
             };
 
-        // Update block index for uncles
+        // Update block index and uncles index for uncles
         for uncle_blockhash in &header.uncles {
             self.update_block_index(uncle_blockhash, &blockhash, batch)?;
+            self.add_to_uncles_index(uncle_blockhash, &blockhash, batch)?;
         }
 
         self.set_height_to_blockhash(&blockhash, new_height, batch)?;
@@ -318,5 +321,165 @@ mod tests {
         // Top candidate should be fork_share
         let top = store.get_top_candidate().unwrap();
         assert_eq!(top.hash, fork_share.block_hash());
+    }
+
+    /// Organising a header that references uncles should mark those
+    /// uncles in the uncles index so find_uncles excludes them later.
+    ///
+    /// Scenario: genesis -> share1(h:1, confirmed) with uncle_block as
+    /// a fork at h:1. share2(h:2) includes uncle_block as an uncle.
+    /// After organising share2, uncle_block should be marked as already
+    /// used in the uncles index.
+    #[test]
+    fn test_organise_header_marks_uncles_in_uncles_index() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1: child of genesis, will be confirmed at h:1
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_confirmed_chain(&share1, true).unwrap();
+
+        // uncle_block: fork child of genesis (sibling of share1)
+        let uncle_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695799)
+            .build();
+        store.store_with_valid_metadata(&uncle_block);
+
+        // uncle_block should not be marked as uncle yet
+        assert!(!store.is_already_uncle(&uncle_block.block_hash()));
+
+        // share2: child of share1, includes uncle_block as uncle
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .uncles(vec![uncle_block.block_hash()])
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store.organise_header(&share2.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // uncle_block should now be marked in the uncles index
+        assert!(store.is_already_uncle(&uncle_block.block_hash()));
+
+        // The nephew recorded for uncle_block should be share2
+        let nephews = store.get_nephews(&uncle_block.block_hash()).unwrap();
+        assert_eq!(nephews.len(), 1);
+        assert_eq!(nephews[0], share2.block_hash());
+    }
+
+    /// Organising a header with multiple uncles should mark all of them
+    /// in the uncles index.
+    #[test]
+    fn test_organise_header_marks_multiple_uncles() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_confirmed_chain(&share1, true).unwrap();
+
+        // Two fork blocks at h:1
+        let uncle_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695801)
+            .build();
+        let uncle_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695802)
+            .build();
+        store.store_with_valid_metadata(&uncle_a);
+        store.store_with_valid_metadata(&uncle_b);
+
+        assert!(!store.is_already_uncle(&uncle_a.block_hash()));
+        assert!(!store.is_already_uncle(&uncle_b.block_hash()));
+
+        // share2 includes both uncles
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .uncles(vec![uncle_a.block_hash(), uncle_b.block_hash()])
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store.organise_header(&share2.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Both uncles should be marked
+        assert!(store.is_already_uncle(&uncle_a.block_hash()));
+        assert!(store.is_already_uncle(&uncle_b.block_hash()));
+    }
+
+    /// After organising a header with uncles, find_uncles should no
+    /// longer return those uncles.
+    #[test]
+    fn test_organise_header_uncles_excluded_from_find_uncles() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Build: genesis -> share1(h:1) -> share2(h:2) -> share3(h:3)
+        // with uncle_block as fork child of share1 (at h:2)
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_confirmed_chain(&share1, true).unwrap();
+
+        // uncle_block: fork child of genesis at h:1 (sibling of share1)
+        let uncle_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695799)
+            .build();
+        store.store_with_valid_metadata(&uncle_block);
+
+        // share2 includes uncle_block; push through organise_header
+        // so the uncles index is updated
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .uncles(vec![uncle_block.block_hash()])
+            .nonce(0xe9695793)
+            .build();
+        store.push_to_confirmed_chain(&share2, true).unwrap();
+
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        store.push_to_confirmed_chain(&share3, true).unwrap();
+
+        // find_uncles should not return uncle_block since share2
+        // already included it and organise_header marked it
+        let uncles = store.find_uncles().unwrap();
+        assert!(
+            !uncles.contains(&uncle_block.block_hash()),
+            "uncle_block should be excluded after being included by share2"
+        );
     }
 }
