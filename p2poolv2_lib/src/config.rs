@@ -219,7 +219,8 @@ pub struct NetworkConfig {
     pub max_transaction_per_second: u32,
     pub rate_limit_window_secs: u64,
     pub max_requests_per_second: u64,
-    pub peer_inactivity_timeout_secs: u64,
+    /// Set to -1 to disable peer inactivity disconnect
+    pub peer_inactivity_timeout_secs: i64,
     pub dial_timeout_secs: u64,
 }
 

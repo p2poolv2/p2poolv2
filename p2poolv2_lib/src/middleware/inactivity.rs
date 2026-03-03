@@ -24,6 +24,9 @@
 ///
 /// Peer activity is tracked by updating a `last_seen` timestamp
 /// on each request received from a peer.
+///
+/// If `timeout_duration` is `None`, inactivity monitoring is disabled
+/// and no peers will be disconnected for inactivity.
 use std::clone::Clone;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -39,13 +42,14 @@ use crate::node::SwarmSend;
 use crate::service::p2p_service::RequestContext;
 
 /// Layer that injects the InactivityService middleware into the stack.
+/// Pass `None` for `timeout_duration` to disable inactivity monitoring.
 pub struct InactivityLayer<C> {
-    timeout_duration: Duration,
+    timeout_duration: Option<Duration>,
     swarm_tx: Sender<SwarmSend<C>>,
 }
 
 impl<C> InactivityLayer<C> {
-    pub fn new(timeout_duration: Duration, swarm_tx: Sender<SwarmSend<C>>) -> Self {
+    pub fn new(timeout_duration: Option<Duration>, swarm_tx: Sender<SwarmSend<C>>) -> Self {
         Self {
             timeout_duration,
             swarm_tx,
@@ -64,9 +68,11 @@ impl<S, C: Send + Sync + 'static> Layer<S> for InactivityLayer<C> {
 }
 
 /// Middleware that tracks and disconnects inactive peers.
+/// When `timeout_duration` is `None`, monitoring is disabled and no peers
+/// will be disconnected for inactivity.
 pub struct InactivityService<S, C> {
     service: S,
-    timeout_duration: Duration,
+    timeout_duration: Option<Duration>,
     last_seen: Arc<Mutex<HashMap<PeerId, Instant>>>,
     swarm_tx: Sender<SwarmSend<C>>,
 }
@@ -75,7 +81,11 @@ impl<S, C> InactivityService<S, C>
 where
     C: Send + Sync + 'static,
 {
-    pub fn new(service: S, timeout_duration: Duration, swarm_tx: Sender<SwarmSend<C>>) -> Self {
+    pub fn new(
+        service: S,
+        timeout_duration: Option<Duration>,
+        swarm_tx: Sender<SwarmSend<C>>,
+    ) -> Self {
         Self {
             service,
             timeout_duration,
@@ -85,8 +95,12 @@ where
     }
 
     /// Starts the periodic task that checks for inactive peers.
+    /// Does nothing if `timeout_duration` is `None`.
     pub fn start_monitoring(&self) {
-        let timeout_duration = self.timeout_duration;
+        let timeout_duration = match self.timeout_duration {
+            Some(duration) => duration,
+            None => return,
+        };
         let last_seen = Arc::clone(&self.last_seen);
         let swarm_tx = self.swarm_tx.clone();
 
@@ -144,8 +158,10 @@ where
     }
 
     fn call(&mut self, req: RequestContext<C, T>) -> Self::Future {
-        let mut map = self.last_seen.lock().unwrap();
-        map.insert(req.peer, Instant::now());
+        if self.timeout_duration.is_some() {
+            let mut map = self.last_seen.lock().unwrap();
+            map.insert(req.peer, Instant::now());
+        }
 
         self.service.call(req)
     }
@@ -170,7 +186,7 @@ mod tests {
 
         let service = InactivityService {
             service: MockService,
-            timeout_duration,
+            timeout_duration: Some(timeout_duration),
             last_seen: Arc::new(Mutex::new(HashMap::new())),
             swarm_tx: tx.clone(),
         };
@@ -229,6 +245,45 @@ mod tests {
             }
             _ => panic!("Expected peer disconnect within timeout"),
         }
+    }
+
+    #[tokio::test]
+    async fn peer_is_not_disconnected_when_timeout_disabled() {
+        let (tx, mut rx) = mpsc::channel::<SwarmSend<()>>(4);
+        let check_interval = Duration::from_millis(50);
+
+        let last_seen = Arc::new(Mutex::new(HashMap::new()));
+        let peer_id = PeerId::random();
+        {
+            let mut map = last_seen.lock().unwrap();
+            map.insert(peer_id, Instant::now() - Duration::from_millis(500));
+        }
+
+        let service = InactivityService {
+            service: MockService,
+            timeout_duration: None,
+            last_seen: last_seen.clone(),
+            swarm_tx: tx.clone(),
+        };
+
+        // start_monitoring should return immediately without spawning
+        service.start_monitoring();
+
+        // Wait longer than the check interval to confirm no disconnect is sent
+        tokio::time::sleep(check_interval * 3).await;
+
+        // No disconnect should have been sent
+        assert!(
+            rx.try_recv().is_err(),
+            "No disconnect expected when timeout is disabled"
+        );
+
+        // Peer should still be in last_seen map
+        let map = last_seen.lock().unwrap();
+        assert!(
+            map.contains_key(&peer_id),
+            "Peer should remain in last_seen when monitoring is disabled"
+        );
     }
 
     // Minimal mock service to satisfy the generic type S
