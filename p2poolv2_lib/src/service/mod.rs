@@ -37,13 +37,7 @@ where
 {
     let base_service = P2PService::new(swarm_tx.clone());
 
-    let timeout_duration = if config.peer_inactivity_timeout_secs < 0 {
-        None
-    } else {
-        Some(Duration::from_secs(
-            config.peer_inactivity_timeout_secs as u64,
-        ))
-    };
+    let timeout_duration = config.peer_inactivity_timeout_secs.map(Duration::from_secs);
 
     let inactivity_layer = InactivityLayer::new(timeout_duration, swarm_tx);
 
@@ -360,7 +354,7 @@ mod tests {
             max_transaction_per_second: 0,
             rate_limit_window_secs: 1,
             max_requests_per_second: 1,
-            peer_inactivity_timeout_secs: 30,
+            peer_inactivity_timeout_secs: Some(30),
             dial_timeout_secs: 30,
         };
 
@@ -452,7 +446,7 @@ mod tests {
             max_transaction_per_second: 0,
             rate_limit_window_secs: 1,
             max_requests_per_second: 1,
-            peer_inactivity_timeout_secs: 30,
+            peer_inactivity_timeout_secs: Some(30),
             dial_timeout_secs: 30,
         };
 

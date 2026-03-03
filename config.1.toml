@@ -13,8 +13,8 @@ max_inventory_per_second = 100
 max_transaction_per_second = 100
 rate_limit_window_secs = 1
 max_requests_per_second = 100
-# Set to -1 to disable peer inactivity disconnect
-peer_inactivity_timeout_secs = -1
+# Comment out to disable peer inactivity disconnect
+# peer_inactivity_timeout_secs = 60
 dial_timeout_secs = 30
 
 [store]
