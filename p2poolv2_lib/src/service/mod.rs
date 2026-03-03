@@ -37,10 +37,15 @@ where
 {
     let base_service = P2PService::new(swarm_tx.clone());
 
-    let inactivity_layer = InactivityLayer::new(
-        Duration::from_secs(config.peer_inactivity_timeout_secs),
-        swarm_tx,
-    );
+    let timeout_duration = if config.peer_inactivity_timeout_secs < 0 {
+        None
+    } else {
+        Some(Duration::from_secs(
+            config.peer_inactivity_timeout_secs as u64,
+        ))
+    };
+
+    let inactivity_layer = InactivityLayer::new(timeout_duration, swarm_tx);
 
     let builder = ServiceBuilder::new()
         .layer(RateLimitLayer::new(
