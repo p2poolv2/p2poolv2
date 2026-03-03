@@ -91,11 +91,11 @@ pub const TEST_ANCHOR_TIME: u32 = 1_700_000_000;
 pub const TEST_TIP_TIME: u32 = TEST_ANCHOR_TIME + 20;
 
 /// Build a PoolDifficulty anchored on-schedule so that
-/// calculate_target(TEST_TIP_TIME, 1) returns the anchor target (0x207fffff).
+/// calculate_target(TEST_TIP_TIME, 1) returns the anchor target (0x1b4188f5).
 #[cfg(any(test, feature = "test-utils"))]
 pub fn on_schedule_pool_difficulty() -> PoolDifficulty {
     PoolDifficulty::new(
-        CompactTarget::from_consensus(0x207fffff),
+        CompactTarget::from_consensus(0x1b4188f5),
         TEST_ANCHOR_TIME,
         0,
     )
@@ -113,7 +113,7 @@ pub fn create_test_commitment() -> ShareCommitment {
             .parse::<CompressedPublicKey>()
             .unwrap(),
         merkle_root: Some(TxMerkleNode::all_zeros()),
-        bits: CompactTarget::from_consensus(0x207fffff),
+        bits: CompactTarget::from_consensus(0x1b4188f5),
         time: 1700000000,
     }
 }
@@ -233,7 +233,7 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
         merkle_root: share_merkle_root,
         bitcoin_header,
         time: 1700000000u32,
-        bits: CompactTarget::from_consensus(0x207fffff),
+        bits: CompactTarget::from_consensus(0x1b4188f5),
     };
 
     ShareBlock {
@@ -504,11 +504,11 @@ impl TestShareHeaderBuilder {
                 prev_blockhash: BlockHash::all_zeros(),
                 merkle_root: default_merkle_root,
                 time: 1700000000u32,
-                bits: CompactTarget::from_consensus(0x207fffff),
+                bits: CompactTarget::from_consensus(0x1b4188f5),
                 nonce: 0,
             },
             time: 1700000000u32,
-            bits: CompactTarget::from_consensus(0x207fffff),
+            bits: CompactTarget::from_consensus(0x1b4188f5),
         }
     }
 }

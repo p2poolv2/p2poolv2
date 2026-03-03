@@ -497,7 +497,7 @@ mod tests {
                 .parse()
                 .unwrap(),
             merkle_root: template.get_merkle_root_without_coinbase(),
-            bits: CompactTarget::from_consensus(0x207fffff),
+            bits: CompactTarget::from_consensus(0x1b4188f5),
             time: 1700000000u32,
         };
 

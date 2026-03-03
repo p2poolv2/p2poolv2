@@ -42,7 +42,7 @@ const HALFLIFE: u32 = 600;
 /// Maximum (easiest) target as a consensus u32. This is the regtest maximum and
 /// serves as the ceiling for the share chain target. Stored as u32 because
 /// `CompactTarget::from_consensus` is not a const fn.
-const MAX_TARGET_CONSENSUS: u32 = 0x207fffff;
+const MAX_TARGET_CONSENSUS: u32 = 0x1b4188f5;
 
 /// Fixed-point radix for the ASERT exponent representation (2^16)
 const RADIX: i64 = 65536;
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_target_u512_roundtrip_regtest_max() {
-        let original = Target::from_compact(CompactTarget::from_consensus(0x207fffff));
+        let original = Target::from_compact(CompactTarget::from_consensus(0x1b4188f5));
         let wide = target_to_u512(original);
         let recovered = u512_to_target(wide);
         assert_eq!(original.to_le_bytes(), recovered.to_le_bytes());
@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn test_u512_multiply_then_shift_recovers_original() {
         // (anchor * 65536) >> 16 should give back anchor
-        let target = Target::from_compact(CompactTarget::from_consensus(0x207fffff));
+        let target = Target::from_compact(CompactTarget::from_consensus(0x1b4188f5));
         let anchor = target_to_u512(target);
         let product = anchor * U512::from(65536u64);
         let recovered = product >> 16;
@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn test_u512_max_target_multiply_does_not_overflow() {
         // Max target (~2^255) * 131072 (~2^17) = ~2^272, fits in U512
-        let target = Target::from_compact(CompactTarget::from_consensus(0x207fffff));
+        let target = Target::from_compact(CompactTarget::from_consensus(0x1b4188f5));
         let anchor = target_to_u512(target);
         let product = anchor * U512::from(131072u64);
         // Product should be larger than anchor
@@ -320,7 +320,7 @@ mod tests {
         // When blocks are exactly on schedule, the exponent is zero and the
         // target should equal the anchor target.
         // For height_delta=0: on schedule means time_delta = ideal_block_time * (0 + 1) = 10
-        let anchor = CompactTarget::from_consensus(0x207fffff);
+        let anchor = CompactTarget::from_consensus(0x1b4188f5);
         let result = asert_calculate_target(anchor, 10, 0, 600, 10);
         assert_eq!(result.to_consensus(), anchor.to_consensus());
     }
@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn test_asert_on_schedule_height_1() {
         // height_delta=1, on schedule means time_delta = ideal_block_time * (1 + 1) = 20
-        let anchor = CompactTarget::from_consensus(0x207fffff);
+        let anchor = CompactTarget::from_consensus(0x1b4188f5);
         let result = asert_calculate_target(anchor, 20, 1, 600, 10);
         assert_eq!(result.to_consensus(), anchor.to_consensus());
     }
@@ -336,14 +336,15 @@ mod tests {
     #[test]
     fn test_asert_on_schedule_height_60() {
         // height_delta=60, on schedule means time_delta = 10 * 61 = 610
-        let anchor = CompactTarget::from_consensus(0x207fffff);
+        let anchor = CompactTarget::from_consensus(0x1b4188f5);
         let result = asert_calculate_target(anchor, 610, 60, 600, 10);
         assert_eq!(result.to_consensus(), anchor.to_consensus());
     }
 
     #[test]
-    fn test_asert_on_schedule_mainnet_target() {
-        let anchor = CompactTarget::from_consensus(0x1d00ffff);
+    fn test_asert_on_schedule_below_max_anchor() {
+        // On-schedule with an anchor well below max target
+        let anchor = CompactTarget::from_consensus(0x1a4188f5);
         let result = asert_calculate_target(anchor, 10, 0, 600, 10);
         assert_eq!(result.to_consensus(), anchor.to_consensus());
     }
@@ -351,7 +352,7 @@ mod tests {
     #[test]
     fn test_asert_fast_blocks_decrease_target() {
         // Blocks arriving faster than expected should lower the target (harder mining)
-        let anchor = CompactTarget::from_consensus(0x207fffff);
+        let anchor = CompactTarget::from_consensus(0x1b4188f5);
         let on_schedule = asert_calculate_target(anchor, 610, 60, 600, 10);
         let too_fast = asert_calculate_target(anchor, 305, 60, 600, 10);
 
@@ -366,8 +367,8 @@ mod tests {
     #[test]
     fn test_asert_slow_blocks_increase_target() {
         // Blocks arriving slower than expected should raise the target (easier mining).
-        // Use mainnet target as anchor so there's room to increase.
-        let anchor = CompactTarget::from_consensus(0x1d00ffff);
+        // Use anchor below max target so there is room to increase.
+        let anchor = CompactTarget::from_consensus(0x1a4188f5);
         let on_schedule = asert_calculate_target(anchor, 610, 60, 600, 10);
         let too_slow = asert_calculate_target(anchor, 1220, 60, 600, 10);
 
@@ -382,7 +383,7 @@ mod tests {
     #[test]
     fn test_asert_slow_blocks_at_max_target_clamps() {
         // When anchor is already at max, slow blocks should clamp to max
-        let anchor = CompactTarget::from_consensus(0x207fffff);
+        let anchor = CompactTarget::from_consensus(0x1b4188f5);
         let too_slow = asert_calculate_target(anchor, 1220, 60, 600, 10);
         let max_target_wide = target_to_u512(Target::from_compact(CompactTarget::from_consensus(
             MAX_TARGET_CONSENSUS,
@@ -404,7 +405,9 @@ mod tests {
         //   (time_delta - 10) * 65536 / 600 = 65536
         //   time_delta - 10 = 600
         //   time_delta = 610
-        let anchor = CompactTarget::from_consensus(0x1d00ffff);
+        //
+        // Anchor must be well below max target so doubling does not clamp.
+        let anchor = CompactTarget::from_consensus(0x1a4188f5);
         let anchor_wide = target_to_u512(Target::from_compact(anchor));
         let result = asert_calculate_target(anchor, 610, 0, 600, 10);
         let result_wide = target_to_u512(Target::from_compact(result));
@@ -431,7 +434,9 @@ mod tests {
         // We want exponent = -65536, so:
         //   time_delta - 10 = -600
         //   time_delta = -590
-        let anchor = CompactTarget::from_consensus(0x1d00ffff);
+        //
+        // Anchor must be below max target so halving is not obscured by clamping.
+        let anchor = CompactTarget::from_consensus(0x1a4188f5);
         let anchor_wide = target_to_u512(Target::from_compact(anchor));
         let result = asert_calculate_target(anchor, -590, 0, 600, 10);
         let result_wide = target_to_u512(Target::from_compact(result));
@@ -451,7 +456,7 @@ mod tests {
 
     #[test]
     fn test_asert_negative_time_delta() {
-        let anchor = CompactTarget::from_consensus(0x207fffff);
+        let anchor = CompactTarget::from_consensus(0x1b4188f5);
         let normal = asert_calculate_target(anchor, 10, 0, 600, 10);
         let negative = asert_calculate_target(anchor, -10, 0, 600, 10);
 
@@ -465,14 +470,14 @@ mod tests {
 
     #[test]
     fn test_asert_large_height_delta_does_not_panic() {
-        let anchor = CompactTarget::from_consensus(0x207fffff);
+        let anchor = CompactTarget::from_consensus(0x1b4188f5);
         let result = asert_calculate_target(anchor, 100_000, 100_000, 600, 10);
         let _ = Target::from_compact(result);
     }
 
     #[test]
     fn test_asert_extreme_fast_mining_target_not_zero() {
-        let anchor = CompactTarget::from_consensus(0x207fffff);
+        let anchor = CompactTarget::from_consensus(0x1b4188f5);
         let result = asert_calculate_target(anchor, 0, 100_000, 600, 10);
         let result_wide = target_to_u512(Target::from_compact(result));
         assert!(
@@ -494,7 +499,7 @@ mod tests {
 
     #[test]
     fn test_asert_compact_target_stable_under_roundtrip() {
-        let anchor = CompactTarget::from_consensus(0x207fffff);
+        let anchor = CompactTarget::from_consensus(0x1b4188f5);
         let result = asert_calculate_target(anchor, 50, 3, 600, 10);
         let result_target = Target::from_compact(result);
         let roundtrip = result_target.to_compact_lossy();
@@ -503,7 +508,8 @@ mod tests {
 
     #[test]
     fn test_asert_symmetry_of_adjustments() {
-        let anchor = CompactTarget::from_consensus(0x1d00ffff);
+        // Anchor must be below max target so the upward adjustment is not clamped.
+        let anchor = CompactTarget::from_consensus(0x1a4188f5);
         let anchor_wide = target_to_u512(Target::from_compact(anchor));
 
         // 300 seconds behind schedule at height 0
@@ -522,7 +528,8 @@ mod tests {
     fn test_asert_monotonic_with_time() {
         // For a fixed height_delta, increasing time_delta should monotonically
         // increase the target (easier difficulty).
-        let anchor = CompactTarget::from_consensus(0x1d00ffff);
+        // Anchor must be below max target so results are not all clamped equally.
+        let anchor = CompactTarget::from_consensus(0x1a4188f5);
 
         let target_at_100 = asert_calculate_target(anchor, 100, 5, 600, 10);
         let target_at_200 = asert_calculate_target(anchor, 200, 5, 600, 10);
@@ -556,8 +563,8 @@ mod tests {
     #[test]
     fn test_pool_difficulty_new() {
         let pool_difficulty =
-            PoolDifficulty::new(CompactTarget::from_consensus(0x207fffff), 1_700_000_000, 0);
-        assert_eq!(pool_difficulty.anchor_target.to_consensus(), 0x207fffff);
+            PoolDifficulty::new(CompactTarget::from_consensus(0x1b4188f5), 1_700_000_000, 0);
+        assert_eq!(pool_difficulty.anchor_target.to_consensus(), 0x1b4188f5);
         assert_eq!(pool_difficulty.anchor_parent_time, 1_700_000_000);
         assert_eq!(pool_difficulty.anchor_height, 0);
     }
@@ -565,16 +572,16 @@ mod tests {
     #[test]
     fn test_pool_difficulty_on_schedule() {
         let pool_difficulty =
-            PoolDifficulty::new(CompactTarget::from_consensus(0x207fffff), 1_700_000_000, 0);
+            PoolDifficulty::new(CompactTarget::from_consensus(0x1b4188f5), 1_700_000_000, 0);
         // Block at height 1, exactly 20 seconds after anchor (on schedule: 10 * (1+1) = 20)
         let target = pool_difficulty.calculate_target(1_700_000_020, 1);
-        assert_eq!(target.to_consensus(), 0x207fffff);
+        assert_eq!(target.to_consensus(), 0x1b4188f5);
     }
 
     #[test]
     fn test_pool_difficulty_consensus_matches_compact() {
         let pool_difficulty =
-            PoolDifficulty::new(CompactTarget::from_consensus(0x207fffff), 1_700_000_000, 0);
+            PoolDifficulty::new(CompactTarget::from_consensus(0x1b4188f5), 1_700_000_000, 0);
         let compact = pool_difficulty.calculate_target(1_700_000_015, 1);
         let consensus = pool_difficulty.calculate_target_consensus(1_700_000_015, 1);
         assert_eq!(consensus, compact.to_consensus());
@@ -583,29 +590,29 @@ mod tests {
     #[test]
     fn test_pool_difficulty_on_schedule_at_various_heights() {
         let pool_difficulty =
-            PoolDifficulty::new(CompactTarget::from_consensus(0x207fffff), 1_700_000_000, 0);
+            PoolDifficulty::new(CompactTarget::from_consensus(0x1b4188f5), 1_700_000_000, 0);
 
         // On schedule: block_parent_time = anchor_parent_time + ideal_block_time * (height + 1)
         let on_schedule_1 = pool_difficulty.calculate_target(1_700_000_020, 1);
         let on_schedule_5 = pool_difficulty.calculate_target(1_700_000_060, 5);
         let on_schedule_100 = pool_difficulty.calculate_target(1_700_001_010, 100);
 
-        assert_eq!(on_schedule_1.to_consensus(), 0x207fffff);
-        assert_eq!(on_schedule_5.to_consensus(), 0x207fffff);
-        assert_eq!(on_schedule_100.to_consensus(), 0x207fffff);
+        assert_eq!(on_schedule_1.to_consensus(), 0x1b4188f5);
+        assert_eq!(on_schedule_5.to_consensus(), 0x1b4188f5);
+        assert_eq!(on_schedule_100.to_consensus(), 0x1b4188f5);
     }
 
     #[test]
     fn test_pool_difficulty_slightly_ahead() {
         let pool_difficulty =
-            PoolDifficulty::new(CompactTarget::from_consensus(0x207fffff), 1_700_000_000, 0);
+            PoolDifficulty::new(CompactTarget::from_consensus(0x1b4188f5), 1_700_000_000, 0);
         // Block at height 1, only 10 seconds later (ahead of schedule by 10s)
         //
         // on-schedule time is ideal_block_time * (height_delta + 1) =
         //  10 * (1 + 1) = 20 seconds after the anchor.
         let target = pool_difficulty.calculate_target(1_700_000_010, 1);
         let anchor_wide = target_to_u512(Target::from_compact(CompactTarget::from_consensus(
-            0x207fffff,
+            0x1b4188f5,
         )));
         let target_wide = target_to_u512(Target::from_compact(target));
         // Slightly ahead -> slightly harder -> lower target
@@ -623,17 +630,17 @@ mod tests {
         // schedule, so the target should clamp to max (easiest difficulty).
         //
         // Actual debug output from the node:
-        //   anchor_target = CompactTarget(545259519)  = 0x207fffff
+        //   anchor_target = CompactTarget(545259519)  = 0x1b4188f5
         //   time_delta    = 72393399
         //   height_delta  = 3033
         //
         // Bug: num_shifts ≈ 120,605. Left-shifting U512 by >= 512 wraps to 0,
         // then the "ensure not zero" clamp sets target to 1 (hardest).
-        let anchor = CompactTarget::from_consensus(0x207fffff);
+        let anchor = CompactTarget::from_consensus(0x1b4188f5);
         let result = asert_calculate_target(anchor, 72_393_399, 3033, 600, 10);
         assert_eq!(
             result.to_consensus(),
-            0x207fffff,
+            0x1b4188f5,
             "target should clamp to max when blocks are far behind schedule"
         );
     }
