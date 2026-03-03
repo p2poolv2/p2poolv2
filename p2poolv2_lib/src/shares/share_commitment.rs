@@ -143,7 +143,8 @@ pub(crate) fn build_share_commitment(
     let (tip, uncles) = chain_store_handle.get_chain_tip_and_uncles()?;
 
     let (tip_height, parent_time) = chain_store_handle.get_tip_height_and_time()?;
-    let target = pool_difficulty.calculate_target(parent_time, tip_height + 1);
+    // pass tip height, pool_difficulty adds 1 in the implementation
+    let target = pool_difficulty.calculate_target(parent_time, tip_height);
 
     let merkle_root = template.get_merkle_root_without_coinbase();
     let time = SystemTimeProvider.seconds_since_epoch() as u32;
