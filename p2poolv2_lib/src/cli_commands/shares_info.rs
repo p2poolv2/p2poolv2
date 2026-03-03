@@ -14,16 +14,36 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use bitcoin::CompactTarget;
+
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::store::dag_store::ShareInfo;
 use crate::utils::short_hex::short_id;
 use crate::utils::time_provider::format_timestamp;
 use std::error::Error;
 
+/// Compute share chain difficulty from a compact target.
+///
+/// Difficulty is the ratio of the maximum (easiest) share chain target
+/// to the given target: `difficulty = max_target / target`.
+/// Uses the compact encoding directly: mantissa * 2^(8*(exponent-3)).
+fn compact_target_to_difficulty(bits: CompactTarget) -> f64 {
+    let compact = bits.to_consensus();
+    let exponent = (compact >> 24) as i32;
+    let mantissa = (compact & 0x007f_ffff) as f64;
+    if mantissa == 0.0 {
+        return f64::INFINITY;
+    }
+    let max_exponent: i32 = 0x20; // 32, from max target 0x207fffff
+    let max_mantissa: f64 = 0x7f_ffff as f64;
+    (max_mantissa / mantissa) * 2_f64.powi(8 * (max_exponent - exponent))
+}
+
 /// Format collected shares as a human-readable text table.
 ///
 /// Each share is displayed with its height, short blockhash, short miner ID,
-/// and formatted timestamp. Uncles are shown indented below their parent share.
+/// difficulty, and formatted timestamp. Uncles are shown indented below their
+/// parent share.
 fn format_table(shares: &[ShareInfo], from_height: u32, to_height: u32) -> String {
     let mut output = String::with_capacity(shares.len() * 120);
 
@@ -33,17 +53,22 @@ fn format_table(shares: &[ShareInfo], from_height: u32, to_height: u32) -> Strin
         to_height,
         shares.len()
     ));
-    output.push_str(&format!("{}\n", "=".repeat(72)));
+    output.push_str(&format!(
+        "{:>6} | {:8} | {:8} | {:>12} | {}\n",
+        "Height", "Hash", "Miner", "Difficulty", "Time"
+    ));
+    output.push_str(&format!("{}\n", "-".repeat(72)));
 
     for share in shares {
         let blockhash_string = share.blockhash.to_string();
         let share_short_hash = short_id(&blockhash_string);
         let miner_short_id = short_id(&share.miner_pubkey);
         let formatted_time = format_timestamp(share.timestamp as u64);
+        let difficulty = compact_target_to_difficulty(share.bits);
 
         output.push_str(&format!(
-            "Height {:>6} | {} | miner: {} | {}\n",
-            share.height, share_short_hash, miner_short_id, formatted_time
+            "{:>6} | {} | {} | {:>12.4} | {}\n",
+            share.height, share_short_hash, miner_short_id, difficulty, formatted_time
         ));
 
         for uncle in &share.uncles {

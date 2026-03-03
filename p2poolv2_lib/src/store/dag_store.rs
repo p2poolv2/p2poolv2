@@ -19,7 +19,7 @@ use crate::shares::chain::chain_store_handle::COMMON_ANCESTOR_DEPTH;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::shares::validation::MAX_UNCLES;
 use bitcoin::consensus::{self, Encodable, encode};
-use bitcoin::{BlockHash, Work};
+use bitcoin::{BlockHash, CompactTarget, Work};
 use std::collections::{HashSet, VecDeque};
 use tracing::debug;
 
@@ -32,6 +32,7 @@ pub struct ShareInfo {
     pub height: u32,
     pub miner_pubkey: String,
     pub timestamp: u32,
+    pub bits: CompactTarget,
     pub uncles: Vec<UncleInfo>,
 }
 
@@ -398,6 +399,7 @@ impl Store {
                 height: *height,
                 miner_pubkey: share_header.miner_pubkey.to_string(),
                 timestamp: share_header.time,
+                bits: share_header.bits,
                 uncles: uncle_infos,
             });
         }
@@ -449,6 +451,7 @@ impl Store {
                 height: *height,
                 miner_pubkey: share_header.miner_pubkey.to_string(),
                 timestamp: share_header.time,
+                bits: share_header.bits,
                 uncles: uncle_infos,
             });
         }
