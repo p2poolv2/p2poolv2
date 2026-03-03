@@ -443,7 +443,7 @@ impl ChainStoreHandle {
     ) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError> {
         let blockhash = header.block_hash();
         let result = self.store_handle.organise_header(header).await?;
-        info!("Organised header {blockhash} into candidate chain: {result:?}");
+        info!("Organised header {blockhash} into candidate chain");
         Ok(result)
     }
 
