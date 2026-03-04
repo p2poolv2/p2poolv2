@@ -64,7 +64,7 @@ impl FromRef<AppState> for AppConfig {
 
 #[derive(Deserialize)]
 pub struct PplnsQuery {
-    limit: Option<usize>,
+    limit: Option<u32>,
     start_time: Option<String>,
     end_time: Option<String>,
 }
@@ -185,16 +185,28 @@ async fn peers(State(state): State<Arc<AppState>>) -> Result<Json<Vec<PeerRespon
     Ok(Json(peers))
 }
 
+/// Returns PPLNS shares with optional time filtering and limit.
 async fn pplns_shares(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PplnsQuery>,
 ) -> Result<Json<Vec<SimplePplnsShare>>, ApiError> {
+    let limit = query.limit.unwrap_or(100);
+
+    if !(1..=endpoints::MAX_NUM_SHARES_IN_RESPONSE).contains(&limit) {
+        return Err(ApiError::BadRequest(format!(
+            "limit must be between 1 and {}, got {limit}",
+            endpoints::MAX_NUM_SHARES_IN_RESPONSE
+        )));
+    }
+
     // Convert ISO 8601 strings to Unix timestamps
     let start_time = match query.start_time.as_ref() {
         Some(s) => match DateTime::parse_from_rfc3339(s) {
             Ok(dt) => dt.timestamp() as u64,
             Err(_) => {
-                return Err(ApiError::ServerError("Invalid time format".into()));
+                return Err(ApiError::BadRequest(
+                    "Invalid start_time format, expected RFC 3339".into(),
+                ));
             }
         },
         None => 0,
@@ -204,7 +216,9 @@ async fn pplns_shares(
         Some(s) => match DateTime::parse_from_rfc3339(s) {
             Ok(dt) => dt.timestamp() as u64,
             Err(_) => {
-                return Err(ApiError::ServerError("Invalid time format".into()));
+                return Err(ApiError::BadRequest(
+                    "Invalid end_time format, expected RFC 3339".into(),
+                ));
             }
         },
         None => {
@@ -215,11 +229,13 @@ async fn pplns_shares(
     };
 
     if end_time < start_time {
-        return Err(ApiError::ServerError("Invalid date range".into()));
+        return Err(ApiError::BadRequest(
+            "end_time must not be before start_time".into(),
+        ));
     }
 
     let shares = state.chain_store_handle.get_pplns_shares_filtered(
-        query.limit,
+        Some(limit as usize),
         Some(start_time),
         Some(end_time),
     );
@@ -401,7 +417,7 @@ mod tests {
 
         let response_body = metrics(State(state)).await;
 
-        println!("{}", response_body);
+        println!("{response_body}");
 
         //  Verify Output
         assert!(response_body.contains(
@@ -410,5 +426,65 @@ mod tests {
         assert!(response_body.contains(
             "coinbase_output{index=\"1\",address=\"tb1q0afww6y0kgl4tyjjyv6xlttvfwdfqxvrfzz35f\"} 100000000"
         ));
+    }
+
+    #[tokio::test]
+    async fn test_pplns_shares_rejects_limit_zero() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let query = Query(PplnsQuery {
+            limit: Some(0),
+            start_time: None,
+            end_time: None,
+        });
+
+        let result = pplns_shares(State(state), query).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_pplns_shares_rejects_limit_above_max() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let query = Query(PplnsQuery {
+            limit: Some(1001),
+            start_time: None,
+            end_time: None,
+        });
+
+        let result = pplns_shares(State(state), query).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_pplns_shares_rejects_end_before_start() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let query = Query(PplnsQuery {
+            limit: None,
+            start_time: Some("2025-01-02T00:00:00Z".to_string()),
+            end_time: Some("2025-01-01T00:00:00Z".to_string()),
+        });
+
+        let result = pplns_shares(State(state), query).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_pplns_shares_defaults_limit() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let query = Query(PplnsQuery {
+            limit: None,
+            start_time: None,
+            end_time: None,
+        });
+
+        let result = pplns_shares(State(state), query).await;
+        assert!(result.is_ok());
     }
 }
