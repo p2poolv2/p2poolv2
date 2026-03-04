@@ -45,10 +45,10 @@ pub(crate) async fn chain_info(
         .get_tip_height()
         .map_err(|error| ApiError::ServerError(format!("Failed to get tip height: {error}")))?;
 
-    let chain_tip_blockhash = match chain_store_handle.get_chain_tip() {
-        Ok(hash) => Some(hash.to_string()),
-        Err(_) => None,
-    };
+    let chain_tip_blockhash = chain_store_handle
+        .get_chain_tip()
+        .map(|hash| Some(hash.to_string()))
+        .map_err(|error| ApiError::ServerError(format!("Failed to get chain tip: {error}")))?;
 
     let total_work = format!(
         "{:#x}",

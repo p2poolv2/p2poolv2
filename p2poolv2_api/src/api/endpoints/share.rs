@@ -25,6 +25,7 @@ use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::store::block_tx_metadata::Status;
 use p2poolv2_lib::store::column_families::ColumnFamily;
 use p2poolv2_lib::store::dag_store::MAX_UNCLES_DEPTH;
+use p2poolv2_lib::store::writer::StoreError;
 use p2poolv2_lib::utils::time_provider::format_timestamp;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -96,7 +97,15 @@ fn build_share_output(
         .map_err(|error| ApiError::ServerError(format!("Store error: {error}")))?
         .ok_or_else(|| ApiError::NotFound(format!("Share not found for blockhash {blockhash}")))?;
 
-    let metadata = chain_store_handle.get_block_metadata(blockhash).ok();
+    let metadata = match chain_store_handle.get_block_metadata(blockhash) {
+        Ok(metadata) => Some(metadata),
+        Err(StoreError::NotFound(_)) => None,
+        Err(error) => {
+            return Err(ApiError::ServerError(format!(
+                "Failed to get metadata for {blockhash}: {error}"
+            )));
+        }
+    };
 
     let height = metadata
         .as_ref()
@@ -209,10 +218,15 @@ fn lookup_by_height(
                 if blockhashes.contains(uncle_hash) {
                     continue;
                 }
-                let uncle_height = chain_store_handle
-                    .get_block_metadata(uncle_hash)
-                    .ok()
-                    .and_then(|metadata| metadata.expected_height);
+                let uncle_height = match chain_store_handle.get_block_metadata(uncle_hash) {
+                    Ok(metadata) => metadata.expected_height,
+                    Err(StoreError::NotFound(_)) => None,
+                    Err(error) => {
+                        return Err(ApiError::ServerError(format!(
+                            "Failed to get metadata for uncle {uncle_hash}: {error}"
+                        )));
+                    }
+                };
                 if uncle_height == Some(height) {
                     blockhashes.push(*uncle_hash);
                 }
