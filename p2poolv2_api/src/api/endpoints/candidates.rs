@@ -50,7 +50,7 @@ pub(crate) async fn candidates(
     let chain_store_handle = &state.chain_store_handle;
     let num = query.num.unwrap_or(10);
 
-    if num < 1 || num > MAX_NUM_SHARES_IN_RESPONSE {
+    if !(1..MAX_NUM_SHARES_IN_RESPONSE).contains(&num) {
         return Err(ApiError::BadRequest(format!(
             "num must be between 1 and {MAX_NUM_SHARES_IN_RESPONSE}, got {num}"
         )));
