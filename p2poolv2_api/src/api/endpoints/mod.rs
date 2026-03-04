@@ -19,3 +19,6 @@ pub mod chain_info;
 pub mod common;
 pub mod share;
 pub mod shares;
+
+/// Maximum number of candidates and shares that can be requested in a single query.
+const MAX_NUM_SHARES_IN_RESPONSE: u32 = 1000;
