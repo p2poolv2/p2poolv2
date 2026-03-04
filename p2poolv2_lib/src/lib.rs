@@ -17,7 +17,7 @@
 pub mod accounting;
 pub mod auth;
 pub mod command;
-pub mod config;
+pub use p2poolv2_config as config;
 pub mod logging;
 pub mod middleware;
 pub mod node;

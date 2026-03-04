@@ -13,7 +13,7 @@ categories.workspace = true
 rust-version.workspace = true
 
 [features]
-test-utils = ["dep:rand", "dep:tempfile"]
+test-utils = ["dep:rand", "dep:tempfile", "p2poolv2_config/test-utils"]
 
 [dependencies]
 # Optional test utilities dependencies
@@ -44,6 +44,7 @@ tokio-util = { workspace = true }
 tokio-stream = { workspace = true }
 tracing-appender = { workspace = true }
 bitcoindrpc = { path = "../bitcoindrpc" }
+p2poolv2_config = { path = "../p2poolv2_config" }
 chrono = { workspace = true }
 dashmap = { workspace = true }
 uint = { workspace = true }

@@ -29,3 +29,11 @@ impl std::fmt::Display for WorkError {
         write!(f, "{}", self.message)
     }
 }
+
+impl From<p2poolv2_config::ConfigError> for WorkError {
+    fn from(error: p2poolv2_config::ConfigError) -> Self {
+        WorkError {
+            message: error.message,
+        }
+    }
+}

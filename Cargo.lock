@@ -3136,6 +3136,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "p2poolv2_config"
+version = "0.1.0"
+dependencies = [
+ "bitcoin",
+ "bitcoindrpc",
+ "config",
+ "serde",
+ "temp-env",
+ "tokio-test",
+]
+
+[[package]]
 name = "p2poolv2_lib"
 version = "0.1.0"
 dependencies = [
@@ -3152,6 +3164,7 @@ dependencies = [
  "libp2p",
  "mockall",
  "mockall_double",
+ "p2poolv2_config",
  "rand 0.8.5",
  "rocksdb",
  "rust_decimal",

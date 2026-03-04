@@ -1,0 +1,30 @@
+[package]
+name = "p2poolv2_config"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description.workspace = true
+readme.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[features]
+test-utils = []
+
+[dependencies]
+bitcoin = { workspace = true }
+bitcoindrpc = { workspace = true }
+config = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+temp-env = "0.3.6"
+tokio-test = { workspace = true }
+
+[lib]
+name = "p2poolv2_config"
+path = "src/lib.rs"
