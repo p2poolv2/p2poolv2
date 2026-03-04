@@ -14,17 +14,19 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+pub mod api_client;
+pub mod candidates;
+pub mod chain_info;
 pub mod gen_auth;
 pub mod peers_info;
+pub mod pplns_shares;
+pub mod share;
+pub mod shares;
 
+use crate::commands;
 use clap::{ArgGroup, Parser, Subcommand};
-use p2poolv2_lib::cli_commands;
 use p2poolv2_lib::config::Config;
-use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
-use p2poolv2_lib::shares::share_block::ShareBlock;
-use p2poolv2_lib::store::writer::{StoreHandle, StoreWriter, write_channel};
 use std::error::Error;
-use std::sync::Arc;
 
 /// P2Pool v2 CLI utility
 #[derive(Parser, Debug)]
@@ -41,7 +43,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// List information about the store
+    /// List information about the chain
     Info,
     /// Get PPLNS shares with optional filtering
     PplnsShares {
@@ -56,7 +58,7 @@ pub enum Commands {
         end_time: Option<u64>,
     },
     /// Display confirmed shares and their uncles for a height range
-    SharesInfo {
+    Shares {
         /// Height to get shares up to, inclusive. Default is chain tip.
         #[arg(short, long)]
         to: Option<u32>,
@@ -65,7 +67,7 @@ pub enum Commands {
         num: u32,
     },
     /// Display candidate shares and their uncles for a height range
-    CandidatesInfo {
+    Candidates {
         /// Height to get candidates up to, inclusive. Default is candidate tip.
         #[arg(short, long)]
         to: Option<u32>,
@@ -75,7 +77,7 @@ pub enum Commands {
     },
     /// Look up a share by its blockhash or height
     #[command(group(ArgGroup::new("query").required(true).args(["hash", "height"])))]
-    ShareLookup {
+    Share {
         /// Share blockhash to look up
         #[arg(short = 'a', long)]
         hash: Option<String>,
@@ -98,89 +100,51 @@ pub enum Commands {
 }
 
 pub async fn run() -> Result<(), Box<dyn Error>> {
-    // Initialize tracing
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
 
-    // Handle command if provided
     match &cli.command {
         Some(Commands::GenAuth { username, password }) => {
-            // gen-auth doesn't need config or store
-            crate::commands::gen_auth::execute(username.clone(), password.clone())?;
+            commands::gen_auth::execute(username.clone(), password.clone())?;
         }
-        Some(Commands::PeersInfo) => {
-            // peers-info needs config (for API host/port) but not the store
+        Some(
+            Commands::PeersInfo
+            | Commands::Info
+            | Commands::PplnsShares { .. }
+            | Commands::Shares { .. }
+            | Commands::Candidates { .. }
+            | Commands::Share { .. },
+        ) => {
             let config_path = cli
                 .config
                 .as_ref()
                 .ok_or("Config file required for this command. Use --config")?;
             let config = Config::load(config_path)?;
-            crate::commands::peers_info::execute(&config.api).await?;
-        }
-        Some(Commands::Info)
-        | Some(Commands::PplnsShares { .. })
-        | Some(Commands::SharesInfo { .. })
-        | Some(Commands::CandidatesInfo { .. })
-        | Some(Commands::ShareLookup { .. }) => {
-            // These commands require config and store
-            let config_path = cli
-                .config
-                .as_ref()
-                .ok_or("Config file required for this command. Use --config")?;
-            let config = Config::load(config_path)?;
-
-            let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
-            let store = match cli_commands::store::open_store(config.store.path.clone()) {
-                Ok(s) => Arc::new(s),
-                Err(e) => {
-                    panic!("Error opening store {e}");
-                }
-            };
-            // Create StoreWriter for serialized database writes (runs on dedicated blocking thread)
-            let (write_tx, write_rx) = write_channel();
-            let store_writer = StoreWriter::new(store.clone(), write_rx);
-            tokio::task::spawn_blocking(move || store_writer.run());
-
-            // Create StoreHandle and ChainStoreHandle for new components
-            let store_handle = StoreHandle::new(store.clone(), write_tx);
-            let chain_store_handle = ChainStoreHandle::new(store_handle, config.stratum.network);
-            if let Err(e) = chain_store_handle.init_or_setup_genesis(genesis).await {
-                eprintln!("Error loading store");
-                return Err(e.into());
-            };
 
             match &cli.command {
+                Some(Commands::PeersInfo) => {
+                    commands::peers_info::execute(&config.api).await?;
+                }
                 Some(Commands::Info) => {
-                    cli_commands::chain_info::execute(chain_store_handle)?;
+                    commands::chain_info::execute(&config.api).await?;
                 }
                 Some(Commands::PplnsShares {
                     limit,
                     start_time,
                     end_time,
                 }) => {
-                    cli_commands::pplns_shares::execute(
-                        chain_store_handle,
-                        *limit,
-                        *start_time,
-                        *end_time,
-                    )?;
+                    commands::pplns_shares::execute(&config.api, *limit, *start_time, *end_time)
+                        .await?;
                 }
-                Some(Commands::SharesInfo { to, num }) => {
-                    cli_commands::shares_info::execute(chain_store_handle, *to, *num)?;
+                Some(Commands::Shares { to, num }) => {
+                    commands::shares::execute(&config.api, *to, *num).await?;
                 }
-                Some(Commands::CandidatesInfo { to, num }) => {
-                    cli_commands::candidates_info::execute(chain_store_handle, *to, *num)?;
+                Some(Commands::Candidates { to, num }) => {
+                    commands::candidates::execute(&config.api, *to, *num).await?;
                 }
-                Some(Commands::ShareLookup { hash, height, full }) => {
-                    let query = if let Some(hash_value) = hash {
-                        cli_commands::share_lookup::LookupQuery::Hash(hash_value)
-                    } else if let Some(height_value) = height {
-                        cli_commands::share_lookup::LookupQuery::Height(*height_value)
-                    } else {
-                        unreachable!("Provide at least one of hash or height")
-                    };
-                    cli_commands::share_lookup::execute(chain_store_handle, query, *full)?;
+                Some(Commands::Share { hash, height, full }) => {
+                    commands::share::execute(&config.api, hash.clone(), *height, *full).await?;
                 }
                 _ => unreachable!(),
             }

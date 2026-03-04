@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::api::auth::auth_middleware;
+use crate::api::endpoints;
 use crate::api::error::ApiError;
 use axum::{
     Extension, Json, Router,
@@ -103,6 +104,10 @@ pub async fn start_api_server(
         .route("/metrics", get(metrics))
         .route("/pplns_shares", get(pplns_shares))
         .route("/peers", get(peers))
+        .route("/chain_info", get(endpoints::chain_info::chain_info))
+        .route("/shares", get(endpoints::shares::shares))
+        .route("/candidates", get(endpoints::candidates::candidates))
+        .route("/share", get(endpoints::share::share))
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth_middleware,

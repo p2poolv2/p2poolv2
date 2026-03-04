@@ -262,7 +262,7 @@ impl Store {
 
     /// Get all transaction IDs for a given block hash
     /// Returns a vector of transaction IDs that were included in the block
-    pub(crate) fn get_txids_for_blockhash(
+    pub fn get_txids_for_blockhash(
         &self,
         blockhash: &BlockHash,
         column_family: ColumnFamily,
