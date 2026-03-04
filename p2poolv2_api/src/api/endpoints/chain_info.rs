@@ -17,7 +17,6 @@
 use crate::api::error::ApiError;
 use crate::api::server::AppState;
 use axum::{Json, extract::State};
-use bitcoin::{BlockHash, hashes::Hash};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -27,7 +26,7 @@ pub struct ChainInfoResponse {
     pub genesis_blockhash: Option<String>,
     pub chain_tip_height: Option<u32>,
     pub total_work: String,
-    pub chain_tip_blockhash: String,
+    pub chain_tip_blockhash: Option<String>,
     pub top_candidate_height: Option<u32>,
     pub top_candidate_blockhash: Option<String>,
     pub total_shares: u64,
@@ -39,19 +38,18 @@ pub(crate) async fn chain_info(
 ) -> Result<Json<ChainInfoResponse>, ApiError> {
     let chain_store_handle = &state.chain_store_handle;
 
-    let genesis_blockhash = chain_store_handle.get_genesis_blockhash();
+    let genesis_blockhash = chain_store_handle
+        .get_genesis_blockhash()
+        .map(|hash| hash.to_string());
 
     let chain_tip_height = chain_store_handle
         .get_tip_height()
-        .unwrap_or_default()
-        .unwrap_or_default();
+        .map_err(|error| ApiError::ServerError(format!("Failed to get tip height: {error}")))?;
 
-    let chain_tip_blockhash = format!(
-        "{}",
-        chain_store_handle
-            .get_chain_tip()
-            .unwrap_or(BlockHash::all_zeros())
-    );
+    let chain_tip_blockhash = match chain_store_handle.get_chain_tip() {
+        Ok(hash) => Some(hash.to_string()),
+        Err(_) => None,
+    };
 
     let total_work = format!(
         "{:#x}",
@@ -62,7 +60,10 @@ pub(crate) async fn chain_info(
 
     let top_candidate_height = chain_store_handle
         .get_candidate_tip_height()
-        .unwrap_or(None);
+        .map_err(|error| {
+            ApiError::ServerError(format!("Failed to get candidate tip height: {error}"))
+        })?;
+
     let top_candidate_blockhash = top_candidate_height.and_then(|height| {
         chain_store_handle
             .store_handle()
@@ -73,18 +74,16 @@ pub(crate) async fn chain_info(
     });
 
     let mut total_shares: u64 = 0;
-    for height in 0..=chain_tip_height {
-        let blockhashes = chain_store_handle.get_blockhashes_for_height(height);
-        total_shares += blockhashes.len() as u64;
+    if let Some(tip) = chain_tip_height {
+        for height in 0..=tip {
+            let blockhashes = chain_store_handle.get_blockhashes_for_height(height);
+            total_shares += blockhashes.len() as u64;
+        }
     }
 
     let response = ChainInfoResponse {
-        genesis_blockhash: Some(
-            genesis_blockhash
-                .unwrap_or(BlockHash::all_zeros())
-                .to_string(),
-        ),
-        chain_tip_height: Some(chain_tip_height),
+        genesis_blockhash,
+        chain_tip_height,
         total_work,
         chain_tip_blockhash,
         top_candidate_height,
@@ -155,7 +154,20 @@ mod tests {
 
         let response = result.unwrap().0;
         assert!(response.genesis_blockhash.is_some());
-        assert!(response.chain_tip_height.is_some());
+        assert_eq!(response.chain_tip_height, Some(0));
+        assert!(response.chain_tip_blockhash.is_some());
         assert!(!response.total_work.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_chain_info_returns_none_when_no_genesis() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        // get_total_work errors on empty store, so this will return ServerError.
+        // The key point is that it propagates the error rather than returning
+        // fake defaults like height=0 and all-zero blockhash.
+        let result = chain_info(State(state)).await;
+        assert!(result.is_err());
     }
 }
