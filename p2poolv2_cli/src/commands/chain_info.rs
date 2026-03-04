@@ -51,8 +51,7 @@ mod tests {
             "total_work": "0xff",
             "chain_tip_blockhash": "def456",
             "top_candidate_height": 101,
-            "top_candidate_blockhash": "ghi789",
-            "total_shares": 50
+            "top_candidate_blockhash": "ghi789"
         }"#;
 
         Mock::given(method("GET"))

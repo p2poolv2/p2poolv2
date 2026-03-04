@@ -50,7 +50,7 @@ pub(crate) async fn candidates(
     let chain_store_handle = &state.chain_store_handle;
     let num = query.num.unwrap_or(10);
 
-    if !(1..MAX_NUM_SHARES_IN_RESPONSE).contains(&num) {
+    if !(1..=MAX_NUM_SHARES_IN_RESPONSE).contains(&num) {
         return Err(ApiError::BadRequest(format!(
             "num must be between 1 and {MAX_NUM_SHARES_IN_RESPONSE}, got {num}"
         )));
@@ -101,7 +101,7 @@ mod tests {
     use p2poolv2_lib::accounting::stats::metrics;
     use p2poolv2_lib::node::actor::NodeHandle;
     use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
-    use p2poolv2_lib::test_utils::setup_test_chain_store_handle;
+    use p2poolv2_lib::test_utils::{genesis_for_tests, setup_test_chain_store_handle};
 
     async fn build_test_state(node_handle: NodeHandle) -> (Arc<AppState>, tempfile::TempDir) {
         let (chain_store_handle, temp_dir) = setup_test_chain_store_handle(true).await;
@@ -152,6 +152,33 @@ mod tests {
 
         let result = candidates(State(state), query).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_candidates_accepts_num_at_max() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let genesis = genesis_for_tests();
+        state
+            .chain_store_handle
+            .init_or_setup_genesis(genesis)
+            .await
+            .unwrap();
+
+        let query = Query(CandidatesQuery {
+            to: None,
+            num: Some(1000),
+        });
+
+        let result = candidates(State(state), query).await;
+        // Will return NotFound since genesis doesn't create candidate entries,
+        // but the important thing is it doesn't reject num=1000 as BadRequest
+        match result {
+            Ok(_) => {} // passed validation
+            Err(ApiError::BadRequest(_)) => panic!("num=1000 should not be rejected as BadRequest"),
+            Err(_) => {} // NotFound or ServerError is fine, means validation passed
+        }
     }
 
     #[tokio::test]

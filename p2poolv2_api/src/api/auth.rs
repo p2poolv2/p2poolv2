@@ -24,6 +24,7 @@ use axum::{
 use base64::Engine;
 use p2poolv2_lib::auth::password_to_hmac;
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
 use tracing::warn;
 
 /// Validate password against stored salt$hmac token
@@ -46,7 +47,10 @@ fn validate_password(password: &str, stored_token: &str) -> bool {
         }
     };
 
-    computed_hmac == expected_hmac
+    computed_hmac
+        .as_bytes()
+        .ct_eq(expected_hmac.as_bytes())
+        .into()
 }
 
 /// Authentication middleware that checks for valid Basic authentication

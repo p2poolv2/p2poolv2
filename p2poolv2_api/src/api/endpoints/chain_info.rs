@@ -29,7 +29,6 @@ pub struct ChainInfoResponse {
     pub chain_tip_blockhash: Option<String>,
     pub top_candidate_height: Option<u32>,
     pub top_candidate_blockhash: Option<String>,
-    pub total_shares: u64,
 }
 
 /// Returns chain state information including tip height, total work, and candidate info.
@@ -73,14 +72,6 @@ pub(crate) async fn chain_info(
             .map(|hash| hash.to_string())
     });
 
-    let mut total_shares: u64 = 0;
-    if let Some(tip) = chain_tip_height {
-        for height in 0..=tip {
-            let blockhashes = chain_store_handle.get_blockhashes_for_height(height);
-            total_shares += blockhashes.len() as u64;
-        }
-    }
-
     let response = ChainInfoResponse {
         genesis_blockhash,
         chain_tip_height,
@@ -88,7 +79,6 @@ pub(crate) async fn chain_info(
         chain_tip_blockhash,
         top_candidate_height,
         top_candidate_blockhash,
-        total_shares,
     };
 
     Ok(Json(response))
