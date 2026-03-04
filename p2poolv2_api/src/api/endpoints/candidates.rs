@@ -167,40 +167,4 @@ mod tests {
         let result = candidates(State(state), query).await;
         assert!(result.is_err());
     }
-
-    #[tokio::test]
-    async fn test_candidates_with_genesis_and_new_share() {
-        let node_handle = NodeHandle::new_for_test();
-        let (state, _temp_dir) = build_test_state(node_handle).await;
-
-        let genesis = p2poolv2_lib::test_utils::genesis_for_tests();
-        state
-            .chain_store_handle
-            .init_or_setup_genesis(genesis.clone())
-            .await
-            .unwrap();
-
-        // Add a share that becomes a candidate
-        let genesis_hash = genesis.block_hash().to_string();
-        let share = p2poolv2_lib::test_utils::TestShareBlockBuilder::new()
-            .prev_share_blockhash(genesis_hash)
-            .work(1)
-            .build();
-
-        let _ = state
-            .chain_store_handle
-            .organise_header(share.header.clone())
-            .await;
-
-        // Now check if we have candidates
-        let query = Query(CandidatesQuery {
-            to: None,
-            num: Some(10),
-        });
-
-        let result = candidates(State(state), query).await;
-        // May return data or NotFound depending on whether the header became a candidate
-        // The important thing is it doesn't panic
-        assert!(result.is_ok() || result.is_err());
-    }
 }
