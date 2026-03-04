@@ -33,7 +33,7 @@ impl std::fmt::Display for WorkError {
 impl From<p2poolv2_config::ConfigError> for WorkError {
     fn from(error: p2poolv2_config::ConfigError) -> Self {
         WorkError {
-            message: error.message,
+            message: error.to_string(),
         }
     }
 }
