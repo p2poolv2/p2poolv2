@@ -16,7 +16,6 @@
 
 pub mod accounting;
 pub mod auth;
-pub mod cli_commands;
 pub mod command;
 pub mod config;
 pub mod logging;

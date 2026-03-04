@@ -26,7 +26,7 @@ use tracing::debug;
 use writer::StoreError;
 
 pub mod background_tasks;
-pub(crate) mod block_tx_metadata;
+pub mod block_tx_metadata;
 pub mod column_families;
 pub mod dag_store;
 pub mod job_store;

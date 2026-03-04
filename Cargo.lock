@@ -3116,6 +3116,7 @@ name = "p2poolv2_cli"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "clap",
  "config",
  "hex",
@@ -3125,6 +3126,7 @@ dependencies = [
  "reqwest",
  "rpassword",
  "serde",
+ "serde_json",
  "sha2",
  "tokio",
  "tracing",
