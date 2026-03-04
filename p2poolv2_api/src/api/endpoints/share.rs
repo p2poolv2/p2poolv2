@@ -197,23 +197,25 @@ fn lookup_by_height(
     }
 
     let upper_height = height.saturating_add(MAX_UNCLES_DEPTH as u32);
-    for scan_height in (height + 1)..=upper_height {
-        let Ok(scan_hash) = chain_store_handle.get_confirmed_at_height(scan_height) else {
-            continue;
-        };
-        let Ok(Some(header)) = store.get_share_header(&scan_hash) else {
-            continue;
-        };
-        for uncle_hash in &header.uncles {
-            if blockhashes.contains(uncle_hash) {
+    if let Some(start_height) = height.checked_add(1) {
+        for scan_height in start_height..=upper_height {
+            let Ok(scan_hash) = chain_store_handle.get_confirmed_at_height(scan_height) else {
                 continue;
-            }
-            let uncle_height = chain_store_handle
-                .get_block_metadata(uncle_hash)
-                .ok()
-                .and_then(|metadata| metadata.expected_height);
-            if uncle_height == Some(height) {
-                blockhashes.push(*uncle_hash);
+            };
+            let Ok(Some(header)) = store.get_share_header(&scan_hash) else {
+                continue;
+            };
+            for uncle_hash in &header.uncles {
+                if blockhashes.contains(uncle_hash) {
+                    continue;
+                }
+                let uncle_height = chain_store_handle
+                    .get_block_metadata(uncle_hash)
+                    .ok()
+                    .and_then(|metadata| metadata.expected_height);
+                if uncle_height == Some(height) {
+                    blockhashes.push(*uncle_hash);
+                }
             }
         }
     }
