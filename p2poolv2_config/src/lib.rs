@@ -14,13 +14,39 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::stratum::work::coinbase::parse_address;
-use crate::stratum::work::error::WorkError;
 use bitcoin::address::NetworkChecked;
-use bitcoin::{Address, CompressedPublicKey};
+use bitcoin::{Address, CompressedPublicKey, Network};
 use bitcoindrpc::BitcoinRpcConfig;
 use serde::Deserialize;
 use std::marker::PhantomData;
+use std::str::FromStr;
+
+/// Error type for configuration parsing and validation.
+#[derive(Debug, Clone)]
+pub struct ConfigError {
+    pub message: String,
+}
+
+impl std::error::Error for ConfigError {}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.message)
+    }
+}
+
+/// Parse and validate a bitcoin address string for a given network.
+pub fn parse_address(address: &str, network: Network) -> Result<Address, ConfigError> {
+    let parsed_address = Address::from_str(address).map_err(|error| ConfigError {
+        message: format!("Invalid address: {error}"),
+    })?;
+
+    parsed_address
+        .require_network(network)
+        .map_err(|_| ConfigError {
+            message: format!("Address does not match network: {network}"),
+        })
+}
 
 /// Max length for pool signature P2Poolv2 + 8 more bytes for users to add
 const MAX_POOL_SIGNATURE_LENGTH: usize = 16;
@@ -75,11 +101,11 @@ pub struct StratumConfig<State = Raw> {
 
     // Parsed addresses - only available when State = Parsed
     #[serde(skip)]
-    pub(crate) bootstrap_address_parsed: Option<Address<NetworkChecked>>,
+    pub bootstrap_address_parsed: Option<Address<NetworkChecked>>,
     #[serde(skip)]
-    pub(crate) donation_address_parsed: Option<Address<NetworkChecked>>,
+    pub donation_address_parsed: Option<Address<NetworkChecked>>,
     #[serde(skip)]
-    pub(crate) fee_address_parsed: Option<Address<NetworkChecked>>,
+    pub fee_address_parsed: Option<Address<NetworkChecked>>,
 
     #[serde(skip)]
     #[serde(default)]
@@ -88,9 +114,9 @@ pub struct StratumConfig<State = Raw> {
 
 impl StratumConfig<Raw> {
     /// Parse and validate addresses, converting from Raw to Parsed state
-    pub fn parse(self) -> Result<StratumConfig<Parsed>, WorkError> {
+    pub fn parse(self) -> Result<StratumConfig<Parsed>, ConfigError> {
         if self.pool_signature.clone().unwrap_or("".to_string()).len() > MAX_POOL_SIGNATURE_LENGTH {
-            return Err(WorkError {
+            return Err(ConfigError {
                 message: format!("Pool signature length is limited to {MAX_POOL_SIGNATURE_LENGTH}"),
             });
         }
@@ -185,22 +211,22 @@ impl StratumConfig<Raw> {
     }
 }
 
-/// helper function to deserialize the network from the config file, which is provided as a string like Core
+/// Helper function to deserialize the network from the config file.
 /// Possible values are: main, test, testnet4, signet, regtest
 fn deserialize_network<'de, D>(deserializer: D) -> Result<bitcoin::Network, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let s: String = serde::Deserialize::deserialize(deserializer)?;
-    bitcoin::Network::from_core_arg(&s).map_err(serde::de::Error::custom)
+    let network_string: String = serde::Deserialize::deserialize(deserializer)?;
+    bitcoin::Network::from_core_arg(&network_string).map_err(serde::de::Error::custom)
 }
 
 fn deserialize_version_mask<'de, D>(deserializer: D) -> Result<i32, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let s: String = serde::Deserialize::deserialize(deserializer)?;
-    i32::from_str_radix(&s, 16).map_err(serde::de::Error::custom)
+    let hex_string: String = serde::Deserialize::deserialize(deserializer)?;
+    i32::from_str_radix(&hex_string, 16).map_err(serde::de::Error::custom)
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -26,7 +26,6 @@ use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::{Sequence, Transaction, TxIn, TxOut, Version};
 use bitcoin::{Address, Amount};
 use hex::FromHex;
-use std::str::FromStr;
 
 #[allow(dead_code)]
 const EXTRANONCE_SEPARATOR: [u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE] =
@@ -38,18 +37,12 @@ const SEQUENCE_LENGTH: usize = 4;
 /// Length of the lock time bytes in coinbase
 const LOCKTIME_LENGTH: usize = 4;
 
-// Parse Address from a string provided by the miner
+/// Parse Address from a string provided by the miner.
+///
+/// Delegates to `p2poolv2_config::parse_address` and converts the error.
 #[allow(dead_code)]
 pub fn parse_address(address: &str, network: Network) -> Result<Address, WorkError> {
-    let parsed_address = Address::from_str(address).map_err(|e| WorkError {
-        message: format!("Invalid address: {e}"),
-    })?;
-
-    parsed_address
-        .require_network(network)
-        .map_err(|_| WorkError {
-            message: format!("Address does not match network: {network}"),
-        })
+    p2poolv2_config::parse_address(address, network).map_err(WorkError::from)
 }
 
 /// Get current timestamp, in seconds and nanoseconds.
@@ -234,6 +227,7 @@ pub fn extract_outputs_from_coinbase2(
 mod tests {
     use crate::shares::share_commitment::ShareCommitment;
     use bitcoin::{CompactTarget, hex::DisplayHex};
+    use std::str::FromStr;
 
     use super::*;
     use crate::{stratum::work::block_template::BlockTemplate, test_utils::genesis_for_tests};
