@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::api::endpoints::MAX_NUM_SHARES_IN_RESPONSE;
 use crate::api::endpoints::common::ShareInfoResponse;
 use crate::api::error::ApiError;
 use crate::api::server::AppState;
@@ -48,6 +49,12 @@ pub(crate) async fn candidates(
 ) -> Result<Json<CandidatesResponse>, ApiError> {
     let chain_store_handle = &state.chain_store_handle;
     let num = query.num.unwrap_or(10);
+
+    if num < 1 || num > MAX_NUM_SHARES_IN_RESPONSE {
+        return Err(ApiError::BadRequest(format!(
+            "num must be between 1 and {MAX_NUM_SHARES_IN_RESPONSE}, got {num}"
+        )));
+    }
 
     let candidate_height = chain_store_handle
         .get_candidate_tip_height()
@@ -117,6 +124,34 @@ mod tests {
             auth_token: None,
         });
         (state, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn test_candidates_rejects_num_zero() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let query = Query(CandidatesQuery {
+            to: None,
+            num: Some(0),
+        });
+
+        let result = candidates(State(state), query).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_candidates_rejects_num_above_max() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let query = Query(CandidatesQuery {
+            to: None,
+            num: Some(1001),
+        });
+
+        let result = candidates(State(state), query).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]

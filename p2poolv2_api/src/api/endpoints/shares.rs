@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::api::endpoints::MAX_NUM_SHARES_IN_RESPONSE;
 use crate::api::endpoints::common::ShareInfoResponse;
 use crate::api::error::ApiError;
 use crate::api::server::AppState;
@@ -48,6 +49,12 @@ pub(crate) async fn shares(
 ) -> Result<Json<SharesResponse>, ApiError> {
     let chain_store_handle = &state.chain_store_handle;
     let num = query.num.unwrap_or(10);
+
+    if num < 1 || num > MAX_NUM_SHARES_IN_RESPONSE {
+        return Err(ApiError::BadRequest(format!(
+            "num must be between 1 and {MAX_NUM_SHARES_IN_RESPONSE}, got {num}"
+        )));
+    }
 
     let tip_height = chain_store_handle
         .get_tip_height()
@@ -113,6 +120,55 @@ mod tests {
             auth_token: None,
         });
         (state, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn test_shares_rejects_num_zero() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let query = Query(SharesQuery {
+            to: None,
+            num: Some(0),
+        });
+
+        let result = shares(State(state), query).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_shares_rejects_num_above_max() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let query = Query(SharesQuery {
+            to: None,
+            num: Some(1001),
+        });
+
+        let result = shares(State(state), query).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_shares_accepts_num_at_max() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let genesis = genesis_for_tests();
+        state
+            .chain_store_handle
+            .init_or_setup_genesis(genesis)
+            .await
+            .unwrap();
+
+        let query = Query(SharesQuery {
+            to: None,
+            num: Some(1000),
+        });
+
+        let result = shares(State(state), query).await;
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
