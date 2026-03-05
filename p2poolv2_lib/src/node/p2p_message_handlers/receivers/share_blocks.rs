@@ -158,16 +158,20 @@ async fn fetch_missing_dependencies(
         "Block {block_hash} has {} missing dependencies, requesting fetch",
         missing.len()
     );
-    if let Err(send_error) = block_fetcher_handle
+    match block_fetcher_handle
         .send(BlockFetcherEvent::FetchBlocks {
             blockhashes: missing.into_iter().collect(),
             peer_id,
         })
         .await
     {
-        error!("Failed to send FetchBlocks for missing dependencies: {send_error}");
+        Ok(()) => true,
+        Err(send_error) => {
+            error!("Failed to send FetchBlocks for missing dependencies: {send_error}");
+            // Proceed with validation rather than leaving the block permanently stalled
+            false
+        }
     }
-    true
 }
 
 #[cfg(test)]
