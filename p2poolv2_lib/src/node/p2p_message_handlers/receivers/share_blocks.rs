@@ -24,6 +24,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::shares::validation;
 use bitcoin::{BlockHash, hashes::Hash};
+use std::collections::HashSet;
 use std::error::Error;
 use tracing::{debug, error, info, warn};
 
@@ -134,18 +135,18 @@ async fn fetch_missing_dependencies(
     block_fetcher_handle: &BlockFetcherHandle,
 ) -> bool {
     let block_hash = share_block.block_hash();
-    let mut missing = Vec::with_capacity(share_block.header.uncles.len() + 1);
+    let mut missing = HashSet::with_capacity(share_block.header.uncles.len() + 1);
 
     // Check parent (skip all-zeros sentinel used by genesis)
     let parent_hash = share_block.header.prev_share_blockhash;
     if parent_hash != BlockHash::all_zeros() && !chain_store_handle.share_block_exists(&parent_hash)
     {
-        missing.push(parent_hash);
+        missing.insert(parent_hash);
     }
 
     for uncle_hash in &share_block.header.uncles {
         if !chain_store_handle.share_block_exists(uncle_hash) {
-            missing.push(*uncle_hash);
+            missing.insert(*uncle_hash);
         }
     }
 
@@ -159,7 +160,7 @@ async fn fetch_missing_dependencies(
     );
     if let Err(send_error) = block_fetcher_handle
         .send(BlockFetcherEvent::FetchBlocks {
-            blockhashes: missing,
+            blockhashes: missing.into_iter().collect(),
             peer_id,
         })
         .await
