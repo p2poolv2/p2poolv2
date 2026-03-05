@@ -199,9 +199,14 @@ impl Store {
         }
     }
 
-    /// Returns blockhashes on the candidate chain that do not yet have
-    /// full block data. Walks from confirmed_height+1 to the candidate
-    /// tip and collects entries whose status is not BlockValid or Confirmed.
+    /// Return blockhashes of all shares between confirmed top and
+    /// candidate top that are missing full block data.
+    ///
+    /// Queries every height from confirmed_top+1 to candidate_top
+    /// using the BlockHeight index, which stores all blockhashes at
+    /// each height including uncle blocks that are not on the
+    /// candidate chain. A share is included if its metadata status is
+    /// Candidate or HeaderValid, meaning it still needs block data.
     pub fn get_candidate_blocks_missing_data(&self) -> Result<Vec<BlockHash>, StoreError> {
         let confirmed_height = match self.get_top_confirmed_height() {
             Ok(height) => height,
@@ -219,24 +224,27 @@ impl Store {
             return Ok(Vec::new());
         }
 
-        let candidates = self.get_candidates(confirmed_height + 1, candidate_height)?;
-        let mut missing = Vec::with_capacity(candidates.len());
+        let height_range = (candidate_height - confirmed_height) as usize;
+        let mut missing = Vec::with_capacity(height_range);
 
-        for (_height, blockhash) in candidates {
-            // Check if the block has full data (BlockValid or Confirmed status)
-            match self.get_block_metadata(&blockhash) {
-                Ok(metadata) => {
-                    if metadata.status != Status::BlockValid && metadata.status != Status::Confirmed
-                    {
-                        // Header-only or candidate status -- needs full block
+        let mut height = confirmed_height + 1;
+        while height <= candidate_height {
+            let blockhashes = self.get_blockhashes_for_height(height);
+            for blockhash in blockhashes {
+                match self.get_block_metadata(&blockhash) {
+                    Ok(metadata) => {
+                        if metadata.status == Status::Candidate
+                            || metadata.status == Status::HeaderValid
+                        {
+                            missing.push(blockhash);
+                        }
+                    }
+                    Err(_) => {
                         missing.push(blockhash);
                     }
                 }
-                Err(_) => {
-                    // No metadata means definitely missing
-                    missing.push(blockhash);
-                }
             }
+            height += 1;
         }
 
         Ok(missing)
@@ -1417,6 +1425,50 @@ mod tests {
         assert_eq!(missing.len(), 2);
         assert_eq!(missing[0], share2.block_hash());
         assert_eq!(missing[1], share3.block_hash());
+    }
+
+    #[test]
+    fn test_missing_data_includes_uncle_blocks() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1: candidate at h:1
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695791)
+            .build();
+        store.push_to_candidate_chain(&share1).unwrap();
+
+        // uncle_block: fork child of genesis at h:1, not on candidate chain.
+        // organise_header stores it in BlockHeight at h:1 with HeaderValid
+        // status but does not put it on the candidate chain since share1
+        // already occupies that slot and has equal or greater work.
+        let uncle_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695799)
+            .build();
+        store.create_valid_metadata_only(&uncle_block);
+
+        // share2: candidate at h:2, includes uncle_block as uncle
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .uncles(vec![uncle_block.block_hash()])
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share2).unwrap();
+
+        let missing = store.get_candidate_blocks_missing_data().unwrap();
+
+        // All three should be missing: share1 and uncle_block at h:1, share2 at h:2
+        assert_eq!(missing.len(), 3);
+        assert!(missing.contains(&share1.block_hash()));
+        assert!(missing.contains(&uncle_block.block_hash()));
+        assert!(missing.contains(&share2.block_hash()));
     }
 
     #[test]
