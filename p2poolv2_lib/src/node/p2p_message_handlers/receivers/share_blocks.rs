@@ -23,6 +23,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::shares::validation;
+use bitcoin::{BlockHash, hashes::Hash};
 use std::error::Error;
 use tracing::{debug, error, info, warn};
 
@@ -40,12 +41,14 @@ use tracing::{debug, error, info, warn};
 /// candidate chain check passes. For broadcast blocks, PoW is
 /// verified.
 ///
-/// After storing, notifies the block fetcher and sends the block to
-/// the validation worker for full asynchronous validation. On
-/// successful validation the worker emits OrganiseEvent::Block and
-/// SwarmSend::Inv.
+/// After storing, notifies the block fetcher and checks for missing
+/// dependencies (uncles and parent). If any are missing, requests
+/// them from the block fetcher and defers validation. Otherwise
+/// sends the block to the validation worker for full asynchronous
+/// validation. On successful validation the worker emits
+/// OrganiseEvent::Block and SwarmSend::Inv.
 pub async fn handle_share_block(
-    _peer_id: libp2p::PeerId,
+    peer_id: libp2p::PeerId,
     share_block: ShareBlock,
     chain_store_handle: &ChainStoreHandle,
     block_fetcher_handle: BlockFetcherHandle,
@@ -94,6 +97,19 @@ pub async fn handle_share_block(
         );
     }
 
+    // Fetch missing dependencies and defer validation if any are absent
+    if fetch_missing_dependencies(
+        peer_id,
+        &share_block,
+        chain_store_handle,
+        &block_fetcher_handle,
+    )
+    .await
+    {
+        debug!("Deferring validation of block {block_hash} until dependencies arrive");
+        return Ok(());
+    }
+
     // Send to validation worker for async validation, organise, and inv relay
     info!("Sending block {block_hash} to validation worker");
     if let Err(send_error) = validation_tx
@@ -107,6 +123,52 @@ pub async fn handle_share_block(
     Ok(())
 }
 
+/// Check for missing parent and uncle dependencies. If any are
+/// missing, send a FetchBlocks request to the block fetcher and
+/// return true to signal that validation should be deferred.
+/// Returns false when all dependencies are present.
+async fn fetch_missing_dependencies(
+    peer_id: libp2p::PeerId,
+    share_block: &ShareBlock,
+    chain_store_handle: &ChainStoreHandle,
+    block_fetcher_handle: &BlockFetcherHandle,
+) -> bool {
+    let block_hash = share_block.block_hash();
+    let mut missing = Vec::with_capacity(share_block.header.uncles.len() + 1);
+
+    // Check parent (skip all-zeros sentinel used by genesis)
+    let parent_hash = share_block.header.prev_share_blockhash;
+    if parent_hash != BlockHash::all_zeros() && !chain_store_handle.share_block_exists(&parent_hash)
+    {
+        missing.push(parent_hash);
+    }
+
+    for uncle_hash in &share_block.header.uncles {
+        if !chain_store_handle.share_block_exists(uncle_hash) {
+            missing.push(*uncle_hash);
+        }
+    }
+
+    if missing.is_empty() {
+        return false;
+    }
+
+    info!(
+        "Block {block_hash} has {} missing dependencies, requesting fetch",
+        missing.len()
+    );
+    if let Err(send_error) = block_fetcher_handle
+        .send(BlockFetcherEvent::FetchBlocks {
+            blockhashes: missing,
+            peer_id,
+        })
+        .await
+    {
+        error!("Failed to send FetchBlocks for missing dependencies: {send_error}");
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,15 +179,22 @@ mod tests {
     use crate::test_utils::{empty_share_block_from_header, load_share_headers_test_data};
     use mockall::predicate::*;
 
-    /// Create test block fetcher and validation handles.
+    /// Create test block fetcher and validation handles, returning
+    /// all receivers so tests can inspect sent events.
     fn test_handles() -> (
         BlockFetcherHandle,
+        tokio::sync::mpsc::Receiver<BlockFetcherEvent>,
         ValidationSender,
         crate::node::validation_worker::ValidationReceiver,
     ) {
-        let (block_fetcher_tx, _) = block_fetcher::create_block_fetcher_channel();
+        let (block_fetcher_tx, block_fetcher_rx) = block_fetcher::create_block_fetcher_channel();
         let (validation_tx, validation_rx) = validation_worker::create_validation_channel();
-        (block_fetcher_tx, validation_tx, validation_rx)
+        (
+            block_fetcher_tx,
+            block_fetcher_rx,
+            validation_tx,
+            validation_rx,
+        )
     }
 
     #[tokio::test]
@@ -155,7 +224,8 @@ mod tests {
             .with(eq(share_block.clone()), eq(true))
             .returning(|_, _| Ok(()));
 
-        let (block_fetcher_handle, validation_tx, mut validation_rx) = test_handles();
+        let (block_fetcher_handle, _block_fetcher_rx, validation_tx, mut validation_rx) =
+            test_handles();
         let result = handle_share_block(
             peer_id,
             share_block,
@@ -201,7 +271,8 @@ mod tests {
             .with(eq(share_block.clone()), eq(true))
             .returning(|_, _| Err(StoreError::Database("Failed to add share".to_string())));
 
-        let (block_fetcher_handle, validation_tx, mut validation_rx) = test_handles();
+        let (block_fetcher_handle, _block_fetcher_rx, validation_tx, mut validation_rx) =
+            test_handles();
         let result = handle_share_block(
             peer_id,
             share_block,
@@ -240,7 +311,8 @@ mod tests {
             .returning(|_| true);
 
         // add_share_block should NOT be called for a duplicate
-        let (block_fetcher_handle, validation_tx, mut validation_rx) = test_handles();
+        let (block_fetcher_handle, _block_fetcher_rx, validation_tx, mut validation_rx) =
+            test_handles();
         let result = handle_share_block(
             peer_id,
             share_block,
@@ -281,7 +353,8 @@ mod tests {
             .returning(|_| false);
 
         // add_share_block should NOT be called for invalid header
-        let (block_fetcher_handle, validation_tx, mut validation_rx) = test_handles();
+        let (block_fetcher_handle, _block_fetcher_rx, validation_tx, mut validation_rx) =
+            test_handles();
         let result = handle_share_block(
             peer_id,
             share_block,
@@ -303,6 +376,227 @@ mod tests {
         assert!(
             validation_rx.try_recv().is_err(),
             "No validation event expected for invalid header"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_share_block_fetches_missing_uncles() {
+        use crate::test_utils::TestShareBlockBuilder;
+
+        let peer_id = libp2p::PeerId::random();
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        // Build a share block that references two uncles
+        let uncle_hash_a = BlockHash::from_byte_array([0xaa; 32]);
+        let uncle_hash_b = BlockHash::from_byte_array([0xbb; 32]);
+        let share_block = TestShareBlockBuilder::new()
+            .uncles(vec![uncle_hash_a, uncle_hash_b])
+            .build();
+        let block_hash = share_block.block_hash();
+
+        // Block not yet in store
+        chain_store_handle
+            .expect_share_block_exists()
+            .with(eq(block_hash))
+            .returning(|_| false);
+
+        // Already on candidate chain so PoW check is skipped
+        chain_store_handle
+            .expect_is_candidate()
+            .with(eq(block_hash))
+            .returning(|_| true);
+
+        chain_store_handle
+            .expect_add_share_block()
+            .returning(|_, _| Ok(()));
+
+        // Parent is all-zeros (genesis sentinel) so no parent check.
+        // Uncles are not in store.
+        chain_store_handle
+            .expect_share_block_exists()
+            .with(eq(uncle_hash_a))
+            .returning(|_| false);
+        chain_store_handle
+            .expect_share_block_exists()
+            .with(eq(uncle_hash_b))
+            .returning(|_| false);
+
+        let (block_fetcher_handle, mut block_fetcher_rx, validation_tx, mut validation_rx) =
+            test_handles();
+        let result = handle_share_block(
+            peer_id,
+            share_block,
+            &chain_store_handle,
+            block_fetcher_handle,
+            validation_tx,
+        )
+        .await;
+        assert!(result.is_ok());
+
+        // Should have sent BlockReceived followed by FetchBlocks
+        let received_event = block_fetcher_rx.try_recv().expect("expected BlockReceived");
+        assert!(
+            matches!(received_event, BlockFetcherEvent::BlockReceived(hash) if hash == block_hash)
+        );
+
+        let fetch_event = block_fetcher_rx.try_recv().expect("expected FetchBlocks");
+        match fetch_event {
+            BlockFetcherEvent::FetchBlocks {
+                blockhashes,
+                peer_id: event_peer_id,
+            } => {
+                assert_eq!(event_peer_id, peer_id);
+                assert!(blockhashes.contains(&uncle_hash_a));
+                assert!(blockhashes.contains(&uncle_hash_b));
+                assert_eq!(blockhashes.len(), 2);
+            }
+            other => panic!("expected FetchBlocks, got: {other}"),
+        }
+
+        // Validation should be deferred (no event sent)
+        assert!(
+            validation_rx.try_recv().is_err(),
+            "No validation event expected when dependencies are missing"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_share_block_skips_known_uncles() {
+        use crate::test_utils::TestShareBlockBuilder;
+
+        let peer_id = libp2p::PeerId::random();
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        // Build a share block that references an uncle already in store
+        let uncle_hash = BlockHash::from_byte_array([0xcc; 32]);
+        let share_block = TestShareBlockBuilder::new()
+            .uncles(vec![uncle_hash])
+            .build();
+        let block_hash = share_block.block_hash();
+
+        // Block not yet in store
+        chain_store_handle
+            .expect_share_block_exists()
+            .with(eq(block_hash))
+            .returning(|_| false);
+
+        chain_store_handle
+            .expect_is_candidate()
+            .with(eq(block_hash))
+            .returning(|_| true);
+
+        chain_store_handle
+            .expect_add_share_block()
+            .returning(|_, _| Ok(()));
+
+        // Uncle IS in store
+        chain_store_handle
+            .expect_share_block_exists()
+            .with(eq(uncle_hash))
+            .returning(|_| true);
+
+        let (block_fetcher_handle, mut block_fetcher_rx, validation_tx, mut validation_rx) =
+            test_handles();
+        let result = handle_share_block(
+            peer_id,
+            share_block,
+            &chain_store_handle,
+            block_fetcher_handle,
+            validation_tx,
+        )
+        .await;
+        assert!(result.is_ok());
+
+        // BlockReceived should be sent, but no FetchBlocks
+        let received_event = block_fetcher_rx.try_recv().expect("expected BlockReceived");
+        assert!(
+            matches!(received_event, BlockFetcherEvent::BlockReceived(hash) if hash == block_hash)
+        );
+        assert!(
+            block_fetcher_rx.try_recv().is_err(),
+            "No FetchBlocks expected when all dependencies are present"
+        );
+
+        // Validation should proceed since all dependencies are present
+        let validation_event = validation_rx.try_recv().expect("expected validation event");
+        assert!(
+            matches!(validation_event, ValidationEvent::ValidateBlock(hash) if hash == block_hash)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_share_block_fetches_missing_parent() {
+        use crate::test_utils::TestShareBlockBuilder;
+
+        let peer_id = libp2p::PeerId::random();
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        // Build a parent block so we can reference its hash
+        let parent_block = TestShareBlockBuilder::new().nonce(0xe9695790).build();
+        let parent_hash = parent_block.block_hash();
+
+        // Build a share block whose parent is not in the store
+        let share_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(parent_hash.to_string())
+            .nonce(0xe9695791)
+            .build();
+        let block_hash = share_block.block_hash();
+
+        // Block not yet in store
+        chain_store_handle
+            .expect_share_block_exists()
+            .with(eq(block_hash))
+            .returning(|_| false);
+
+        chain_store_handle
+            .expect_is_candidate()
+            .with(eq(block_hash))
+            .returning(|_| true);
+
+        chain_store_handle
+            .expect_add_share_block()
+            .returning(|_, _| Ok(()));
+
+        // Parent is NOT in store
+        chain_store_handle
+            .expect_share_block_exists()
+            .with(eq(parent_hash))
+            .returning(|_| false);
+
+        let (block_fetcher_handle, mut block_fetcher_rx, validation_tx, mut validation_rx) =
+            test_handles();
+        let result = handle_share_block(
+            peer_id,
+            share_block,
+            &chain_store_handle,
+            block_fetcher_handle,
+            validation_tx,
+        )
+        .await;
+        assert!(result.is_ok());
+
+        // BlockReceived then FetchBlocks with parent hash
+        let received_event = block_fetcher_rx.try_recv().expect("expected BlockReceived");
+        assert!(
+            matches!(received_event, BlockFetcherEvent::BlockReceived(hash) if hash == block_hash)
+        );
+
+        let fetch_event = block_fetcher_rx.try_recv().expect("expected FetchBlocks");
+        match fetch_event {
+            BlockFetcherEvent::FetchBlocks {
+                blockhashes,
+                peer_id: event_peer_id,
+            } => {
+                assert_eq!(event_peer_id, peer_id);
+                assert_eq!(blockhashes, vec![parent_hash]);
+            }
+            other => panic!("expected FetchBlocks, got: {other}"),
+        }
+
+        // Validation deferred
+        assert!(
+            validation_rx.try_recv().is_err(),
+            "No validation event expected when parent is missing"
         );
     }
 }
