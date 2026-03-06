@@ -81,6 +81,10 @@ impl std::error::Error for ValidationWorkerError {}
 /// the share block from the chain store, validates it, and on success
 /// emits `OrganiseEvent::Block` for confirmed promotion and
 /// `SwarmSend::Inv` for inventory relay to peers.
+///
+/// After successful validation, spawns new tasks for stored children
+/// and nephews so the chain advances when a hole is filled. Each
+/// child/nephew task acquires its own semaphore permit.
 pub struct ValidationWorker {
     validation_rx: ValidationReceiver,
     chain_store_handle: ChainStoreHandle,
@@ -127,14 +131,16 @@ impl ValidationWorker {
                     let chain_store_handle = self.chain_store_handle.clone();
                     let organise_tx = self.organise_tx.clone();
                     let swarm_tx = self.swarm_tx.clone();
+                    let semaphore = self.semaphore.clone();
 
                     tokio::spawn(async move {
                         let _permit = permit;
-                        Self::validate_and_emit(
+                        validate_and_emit(
                             block_hash,
                             chain_store_handle,
                             organise_tx,
                             swarm_tx,
+                            semaphore,
                         )
                         .await;
                     });
@@ -144,39 +150,129 @@ impl ValidationWorker {
         info!("Validation worker stopped - channel closed");
         Ok(())
     }
+}
 
-    /// Read a share block from the store, validate it, and emit events on success.
-    async fn validate_and_emit(
-        block_hash: BlockHash,
-        chain_store_handle: ChainStoreHandle,
-        organise_tx: OrganiseSender,
-        swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
-    ) {
-        let share_block = match chain_store_handle.get_share(&block_hash) {
-            Some(share_block) => share_block,
-            None => {
-                error!("Share block {block_hash} not found in store for validation");
-                return;
-            }
-        };
-
-        if let Err(validation_error) =
-            validation::validate_share_block(&share_block, &chain_store_handle)
-        {
-            error!("Share block {block_hash} validation failed: {validation_error}");
+/// Read a share block from the store, validate it, and emit events
+/// on success. After organising, spawn tasks for stored children and
+/// nephews so the chain advances when a hole is filled.
+///
+/// Blocks that are already BlockValid are skipped entirely. During
+/// initial download a block can be scheduled for validation twice:
+/// once when it arrives via handle_share_block, and again when its
+/// parent validates and schedule_dependents spawns a child task.
+/// This early return avoids duplicate organise/inv events in that
+/// race. There is a small window where two concurrent tasks both
+/// see Candidate status and both proceed, but that duplication is
+/// harmless since organise_block is idempotent.
+async fn validate_and_emit(
+    block_hash: BlockHash,
+    chain_store_handle: ChainStoreHandle,
+    organise_tx: OrganiseSender,
+    swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
+    semaphore: Arc<Semaphore>,
+) {
+    // Skip blocks already validated by a concurrent task to avoid
+    // duplicate organise/inv events during initial download.
+    if let Ok(metadata) = chain_store_handle.get_block_metadata(&block_hash) {
+        if metadata.status == crate::store::block_tx_metadata::Status::BlockValid {
             return;
         }
+    }
 
-        info!("Share block {block_hash} validated successfully");
-
-        if let Err(send_error) = organise_tx.send(OrganiseEvent::Block(share_block)).await {
-            error!("Failed to send validated block to organise worker: {send_error}");
+    let share_block = match chain_store_handle.get_share(&block_hash) {
+        Some(share_block) => share_block,
+        None => {
+            error!("Share block {block_hash} not found in store for validation");
+            return;
         }
+    };
 
-        // Relay block once context free validations are run. If later the block is not confirmed, peers should have a copy of this block anyway.
-        if let Err(send_error) = swarm_tx.send(SwarmSend::Inv(block_hash)).await {
-            error!("Failed to send inv relay for validated block {block_hash}: {send_error}");
+    if let Err(validation_error) =
+        validation::validate_share_block(&share_block, &chain_store_handle)
+    {
+        error!("Share block {block_hash} validation failed: {validation_error}");
+        return;
+    }
+
+    info!("Share block {block_hash} validated successfully");
+
+    if let Err(send_error) = organise_tx.send(OrganiseEvent::Block(share_block)).await {
+        error!("Failed to send validated block to organise worker: {send_error}");
+    }
+
+    // Relay block once context free validations are run. If later
+    // the block is not confirmed, peers should have a copy anyway.
+    if let Err(send_error) = swarm_tx.send(SwarmSend::Inv(block_hash)).await {
+        error!("Failed to send inv relay for validated block {block_hash}: {send_error}");
+    }
+
+    // Spawn tasks for stored children and nephews so the chain
+    // advances when a missing block arrives.
+    schedule_dependents(
+        &block_hash,
+        &chain_store_handle,
+        &organise_tx,
+        &swarm_tx,
+        &semaphore,
+    );
+}
+
+/// Collect stored children and nephews and spawn a validation task
+/// for each. Each task acquires its own semaphore permit so
+/// concurrency stays capped.
+fn schedule_dependents(
+    block_hash: &BlockHash,
+    chain_store_handle: &ChainStoreHandle,
+    organise_tx: &OrganiseSender,
+    swarm_tx: &mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
+    semaphore: &Arc<Semaphore>,
+) {
+    let mut dependent_hashes = Vec::with_capacity(4);
+
+    if let Ok(Some(children)) = chain_store_handle.get_children_blockhashes(block_hash) {
+        for child_hash in children {
+            if chain_store_handle.share_block_exists(&child_hash) {
+                info!("Scheduling child {child_hash} for validation after {block_hash}");
+                dependent_hashes.push(child_hash);
+            }
         }
+    }
+
+    if let Some(nephews) = chain_store_handle.get_nephews(block_hash) {
+        for nephew_hash in nephews {
+            if chain_store_handle.share_block_exists(&nephew_hash) {
+                info!("Scheduling nephew {nephew_hash} for validation after uncle {block_hash}");
+                dependent_hashes.push(nephew_hash);
+            }
+        }
+    }
+
+    for dependent_hash in dependent_hashes {
+        let chain_store_handle = chain_store_handle.clone();
+        let organise_tx = organise_tx.clone();
+        let swarm_tx = swarm_tx.clone();
+        let semaphore = semaphore.clone();
+
+        tokio::spawn(async move {
+            let permit = match semaphore.clone().acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => {
+                    error!(
+                        "Validation semaphore closed while scheduling dependent {dependent_hash}"
+                    );
+                    return;
+                }
+            };
+            let _permit = permit;
+            validate_and_emit(
+                dependent_hash,
+                chain_store_handle,
+                organise_tx,
+                swarm_tx,
+                semaphore,
+            )
+            .await;
+        });
     }
 }
 
@@ -185,22 +281,41 @@ mod tests {
     use super::*;
     use crate::node::organise_worker;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
+    use crate::store::block_tx_metadata::{BlockMetadata, Status};
     use crate::test_utils::TestShareBlockBuilder;
     use std::time::Duration;
 
+    /// Add mock expectations needed for validate_share_block (get_block_metadata)
+    /// and schedule_dependents (get_children_blockhashes, get_nephews) on a
+    /// mock clone that will handle a successful validation path with no
+    /// children or nephews.
+    fn setup_validation_expectations(mock_clone: &mut MockChainStoreHandle) {
+        // validate_share_block checks metadata for early BlockValid return
+        mock_clone.expect_get_block_metadata().returning(|_| {
+            Ok(BlockMetadata {
+                expected_height: Some(1),
+                chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                status: Status::Candidate,
+            })
+        });
+
+        // schedule_dependents checks children and nephews
+        mock_clone
+            .expect_get_children_blockhashes()
+            .returning(|_| Ok(None));
+        mock_clone.expect_get_nephews().returning(|_| None);
+    }
+
     #[tokio::test]
     async fn test_validation_worker_stops_on_channel_close() {
-        let (_validation_tx, validation_rx) = create_validation_channel();
-        let mut mock_chain_handle = MockChainStoreHandle::new();
-        mock_chain_handle
-            .expect_clone()
-            .return_once(MockChainStoreHandle::new);
+        let (validation_tx, validation_rx) = create_validation_channel();
+        let mock_chain_handle = MockChainStoreHandle::new();
         let (organise_tx, _organise_rx) = organise_worker::create_organise_channel();
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
 
         let worker = ValidationWorker::new(validation_rx, mock_chain_handle, organise_tx, swarm_tx);
 
-        drop(_validation_tx);
+        drop(validation_tx);
 
         let result = worker.run().await;
         assert!(result.is_ok());
@@ -220,6 +335,7 @@ mod tests {
         mock_clone
             .expect_get_share()
             .returning(move |_| Some(share_block_clone.clone()));
+        setup_validation_expectations(&mut mock_clone);
         mock_chain_handle
             .expect_clone()
             .return_once(move || mock_clone);
@@ -258,6 +374,7 @@ mod tests {
         mock_clone
             .expect_get_share()
             .returning(move |_| Some(share_block_clone.clone()));
+        setup_validation_expectations(&mut mock_clone);
         mock_chain_handle
             .expect_clone()
             .return_once(move || mock_clone);
@@ -310,8 +427,7 @@ mod tests {
         let result = worker.run().await;
         assert!(result.is_ok());
 
-        // The spawned task holds the last sender clones. When it finishes
-        // without sending (block not found), recv() returns None.
+        // Block not found in store -- no events should be produced.
         let organise_result =
             tokio::time::timeout(Duration::from_millis(500), organise_rx.recv()).await;
         assert!(
@@ -350,6 +466,14 @@ mod tests {
             .expect_get_share()
             .withf(move |hash| *hash == uncle_hash)
             .returning(|_| None);
+        // validate_share_block checks metadata for early BlockValid return
+        mock_clone.expect_get_block_metadata().returning(|_| {
+            Ok(BlockMetadata {
+                expected_height: Some(1),
+                chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                status: Status::Candidate,
+            })
+        });
         mock_chain_handle
             .expect_clone()
             .return_once(move || mock_clone);
@@ -368,8 +492,7 @@ mod tests {
         let result = worker.run().await;
         assert!(result.is_ok());
 
-        // The spawned task holds the last sender clones. When it finishes
-        // without sending (validation failed), recv() returns None.
+        // Validation fails (uncle not found) -- no events should be produced.
         let organise_result =
             tokio::time::timeout(Duration::from_millis(500), organise_rx.recv()).await;
         assert!(
@@ -382,5 +505,177 @@ mod tests {
             matches!(swarm_result, Ok(None)),
             "No SwarmSend expected for invalid block"
         );
+    }
+
+    #[tokio::test]
+    async fn test_validation_worker_schedules_children() {
+        let (validation_tx, validation_rx) = create_validation_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+
+        let parent_block = TestShareBlockBuilder::new().build();
+        let parent_hash = parent_block.block_hash();
+        let parent_clone = parent_block.clone();
+
+        let child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(parent_hash.to_string())
+            .build();
+        let child_hash = child_block.block_hash();
+
+        // The mock clone will be used for both the parent validation
+        // and the spawned child validation task (via clone).
+        let mut mock_clone = MockChainStoreHandle::new();
+        mock_clone
+            .expect_get_share()
+            .returning(move |_| Some(parent_clone.clone()));
+        mock_clone.expect_get_block_metadata().returning(|_| {
+            Ok(BlockMetadata {
+                expected_height: Some(1),
+                chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                status: Status::Candidate,
+            })
+        });
+        // schedule_dependents: parent has one child
+        mock_clone
+            .expect_get_children_blockhashes()
+            .returning(move |_| Ok(Some(vec![child_hash])));
+        mock_clone.expect_share_block_exists().returning(|_| true);
+        mock_clone.expect_get_nephews().returning(|_| None);
+        // The spawned child task clones the handle. Return the child
+        // block so validation succeeds and produces a second organise event.
+        let child_clone = child_block.clone();
+        mock_clone.expect_clone().return_once(move || {
+            let mut inner = MockChainStoreHandle::new();
+            inner
+                .expect_get_share()
+                .returning(move |_| Some(child_clone.clone()));
+            setup_validation_expectations(&mut inner);
+            inner
+        });
+        mock_chain_handle
+            .expect_clone()
+            .return_once(move || mock_clone);
+
+        let (organise_tx, mut organise_rx) = organise_worker::create_organise_channel();
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+
+        let worker = ValidationWorker::new(validation_rx, mock_chain_handle, organise_tx, swarm_tx);
+
+        validation_tx
+            .send(ValidationEvent::ValidateBlock(parent_hash))
+            .await
+            .unwrap();
+        drop(validation_tx);
+
+        let result = worker.run().await;
+        assert!(result.is_ok());
+
+        // First organise event from parent validation.
+        let first_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv())
+            .await
+            .expect("Timed out waiting for parent OrganiseEvent");
+        assert!(
+            matches!(first_event, Some(OrganiseEvent::Block(_))),
+            "Expected OrganiseEvent::Block for parent"
+        );
+
+        // Second organise event from the spawned child validation task.
+        let second_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv())
+            .await
+            .expect("Timed out waiting for child OrganiseEvent");
+        if let Some(OrganiseEvent::Block(received_block)) = second_event {
+            assert_eq!(received_block.block_hash(), child_hash);
+        } else {
+            panic!("Expected OrganiseEvent::Block for child");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validation_worker_schedules_nephews() {
+        let (validation_tx, validation_rx) = create_validation_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+
+        let uncle_block = TestShareBlockBuilder::new().build();
+        let uncle_hash = uncle_block.block_hash();
+        let uncle_clone = uncle_block.clone();
+
+        let nephew_block = TestShareBlockBuilder::new()
+            .uncles(vec![uncle_hash])
+            .build();
+        let nephew_hash = nephew_block.block_hash();
+
+        let mut mock_clone = MockChainStoreHandle::new();
+        mock_clone
+            .expect_get_share()
+            .returning(move |_| Some(uncle_clone.clone()));
+        mock_clone.expect_get_block_metadata().returning(|_| {
+            Ok(BlockMetadata {
+                expected_height: Some(1),
+                chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                status: Status::Candidate,
+            })
+        });
+        // schedule_dependents: no children, one nephew
+        mock_clone
+            .expect_get_children_blockhashes()
+            .returning(|_| Ok(None));
+        mock_clone
+            .expect_get_nephews()
+            .returning(move |_| Some(vec![nephew_hash]));
+        mock_clone.expect_share_block_exists().returning(|_| true);
+        // The spawned nephew task clones the handle. Return the nephew
+        // block (which references the uncle) so validation succeeds.
+        let nephew_clone = nephew_block.clone();
+        let uncle_for_nephew = uncle_block.clone();
+        mock_clone.expect_clone().return_once(move || {
+            let mut inner = MockChainStoreHandle::new();
+            // nephew's get_share returns itself; uncle lookup returns uncle
+            let nephew_for_inner = nephew_clone.clone();
+            let nephew_hash_inner = nephew_for_inner.block_hash();
+            inner
+                .expect_get_share()
+                .withf(move |hash| *hash == nephew_hash_inner)
+                .returning(move |_| Some(nephew_for_inner.clone()));
+            inner
+                .expect_get_share()
+                .returning(move |_| Some(uncle_for_nephew.clone()));
+            setup_validation_expectations(&mut inner);
+            inner
+        });
+        mock_chain_handle
+            .expect_clone()
+            .return_once(move || mock_clone);
+
+        let (organise_tx, mut organise_rx) = organise_worker::create_organise_channel();
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+
+        let worker = ValidationWorker::new(validation_rx, mock_chain_handle, organise_tx, swarm_tx);
+
+        validation_tx
+            .send(ValidationEvent::ValidateBlock(uncle_hash))
+            .await
+            .unwrap();
+        drop(validation_tx);
+
+        let result = worker.run().await;
+        assert!(result.is_ok());
+
+        // First organise event from uncle validation.
+        let first_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv())
+            .await
+            .expect("Timed out waiting for uncle OrganiseEvent");
+        assert!(
+            matches!(first_event, Some(OrganiseEvent::Block(_))),
+            "Expected OrganiseEvent::Block for uncle"
+        );
+
+        // Second organise event from the spawned nephew validation task.
+        let second_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv())
+            .await
+            .expect("Timed out waiting for nephew OrganiseEvent");
+        if let Some(OrganiseEvent::Block(received_block)) = second_event {
+            assert_eq!(received_block.block_hash(), nephew_hash);
+        } else {
+            panic!("Expected OrganiseEvent::Block for nephew");
+        }
     }
 }

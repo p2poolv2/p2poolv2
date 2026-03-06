@@ -247,6 +247,19 @@ impl ChainStoreHandle {
         self.store_handle.get_blockhashes_for_height(height)
     }
 
+    /// Get children blockhashes for a given block from the block index.
+    pub fn get_children_blockhashes(
+        &self,
+        blockhash: &BlockHash,
+    ) -> Result<Option<Vec<BlockHash>>, StoreError> {
+        self.store_handle.get_children_blockhashes(blockhash)
+    }
+
+    /// Get nephew blockhashes for a given uncle from the uncles index.
+    pub fn get_nephews(&self, uncle: &BlockHash) -> Option<Vec<BlockHash>> {
+        self.store_handle.store().get_nephews(uncle)
+    }
+
     /// Build a locator for the chain.
     pub fn build_locator(&self) -> Result<Vec<BlockHash>, StoreError> {
         let tip_height = self.get_tip_height()?;
@@ -551,6 +564,8 @@ mockall::mock! {
         pub fn get_tip_height_and_time(&self) -> Result<(u32, u32), StoreError>;
         pub fn get_genesis_blockhash(&self) -> Option<BlockHash>;
         pub fn get_genesis_header(&self) -> Result<ShareHeader, StoreError>;
+        pub fn get_children_blockhashes(&self, blockhash: &BlockHash) -> Result<Option<Vec<BlockHash>>, StoreError>;
+        pub fn get_nephews(&self, uncle: &BlockHash) -> Option<Vec<BlockHash>>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
         pub fn get_candidate_blocks_missing_data(&self) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_depth(&self, blockhash: &BlockHash) -> Option<usize>;

@@ -120,6 +120,12 @@ pub fn validate_share_header(
 }
 
 /// Validate the share block, returning ValidationError in case of failure.
+///
+/// Returns Ok immediately if the block's metadata status is already
+/// BlockValid, allowing re-scheduled blocks (e.g. children of a
+/// newly validated parent) to skip redundant validation while still
+/// proceeding through organise_block.
+///
 /// TODO: validate nonce and blockhash meets pool difficulty
 /// validate prev_share_blockhash is in store
 /// validate uncles are in store and no more than MAX_UNCLES
@@ -129,6 +135,20 @@ pub fn validate_share_block(
     share: &ShareBlock,
     chain_store_handle: &ChainStoreHandle,
 ) -> Result<(), ValidationError> {
+    // When a hole in the chain is filled, schedule_dependents
+    // re-schedules children that were already validated but could
+    // not be promoted because their parent was not yet confirmed.
+    // Return Ok immediately so organise_block gets another chance
+    // to promote them without re-running validation.
+    // Note: validate_and_emit also checks this before calling us,
+    // but that check avoids duplicate organise/inv events, while
+    // this one avoids redundant validation work if a caller bypasses
+    // validate_and_emit.
+    if let Ok(metadata) = chain_store_handle.get_block_metadata(&share.block_hash()) {
+        if metadata.status == crate::store::block_tx_metadata::Status::BlockValid {
+            return Ok(());
+        }
+    }
     validate_uncles(share, chain_store_handle)?;
     // TODO: Populate bitcoin block from ShortIDs in share and use bitcoin_block_validation to validate difficulty
     // OR - Fetch difficulty from bitcoind rpc and validate share blockhash meets difficulty
@@ -346,6 +366,16 @@ mod tests {
 
         // Set up mock expectations
         chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                use crate::store::block_tx_metadata::{BlockMetadata, Status};
+                Ok(BlockMetadata {
+                    expected_height: Some(1),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::Candidate,
+                })
+            });
+        chain_store_handle
             .expect_add_share_block()
             .with(
                 mockall::predicate::eq(share_block.clone()),
@@ -364,6 +394,33 @@ mod tests {
         let result = validate_share_block(&share_block, &chain_store_handle);
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_share_block_returns_ok_for_block_valid_status() {
+        use crate::store::block_tx_metadata::{BlockMetadata, Status};
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let share_block = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(1),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::BlockValid,
+                })
+            });
+
+        let result = validate_share_block(&share_block, &chain_store_handle);
+        assert!(
+            result.is_ok(),
+            "Expected Ok for BlockValid status, got: {:?}",
+            result.err()
+        );
     }
 
     #[test]
