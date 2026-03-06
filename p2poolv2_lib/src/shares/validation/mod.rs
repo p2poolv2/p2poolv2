@@ -140,10 +140,6 @@ pub fn validate_share_block(
     // not be promoted because their parent was not yet confirmed.
     // Return Ok immediately so organise_block gets another chance
     // to promote them without re-running validation.
-    // Note: validate_and_emit also checks this before calling us,
-    // but that check avoids duplicate organise/inv events, while
-    // this one avoids redundant validation work if a caller bypasses
-    // validate_and_emit.
     if chain_store_handle.has_status(
         &share.block_hash(),
         crate::store::block_tx_metadata::Status::BlockValid,
