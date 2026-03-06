@@ -226,6 +226,9 @@ impl NodeActor {
         // Create block fetcher channel
         let (block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
 
+        // Clone validation_tx for the worker before moving it into Node::new
+        let validation_tx_for_worker = validation_tx.clone();
+
         let node = Node::new(
             config,
             chain_store_handle.clone(),
@@ -240,6 +243,7 @@ impl NodeActor {
         // Spawn validation worker
         let validation_worker = ValidationWorker::new(
             validation_rx,
+            validation_tx_for_worker,
             chain_store_handle.clone(),
             organise_tx.clone(),
             node.swarm_tx.clone(),
