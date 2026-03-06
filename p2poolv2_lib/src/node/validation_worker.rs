@@ -173,10 +173,11 @@ async fn validate_and_emit(
 ) {
     // Skip blocks already validated by a concurrent task to avoid
     // duplicate organise/inv events during initial download.
-    if let Ok(metadata) = chain_store_handle.get_block_metadata(&block_hash) {
-        if metadata.status == crate::store::block_tx_metadata::Status::BlockValid {
-            return;
-        }
+    if chain_store_handle.has_status(
+        &block_hash,
+        crate::store::block_tx_metadata::Status::BlockValid,
+    ) {
+        return;
     }
 
     let share_block = match chain_store_handle.get_share(&block_hash) {
@@ -281,23 +282,17 @@ mod tests {
     use super::*;
     use crate::node::organise_worker;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
-    use crate::store::block_tx_metadata::{BlockMetadata, Status};
     use crate::test_utils::TestShareBlockBuilder;
     use std::time::Duration;
 
-    /// Add mock expectations needed for validate_share_block (get_block_metadata)
+    /// Add mock expectations needed for validate_and_emit (has_status)
     /// and schedule_dependents (get_children_blockhashes, get_nephews) on a
     /// mock clone that will handle a successful validation path with no
     /// children or nephews.
     fn setup_validation_expectations(mock_clone: &mut MockChainStoreHandle) {
-        // validate_share_block checks metadata for early BlockValid return
-        mock_clone.expect_get_block_metadata().returning(|_| {
-            Ok(BlockMetadata {
-                expected_height: Some(1),
-                chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                status: Status::Candidate,
-            })
-        });
+        // validate_and_emit and validate_share_block both call has_status
+        // to check for BlockValid early return
+        mock_clone.expect_has_status().returning(|_, _| false);
 
         // schedule_dependents checks children and nephews
         mock_clone
@@ -466,14 +461,8 @@ mod tests {
             .expect_get_share()
             .withf(move |hash| *hash == uncle_hash)
             .returning(|_| None);
-        // validate_share_block checks metadata for early BlockValid return
-        mock_clone.expect_get_block_metadata().returning(|_| {
-            Ok(BlockMetadata {
-                expected_height: Some(1),
-                chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                status: Status::Candidate,
-            })
-        });
+        // validate_and_emit and validate_share_block both call has_status
+        mock_clone.expect_has_status().returning(|_, _| false);
         mock_chain_handle
             .expect_clone()
             .return_once(move || mock_clone);
@@ -527,13 +516,7 @@ mod tests {
         mock_clone
             .expect_get_share()
             .returning(move |_| Some(parent_clone.clone()));
-        mock_clone.expect_get_block_metadata().returning(|_| {
-            Ok(BlockMetadata {
-                expected_height: Some(1),
-                chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                status: Status::Candidate,
-            })
-        });
+        mock_clone.expect_has_status().returning(|_, _| false);
         // schedule_dependents: parent has one child
         mock_clone
             .expect_get_children_blockhashes()
@@ -607,13 +590,7 @@ mod tests {
         mock_clone
             .expect_get_share()
             .returning(move |_| Some(uncle_clone.clone()));
-        mock_clone.expect_get_block_metadata().returning(|_| {
-            Ok(BlockMetadata {
-                expected_height: Some(1),
-                chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                status: Status::Candidate,
-            })
-        });
+        mock_clone.expect_has_status().returning(|_, _| false);
         // schedule_dependents: no children, one nephew
         mock_clone
             .expect_get_children_blockhashes()

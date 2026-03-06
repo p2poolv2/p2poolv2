@@ -22,7 +22,7 @@
 
 use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
-use crate::store::block_tx_metadata::BlockMetadata;
+use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::writer::{StoreError, StoreHandle};
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Work};
@@ -337,9 +337,17 @@ impl ChainStoreHandle {
         self.store_handle.store().is_candidate(blockhash)
     }
 
-    /// Get metadata for blockhash
+    /// Get metadata for blockhash.
     pub fn get_block_metadata(&self, hash: &BlockHash) -> Result<BlockMetadata, StoreError> {
         self.store_handle.store().get_block_metadata(hash)
+    }
+
+    /// Check whether a block's metadata status matches the given status.
+    /// Returns false if the block has no metadata in the store.
+    pub fn has_status(&self, hash: &BlockHash, status: Status) -> bool {
+        self.get_block_metadata(hash)
+            .map(|metadata| metadata.status == status)
+            .unwrap_or(false)
     }
 
     /// Get the depth of a blockhash from the confirmed chain tip.
@@ -547,6 +555,7 @@ mockall::mock! {
     pub ChainStoreHandle {
         pub fn is_candidate(&self, blockhash: &BlockHash) -> bool;
         pub fn get_block_metadata(&self, hash: &BlockHash) -> Result<BlockMetadata, StoreError>;
+        pub fn has_status(&self, hash: &BlockHash, status: Status) -> bool;
         pub fn get_blockhashes_for_height(&self, height: u32) -> Vec<BlockHash>;
         pub fn network(&self) -> bitcoin::Network;
         pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool;
