@@ -13,52 +13,65 @@ The share processing pipeline is designed to:
 1. Offload CPU-intensive work from the main swarm event loop
 2. Serialize database writes via StoreWriter on a dedicated OS thread
 3. Decouple candidate chain building from confirmed chain promotion
-4. Enable future additions (validation worker, peer-received share organisation)
+4. Validate blocks before organisation and relay
+5. Cascade validation to dependents (children/nephews) when holes are filled
 
 ## Data Flow Diagram
 
 ```
-+-------------------+
-|  Stratum Server   |
-|  (miner submit)   |
-+--------+----------+
-         | Emission (mpsc channel)
-         v
-+--------------------------------------+
-| EmissionWorker (tokio task)          |
-|                                      |
-| - Receives Emission from stratum     |
-| - Calls handle_stratum_share()       |
-| - On Ok(Some(share_block)):          |
-|     sends Header event to organise   |
-|     sends Block event to organise    |
-|     sends original to swarm broadcast|
-+-------+------------------+----------+
-        |                  |
-        v                  v
-+----------------------------------------+
-|       handle_stratum_share()           |
-|                                        |
-| - Builds ShareBlock from emission      |
-| - Merkle tree + coinbase calculation   |
-| - Stores via ChainStoreHandle          |
-|   .add_share() (serialized write)      |
-| - Returns Option<ShareBlock>           |
-+----------------------------------------+
-        |                         |
-        | organise_tx             | swarm_tx
-        | (mpsc, cap 256)         | (mpsc, cap 100)
-        v                         v
++-------------------+          +---------------------+
+|  Stratum Server   |          |  P2P Peer Network   |
+|  (miner submit)   |          |  (share blocks)     |
++--------+----------+          +----------+----------+
+         |                                |
+         | Emission (mpsc)                | handle_share_block
+         v                                v
++------------------------+     +---------------------------+
+| EmissionWorker         |     | Share Block Handler       |
+| (tokio task)           |     | (p2p message handler)     |
+|                        |     |                           |
+| - handle_stratum_share |     | - Stores share block      |
+| - Sends Header event   |     | - Checks missing deps     |
+|   to organise          |     |   (parent, uncles)        |
+| - Sends ValidateBlock  |     | - If deps missing:        |
+|   to validation        |     |   sends FetchBlocks,      |
+| - Broadcasts to peers  |     |   defers validation       |
++---+----------+---------+     | - If deps present:        |
+    |          |               |   sends ValidateBlock     |
+    |          |               +----------+----------------+
+    |          |                          |
+    |          | validation_tx            | validation_tx
+    |          | (mpsc, cap 256)          | (mpsc, cap 256)
+    |          v                          v
+    |   +------------------------------------------+
+    |   | ValidationWorker (tokio task)            |
+    |   |                                          |
+    |   | - Receives ValidateBlock events          |
+    |   | - Spawns capped concurrent tasks         |
+    |   |   (semaphore = available CPUs)           |
+    |   | - validate_share_block():                |
+    |   |   returns Ok early if already BlockValid |
+    |   |   validates uncles in store              |
+    |   | - On success:                            |
+    |   |   sends Block to organise                |
+    |   |   sends Inv to swarm                     |
+    |   |   schedule_dependents: sends             |
+    |   |   ValidateBlock for children/nephews     |
+    |   |   back through validation channel        |
+    |   +----+-----------------+-------------------+
+    |        |                 |
+    |        | organise_tx     | swarm_tx
+    v        v                 v
 +-------------------+       +-----------------+
 | OrganiseWorker    |       |   NodeActor     |
 | (tokio task)      |       |                 |
 |                   |       | - Receives      |
 | Two event types:  |       |   SwarmSend::   |
-|                   |       |   Broadcast     |
-| Header(ShareHdr): |       | - Sends to all  |
-|   organise_header |       |   peers         |
-|   -> candidate    |       +-----------------+
-|   chain updates   |
+|                   |       |   Inv/Broadcast |
+| Header(ShareHdr): |       | - Relays inv to |
+|   organise_header |       |   peers via     |
+|   -> candidate    |       |   peer knowledge|
+|   chain updates   |       +-----------------+
 |                   |
 | Block(ShareBlock):|
 |   organise_block  |
@@ -175,8 +188,10 @@ to confirmed), operating independently.
 | Channel | Type | Capacity | Purpose |
 |---------|------|----------|---------|
 | emissions_rx | tokio mpsc | 100 | Stratum server -> EmissionWorker |
-| organise_tx/rx | tokio mpsc | 256 | EmissionWorker -> OrganiseWorker |
-| swarm_tx/rx | tokio mpsc | 100 | EmissionWorker -> NodeActor (broadcast) |
+| validation_tx/rx | tokio mpsc | 256 | Share handlers -> ValidationWorker |
+| organise_tx/rx | tokio mpsc | 256 | ValidationWorker/EmissionWorker -> OrganiseWorker |
+| swarm_tx/rx | tokio mpsc | 100 | ValidationWorker/EmissionWorker -> NodeActor |
+| block_fetcher_tx/rx | tokio mpsc | 256 | Share handlers -> BlockFetcher |
 | write_tx/rx | std::sync mpsc | unbounded | StoreHandle -> StoreWriter (serialized writes) |
 
 ## BlockHeight Column Family Key Schema
@@ -240,31 +255,62 @@ All writes go into a single `WriteBatch` for atomicity.
 
 Within a single `WriteBatch`, reads from the DB return pre-batch (committed) state. The reorg logic avoids this by using direct batch helpers (`set_top_candidate_height`, `put_candidate_entry`, `delete_candidate_entry`) that write without validating against DB state, and setting the final top height once rather than incrementing/decrementing per entry.
 
-## Future Additions
+## Validation Worker
 
-### Validation Worker
-- Insert between EmissionWorker and OrganiseWorker
-- Validates PoW, share structure before organisation
-- `OrganiseSender` is `Clone`, so the validation worker can send to the same channel
+### ValidationWorker (`node/validation_worker.rs`)
+- Runs in dedicated tokio task, spawned by NodeActor
+- Receives `ValidationEvent::ValidateBlock(BlockHash)` via bounded mpsc channel (capacity 256)
+- Spawns capped concurrent validation tasks (semaphore sized to available CPUs)
+- Each task:
+  1. Reads the share block from the chain store
+  2. Calls `validate_share_block()` which returns Ok early if the block
+     already has `BlockValid` status (avoids redundant work for re-scheduled blocks)
+  3. On success: sends `OrganiseEvent::Block` and `SwarmSend::Inv`
+  4. Calls `schedule_dependents()` which looks up children (via
+     `get_children_blockhashes`) and nephews (via `get_nephews`) and sends
+     `ValidateBlock` events back through the validation channel
+- The worker holds a `ValidationSender` clone so `schedule_dependents` can
+  send events. The worker is shut down by cancelling its task.
+
+### Hole-filling cascade
+When a missing block arrives and validates, `schedule_dependents` enqueues
+its children and nephews for validation. Each of those, on success, enqueues
+their own dependents. This cascades from the filled hole all the way to the
+tip without explicit forward-walk logic.
+
+Blocks that were already validated (status `BlockValid`) but could not be
+promoted because their parent was not yet confirmed will be re-scheduled.
+`validate_share_block` returns Ok immediately for these, and `organise_block`
+gets another chance to promote them.
+
+### Dependency fetching
+When a share block arrives from a peer (`handle_share_block`), its parent
+and uncle references are checked against the store. If any dependency is
+missing, a `FetchBlocks` event is sent to the block fetcher and validation
+is deferred. Once the dependency arrives and validates, `schedule_dependents`
+picks up the waiting block.
+
+## Future Additions
 
 ### Header Sync / Block Fetch Separation
 - Header sync can send `OrganiseEvent::Header` events to build the candidate chain
 - Block fetch can send `OrganiseEvent::Block` events to promote candidates to confirmed
 - These can operate independently and concurrently
 
-### Peer-received Share Organisation
-- Shares received from peers via p2p will also need organisation
-- Pass an `OrganiseSender` clone through the peer handling path
-
 ## Files
 
 - `p2poolv2_lib/src/node/emission_worker.rs`
+- `p2poolv2_lib/src/node/validation_worker.rs` (ValidationWorker, schedule_dependents)
 - `p2poolv2_lib/src/node/organise_worker.rs`
 - `p2poolv2_lib/src/node/actor.rs`
+- `p2poolv2_lib/src/node/request_response_handler/block_fetcher.rs` (BlockFetcher)
+- `p2poolv2_lib/src/node/p2p_message_handlers/receivers/share_blocks.rs` (handle_share_block, dependency fetching)
 - `p2poolv2_lib/src/shares/handle_stratum_share.rs`
+- `p2poolv2_lib/src/shares/validation/mod.rs` (validate_share_block, validate_uncles)
 - `p2poolv2_lib/src/shares/chain/chain_store_handle.rs`
 - `p2poolv2_lib/src/store/writer/mod.rs` (StoreWriter + WriteCommand)
 - `p2poolv2_lib/src/store/writer/handle.rs` (StoreHandle)
 - `p2poolv2_lib/src/store/organise/mod.rs` (candidate/confirmed index management)
+- `p2poolv2_lib/src/store/organise/candidate.rs` (get_candidate_blocks_missing_data)
 - `p2poolv2_lib/src/store/organise/organise_header.rs` (Store::organise_header, candidate chain logic)
 - `p2poolv2_lib/src/store/organise/organise_block.rs` (Store::organise_block, confirmed promotion)
