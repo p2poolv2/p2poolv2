@@ -361,9 +361,9 @@ impl Store {
         Ok((new_top_height, new_chain))
     }
 
-    /// Walk forward from the current candidate tip, discovering children
-    /// already stored with `Valid` status and appending them to the
-    /// candidate chain in the same WriteBatch.
+    /// Walk forward from the current candidate tip, discovering
+    /// children already stored and appending them to the candidate
+    /// chain in the same WriteBatch.
     ///
     /// Among multiple children at the same height, selects the one with
     /// the highest `chain_work`. Verifies parent hash to exclude uncle
