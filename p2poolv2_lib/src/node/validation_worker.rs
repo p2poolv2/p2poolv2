@@ -34,8 +34,9 @@ use crate::shares::validation;
 use crate::utils::cpu::available_cpus;
 use bitcoin::BlockHash;
 use libp2p::request_response::ResponseChannel;
+use std::collections::HashSet;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::{Semaphore, mpsc};
 use tracing::{error, info};
 
@@ -75,6 +76,15 @@ impl fmt::Display for ValidationWorkerError {
 
 impl std::error::Error for ValidationWorkerError {}
 
+/// Set of block hashes currently in the validation pipeline.
+/// Prevents duplicate concurrent validation tasks while allowing
+/// re-scheduling after a block has been fully processed. When a
+/// block enters the pipeline its hash is inserted; when
+/// validate_and_emit finishes (success or failure) the hash is
+/// removed so it can be scheduled again later (e.g. when a parent
+/// fills a hole and schedule_dependents re-triggers the child).
+type PendingSet = Arc<Mutex<HashSet<BlockHash>>>;
+
 /// Worker that validates share blocks in capped concurrent tasks.
 ///
 /// Receives `ValidationEvent` values containing block hashes, reads
@@ -91,6 +101,7 @@ pub struct ValidationWorker {
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     semaphore: Arc<Semaphore>,
+    pending: PendingSet,
 }
 
 impl ValidationWorker {
@@ -107,6 +118,7 @@ impl ValidationWorker {
             organise_tx,
             swarm_tx,
             semaphore: Arc::new(Semaphore::new(available_cpus())),
+            pending: Arc::new(Mutex::new(HashSet::with_capacity(64))),
         }
     }
 
@@ -119,6 +131,10 @@ impl ValidationWorker {
         while let Some(event) = self.validation_rx.recv().await {
             match event {
                 ValidationEvent::ValidateBlock(block_hash) => {
+                    if !self.pending.lock().unwrap().insert(block_hash) {
+                        continue;
+                    }
+
                     let permit = match self.semaphore.clone().acquire_owned().await {
                         Ok(permit) => permit,
                         Err(_) => {
@@ -132,6 +148,7 @@ impl ValidationWorker {
                     let organise_tx = self.organise_tx.clone();
                     let swarm_tx = self.swarm_tx.clone();
                     let semaphore = self.semaphore.clone();
+                    let pending = self.pending.clone();
 
                     tokio::spawn(async move {
                         let _permit = permit;
@@ -141,6 +158,7 @@ impl ValidationWorker {
                             organise_tx,
                             swarm_tx,
                             semaphore,
+                            pending,
                         )
                         .await;
                     });
@@ -156,34 +174,23 @@ impl ValidationWorker {
 /// on success. After organising, spawn tasks for stored children and
 /// nephews so the chain advances when a hole is filled.
 ///
-/// Blocks that are already BlockValid are skipped entirely. During
-/// initial download a block can be scheduled for validation twice:
-/// once when it arrives via handle_share_block, and again when its
-/// parent validates and schedule_dependents spawns a child task.
-/// This early return avoids duplicate organise/inv events in that
-/// race. There is a small window where two concurrent tasks both
-/// see Candidate status and both proceed, but that duplication is
-/// harmless since organise_block is idempotent.
+/// Removes the block from the pending set when done so that it can
+/// be re-scheduled later (e.g. when a parent fills a hole).
+/// Duplicate concurrent validation is prevented by the pending set
+/// check in the worker's run loop and in schedule_dependents.
 async fn validate_and_emit(
     block_hash: BlockHash,
     chain_store_handle: ChainStoreHandle,
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     semaphore: Arc<Semaphore>,
+    pending: PendingSet,
 ) {
-    // Skip blocks already validated by a concurrent task to avoid
-    // duplicate organise/inv events during initial download.
-    if chain_store_handle.has_status(
-        &block_hash,
-        crate::store::block_tx_metadata::Status::BlockValid,
-    ) {
-        return;
-    }
-
     let share_block = match chain_store_handle.get_share(&block_hash) {
         Some(share_block) => share_block,
         None => {
             error!("Share block {block_hash} not found in store for validation");
+            pending.lock().unwrap().remove(&block_hash);
             return;
         }
     };
@@ -192,6 +199,7 @@ async fn validate_and_emit(
         validation::validate_share_block(&share_block, &chain_store_handle)
     {
         error!("Share block {block_hash} validation failed: {validation_error}");
+        pending.lock().unwrap().remove(&block_hash);
         return;
     }
 
@@ -215,11 +223,15 @@ async fn validate_and_emit(
         &organise_tx,
         &swarm_tx,
         &semaphore,
+        &pending,
     );
+
+    pending.lock().unwrap().remove(&block_hash);
 }
 
 /// Collect stored children and nephews and spawn a validation task
-/// for each. Each task acquires its own semaphore permit so
+/// for each. Uses the pending set to skip blocks already in the
+/// pipeline. Each task acquires its own semaphore permit so
 /// concurrency stays capped.
 fn schedule_dependents(
     block_hash: &BlockHash,
@@ -227,13 +239,13 @@ fn schedule_dependents(
     organise_tx: &OrganiseSender,
     swarm_tx: &mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     semaphore: &Arc<Semaphore>,
+    pending: &PendingSet,
 ) {
     let mut dependent_hashes = Vec::with_capacity(4);
 
     if let Ok(Some(children)) = chain_store_handle.get_children_blockhashes(block_hash) {
         for child_hash in children {
             if chain_store_handle.share_block_exists(&child_hash) {
-                info!("Scheduling child {child_hash} for validation after {block_hash}");
                 dependent_hashes.push(child_hash);
             }
         }
@@ -242,17 +254,23 @@ fn schedule_dependents(
     if let Some(nephews) = chain_store_handle.get_nephews(block_hash) {
         for nephew_hash in nephews {
             if chain_store_handle.share_block_exists(&nephew_hash) {
-                info!("Scheduling nephew {nephew_hash} for validation after uncle {block_hash}");
                 dependent_hashes.push(nephew_hash);
             }
         }
     }
 
     for dependent_hash in dependent_hashes {
+        if !pending.lock().unwrap().insert(dependent_hash) {
+            continue;
+        }
+
+        info!("Scheduling dependent {dependent_hash} for validation after {block_hash}");
+
         let chain_store_handle = chain_store_handle.clone();
         let organise_tx = organise_tx.clone();
         let swarm_tx = swarm_tx.clone();
         let semaphore = semaphore.clone();
+        let pending = pending.clone();
 
         tokio::spawn(async move {
             let permit = match semaphore.clone().acquire_owned().await {
@@ -261,6 +279,7 @@ fn schedule_dependents(
                     error!(
                         "Validation semaphore closed while scheduling dependent {dependent_hash}"
                     );
+                    pending.lock().unwrap().remove(&dependent_hash);
                     return;
                 }
             };
@@ -271,6 +290,7 @@ fn schedule_dependents(
                 organise_tx,
                 swarm_tx,
                 semaphore,
+                pending,
             )
             .await;
         });
@@ -285,13 +305,12 @@ mod tests {
     use crate::test_utils::TestShareBlockBuilder;
     use std::time::Duration;
 
-    /// Add mock expectations needed for validate_and_emit (has_status)
+    /// Add mock expectations needed for validate_share_block (has_status)
     /// and schedule_dependents (get_children_blockhashes, get_nephews) on a
     /// mock clone that will handle a successful validation path with no
     /// children or nephews.
     fn setup_validation_expectations(mock_clone: &mut MockChainStoreHandle) {
-        // validate_and_emit and validate_share_block both call has_status
-        // to check for BlockValid early return
+        // validate_share_block calls has_status to check for BlockValid
         mock_clone.expect_has_status().returning(|_, _| false);
 
         // schedule_dependents checks children and nephews
@@ -461,7 +480,7 @@ mod tests {
             .expect_get_share()
             .withf(move |hash| *hash == uncle_hash)
             .returning(|_| None);
-        // validate_and_emit and validate_share_block both call has_status
+        // validate_share_block calls has_status
         mock_clone.expect_has_status().returning(|_, _| false);
         mock_chain_handle
             .expect_clone()
