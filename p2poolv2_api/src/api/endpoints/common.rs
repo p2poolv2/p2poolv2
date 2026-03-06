@@ -14,75 +14,14 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use bitcoin::Target;
-use p2poolv2_lib::store::dag_store::{ShareInfo, UncleInfo};
-use serde::Serialize;
-
-/// JSON response for a share with its uncles.
-#[derive(Serialize)]
-pub struct ShareInfoResponse {
-    pub blockhash: String,
-    pub prev_blockhash: String,
-    pub height: u32,
-    pub miner_pubkey: String,
-    pub timestamp: u32,
-    pub bits: String,
-    pub difficulty: f64,
-    pub uncles: Vec<UncleInfoResponse>,
-}
-
-/// JSON response for an uncle share.
-#[derive(Serialize)]
-pub struct UncleInfoResponse {
-    pub blockhash: String,
-    pub prev_blockhash: String,
-    pub miner_pubkey: String,
-    pub timestamp: u32,
-    pub height: Option<u32>,
-}
-
-impl From<ShareInfo> for ShareInfoResponse {
-    fn from(share: ShareInfo) -> Self {
-        let difficulty = Target::from_compact(share.bits).difficulty_float();
-        let uncles: Vec<UncleInfoResponse> = share
-            .uncles
-            .into_iter()
-            .map(UncleInfoResponse::from)
-            .collect();
-
-        ShareInfoResponse {
-            blockhash: share.blockhash.to_string(),
-            prev_blockhash: share.prev_blockhash.to_string(),
-            height: share.height,
-            miner_pubkey: share.miner_pubkey,
-            timestamp: share.timestamp,
-            bits: format!("{:#x}", share.bits.to_consensus()),
-            difficulty,
-            uncles,
-        }
-    }
-}
-
-impl From<UncleInfo> for UncleInfoResponse {
-    fn from(uncle: UncleInfo) -> Self {
-        UncleInfoResponse {
-            blockhash: uncle.blockhash.to_string(),
-            prev_blockhash: uncle.prev_blockhash.to_string(),
-            miner_pubkey: uncle.miner_pubkey,
-            timestamp: uncle.timestamp,
-            height: uncle.height,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use bitcoin::hashes::Hash;
     use bitcoin::{BlockHash, CompactTarget};
+    use p2poolv2_lib::store::dag_store::{ShareInfo, UncleInfo};
 
     #[test]
-    fn test_share_info_response_from_share_info() {
+    fn test_share_info_serialization() {
         let share_info = ShareInfo {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
@@ -93,20 +32,14 @@ mod tests {
             uncles: vec![],
         };
 
-        let response = ShareInfoResponse::from(share_info);
-
-        assert_eq!(response.height, 42);
-        assert_eq!(response.timestamp, 1_700_000_000);
-        assert_eq!(response.miner_pubkey, "02aabbccdd");
-        assert_eq!(response.bits, "0x1b4188f5");
-        assert!(response.difficulty > 0.0);
-        assert!(response.uncles.is_empty());
-        assert!(!response.blockhash.is_empty());
-        assert!(!response.prev_blockhash.is_empty());
+        let json = serde_json::to_string(&share_info).unwrap();
+        assert!(json.contains("\"height\":42"));
+        assert!(json.contains("\"miner_pubkey\":\"02aabbccdd\""));
+        assert!(json.contains("\"timestamp\":1700000000"));
     }
 
     #[test]
-    fn test_share_info_response_with_uncles() {
+    fn test_share_info_with_uncles_serialization() {
         let uncle = UncleInfo {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
@@ -125,16 +58,13 @@ mod tests {
             uncles: vec![uncle],
         };
 
-        let response = ShareInfoResponse::from(share_info);
-
-        assert_eq!(response.uncles.len(), 1);
-        assert_eq!(response.uncles[0].miner_pubkey, "02uncle");
-        assert_eq!(response.uncles[0].timestamp, 1_700_000_010);
-        assert_eq!(response.uncles[0].height, Some(41));
+        let json = serde_json::to_string(&share_info).unwrap();
+        assert!(json.contains("\"02uncle\""));
+        assert!(json.contains("\"height\":41"));
     }
 
     #[test]
-    fn test_uncle_info_response_from_uncle_info() {
+    fn test_uncle_info_serialization() {
         let uncle = UncleInfo {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
@@ -143,17 +73,14 @@ mod tests {
             height: Some(10),
         };
 
-        let response = UncleInfoResponse::from(uncle);
-
-        assert_eq!(response.miner_pubkey, "02aabb");
-        assert_eq!(response.timestamp, 1_700_000_005);
-        assert_eq!(response.height, Some(10));
-        assert!(!response.blockhash.is_empty());
-        assert!(!response.prev_blockhash.is_empty());
+        let json = serde_json::to_string(&uncle).unwrap();
+        assert!(json.contains("\"miner_pubkey\":\"02aabb\""));
+        assert!(json.contains("\"timestamp\":1700000005"));
+        assert!(json.contains("\"height\":10"));
     }
 
     #[test]
-    fn test_uncle_info_response_with_no_height() {
+    fn test_uncle_info_with_no_height_serialization() {
         let uncle = UncleInfo {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
@@ -162,26 +89,7 @@ mod tests {
             height: None,
         };
 
-        let response = UncleInfoResponse::from(uncle);
-
-        assert_eq!(response.height, None);
-    }
-
-    #[test]
-    fn test_difficulty_computed_from_bits() {
-        let share_info = ShareInfo {
-            blockhash: BlockHash::all_zeros(),
-            prev_blockhash: BlockHash::all_zeros(),
-            height: 1,
-            miner_pubkey: "02aa".to_string(),
-            timestamp: 1_700_000_000,
-            bits: CompactTarget::from_consensus(0x1d00ffff),
-            uncles: vec![],
-        };
-
-        let response = ShareInfoResponse::from(share_info);
-
-        // 0x1d00ffff is difficulty 1.0
-        assert!((response.difficulty - 1.0).abs() < 0.001);
+        let json = serde_json::to_string(&uncle).unwrap();
+        assert!(json.contains("\"height\":null"));
     }
 }
