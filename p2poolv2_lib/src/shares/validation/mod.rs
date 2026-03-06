@@ -144,10 +144,11 @@ pub fn validate_share_block(
     // but that check avoids duplicate organise/inv events, while
     // this one avoids redundant validation work if a caller bypasses
     // validate_and_emit.
-    if let Ok(metadata) = chain_store_handle.get_block_metadata(&share.block_hash()) {
-        if metadata.status == crate::store::block_tx_metadata::Status::BlockValid {
-            return Ok(());
-        }
+    if chain_store_handle.has_status(
+        &share.block_hash(),
+        crate::store::block_tx_metadata::Status::BlockValid,
+    ) {
+        return Ok(());
     }
     validate_uncles(share, chain_store_handle)?;
     // TODO: Populate bitcoin block from ShortIDs in share and use bitcoin_block_validation to validate difficulty
@@ -366,15 +367,8 @@ mod tests {
 
         // Set up mock expectations
         chain_store_handle
-            .expect_get_block_metadata()
-            .returning(|_| {
-                use crate::store::block_tx_metadata::{BlockMetadata, Status};
-                Ok(BlockMetadata {
-                    expected_height: Some(1),
-                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: Status::Candidate,
-                })
-            });
+            .expect_has_status()
+            .returning(|_, _| false);
         chain_store_handle
             .expect_add_share_block()
             .with(
@@ -398,22 +392,14 @@ mod tests {
 
     #[test]
     fn test_validate_share_block_returns_ok_for_block_valid_status() {
-        use crate::store::block_tx_metadata::{BlockMetadata, Status};
-
         let mut chain_store_handle = ChainStoreHandle::default();
         let share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
         chain_store_handle
-            .expect_get_block_metadata()
-            .returning(|_| {
-                Ok(BlockMetadata {
-                    expected_height: Some(1),
-                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: Status::BlockValid,
-                })
-            });
+            .expect_has_status()
+            .returning(|_, _| true);
 
         let result = validate_share_block(&share_block, &chain_store_handle);
         assert!(
