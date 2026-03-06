@@ -21,6 +21,9 @@
 //! `shares::validation::validate_share_block`, and on success emits
 //! `OrganiseEvent::Block` and `SwarmSend::Inv` events. Runs in a dedicated
 //! tokio task, decoupled from the P2P message handler hot path.
+//!
+//! After successful validation, schedules stored children and nephews for
+//! validation by sending `ValidateBlock` events back through the channel.
 
 use crate::node::SwarmSend;
 use crate::node::messages::Message;
@@ -34,9 +37,8 @@ use crate::shares::validation;
 use crate::utils::cpu::available_cpus;
 use bitcoin::BlockHash;
 use libp2p::request_response::ResponseChannel;
-use std::collections::HashSet;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::sync::{Semaphore, mpsc};
 use tracing::{error, info};
 
@@ -76,15 +78,6 @@ impl fmt::Display for ValidationWorkerError {
 
 impl std::error::Error for ValidationWorkerError {}
 
-/// Set of block hashes currently in the validation pipeline.
-/// Prevents duplicate concurrent validation tasks while allowing
-/// re-scheduling after a block has been fully processed. When a
-/// block enters the pipeline its hash is inserted; when
-/// validate_and_emit finishes (success or failure) the hash is
-/// removed so it can be scheduled again later (e.g. when a parent
-/// fills a hole and schedule_dependents re-triggers the child).
-type PendingSet = Arc<Mutex<HashSet<BlockHash>>>;
-
 /// Worker that validates share blocks in capped concurrent tasks.
 ///
 /// Receives `ValidationEvent` values containing block hashes, reads
@@ -92,37 +85,44 @@ type PendingSet = Arc<Mutex<HashSet<BlockHash>>>;
 /// emits `OrganiseEvent::Block` for confirmed promotion and
 /// `SwarmSend::Inv` for inventory relay to peers.
 ///
-/// After successful validation, spawns new tasks for stored children
-/// and nephews so the chain advances when a hole is filled. Each
-/// child/nephew task acquires its own semaphore permit.
+/// After successful validation, sends `ValidateBlock` events for
+/// stored children and nephews back through the validation channel
+/// so the chain advances when a hole is filled.
 pub struct ValidationWorker {
     validation_rx: ValidationReceiver,
+    validation_tx: ValidationSender,
     chain_store_handle: ChainStoreHandle,
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     semaphore: Arc<Semaphore>,
-    pending: PendingSet,
 }
 
 impl ValidationWorker {
     /// Creates a new validation worker.
     pub fn new(
         validation_rx: ValidationReceiver,
+        validation_tx: ValidationSender,
         chain_store_handle: ChainStoreHandle,
         organise_tx: OrganiseSender,
         swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     ) -> Self {
         Self {
             validation_rx,
+            validation_tx,
             chain_store_handle,
             organise_tx,
             swarm_tx,
             semaphore: Arc::new(Semaphore::new(available_cpus())),
-            pending: Arc::new(Mutex::new(HashSet::with_capacity(64))),
         }
     }
 
     /// Runs the validation worker until the channel closes.
+    ///
+    /// Note: Because the worker holds a `ValidationSender` (used by
+    /// `schedule_dependents` to re-enqueue children/nephews), the
+    /// channel only closes once both the external sender AND this
+    /// worker are dropped. In practice the node shuts down the worker
+    /// by cancelling its task.
     ///
     /// Returns `Ok(())` on clean shutdown (channel closed).
     /// Returns `Err(ValidationWorkerError)` on fatal failure.
@@ -131,10 +131,6 @@ impl ValidationWorker {
         while let Some(event) = self.validation_rx.recv().await {
             match event {
                 ValidationEvent::ValidateBlock(block_hash) => {
-                    if !self.pending.lock().unwrap().insert(block_hash) {
-                        continue;
-                    }
-
                     let permit = match self.semaphore.clone().acquire_owned().await {
                         Ok(permit) => permit,
                         Err(_) => {
@@ -147,8 +143,7 @@ impl ValidationWorker {
                     let chain_store_handle = self.chain_store_handle.clone();
                     let organise_tx = self.organise_tx.clone();
                     let swarm_tx = self.swarm_tx.clone();
-                    let semaphore = self.semaphore.clone();
-                    let pending = self.pending.clone();
+                    let validation_tx = self.validation_tx.clone();
 
                     tokio::spawn(async move {
                         let _permit = permit;
@@ -157,8 +152,7 @@ impl ValidationWorker {
                             chain_store_handle,
                             organise_tx,
                             swarm_tx,
-                            semaphore,
-                            pending,
+                            validation_tx,
                         )
                         .await;
                     });
@@ -171,26 +165,24 @@ impl ValidationWorker {
 }
 
 /// Read a share block from the store, validate it, and emit events
-/// on success. After organising, spawn tasks for stored children and
-/// nephews so the chain advances when a hole is filled.
+/// on success. After organising, schedule stored children and nephews
+/// for validation by sending `ValidateBlock` events back through
+/// the validation channel.
 ///
-/// Removes the block from the pending set when done so that it can
-/// be re-scheduled later (e.g. when a parent fills a hole).
-/// Duplicate concurrent validation is prevented by the pending set
-/// check in the worker's run loop and in schedule_dependents.
+/// Duplicate validation of already-confirmed blocks is handled by
+/// `validate_share_block` which returns Ok immediately for blocks
+/// with `BlockValid` status.
 async fn validate_and_emit(
     block_hash: BlockHash,
     chain_store_handle: ChainStoreHandle,
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
-    semaphore: Arc<Semaphore>,
-    pending: PendingSet,
+    validation_tx: ValidationSender,
 ) {
     let share_block = match chain_store_handle.get_share(&block_hash) {
         Some(share_block) => share_block,
         None => {
             error!("Share block {block_hash} not found in store for validation");
-            pending.lock().unwrap().remove(&block_hash);
             return;
         }
     };
@@ -199,7 +191,6 @@ async fn validate_and_emit(
         validation::validate_share_block(&share_block, &chain_store_handle)
     {
         error!("Share block {block_hash} validation failed: {validation_error}");
-        pending.lock().unwrap().remove(&block_hash);
         return;
     }
 
@@ -215,31 +206,17 @@ async fn validate_and_emit(
         error!("Failed to send inv relay for validated block {block_hash}: {send_error}");
     }
 
-    // Spawn tasks for stored children and nephews so the chain
-    // advances when a missing block arrives.
-    schedule_dependents(
-        &block_hash,
-        &chain_store_handle,
-        &organise_tx,
-        &swarm_tx,
-        &semaphore,
-        &pending,
-    );
-
-    pending.lock().unwrap().remove(&block_hash);
+    // Schedule stored children and nephews for validation so the
+    // chain advances when a missing block arrives and is validated.
+    schedule_dependents(&block_hash, &chain_store_handle, &validation_tx).await;
 }
 
-/// Collect stored children and nephews and spawn a validation task
-/// for each. Uses the pending set to skip blocks already in the
-/// pipeline. Each task acquires its own semaphore permit so
-/// concurrency stays capped.
-fn schedule_dependents(
+/// Collect stored children and nephews and send `ValidateBlock` events
+/// for each through the validation channel.
+async fn schedule_dependents(
     block_hash: &BlockHash,
     chain_store_handle: &ChainStoreHandle,
-    organise_tx: &OrganiseSender,
-    swarm_tx: &mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
-    semaphore: &Arc<Semaphore>,
-    pending: &PendingSet,
+    validation_tx: &ValidationSender,
 ) {
     let mut dependent_hashes = Vec::with_capacity(4);
 
@@ -260,40 +237,13 @@ fn schedule_dependents(
     }
 
     for dependent_hash in dependent_hashes {
-        if !pending.lock().unwrap().insert(dependent_hash) {
-            continue;
-        }
-
         info!("Scheduling dependent {dependent_hash} for validation after {block_hash}");
-
-        let chain_store_handle = chain_store_handle.clone();
-        let organise_tx = organise_tx.clone();
-        let swarm_tx = swarm_tx.clone();
-        let semaphore = semaphore.clone();
-        let pending = pending.clone();
-
-        tokio::spawn(async move {
-            let permit = match semaphore.clone().acquire_owned().await {
-                Ok(permit) => permit,
-                Err(_) => {
-                    error!(
-                        "Validation semaphore closed while scheduling dependent {dependent_hash}"
-                    );
-                    pending.lock().unwrap().remove(&dependent_hash);
-                    return;
-                }
-            };
-            let _permit = permit;
-            validate_and_emit(
-                dependent_hash,
-                chain_store_handle,
-                organise_tx,
-                swarm_tx,
-                semaphore,
-                pending,
-            )
-            .await;
-        });
+        if let Err(send_error) = validation_tx
+            .send(ValidationEvent::ValidateBlock(dependent_hash))
+            .await
+        {
+            error!("Failed to schedule dependent {dependent_hash} for validation: {send_error}");
+        }
     }
 }
 
@@ -321,21 +271,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_validation_worker_stops_on_channel_close() {
-        let (validation_tx, validation_rx) = create_validation_channel();
-        let mock_chain_handle = MockChainStoreHandle::new();
-        let (organise_tx, _organise_rx) = organise_worker::create_organise_channel();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
-
-        let worker = ValidationWorker::new(validation_rx, mock_chain_handle, organise_tx, swarm_tx);
-
-        drop(validation_tx);
-
-        let result = worker.run().await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
     async fn test_validation_worker_validates_and_sends_organise_event() {
         let (validation_tx, validation_rx) = create_validation_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
@@ -357,22 +292,29 @@ mod tests {
         let (organise_tx, mut organise_rx) = organise_worker::create_organise_channel();
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
 
-        let worker = ValidationWorker::new(validation_rx, mock_chain_handle, organise_tx, swarm_tx);
+        let worker = ValidationWorker::new(
+            validation_rx,
+            validation_tx.clone(),
+            mock_chain_handle,
+            organise_tx,
+            swarm_tx,
+        );
+
+        let worker_handle = tokio::spawn(worker.run());
 
         validation_tx
             .send(ValidationEvent::ValidateBlock(block_hash))
             .await
             .unwrap();
-        drop(validation_tx);
 
-        let result = worker.run().await;
-        assert!(result.is_ok());
-
-        if let Some(OrganiseEvent::Block(received_block)) = organise_rx.recv().await {
+        let organise_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv()).await;
+        if let Ok(Some(OrganiseEvent::Block(received_block))) = organise_event {
             assert_eq!(received_block.block_hash(), block_hash);
         } else {
             panic!("Expected OrganiseEvent::Block after successful validation");
         }
+
+        worker_handle.abort();
     }
 
     #[tokio::test]
@@ -396,22 +338,29 @@ mod tests {
         let (organise_tx, _organise_rx) = organise_worker::create_organise_channel();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
 
-        let worker = ValidationWorker::new(validation_rx, mock_chain_handle, organise_tx, swarm_tx);
+        let worker = ValidationWorker::new(
+            validation_rx,
+            validation_tx.clone(),
+            mock_chain_handle,
+            organise_tx,
+            swarm_tx,
+        );
+
+        let worker_handle = tokio::spawn(worker.run());
 
         validation_tx
             .send(ValidationEvent::ValidateBlock(block_hash))
             .await
             .unwrap();
-        drop(validation_tx);
 
-        let result = worker.run().await;
-        assert!(result.is_ok());
-
-        if let Some(SwarmSend::Inv(sent_block_hash)) = swarm_rx.recv().await {
+        let swarm_event = tokio::time::timeout(Duration::from_secs(2), swarm_rx.recv()).await;
+        if let Ok(Some(SwarmSend::Inv(sent_block_hash))) = swarm_event {
             assert_eq!(sent_block_hash, block_hash);
         } else {
             panic!("Expected SwarmSend::Inv after successful validation");
         }
+
+        worker_handle.abort();
     }
 
     #[tokio::test]
@@ -430,30 +379,36 @@ mod tests {
         let (organise_tx, mut organise_rx) = organise_worker::create_organise_channel();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
 
-        let worker = ValidationWorker::new(validation_rx, mock_chain_handle, organise_tx, swarm_tx);
+        let worker = ValidationWorker::new(
+            validation_rx,
+            validation_tx.clone(),
+            mock_chain_handle,
+            organise_tx,
+            swarm_tx,
+        );
+
+        let worker_handle = tokio::spawn(worker.run());
 
         validation_tx
             .send(ValidationEvent::ValidateBlock(block_hash))
             .await
             .unwrap();
-        drop(validation_tx);
-
-        let result = worker.run().await;
-        assert!(result.is_ok());
 
         // Block not found in store -- no events should be produced.
         let organise_result =
             tokio::time::timeout(Duration::from_millis(500), organise_rx.recv()).await;
         assert!(
-            matches!(organise_result, Ok(None)),
+            organise_result.is_err(),
             "No OrganiseEvent expected for missing block"
         );
 
         let swarm_result = tokio::time::timeout(Duration::from_millis(500), swarm_rx.recv()).await;
         assert!(
-            matches!(swarm_result, Ok(None)),
+            swarm_result.is_err(),
             "No SwarmSend expected for missing block"
         );
+
+        worker_handle.abort();
     }
 
     #[tokio::test]
@@ -489,30 +444,36 @@ mod tests {
         let (organise_tx, mut organise_rx) = organise_worker::create_organise_channel();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
 
-        let worker = ValidationWorker::new(validation_rx, mock_chain_handle, organise_tx, swarm_tx);
+        let worker = ValidationWorker::new(
+            validation_rx,
+            validation_tx.clone(),
+            mock_chain_handle,
+            organise_tx,
+            swarm_tx,
+        );
+
+        let worker_handle = tokio::spawn(worker.run());
 
         validation_tx
             .send(ValidationEvent::ValidateBlock(block_hash))
             .await
             .unwrap();
-        drop(validation_tx);
-
-        let result = worker.run().await;
-        assert!(result.is_ok());
 
         // Validation fails (uncle not found) -- no events should be produced.
         let organise_result =
             tokio::time::timeout(Duration::from_millis(500), organise_rx.recv()).await;
         assert!(
-            matches!(organise_result, Ok(None)),
+            organise_result.is_err(),
             "No OrganiseEvent expected for invalid block"
         );
 
         let swarm_result = tokio::time::timeout(Duration::from_millis(500), swarm_rx.recv()).await;
         assert!(
-            matches!(swarm_result, Ok(None)),
+            swarm_result.is_err(),
             "No SwarmSend expected for invalid block"
         );
+
+        worker_handle.abort();
     }
 
     #[tokio::test]
@@ -529,47 +490,58 @@ mod tests {
             .build();
         let child_hash = child_block.block_hash();
 
-        // The mock clone will be used for both the parent validation
-        // and the spawned child validation task (via clone).
-        let mut mock_clone = MockChainStoreHandle::new();
-        mock_clone
+        // Parent validation task: cloned from the worker's handle.
+        let mut parent_mock = MockChainStoreHandle::new();
+        parent_mock
             .expect_get_share()
             .returning(move |_| Some(parent_clone.clone()));
-        mock_clone.expect_has_status().returning(|_, _| false);
+        parent_mock.expect_has_status().returning(|_, _| false);
         // schedule_dependents: parent has one child
-        mock_clone
+        parent_mock
             .expect_get_children_blockhashes()
             .returning(move |_| Ok(Some(vec![child_hash])));
-        mock_clone.expect_share_block_exists().returning(|_| true);
-        mock_clone.expect_get_nephews().returning(|_| None);
-        // The spawned child task clones the handle. Return the child
-        // block so validation succeeds and produces a second organise event.
+        parent_mock.expect_share_block_exists().returning(|_| true);
+        parent_mock.expect_get_nephews().returning(|_| None);
+
+        // Child validation task: also cloned from the worker's handle
+        // (arrives via the validation channel, not spawned directly).
         let child_clone = child_block.clone();
-        mock_clone.expect_clone().return_once(move || {
-            let mut inner = MockChainStoreHandle::new();
-            inner
-                .expect_get_share()
-                .returning(move |_| Some(child_clone.clone()));
-            setup_validation_expectations(&mut inner);
-            inner
-        });
+        let mut child_mock = MockChainStoreHandle::new();
+        child_mock
+            .expect_get_share()
+            .returning(move |_| Some(child_clone.clone()));
+        setup_validation_expectations(&mut child_mock);
+
+        // Worker clones its handle once per spawned task.
+        let mut clone_seq = mockall::Sequence::new();
         mock_chain_handle
             .expect_clone()
-            .return_once(move || mock_clone);
+            .times(1)
+            .in_sequence(&mut clone_seq)
+            .return_once(move || parent_mock);
+        mock_chain_handle
+            .expect_clone()
+            .times(1)
+            .in_sequence(&mut clone_seq)
+            .return_once(move || child_mock);
 
         let (organise_tx, mut organise_rx) = organise_worker::create_organise_channel();
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
 
-        let worker = ValidationWorker::new(validation_rx, mock_chain_handle, organise_tx, swarm_tx);
+        let worker = ValidationWorker::new(
+            validation_rx,
+            validation_tx.clone(),
+            mock_chain_handle,
+            organise_tx,
+            swarm_tx,
+        );
+
+        let worker_handle = tokio::spawn(worker.run());
 
         validation_tx
             .send(ValidationEvent::ValidateBlock(parent_hash))
             .await
             .unwrap();
-        drop(validation_tx);
-
-        let result = worker.run().await;
-        assert!(result.is_ok());
 
         // First organise event from parent validation.
         let first_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv())
@@ -580,7 +552,7 @@ mod tests {
             "Expected OrganiseEvent::Block for parent"
         );
 
-        // Second organise event from the spawned child validation task.
+        // Second organise event from the child validation (scheduled via channel).
         let second_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv())
             .await
             .expect("Timed out waiting for child OrganiseEvent");
@@ -589,6 +561,8 @@ mod tests {
         } else {
             panic!("Expected OrganiseEvent::Block for child");
         }
+
+        worker_handle.abort();
     }
 
     #[tokio::test]
@@ -605,55 +579,67 @@ mod tests {
             .build();
         let nephew_hash = nephew_block.block_hash();
 
-        let mut mock_clone = MockChainStoreHandle::new();
-        mock_clone
+        // Uncle validation task: cloned from the worker's handle.
+        let mut uncle_mock = MockChainStoreHandle::new();
+        uncle_mock
             .expect_get_share()
             .returning(move |_| Some(uncle_clone.clone()));
-        mock_clone.expect_has_status().returning(|_, _| false);
+        uncle_mock.expect_has_status().returning(|_, _| false);
         // schedule_dependents: no children, one nephew
-        mock_clone
+        uncle_mock
             .expect_get_children_blockhashes()
             .returning(|_| Ok(None));
-        mock_clone
+        uncle_mock
             .expect_get_nephews()
             .returning(move |_| Some(vec![nephew_hash]));
-        mock_clone.expect_share_block_exists().returning(|_| true);
-        // The spawned nephew task clones the handle. Return the nephew
-        // block (which references the uncle) so validation succeeds.
+        uncle_mock.expect_share_block_exists().returning(|_| true);
+
+        // Nephew validation task: also cloned from the worker's handle
+        // (arrives via the validation channel, not spawned directly).
         let nephew_clone = nephew_block.clone();
         let uncle_for_nephew = uncle_block.clone();
-        mock_clone.expect_clone().return_once(move || {
-            let mut inner = MockChainStoreHandle::new();
-            // nephew's get_share returns itself; uncle lookup returns uncle
-            let nephew_for_inner = nephew_clone.clone();
-            let nephew_hash_inner = nephew_for_inner.block_hash();
-            inner
-                .expect_get_share()
-                .withf(move |hash| *hash == nephew_hash_inner)
-                .returning(move |_| Some(nephew_for_inner.clone()));
-            inner
-                .expect_get_share()
-                .returning(move |_| Some(uncle_for_nephew.clone()));
-            setup_validation_expectations(&mut inner);
-            inner
-        });
+        let mut nephew_mock = MockChainStoreHandle::new();
+        let nephew_for_inner = nephew_clone.clone();
+        let nephew_hash_inner = nephew_for_inner.block_hash();
+        nephew_mock
+            .expect_get_share()
+            .withf(move |hash| *hash == nephew_hash_inner)
+            .returning(move |_| Some(nephew_for_inner.clone()));
+        nephew_mock
+            .expect_get_share()
+            .returning(move |_| Some(uncle_for_nephew.clone()));
+        setup_validation_expectations(&mut nephew_mock);
+
+        // Worker clones its handle once per spawned task.
+        let mut clone_seq = mockall::Sequence::new();
         mock_chain_handle
             .expect_clone()
-            .return_once(move || mock_clone);
+            .times(1)
+            .in_sequence(&mut clone_seq)
+            .return_once(move || uncle_mock);
+        mock_chain_handle
+            .expect_clone()
+            .times(1)
+            .in_sequence(&mut clone_seq)
+            .return_once(move || nephew_mock);
 
         let (organise_tx, mut organise_rx) = organise_worker::create_organise_channel();
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
 
-        let worker = ValidationWorker::new(validation_rx, mock_chain_handle, organise_tx, swarm_tx);
+        let worker = ValidationWorker::new(
+            validation_rx,
+            validation_tx.clone(),
+            mock_chain_handle,
+            organise_tx,
+            swarm_tx,
+        );
+
+        let worker_handle = tokio::spawn(worker.run());
 
         validation_tx
             .send(ValidationEvent::ValidateBlock(uncle_hash))
             .await
             .unwrap();
-        drop(validation_tx);
-
-        let result = worker.run().await;
-        assert!(result.is_ok());
 
         // First organise event from uncle validation.
         let first_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv())
@@ -664,7 +650,7 @@ mod tests {
             "Expected OrganiseEvent::Block for uncle"
         );
 
-        // Second organise event from the spawned nephew validation task.
+        // Second organise event from the nephew validation (scheduled via channel).
         let second_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv())
             .await
             .expect("Timed out waiting for nephew OrganiseEvent");
@@ -673,5 +659,7 @@ mod tests {
         } else {
             panic!("Expected OrganiseEvent::Block for nephew");
         }
+
+        worker_handle.abort();
     }
 }
