@@ -31,7 +31,7 @@ use p2poolv2_lib::{
     config::ApiConfig,
     shares::chain::chain_store_handle::ChainStoreHandle,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
 use tracing::info;
@@ -162,10 +162,11 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
 }
 
 /// Response type for the /peers endpoint.
-#[derive(Debug, Serialize)]
-struct PeerResponse {
-    peer_id: String,
-}
+///
+/// Reuses the shared PeerResponse from the lib crate but with a
+/// default Connected status since the REST endpoint only lists
+/// currently connected peers.
+use p2poolv2_lib::monitoring_events::{PeerResponse, PeerStatus};
 
 /// Returns the list of currently connected peers.
 async fn peers(State(state): State<Arc<AppState>>) -> Result<Json<Vec<PeerResponse>>, ApiError> {
@@ -179,6 +180,7 @@ async fn peers(State(state): State<Arc<AppState>>) -> Result<Json<Vec<PeerRespon
         .into_iter()
         .map(|peer_id| PeerResponse {
             peer_id: peer_id.to_string(),
+            status: PeerStatus::Connected,
         })
         .collect();
 

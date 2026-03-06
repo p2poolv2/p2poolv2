@@ -15,13 +15,13 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::api::endpoints::MAX_NUM_SHARES_IN_RESPONSE;
-use crate::api::endpoints::common::ShareInfoResponse;
 use crate::api::error::ApiError;
 use crate::api::server::AppState;
 use axum::{
     Json,
     extract::{Query, State},
 };
+use p2poolv2_lib::store::dag_store::ShareInfo;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -39,7 +39,7 @@ pub struct CandidatesQuery {
 pub struct CandidatesResponse {
     pub from_height: u32,
     pub to_height: u32,
-    pub shares: Vec<ShareInfoResponse>,
+    pub shares: Vec<ShareInfo>,
 }
 
 /// Returns candidate shares and their uncles for a height range.
@@ -81,15 +81,10 @@ pub(crate) async fn candidates(
         .query_candidates(from_height, to_height)
         .map_err(|error| ApiError::ServerError(format!("Failed to query candidates: {error}")))?;
 
-    let candidate_shares: Vec<ShareInfoResponse> = candidates
-        .into_iter()
-        .map(ShareInfoResponse::from)
-        .collect();
-
     Ok(Json(CandidatesResponse {
         from_height,
         to_height,
-        shares: candidate_shares,
+        shares: candidates,
     }))
 }
 

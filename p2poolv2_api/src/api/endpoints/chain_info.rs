@@ -17,24 +17,13 @@
 use crate::api::error::ApiError;
 use crate::api::server::AppState;
 use axum::{Json, extract::State};
-use serde::Serialize;
+use p2poolv2_lib::monitoring_events::ChainInfo;
 use std::sync::Arc;
-
-/// JSON response for the /chain_info endpoint.
-#[derive(Serialize)]
-pub struct ChainInfoResponse {
-    pub genesis_blockhash: Option<String>,
-    pub chain_tip_height: Option<u32>,
-    pub total_work: String,
-    pub chain_tip_blockhash: Option<String>,
-    pub top_candidate_height: Option<u32>,
-    pub top_candidate_blockhash: Option<String>,
-}
 
 /// Returns chain state information including tip height, total work, and candidate info.
 pub(crate) async fn chain_info(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<ChainInfoResponse>, ApiError> {
+) -> Result<Json<ChainInfo>, ApiError> {
     let chain_store_handle = &state.chain_store_handle;
 
     let genesis_blockhash = chain_store_handle
@@ -72,7 +61,7 @@ pub(crate) async fn chain_info(
             .map(|hash| hash.to_string())
     });
 
-    let response = ChainInfoResponse {
+    let response = ChainInfo {
         genesis_blockhash,
         chain_tip_height,
         total_work,

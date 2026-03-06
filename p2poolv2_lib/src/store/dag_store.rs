@@ -20,6 +20,7 @@ use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::shares::validation::MAX_UNCLES;
 use bitcoin::consensus::{self, Encodable, encode};
 use bitcoin::{BlockHash, CompactTarget, Work};
+use serde::Serialize;
 use std::collections::{HashSet, VecDeque};
 use tracing::debug;
 
@@ -27,6 +28,7 @@ use tracing::debug;
 pub const MAX_UNCLES_DEPTH: u8 = 3;
 
 /// Single confirmed share and its uncles.
+#[derive(Clone, Debug, Serialize)]
 pub struct ShareInfo {
     pub blockhash: BlockHash,
     pub prev_blockhash: BlockHash,
@@ -38,6 +40,7 @@ pub struct ShareInfo {
 }
 
 /// Uncle share referenced by a confirmed share.
+#[derive(Clone, Debug, Serialize)]
 pub struct UncleInfo {
     pub blockhash: BlockHash,
     pub prev_blockhash: BlockHash,
