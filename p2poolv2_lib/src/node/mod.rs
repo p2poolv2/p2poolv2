@@ -25,6 +25,7 @@ pub mod messages;
 pub mod p2p_message_handlers;
 
 use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender, PeerResponse, PeerStatus};
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::senders::send_getheaders;
 use crate::node::request_response_handler::RequestResponseHandler;
@@ -96,6 +97,7 @@ struct Node {
     chain_store_handle: ChainStoreHandle,
     request_response_handler: RequestResponseHandler<ResponseChannel<Message>>,
     config: Config,
+    monitoring_event_sender: MonitoringEventSender,
 }
 
 impl Node {
@@ -104,6 +106,7 @@ impl Node {
         chain_store_handle: ChainStoreHandle,
         block_fetcher_handle: BlockFetcherHandle,
         validation_tx: ValidationSender,
+        monitoring_event_sender: MonitoringEventSender,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
 
@@ -204,6 +207,7 @@ impl Node {
             chain_store_handle,
             request_response_handler,
             config,
+            monitoring_event_sender,
         })
     }
 
@@ -291,6 +295,12 @@ impl Node {
                         info!("Inbound connection established from peer: {peer_id}");
                     }
                 }
+                let _ = self
+                    .monitoring_event_sender
+                    .send(MonitoringEvent::Peer(PeerResponse {
+                        peer_id: peer_id.to_string(),
+                        status: PeerStatus::Connected,
+                    }));
                 Ok(())
             }
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
@@ -298,6 +308,12 @@ impl Node {
                 self.swarm.behaviour_mut().remove_peer(&peer_id);
                 self.request_response_handler
                     .remove_peer_knowledge(&peer_id);
+                let _ = self
+                    .monitoring_event_sender
+                    .send(MonitoringEvent::Peer(PeerResponse {
+                        peer_id: peer_id.to_string(),
+                        status: PeerStatus::Disconnected,
+                    }));
                 Ok(())
             }
             SwarmEvent::OutgoingConnectionError {
@@ -498,11 +514,14 @@ mod tests {
 
         let (block_fetcher_tx, _block_fetcher_rx) = create_block_fetcher_channel();
         let (validation_tx, _validation_rx) = create_validation_channel();
+        let (monitoring_tx, _monitoring_rx) =
+            crate::monitoring_events::create_monitoring_event_channel();
         let mut node = Node::new(
             config.clone(),
             chain_store_handle,
             block_fetcher_tx,
             validation_tx,
+            monitoring_tx,
         )
         .expect("Node initialization failed");
 

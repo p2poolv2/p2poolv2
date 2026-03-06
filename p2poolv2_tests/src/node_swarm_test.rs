@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use p2poolv2_lib::accounting::stats::metrics;
+use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::writer::{StoreHandle, StoreWriter, write_channel};
@@ -123,20 +124,38 @@ async fn test_three_nodes_connectivity() {
         .unwrap();
 
     // Start three nodes
-    let (node1_handle, _stop_rx1) =
-        NodeHandle::new(config1, chain_store_handle1, shares_rx_1, metrics1)
-            .await
-            .expect("Failed to create node 1");
+    let (monitoring_tx1, _monitoring_rx1) = create_monitoring_event_channel();
+    let (node1_handle, _stop_rx1) = NodeHandle::new(
+        config1,
+        chain_store_handle1,
+        shares_rx_1,
+        metrics1,
+        monitoring_tx1,
+    )
+    .await
+    .expect("Failed to create node 1");
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let (node2_handle, _stop_rx2) =
-        NodeHandle::new(config2, chain_store_handle2, shares_rx_2, metrics2)
-            .await
-            .expect("Failed to create node 2");
+    let (monitoring_tx2, _monitoring_rx2) = create_monitoring_event_channel();
+    let (node2_handle, _stop_rx2) = NodeHandle::new(
+        config2,
+        chain_store_handle2,
+        shares_rx_2,
+        metrics2,
+        monitoring_tx2,
+    )
+    .await
+    .expect("Failed to create node 2");
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let (node3_handle, _stop_rx3) =
-        NodeHandle::new(config3, chain_store_handle3, shares_rx_3, metrics3)
-            .await
-            .expect("Failed to create node 3");
+    let (monitoring_tx3, _monitoring_rx3) = create_monitoring_event_channel();
+    let (node3_handle, _stop_rx3) = NodeHandle::new(
+        config3,
+        chain_store_handle3,
+        shares_rx_3,
+        metrics3,
+        monitoring_tx3,
+    )
+    .await
+    .expect("Failed to create node 3");
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Get peer lists from each node
@@ -304,21 +323,39 @@ async fn test_three_nodes_share_sync() {
         .unwrap();
 
     // Start node 1 (seeded with shares)
-    let (node1_handle, _stop_rx1) =
-        NodeHandle::new(config1, chain_store_handle1, shares_rx_1, metrics1)
-            .await
-            .expect("Failed to create node 1");
+    let (monitoring_tx1, _monitoring_rx1) = create_monitoring_event_channel();
+    let (node1_handle, _stop_rx1) = NodeHandle::new(
+        config1,
+        chain_store_handle1,
+        shares_rx_1,
+        metrics1,
+        monitoring_tx1,
+    )
+    .await
+    .expect("Failed to create node 1");
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Start nodes 2 and 3 (they dial into node 1 and should sync)
-    let (node2_handle, _stop_rx2) =
-        NodeHandle::new(config2, chain_store_handle2, shares_rx_2, metrics2)
-            .await
-            .expect("Failed to create node 2");
-    let (node3_handle, _stop_rx3) =
-        NodeHandle::new(config3, chain_store_handle3, shares_rx_3, metrics3)
-            .await
-            .expect("Failed to create node 3");
+    let (monitoring_tx2, _monitoring_rx2) = create_monitoring_event_channel();
+    let (node2_handle, _stop_rx2) = NodeHandle::new(
+        config2,
+        chain_store_handle2,
+        shares_rx_2,
+        metrics2,
+        monitoring_tx2,
+    )
+    .await
+    .expect("Failed to create node 2");
+    let (monitoring_tx3, _monitoring_rx3) = create_monitoring_event_channel();
+    let (node3_handle, _stop_rx3) = NodeHandle::new(
+        config3,
+        chain_store_handle3,
+        shares_rx_3,
+        metrics3,
+        monitoring_tx3,
+    )
+    .await
+    .expect("Failed to create node 3");
 
     // Poll until both nodes reach the expected tip height
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);

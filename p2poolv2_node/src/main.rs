@@ -252,11 +252,15 @@ async fn main() -> ExitCode {
         info!("Stratum server stopped");
     });
 
+    let (monitoring_event_sender, _monitoring_event_receiver) =
+        p2poolv2_lib::monitoring_events::create_monitoring_event_channel();
+
     let (node_handle, stopping_rx) = match NodeHandle::new(
         config.clone(),
         chain_store_handle.clone(),
         emissions_rx,
         metrics_handle.clone(),
+        monitoring_event_sender,
     )
     .await
     {
