@@ -260,7 +260,7 @@ async fn main() -> ExitCode {
         chain_store_handle.clone(),
         emissions_rx,
         metrics_handle.clone(),
-        monitoring_event_sender,
+        monitoring_event_sender.clone(),
     )
     .await
     {
@@ -279,6 +279,7 @@ async fn main() -> ExitCode {
         metrics_handle.clone(),
         tracker_handle,
         node_handle.clone(),
+        monitoring_event_sender,
         stratum_config.network,
         stratum_config.pool_signature,
     )

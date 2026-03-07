@@ -14,9 +14,9 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::api::auth::auth_middleware;
 use crate::api::endpoints;
 use crate::api::error::ApiError;
+use crate::api::{auth::auth_middleware, websocket::websocket_handler};
 use axum::{
     Extension, Json, Router,
     extract::{FromRef, Query, State},
@@ -24,6 +24,7 @@ use axum::{
     routing::get,
 };
 use chrono::DateTime;
+use p2poolv2_lib::monitoring_events::MonitoringEventSender;
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::stratum::work::tracker::{JobTracker, parse_coinbase};
 use p2poolv2_lib::{
@@ -43,6 +44,7 @@ pub(crate) struct AppState {
     pub(crate) metrics_handle: MetricsHandle,
     pub(crate) tracker_handle: Arc<JobTracker>,
     pub(crate) node_handle: NodeHandle,
+    pub(crate) monitoring_event_sender: MonitoringEventSender,
     pub(crate) auth_user: Option<String>,
     pub(crate) auth_token: Option<String>,
 }
@@ -76,6 +78,7 @@ pub async fn start_api_server(
     metrics_handle: MetricsHandle,
     tracker_handle: Arc<JobTracker>,
     node_handle: NodeHandle,
+    monitoring_event_sender: MonitoringEventSender,
     network: bitcoin::Network,
     pool_signature: Option<String>,
 ) -> Result<oneshot::Sender<()>, std::io::Error> {
@@ -90,6 +93,7 @@ pub async fn start_api_server(
         metrics_handle,
         tracker_handle,
         node_handle,
+        monitoring_event_sender,
         auth_user: config.auth_user.clone(),
         auth_token: config.auth_token.clone(),
     });
@@ -99,7 +103,8 @@ pub async fn start_api_server(
         std::net::IpAddr::V4(config.hostname.parse().unwrap()),
         config.port,
     );
-    let app = Router::new()
+    // REST routes protected by auth middleware
+    let authenticated_routes = Router::new()
         .route("/health", get(health_check))
         .route("/metrics", get(metrics))
         .route("/pplns_shares", get(pplns_shares))
@@ -111,7 +116,11 @@ pub async fn start_api_server(
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth_middleware,
-        ))
+        ));
+
+    // WebSocket route handles its own auth via query param
+    let app = authenticated_routes
+        .route("/ws", get(websocket_handler))
         .layer(Extension(app_config))
         .with_state(app_state);
 
@@ -251,6 +260,7 @@ mod tests {
     use axum::extract::State;
     use bitcoin::{Amount, Network, TxOut};
     use p2poolv2_lib::accounting::stats::metrics;
+    use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::shares::share_block::ShareBlock;
     use p2poolv2_lib::stratum::work::block_template::BlockTemplate;
     use p2poolv2_lib::stratum::work::coinbase::parse_address;
@@ -278,6 +288,7 @@ mod tests {
             metrics_handle,
             tracker_handle,
             node_handle,
+            monitoring_event_sender: create_monitoring_event_channel().0,
             auth_user: None,
             auth_token: None,
         });
@@ -413,6 +424,7 @@ mod tests {
             metrics_handle,
             tracker_handle,
             node_handle,
+            monitoring_event_sender: create_monitoring_event_channel().0,
             auth_user: None,
             auth_token: None,
         });
