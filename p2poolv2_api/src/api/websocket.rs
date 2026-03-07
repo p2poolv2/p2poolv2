@@ -46,10 +46,11 @@ pub(crate) struct WsQuery {
 enum Topic {
     ChainInfo,
     Shares,
+    Uncles,
     Peers,
 }
 
-const TOPIC_COUNT: usize = 3;
+const TOPIC_COUNT: usize = 4;
 
 /// Client-to-server message format.
 #[derive(Deserialize)]
@@ -63,6 +64,7 @@ fn parse_topic(topic: &str) -> Option<Topic> {
     match topic {
         "chain_info" => Some(Topic::ChainInfo),
         "shares" => Some(Topic::Shares),
+        "uncles" => Some(Topic::Uncles),
         "peers" => Some(Topic::Peers),
         _ => None,
     }
@@ -73,6 +75,7 @@ fn event_matches_subscriptions(event: &MonitoringEvent, subscriptions: &HashSet<
     match event {
         MonitoringEvent::Info(_) => subscriptions.contains(&Topic::ChainInfo),
         MonitoringEvent::Share(_) => subscriptions.contains(&Topic::Shares),
+        MonitoringEvent::Uncle(_) => subscriptions.contains(&Topic::Uncles),
         MonitoringEvent::Peer(_) => subscriptions.contains(&Topic::Peers),
     }
 }
@@ -131,7 +134,7 @@ async fn handle_socket(mut socket: WebSocket, monitoring_event_sender: Monitorin
                         if event_matches_subscriptions(&event, &subscriptions) {
                             match serde_json::to_string(&event) {
                                 Ok(json) => {
-                                    if socket.send(Message::Text(json.into())).await.is_err() {
+                                    if socket.send(Message::Text(json)).await.is_err() {
                                         debug!("WebSocket send failed, closing connection");
                                         return;
                                     }
@@ -193,6 +196,7 @@ mod tests {
     fn test_parse_topic_valid() {
         assert_eq!(parse_topic("chain_info"), Some(Topic::ChainInfo));
         assert_eq!(parse_topic("shares"), Some(Topic::Shares));
+        assert_eq!(parse_topic("uncles"), Some(Topic::Uncles));
         assert_eq!(parse_topic("peers"), Some(Topic::Peers));
     }
 
@@ -205,10 +209,12 @@ mod tests {
     #[test]
     fn test_event_matches_subscriptions() {
         use bitcoin::hashes::Hash;
+        use p2poolv2_lib::store::dag_store::{ShareInfo, UncleInfo};
+
         let mut subscriptions = HashSet::with_capacity(TOPIC_COUNT);
         subscriptions.insert(Topic::Shares);
 
-        let share_event = MonitoringEvent::Share(p2poolv2_lib::store::dag_store::ShareInfo {
+        let share_event = MonitoringEvent::Share(ShareInfo {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 1,
@@ -218,12 +224,21 @@ mod tests {
             uncles: vec![],
         });
 
+        let uncle_event = MonitoringEvent::Uncle(UncleInfo {
+            blockhash: bitcoin::BlockHash::all_zeros(),
+            prev_blockhash: bitcoin::BlockHash::all_zeros(),
+            miner_pubkey: "02bb".to_string(),
+            timestamp: 0,
+            height: None,
+        });
+
         let peer_event = MonitoringEvent::Peer(p2poolv2_lib::monitoring_events::PeerResponse {
             peer_id: "peer1".to_string(),
             status: p2poolv2_lib::monitoring_events::PeerStatus::Connected,
         });
 
         assert!(event_matches_subscriptions(&share_event, &subscriptions));
+        assert!(!event_matches_subscriptions(&uncle_event, &subscriptions));
         assert!(!event_matches_subscriptions(&peer_event, &subscriptions));
     }
 

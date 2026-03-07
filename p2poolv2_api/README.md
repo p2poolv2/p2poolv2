@@ -155,6 +155,7 @@ Clients send JSON messages to subscribe or unsubscribe from topics:
 ```json
 {"action": "subscribe", "topic": "chain_info"}
 {"action": "subscribe", "topic": "shares"}
+{"action": "subscribe", "topic": "uncles"}
 {"action": "subscribe", "topic": "peers"}
 {"action": "unsubscribe", "topic": "shares"}
 ```
@@ -164,15 +165,23 @@ Clients send JSON messages to subscribe or unsubscribe from topics:
 | Topic        | Description                                      |
 |--------------|--------------------------------------------------|
 | `chain_info` | Chain tip updates (height, blockhash, work)      |
-| `shares`     | New confirmed shares                             |
+| `shares`     | New confirmed shares (includes uncle blockhashes)|
+| `uncles`     | Headers that did not extend the candidate chain  |
 | `peers`      | Peer connection and disconnection events         |
+
+Subscribing to both `shares` and `uncles` lets clients build full
+uncle detail locally: uncle events provide share data for headers
+that did not make it onto the candidate chain, and confirmed share
+events list uncle blockhashes that clients can correlate with
+previously received uncle events.
 
 **Server-to-client messages:**
 
 Events are delivered as JSON with `topic` and `data` fields:
 
 ```json
-{"topic": "Share", "data": {"blockhash": "00000...", "height": 42, "miner_pubkey": "02aa...", ...}}
+{"topic": "Uncle", "data": {"blockhash": "00000...", "height": null, "miner_pubkey": "02bb...", ...}}
+{"topic": "Share", "data": {"blockhash": "00000...", "height": 42, "uncles": ["00000..."], ...}}
 {"topic": "Peer", "data": {"peer_id": "12D3KooW...", "status": "Connected"}}
 ```
 
@@ -202,6 +211,7 @@ websocat "ws://127.0.0.1:46884/ws?token=${TOKEN}"
 ```sh
 websocat ws://127.0.0.1:46884/ws
 > {"action": "subscribe", "topic": "shares"}
+> {"action": "subscribe", "topic": "uncles"}
 > {"action": "subscribe", "topic": "peers"}
 > {"action": "subscribe", "topic": "chain_info"}
 ```

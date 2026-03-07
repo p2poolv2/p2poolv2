@@ -23,7 +23,7 @@
 //! Share and uncle data uses `ShareInfo`/`UncleInfo` from the store
 //! directly so there is a single source of truth for the wire format.
 
-use crate::store::dag_store::ShareInfo;
+use crate::store::dag_store::{ShareInfo, UncleInfo};
 use serde::Serialize;
 use tokio::sync::broadcast;
 
@@ -65,6 +65,8 @@ pub enum MonitoringEvent {
     Info(ChainInfo),
     /// A new share was confirmed on the chain.
     Share(ShareInfo),
+    /// A header that did not extend or reorg the candidate chain (uncle).
+    Uncle(UncleInfo),
     /// A peer connected or disconnected.
     Peer(PeerResponse),
 }
@@ -86,7 +88,6 @@ pub fn create_monitoring_event_channel() -> (MonitoringEventSender, MonitoringEv
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::dag_store::UncleInfo;
     use bitcoin::hashes::Hash;
     use bitcoin::{BlockHash, CompactTarget};
 
@@ -122,6 +123,22 @@ mod tests {
         assert!(json.contains("\"topic\":\"Share\""));
         assert!(json.contains("\"height\":100"));
         assert!(json.contains("\"miner_pubkey\":\"02aa\""));
+    }
+
+    #[test]
+    fn test_uncle_event_serialization() {
+        let uncle = UncleInfo {
+            blockhash: BlockHash::all_zeros(),
+            prev_blockhash: BlockHash::all_zeros(),
+            miner_pubkey: "02cc".to_string(),
+            timestamp: 1700000000,
+            height: None,
+        };
+        let event = MonitoringEvent::Uncle(uncle);
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"topic\":\"Uncle\""));
+        assert!(json.contains("\"height\":null"));
+        assert!(json.contains("\"miner_pubkey\":\"02cc\""));
     }
 
     #[test]
