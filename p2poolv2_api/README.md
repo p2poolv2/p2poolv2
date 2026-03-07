@@ -180,7 +180,7 @@ Events are delivered as JSON with `topic` and `data` fields:
 
 ```sh
 # Connect and subscribe to shares
-websocat ws://127.0.0.1:3000/ws
+websocat ws://127.0.0.1:46884/ws
 > {"action": "subscribe", "topic": "shares"}
 < {"topic":"Share","data":{"blockhash":"00000...","height":42,...}}
 ```
@@ -192,7 +192,7 @@ websocat ws://127.0.0.1:3000/ws
 TOKEN=$(echo -n "admin:mypassword" | base64)
 
 # Connect with token
-websocat "ws://127.0.0.1:3000/ws?token=${TOKEN}"
+websocat "ws://127.0.0.1:46884/ws?token=${TOKEN}"
 > {"action": "subscribe", "topic": "peers"}
 < {"topic":"Peer","data":{"peer_id":"12D3KooW...","status":"Connected"}}
 ```
@@ -200,7 +200,7 @@ websocat "ws://127.0.0.1:3000/ws?token=${TOKEN}"
 **Example subscribing to multiple topics:**
 
 ```sh
-websocat ws://127.0.0.1:3000/ws
+websocat ws://127.0.0.1:46884/ws
 > {"action": "subscribe", "topic": "shares"}
 > {"action": "subscribe", "topic": "peers"}
 > {"action": "subscribe", "topic": "chain_info"}
