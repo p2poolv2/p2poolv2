@@ -33,6 +33,11 @@ p2poolv2_lib = { workspace = true, features = ["test-utils"] }
 tempfile.workspace = true
 test-log = { version = "0.2", features = ["trace"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tower = "0.5"
+http = "1"
+http-body-util = "0.1"
+bytes = "1"
+reqwest = "0.12"
 
 [lib]
 name = "p2poolv2_api"

@@ -71,6 +71,33 @@ pub struct PplnsQuery {
     end_time: Option<String>,
 }
 
+/// Build the axum router with REST routes (protected by auth middleware)
+/// and the WebSocket route (which handles its own auth via query param).
+fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
+    let authenticated_routes = Router::new()
+        .route("/health", get(health_check))
+        .route("/metrics", get(metrics))
+        .route("/pplns_shares", get(pplns_shares))
+        .route("/peers", get(peers))
+        .route("/chain_info", get(endpoints::chain_info::chain_info))
+        .route("/shares", get(endpoints::shares::shares))
+        .route("/candidates", get(endpoints::candidates::candidates))
+        .route("/share", get(endpoints::share::share))
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            auth_middleware,
+        ));
+
+    // WebSocket route handles its own auth via query param, so it
+    // must be on a separate router without the auth middleware.
+    let websocket_routes = Router::new().route("/ws", get(websocket_handler));
+
+    authenticated_routes
+        .merge(websocket_routes)
+        .layer(Extension(app_config))
+        .with_state(app_state)
+}
+
 /// Start the API server and return a shutdown channel
 pub async fn start_api_server(
     config: ApiConfig,
@@ -103,26 +130,7 @@ pub async fn start_api_server(
         std::net::IpAddr::V4(config.hostname.parse().unwrap()),
         config.port,
     );
-    // REST routes protected by auth middleware
-    let authenticated_routes = Router::new()
-        .route("/health", get(health_check))
-        .route("/metrics", get(metrics))
-        .route("/pplns_shares", get(pplns_shares))
-        .route("/peers", get(peers))
-        .route("/chain_info", get(endpoints::chain_info::chain_info))
-        .route("/shares", get(endpoints::shares::shares))
-        .route("/candidates", get(endpoints::candidates::candidates))
-        .route("/share", get(endpoints::share::share))
-        .layer(middleware::from_fn_with_state(
-            app_state.clone(),
-            auth_middleware,
-        ));
-
-    // WebSocket route handles its own auth via query param
-    let app = authenticated_routes
-        .route("/ws", get(websocket_handler))
-        .layer(Extension(app_config))
-        .with_state(app_state);
+    let app = build_router(app_state, app_config);
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(listener) => listener,
@@ -258,6 +266,7 @@ async fn pplns_shares(
 mod tests {
     use super::*;
     use axum::extract::State;
+    use base64::Engine;
     use bitcoin::{Amount, Network, TxOut};
     use p2poolv2_lib::accounting::stats::metrics;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
@@ -500,5 +509,174 @@ mod tests {
 
         let result = pplns_shares(State(state), query).await;
         assert!(result.is_ok());
+    }
+
+    /// Build an AppState with auth credentials configured.
+    async fn build_auth_test_state() -> (Arc<AppState>, tempfile::TempDir, String) {
+        let (chain_store_handle, temp_dir) = setup_test_chain_store_handle(true).await;
+        let metrics_temp = tempfile::tempdir().unwrap();
+        let metrics_handle =
+            metrics::start_metrics(metrics_temp.path().to_str().unwrap().to_string())
+                .await
+                .unwrap();
+        let tracker_handle = start_tracker_actor();
+        let node_handle = NodeHandle::new_for_test();
+
+        let username = "testuser";
+        let password = "testpassword";
+        let salt = "testsalt";
+        let hmac = p2poolv2_lib::auth::password_to_hmac(salt, password).unwrap();
+        let token = format!("{salt}${hmac}");
+
+        let base64_credentials =
+            base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
+
+        let state = Arc::new(AppState {
+            app_config: AppConfig {
+                pool_signature_length: 0,
+                network: bitcoin::Network::Signet,
+            },
+            chain_store_handle,
+            metrics_handle,
+            tracker_handle,
+            node_handle,
+            monitoring_event_sender: create_monitoring_event_channel().0,
+            auth_user: Some(username.to_string()),
+            auth_token: Some(token),
+        });
+        (state, temp_dir, base64_credentials)
+    }
+
+    #[tokio::test]
+    async fn test_rest_with_valid_auth_header_succeeds() {
+        use tower::ServiceExt;
+
+        let (state, _temp_dir, base64_credentials) = build_auth_test_state().await;
+        let app = build_router(state.clone(), state.app_config.clone());
+
+        let request = http::Request::builder()
+            .uri("/health")
+            .header("Authorization", format!("Basic {base64_credentials}"))
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_rest_without_auth_header_returns_401() {
+        use tower::ServiceExt;
+
+        let (state, _temp_dir, _base64_credentials) = build_auth_test_state().await;
+        let app = build_router(state.clone(), state.app_config.clone());
+
+        let request = http::Request::builder()
+            .uri("/health")
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_rest_with_token_param_returns_401() {
+        use tower::ServiceExt;
+
+        let (state, _temp_dir, base64_credentials) = build_auth_test_state().await;
+        let app = build_router(state.clone(), state.app_config.clone());
+
+        // Token query param should NOT authenticate REST routes
+        let request = http::Request::builder()
+            .uri(format!("/health?token={base64_credentials}"))
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
+    }
+
+    /// Start a real HTTP server on a random port and return (base_url, shutdown_tx).
+    ///
+    /// WebSocket upgrade tests need a real TCP connection because axum's
+    /// WebSocketUpgrade extractor rejects non-upgradeable requests with 426.
+    async fn start_test_server(state: Arc<AppState>) -> (String, oneshot::Sender<()>) {
+        let app = build_router(state.clone(), state.app_config.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .unwrap();
+        });
+
+        (format!("http://{addr}"), shutdown_tx)
+    }
+
+    #[tokio::test]
+    async fn test_ws_without_token_returns_401() {
+        let (state, _temp_dir, _base64_credentials) = build_auth_test_state().await;
+        let (base_url, _shutdown_tx) = start_test_server(state).await;
+
+        let response = reqwest::Client::new()
+            .get(format!("{base_url}/ws"))
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), 401);
+    }
+
+    #[tokio::test]
+    async fn test_ws_with_valid_token_param_upgrades() {
+        let (state, _temp_dir, base64_credentials) = build_auth_test_state().await;
+        let (base_url, _shutdown_tx) = start_test_server(state).await;
+
+        let response = reqwest::Client::new()
+            .get(format!("{base_url}/ws?token={base64_credentials}"))
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .send()
+            .await
+            .unwrap();
+
+        // 101 Switching Protocols means the upgrade succeeded
+        assert_eq!(response.status(), 101);
+    }
+
+    #[tokio::test]
+    async fn test_ws_with_auth_header_only_does_not_upgrade() {
+        let (state, _temp_dir, base64_credentials) = build_auth_test_state().await;
+        let (base_url, _shutdown_tx) = start_test_server(state).await;
+
+        // Auth header alone should NOT authenticate the WebSocket route
+        let response = reqwest::Client::new()
+            .get(format!("{base_url}/ws"))
+            .header("Authorization", format!("Basic {base64_credentials}"))
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .send()
+            .await
+            .unwrap();
+
+        assert_ne!(
+            response.status(),
+            101,
+            "WebSocket upgrade should not succeed with only an Authorization header"
+        );
     }
 }
