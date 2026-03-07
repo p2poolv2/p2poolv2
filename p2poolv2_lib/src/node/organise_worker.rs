@@ -21,14 +21,14 @@
 //! tokio task, decoupled from share producers (emission worker, peer
 //! handler, future validation worker).
 
-use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender};
+use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender, ShareNotification};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
-use crate::store::dag_store::{ShareInfo, UncleInfo};
+use crate::store::dag_store::UncleInfo;
 use crate::store::writer::StoreError;
 use std::fmt;
 use tokio::sync::mpsc;
@@ -162,16 +162,16 @@ impl OrganiseWorker {
 
     /// Emits a Share monitoring event for a confirmed share.
     fn emit_share_monitoring_event(&self, share_block: &ShareBlock, height: u32) {
-        let share_info = ShareInfo {
+        let notification = ShareNotification {
             blockhash: share_block.block_hash(),
             prev_blockhash: share_block.header.prev_share_blockhash,
             height,
             miner_pubkey: share_block.header.miner_pubkey.to_string(),
             timestamp: share_block.header.time,
             bits: share_block.header.bits,
-            uncles: vec![],
+            uncles: share_block.header.uncles.clone(),
         };
-        let event = MonitoringEvent::Share(share_info);
+        let event = MonitoringEvent::Share(notification);
         if self.monitoring_event_sender.send(event).is_err() {
             debug!("No monitoring subscribers for Share event");
         }
