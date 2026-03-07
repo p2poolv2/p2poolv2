@@ -28,7 +28,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
-use crate::store::dag_store::ShareInfo;
+use crate::store::dag_store::{ShareInfo, UncleInfo};
 use crate::store::writer::StoreError;
 use std::fmt;
 use tokio::sync::mpsc;
@@ -108,8 +108,18 @@ impl OrganiseWorker {
                 OrganiseEvent::Header(header) => {
                     let blockhash = header.block_hash();
                     debug!("Organising header: {blockhash:?}");
+                    let uncle_info = UncleInfo {
+                        blockhash,
+                        prev_blockhash: header.prev_share_blockhash,
+                        miner_pubkey: header.miner_pubkey.to_string(),
+                        timestamp: header.time,
+                        height: None,
+                    };
                     match self.chain_store_handle.organise_header(header).await {
-                        Ok(_) => {}
+                        Ok(Some((_height, _valid_blocks))) => {}
+                        Ok(None) => {
+                            self.emit_uncle_event(uncle_info);
+                        }
                         Err(StoreError::ChannelClosed) => {
                             error!("Store writer channel closed during organise header");
                             return Err(OrganiseError {
@@ -150,7 +160,7 @@ impl OrganiseWorker {
         Ok(())
     }
 
-    /// Emits a Share monitoring event built from the promoted share block.
+    /// Emits a Share monitoring event for a confirmed share.
     fn emit_share_event(&self, share_block: &ShareBlock, height: u32) {
         let share_info = ShareInfo {
             blockhash: share_block.block_hash(),
@@ -159,11 +169,20 @@ impl OrganiseWorker {
             miner_pubkey: share_block.header.miner_pubkey.to_string(),
             timestamp: share_block.header.time,
             bits: share_block.header.bits,
-            uncles: Vec::new(),
+            uncles: vec![],
         };
         let event = MonitoringEvent::Share(share_info);
         if self.monitoring_event_sender.send(event).is_err() {
             debug!("No monitoring subscribers for Share event");
+        }
+    }
+
+    /// Emits an Uncle monitoring event for a header that did not extend
+    /// or reorg the candidate chain.
+    fn emit_uncle_event(&self, uncle_info: UncleInfo) {
+        let event = MonitoringEvent::Uncle(uncle_info);
+        if self.monitoring_event_sender.send(event).is_err() {
+            debug!("No monitoring subscribers for Uncle event");
         }
     }
 }
