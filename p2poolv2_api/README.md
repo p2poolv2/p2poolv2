@@ -11,11 +11,16 @@ section of the configuration file.
 
 ## Authentication
 
-All endpoints are protected by optional HTTP Basic authentication.
+All REST endpoints are protected by optional HTTP Basic authentication.
 When `auth_user` and `auth_token` are set in the `[api]` config
 section, every request must include a valid `Authorization: Basic
 <base64(user:password)>` header. If no credentials are configured,
 all endpoints are accessible without authentication.
+
+The WebSocket endpoint (`/ws`) uses a query parameter for
+authentication instead of the `Authorization` header. Pass
+`?token=<base64(user:password)>` when connecting. If no credentials
+are configured on the server, the token parameter is not required.
 
 Use the `p2poolv2_cli gen-auth` command to generate a salted HMAC
 token suitable for the config file.
@@ -30,6 +35,7 @@ token suitable for the config file.
 - [GET /share](#get-share) -- Look up a share by hash or height
 - [GET /peers](#get-peers) -- Connected peers
 - [GET /pplns_shares](#get-pplns_shares) -- PPLNS accounting data
+- [WebSocket /ws](#websocket-ws) -- Real-time event subscriptions
 
 ### GET /health
 
@@ -131,6 +137,74 @@ time filtering.
 | `limit`      | `number` | 100           | Max shares to return (1-1000)                |
 | `start_time` | `string` | epoch (0)     | RFC 3339 timestamp for range start           |
 | `end_time`   | `string` | current time  | RFC 3339 timestamp for range end             |
+
+### WebSocket /ws
+
+Real-time push notifications for share chain events, new shares, and
+peer connectivity changes. Clients subscribe to topics and receive
+JSON messages as events occur.
+
+**Authentication:** When auth is configured, pass credentials as a
+query parameter: `ws://host:port/ws?token=<base64(user:password)>`.
+Returns HTTP 401 if credentials are missing or invalid.
+
+**Subscription protocol:**
+
+Clients send JSON messages to subscribe or unsubscribe from topics:
+
+```json
+{"action": "subscribe", "topic": "chain_info"}
+{"action": "subscribe", "topic": "shares"}
+{"action": "subscribe", "topic": "peers"}
+{"action": "unsubscribe", "topic": "shares"}
+```
+
+**Available topics:**
+
+| Topic        | Description                                      |
+|--------------|--------------------------------------------------|
+| `chain_info` | Chain tip updates (height, blockhash, work)      |
+| `shares`     | New confirmed shares                             |
+| `peers`      | Peer connection and disconnection events         |
+
+**Server-to-client messages:**
+
+Events are delivered as JSON with `topic` and `data` fields:
+
+```json
+{"topic": "Share", "data": {"blockhash": "00000...", "height": 42, "miner_pubkey": "02aa...", ...}}
+{"topic": "Peer", "data": {"peer_id": "12D3KooW...", "status": "Connected"}}
+```
+
+**Example with websocat (no auth):**
+
+```sh
+# Connect and subscribe to shares
+websocat ws://127.0.0.1:3000/ws
+> {"action": "subscribe", "topic": "shares"}
+< {"topic":"Share","data":{"blockhash":"00000...","height":42,...}}
+```
+
+**Example with websocat (with auth):**
+
+```sh
+# Encode credentials as base64
+TOKEN=$(echo -n "admin:mypassword" | base64)
+
+# Connect with token
+websocat "ws://127.0.0.1:3000/ws?token=${TOKEN}"
+> {"action": "subscribe", "topic": "peers"}
+< {"topic":"Peer","data":{"peer_id":"12D3KooW...","status":"Connected"}}
+```
+
+**Example subscribing to multiple topics:**
+
+```sh
+websocat ws://127.0.0.1:3000/ws
+> {"action": "subscribe", "topic": "shares"}
+> {"action": "subscribe", "topic": "peers"}
+> {"action": "subscribe", "topic": "chain_info"}
+```
 
 ## Error responses
 
