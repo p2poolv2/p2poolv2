@@ -18,6 +18,7 @@ use crate::accounting::simple_pplns::SimplePplnsShare;
 use crate::accounting::stats::metrics::MetricsHandle;
 use crate::command::Command;
 use crate::config::Config;
+use crate::monitoring_events::MonitoringEventSender;
 use crate::node::Node;
 use crate::node::SwarmSend;
 use crate::node::emission_worker::EmissionWorker;
@@ -58,6 +59,7 @@ impl NodeHandle {
         chain_store_handle: ChainStoreHandle,
         emissions_rx: EmissionReceiver,
         metrics: MetricsHandle,
+        monitoring_event_sender: MonitoringEventSender,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
         let (node_actor, stopping_rx) = NodeActor::new(
@@ -66,6 +68,7 @@ impl NodeHandle {
             command_rx,
             emissions_rx,
             metrics,
+            monitoring_event_sender,
         )
         .unwrap();
 
@@ -216,6 +219,7 @@ impl NodeActor {
         command_rx: mpsc::Receiver<Command>,
         emissions_rx: EmissionReceiver,
         metrics: MetricsHandle,
+        monitoring_event_sender: MonitoringEventSender,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>> {
         // Create organise channel
         let (organise_tx, organise_rx) = create_organise_channel();
@@ -234,10 +238,15 @@ impl NodeActor {
             chain_store_handle.clone(),
             block_fetcher_tx,
             validation_tx,
+            monitoring_event_sender.clone(),
         )?;
 
         // Spawn organise worker
-        let organise_worker = OrganiseWorker::new(organise_rx, chain_store_handle.clone());
+        let organise_worker = OrganiseWorker::new(
+            organise_rx,
+            chain_store_handle.clone(),
+            monitoring_event_sender,
+        );
         let organise_handle = tokio::spawn(organise_worker.run());
 
         // Spawn validation worker

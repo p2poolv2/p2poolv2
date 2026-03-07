@@ -21,12 +21,14 @@
 //! tokio task, decoupled from share producers (emission worker, peer
 //! handler, future validation worker).
 
+use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender, ShareNotification};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
+use crate::store::dag_store::UncleInfo;
 use crate::store::writer::StoreError;
 use std::fmt;
 use tokio::sync::mpsc;
@@ -78,14 +80,20 @@ impl std::error::Error for OrganiseError {}
 pub struct OrganiseWorker {
     organise_rx: OrganiseReceiver,
     chain_store_handle: ChainStoreHandle,
+    monitoring_event_sender: MonitoringEventSender,
 }
 
 impl OrganiseWorker {
     /// Creates a new organise worker.
-    pub fn new(organise_rx: OrganiseReceiver, chain_store_handle: ChainStoreHandle) -> Self {
+    pub fn new(
+        organise_rx: OrganiseReceiver,
+        chain_store_handle: ChainStoreHandle,
+        monitoring_event_sender: MonitoringEventSender,
+    ) -> Self {
         Self {
             organise_rx,
             chain_store_handle,
+            monitoring_event_sender,
         }
     }
 
@@ -100,8 +108,18 @@ impl OrganiseWorker {
                 OrganiseEvent::Header(header) => {
                     let blockhash = header.block_hash();
                     debug!("Organising header: {blockhash:?}");
+                    let uncle_info = UncleInfo {
+                        blockhash,
+                        prev_blockhash: header.prev_share_blockhash,
+                        miner_pubkey: header.miner_pubkey.to_string(),
+                        timestamp: header.time,
+                        height: None,
+                    };
                     match self.chain_store_handle.organise_header(header).await {
-                        Ok(_) => {}
+                        Ok(Some((_height, _valid_blocks))) => {}
+                        Ok(None) => {
+                            self.emit_uncle_monitoring_event(uncle_info);
+                        }
                         Err(StoreError::ChannelClosed) => {
                             error!("Store writer channel closed during organise header");
                             return Err(OrganiseError {
@@ -118,10 +136,13 @@ impl OrganiseWorker {
                     debug!("Organising block: {blockhash:?}");
                     match self
                         .chain_store_handle
-                        .promote_block(share_block.header)
+                        .promote_block(share_block.header.clone())
                         .await
                     {
-                        Ok(_height) => {}
+                        Ok(Some(height)) => {
+                            self.emit_share_monitoring_event(&share_block, height);
+                        }
+                        Ok(None) => {}
                         Err(StoreError::ChannelClosed) => {
                             error!("Store writer channel closed during promote block");
                             return Err(OrganiseError {
@@ -138,11 +159,38 @@ impl OrganiseWorker {
         info!("Organise worker stopped - channel closed");
         Ok(())
     }
+
+    /// Emits a Share monitoring event for a confirmed share.
+    fn emit_share_monitoring_event(&self, share_block: &ShareBlock, height: u32) {
+        let notification = ShareNotification {
+            blockhash: share_block.block_hash(),
+            prev_blockhash: share_block.header.prev_share_blockhash,
+            height,
+            miner_pubkey: share_block.header.miner_pubkey.to_string(),
+            timestamp: share_block.header.time,
+            bits: share_block.header.bits,
+            uncles: share_block.header.uncles.clone(),
+        };
+        let event = MonitoringEvent::Share(notification);
+        if self.monitoring_event_sender.send(event).is_err() {
+            debug!("No monitoring subscribers for Share event");
+        }
+    }
+
+    /// Emits an Uncle monitoring event for a header that did not extend
+    /// or reorg the candidate chain.
+    fn emit_uncle_monitoring_event(&self, uncle_info: UncleInfo) {
+        let event = MonitoringEvent::Uncle(uncle_info);
+        if self.monitoring_event_sender.send(event).is_err() {
+            debug!("No monitoring subscribers for Uncle event");
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::monitoring_events::create_monitoring_event_channel;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
 
     #[tokio::test]
@@ -152,7 +200,8 @@ mod tests {
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
-        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle);
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle, monitoring_tx);
 
         // Drop sender so recv() returns None immediately
         drop(_organise_tx);
@@ -172,7 +221,8 @@ mod tests {
             .expect_organise_header()
             .returning(|_| Ok(None));
 
-        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle);
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle, monitoring_tx);
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
             .nonce(0xe9695791)
@@ -198,7 +248,8 @@ mod tests {
             .expect_promote_block()
             .returning(|_| Ok(None));
 
-        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle);
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle, monitoring_tx);
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
             .nonce(0xe9695791)
@@ -221,7 +272,8 @@ mod tests {
             .expect_promote_block()
             .returning(|_| Err(StoreError::ChannelClosed));
 
-        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle);
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle, monitoring_tx);
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
             .nonce(0xe9695791)
@@ -244,7 +296,8 @@ mod tests {
             .expect_promote_block()
             .returning(|_| Err(StoreError::Database("test error".to_string())));
 
-        let worker = OrganiseWorker::new(rx, mock_chain_handle);
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let worker = OrganiseWorker::new(rx, mock_chain_handle, monitoring_tx);
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
             .nonce(0xe9695791)

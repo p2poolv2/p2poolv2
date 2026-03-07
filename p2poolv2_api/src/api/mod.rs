@@ -18,3 +18,4 @@ mod auth;
 pub mod endpoints;
 pub mod error;
 pub mod server;
+pub(crate) mod websocket;

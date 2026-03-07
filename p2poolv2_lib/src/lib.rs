@@ -20,6 +20,7 @@ pub mod command;
 pub use p2poolv2_config as config;
 pub mod logging;
 pub mod middleware;
+pub mod monitoring_events;
 pub mod node;
 pub mod pool_difficulty;
 pub mod service;
