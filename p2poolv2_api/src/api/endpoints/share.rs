@@ -253,6 +253,7 @@ mod tests {
     use crate::api::server::{AppConfig, AppState};
     use axum::extract::{Query, State};
     use p2poolv2_lib::accounting::stats::metrics;
+    use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::node::actor::NodeHandle;
     use p2poolv2_lib::store::block_tx_metadata::Status;
     use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
@@ -275,6 +276,7 @@ mod tests {
             metrics_handle,
             tracker_handle,
             node_handle,
+            monitoring_event_sender: create_monitoring_event_channel().0,
             auth_user: None,
             auth_token: None,
         });
