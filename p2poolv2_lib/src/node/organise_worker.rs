@@ -118,7 +118,7 @@ impl OrganiseWorker {
                     match self.chain_store_handle.organise_header(header).await {
                         Ok(Some((_height, _valid_blocks))) => {}
                         Ok(None) => {
-                            self.emit_uncle_event(uncle_info);
+                            self.emit_uncle_monitoring_event(uncle_info);
                         }
                         Err(StoreError::ChannelClosed) => {
                             error!("Store writer channel closed during organise header");
@@ -140,7 +140,7 @@ impl OrganiseWorker {
                         .await
                     {
                         Ok(Some(height)) => {
-                            self.emit_share_event(&share_block, height);
+                            self.emit_share_monitoring_event(&share_block, height);
                         }
                         Ok(None) => {}
                         Err(StoreError::ChannelClosed) => {
@@ -161,7 +161,7 @@ impl OrganiseWorker {
     }
 
     /// Emits a Share monitoring event for a confirmed share.
-    fn emit_share_event(&self, share_block: &ShareBlock, height: u32) {
+    fn emit_share_monitoring_event(&self, share_block: &ShareBlock, height: u32) {
         let share_info = ShareInfo {
             blockhash: share_block.block_hash(),
             prev_blockhash: share_block.header.prev_share_blockhash,
@@ -179,7 +179,7 @@ impl OrganiseWorker {
 
     /// Emits an Uncle monitoring event for a header that did not extend
     /// or reorg the candidate chain.
-    fn emit_uncle_event(&self, uncle_info: UncleInfo) {
+    fn emit_uncle_monitoring_event(&self, uncle_info: UncleInfo) {
         let event = MonitoringEvent::Uncle(uncle_info);
         if self.monitoring_event_sender.send(event).is_err() {
             debug!("No monitoring subscribers for Uncle event");
