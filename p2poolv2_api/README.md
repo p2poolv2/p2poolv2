@@ -63,7 +63,7 @@ Returns information about the current share chain state.
 
 ### GET /shares
 
-Returns confirmed shares and their uncles for a height range.
+Returns confirmed shares and their uncles blockhashes for a height range.
 
 **Query parameters:**
 
@@ -81,14 +81,15 @@ Returns confirmed shares and their uncles for a height range.
 | `shares`      | `array`  | List of share objects        |
 
 Each share object contains: `blockhash`, `prev_blockhash`, `height`,
-`miner_pubkey`, `timestamp`, `bits`, `difficulty`, and an `uncles`
-array.
+`miner_pubkey`, `timestamp`, `bits`, and an `uncles` array of uncle
+objects (each with `blockhash`, `prev_blockhash`, `miner_pubkey`,
+`timestamp`, `height`).
 
 ### GET /candidates
 
-Returns candidate (unconfirmed) shares and their uncles for a height
-range. Same query parameters and response shape as `/shares`, but
-operates on the candidate chain.
+Returns candidate (unconfirmed) shares and their uncle blockhashes for
+a height range. Same query parameters and response shape as `/shares`,
+but operates on the candidate chain.
 
 ### GET /share
 
@@ -181,10 +182,15 @@ previously received uncle events.
 Events are delivered as JSON with `topic` and `data` fields:
 
 ```json
-{"topic": "Uncle", "data": {"blockhash": "00000...", "height": null, "miner_pubkey": "02bb...", ...}}
-{"topic": "Share", "data": {"blockhash": "00000...", "height": 42, "uncles": ["00000..."], ...}}
+{"topic": "Uncle", "data": {"blockhash": "00000...", "prev_blockhash": "00000...", "miner_pubkey": "02bb...", "timestamp": 1700000000, "height": null}}
+{"topic": "Share", "data": {"blockhash": "00000...", "prev_blockhash": "00000...", "height": 42, "miner_pubkey": "02aa...", "timestamp": 1700000000, "bits": "1d00ffff", "uncles": ["00000..."]}}
 {"topic": "Peer", "data": {"peer_id": "12D3KooW...", "status": "Connected"}}
 ```
+
+Note: Share events in the WebSocket stream carry uncle blockhashes
+(strings), not full uncle objects. Use previously received Uncle
+events to look up full details for each blockhash. The REST
+`/shares` and `/candidates` endpoints return full uncle objects.
 
 **Example with websocat (no auth):**
 
