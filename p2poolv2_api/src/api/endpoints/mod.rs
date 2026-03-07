@@ -16,7 +16,6 @@
 
 pub mod candidates;
 pub mod chain_info;
-pub mod common;
 pub mod share;
 pub mod shares;
 

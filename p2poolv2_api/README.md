@@ -19,8 +19,10 @@ all endpoints are accessible without authentication.
 
 The WebSocket endpoint (`/ws`) uses a query parameter for
 authentication instead of the `Authorization` header. Pass
-`?token=<base64(user:password)>` when connecting. If no credentials
-are configured on the server, the token parameter is not required.
+`?token=<base64(user:password)>` when connecting. Make sure the token
+value is URL-encoded (percent-encoded) so that characters like `+`,
+`/`, and `=` are transmitted correctly. If no credentials are
+configured on the server, the token parameter is not required.
 
 Use the `p2poolv2_cli gen-auth` command to generate a salted HMAC
 token suitable for the config file.
