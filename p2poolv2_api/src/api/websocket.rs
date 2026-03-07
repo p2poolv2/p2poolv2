@@ -44,13 +44,12 @@ pub(crate) struct WsQuery {
 /// Topics a client can subscribe to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Topic {
-    ChainInfo,
     Shares,
     Uncles,
     Peers,
 }
 
-const TOPIC_COUNT: usize = 4;
+const TOPIC_COUNT: usize = 3;
 
 /// Client-to-server message format.
 #[derive(Deserialize)]
@@ -62,7 +61,6 @@ struct ClientMessage {
 /// Parses a topic string into a `Topic` enum value.
 fn parse_topic(topic: &str) -> Option<Topic> {
     match topic {
-        "chain_info" => Some(Topic::ChainInfo),
         "shares" => Some(Topic::Shares),
         "uncles" => Some(Topic::Uncles),
         "peers" => Some(Topic::Peers),
@@ -73,7 +71,6 @@ fn parse_topic(topic: &str) -> Option<Topic> {
 /// Returns true if the given event matches one of the subscribed topics.
 fn event_matches_subscriptions(event: &MonitoringEvent, subscriptions: &HashSet<Topic>) -> bool {
     match event {
-        MonitoringEvent::Info(_) => subscriptions.contains(&Topic::ChainInfo),
         MonitoringEvent::Share(_) => subscriptions.contains(&Topic::Shares),
         MonitoringEvent::Uncle(_) => subscriptions.contains(&Topic::Uncles),
         MonitoringEvent::Peer(_) => subscriptions.contains(&Topic::Peers),
@@ -194,7 +191,6 @@ mod tests {
 
     #[test]
     fn test_parse_topic_valid() {
-        assert_eq!(parse_topic("chain_info"), Some(Topic::ChainInfo));
         assert_eq!(parse_topic("shares"), Some(Topic::Shares));
         assert_eq!(parse_topic("uncles"), Some(Topic::Uncles));
         assert_eq!(parse_topic("peers"), Some(Topic::Peers));
@@ -246,10 +242,10 @@ mod tests {
     fn test_handle_client_message_subscribe() {
         let mut subscriptions = HashSet::with_capacity(TOPIC_COUNT);
         handle_client_message(
-            r#"{"action": "subscribe", "topic": "chain_info"}"#,
+            r#"{"action": "subscribe", "topic": "shares"}"#,
             &mut subscriptions,
         );
-        assert!(subscriptions.contains(&Topic::ChainInfo));
+        assert!(subscriptions.contains(&Topic::Shares));
     }
 
     #[test]

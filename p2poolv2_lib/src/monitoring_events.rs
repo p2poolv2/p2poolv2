@@ -61,8 +61,6 @@ pub enum PeerStatus {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "topic", content = "data")]
 pub enum MonitoringEvent {
-    /// Confirmed or candidate chain tip changed.
-    Info(ChainInfo),
     /// A new share was confirmed on the chain.
     Share(ShareInfo),
     /// A header that did not extend or reorg the candidate chain (uncle).
@@ -90,22 +88,6 @@ mod tests {
     use super::*;
     use bitcoin::hashes::Hash;
     use bitcoin::{BlockHash, CompactTarget};
-
-    #[test]
-    fn test_chain_info_event_serialization() {
-        let event = MonitoringEvent::Info(ChainInfo {
-            genesis_blockhash: Some("genesis".to_string()),
-            chain_tip_height: Some(42),
-            total_work: "0xff".to_string(),
-            chain_tip_blockhash: Some("00000000".to_string()),
-            top_candidate_height: Some(43),
-            top_candidate_blockhash: Some("candidate".to_string()),
-        });
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("\"topic\":\"Info\""));
-        assert!(json.contains("\"chain_tip_height\":42"));
-        assert!(json.contains("\"total_work\":\"0xff\""));
-    }
 
     #[test]
     fn test_share_event_serialization() {
@@ -209,19 +191,15 @@ mod tests {
     #[test]
     fn test_broadcast_channel_send_receive() {
         let (sender, mut receiver) = create_monitoring_event_channel();
-        let event = MonitoringEvent::Info(ChainInfo {
-            genesis_blockhash: None,
-            chain_tip_height: Some(1),
-            total_work: "0x1".to_string(),
-            chain_tip_blockhash: Some("abc".to_string()),
-            top_candidate_height: None,
-            top_candidate_blockhash: None,
+        let event = MonitoringEvent::Peer(PeerResponse {
+            peer_id: "12D3KooW".to_string(),
+            status: PeerStatus::Connected,
         });
         sender.send(event.clone()).unwrap();
         let received = receiver.try_recv().unwrap();
         match received {
-            MonitoringEvent::Info(info) => {
-                assert_eq!(info.chain_tip_height, Some(1));
+            MonitoringEvent::Peer(peer) => {
+                assert_eq!(peer.peer_id, "12D3KooW");
             }
             _ => panic!("unexpected event variant"),
         }

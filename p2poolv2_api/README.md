@@ -153,7 +153,6 @@ Returns HTTP 401 if credentials are missing or invalid.
 Clients send JSON messages to subscribe or unsubscribe from topics:
 
 ```json
-{"action": "subscribe", "topic": "chain_info"}
 {"action": "subscribe", "topic": "shares"}
 {"action": "subscribe", "topic": "uncles"}
 {"action": "subscribe", "topic": "peers"}
@@ -162,12 +161,14 @@ Clients send JSON messages to subscribe or unsubscribe from topics:
 
 **Available topics:**
 
-| Topic        | Description                                      |
-|--------------|--------------------------------------------------|
-| `chain_info` | Chain tip updates (height, blockhash, work)      |
-| `shares`     | New confirmed shares (includes uncle blockhashes)|
-| `uncles`     | Headers that did not extend the candidate chain  |
-| `peers`      | Peer connection and disconnection events         |
+| Topic    | Description                                      |
+|----------|--------------------------------------------------|
+| `shares` | New confirmed shares (includes uncle blockhashes)|
+| `uncles` | Headers that did not extend the candidate chain  |
+| `peers`  | Peer connection and disconnection events         |
+
+Chain state information is available via the `/chain_info` REST
+endpoint. Clients can derive chain tip updates from share events.
 
 Subscribing to both `shares` and `uncles` lets clients build full
 uncle detail locally: uncle events provide share data for headers
@@ -213,7 +214,6 @@ websocat ws://127.0.0.1:46884/ws
 > {"action": "subscribe", "topic": "shares"}
 > {"action": "subscribe", "topic": "uncles"}
 > {"action": "subscribe", "topic": "peers"}
-> {"action": "subscribe", "topic": "chain_info"}
 ```
 
 ## Error responses
