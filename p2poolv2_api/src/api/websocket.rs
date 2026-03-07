@@ -274,4 +274,75 @@ mod tests {
         );
         assert!(subscriptions.is_empty());
     }
+
+    #[tokio::test]
+    async fn test_broadcast_event_delivered_to_subscriber() {
+        use bitcoin::hashes::Hash;
+        use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
+        use p2poolv2_lib::store::dag_store::ShareInfo;
+
+        let (sender, _guard) = create_monitoring_event_channel();
+        let mut receiver = sender.subscribe();
+
+        // Build subscription set as handle_socket would
+        let mut subscriptions = HashSet::with_capacity(TOPIC_COUNT);
+        handle_client_message(
+            r#"{"action": "subscribe", "topic": "shares"}"#,
+            &mut subscriptions,
+        );
+
+        let share_event = MonitoringEvent::Share(ShareInfo {
+            blockhash: bitcoin::BlockHash::all_zeros(),
+            prev_blockhash: bitcoin::BlockHash::all_zeros(),
+            height: 42,
+            miner_pubkey: "02aa".to_string(),
+            timestamp: 1000,
+            bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
+            uncles: vec![],
+        });
+
+        sender.send(share_event).unwrap();
+
+        let received = receiver.recv().await.unwrap();
+        assert!(event_matches_subscriptions(&received, &subscriptions));
+
+        let json = serde_json::to_string(&received).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["topic"], "Share");
+        assert_eq!(parsed["data"]["height"], 42);
+        assert_eq!(parsed["data"]["miner_pubkey"], "02aa");
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_event_filtered_for_unsubscribed_topic() {
+        use bitcoin::hashes::Hash;
+        use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
+        use p2poolv2_lib::store::dag_store::ShareInfo;
+
+        let (sender, _guard) = create_monitoring_event_channel();
+        let mut receiver = sender.subscribe();
+
+        // Subscribe to peers only
+        let mut subscriptions = HashSet::with_capacity(TOPIC_COUNT);
+        handle_client_message(
+            r#"{"action": "subscribe", "topic": "peers"}"#,
+            &mut subscriptions,
+        );
+
+        let share_event = MonitoringEvent::Share(ShareInfo {
+            blockhash: bitcoin::BlockHash::all_zeros(),
+            prev_blockhash: bitcoin::BlockHash::all_zeros(),
+            height: 1,
+            miner_pubkey: "02bb".to_string(),
+            timestamp: 0,
+            bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
+            uncles: vec![],
+        });
+
+        sender.send(share_event).unwrap();
+
+        let received = receiver.recv().await.unwrap();
+        // Share event should NOT match a peers-only subscription
+        assert!(!event_matches_subscriptions(&received, &subscriptions));
+    }
 }
