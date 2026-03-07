@@ -1,6 +1,18 @@
 image:https://github.com/p2poolv2/p2poolv2/actions/workflows/rust.yml/badge.svg[Rust CI, link=https://github.com/p2poolv2/p2poolv2/actions/workflows/rust.yml]
 image:https://codecov.io/gh/p2poolv2/p2poolv2/graph/badge.svg?token=Xeu4GFdASS[Codecov, link=https://codecov.io/gh/p2poolv2/p2poolv2]
 
+== P2Pool V2
+
+****
+**Mission:** Build a mining pool owned and operated by its miners.
+****
+
+1. Share chain with uncles - all your work is accounted for.
+2. Pay large miners in coinbase - non custodial solution for top N miners.
+3. Support transactions - pay all miners with atomic swaps by market makers.
+4. Market makers buy shares from smaller miners - earning virgin coins.
+
+--
 We chat on https://matrix.to/#/#p2poolv2:matrix.org[Matrix].
 
 We use https://github.com/p2poolv2/p2poolv2/wiki[github wiki] for most design documents and tools for developers.
@@ -8,15 +20,7 @@ We use https://github.com/p2poolv2/p2poolv2/wiki[github wiki] for most design do
 We are tracking progress using our https://github.com/orgs/p2poolv2/projects/1[Github project: Reboot P2Pool].
 
 See detailed https://github.com/p2poolv2/p2poolv2/wiki/Developer-Setup-Notes[Developer Setup Notes] on the wiki.
-
-== P2Pool V2
-
-Rebooting P2Pool
-
-1. Share chain with uncles - all your work is accounted for.
-2. Pay large miners in coinbase - non custodial solution for top N miners.
-3. Support transactions - pay all miners with atomic swaps by market makers.
-4. Market makers buy shares from smaller miners - earning virgin coins.
+--
 
 == Run with Docker
 
@@ -61,6 +65,15 @@ docker compose up p2pool
 docker compose up cpuminer
 ----
 
+== API and CLI READMEs
+
+Both the API and CLI crates provide detailed documentation on how to
+use them in their individual crates.
+
+link:p2poolv2_api/README.md[API Documentation]
+
+link:p2poolv2_cli/README.md[CLI Documentation]
+
 == Developer Setup
 
 To ease development of p2pool's rust node, there is a devcontainer setup in place. You can use it
@@ -70,13 +83,13 @@ for IDEs supporting devcontainers and github codespaces.
 
 MSRV 1.88 with 2024 edition is required to build p2poolv2.
 
-== Masochistic Setup
+== Native Setup
 
-Follow the guidelines below to setup your local p2pool node. Note, these are not setup instructions,
-and we do not support masochistic setups. You are on your own.
+Follow the guidelines below to setup your local p2pool node.
 
 . Setup bitcoind
 .. Use `docker/bitcoin-signet.conf` as your bitcoin.conf
 . Setup p2poolv2
 .. Use `src/config.toml` as starting point for your own `config.toml`
 . Point your miners to `localhost:3333`
+
