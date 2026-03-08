@@ -99,7 +99,7 @@
                 </thead>
                 <tbody>
                   <template x-for="share in pagedShares" :key="share.blockhash">
-                    <tr>
+                    <tr style="cursor: pointer;" @click="selectShare(share)">
                       <td x-text="share.height"></td>
                       <td><code x-text="formatHash(share.blockhash)"></code></td>
                       <td><code x-text="formatHash(share.miner_pubkey)"></code></td>
@@ -129,6 +129,62 @@
         </article>
       </div>
     </template>
+
+    <!-- Share detail modal -->
+    <dialog :open="selectedShare !== null">
+      <article x-show="selectedShare">
+        <header>
+          <button aria-label="Close" rel="prev" @click="selectedShare = null"></button>
+          <h3>Share Details</h3>
+        </header>
+        <table>
+          <tbody>
+            <tr>
+              <th scope="row">Height</th>
+              <td x-text="selectedShare ? selectedShare.height : ''"></td>
+            </tr>
+            <tr>
+              <th scope="row">Blockhash</th>
+              <td><code style="word-break: break-all;" x-text="selectedShare ? selectedShare.blockhash : ''"></code></td>
+            </tr>
+            <tr>
+              <th scope="row">Previous Blockhash</th>
+              <td><code style="word-break: break-all;" x-text="selectedShare ? selectedShare.prev_blockhash : ''"></code></td>
+            </tr>
+            <tr>
+              <th scope="row">Miner</th>
+              <td><code style="word-break: break-all;" x-text="selectedShare ? selectedShare.miner_pubkey : ''"></code></td>
+            </tr>
+            <tr>
+              <th scope="row">Time</th>
+              <td x-text="selectedShare ? formatTimestamp(selectedShare.timestamp) : ''"></td>
+            </tr>
+            <tr>
+              <th scope="row">Bits</th>
+              <td><code x-text="selectedShare ? selectedShare.bits : ''"></code></td>
+            </tr>
+            <tr>
+              <th scope="row">Uncles</th>
+              <td>
+                <template x-if="selectedShare && selectedShare.uncles.length > 0">
+                  <ul>
+                    <template x-for="uncle in selectedShare.uncles" :key="typeof uncle === 'string' ? uncle : uncle.blockhash">
+                      <li><code style="word-break: break-all;" x-text="typeof uncle === 'string' ? uncle : uncle.blockhash"></code></li>
+                    </template>
+                  </ul>
+                </template>
+                <template x-if="selectedShare && selectedShare.uncles.length === 0">
+                  <span>None</span>
+                </template>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <footer>
+          <button @click="selectedShare = null">Close</button>
+        </footer>
+      </article>
+    </dialog>
 
   </main>
 
