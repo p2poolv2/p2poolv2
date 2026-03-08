@@ -20,11 +20,10 @@
 //! channel. Each WebSocket client subscribes to the channel and filters
 //! events by topic.
 //!
-//! Share and uncle data uses `ShareInfo`/`UncleInfo` from the store
-//! directly so there is a single source of truth for the wire format.
+//! Share events use `ShareInfo` from the store directly so there is
+//! a single source of truth for the wire format.
 
-use crate::store::dag_store::UncleInfo;
-use bitcoin::{BlockHash, CompactTarget};
+use crate::store::dag_store::ShareInfo;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
@@ -58,30 +57,12 @@ pub enum PeerStatus {
     Disconnected,
 }
 
-/// Confirmed share notification for WebSocket subscribers.
-///
-/// Similar to `ShareInfo` but carries uncle blockhashes instead of full
-/// `UncleInfo` objects. Clients correlate uncle blockhashes with
-/// previously received Uncle events to get full details.
-#[derive(Clone, Debug, Serialize)]
-pub struct ShareNotification {
-    pub blockhash: BlockHash,
-    pub prev_blockhash: BlockHash,
-    pub height: u32,
-    pub miner_pubkey: String,
-    pub timestamp: u32,
-    pub bits: CompactTarget,
-    pub uncles: Vec<BlockHash>,
-}
-
 /// Events pushed to WebSocket subscribers.
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "topic", content = "data")]
 pub enum MonitoringEvent {
-    /// A new share was confirmed on the chain.
-    Share(ShareNotification),
-    /// A header that did not extend or reorg the candidate chain (uncle).
-    Uncle(UncleInfo),
+    /// A new share was confirmed on the chain, with full uncle details.
+    Share(ShareInfo),
     /// A peer connected or disconnected.
     Peer(PeerResponse),
 }
@@ -103,12 +84,13 @@ pub fn create_monitoring_event_channel() -> (MonitoringEventSender, MonitoringEv
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::dag_store::UncleInfo;
     use bitcoin::hashes::Hash;
     use bitcoin::{BlockHash, CompactTarget};
 
     #[test]
     fn test_share_event_serialization() {
-        let share = ShareNotification {
+        let share = ShareInfo {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 100,
@@ -122,22 +104,6 @@ mod tests {
         assert!(json.contains("\"topic\":\"Share\""));
         assert!(json.contains("\"height\":100"));
         assert!(json.contains("\"miner_pubkey\":\"02aa\""));
-    }
-
-    #[test]
-    fn test_uncle_event_serialization() {
-        let uncle = UncleInfo {
-            blockhash: BlockHash::all_zeros(),
-            prev_blockhash: BlockHash::all_zeros(),
-            miner_pubkey: "02cc".to_string(),
-            timestamp: 1700000000,
-            height: None,
-        };
-        let event = MonitoringEvent::Uncle(uncle);
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("\"topic\":\"Uncle\""));
-        assert!(json.contains("\"height\":null"));
-        assert!(json.contains("\"miner_pubkey\":\"02cc\""));
     }
 
     #[test]
@@ -163,8 +129,8 @@ mod tests {
     }
 
     #[test]
-    fn test_share_notification_serialization() {
-        let notification = ShareNotification {
+    fn test_share_info_event_serialization() {
+        let share = ShareInfo {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
@@ -174,28 +140,37 @@ mod tests {
             uncles: vec![],
         };
 
-        let json = serde_json::to_string(&notification).unwrap();
+        let event = MonitoringEvent::Share(share);
+        let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"height\":42"));
         assert!(json.contains("\"miner_pubkey\":\"02aabbccdd\""));
         assert!(json.contains("\"timestamp\":1700000000"));
     }
 
     #[test]
-    fn test_share_notification_with_uncles_serialization() {
-        let uncle_hash = BlockHash::all_zeros();
+    fn test_share_event_with_uncles_serialization() {
+        let uncle = UncleInfo {
+            blockhash: BlockHash::all_zeros(),
+            prev_blockhash: BlockHash::all_zeros(),
+            miner_pubkey: "02uncle".to_string(),
+            timestamp: 1_700_000_010,
+            height: Some(41),
+        };
 
-        let notification = ShareNotification {
+        let share = ShareInfo {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
             miner_pubkey: "02parent".to_string(),
             timestamp: 1_700_000_020,
             bits: CompactTarget::from_consensus(0x1b4188f5),
-            uncles: vec![uncle_hash],
+            uncles: vec![uncle],
         };
 
-        let json = serde_json::to_string(&notification).unwrap();
+        let event = MonitoringEvent::Share(share);
+        let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"uncles\""));
+        assert!(json.contains("\"02uncle\""));
         assert!(json.contains("\"height\":42"));
     }
 

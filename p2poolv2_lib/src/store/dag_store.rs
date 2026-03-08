@@ -363,10 +363,36 @@ impl Store {
 
         Ok(uncles)
     }
+
     /// Query confirmed shares from to_height down to from_height.
     ///
     /// Uses the confirmed chain range query to fetch all blockhashes in one call,
     /// then resolves each share's header and uncle details.
+    /// Looks up full uncle details for a list of uncle blockhashes.
+    ///
+    /// Silently skips any uncle whose header is not found in the store.
+    pub fn get_uncle_infos(&self, uncle_hashes: &[BlockHash]) -> Vec<UncleInfo> {
+        uncle_hashes
+            .iter()
+            .filter_map(|uncle_hash| {
+                let uncle_header = self.get_share_header(uncle_hash).ok().flatten()?;
+
+                let uncle_height = self
+                    .get_block_metadata(uncle_hash)
+                    .ok()
+                    .and_then(|metadata| metadata.expected_height);
+
+                Some(UncleInfo {
+                    blockhash: *uncle_hash,
+                    prev_blockhash: uncle_header.prev_share_blockhash,
+                    miner_pubkey: uncle_header.miner_pubkey.to_string(),
+                    timestamp: uncle_header.time,
+                    height: uncle_height,
+                })
+            })
+            .collect()
+    }
+
     /// Returns shares ordered from highest height to lowest.
     pub fn query_shares(
         &self,
@@ -382,26 +408,7 @@ impl Store {
                 StoreError::NotFound(format!("Share header not found for {blockhash}"))
             })?;
 
-            let uncle_infos: Vec<UncleInfo> = share_header
-                .uncles
-                .iter()
-                .filter_map(|uncle_hash| {
-                    let uncle_header = self.get_share_header(uncle_hash).ok().flatten()?;
-
-                    let uncle_height = self
-                        .get_block_metadata(uncle_hash)
-                        .ok()
-                        .and_then(|metadata| metadata.expected_height);
-
-                    Some(UncleInfo {
-                        blockhash: *uncle_hash,
-                        prev_blockhash: uncle_header.prev_share_blockhash,
-                        miner_pubkey: uncle_header.miner_pubkey.to_string(),
-                        timestamp: uncle_header.time,
-                        height: uncle_height,
-                    })
-                })
-                .collect();
+            let uncle_infos = self.get_uncle_infos(&share_header.uncles);
 
             shares.push(ShareInfo {
                 blockhash: *blockhash,
