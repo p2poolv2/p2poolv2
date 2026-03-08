@@ -4,7 +4,8 @@ function workFromBits(bits) {
     var exponent = bits >> 24;
     var mantissa = BigInt(bits & 0x7fffff);
     var shift = 8 * (exponent - 3);
-    var target = shift >= 0 ? mantissa << BigInt(shift) : mantissa >> BigInt(-shift);
+    var target =
+        shift >= 0 ? mantissa << BigInt(shift) : mantissa >> BigInt(-shift);
     var two256 = 1n << 256n;
     return two256 / (target + 1n);
 }
@@ -22,9 +23,9 @@ function dashboard() {
         shares: [],
         sharesError: "",
         sharesPage: 0,
-        sharesPerPage: 10,
+        sharesPerPage: 25,
         selectedShare: null,
-        uncles: {},
+        selectedUncle: null,
         websocket: null,
         wsConnected: false,
 
@@ -76,9 +77,6 @@ function dashboard() {
                 this.websocket.send(
                     JSON.stringify({ action: "subscribe", topic: "shares" }),
                 );
-                this.websocket.send(
-                    JSON.stringify({ action: "subscribe", topic: "uncles" }),
-                );
             };
 
             this.websocket.onmessage = (event) => {
@@ -108,44 +106,36 @@ function dashboard() {
                     this.chainInfo.chain_tip_blockhash = share.blockhash;
                     var work = workFromBits(share.bits);
                     var currentWork = BigInt(this.chainInfo.total_work);
-                    this.chainInfo.total_work = "0x" + (currentWork + work).toString(16).padStart(64, "0");
-                }
-            }
-            if (message.topic === "Uncle") {
-                var uncle = message.data;
-                this.uncles[uncle.blockhash] = uncle;
-                this.capUncles();
-            }
-        },
-
-        extractUnclesFromShares(shares) {
-            for (var idx = 0; idx < shares.length; idx++) {
-                var share = shares[idx];
-                for (var uncleIdx = 0; uncleIdx < share.uncles.length; uncleIdx++) {
-                    var uncle = share.uncles[uncleIdx];
-                    this.uncles[uncle.blockhash] = uncle;
-                }
-            }
-        },
-
-        capUncles() {
-            var maxUncles = 3000;
-            var keys = Object.keys(this.uncles);
-            if (keys.length > maxUncles) {
-                var excess = keys.length - maxUncles;
-                for (var idx = 0; idx < excess; idx++) {
-                    delete this.uncles[keys[idx]];
+                    this.chainInfo.total_work =
+                        "0x" +
+                        (currentWork + work).toString(16).padStart(64, "0");
                 }
             }
         },
 
         get pagedShares() {
             var start = this.sharesPage * this.sharesPerPage;
-            return this.shares.slice(start, start + this.sharesPerPage);
+            var page = this.shares.slice(start, start + this.sharesPerPage);
+            var rows = [];
+            for (var idx = 0; idx < page.length; idx++) {
+                var share = page[idx];
+                rows.push({ share: share, isUncle: false });
+                for (
+                    var uncleIdx = 0;
+                    uncleIdx < share.uncles.length;
+                    uncleIdx++
+                ) {
+                    rows.push({ share: share.uncles[uncleIdx], isUncle: true });
+                }
+            }
+            return rows;
         },
 
         get totalSharesPages() {
-            return Math.max(1, Math.ceil(this.shares.length / this.sharesPerPage));
+            return Math.max(
+                1,
+                Math.ceil(this.shares.length / this.sharesPerPage),
+            );
         },
 
         previousSharesPage() {
@@ -164,14 +154,8 @@ function dashboard() {
             this.selectedShare = share;
         },
 
-        resolveUncle(uncle) {
-            if (typeof uncle === "object") {
-                return uncle;
-            }
-            if (this.uncles[uncle]) {
-                return this.uncles[uncle];
-            }
-            return { blockhash: uncle };
+        selectUncle(uncle) {
+            this.selectedUncle = uncle;
         },
 
         async fetchChainInfo() {
@@ -205,7 +189,7 @@ function dashboard() {
             this.sharesError = "";
 
             try {
-                var response = await fetch("/shares", {
+                var response = await fetch("/shares?num=100", {
                     headers: { Authorization: "Basic " + this.credentials },
                 });
 
@@ -217,7 +201,6 @@ function dashboard() {
 
                 var data = await response.json();
                 this.shares = data.shares;
-                this.extractUnclesFromShares(data.shares);
             } catch (err) {
                 this.sharesError = "Connection failed: " + err.message;
             }
@@ -226,7 +209,9 @@ function dashboard() {
         formatHash(hash) {
             if (!hash) return "N/A";
             if (hash.length <= 16) return hash;
-            return hash.substring(0, 8) + "..." + hash.substring(hash.length - 8);
+            return (
+                hash.substring(0, 8) + "..." + hash.substring(hash.length - 8)
+            );
         },
 
         formatTimestamp(timestamp) {
@@ -251,7 +236,7 @@ function dashboard() {
             this.shares = [];
             this.sharesError = "";
             this.selectedShare = null;
-            this.uncles = {};
+            this.selectedUncle = null;
             this.username = "";
             this.password = "";
             this.error = "";

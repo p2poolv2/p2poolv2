@@ -1,219 +1,397 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en" data-theme="light">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>P2Poolv2 Dashboard</title>
-  <link rel="stylesheet" href="/static/pico.min.css">
-  <script defer src="/static/alpine.min.js"></script>
-  <style>
-    :root {
-      --pico-font-size: 87.5%;
-    }
-  </style>
-</head>
-<body>
-  <main class="container" x-data="dashboard()">
-
-    <!-- Login dialog -->
-    <template x-if="!authenticated">
-      <article>
-        <header>
-          <h2>P2Poolv2 - Login</h2>
-        </header>
-        <form @submit.prevent="login">
-          <template x-if="error">
-            <p role="alert" style="color: var(--pico-del-color);" x-text="error"></p>
-          </template>
-          <label>
-            Username
-            <input type="text" x-model="username" required autofocus>
-          </label>
-          <label>
-            Password
-            <input type="password" x-model="password" required>
-          </label>
-          <button type="submit" :aria-busy="loading">Login</button>
-        </form>
-      </article>
-    </template>
-
-    <!-- Dashboard -->
-    <template x-if="authenticated">
-      <div>
-        <nav>
-          <ul><li><strong>P2Poolv2 Dashboard</strong></li></ul>
-          <ul><li><button class="outline secondary" @click="logout">Logout</button></li></ul>
-        </nav>
-
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>P2Poolv2 Dashboard</title>
+    <link rel="stylesheet" href="/static/pico.min.css" />
+    <script defer src="/static/alpine.min.js"></script>
+    <style>
+      :root {
+        --pico-font-size: 87.5%;
+      }
+    </style>
+  </head>
+  <body>
+    <main
+      class="container"
+      x-data="dashboard()"
+      @keydown.escape.window="selectedShare = null; selectedUncle = null"
+    >
+      <!-- Login dialog -->
+      <template x-if="!authenticated">
         <article>
           <header>
-            <h3>Chain Info</h3>
+            <h2>P2Poolv2 - Login</h2>
           </header>
-
-          <template x-if="chainError">
-            <p role="alert" style="color: var(--pico-del-color);" x-text="chainError"></p>
-          </template>
-
-          <template x-if="chainInfo">
-            <div class="overflow-auto">
-              <table>
-                <tbody>
-                  <tr>
-                    <th scope="row">Genesis Blockhash</th>
-                    <td><code x-text="chainInfo.genesis_blockhash || 'N/A'"></code></td>
-                  </tr>
-                  <tr>
-                    <th scope="row">Chain Tip Height</th>
-                    <td x-text="chainInfo.chain_tip_height != null ? chainInfo.chain_tip_height : 'N/A'"></td>
-                  </tr>
-                  <tr>
-                    <th scope="row">Total Work</th>
-                    <td><code x-text="chainInfo.total_work || 'N/A'"></code></td>
-                  </tr>
-                  <tr>
-                    <th scope="row">Chain Tip Blockhash</th>
-                    <td><code x-text="chainInfo.chain_tip_blockhash || 'N/A'"></code></td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </template>
-        </article>
-
-        <article>
-          <header>
-            <h3>Shares</h3>
-          </header>
-
-          <template x-if="sharesError">
-            <p role="alert" style="color: var(--pico-del-color);" x-text="sharesError"></p>
-          </template>
-
-          <template x-if="shares.length > 0">
-            <div class="overflow-auto">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Height</th>
-                    <th>Blockhash</th>
-                    <th>Miner</th>
-                    <th>Time</th>
-                    <th>Uncles</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <template x-for="share in pagedShares" :key="share.blockhash">
-                    <tr style="cursor: pointer;" @click="selectShare(share)">
-                      <td x-text="share.height"></td>
-                      <td><code x-text="formatHash(share.blockhash)"></code></td>
-                      <td><code x-text="formatHash(share.miner_pubkey)"></code></td>
-                      <td x-text="formatTimestamp(share.timestamp)"></td>
-                      <td x-text="share.uncles.length"></td>
-                    </tr>
-                  </template>
-                </tbody>
-              </table>
-              <nav>
-                <ul>
-                  <li><button class="outline" @click="previousSharesPage" :disabled="sharesPage === 0">Previous</button></li>
-                </ul>
-                <ul>
-                  <li><span x-text="(sharesPage + 1) + ' / ' + totalSharesPages"></span></li>
-                </ul>
-                <ul>
-                  <li><button class="outline" @click="nextSharesPage" :disabled="sharesPage >= totalSharesPages - 1">Next</button></li>
-                </ul>
-              </nav>
-            </div>
-          </template>
-
-          <template x-if="shares.length === 0 && !sharesError">
-            <p>No shares found.</p>
-          </template>
-        </article>
-      </div>
-    </template>
-
-    <!-- Share detail modal -->
-    <dialog :open="selectedShare !== null">
-      <article x-show="selectedShare">
-        <header>
-          <button aria-label="Close" rel="prev" @click="selectedShare = null"></button>
-          <h3>Share Details</h3>
-        </header>
-        <table>
-          <tbody>
-            <tr>
-              <th scope="row">Height</th>
-              <td x-text="selectedShare ? selectedShare.height : ''"></td>
-            </tr>
-            <tr>
-              <th scope="row">Blockhash</th>
-              <td><code style="word-break: break-all;" x-text="selectedShare ? selectedShare.blockhash : ''"></code></td>
-            </tr>
-            <tr>
-              <th scope="row">Previous Blockhash</th>
-              <td><code style="word-break: break-all;" x-text="selectedShare ? selectedShare.prev_blockhash : ''"></code></td>
-            </tr>
-            <tr>
-              <th scope="row">Miner</th>
-              <td><code style="word-break: break-all;" x-text="selectedShare ? selectedShare.miner_pubkey : ''"></code></td>
-            </tr>
-            <tr>
-              <th scope="row">Time</th>
-              <td x-text="selectedShare ? formatTimestamp(selectedShare.timestamp) : ''"></td>
-            </tr>
-            <tr>
-              <th scope="row">Bits</th>
-              <td><code x-text="selectedShare ? selectedShare.bits : ''"></code></td>
-            </tr>
-            <tr>
-              <th scope="row">Uncles</th>
-              <td x-text="selectedShare ? selectedShare.uncles.length : 0"></td>
-            </tr>
-          </tbody>
-        </table>
-
-        <template x-if="selectedShare && selectedShare.uncles.length > 0">
-          <div>
-            <h4>Uncle Details</h4>
-            <template x-for="uncle in selectedShare.uncles" :key="typeof uncle === 'string' ? uncle : uncle.blockhash">
-              <table>
-                <tbody>
-                  <tr>
-                    <th scope="row">Blockhash</th>
-                    <td><code style="word-break: break-all;" x-text="resolveUncle(uncle).blockhash"></code></td>
-                  </tr>
-                  <tr>
-                    <th scope="row">Previous Blockhash</th>
-                    <td><code style="word-break: break-all;" x-text="resolveUncle(uncle).prev_blockhash || 'N/A'"></code></td>
-                  </tr>
-                  <tr>
-                    <th scope="row">Miner</th>
-                    <td><code style="word-break: break-all;" x-text="resolveUncle(uncle).miner_pubkey || 'N/A'"></code></td>
-                  </tr>
-                  <tr>
-                    <th scope="row">Time</th>
-                    <td x-text="resolveUncle(uncle).timestamp ? formatTimestamp(resolveUncle(uncle).timestamp) : 'N/A'"></td>
-                  </tr>
-                  <tr>
-                    <th scope="row">Height</th>
-                    <td x-text="resolveUncle(uncle).height != null ? resolveUncle(uncle).height : 'N/A'"></td>
-                  </tr>
-                </tbody>
-              </table>
+          <form @submit.prevent="login">
+            <template x-if="error">
+              <p
+                role="alert"
+                style="color: var(--pico-del-color)"
+                x-text="error"
+              ></p>
             </template>
-          </div>
-        </template>
-        <footer>
-          <button @click="selectedShare = null">Close</button>
-        </footer>
-      </article>
-    </dialog>
+            <label>
+              Username
+              <input type="text" x-model="username" required autofocus />
+            </label>
+            <label>
+              Password
+              <input type="password" x-model="password" required />
+            </label>
+            <button type="submit" :aria-busy="loading">Login</button>
+          </form>
+        </article>
+      </template>
 
-  </main>
+      <!-- Dashboard -->
+      <template x-if="authenticated">
+        <div>
+          <nav>
+            <ul>
+              <li><strong>P2Poolv2 Dashboard</strong></li>
+            </ul>
+            <ul>
+              <li>
+                <button class="outline secondary" @click="logout">
+                  Logout
+                </button>
+              </li>
+            </ul>
+          </nav>
 
-  <script src="/static/dashboard.js"></script>
-</body>
+          <article>
+            <header>
+              <h3>Chain Info</h3>
+            </header>
+
+            <template x-if="chainError">
+              <p
+                role="alert"
+                style="color: var(--pico-del-color)"
+                x-text="chainError"
+              ></p>
+            </template>
+
+            <template x-if="chainInfo">
+              <div class="overflow-auto">
+                <table>
+                  <tbody>
+                    <tr>
+                      <th scope="row">Genesis Blockhash</th>
+                      <td>
+                        <code
+                          x-text="chainInfo.genesis_blockhash || 'N/A'"
+                        ></code>
+                      </td>
+                    </tr>
+                    <tr>
+                      <th scope="row">Chain Tip Height</th>
+                      <td
+                        x-text="chainInfo.chain_tip_height != null ? chainInfo.chain_tip_height : 'N/A'"
+                      ></td>
+                    </tr>
+                    <tr>
+                      <th scope="row">Total Work</th>
+                      <td>
+                        <code x-text="chainInfo.total_work || 'N/A'"></code>
+                      </td>
+                    </tr>
+                    <tr>
+                      <th scope="row">Chain Tip Blockhash</th>
+                      <td>
+                        <code
+                          x-text="chainInfo.chain_tip_blockhash || 'N/A'"
+                        ></code>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </template>
+          </article>
+
+          <article>
+            <header>
+              <h3>Shares</h3>
+            </header>
+
+            <template x-if="sharesError">
+              <p
+                role="alert"
+                style="color: var(--pico-del-color)"
+                x-text="sharesError"
+              ></p>
+            </template>
+
+            <template x-if="shares.length > 0">
+              <div class="overflow-auto">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Height</th>
+                      <th>Blockhash</th>
+                      <th>Miner</th>
+                      <th>Time</th>
+                      <th>Uncles</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template
+                      x-for="row in pagedShares"
+                      :key="(row.isUncle ? 'uncle-' : 'share-') + row.share.blockhash"
+                    >
+                      <tr
+                        style="cursor: pointer"
+                        :style="row.isUncle ? 'opacity: 0.55;' : ''"
+                        @click="row.isUncle ? selectUncle(row.share) : selectShare(row.share)"
+                      >
+                        <td
+                          x-text="row.share.height != null ? row.share.height : ''"
+                        ></td>
+                        <td>
+                          <code x-text="formatHash(row.share.blockhash)"></code>
+                        </td>
+                        <td>
+                          <code
+                            x-text="formatHash(row.share.miner_pubkey)"
+                          ></code>
+                        </td>
+                        <td x-text="formatTimestamp(row.share.timestamp)"></td>
+                        <td
+                          x-text="row.isUncle ? 'uncle' : row.share.uncles.length"
+                        ></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+                <nav>
+                  <ul>
+                    <li>
+                      <button
+                        class="outline"
+                        @click="previousSharesPage"
+                        :disabled="sharesPage === 0"
+                      >
+                        Previous
+                      </button>
+                    </li>
+                  </ul>
+                  <ul>
+                    <li>
+                      <span
+                        x-text="(sharesPage + 1) + ' / ' + totalSharesPages"
+                      ></span>
+                    </li>
+                  </ul>
+                  <ul>
+                    <li>
+                      <button
+                        class="outline"
+                        @click="nextSharesPage"
+                        :disabled="sharesPage >= totalSharesPages - 1"
+                      >
+                        Next
+                      </button>
+                    </li>
+                  </ul>
+                </nav>
+              </div>
+            </template>
+
+            <template x-if="shares.length === 0 && !sharesError">
+              <p>No shares found.</p>
+            </template>
+          </article>
+        </div>
+      </template>
+
+      <!-- Share detail modal -->
+      <dialog :open="selectedShare !== null" @click="selectedShare = null">
+        <article x-show="selectedShare" @click.stop>
+          <header>
+            <button
+              aria-label="Close"
+              rel="prev"
+              @click="selectedShare = null"
+            ></button>
+            <h3>Share Details</h3>
+          </header>
+          <table>
+            <tbody>
+              <tr>
+                <th scope="row">Height</th>
+                <td x-text="selectedShare ? selectedShare.height : ''"></td>
+              </tr>
+              <tr>
+                <th scope="row">Blockhash</th>
+                <td>
+                  <code
+                    style="word-break: break-all"
+                    x-text="selectedShare ? selectedShare.blockhash : ''"
+                  ></code>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Previous Blockhash</th>
+                <td>
+                  <code
+                    style="word-break: break-all"
+                    x-text="selectedShare ? selectedShare.prev_blockhash : ''"
+                  ></code>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Miner</th>
+                <td>
+                  <code
+                    style="word-break: break-all"
+                    x-text="selectedShare ? selectedShare.miner_pubkey : ''"
+                  ></code>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Time</th>
+                <td
+                  x-text="selectedShare ? formatTimestamp(selectedShare.timestamp) : ''"
+                ></td>
+              </tr>
+              <tr>
+                <th scope="row">Bits</th>
+                <td>
+                  <code x-text="selectedShare ? selectedShare.bits : ''"></code>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Uncles</th>
+                <td
+                  x-text="selectedShare ? selectedShare.uncles.length : 0"
+                ></td>
+              </tr>
+            </tbody>
+          </table>
+
+          <template x-if="selectedShare && selectedShare.uncles.length > 0">
+            <div>
+              <h4>Uncle Details</h4>
+              <template
+                x-for="uncle in selectedShare.uncles"
+                :key="uncle.blockhash"
+              >
+                <table>
+                  <tbody>
+                    <tr>
+                      <th scope="row">Blockhash</th>
+                      <td>
+                        <code
+                          style="word-break: break-all"
+                          x-text="uncle.blockhash"
+                        ></code>
+                      </td>
+                    </tr>
+                    <tr>
+                      <th scope="row">Previous Blockhash</th>
+                      <td>
+                        <code
+                          style="word-break: break-all"
+                          x-text="uncle.prev_blockhash || 'N/A'"
+                        ></code>
+                      </td>
+                    </tr>
+                    <tr>
+                      <th scope="row">Miner</th>
+                      <td>
+                        <code
+                          style="word-break: break-all"
+                          x-text="uncle.miner_pubkey || 'N/A'"
+                        ></code>
+                      </td>
+                    </tr>
+                    <tr>
+                      <th scope="row">Time</th>
+                      <td
+                        x-text="uncle.timestamp ? formatTimestamp(uncle.timestamp) : 'N/A'"
+                      ></td>
+                    </tr>
+                    <tr>
+                      <th scope="row">Height</th>
+                      <td
+                        x-text="uncle.height != null ? uncle.height : 'N/A'"
+                      ></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </template>
+            </div>
+          </template>
+          <footer>
+            <button @click="selectedShare = null">Close</button>
+          </footer>
+        </article>
+      </dialog>
+
+      <!-- Uncle detail modal -->
+      <dialog :open="selectedUncle !== null" @click="selectedUncle = null">
+        <article x-show="selectedUncle" @click.stop>
+          <header>
+            <button
+              aria-label="Close"
+              rel="prev"
+              @click="selectedUncle = null"
+            ></button>
+            <h3>Uncle Details</h3>
+          </header>
+          <table>
+            <tbody>
+              <tr>
+                <th scope="row">Height</th>
+                <td
+                  x-text="selectedUncle ? (selectedUncle.height != null ? selectedUncle.height : 'N/A') : ''"
+                ></td>
+              </tr>
+              <tr>
+                <th scope="row">Blockhash</th>
+                <td>
+                  <code
+                    style="word-break: break-all"
+                    x-text="selectedUncle ? selectedUncle.blockhash : ''"
+                  ></code>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Previous Blockhash</th>
+                <td>
+                  <code
+                    style="word-break: break-all"
+                    x-text="selectedUncle ? (selectedUncle.prev_blockhash || 'N/A') : ''"
+                  ></code>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Miner</th>
+                <td>
+                  <code
+                    style="word-break: break-all"
+                    x-text="selectedUncle ? (selectedUncle.miner_pubkey || 'N/A') : ''"
+                  ></code>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Time</th>
+                <td
+                  x-text="selectedUncle && selectedUncle.timestamp ? formatTimestamp(selectedUncle.timestamp) : 'N/A'"
+                ></td>
+              </tr>
+            </tbody>
+          </table>
+          <footer>
+            <button @click="selectedUncle = null">Close</button>
+          </footer>
+        </article>
+      </dialog>
+    </main>
+
+    <script src="/static/dashboard.js"></script>
+  </body>
 </html>
