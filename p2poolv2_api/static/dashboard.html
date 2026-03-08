@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>P2Poolv2 Dashboard</title>
+  <link rel="stylesheet" href="/static/pico.min.css">
+  <script defer src="/static/alpine.min.js"></script>
+</head>
+<body>
+  <main class="container" x-data="dashboard()">
+
+    <!-- Login dialog -->
+    <template x-if="!authenticated">
+      <article>
+        <header>
+          <h2>P2Poolv2 - Login</h2>
+        </header>
+        <form @submit.prevent="login">
+          <template x-if="error">
+            <p role="alert" style="color: var(--pico-del-color);" x-text="error"></p>
+          </template>
+          <label>
+            Username
+            <input type="text" x-model="username" required autofocus>
+          </label>
+          <label>
+            Password
+            <input type="password" x-model="password" required>
+          </label>
+          <button type="submit" :aria-busy="loading">Login</button>
+        </form>
+      </article>
+    </template>
+
+    <!-- Dashboard -->
+    <template x-if="authenticated">
+      <div>
+        <nav>
+          <ul><li><strong>P2Poolv2 Dashboard</strong></li></ul>
+          <ul><li><button class="outline secondary" @click="logout">Logout</button></li></ul>
+        </nav>
+
+        <article>
+          <header>
+            <h3>Chain Info</h3>
+          </header>
+
+          <template x-if="chainError">
+            <p role="alert" style="color: var(--pico-del-color);" x-text="chainError"></p>
+          </template>
+
+          <template x-if="chainInfo">
+            <div class="overflow-auto">
+              <table>
+                <tbody>
+                  <tr>
+                    <th scope="row">Genesis Blockhash</th>
+                    <td><code x-text="chainInfo.genesis_blockhash || 'N/A'"></code></td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Chain Tip Height</th>
+                    <td x-text="chainInfo.chain_tip_height != null ? chainInfo.chain_tip_height : 'N/A'"></td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Total Work</th>
+                    <td><code x-text="chainInfo.total_work || 'N/A'"></code></td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Chain Tip Blockhash</th>
+                    <td><code x-text="chainInfo.chain_tip_blockhash || 'N/A'"></code></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
+        </article>
+      </div>
+    </template>
+
+  </main>
+
+  <script>
+    function dashboard() {
+      return {
+        username: '',
+        password: '',
+        error: '',
+        loading: false,
+        authenticated: false,
+        credentials: '',
+        chainInfo: null,
+        chainError: '',
+        refreshing: false,
+
+        async login() {
+          this.error = '';
+          this.loading = true;
+          this.credentials = btoa(this.username + ':' + this.password);
+
+          try {
+            const response = await fetch('/chain_info', {
+              headers: { 'Authorization': 'Basic ' + this.credentials }
+            });
+
+            if (!response.ok) {
+              if (response.status === 401) {
+                this.error = 'Invalid username or password.';
+              } else {
+                this.error = 'Server error: ' + response.status;
+              }
+              this.credentials = '';
+              this.loading = false;
+              return;
+            }
+
+            this.chainInfo = await response.json();
+            this.authenticated = true;
+            this.password = '';
+          } catch (err) {
+            this.error = 'Connection failed: ' + err.message;
+            this.credentials = '';
+          }
+
+          this.loading = false;
+        },
+
+        async fetchChainInfo() {
+          this.chainError = '';
+          this.refreshing = true;
+
+          try {
+            const response = await fetch('/chain_info', {
+              headers: { 'Authorization': 'Basic ' + this.credentials }
+            });
+
+            if (!response.ok) {
+              if (response.status === 401) {
+                this.authenticated = false;
+                this.credentials = '';
+                this.error = 'Session expired. Please login again.';
+                this.refreshing = false;
+                return;
+              }
+              this.chainError = 'Failed to fetch chain info: ' + response.status;
+              this.refreshing = false;
+              return;
+            }
+
+            this.chainInfo = await response.json();
+          } catch (err) {
+            this.chainError = 'Connection failed: ' + err.message;
+          }
+
+          this.refreshing = false;
+        },
+
+        logout() {
+          this.authenticated = false;
+          this.credentials = '';
+          this.chainInfo = null;
+          this.username = '';
+          this.password = '';
+          this.error = '';
+          this.chainError = '';
+        }
+      };
+    }
+  </script>
+</body>
+</html>

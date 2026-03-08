@@ -29,6 +29,7 @@ token suitable for the config file.
 
 ## Endpoints
 
+- [GET /dashboard](#get-dashboard) -- Monitoring dashboard (no auth required)
 - [GET /health](#get-health) -- Liveness check
 - [GET /metrics](#get-metrics) -- Pool metrics in Prometheus format
 - [GET /chain_info](#get-chain_info) -- Share chain state
@@ -38,6 +39,15 @@ token suitable for the config file.
 - [GET /peers](#get-peers) -- Connected peers
 - [GET /pplns_shares](#get-pplns_shares) -- PPLNS accounting data
 - [WebSocket /ws](#websocket-ws) -- Real-time event subscriptions
+
+### GET /dashboard
+
+Serves a static monitoring dashboard page built with Pico CSS and
+Alpine.js. The page prompts for username/password and authenticates
+against the API using HTTP Basic auth. On successful login it displays
+chain state information from `/chain_info`. This route is served
+without auth middleware since the page handles authentication
+client-side.
 
 ### GET /health
 
