@@ -232,7 +232,7 @@ pub async fn start_notify(
         None => Vec::new(),
     };
 
-    let context = NotifyContext {
+    let notify_context = NotifyContext {
         chain_store_handle,
         config: config.clone(),
         miner_pubkey,
@@ -251,7 +251,8 @@ pub async fn start_notify(
                 latest_template = Some(Arc::clone(&template));
 
                 let (notify_str, _share_commitment) =
-                    match build_notify_and_commitment(&template, clean_jobs, &context).await {
+                    match build_notify_and_commitment(&template, clean_jobs, &notify_context).await
+                    {
                         Ok(serialized) => serialized,
                         Err(e) => {
                             tracing::error!("Failed to build notify: {}. Skipping.", e);
@@ -260,7 +261,7 @@ pub async fn start_notify(
                     };
 
                 connections.send_to_all(Arc::new(notify_str.clone())).await;
-                if context
+                if notify_context
                     .chain_store_handle
                     .add_job(notify_str)
                     .await
@@ -282,19 +283,24 @@ pub async fn start_notify(
                 }
 
                 let template = latest_template.as_ref().unwrap();
-                let (notify_str, _share_commitment) =
-                    match build_notify_and_commitment(template, clean_jobs, &context).await {
-                        Ok(serialized) => serialized,
-                        Err(e) => {
-                            tracing::error!("Failed to build notify: {}. Skipping.", e);
-                            continue;
-                        }
-                    };
+                let (notify_str, _share_commitment) = match build_notify_and_commitment(
+                    template,
+                    clean_jobs,
+                    &notify_context,
+                )
+                .await
+                {
+                    Ok(serialized) => serialized,
+                    Err(e) => {
+                        tracing::error!("Failed to build notify: {}. Skipping.", e);
+                        continue;
+                    }
+                };
 
                 connections
                     .send_to_client(client_address, Arc::new(notify_str.clone()))
                     .await;
-                if context
+                if notify_context
                     .chain_store_handle
                     .add_job(notify_str)
                     .await
