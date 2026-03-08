@@ -165,21 +165,42 @@
             </tr>
             <tr>
               <th scope="row">Uncles</th>
-              <td>
-                <template x-if="selectedShare && selectedShare.uncles.length > 0">
-                  <ul>
-                    <template x-for="uncle in selectedShare.uncles" :key="typeof uncle === 'string' ? uncle : uncle.blockhash">
-                      <li><code style="word-break: break-all;" x-text="typeof uncle === 'string' ? uncle : uncle.blockhash"></code></li>
-                    </template>
-                  </ul>
-                </template>
-                <template x-if="selectedShare && selectedShare.uncles.length === 0">
-                  <span>None</span>
-                </template>
-              </td>
+              <td x-text="selectedShare ? selectedShare.uncles.length : 0"></td>
             </tr>
           </tbody>
         </table>
+
+        <template x-if="selectedShare && selectedShare.uncles.length > 0">
+          <div>
+            <h4>Uncle Details</h4>
+            <template x-for="uncle in selectedShare.uncles" :key="typeof uncle === 'string' ? uncle : uncle.blockhash">
+              <table>
+                <tbody>
+                  <tr>
+                    <th scope="row">Blockhash</th>
+                    <td><code style="word-break: break-all;" x-text="resolveUncle(uncle).blockhash"></code></td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Previous Blockhash</th>
+                    <td><code style="word-break: break-all;" x-text="resolveUncle(uncle).prev_blockhash || 'N/A'"></code></td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Miner</th>
+                    <td><code style="word-break: break-all;" x-text="resolveUncle(uncle).miner_pubkey || 'N/A'"></code></td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Time</th>
+                    <td x-text="resolveUncle(uncle).timestamp ? formatTimestamp(resolveUncle(uncle).timestamp) : 'N/A'"></td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Height</th>
+                    <td x-text="resolveUncle(uncle).height != null ? resolveUncle(uncle).height : 'N/A'"></td>
+                  </tr>
+                </tbody>
+              </table>
+            </template>
+          </div>
+        </template>
         <footer>
           <button @click="selectedShare = null">Close</button>
         </footer>
