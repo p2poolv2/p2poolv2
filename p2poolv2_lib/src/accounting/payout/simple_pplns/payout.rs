@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::OutputPair;
+use crate::accounting::payout::PayoutDistribution;
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::config::StratumConfig;
 #[cfg(test)]
@@ -32,6 +33,66 @@ pub struct Payout {
     /// This determines how far back in time to query in each batch.
     /// Default: 86400 seconds (1 day) for typical pool configurations.
     step_size_seconds: u64,
+}
+
+impl PayoutDistribution for Payout {
+    /// Generate output distribution based on PPLNS shares weighted by difficulty.
+    ///
+    /// # Arguments
+    /// * `store` - Handle to the chain store for querying PPLNS shares
+    /// * `total_difficulty` - Target cumulative difficulty to collect shares for
+    /// * `total_amount` - Total bitcoin amount to distribute among contributors
+    ///
+    /// # Returns
+    /// Vector of OutputPair containing addresses and their proportional amounts
+    fn get_output_distribution(
+        &self,
+        chain_store_handle: &ChainStoreHandle,
+        total_difficulty: f64,
+        total_amount: bitcoin::Amount,
+        config: &StratumConfig<crate::config::Parsed>,
+    ) -> Result<Vec<OutputPair>, Box<dyn Error + Send + Sync>> {
+        // Extra two places for potential cuts
+        let mut distribution = Vec::<OutputPair>::new();
+        let remaining_total_amount = Self::include_address_and_cut(
+            &mut distribution,
+            total_amount,
+            &config.donation_address_parsed,
+            config.donation,
+        );
+        let remaining_total_amount = Self::include_address_and_cut(
+            &mut distribution,
+            remaining_total_amount,
+            &config.fee_address_parsed,
+            config.fee,
+        );
+
+        // Only calculate proportional distribution if there's remaining amount for miners
+        // This avoids parsing miner addresses when 100% goes to donation/fee
+        // This also avoids running PPLNS share look ups when we don't need to use that data
+        if remaining_total_amount > bitcoin::Amount::ZERO {
+            let shares = self.get_shares_for_difficulty(chain_store_handle, total_difficulty)?;
+
+            if shares.is_empty() {
+                return Ok(vec![OutputPair {
+                    address: config.bootstrap_address().clone(),
+                    amount: total_amount,
+                }]);
+            }
+
+            let address_difficulty_map = Self::group_shares_by_address(&shares);
+
+            distribution.reserve(address_difficulty_map.len());
+
+            Self::append_proportional_distribution(
+                address_difficulty_map,
+                remaining_total_amount,
+                &mut distribution,
+            )?;
+        }
+
+        Ok(distribution)
+    }
 }
 
 impl Payout {
@@ -59,7 +120,7 @@ impl Payout {
     /// Queries shares in time windows going backwards from the latest timestamp.
     /// Uses the configured step_size_seconds to determine batch size, defaulting to 1 day.
     /// Continues querying additional time windows if total difficulty hasn't been reached.
-    async fn get_shares_for_difficulty(
+    fn get_shares_for_difficulty(
         &self,
         store: &ChainStoreHandle,
         total_difficulty: f64,
@@ -103,66 +164,6 @@ impl Payout {
         }
 
         Ok(result_shares)
-    }
-
-    /// Generate output distribution based on PPLNS shares weighted by difficulty.
-    ///
-    /// # Arguments
-    /// * `store` - Handle to the chain store for querying PPLNS shares
-    /// * `total_difficulty` - Target cumulative difficulty to collect shares for
-    /// * `total_amount` - Total bitcoin amount to distribute among contributors
-    ///
-    /// # Returns
-    /// Vector of OutputPair containing addresses and their proportional amounts
-    pub async fn get_output_distribution(
-        &self,
-        chain_store_handle: &ChainStoreHandle,
-        total_difficulty: f64,
-        total_amount: bitcoin::Amount,
-        config: &StratumConfig<crate::config::Parsed>,
-    ) -> Result<Vec<OutputPair>, Box<dyn Error + Send + Sync>> {
-        // Extra two places for potential cuts
-        let mut distribution = Vec::<OutputPair>::new();
-        let remaining_total_amount = Self::include_address_and_cut(
-            &mut distribution,
-            total_amount,
-            &config.donation_address_parsed,
-            config.donation,
-        );
-        let remaining_total_amount = Self::include_address_and_cut(
-            &mut distribution,
-            remaining_total_amount,
-            &config.fee_address_parsed,
-            config.fee,
-        );
-
-        // Only calculate proportional distribution if there's remaining amount for miners
-        // This avoids parsing miner addresses when 100% goes to donation/fee
-        // This also avoids running PPLNS share look ups when we don't need to use that data
-        if remaining_total_amount > bitcoin::Amount::ZERO {
-            let shares = self
-                .get_shares_for_difficulty(&chain_store_handle, total_difficulty)
-                .await?;
-
-            if shares.is_empty() {
-                return Ok(vec![OutputPair {
-                    address: config.bootstrap_address().clone(),
-                    amount: total_amount,
-                }]);
-            }
-
-            let address_difficulty_map = Self::group_shares_by_address(&shares);
-
-            distribution.reserve(address_difficulty_map.len());
-
-            Self::append_proportional_distribution(
-                address_difficulty_map,
-                remaining_total_amount,
-                &mut distribution,
-            )?;
-        }
-
-        Ok(distribution)
     }
 
     /// Appends new output pair to distribution and returns remaining amount
@@ -302,7 +303,6 @@ mod tests {
 
         let result = payout
             .get_shares_for_difficulty(&chain_store_handle, 1000.0)
-            .await
             .unwrap();
 
         // Should return all shares since total difficulty is exactly 1000
@@ -378,7 +378,6 @@ mod tests {
 
         let result = payout
             .get_shares_for_difficulty(&chain_store_handle, 750.0)
-            .await
             .unwrap();
 
         // Should return first 3 shares (400 + 300 + 200 = 900, which exceeds 750)
@@ -440,7 +439,6 @@ mod tests {
 
         let result = payout
             .get_shares_for_difficulty(&chain_store_handle, 500.0)
-            .await
             .unwrap();
 
         // Should return all available shares even though total difficulty (300) < target (500)
@@ -461,7 +459,6 @@ mod tests {
 
         let result = payout
             .get_shares_for_difficulty(&chain_store_handle, 1000.0)
-            .await
             .unwrap();
 
         assert_eq!(result.len(), 0);
@@ -494,7 +491,6 @@ mod tests {
 
         let result = payout
             .get_shares_for_difficulty(&chain_store_handle, 1000.0)
-            .await
             .unwrap();
 
         // Should return the single share even though it exceeds target
@@ -572,7 +568,6 @@ mod tests {
 
         let result = payout
             .get_shares_for_difficulty(&chain_store_handle, 550.0)
-            .await
             .unwrap();
 
         // Should return first 3 shares (100 + 200 + 300 = 600, which exceeds 550)
@@ -624,7 +619,6 @@ mod tests {
 
         let result = payout
             .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
-            .await
             .unwrap();
 
         assert_eq!(result.len(), 1);
@@ -678,7 +672,6 @@ mod tests {
 
         let result = payout
             .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
-            .await
             .unwrap();
 
         assert_eq!(result.len(), 2);
@@ -759,7 +752,6 @@ mod tests {
 
         let result = payout
             .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
-            .await
             .unwrap();
 
         // Should have 2 unique addresses
@@ -790,7 +782,6 @@ mod tests {
 
         let result = payout
             .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
-            .await
             .unwrap();
 
         assert_eq!(result.len(), 1);
@@ -915,7 +906,6 @@ mod tests {
 
         let result = payout
             .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
-            .await
             .unwrap();
 
         // Should have 3 outputs: donation + 2 miners
@@ -1004,7 +994,6 @@ mod tests {
 
         let result = payout
             .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
-            .await
             .unwrap();
 
         // Should have 3 outputs: fee + 2 miners
@@ -1099,7 +1088,6 @@ mod tests {
 
         let result = payout
             .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
-            .await
             .unwrap();
 
         // Should have 4 outputs: donation + fee + 2 miners
@@ -1176,7 +1164,6 @@ mod tests {
 
         let result = payout
             .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
-            .await
             .unwrap();
 
         // When no shares, all funds should go to bootstrap address (not donation)
@@ -1233,7 +1220,6 @@ mod tests {
 
         let result = payout
             .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
-            .await
             .unwrap();
 
         // Should have only 2 outputs: just the 2 miners (no donation output)
@@ -1319,7 +1305,6 @@ mod tests {
 
         let result = payout
             .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
-            .await
             .unwrap();
 
         // Should have only 2 outputs: just the 2 miners (no fee output)
@@ -1385,7 +1370,6 @@ mod tests {
 
         let result = payout
             .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
-            .await
             .unwrap();
 
         // Should have only 1 output: donation gets 100%
