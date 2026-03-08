@@ -24,6 +24,7 @@ function dashboard() {
         sharesPage: 0,
         sharesPerPage: 10,
         selectedShare: null,
+        uncles: {},
         websocket: null,
         wsConnected: false,
 
@@ -110,6 +111,32 @@ function dashboard() {
                     this.chainInfo.total_work = "0x" + (currentWork + work).toString(16).padStart(64, "0");
                 }
             }
+            if (message.topic === "Uncle") {
+                var uncle = message.data;
+                this.uncles[uncle.blockhash] = uncle;
+                this.capUncles();
+            }
+        },
+
+        extractUnclesFromShares(shares) {
+            for (var idx = 0; idx < shares.length; idx++) {
+                var share = shares[idx];
+                for (var uncleIdx = 0; uncleIdx < share.uncles.length; uncleIdx++) {
+                    var uncle = share.uncles[uncleIdx];
+                    this.uncles[uncle.blockhash] = uncle;
+                }
+            }
+        },
+
+        capUncles() {
+            var maxUncles = this.shares.length * 3;
+            var keys = Object.keys(this.uncles);
+            if (keys.length > maxUncles) {
+                var excess = keys.length - maxUncles;
+                for (var idx = 0; idx < excess; idx++) {
+                    delete this.uncles[keys[idx]];
+                }
+            }
         },
 
         get pagedShares() {
@@ -180,6 +207,7 @@ function dashboard() {
 
                 var data = await response.json();
                 this.shares = data.shares;
+                this.extractUnclesFromShares(data.shares);
             } catch (err) {
                 this.sharesError = "Connection failed: " + err.message;
             }
@@ -213,6 +241,7 @@ function dashboard() {
             this.shares = [];
             this.sharesError = "";
             this.selectedShare = null;
+            this.uncles = {};
             this.username = "";
             this.password = "";
             this.error = "";
