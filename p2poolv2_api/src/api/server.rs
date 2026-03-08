@@ -21,6 +21,7 @@ use axum::{
     Extension, Json, Router,
     extract::{FromRef, Query, State},
     middleware::{self},
+    response::Html,
     routing::get,
 };
 use chrono::DateTime;
@@ -88,12 +89,17 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
             auth_middleware,
         ));
 
-    // WebSocket route handles its own auth via query param, so it
-    // must be on a separate router without the auth middleware.
-    let websocket_routes = Router::new().route("/ws", get(websocket_handler));
+    // Routes that handle their own auth or need none.
+    // WebSocket validates credentials via query param in its handler.
+    // Dashboard serves a static page that authenticates client-side.
+    let unauthenticated_routes = Router::new()
+        .route("/ws", get(websocket_handler))
+        .route("/dashboard", get(dashboard))
+        .route("/static/pico.min.css", get(pico_css))
+        .route("/static/alpine.min.js", get(alpine_js));
 
     authenticated_routes
-        .merge(websocket_routes)
+        .merge(unauthenticated_routes)
         .layer(Extension(app_config))
         .with_state(app_state)
 }
@@ -156,6 +162,27 @@ pub async fn start_api_server(
 
 async fn health_check() -> String {
     "OK".into()
+}
+
+/// Serves the static monitoring dashboard HTML page.
+async fn dashboard() -> Html<&'static str> {
+    Html(include_str!("../../static/dashboard.html"))
+}
+
+/// Serves the vendored Pico CSS stylesheet.
+async fn pico_css() -> ([(&'static str, &'static str); 1], &'static str) {
+    (
+        [("content-type", "text/css")],
+        include_str!("../../static/pico.min.css"),
+    )
+}
+
+/// Serves the vendored Alpine.js script.
+async fn alpine_js() -> ([(&'static str, &'static str); 1], &'static str) {
+    (
+        [("content-type", "application/javascript")],
+        include_str!("../../static/alpine.min.js"),
+    )
 }
 
 /// Returns pool metrics in grafana exposition format
