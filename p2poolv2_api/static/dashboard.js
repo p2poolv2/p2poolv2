@@ -10,6 +10,8 @@ function dashboard() {
         chainError: "",
         shares: [],
         sharesError: "",
+        sharesPage: 0,
+        sharesPerPage: 10,
         websocket: null,
         wsConnected: false,
 
@@ -83,7 +85,36 @@ function dashboard() {
 
         handleWsMessage(message) {
             if (message.topic === "Share") {
-                console.log("share received");
+                var share = message.data;
+                this.shares.unshift(share);
+                if (this.shares.length > 1000) {
+                    this.shares.length = 1000;
+                }
+                if (this.chainInfo) {
+                    this.chainInfo.chain_tip_height = share.height;
+                    this.chainInfo.chain_tip_blockhash = share.blockhash;
+                }
+            }
+        },
+
+        get pagedShares() {
+            var start = this.sharesPage * this.sharesPerPage;
+            return this.shares.slice(start, start + this.sharesPerPage);
+        },
+
+        get totalSharesPages() {
+            return Math.max(1, Math.ceil(this.shares.length / this.sharesPerPage));
+        },
+
+        previousSharesPage() {
+            if (this.sharesPage > 0) {
+                this.sharesPage = this.sharesPage - 1;
+            }
+        },
+
+        nextSharesPage() {
+            if (this.sharesPage < this.totalSharesPages - 1) {
+                this.sharesPage = this.sharesPage + 1;
             }
         },
 
