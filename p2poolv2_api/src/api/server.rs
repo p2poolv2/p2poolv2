@@ -96,7 +96,8 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
         .route("/ws", get(websocket_handler))
         .route("/dashboard", get(dashboard))
         .route("/static/pico.min.css", get(pico_css))
-        .route("/static/alpine.min.js", get(alpine_js));
+        .route("/static/alpine.min.js", get(alpine_js))
+        .route("/static/dashboard.js", get(dashboard_js));
 
     authenticated_routes
         .merge(unauthenticated_routes)
@@ -182,6 +183,14 @@ async fn alpine_js() -> ([(&'static str, &'static str); 1], &'static str) {
     (
         [("content-type", "application/javascript")],
         include_str!("../../static/alpine.min.js"),
+    )
+}
+
+/// Serves the dashboard application script.
+async fn dashboard_js() -> ([(&'static str, &'static str); 1], &'static str) {
+    (
+        [("content-type", "application/javascript")],
+        include_str!("../../static/dashboard.js"),
     )
 }
 
