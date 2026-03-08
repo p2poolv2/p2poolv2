@@ -129,7 +129,7 @@ function dashboard() {
         },
 
         capUncles() {
-            var maxUncles = this.shares.length * 3;
+            var maxUncles = 3000;
             var keys = Object.keys(this.uncles);
             if (keys.length > maxUncles) {
                 var excess = keys.length - maxUncles;
