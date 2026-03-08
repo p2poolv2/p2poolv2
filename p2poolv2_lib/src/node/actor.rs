@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::accounting::stats::metrics::MetricsHandle;
 use crate::command::Command;
 use crate::config::Config;
@@ -488,7 +488,7 @@ impl NodeActor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounting::simple_pplns::SimplePplnsShare;
+    use crate::accounting::payout::simple_pplns::SimplePplnsShare;
     use crate::command::GetPplnsShareQuery;
     use tokio::sync::mpsc;
 

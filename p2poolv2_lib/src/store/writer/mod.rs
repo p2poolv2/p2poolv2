@@ -27,7 +27,7 @@ mod handle;
 
 pub use handle::StoreHandle;
 
-use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
 use bitcoin::{BlockHash, Work};

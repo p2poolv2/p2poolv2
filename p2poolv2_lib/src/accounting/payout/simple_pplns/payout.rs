@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::OutputPair;
-use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::config::StratumConfig;
 #[cfg(test)]
 #[mockall_double::double]

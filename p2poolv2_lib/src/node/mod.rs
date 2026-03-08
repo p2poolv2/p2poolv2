@@ -24,7 +24,7 @@ pub mod actor;
 pub mod messages;
 pub mod p2p_message_handlers;
 
-use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender, PeerResponse, PeerStatus};
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::senders::send_getheaders;

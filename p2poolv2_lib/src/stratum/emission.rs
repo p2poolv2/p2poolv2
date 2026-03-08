@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::share_commitment::ShareCommitment;
 use crate::stratum::work::block_template::BlockTemplate;
 use bitcoin::block::Header;

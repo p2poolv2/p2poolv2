@@ -20,7 +20,7 @@ use super::error::WorkError;
 use super::gbt::build_merkle_branches_for_template;
 use super::tracker::{JobId, JobTracker};
 use crate::accounting::OutputPair;
-use crate::accounting::simple_pplns::payout::Payout;
+use crate::accounting::payout::simple_pplns::payout::Payout;
 use crate::config::StratumConfig;
 use crate::pool_difficulty;
 #[cfg(test)]
@@ -310,7 +310,7 @@ pub async fn start_notify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounting::simple_pplns::SimplePplnsShare;
+    use crate::accounting::payout::simple_pplns::SimplePplnsShare;
     use crate::stratum::work::block_template::{BlockTemplate, TemplateTransaction};
     use crate::stratum::work::coinbase::extract_outputs_from_coinbase2;
     use crate::stratum::work::tracker::start_tracker_actor;
