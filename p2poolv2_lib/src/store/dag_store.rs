@@ -443,26 +443,7 @@ impl Store {
                 StoreError::NotFound(format!("Share header not found for {blockhash}"))
             })?;
 
-            let uncle_infos: Vec<UncleInfo> = share_header
-                .uncles
-                .iter()
-                .filter_map(|uncle_hash| {
-                    let uncle_header = self.get_share_header(uncle_hash).ok().flatten()?;
-
-                    let uncle_height = self
-                        .get_block_metadata(uncle_hash)
-                        .ok()
-                        .and_then(|metadata| metadata.expected_height);
-
-                    Some(UncleInfo {
-                        blockhash: *uncle_hash,
-                        prev_blockhash: uncle_header.prev_share_blockhash,
-                        miner_pubkey: uncle_header.miner_pubkey.to_string(),
-                        timestamp: uncle_header.time,
-                        height: uncle_height,
-                    })
-                })
-                .collect();
+            let uncle_infos = self.get_uncle_infos(&share_header.uncles);
 
             shares.push(ShareInfo {
                 blockhash: *blockhash,
