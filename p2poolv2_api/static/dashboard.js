@@ -8,6 +8,8 @@ function dashboard() {
         credentials: "",
         chainInfo: null,
         chainError: "",
+        shares: [],
+        sharesError: "",
         websocket: null,
         wsConnected: false,
 
@@ -35,6 +37,7 @@ function dashboard() {
                 this.chainInfo = await response.json();
                 this.authenticated = true;
                 this.password = "";
+                this.fetchShares();
                 this.connectWebSocket();
             } catch (err) {
                 this.error = "Connection failed: " + err.message;
@@ -111,6 +114,38 @@ function dashboard() {
             }
         },
 
+        async fetchShares() {
+            this.sharesError = "";
+
+            try {
+                var response = await fetch("/shares", {
+                    headers: { Authorization: "Basic " + this.credentials },
+                });
+
+                if (!response.ok) {
+                    this.sharesError =
+                        "Failed to fetch shares: " + response.status;
+                    return;
+                }
+
+                var data = await response.json();
+                this.shares = data.shares;
+            } catch (err) {
+                this.sharesError = "Connection failed: " + err.message;
+            }
+        },
+
+        formatHash(hash) {
+            if (!hash) return "N/A";
+            if (hash.length <= 16) return hash;
+            return hash.substring(0, 8) + "..." + hash.substring(hash.length - 8);
+        },
+
+        formatTimestamp(timestamp) {
+            if (!timestamp) return "N/A";
+            return new Date(timestamp * 1000).toLocaleString();
+        },
+
         closeWebSocket() {
             if (this.websocket) {
                 this.websocket.onclose = null;
@@ -125,6 +160,8 @@ function dashboard() {
             this.authenticated = false;
             this.credentials = "";
             this.chainInfo = null;
+            this.shares = [];
+            this.sharesError = "";
             this.username = "";
             this.password = "";
             this.error = "";
