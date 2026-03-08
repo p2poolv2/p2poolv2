@@ -98,7 +98,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <template x-for="share in shares" :key="share.blockhash">
+                  <template x-for="share in pagedShares" :key="share.blockhash">
                     <tr>
                       <td x-text="share.height"></td>
                       <td><code x-text="formatHash(share.blockhash)"></code></td>
@@ -109,6 +109,17 @@
                   </template>
                 </tbody>
               </table>
+              <nav>
+                <ul>
+                  <li><button class="outline" @click="previousSharesPage" :disabled="sharesPage === 0">Previous</button></li>
+                </ul>
+                <ul>
+                  <li><span x-text="(sharesPage + 1) + ' / ' + totalSharesPages"></span></li>
+                </ul>
+                <ul>
+                  <li><button class="outline" @click="nextSharesPage" :disabled="sharesPage >= totalSharesPages - 1">Next</button></li>
+                </ul>
+              </nav>
             </div>
           </template>
 
