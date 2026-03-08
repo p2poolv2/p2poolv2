@@ -14,13 +14,4 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod calc;
-pub mod payout;
-pub mod stats;
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct OutputPair {
-    pub address: bitcoin::Address,
-    pub amount: bitcoin::Amount,
-}
+pub mod simple_pplns;

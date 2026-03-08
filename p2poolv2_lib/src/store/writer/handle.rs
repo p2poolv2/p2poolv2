@@ -21,7 +21,7 @@
 //! while ensuring all writes are processed sequentially.
 
 use super::{StoreError, WriteCommand, WriteSender};
-use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
 use crate::store::stored_user::StoredUser;

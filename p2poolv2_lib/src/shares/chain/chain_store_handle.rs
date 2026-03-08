@@ -20,7 +20,7 @@
 //! height calculation, chain work tracking, and reorg handling. Read operations
 //! are synchronous and direct, while writes are serialized through the store writer.
 
-use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::dag_store::UncleInfo;

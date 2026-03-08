@@ -18,7 +18,9 @@ use base64::Engine;
 use chrono::{TimeZone, Utc};
 use p2poolv2_api::api::error::ApiError;
 use p2poolv2_api::start_api_server;
-use p2poolv2_lib::accounting::{simple_pplns::SimplePplnsShare, stats::metrics::start_metrics};
+use p2poolv2_lib::accounting::{
+    payout::simple_pplns::SimplePplnsShare, stats::metrics::start_metrics,
+};
 use p2poolv2_lib::config::ApiConfig;
 use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
 use p2poolv2_lib::node::actor::NodeHandle;

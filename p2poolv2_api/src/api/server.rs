@@ -29,7 +29,7 @@ use p2poolv2_lib::monitoring_events::MonitoringEventSender;
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::stratum::work::tracker::{JobTracker, parse_coinbase};
 use p2poolv2_lib::{
-    accounting::{simple_pplns::SimplePplnsShare, stats::metrics::MetricsHandle},
+    accounting::{payout::simple_pplns::SimplePplnsShare, stats::metrics::MetricsHandle},
     config::ApiConfig,
     shares::chain::chain_store_handle::ChainStoreHandle,
 };

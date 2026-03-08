@@ -269,4 +269,4 @@ const PPLNS_WINDOW: usize = 2160;            // PPLNS window in shares
 | PPLNS Shares       | `p2poolv2_lib/src/store/pplns_shares.rs`          | PPLNS share storage and filtering        |
 | Background Tasks   | `p2poolv2_lib/src/store/background_tasks.rs`      | Async background operations              |
 | ChainStore         | `p2poolv2_lib/src/shares/chain/chain_store.rs`    | High-level chain operations              |
-| SimplePplnsShare   | `p2poolv2_lib/src/accounting/simple_pplns/mod.rs` | PPLNS share struct definition            |
+| SimplePplnsShare   | `p2poolv2_lib/src/accounting/payout/simple_pplns/mod.rs` | PPLNS share struct definition            |

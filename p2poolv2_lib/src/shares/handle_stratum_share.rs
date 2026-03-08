@@ -96,7 +96,7 @@ pub async fn handle_stratum_share(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounting::simple_pplns::SimplePplnsShare;
+    use crate::accounting::payout::simple_pplns::SimplePplnsShare;
     use crate::store::writer::StoreError;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::test_utils::create_test_commitment;

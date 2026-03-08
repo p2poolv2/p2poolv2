@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::store::Store;
 use crate::store::column_families::ColumnFamily;
 use crate::store::writer::StoreError;
@@ -125,7 +125,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounting::simple_pplns::SimplePplnsShare;
+    use crate::accounting::payout::simple_pplns::SimplePplnsShare;
     use tempfile::tempdir;
 
     #[test]

@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::{Store, column_families::ColumnFamily, writer::StoreError};
-use crate::accounting::simple_pplns::SimplePplnsShare;
+use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::utils::snowflake_simplified::get_next_id;
 use bitcoin::consensus::Encodable;
 use bitcoin::consensus::encode;
@@ -123,7 +123,7 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use crate::accounting::simple_pplns::SimplePplnsShare;
+    use crate::accounting::payout::simple_pplns::SimplePplnsShare;
     use crate::store::Store;
     use tempfile::tempdir;
 
