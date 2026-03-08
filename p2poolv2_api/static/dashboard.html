@@ -75,6 +75,47 @@
             </div>
           </template>
         </article>
+
+        <article>
+          <header>
+            <h3>Shares</h3>
+          </header>
+
+          <template x-if="sharesError">
+            <p role="alert" style="color: var(--pico-del-color);" x-text="sharesError"></p>
+          </template>
+
+          <template x-if="shares.length > 0">
+            <div class="overflow-auto">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Height</th>
+                    <th>Blockhash</th>
+                    <th>Miner</th>
+                    <th>Time</th>
+                    <th>Uncles</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="share in shares" :key="share.blockhash">
+                    <tr>
+                      <td x-text="share.height"></td>
+                      <td><code x-text="formatHash(share.blockhash)"></code></td>
+                      <td><code x-text="formatHash(share.miner_pubkey)"></code></td>
+                      <td x-text="formatTimestamp(share.timestamp)"></td>
+                      <td x-text="share.uncles.length"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </template>
+
+          <template x-if="shares.length === 0 && !sharesError">
+            <p>No shares found.</p>
+          </template>
+        </article>
       </div>
     </template>
 
