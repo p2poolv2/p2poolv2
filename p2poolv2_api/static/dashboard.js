@@ -23,7 +23,7 @@ function dashboard() {
         shares: [],
         sharesError: "",
         sharesPage: 0,
-        sharesPerPage: 25,
+        sharesPerPage: 10,
         selectedShare: null,
         selectedUncle: null,
         websocket: null,
