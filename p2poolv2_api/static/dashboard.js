@@ -164,6 +164,16 @@ function dashboard() {
             this.selectedShare = share;
         },
 
+        resolveUncle(uncle) {
+            if (typeof uncle === "object") {
+                return uncle;
+            }
+            if (this.uncles[uncle]) {
+                return this.uncles[uncle];
+            }
+            return { blockhash: uncle };
+        },
+
         async fetchChainInfo() {
             this.chainError = "";
 
