@@ -21,14 +21,14 @@
 //! tokio task, decoupled from share producers (emission worker, peer
 //! handler, future validation worker).
 
-use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender, ShareNotification};
+use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
-use crate::store::dag_store::UncleInfo;
+use crate::store::dag_store::ShareInfo;
 use crate::store::writer::StoreError;
 use std::fmt;
 use tokio::sync::mpsc;
@@ -108,18 +108,9 @@ impl OrganiseWorker {
                 OrganiseEvent::Header(header) => {
                     let blockhash = header.block_hash();
                     debug!("Organising header: {blockhash:?}");
-                    let uncle_info = UncleInfo {
-                        blockhash,
-                        prev_blockhash: header.prev_share_blockhash,
-                        miner_pubkey: header.miner_pubkey.to_string(),
-                        timestamp: header.time,
-                        height: None,
-                    };
                     match self.chain_store_handle.organise_header(header).await {
                         Ok(Some((_height, _valid_blocks))) => {}
-                        Ok(None) => {
-                            self.emit_uncle_monitoring_event(uncle_info);
-                        }
+                        Ok(None) => {}
                         Err(StoreError::ChannelClosed) => {
                             error!("Store writer channel closed during organise header");
                             return Err(OrganiseError {
@@ -161,28 +152,26 @@ impl OrganiseWorker {
     }
 
     /// Emits a Share monitoring event for a confirmed share.
+    ///
+    /// Looks up uncle details from the store so that subscribers receive
+    /// full uncle information in a single event.
     fn emit_share_monitoring_event(&self, share_block: &ShareBlock, height: u32) {
-        let notification = ShareNotification {
+        let uncle_infos = self
+            .chain_store_handle
+            .get_uncle_infos(&share_block.header.uncles);
+
+        let share_info = ShareInfo {
             blockhash: share_block.block_hash(),
             prev_blockhash: share_block.header.prev_share_blockhash,
             height,
             miner_pubkey: share_block.header.miner_pubkey.to_string(),
             timestamp: share_block.header.time,
             bits: share_block.header.bits,
-            uncles: share_block.header.uncles.clone(),
+            uncles: uncle_infos,
         };
-        let event = MonitoringEvent::Share(notification);
+        let event = MonitoringEvent::Share(share_info);
         if self.monitoring_event_sender.send(event).is_err() {
             debug!("No monitoring subscribers for Share event");
-        }
-    }
-
-    /// Emits an Uncle monitoring event for a header that did not extend
-    /// or reorg the candidate chain.
-    fn emit_uncle_monitoring_event(&self, uncle_info: UncleInfo) {
-        let event = MonitoringEvent::Uncle(uncle_info);
-        if self.monitoring_event_sender.send(event).is_err() {
-            debug!("No monitoring subscribers for Uncle event");
         }
     }
 }

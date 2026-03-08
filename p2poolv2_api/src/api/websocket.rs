@@ -45,11 +45,10 @@ pub(crate) struct WsQuery {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Topic {
     Shares,
-    Uncles,
     Peers,
 }
 
-const TOPIC_COUNT: usize = 3;
+const TOPIC_COUNT: usize = 2;
 
 /// Client-to-server message format.
 #[derive(Deserialize)]
@@ -62,7 +61,6 @@ struct ClientMessage {
 fn parse_topic(topic: &str) -> Option<Topic> {
     match topic {
         "shares" => Some(Topic::Shares),
-        "uncles" => Some(Topic::Uncles),
         "peers" => Some(Topic::Peers),
         _ => None,
     }
@@ -72,7 +70,6 @@ fn parse_topic(topic: &str) -> Option<Topic> {
 fn event_matches_subscriptions(event: &MonitoringEvent, subscriptions: &HashSet<Topic>) -> bool {
     match event {
         MonitoringEvent::Share(_) => subscriptions.contains(&Topic::Shares),
-        MonitoringEvent::Uncle(_) => subscriptions.contains(&Topic::Uncles),
         MonitoringEvent::Peer(_) => subscriptions.contains(&Topic::Peers),
     }
 }
@@ -188,11 +185,13 @@ fn handle_client_message(text: &str, subscriptions: &mut HashSet<Topic>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::hashes::Hash;
+    use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
+    use p2poolv2_lib::store::dag_store::ShareInfo;
 
     #[test]
     fn test_parse_topic_valid() {
         assert_eq!(parse_topic("shares"), Some(Topic::Shares));
-        assert_eq!(parse_topic("uncles"), Some(Topic::Uncles));
         assert_eq!(parse_topic("peers"), Some(Topic::Peers));
     }
 
@@ -204,14 +203,10 @@ mod tests {
 
     #[test]
     fn test_event_matches_subscriptions() {
-        use bitcoin::hashes::Hash;
-        use p2poolv2_lib::monitoring_events::ShareNotification;
-        use p2poolv2_lib::store::dag_store::UncleInfo;
-
         let mut subscriptions = HashSet::with_capacity(TOPIC_COUNT);
         subscriptions.insert(Topic::Shares);
 
-        let share_event = MonitoringEvent::Share(ShareNotification {
+        let share_event = MonitoringEvent::Share(ShareInfo {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 1,
@@ -221,21 +216,12 @@ mod tests {
             uncles: vec![],
         });
 
-        let uncle_event = MonitoringEvent::Uncle(UncleInfo {
-            blockhash: bitcoin::BlockHash::all_zeros(),
-            prev_blockhash: bitcoin::BlockHash::all_zeros(),
-            miner_pubkey: "02bb".to_string(),
-            timestamp: 0,
-            height: None,
-        });
-
         let peer_event = MonitoringEvent::Peer(p2poolv2_lib::monitoring_events::PeerResponse {
             peer_id: "peer1".to_string(),
             status: p2poolv2_lib::monitoring_events::PeerStatus::Connected,
         });
 
         assert!(event_matches_subscriptions(&share_event, &subscriptions));
-        assert!(!event_matches_subscriptions(&uncle_event, &subscriptions));
         assert!(!event_matches_subscriptions(&peer_event, &subscriptions));
     }
 
@@ -289,9 +275,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_broadcast_event_delivered_to_subscriber() {
-        use bitcoin::hashes::Hash;
-        use p2poolv2_lib::monitoring_events::{ShareNotification, create_monitoring_event_channel};
-
         let (sender, _guard) = create_monitoring_event_channel();
         let mut receiver = sender.subscribe();
 
@@ -302,7 +285,7 @@ mod tests {
             &mut subscriptions,
         );
 
-        let share_event = MonitoringEvent::Share(ShareNotification {
+        let share_event = MonitoringEvent::Share(ShareInfo {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 42,
@@ -326,9 +309,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_broadcast_event_filtered_for_unsubscribed_topic() {
-        use bitcoin::hashes::Hash;
-        use p2poolv2_lib::monitoring_events::{ShareNotification, create_monitoring_event_channel};
-
         let (sender, _guard) = create_monitoring_event_channel();
         let mut receiver = sender.subscribe();
 
@@ -339,7 +319,7 @@ mod tests {
             &mut subscriptions,
         );
 
-        let share_event = MonitoringEvent::Share(ShareNotification {
+        let share_event = MonitoringEvent::Share(ShareInfo {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 1,
