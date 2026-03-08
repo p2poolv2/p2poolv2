@@ -1,3 +1,14 @@
+// Convert Bitcoin compact target (bits) to work.
+// Work = 2^256 / (target + 1) where target is decoded from the compact format.
+function workFromBits(bits) {
+    var exponent = bits >> 24;
+    var mantissa = BigInt(bits & 0x7fffff);
+    var shift = 8 * (exponent - 3);
+    var target = shift >= 0 ? mantissa << BigInt(shift) : mantissa >> BigInt(-shift);
+    var two256 = 1n << 256n;
+    return two256 / (target + 1n);
+}
+
 function dashboard() {
     return {
         username: "",
@@ -12,6 +23,7 @@ function dashboard() {
         sharesError: "",
         sharesPage: 0,
         sharesPerPage: 10,
+        selectedShare: null,
         websocket: null,
         wsConnected: false,
 
@@ -93,6 +105,9 @@ function dashboard() {
                 if (this.chainInfo) {
                     this.chainInfo.chain_tip_height = share.height;
                     this.chainInfo.chain_tip_blockhash = share.blockhash;
+                    var work = workFromBits(share.bits);
+                    var currentWork = BigInt(this.chainInfo.total_work);
+                    this.chainInfo.total_work = "0x" + (currentWork + work).toString(16).padStart(64, "0");
                 }
             }
         },
@@ -116,6 +131,10 @@ function dashboard() {
             if (this.sharesPage < this.totalSharesPages - 1) {
                 this.sharesPage = this.sharesPage + 1;
             }
+        },
+
+        selectShare(share) {
+            this.selectedShare = share;
         },
 
         async fetchChainInfo() {
@@ -193,6 +212,7 @@ function dashboard() {
             this.chainInfo = null;
             this.shares = [];
             this.sharesError = "";
+            this.selectedShare = null;
             this.username = "";
             this.password = "";
             this.error = "";
