@@ -17,6 +17,8 @@
 use bitcoin::consensus::{Decodable, Encodable};
 use serde::{Deserialize, Serialize};
 
+use super::PayoutShare;
+
 pub mod payout;
 
 /// PPLNS share representation
@@ -43,6 +45,15 @@ pub struct SimplePplnsShare {
     pub extranonce2: String,
     /// nonce from the mining session, used to build block
     pub nonce: String,
+}
+
+impl PayoutShare for SimplePplnsShare {
+    fn get_btcaddress(&self) -> Option<String> {
+        self.btcaddress.clone()
+    }
+    fn get_difficulty(&self) -> u64 {
+        self.difficulty
+    }
 }
 
 impl SimplePplnsShare {
