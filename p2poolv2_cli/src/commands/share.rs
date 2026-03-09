@@ -61,7 +61,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_with_hash() {
         let mock_server = MockServer::start().await;
-        let body = r#"[{"blockhash":"abc123","height":1,"status":"Confirmed","parent":"000","uncles":[],"miner_pubkey":"02aa","merkle_root":"ff","bits":"0x1b4188f5","time":"2024-01-01","bitcoin_header":{"block_hash":"bb","version":2,"prev_blockhash":"00","merkle_root":"ff","time":"2024-01-01","bits":"0x1d00ffff","nonce":0},"bitcoin_transaction_count":1}]"#;
+        let body = r#"[{"blockhash":"abc123","height":1,"status":"Confirmed","parent":"000","uncles":[],"btcaddress":"02aa","merkle_root":"ff","bits":"0x1b4188f5","time":"2024-01-01","bitcoin_header":{"block_hash":"bb","version":2,"prev_blockhash":"00","merkle_root":"ff","time":"2024-01-01","bits":"0x1d00ffff","nonce":0},"bitcoin_transaction_count":1}]"#;
 
         Mock::given(method("GET"))
             .and(path("/share"))
@@ -79,7 +79,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_with_height() {
         let mock_server = MockServer::start().await;
-        let body = r#"[{"blockhash":"abc123","height":42,"status":"Confirmed","parent":"000","uncles":[],"miner_pubkey":"02aa","merkle_root":"ff","bits":"0x1b4188f5","time":"2024-01-01","bitcoin_header":{"block_hash":"bb","version":2,"prev_blockhash":"00","merkle_root":"ff","time":"2024-01-01","bits":"0x1d00ffff","nonce":0},"bitcoin_transaction_count":1}]"#;
+        let body = r#"[{"blockhash":"abc123","height":42,"status":"Confirmed","parent":"000","uncles":[],"btcaddress":"02aa","merkle_root":"ff","bits":"0x1b4188f5","time":"2024-01-01","bitcoin_header":{"block_hash":"bb","version":2,"prev_blockhash":"00","merkle_root":"ff","time":"2024-01-01","bits":"0x1d00ffff","nonce":0},"bitcoin_transaction_count":1}]"#;
 
         Mock::given(method("GET"))
             .and(path("/share"))
@@ -97,7 +97,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_with_full_flag() {
         let mock_server = MockServer::start().await;
-        let body = r#"[{"blockhash":"abc123","height":1,"status":"Confirmed","parent":"000","uncles":[],"miner_pubkey":"02aa","merkle_root":"ff","bits":"0x1b4188f5","time":"2024-01-01","bitcoin_header":{"block_hash":"bb","version":2,"prev_blockhash":"00","merkle_root":"ff","time":"2024-01-01","bits":"0x1d00ffff","nonce":0},"bitcoin_transaction_count":1,"transactions":["txid1"]}]"#;
+        let body = r#"[{"blockhash":"abc123","height":1,"status":"Confirmed","parent":"000","uncles":[],"btcaddress":"02aa","merkle_root":"ff","bits":"0x1b4188f5","time":"2024-01-01","bitcoin_header":{"block_hash":"bb","version":2,"prev_blockhash":"00","merkle_root":"ff","time":"2024-01-01","bits":"0x1d00ffff","nonce":0},"bitcoin_transaction_count":1,"transactions":["txid1"]}]"#;
 
         Mock::given(method("GET"))
             .and(path("/share"))

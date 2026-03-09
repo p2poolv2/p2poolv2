@@ -230,7 +230,10 @@ mod tests {
     use std::str::FromStr;
 
     use super::*;
-    use crate::{stratum::work::block_template::BlockTemplate, test_utils::genesis_for_tests};
+    use crate::{
+        stratum::work::block_template::BlockTemplate,
+        test_utils::{create_test_commitment, genesis_for_tests},
+    };
 
     #[test]
     fn test_parse_address_valid_mainnet() {
@@ -484,15 +487,11 @@ mod tests {
 
         let genesis = genesis_for_tests();
 
+        let share_commitment = create_test_commitment();
         let share_commitment = ShareCommitment {
             prev_share_blockhash: genesis.block_hash(),
-            uncles: vec![],
-            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                .parse()
-                .unwrap(),
             merkle_root: template.get_merkle_root_without_coinbase(),
-            bits: CompactTarget::from_consensus(0x1b4188f5),
-            time: 1700000000u32,
+            ..share_commitment
         };
 
         let share_commitment_cloned = share_commitment.clone();

@@ -210,7 +210,7 @@ mod tests {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 1,
-            miner_pubkey: "02aa".to_string(),
+            miner_address: "02aa".to_string(),
             timestamp: 0,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],
@@ -289,7 +289,7 @@ mod tests {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 42,
-            miner_pubkey: "02aa".to_string(),
+            miner_address: "02aa".to_string(),
             timestamp: 1000,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],
@@ -304,7 +304,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["topic"], "Share");
         assert_eq!(parsed["data"]["height"], 42);
-        assert_eq!(parsed["data"]["miner_pubkey"], "02aa");
+        assert_eq!(parsed["data"]["miner_address"], "02aa");
     }
 
     #[tokio::test]
@@ -323,7 +323,7 @@ mod tests {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 1,
-            miner_pubkey: "02bb".to_string(),
+            miner_address: "02bb".to_string(),
             timestamp: 0,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],

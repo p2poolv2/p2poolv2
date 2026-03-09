@@ -25,8 +25,8 @@ use std::error::Error;
 /// difficulty. It just captures where we started from and keeps all
 /// nodes build on the same chain.
 pub struct GenesisData {
-    /// The public key of the miner that mined the genesis share
-    /// block. Is used to build the coinbase for the share block
+    /// The public key hex string used to derive the miner's bitcoin
+    /// address for the genesis share block coinbase
     pub public_key: &'static str,
     /// The bitcoin block in hex for the share
     pub bitcoin_block_hex: &'static str,

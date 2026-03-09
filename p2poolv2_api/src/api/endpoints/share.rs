@@ -62,7 +62,7 @@ pub struct ShareLookupOutput {
     pub status: String,
     pub parent: String,
     pub uncles: Vec<String>,
-    pub miner_pubkey: String,
+    pub btcaddress: String,
     pub merkle_root: String,
     pub bits: String,
     pub time: String,
@@ -155,7 +155,7 @@ fn build_share_output(
             .iter()
             .map(|uncle| uncle.to_string())
             .collect(),
-        miner_pubkey: share_header.miner_pubkey.to_string(),
+        btcaddress: share_header.miner_address.to_string(),
         merkle_root: share_header.merkle_root.to_string(),
         bits: format!("{:#x}", share_header.bits.to_consensus()),
         time: format_timestamp(share_header.time as u64),

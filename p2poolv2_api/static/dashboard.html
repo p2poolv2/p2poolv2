@@ -155,7 +155,7 @@
                         </td>
                         <td>
                           <code
-                            x-text="formatHash(row.share.miner_pubkey)"
+                            x-text="formatHash(row.share.miner_address)"
                           ></code>
                         </td>
                         <td x-text="formatTimestamp(row.share.timestamp)"></td>
@@ -247,7 +247,7 @@
                 <td>
                   <code
                     style="word-break: break-all"
-                    x-text="selectedShare ? selectedShare.miner_pubkey : ''"
+                    x-text="selectedShare ? selectedShare.miner_address : ''"
                   ></code>
                 </td>
               </tr>
@@ -304,7 +304,7 @@
                       <td>
                         <code
                           style="word-break: break-all"
-                          x-text="uncle.miner_pubkey || 'N/A'"
+                          x-text="uncle.miner_address || 'N/A'"
                         ></code>
                       </td>
                     </tr>
@@ -373,7 +373,7 @@
                 <td>
                   <code
                     style="word-break: break-all"
-                    x-text="selectedUncle ? (selectedUncle.miner_pubkey || 'N/A') : ''"
+                    x-text="selectedUncle ? (selectedUncle.miner_address || 'N/A') : ''"
                   ></code>
                 </td>
               </tr>

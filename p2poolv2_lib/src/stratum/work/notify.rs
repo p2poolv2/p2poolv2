@@ -33,7 +33,7 @@ use crate::shares::share_commitment::{ShareCommitment, build_share_commitment};
 use crate::stratum::messages::{Notify, NotifyParams};
 use crate::stratum::util::reverse_four_byte_chunks;
 use crate::stratum::util::to_be_hex;
-use bitcoin::CompressedPublicKey;
+use bitcoin::Address;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::Version;
 use std::net::SocketAddr;
@@ -53,7 +53,7 @@ use crate::stratum::client_connections::ClientConnectionsHandle;
 pub(crate) struct NotifyContext {
     pub chain_store_handle: ChainStoreHandle,
     pub config: StratumConfig<crate::config::Parsed>,
-    pub miner_pubkey: Option<CompressedPublicKey>,
+    pub miner_address: Option<Address>,
     pub pool_signature: Vec<u8>,
     pub tracker_handle: Arc<JobTracker>,
     pub pool_difficulty: pool_difficulty::PoolDifficulty,
@@ -161,7 +161,7 @@ async fn build_notify_and_commitment(
     let share_commitment = build_share_commitment(
         &context.chain_store_handle,
         template,
-        context.miner_pubkey,
+        context.miner_address.clone(),
         &context.pool_difficulty,
     )
     .map_err(|_| WorkError {
@@ -216,7 +216,7 @@ pub async fn start_notify(
     chain_store_handle: ChainStoreHandle,
     tracker_handle: Arc<JobTracker>,
     config: &StratumConfig<crate::config::Parsed>,
-    miner_pubkey: Option<CompressedPublicKey>,
+    miner_address: Option<Address>,
 ) {
     let pool_difficulty = match pool_difficulty::PoolDifficulty::build(&chain_store_handle) {
         Ok(pool_difficulty) => pool_difficulty,
@@ -234,7 +234,7 @@ pub async fn start_notify(
     let notify_context = NotifyContext {
         chain_store_handle,
         config: config.clone(),
-        miner_pubkey,
+        miner_address,
         pool_signature,
         tracker_handle,
         pool_difficulty,
@@ -321,7 +321,7 @@ mod tests {
     use crate::stratum::work::tracker::start_tracker_actor;
     use crate::test_utils::genesis_for_tests;
     use bitcoin::CompressedPublicKey;
-    use bitcoin::{Amount, ScriptBuf, TxOut};
+    use bitcoin::{Address, Amount, Network, ScriptBuf, TxOut};
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::time::SystemTime;
@@ -478,6 +478,7 @@ mod tests {
             "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap();
+        let miner_address = Address::p2wpkh(&miner_pubkey, Network::Signet);
 
         let task_handle = tokio::spawn(async move {
             start_notify(
@@ -486,7 +487,7 @@ mod tests {
                 chain_store_handle,
                 work_map_handle,
                 &stratum_config,
-                Some(miner_pubkey),
+                Some(miner_address),
             )
             .await;
         });
@@ -578,6 +579,7 @@ mod tests {
             "020202020202020202020202020202020202020202020202020202020202020202"
                 .parse()
                 .unwrap();
+        let btcaddress = Address::p2wpkh(&miner_pubkey, Network::Signet);
 
         let pool_difficulty =
             pool_difficulty::PoolDifficulty::new(genesis.header.bits, genesis.header.time, 0);
@@ -585,7 +587,7 @@ mod tests {
         let context = NotifyContext {
             chain_store_handle,
             config: stratum_config,
-            miner_pubkey: Some(miner_pubkey),
+            miner_address: Some(btcaddress.clone()),
             pool_signature: b"test_pool".to_vec(),
             tracker_handle,
             pool_difficulty,
@@ -608,7 +610,7 @@ mod tests {
         // Verify share commitment was created
         assert!(share_commitment.is_some());
         let commitment = share_commitment.unwrap();
-        assert_eq!(commitment.miner_pubkey, miner_pubkey);
+        assert_eq!(commitment.miner_address, btcaddress);
 
         // Verify the job was inserted in the tracker
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
@@ -619,7 +621,7 @@ mod tests {
         // Verify share_commitment is properly set in tracker
         assert!(details.share_commitment.is_some());
         let stored_commitment = details.share_commitment.unwrap();
-        assert_eq!(stored_commitment.miner_pubkey, miner_pubkey);
+        assert_eq!(stored_commitment.miner_address, btcaddress);
         assert_eq!(stored_commitment.prev_share_blockhash, genesis.block_hash());
     }
 

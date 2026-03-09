@@ -34,11 +34,11 @@ use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
 #[cfg(any(test, feature = "test-utils"))]
 use crate::shares::transactions::coinbase::create_coinbase_transaction;
 #[cfg(any(test, feature = "test-utils"))]
-use bitcoin::CompressedPublicKey;
-#[cfg(any(test, feature = "test-utils"))]
 use bitcoin::hashes::Hash;
 #[cfg(any(test, feature = "test-utils"))]
-use bitcoin::{Block, BlockHash, CompactTarget, Transaction, block::Header};
+use bitcoin::{
+    Address, Block, BlockHash, CompactTarget, CompressedPublicKey, Transaction, block::Header,
+};
 #[cfg(any(test, feature = "test-utils"))]
 use std::str::FromStr;
 
@@ -103,15 +103,17 @@ pub fn on_schedule_pool_difficulty() -> PoolDifficulty {
 
 #[cfg(test)]
 pub fn create_test_commitment() -> ShareCommitment {
+    let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+        .parse::<CompressedPublicKey>()
+        .unwrap();
+    let btcaddress = Address::p2wpkh(&pubkey, bitcoin::Network::Signet);
     ShareCommitment {
         prev_share_blockhash: BlockHash::from_str(
             "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
         )
         .unwrap(),
         uncles: vec![],
-        miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<CompressedPublicKey>()
-            .unwrap(),
+        miner_address: btcaddress,
         merkle_root: Some(TxMerkleNode::all_zeros()),
         bits: CompactTarget::from_consensus(0x1b4188f5),
         time: 1700000000,
@@ -139,8 +141,8 @@ pub fn test_coinbase_transaction() -> bitcoin::Transaction {
     let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
         .parse::<bitcoin::CompressedPublicKey>()
         .unwrap();
-
-    create_coinbase_transaction(&pubkey, bitcoin::Network::Signet)
+    let btcaddress = Address::p2wpkh(&pubkey, bitcoin::Network::Signet);
+    create_coinbase_transaction(&btcaddress)
 }
 
 #[cfg(test)]
@@ -223,13 +225,16 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
         nonce: u32::from_str_radix(submit.params[4].as_ref().unwrap(), 16).unwrap(),
     };
 
+    let pubkey = CompressedPublicKey::from_str(
+        "020202020202020202020202020202020202020202020202020202020202020202",
+    )
+    .unwrap();
+    let btcaddress = Address::p2wpkh(&pubkey, bitcoin::Network::Signet);
+
     let share_header = ShareHeader {
         prev_share_blockhash: BlockHash::all_zeros(),
         uncles: vec![],
-        miner_pubkey: CompressedPublicKey::from_str(
-            "020202020202020202020202020202020202020202020202020202020202020202",
-        )
-        .unwrap(),
+        miner_address: btcaddress,
         merkle_root: share_merkle_root,
         bitcoin_header,
         time: 1700000000u32,
@@ -277,8 +282,8 @@ impl TestShareBlockBuilder {
         self
     }
 
-    pub fn miner_pubkey(mut self, miner_pubkey: &str) -> Self {
-        self.miner_pubkey = Some(miner_pubkey.to_string());
+    pub fn miner_pubkey(mut self, pubkey_hex: &str) -> Self {
+        self.miner_pubkey = Some(pubkey_hex.to_string());
         self
     }
 
@@ -303,13 +308,13 @@ impl TestShareBlockBuilder {
     }
 
     pub fn build(self) -> ShareBlock {
-        let coinbase = match self.miner_pubkey {
-            Some(ref pk) => {
-                let pubkey = CompressedPublicKey::from_str(pk).unwrap();
-                create_coinbase_transaction(&pubkey, bitcoin::Network::Signet)
-            }
-            None => test_coinbase_transaction(),
-        };
+        let default_pubkey_hex =
+            "020202020202020202020202020202020202020202020202020202020202020202";
+        let pubkey_hex = self.miner_pubkey.as_deref().unwrap_or(default_pubkey_hex);
+        let pubkey = CompressedPublicKey::from_str(pubkey_hex).unwrap();
+        let btcaddress = Address::p2wpkh(&pubkey, bitcoin::Network::Signet);
+
+        let coinbase = create_coinbase_transaction(&btcaddress);
         let all_transactions: Vec<ShareTransaction> = {
             let mut txs = vec![ShareTransaction(coinbase)];
             txs.extend(self.transactions.into_iter().map(ShareTransaction));
@@ -321,11 +326,7 @@ impl TestShareBlockBuilder {
                 .unwrap_or(BlockHash::all_zeros().to_string())
                 .as_str(),
             self.uncles,
-            self.miner_pubkey
-                .unwrap_or(
-                    "020202020202020202020202020202020202020202020202020202020202020202".into(),
-                )
-                .as_str(),
+            &btcaddress,
             all_transactions,
             self.work,
             self.nonce,
@@ -375,7 +376,7 @@ fn test_share_block(
     bitcoin_block: Option<Block>,
     prev_share_blockhash: &str,
     uncles: Vec<BlockHash>,
-    miner_pubkey: &str,
+    btcaddress: &Address,
     transactions: Vec<ShareTransaction>,
     work: Option<u32>,
     nonce: Option<u32>,
@@ -410,7 +411,7 @@ fn test_share_block(
     let header = ShareHeader {
         prev_share_blockhash: BlockHash::from_str(prev_share_blockhash).unwrap(),
         uncles,
-        miner_pubkey: CompressedPublicKey::from_str(miner_pubkey).unwrap(),
+        miner_address: btcaddress.clone(),
         merkle_root: share_merkle_root,
         bitcoin_header,
         time: 1700000000u32,
@@ -429,7 +430,7 @@ fn test_share_block(
 pub struct TestShareHeaderBuilder {
     prev_share_blockhash: Option<BlockHash>,
     uncles: Vec<BlockHash>,
-    miner_pubkey: Option<CompressedPublicKey>,
+    btcaddress: Option<Address>,
     transactions: Vec<Transaction>,
 }
 
@@ -439,7 +440,7 @@ impl Default for TestShareHeaderBuilder {
         Self {
             prev_share_blockhash: None,
             uncles: Vec::new(),
-            miner_pubkey: None,
+            btcaddress: None,
             transactions: Vec::new(),
         }
     }
@@ -466,8 +467,8 @@ impl TestShareHeaderBuilder {
         self
     }
 
-    pub fn miner_pubkey(mut self, miner_pubkey: CompressedPublicKey) -> Self {
-        self.miner_pubkey = Some(miner_pubkey);
+    pub fn btcaddress(mut self, btcaddress: Address) -> Self {
+        self.btcaddress = Some(btcaddress);
         self
     }
 
@@ -480,6 +481,7 @@ impl TestShareHeaderBuilder {
         let default_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
             .parse::<CompressedPublicKey>()
             .unwrap();
+        let default_address = Address::p2wpkh(&default_pubkey, bitcoin::Network::Signet);
 
         let default_merkle_root = {
             let tx = test_coinbase_transaction();
@@ -497,7 +499,7 @@ impl TestShareHeaderBuilder {
         ShareHeader {
             prev_share_blockhash: self.prev_share_blockhash.unwrap_or(BlockHash::all_zeros()),
             uncles: self.uncles,
-            miner_pubkey: self.miner_pubkey.unwrap_or(default_pubkey),
+            miner_address: self.btcaddress.unwrap_or(default_address),
             merkle_root: share_merkle_root,
             bitcoin_header: Header {
                 version: bitcoin::block::Version::TWO,
