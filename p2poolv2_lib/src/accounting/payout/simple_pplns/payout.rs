@@ -15,10 +15,10 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::OutputPair;
-use crate::accounting::payout::simple_pplns::SimplePplnsShare;
-use crate::accounting::payout::{
+use crate::accounting::payout::payout_distribution::{
     PayoutDistribution, append_proportional_distribution, group_shares_by_address,
 };
+use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;

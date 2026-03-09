@@ -20,7 +20,7 @@ use super::error::WorkError;
 use super::gbt::build_merkle_branches_for_template;
 use super::tracker::{JobId, JobTracker};
 use crate::accounting::OutputPair;
-use crate::accounting::payout::PayoutDistribution;
+use crate::accounting::payout::payout_distribution::PayoutDistribution;
 use crate::accounting::payout::simple_pplns::payout::Payout;
 use crate::config::StratumConfig;
 use crate::pool_difficulty;
