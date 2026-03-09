@@ -190,7 +190,7 @@ impl ShareBlock {
     /// Share chain metadata includes previous block hash, uncles and
     /// transactions included in the share chain block.
     ///
-    /// Miner pub key identifies the miner that found the share and is used to build the coinbase for the share block.
+    /// Miner address key identifies the miner that found the share and is used to build the coinbase for the share block.
     pub fn new(
         bitcoin_block: Block,
         prev_share_blockhash: BlockHash,
@@ -442,13 +442,13 @@ mod tests {
             BlockHash::from_str("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6")
                 .unwrap(),
         ];
-        let btcaddress = "020202020202020202020202020202020202020202020202020202020202020202";
+        let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202";
 
         // Create a bitcoin block header
         let share_block = TestShareBlockBuilder::new()
             .prev_share_blockhash(prev_share_blockhash.into())
             .uncles(uncles)
-            .miner_pubkey(btcaddress)
+            .miner_pubkey(miner_pubkey)
             .build();
 
         // Verify transactions include coinbase
