@@ -140,13 +140,10 @@ async fn main() -> ExitCode {
     );
 
     let stratum_config = config.stratum.clone().parse().unwrap();
-    let miner_address = config
-        .miner
-        .as_ref()
-        .map(|miner_config| {
-            p2poolv2_lib::config::parse_address(&miner_config.address, stratum_config.network)
-                .expect("Invalid miner address in config")
-        });
+    let miner_address = config.miner.as_ref().map(|miner_config| {
+        p2poolv2_lib::config::parse_address(&miner_config.address, stratum_config.network)
+            .expect("Invalid miner address in config")
+    });
     let bitcoinrpc_config = config.bitcoinrpc.clone();
 
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();

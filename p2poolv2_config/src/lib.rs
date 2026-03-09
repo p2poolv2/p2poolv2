@@ -572,9 +572,7 @@ mod tests {
             .with_maximum_difficulty(Some(100))
             .with_difficulty_multiplier(2.0)
             .with_ignore_difficulty(Some(true))
-            .with_miner_address(
-                "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
-            )
+            .with_miner_address("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string())
             .with_bitcoinrpc_url("http://localhost:8332".to_string())
             .with_bitcoinrpc_username("testuser".to_string())
             .with_bitcoinrpc_password("testpass".to_string())

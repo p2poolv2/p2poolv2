@@ -70,7 +70,7 @@ impl EmissionWorker {
         while let Some(emission) = self.emissions_rx.recv().await {
             debug!("Processing emission");
             // Pass a references to chain store handle to avoid clones on each loop
-            match handle_stratum_share(emission, &self.chain_store_handle, self.network).await {
+            match handle_stratum_share(emission, &self.chain_store_handle).await {
                 Ok(Some(share_block)) => {
                     // Send block to organise worker for confirmed promotion.
                     if let Err(e) = self
