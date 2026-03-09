@@ -47,8 +47,8 @@ pub struct SimplePplnsShare {
 }
 
 impl PayoutShare for SimplePplnsShare {
-    fn get_btcaddress(&self) -> Option<String> {
-        self.btcaddress.clone()
+    fn get_btcaddress(&self) -> Option<&str> {
+        self.btcaddress.as_deref()
     }
     fn get_difficulty(&self) -> u64 {
         self.difficulty

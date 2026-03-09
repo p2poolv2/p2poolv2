@@ -30,17 +30,17 @@ pub trait PayoutShare {
     fn get_difficulty(&self) -> u64;
 }
 
-/// A trait for implementing a payout distribtuion
+/// A trait for implementing a payout distribution
 ///
 /// payout::simple_pplns implements this trait to provide a payout
-/// distribtuion based on centralised PPLNS algorithm.
+/// distribution based on centralised PPLNS algorithm.
 ///
-/// payout::share_chain_payout implments this trait from the share
+/// payout::share_chain_payout implements this trait from the share
 /// chain data.
 pub trait PayoutDistribution<P: PayoutShare> {
     /// Fill distribution according to the the Payout mechanism.  The
     /// donation and fees amount have already been filled by the trait
-    /// common implmentation of get_outpoint_distribtuion
+    /// common implementation of get_outpoint_distribution
     fn fill_distribution_from_shares(
         &self,
         distribution: &mut Vec<OutputPair>,
@@ -48,7 +48,7 @@ pub trait PayoutDistribution<P: PayoutShare> {
         total_difficulty: f64,
         total_amount: bitcoin::Amount,
         remaining_total_amount: Amount,
-        address: Address,
+        bootstrap_address: Address,
     ) -> Result<(), Box<dyn Error + Send + Sync>>;
 
     /// Generate output distribution based on PPLNS shares weighted by difficulty.
@@ -126,9 +126,9 @@ fn include_address_and_cut(
 pub(crate) fn group_shares_by_address<P: PayoutShare>(shares: &[P]) -> HashMap<String, u64> {
     let mut address_difficulty_map = HashMap::new();
     for share in shares {
-        if let Some(btcaddress) = &share.get_btcaddress() {
+        if let Some(btcaddress) = share.get_btcaddress() {
             *address_difficulty_map
-                .entry(btcaddress.clone())
+                .entry(btcaddress.to_owned())
                 .or_insert(0) += share.get_difficulty();
         }
     }
