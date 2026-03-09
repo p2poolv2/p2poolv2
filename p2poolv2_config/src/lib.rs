@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use bitcoin::address::NetworkChecked;
-use bitcoin::{Address, CompressedPublicKey, Network};
+use bitcoin::{Address, Network};
 use bitcoindrpc::BitcoinRpcConfig;
 use serde::Deserialize;
 use std::marker::PhantomData;
@@ -298,7 +298,8 @@ fn default_pplns_ttl_days() -> u64 {
 /// connect to p2poolv2.
 #[derive(Debug, Deserialize, Clone)]
 pub struct MinerConfig {
-    pub pubkey: CompressedPublicKey,
+    /// The bitcoin address for the local miner
+    pub address: String,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -484,10 +485,8 @@ impl Config {
         self
     }
 
-    pub fn with_miner_pubkey(mut self, miner_pubkey: String) -> Self {
-        self.miner = Some(MinerConfig {
-            pubkey: miner_pubkey.parse::<CompressedPublicKey>().unwrap(),
-        });
+    pub fn with_miner_address(mut self, address: String) -> Self {
+        self.miner = Some(MinerConfig { address });
         self
     }
 
@@ -573,8 +572,8 @@ mod tests {
             .with_maximum_difficulty(Some(100))
             .with_difficulty_multiplier(2.0)
             .with_ignore_difficulty(Some(true))
-            .with_miner_pubkey(
-                "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".to_string(),
+            .with_miner_address(
+                "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
             )
             .with_bitcoinrpc_url("http://localhost:8332".to_string())
             .with_bitcoinrpc_username("testuser".to_string())
@@ -614,8 +613,8 @@ mod tests {
         );
 
         assert_eq!(
-            config.miner.unwrap().pubkey.to_string(),
-            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+            config.miner.unwrap().address,
+            "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
         );
         assert_eq!(config.bitcoinrpc.url, "http://localhost:8332");
         assert_eq!(config.bitcoinrpc.username, "testuser");
