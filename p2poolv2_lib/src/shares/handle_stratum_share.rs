@@ -33,7 +33,6 @@ use tracing::debug;
 pub async fn handle_stratum_share(
     emission: Emission,
     chain_store_handle: &ChainStoreHandle,
-    network: bitcoin::Network,
 ) -> Result<Option<ShareBlock>, Box<dyn Error + Send + Sync>> {
     // Send share to peers only in p2p mode, i.e. if the pool is run with a miner pubkey that results in a commitment
     if let Some(share_commitment) = emission.share_commitment {
@@ -225,8 +224,7 @@ mod tests {
 
         let emission = create_test_emission_without_commitment();
 
-        let result =
-            handle_stratum_share(emission, &mock_chain_store, bitcoin::Network::Signet).await;
+        let result = handle_stratum_share(emission, &mock_chain_store).await;
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -243,8 +241,7 @@ mod tests {
 
         let emission = create_test_emission_with_commitment();
 
-        let result =
-            handle_stratum_share(emission, &mock_chain_store, bitcoin::Network::Signet).await;
+        let result = handle_stratum_share(emission, &mock_chain_store).await;
 
         assert!(result.is_ok());
         let share_block = result.unwrap();
@@ -268,8 +265,7 @@ mod tests {
 
         let emission = create_test_emission_without_commitment();
 
-        let result =
-            handle_stratum_share(emission, &mock_chain_store, bitcoin::Network::Signet).await;
+        let result = handle_stratum_share(emission, &mock_chain_store).await;
 
         assert!(result.is_err());
         // The error message will contain information about the channel being closed
@@ -289,8 +285,7 @@ mod tests {
         let expected_commitment = emission.share_commitment.clone().unwrap();
         let expected_bitcoin_header = emission.header;
 
-        let result =
-            handle_stratum_share(emission, &mock_chain_store, bitcoin::Network::Signet).await;
+        let result = handle_stratum_share(emission, &mock_chain_store).await;
 
         assert!(result.is_ok());
         let share_block = result.unwrap().unwrap();
@@ -387,8 +382,7 @@ mod tests {
             share_commitment: Some(commitment),
         };
 
-        let result =
-            handle_stratum_share(emission, &mock_chain_store, bitcoin::Network::Signet).await;
+        let result = handle_stratum_share(emission, &mock_chain_store).await;
 
         assert!(result.is_ok());
         let share_block = result.unwrap().unwrap();
@@ -408,8 +402,7 @@ mod tests {
 
         let emission = create_test_emission_without_commitment();
 
-        let result =
-            handle_stratum_share(emission, &mock_chain_store, bitcoin::Network::Signet).await;
+        let result = handle_stratum_share(emission, &mock_chain_store).await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_none()); // No share block for standlone pool mode
     }
