@@ -93,8 +93,8 @@ Returns confirmed shares and their uncles blockhashes for a height range.
 | `shares`      | `array`  | List of share objects        |
 
 Each share object contains: `blockhash`, `prev_blockhash`, `height`,
-`miner_pubkey`, `timestamp`, `bits`, and an `uncles` array of uncle
-objects (each with `blockhash`, `prev_blockhash`, `miner_pubkey`,
+`miner_address`, `timestamp`, `bits`, and an `uncles` array of uncle
+objects (each with `blockhash`, `prev_blockhash`, `miner_address`,
 `timestamp`, `height`).
 
 ### GET /candidates
@@ -124,7 +124,7 @@ Look up a single share by blockhash or by height.
 | `status`                    | `string`        | Validation status of the share            |
 | `parent`                    | `string`        | Parent share blockhash                    |
 | `uncles`                    | `array`         | Uncle blockhashes                         |
-| `miner_pubkey`              | `string`        | Miner public key                          |
+| `miner_address`             | `string`        | Miner bitcoin address                     |
 | `merkle_root`               | `string`        | Share merkle root                         |
 | `bits`                      | `string`        | Compact target (hex)                      |
 | `time`                      | `string`        | Human-readable timestamp                  |
@@ -186,7 +186,7 @@ endpoint. Clients can derive chain tip updates from share events.
 Events are delivered as JSON with `topic` and `data` fields:
 
 ```json
-{"topic": "Share", "data": {"blockhash": "00000...", "prev_blockhash": "00000...", "height": 42, "miner_pubkey": "02aa...", "timestamp": 1700000000, "bits": "1d00ffff", "uncles": [<json uncle info>]}}
+{"topic": "Share", "data": {"blockhash": "00000...", "prev_blockhash": "00000...", "height": 42, "miner_address": "02aa...", "timestamp": 1700000000, "bits": "1d00ffff", "uncles": [<json uncle info>]}}
 {"topic": "Peer", "data": {"peer_id": "12D3KooW...", "status": "Connected"}}
 ```
 

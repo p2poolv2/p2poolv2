@@ -98,7 +98,7 @@ impl Encodable for ShareCommitment {
 }
 
 /// We don't support Deserialize for ShareCommitment, but we still
-/// provide decode for testing seralization
+/// provide decode for testing serialization
 impl Decodable for ShareCommitment {
     fn consensus_decode<R: Read + ?Sized>(
         r: &mut R,
