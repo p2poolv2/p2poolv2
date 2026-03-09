@@ -23,8 +23,8 @@ use super::transactions;
 use crate::shares::genesis;
 use crate::shares::share_commitment::ShareCommitment;
 use bitcoin::{
-    Block, BlockHash, CompactTarget, CompressedPublicKey, Target, Transaction, TxMerkleNode, Txid,
-    VarInt, bip152,
+    Address, Block, BlockHash, CompactTarget, CompressedPublicKey, Target, Transaction,
+    TxMerkleNode, Txid, VarInt, bip152,
     block::Header,
     consensus::{Decodable, Encodable},
     hashes::Hash,
@@ -47,8 +47,9 @@ pub struct ShareHeader {
     pub prev_share_blockhash: BlockHash,
     /// The uncles of the share
     pub uncles: Vec<BlockHash>,
-    /// Compressed pubkey identifying the miner
-    pub miner_pubkey: CompressedPublicKey,
+    /// Bitcoin address identifying the miner
+    #[serde(with = "crate::shares::address_serde")]
+    pub miner_address: Address,
     /// Share block transactions merkle root
     pub merkle_root: TxMerkleNode,
     /// Bitcoin header the share is found for
@@ -78,7 +79,7 @@ impl ShareHeader {
         Self {
             prev_share_blockhash: commitment.prev_share_blockhash,
             uncles: commitment.uncles,
-            miner_pubkey: commitment.miner_pubkey,
+            miner_address: commitment.miner_address,
             merkle_root: share_chain_merkle_root,
             bitcoin_header,
             bits: commitment.bits,
@@ -104,8 +105,9 @@ impl ShareHeader {
             .consensus_encode(&mut serialized_without_bitcoin_header)?;
         self.uncles
             .consensus_encode(&mut serialized_without_bitcoin_header)?;
-        self.miner_pubkey
-            .write_into(&mut serialized_without_bitcoin_header)?;
+        self.miner_address
+            .to_string()
+            .consensus_encode(&mut serialized_without_bitcoin_header)?;
         self.merkle_root
             .consensus_encode(&mut serialized_without_bitcoin_header)?;
         self.bits
@@ -128,8 +130,8 @@ impl Encodable for ShareHeader {
         let mut len = 0;
         len += self.prev_share_blockhash.consensus_encode(w)?;
         len += self.uncles.consensus_encode(w)?;
-        self.miner_pubkey.write_into(w)?;
-        len += 33; // Compressedpublickey is 33 bytes
+        let addr_str = self.miner_address.to_string();
+        len += addr_str.consensus_encode(w)?;
         len += self.merkle_root.consensus_encode(w)?;
         len += self.bitcoin_header.consensus_encode(w)?;
         len += self.bits.consensus_encode(w)?;
@@ -143,10 +145,17 @@ impl Decodable for ShareHeader {
     fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
         r: &mut R,
     ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        let prev_share_blockhash = BlockHash::consensus_decode(r)?;
+        let uncles = Vec::<BlockHash>::consensus_decode(r)?;
+        let addr_str = String::consensus_decode(r)?;
+        let btcaddress = addr_str
+            .parse::<Address<_>>()
+            .map_err(|_| bitcoin::consensus::encode::Error::ParseFailed("invalid bitcoin address"))?
+            .assume_checked();
         Ok(ShareHeader {
-            prev_share_blockhash: BlockHash::consensus_decode(r)?,
-            uncles: Vec::<BlockHash>::consensus_decode(r)?,
-            miner_pubkey: CompressedPublicKey::read_from(r)?,
+            prev_share_blockhash,
+            uncles,
+            miner_address: btcaddress,
             merkle_root: TxMerkleNode::consensus_decode(r)?,
             bitcoin_header: Header::consensus_decode(r)?,
             bits: CompactTarget::consensus_decode(r)?,
@@ -186,11 +195,10 @@ impl ShareBlock {
         bitcoin_block: Block,
         prev_share_blockhash: BlockHash,
         uncles: &[BlockHash],
-        miner_pubkey: CompressedPublicKey,
+        btcaddress: Address,
         transactions: Vec<ShareTransaction>,
-        network: bitcoin::Network,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        let coinbase = transactions::coinbase::create_coinbase_transaction(&miner_pubkey, network);
+        let coinbase = transactions::coinbase::create_coinbase_transaction(&btcaddress);
         let mut all_transactions = vec![ShareTransaction(coinbase)];
         all_transactions.extend(transactions);
         let merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
@@ -202,7 +210,7 @@ impl ShareBlock {
         let header = ShareHeader {
             prev_share_blockhash,
             uncles: uncles.to_vec(),
-            miner_pubkey,
+            miner_address: btcaddress,
             bitcoin_header: bitcoin_block.header,
             merkle_root,
             time: 1700000000u32,
@@ -244,7 +252,8 @@ impl ShareBlock {
             .public_key
             .parse::<CompressedPublicKey>()
             .unwrap();
-        let coinbase_tx = transactions::coinbase::create_coinbase_transaction(&public_key, network);
+        let btcaddress = Address::p2wpkh(&public_key, network);
+        let coinbase_tx = transactions::coinbase::create_coinbase_transaction(&btcaddress);
         let transactions = vec![ShareTransaction(coinbase_tx)];
         let merkle_root: TxMerkleNode =
             bitcoin::merkle_tree::calculate_root(transactions.iter().map(|tx| tx.compute_txid()))
@@ -263,7 +272,7 @@ impl ShareBlock {
         let header = ShareHeader {
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: vec![],
-            miner_pubkey: public_key,
+            miner_address: btcaddress,
             bitcoin_header: compact_block.header,
             merkle_root,
             time: 1700000000u32,
@@ -384,10 +393,12 @@ mod tests {
         let share = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
 
         assert!(share.header.uncles.is_empty());
-        assert_eq!(
-            share.header.miner_pubkey.to_string(),
-            "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
-        );
+        // Verify the genesis address is derived from the known pubkey
+        let expected_pubkey = "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
+            .parse::<CompressedPublicKey>()
+            .unwrap();
+        let expected_address = Address::p2wpkh(&expected_pubkey, bitcoin::Network::Signet);
+        assert_eq!(share.header.miner_address, expected_address);
         assert_eq!(share.transactions.len(), 1);
         assert!(share.transactions[0].is_coinbase());
         assert_eq!(share.transactions[0].output.len(), 1);
@@ -396,12 +407,6 @@ mod tests {
         let output = &share.transactions[0].output[0];
         assert_eq!(output.value.to_sat(), 100_000_000);
 
-        let expected_address = bitcoin::Address::p2pkh(
-            "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
-                .parse::<CompressedPublicKey>()
-                .unwrap(),
-            bitcoin::Network::Signet,
-        );
         assert_eq!(output.script_pubkey, expected_address.script_pubkey());
         assert_eq!(
             share.header.bitcoin_header.block_hash().to_string(),
@@ -411,11 +416,6 @@ mod tests {
 
     #[test]
     fn test_share_block_new_includes_coinbase_transaction() {
-        // Create a test public key
-        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<CompressedPublicKey>()
-            .unwrap();
-
         let share_block = TestShareBlockBuilder::new().build();
 
         // Verify the coinbase transaction exists and has expected properties
@@ -423,13 +423,14 @@ mod tests {
         assert_eq!(share_block.transactions[0].output.len(), 1);
         assert_eq!(share_block.transactions[0].input.len(), 1);
 
-        // Verify the output is a P2PKH to the miner's public key
         let output = &share_block.transactions[0].output[0];
         assert_eq!(output.value.to_sat(), 100_000_000);
 
-        // Verify the output script is P2PKH for the miner's pubkey
-        let expected_address = bitcoin::Address::p2pkh(pubkey, bitcoin::Network::Regtest);
-        assert_eq!(output.script_pubkey, expected_address.script_pubkey());
+        // Verify the output script matches the builder's default address
+        assert_eq!(
+            output.script_pubkey,
+            share_block.header.miner_address.script_pubkey()
+        );
     }
 
     #[test]
@@ -441,13 +442,13 @@ mod tests {
             BlockHash::from_str("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6")
                 .unwrap(),
         ];
-        let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202";
+        let btcaddress = "020202020202020202020202020202020202020202020202020202020202020202";
 
         // Create a bitcoin block header
         let share_block = TestShareBlockBuilder::new()
             .prev_share_blockhash(prev_share_blockhash.into())
             .uncles(uncles)
-            .miner_pubkey(miner_pubkey)
+            .miner_pubkey(btcaddress)
             .build();
 
         // Verify transactions include coinbase
@@ -510,15 +511,18 @@ mod tests {
     #[test]
     fn test_from_commitment_and_header() {
         let bitcoin_header = TestShareBlockBuilder::new().build().header.bitcoin_header;
+        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+            .parse::<CompressedPublicKey>()
+            .unwrap();
+        let btcaddress = Address::p2wpkh(&pubkey, bitcoin::Network::Signet);
+
         let commitment = ShareCommitment {
             prev_share_blockhash: BlockHash::from_str(
                 "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
             )
             .unwrap(),
             uncles: vec![],
-            miner_pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                .parse::<CompressedPublicKey>()
-                .unwrap(),
+            miner_address: btcaddress,
             merkle_root: None,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             time: 1700000000,
@@ -533,7 +537,7 @@ mod tests {
 
         assert_eq!(header.prev_share_blockhash, cloned.prev_share_blockhash);
         assert_eq!(header.uncles, cloned.uncles);
-        assert_eq!(header.miner_pubkey, cloned.miner_pubkey);
+        assert_eq!(header.miner_address, cloned.miner_address);
         assert_eq!(header.merkle_root, bitcoin_header.merkle_root);
         assert_eq!(header.bitcoin_header, bitcoin_header);
         assert_eq!(header.bits, cloned.bits);

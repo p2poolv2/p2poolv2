@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use super::address_serde;
 use crate::pool_difficulty::PoolDifficulty;
 #[cfg(test)]
 #[mockall_double::double]
@@ -25,7 +26,7 @@ use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoin::consensus::{Decodable, Encodable};
 use bitcoin::hashes::Hash;
 use bitcoin::io::{Read, Write};
-use bitcoin::{BlockHash, CompactTarget, CompressedPublicKey, TxMerkleNode, hashes};
+use bitcoin::{Address, BlockHash, CompactTarget, TxMerkleNode, hashes};
 use serde::Serialize;
 use std::error::Error;
 use std::sync::Arc;
@@ -50,8 +51,9 @@ pub struct ShareCommitment {
     pub prev_share_blockhash: BlockHash,
     /// The uncles of the share
     pub uncles: Vec<BlockHash>,
-    /// Pubkey identifying the miner mining the share
-    pub miner_pubkey: CompressedPublicKey,
+    /// Bitcoin address identifying the miner mining the share
+    #[serde(serialize_with = "address_serde::serialize")]
+    pub miner_address: Address,
     /// Share block transactions merkle root. If there are no transactions, this is None.
     pub merkle_root: Option<TxMerkleNode>,
     /// Share chain difficult as compact target
@@ -76,11 +78,9 @@ impl Encodable for ShareCommitment {
         len += self.prev_share_blockhash.consensus_encode(w)?;
         len += self.uncles.consensus_encode(w)?;
 
-        // Encode CompressedPublicKey using write_into
-        self.miner_pubkey.write_into(w)?;
-        len += 33;
+        let addr_str = self.miner_address.to_string();
+        len += addr_str.consensus_encode(w)?;
 
-        // Encode Option<TxMerkleNode> manually
         match &self.merkle_root {
             Some(root) => {
                 len += true.consensus_encode(w)?;
@@ -104,10 +104,12 @@ impl Decodable for ShareCommitment {
         let prev_share_blockhash = BlockHash::consensus_decode(r)?;
         let uncles = Vec::<BlockHash>::consensus_decode(r)?;
 
-        // Decode CompressedPublicKey using read_from
-        let miner_pubkey = CompressedPublicKey::read_from(r)?;
+        let addr_str = String::consensus_decode(r)?;
+        let btcaddress = addr_str
+            .parse::<Address<_>>()
+            .map_err(|_| bitcoin::consensus::encode::Error::ParseFailed("invalid bitcoin address"))?
+            .assume_checked();
 
-        // Decode Option<TxMerkleNode> manually
         let has_merkle_root = bool::consensus_decode(r)?;
         let merkle_root = if has_merkle_root {
             Some(TxMerkleNode::consensus_decode(r)?)
@@ -121,7 +123,7 @@ impl Decodable for ShareCommitment {
         Ok(ShareCommitment {
             prev_share_blockhash,
             uncles,
-            miner_pubkey,
+            miner_address: btcaddress,
             merkle_root,
             bits,
             time,
@@ -137,7 +139,7 @@ impl Decodable for ShareCommitment {
 pub(crate) fn build_share_commitment(
     chain_store_handle: &ChainStoreHandle,
     template: &Arc<BlockTemplate>,
-    miner_pubkey: Option<CompressedPublicKey>,
+    btcaddress: Option<Address>,
     pool_difficulty: &PoolDifficulty,
 ) -> Result<Option<ShareCommitment>, Box<dyn Error + Send + Sync>> {
     let (tip, uncles) = chain_store_handle.get_chain_tip_and_uncles()?;
@@ -149,11 +151,11 @@ pub(crate) fn build_share_commitment(
     let merkle_root = template.get_merkle_root_without_coinbase();
     let time = SystemTimeProvider.seconds_since_epoch() as u32;
 
-    match miner_pubkey {
-        Some(key) => Ok(Some(ShareCommitment {
+    match btcaddress {
+        Some(address) => Ok(Some(ShareCommitment {
             prev_share_blockhash: tip,
             uncles: uncles.into_iter().collect(),
-            miner_pubkey: key,
+            miner_address: address,
             merkle_root,
             bits: target,
             time,
@@ -169,6 +171,7 @@ mod tests {
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::test_utils::{TEST_TIP_TIME, create_test_commitment, on_schedule_pool_difficulty};
     use bitcoin::hashes::Hash;
+    use bitcoin::{CompressedPublicKey, Network};
     use std::collections::HashSet;
     use std::str::FromStr;
 
@@ -212,14 +215,14 @@ mod tests {
     }
 
     #[test]
-    fn test_hash_uniqueness_different_miner_pubkey() {
+    fn test_hash_uniqueness_different_btcaddress() {
         let commitment1 = create_test_commitment();
         let mut commitment2 = create_test_commitment();
 
-        commitment2.miner_pubkey =
-            "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
-                .parse::<CompressedPublicKey>()
-                .unwrap();
+        let other_pubkey = "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
+            .parse::<CompressedPublicKey>()
+            .unwrap();
+        commitment2.miner_address = Address::p2wpkh(&other_pubkey, Network::Signet);
 
         let hash1 = commitment1.hash();
         let hash2 = commitment2.hash();
@@ -356,9 +359,10 @@ mod tests {
                 .expect("Failed to parse JSON into BlockTemplate"),
         );
 
-        let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
             .parse::<CompressedPublicKey>()
             .unwrap();
+        let btcaddress = Address::p2wpkh(&pubkey, Network::Signet);
 
         let pool_difficulty = on_schedule_pool_difficulty();
 
@@ -378,7 +382,7 @@ mod tests {
         let result = build_share_commitment(
             &chain_store_handle,
             &template,
-            Some(miner_pubkey),
+            Some(btcaddress.clone()),
             &pool_difficulty,
         );
 
@@ -392,7 +396,7 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(commitment.uncles.len(), 0);
-        assert_eq!(commitment.miner_pubkey, miner_pubkey);
+        assert_eq!(commitment.miner_address, btcaddress);
         assert_eq!(commitment.bits, CompactTarget::from_consensus(0x1b4188f5));
         // Time should be current, so just verify it's set
         assert!(commitment.time > 0);
@@ -412,9 +416,10 @@ mod tests {
                 .expect("Failed to parse JSON into BlockTemplate"),
         );
 
-        let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
             .parse::<CompressedPublicKey>()
             .unwrap();
+        let btcaddress = Address::p2wpkh(&pubkey, Network::Signet);
 
         let pool_difficulty = on_schedule_pool_difficulty();
 
@@ -439,7 +444,7 @@ mod tests {
         let result = build_share_commitment(
             &chain_store_handle,
             &template,
-            Some(miner_pubkey),
+            Some(btcaddress),
             &pool_difficulty,
         );
 
@@ -464,9 +469,10 @@ mod tests {
                 .expect("Failed to parse JSON into BlockTemplate"),
         );
 
-        let miner_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
             .parse::<CompressedPublicKey>()
             .unwrap();
+        let btcaddress = Address::p2wpkh(&pubkey, Network::Signet);
 
         let pool_difficulty = on_schedule_pool_difficulty();
 
@@ -478,7 +484,7 @@ mod tests {
         let result = build_share_commitment(
             &chain_store_handle,
             &template,
-            Some(miner_pubkey),
+            Some(btcaddress),
             &pool_difficulty,
         );
 
@@ -486,7 +492,7 @@ mod tests {
     }
 
     #[test_log::test]
-    fn test_build_share_commitment_with_none_miner_pubkey_returns_none() {
+    fn test_build_share_commitment_with_none_btcaddress_returns_none() {
         let mut chain_store_handle = ChainStoreHandle::default();
 
         // Load template from file

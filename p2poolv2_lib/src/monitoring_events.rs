@@ -94,7 +94,7 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 100,
-            miner_pubkey: "02aa".to_string(),
+            miner_address: "02aa".to_string(),
             timestamp: 1700000000,
             bits: CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],
@@ -103,7 +103,7 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"topic\":\"Share\""));
         assert!(json.contains("\"height\":100"));
-        assert!(json.contains("\"miner_pubkey\":\"02aa\""));
+        assert!(json.contains("\"miner_address\":\"02aa\""));
     }
 
     #[test]
@@ -134,7 +134,7 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
-            miner_pubkey: "02aabbccdd".to_string(),
+            miner_address: "02aabbccdd".to_string(),
             timestamp: 1_700_000_000,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             uncles: vec![],
@@ -143,7 +143,7 @@ mod tests {
         let event = MonitoringEvent::Share(share);
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"height\":42"));
-        assert!(json.contains("\"miner_pubkey\":\"02aabbccdd\""));
+        assert!(json.contains("\"miner_address\":\"02aabbccdd\""));
         assert!(json.contains("\"timestamp\":1700000000"));
     }
 
@@ -152,7 +152,7 @@ mod tests {
         let uncle = UncleInfo {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
-            miner_pubkey: "02uncle".to_string(),
+            miner_address: "02uncle".to_string(),
             timestamp: 1_700_000_010,
             height: Some(41),
         };
@@ -161,7 +161,7 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
-            miner_pubkey: "02parent".to_string(),
+            miner_address: "02parent".to_string(),
             timestamp: 1_700_000_020,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             uncles: vec![uncle],

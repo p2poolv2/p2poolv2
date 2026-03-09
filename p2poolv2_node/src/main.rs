@@ -140,10 +140,10 @@ async fn main() -> ExitCode {
     );
 
     let stratum_config = config.stratum.clone().parse().unwrap();
-    let miner_pubkey = config
+    let miner_address = config
         .miner
         .as_ref()
-        .map(|miner_config| miner_config.pubkey);
+        .map(|miner_config| bitcoin::Address::p2wpkh(&miner_config.pubkey, stratum_config.network));
     let bitcoinrpc_config = config.bitcoinrpc.clone();
 
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
@@ -193,7 +193,7 @@ async fn main() -> ExitCode {
             chain_store_handle_for_notify,
             tracker_handle_cloned,
             &cloned_stratum_config,
-            miner_pubkey,
+            miner_address,
         )
         .await;
     });

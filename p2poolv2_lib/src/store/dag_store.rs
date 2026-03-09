@@ -33,7 +33,7 @@ pub struct ShareInfo {
     pub blockhash: BlockHash,
     pub prev_blockhash: BlockHash,
     pub height: u32,
-    pub miner_pubkey: String,
+    pub miner_address: String,
     pub timestamp: u32,
     pub bits: CompactTarget,
     pub uncles: Vec<UncleInfo>,
@@ -44,7 +44,7 @@ pub struct ShareInfo {
 pub struct UncleInfo {
     pub blockhash: BlockHash,
     pub prev_blockhash: BlockHash,
-    pub miner_pubkey: String,
+    pub miner_address: String,
     pub timestamp: u32,
     pub height: Option<u32>,
 }
@@ -385,7 +385,7 @@ impl Store {
                 Some(UncleInfo {
                     blockhash: *uncle_hash,
                     prev_blockhash: uncle_header.prev_share_blockhash,
-                    miner_pubkey: uncle_header.miner_pubkey.to_string(),
+                    miner_address: uncle_header.miner_address.to_string(),
                     timestamp: uncle_header.time,
                     height: uncle_height,
                 })
@@ -414,7 +414,7 @@ impl Store {
                 blockhash: *blockhash,
                 prev_blockhash: share_header.prev_share_blockhash,
                 height: *height,
-                miner_pubkey: share_header.miner_pubkey.to_string(),
+                miner_address: share_header.miner_address.to_string(),
                 timestamp: share_header.time,
                 bits: share_header.bits,
                 uncles: uncle_infos,
@@ -449,7 +449,7 @@ impl Store {
                 blockhash: *blockhash,
                 prev_blockhash: share_header.prev_share_blockhash,
                 height: *height,
-                miner_pubkey: share_header.miner_pubkey.to_string(),
+                miner_address: share_header.miner_address.to_string(),
                 timestamp: share_header.time,
                 bits: share_header.bits,
                 uncles: uncle_infos,
@@ -2333,7 +2333,7 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
-            miner_pubkey: "02aabbccdd".to_string(),
+            miner_address: "02aabbccdd".to_string(),
             timestamp: 1_700_000_000,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             uncles: vec![],
@@ -2341,7 +2341,7 @@ mod tests {
 
         let json = serde_json::to_string(&share_info).unwrap();
         assert!(json.contains("\"height\":42"));
-        assert!(json.contains("\"miner_pubkey\":\"02aabbccdd\""));
+        assert!(json.contains("\"miner_address\":\"02aabbccdd\""));
         assert!(json.contains("\"timestamp\":1700000000"));
     }
 
@@ -2350,7 +2350,7 @@ mod tests {
         let uncle = UncleInfo {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
-            miner_pubkey: "02uncle".to_string(),
+            miner_address: "02uncle".to_string(),
             timestamp: 1_700_000_010,
             height: Some(41),
         };
@@ -2359,7 +2359,7 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
-            miner_pubkey: "02parent".to_string(),
+            miner_address: "02parent".to_string(),
             timestamp: 1_700_000_020,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             uncles: vec![uncle],
@@ -2375,13 +2375,13 @@ mod tests {
         let uncle = UncleInfo {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
-            miner_pubkey: "02aabb".to_string(),
+            miner_address: "02aabb".to_string(),
             timestamp: 1_700_000_005,
             height: Some(10),
         };
 
         let json = serde_json::to_string(&uncle).unwrap();
-        assert!(json.contains("\"miner_pubkey\":\"02aabb\""));
+        assert!(json.contains("\"miner_address\":\"02aabb\""));
         assert!(json.contains("\"timestamp\":1700000005"));
         assert!(json.contains("\"height\":10"));
     }
@@ -2391,7 +2391,7 @@ mod tests {
         let uncle = UncleInfo {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
-            miner_pubkey: "02ccdd".to_string(),
+            miner_address: "02ccdd".to_string(),
             timestamp: 1_700_000_005,
             height: None,
         };

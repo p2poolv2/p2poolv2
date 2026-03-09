@@ -167,7 +167,6 @@ Clients send JSON messages to subscribe or unsubscribe from topics:
 
 ```json
 {"action": "subscribe", "topic": "shares"}
-{"action": "subscribe", "topic": "uncles"}
 {"action": "subscribe", "topic": "peers"}
 {"action": "unsubscribe", "topic": "shares"}
 ```
@@ -177,25 +176,17 @@ Clients send JSON messages to subscribe or unsubscribe from topics:
 | Topic    | Description                                      |
 |----------|--------------------------------------------------|
 | `shares` | New confirmed shares (includes uncle blockhashes)|
-| `uncles` | Headers that did not extend the candidate chain  |
 | `peers`  | Peer connection and disconnection events         |
 
 Chain state information is available via the `/chain_info` REST
 endpoint. Clients can derive chain tip updates from share events.
-
-Subscribing to both `shares` and `uncles` lets clients build full
-uncle detail locally: uncle events provide share data for headers
-that did not make it onto the candidate chain, and confirmed share
-events list uncle blockhashes that clients can correlate with
-previously received uncle events.
 
 **Server-to-client messages:**
 
 Events are delivered as JSON with `topic` and `data` fields:
 
 ```json
-{"topic": "Uncle", "data": {"blockhash": "00000...", "prev_blockhash": "00000...", "miner_pubkey": "02bb...", "timestamp": 1700000000, "height": null}}
-{"topic": "Share", "data": {"blockhash": "00000...", "prev_blockhash": "00000...", "height": 42, "miner_pubkey": "02aa...", "timestamp": 1700000000, "bits": "1d00ffff", "uncles": ["00000..."]}}
+{"topic": "Share", "data": {"blockhash": "00000...", "prev_blockhash": "00000...", "height": 42, "miner_pubkey": "02aa...", "timestamp": 1700000000, "bits": "1d00ffff", "uncles": [<json uncle info>]}}
 {"topic": "Peer", "data": {"peer_id": "12D3KooW...", "status": "Connected"}}
 ```
 
@@ -230,7 +221,6 @@ websocat "ws://127.0.0.1:46884/ws?token=${TOKEN}"
 ```sh
 websocat ws://127.0.0.1:46884/ws
 > {"action": "subscribe", "topic": "shares"}
-> {"action": "subscribe", "topic": "uncles"}
 > {"action": "subscribe", "topic": "peers"}
 ```
 

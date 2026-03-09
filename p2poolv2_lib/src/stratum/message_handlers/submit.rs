@@ -334,8 +334,8 @@ mod handle_submit_tests {
         assert!(share.share_commitment.is_some());
         let commitment = share.share_commitment.unwrap();
         assert_eq!(
-            commitment.miner_pubkey,
-            create_test_commitment().miner_pubkey
+            commitment.miner_address,
+            create_test_commitment().miner_address
         );
 
         // Verify that the block is submitted to the mock server
@@ -423,8 +423,8 @@ mod handle_submit_tests {
         assert!(stratum_share.share_commitment.is_some());
         let commitment = stratum_share.share_commitment.unwrap();
         assert_eq!(
-            commitment.miner_pubkey,
-            create_test_commitment().miner_pubkey
+            commitment.miner_address,
+            create_test_commitment().miner_address
         );
 
         assert_eq!(metrics_handle.get_metrics().await.accepted_total, 1);
@@ -714,8 +714,8 @@ mod handle_submit_tests {
         assert!(share.share_commitment.is_some());
         let commitment = share.share_commitment.unwrap();
         assert_eq!(
-            commitment.miner_pubkey,
-            create_test_commitment().miner_pubkey
+            commitment.miner_address,
+            create_test_commitment().miner_address
         );
 
         // Verify that the block is submitted to the mock server
