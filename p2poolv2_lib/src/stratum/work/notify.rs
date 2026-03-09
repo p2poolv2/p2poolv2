@@ -74,7 +74,7 @@ fn parse_flags(flags: Option<String>) -> PushBytesBuf {
 ///
 /// difficulty_multiplier is used to get the total difficulty we need
 /// to match to collect all the shares to use to compute output distribution.
-async fn build_output_distribution(
+fn build_output_distribution(
     template: &BlockTemplate,
     chain_store_handle: &ChainStoreHandle,
     config: &StratumConfig<crate::config::Parsed>,
@@ -156,7 +156,7 @@ async fn build_notify_and_commitment(
 ) -> Result<(String, Option<ShareCommitment>), WorkError> {
     let job_id = context.tracker_handle.get_next_job_id();
     let output_distribution =
-        build_output_distribution(template, &context.chain_store_handle, &context.config).await;
+        build_output_distribution(template, &context.chain_store_handle, &context.config);
 
     let share_commitment = build_share_commitment(
         &context.chain_store_handle,
@@ -372,7 +372,7 @@ mod tests {
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let output_distribution =
-            build_output_distribution(&template, &chain_store_handle, &stratum_config).await;
+            build_output_distribution(&template, &chain_store_handle, &stratum_config);
         // Build Notify
         let notify = build_notify(&template, output_distribution, job_id, false, &[], None)
             .expect("Failed to build notify");
