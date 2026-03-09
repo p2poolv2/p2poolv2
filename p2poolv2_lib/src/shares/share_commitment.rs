@@ -97,6 +97,8 @@ impl Encodable for ShareCommitment {
     }
 }
 
+/// We don't support Deserialize for ShareCommitment, but we still
+/// provide decode for testing seralization
 impl Decodable for ShareCommitment {
     fn consensus_decode<R: Read + ?Sized>(
         r: &mut R,
@@ -355,7 +357,7 @@ mod tests {
         let json_content =
             include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
         let template = Arc::new(
-            serde_json::from_str::<BlockTemplate>(&json_content)
+            serde_json::from_str::<BlockTemplate>(json_content)
                 .expect("Failed to parse JSON into BlockTemplate"),
         );
 
@@ -412,7 +414,7 @@ mod tests {
         let json_content =
             include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
         let template = Arc::new(
-            serde_json::from_str::<BlockTemplate>(&json_content)
+            serde_json::from_str::<BlockTemplate>(json_content)
                 .expect("Failed to parse JSON into BlockTemplate"),
         );
 
@@ -465,7 +467,7 @@ mod tests {
         let json_content =
             include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
         let template = Arc::new(
-            serde_json::from_str::<BlockTemplate>(&json_content)
+            serde_json::from_str::<BlockTemplate>(json_content)
                 .expect("Failed to parse JSON into BlockTemplate"),
         );
 
@@ -499,7 +501,7 @@ mod tests {
         let json_content =
             include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
         let template = Arc::new(
-            serde_json::from_str::<BlockTemplate>(&json_content)
+            serde_json::from_str::<BlockTemplate>(json_content)
                 .expect("Failed to parse JSON into BlockTemplate"),
         );
 

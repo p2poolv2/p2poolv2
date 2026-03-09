@@ -52,7 +52,7 @@ difficulty_multiplier = 1.0
 pool_signature = "P2Poolv2"
 
 [miner]
-pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 
 [bitcoinrpc]
 # RPC credentials are loaded from env vars

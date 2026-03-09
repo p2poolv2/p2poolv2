@@ -55,9 +55,7 @@ pub fn default_test_config() -> Config {
         },
         stratum: StratumConfig::new_for_test_default(),
         miner: Some(MinerConfig {
-            pubkey: "020202020202020202020202020202020202020202020202020202020202020202"
-                .parse()
-                .unwrap(),
+            address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
         }),
         logging: LoggingConfig {
             console: Some(true),
