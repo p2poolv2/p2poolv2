@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::error::Error;
 
 pub trait PayoutShare {
-    fn get_btcaddress(&self) -> Option<String>;
+    fn get_btcaddress(&self) -> Option<&str>;
     fn get_difficulty(&self) -> u64;
 }
 
