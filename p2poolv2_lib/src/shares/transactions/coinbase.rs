@@ -14,18 +14,14 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use bitcoin::{Address, CompressedPublicKey, Network, Transaction, TxOut};
+use bitcoin::{Address, Transaction, TxOut};
 
 const SHARE_VALUE: u64 = 1; // 100_000_000 satoshi == 1 BTC == 1 share
 
-/// Create a P2PKH coinbase transaction for the given public key and amount
+/// Create a coinbase transaction for the given bitcoin address and amount.
 /// For now, all shares are equal value, so the amount is 1 unit share coin.
-pub fn create_coinbase_transaction(pubkey: &CompressedPublicKey, network: Network) -> Transaction {
-    // Create P2PKH address from public key
-    let address = Address::p2pkh(pubkey, network);
-
-    // Create P2PKH script from address
-    let script_pubkey = address.script_pubkey();
+pub fn create_coinbase_transaction(btcaddress: &Address) -> Transaction {
+    let script_pubkey = btcaddress.script_pubkey();
 
     // Create TxOut with script_pubkey and amount of 1 satoshi
     let tx_out = TxOut {
@@ -52,18 +48,17 @@ pub fn create_coinbase_transaction(pubkey: &CompressedPublicKey, network: Networ
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::{CompressedPublicKey, Network};
 
     #[test]
     fn test_create_share_block_coinbase_transaction() {
-        // Create a test public key
         let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
             .parse::<CompressedPublicKey>()
             .unwrap();
+        let address = Address::p2wpkh(&pubkey, Network::Regtest);
 
-        // Create coinbase transaction
-        let transaction = create_coinbase_transaction(&pubkey, Network::Regtest);
+        let transaction = create_coinbase_transaction(&address);
 
-        // Verify transaction properties
         assert_eq!(transaction.version, bitcoin::transaction::Version::TWO);
         assert_eq!(transaction.lock_time, bitcoin::absolute::LockTime::ZERO);
         assert_eq!(transaction.input.len(), 1);
@@ -71,12 +66,9 @@ mod tests {
 
         assert!(transaction.is_coinbase());
 
-        // Verify output properties
         let output = &transaction.output[0];
         assert_eq!(output.value, bitcoin::Amount::from_int_btc(SHARE_VALUE));
 
-        // Verify output goes to correct address
-        let expected_address = Address::p2pkh(pubkey, Network::Regtest);
-        assert_eq!(output.script_pubkey, expected_address.script_pubkey());
+        assert_eq!(output.script_pubkey, address.script_pubkey());
     }
 }
