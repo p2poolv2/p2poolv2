@@ -33,6 +33,8 @@ use crate::shares::share_commitment::{ShareCommitment, build_share_commitment};
 use crate::stratum::messages::{Notify, NotifyParams};
 use crate::stratum::util::reverse_four_byte_chunks;
 use crate::stratum::util::to_be_hex;
+use crate::stratum::work::prepared_notify::{build_notify_from_prepared, prepare_notify_params};
+use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoin::Address;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::Version;
@@ -148,50 +150,84 @@ pub fn build_notify(
 /// job into tracker. We need to do all this for SendToAll and
 /// SendToClient. So we DRY it here.
 ///
+/// When a miner_address is present, uses the PreparedNotifyParams path
+/// for efficient pre-serialized JSON with placeholder replacement.
+/// When no miner_address is present (solo mode), falls back to the
+/// direct build path without a commitment.
+///
 /// Returns the serialized notify string on success.
 async fn build_notify_and_commitment(
     template: &Arc<BlockTemplate>,
     clean_jobs: bool,
     context: &NotifyContext,
 ) -> Result<(String, Option<ShareCommitment>), WorkError> {
-    let job_id = context.tracker_handle.get_next_job_id();
     let output_distribution =
         build_output_distribution(template, &context.chain_store_handle, &context.config);
 
-    let share_commitment = build_share_commitment(
-        &context.chain_store_handle,
-        template,
-        context.miner_address.clone(),
-        &context.pool_difficulty,
-    )
-    .map_err(|_| WorkError {
-        message: "Failed to build share commitment".to_string(),
-    })?;
-    let commitment_hash = share_commitment
-        .as_ref()
-        .map(|commitment| commitment.hash());
+    match &context.miner_address {
+        Some(address) => {
+            // Use the prepared approach: pre-serialize once, overwrite placeholders
+            let (tip, uncles) = context
+                .chain_store_handle
+                .get_chain_tip_and_uncles()
+                .map_err(|error| WorkError {
+                    message: format!("Failed to get chain tip: {error}"),
+                })?;
+            let (tip_height, parent_time) = context
+                .chain_store_handle
+                .get_tip_height_and_time()
+                .map_err(|error| WorkError {
+                    message: format!("Failed to get tip height: {error}"),
+                })?;
+            let target = context
+                .pool_difficulty
+                .calculate_target(parent_time, tip_height);
+            let merkle_root = template.get_merkle_root_without_coinbase();
+            let time = SystemTimeProvider.seconds_since_epoch() as u32;
 
-    let notify = build_notify(
-        template,
-        output_distribution,
-        job_id,
-        clean_jobs,
-        &context.pool_signature,
-        commitment_hash,
-    )?;
+            let prepared = prepare_notify_params(
+                template,
+                output_distribution,
+                &context.pool_signature,
+                tip,
+                uncles.into_iter().collect(),
+                merkle_root,
+                target,
+                time,
+                clean_jobs,
+            )?;
 
-    let serialized_notify =
-        serde_json::to_string(&notify).expect("Failed to serialize Notify message");
+            let (serialized_notify, share_commitment, _job_id) =
+                build_notify_from_prepared(&prepared, address, &context.tracker_handle)?;
 
-    context.tracker_handle.insert_job(
-        Arc::clone(template),
-        notify.params.coinbase1.to_string(),
-        notify.params.coinbase2.to_string(),
-        share_commitment.clone(),
-        job_id,
-    );
+            Ok((serialized_notify, Some(share_commitment)))
+        }
+        None => {
+            // Solo mode: no commitment, build directly
+            let job_id = context.tracker_handle.get_next_job_id();
+            let notify = build_notify(
+                template,
+                output_distribution,
+                job_id,
+                clean_jobs,
+                &context.pool_signature,
+                None,
+            )?;
 
-    Ok((serialized_notify, share_commitment))
+            let serialized_notify =
+                serde_json::to_string(&notify).expect("Failed to serialize Notify message");
+
+            context.tracker_handle.insert_job(
+                Arc::clone(template),
+                notify.params.coinbase1.to_string(),
+                notify.params.coinbase2.to_string(),
+                None,
+                job_id,
+            );
+
+            Ok((serialized_notify, None))
+        }
+    }
 }
 
 /// NotifyCmd is used to send notify to all clients or a single client.
