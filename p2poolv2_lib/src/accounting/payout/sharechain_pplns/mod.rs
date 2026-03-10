@@ -14,11 +14,3 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod block_template;
-pub mod coinbase;
-pub mod difficulty;
-pub(crate) mod error;
-pub mod gbt;
-pub mod notify;
-pub mod prepared_notify;
-pub mod tracker;

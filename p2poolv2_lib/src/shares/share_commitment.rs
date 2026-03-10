@@ -23,9 +23,9 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::stratum::work::block_template::BlockTemplate;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
-use bitcoin::consensus::{Decodable, Encodable};
+use bitcoin::consensus::Encodable;
 use bitcoin::hashes::Hash;
-use bitcoin::io::{Read, Write};
+use bitcoin::io::Write;
 use bitcoin::{Address, BlockHash, CompactTarget, TxMerkleNode, hashes};
 use serde::Serialize;
 use std::error::Error;
@@ -63,23 +63,35 @@ pub struct ShareCommitment {
 }
 
 impl ShareCommitment {
-    /// Make a SHA256 hash for commitment using consensus encoding
+    /// Make a SHA256 hash for commitment using consensus encoding.
+    ///
+    /// Encodes all shared fields via consensus_encode, then appends
+    /// the miner_address encoding and hashes the result.
     pub fn hash(&self) -> hashes::sha256::Hash {
         let mut serialized = Vec::new();
         self.consensus_encode(&mut serialized)
             .expect("encoding commitment should never fail");
+        let addr_str = self.miner_address.to_string();
+        addr_str
+            .consensus_encode(&mut serialized)
+            .expect("encoding address should never fail");
         bitcoin::hashes::sha256::Hash::hash(&serialized)
     }
 }
 
 impl Encodable for ShareCommitment {
+    /// Consensus-encode the shared fields of the commitment (excluding miner_address).
+    ///
+    /// Field order: prev_share_blockhash, uncles, merkle_root, bits, time.
+    ///
+    /// The miner_address is intentionally excluded so that the encoded bytes
+    /// can be reused as a prefix across miners. Each miner only needs to
+    /// append their address encoding. The hash() method appends the address
+    /// before hashing.
     fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, bitcoin::io::Error> {
         let mut len = 0;
         len += self.prev_share_blockhash.consensus_encode(w)?;
         len += self.uncles.consensus_encode(w)?;
-
-        let addr_str = self.miner_address.to_string();
-        len += addr_str.consensus_encode(w)?;
 
         match &self.merkle_root {
             Some(root) => {
@@ -93,43 +105,8 @@ impl Encodable for ShareCommitment {
 
         len += self.bits.consensus_encode(w)?;
         len += self.time.consensus_encode(w)?;
+
         Ok(len)
-    }
-}
-
-/// We don't support Deserialize for ShareCommitment, but we still
-/// provide decode for testing serialization
-impl Decodable for ShareCommitment {
-    fn consensus_decode<R: Read + ?Sized>(
-        r: &mut R,
-    ) -> Result<Self, bitcoin::consensus::encode::Error> {
-        let prev_share_blockhash = BlockHash::consensus_decode(r)?;
-        let uncles = Vec::<BlockHash>::consensus_decode(r)?;
-
-        let addr_str = String::consensus_decode(r)?;
-        let btcaddress = addr_str
-            .parse::<Address<_>>()
-            .map_err(|_| bitcoin::consensus::encode::Error::ParseFailed("invalid bitcoin address"))?
-            .assume_checked();
-
-        let has_merkle_root = bool::consensus_decode(r)?;
-        let merkle_root = if has_merkle_root {
-            Some(TxMerkleNode::consensus_decode(r)?)
-        } else {
-            None
-        };
-
-        let bits = CompactTarget::consensus_decode(r)?;
-        let time = u32::consensus_decode(r)?;
-
-        Ok(ShareCommitment {
-            prev_share_blockhash,
-            uncles,
-            miner_address: btcaddress,
-            merkle_root,
-            bits,
-            time,
-        })
     }
 }
 
@@ -243,53 +220,6 @@ mod tests {
         let hash2 = commitment2.hash();
 
         assert_ne!(hash1, hash2);
-    }
-
-    #[test]
-    fn test_consensus_encode_decode_roundtrip() {
-        let commitment = create_test_commitment();
-
-        let mut serialized = Vec::new();
-        commitment.consensus_encode(&mut serialized).unwrap();
-
-        let decoded = ShareCommitment::consensus_decode(&mut &serialized[..]).unwrap();
-
-        assert_eq!(decoded, commitment);
-    }
-
-    #[test]
-    fn test_consensus_encode_decode_with_none_merkle_root() {
-        let mut commitment = create_test_commitment();
-        commitment.merkle_root = None;
-
-        let mut serialized = Vec::new();
-        commitment.consensus_encode(&mut serialized).unwrap();
-
-        let decoded = ShareCommitment::consensus_decode(&mut &serialized[..]).unwrap();
-
-        assert_eq!(decoded.merkle_root, None);
-        assert_eq!(decoded, commitment);
-    }
-
-    #[test]
-    fn test_consensus_encode_decode_with_uncles() {
-        let mut commitment = create_test_commitment();
-        commitment.uncles.push(
-            BlockHash::from_str("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6")
-                .unwrap(),
-        );
-        commitment.uncles.push(
-            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
-                .unwrap(),
-        );
-
-        let mut serialized = Vec::new();
-        commitment.consensus_encode(&mut serialized).unwrap();
-
-        let decoded = ShareCommitment::consensus_decode(&mut &serialized[..]).unwrap();
-
-        assert_eq!(decoded.uncles.len(), 2);
-        assert_eq!(decoded, commitment);
     }
 
     #[test]
