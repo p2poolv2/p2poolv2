@@ -296,14 +296,6 @@ pub async fn start_notify(
                     };
 
                 connections.send_to_all(Arc::new(notify_str.clone())).await;
-                if notify_context
-                    .chain_store_handle
-                    .add_job(notify_str)
-                    .await
-                    .is_err()
-                {
-                    tracing::warn!("Couldn't save job when sending to all");
-                }
             }
             NotifyCmd::SendToClient {
                 client_address,
@@ -335,14 +327,6 @@ pub async fn start_notify(
                 connections
                     .send_to_client(client_address, Arc::new(notify_str.clone()))
                     .await;
-                if notify_context
-                    .chain_store_handle
-                    .add_job(notify_str)
-                    .await
-                    .is_err()
-                {
-                    tracing::warn!("Couldn't save job when sending to client");
-                }
             }
         }
     }
@@ -491,8 +475,6 @@ mod tests {
         chain_store_handle
             .expect_get_pplns_shares_filtered()
             .return_const(shares);
-
-        chain_store_handle.expect_add_job().returning(|_| Ok(()));
 
         let genesis = genesis_for_tests();
         let genesis_hash = genesis.block_hash();

@@ -107,13 +107,6 @@ pub enum WriteCommand {
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
 
-    /// Add a job
-    AddJob {
-        timestamp: u64,
-        serialized_notify: String,
-        reply: oneshot::Sender<Result<(), StoreError>>,
-    },
-
     /// Add a user
     AddUser {
         btcaddress: String,
@@ -218,16 +211,6 @@ impl StoreWriter {
             } => {
                 debug!("Initializing chain state from store");
                 let result = self.store.init_chain_state_from_store(genesis_hash);
-                let _ = reply.send(result);
-            }
-
-            WriteCommand::AddJob {
-                timestamp,
-                serialized_notify,
-                reply,
-            } => {
-                debug!("Adding job: {}", timestamp);
-                let result = self.store.add_job(timestamp, serialized_notify);
                 let _ = reply.send(result);
             }
 
