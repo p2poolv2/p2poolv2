@@ -29,7 +29,7 @@ use crate::pool_difficulty;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::shares::share_commitment::{ShareCommitment, build_share_commitment};
+use crate::shares::share_commitment::ShareCommitment;
 use crate::stratum::messages::{Notify, NotifyParams};
 use crate::stratum::util::reverse_four_byte_chunks;
 use crate::stratum::util::to_be_hex;
