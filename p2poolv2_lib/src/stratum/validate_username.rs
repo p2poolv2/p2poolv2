@@ -14,10 +14,23 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use bitcoin::Address;
+
 /// Max username includes the dot and the worker name
 /// btcaddress.workername, with btcaddress max at 62 bytes, we get 66 character worker name
 /// npubs are 63 characters, we still get enough room for workername
 const MAX_USERNAME_LENGTH: usize = 128;
+
+/// Result of a successful username validation.
+#[derive(Debug)]
+pub struct ValidatedUsername<'a> {
+    /// The address portion of the username as a string slice
+    pub address_str: &'a str,
+    /// Parsed and network-checked bitcoin Address (None when validation is skipped)
+    pub parsed_address: Option<Address>,
+    /// Optional worker name after the first dot
+    pub worker_name: Option<&'a str>,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum UsernameValidationError {
@@ -34,17 +47,18 @@ pub enum UsernameValidationError {
 /// # Arguments
 ///
 /// * `username` - The username to validate
+/// * `validate_address` - Whether to parse and validate the bitcoin address
 /// * `network` - The Bitcoin network to validate the address against
 ///
 /// # Returns
 ///
-/// * `Ok((address, worker_name))` - Tuple with parsed address and worker name
+/// * `Ok(ValidatedUsername)` - Parsed address string, checked Address, and worker name
 /// * `Err(UsernameValidationError)` - Error if validation fails
 pub fn validate(
     username: &str,
     validate_address: bool,
     network: bitcoin::Network,
-) -> Result<(&str, Option<&str>), UsernameValidationError> {
+) -> Result<ValidatedUsername<'_>, UsernameValidationError> {
     if username.is_empty() {
         return Err(UsernameValidationError::UserNameMissing());
     }
@@ -61,25 +75,33 @@ pub fn validate(
     // Parse the Bitcoin address
     let address_part = parts[0];
 
-    if validate_address {
+    let parsed_address = if validate_address {
         let address = address_part.parse::<bitcoin::Address<_>>().map_err(|e| {
             UsernameValidationError::InvalidAddress(format!("Failed to parse address: {e}"))
         })?;
 
         // Verify the network, return error on failure
-        address.require_network(network).map_err(|_| {
+        let checked = address.require_network(network).map_err(|_| {
             UsernameValidationError::InvalidAddress(format!(
                 "Expected an address for network {network}",
             ))
         })?;
-    }
-
-    // Extract worker name if present
-    if parts.len() > 1 {
-        Ok((address_part, Some(parts[1])))
+        Some(checked)
     } else {
-        Ok((address_part, None))
-    }
+        None
+    };
+
+    let worker_name = if parts.len() > 1 {
+        Some(parts[1])
+    } else {
+        None
+    };
+
+    Ok(ValidatedUsername {
+        address_str: address_part,
+        parsed_address,
+        worker_name,
+    })
 }
 
 #[cfg(test)]
@@ -92,9 +114,10 @@ mod tests {
         let testnet_address = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
         let result = validate(testnet_address, true, Network::Testnet);
         assert!(result.is_ok());
-        let (address, worker_name) = result.unwrap();
-        assert_eq!(address.to_string(), testnet_address);
-        assert_eq!(worker_name, None);
+        let validated = result.unwrap();
+        assert_eq!(validated.address_str, testnet_address);
+        assert!(validated.parsed_address.is_some());
+        assert_eq!(validated.worker_name, None);
     }
 
     #[test]
@@ -102,9 +125,13 @@ mod tests {
         let testnet_address = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx.worker1";
         let result = validate(testnet_address, true, Network::Testnet);
         assert!(result.is_ok());
-        let (address, worker_name) = result.unwrap();
-        assert_eq!(address, "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx");
-        assert_eq!(worker_name, Some("worker1"));
+        let validated = result.unwrap();
+        assert_eq!(
+            validated.address_str,
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
+        );
+        assert!(validated.parsed_address.is_some());
+        assert_eq!(validated.worker_name, Some("worker1"));
     }
 
     #[test]
@@ -156,9 +183,10 @@ mod tests {
         let multiple_dots = format!("{}.worker.with.dots", mainnet_address);
         let result = validate(&multiple_dots, true, Network::Bitcoin);
         assert!(result.is_ok());
-        let (address, worker_name) = result.unwrap();
-        assert_eq!(address.to_string(), mainnet_address);
-        assert_eq!(worker_name, Some("worker.with.dots"));
+        let validated = result.unwrap();
+        assert_eq!(validated.address_str, mainnet_address);
+        assert!(validated.parsed_address.is_some());
+        assert_eq!(validated.worker_name, Some("worker.with.dots"));
     }
 
     #[test]

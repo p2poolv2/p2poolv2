@@ -21,7 +21,6 @@ use crate::stratum::messages::{Message, Response, SetDifficultyNotification, Sim
 use crate::stratum::server::StratumContext;
 use crate::stratum::session::Session;
 use crate::stratum::validate_username;
-use crate::stratum::work::notify::NotifyCmd;
 use tracing::debug;
 
 /// Register user in the store and update session with their IDs
@@ -92,12 +91,13 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
         };
 
     session.username = Some(message.params[0].clone().unwrap());
-    session.btcaddress = Some(parsed_username.0.to_string());
-    session.workername = parsed_username.1.map(|s| s.to_string());
+    session.btcaddress = Some(parsed_username.address_str.to_string());
+    session.parsed_address = parsed_username.parsed_address;
+    session.workername = parsed_username.worker_name.map(|s| s.to_string());
     session.password = message.params[1].clone();
 
     // Register user in the store
-    register_user(session, parsed_username.0, ctx.chain_store_handle).await?;
+    register_user(session, parsed_username.address_str, ctx.chain_store_handle).await?;
 
     match ctx
         .metrics
@@ -116,13 +116,10 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
     session
         .difficulty_adjuster
         .set_current_difficulty(ctx.start_difficulty);
-    let _ = ctx
-        .notify_tx
-        .send(NotifyCmd::SendToClient {
-            client_address: addr,
-            clean_jobs: true,
-        })
-        .await;
+    // After authorization, the connection handler will pick up the current
+    // prepared template from the watch channel and send the first notify.
+    // We set a flag so handle_connection knows to send the initial notify.
+    session.needs_first_notify = true;
 
     Ok(vec![
         Message::Response(Response::new_ok(message.id, serde_json::json!(true))),
@@ -217,10 +214,18 @@ mod tests {
         assert!(session.user_id.is_some(), "user_id should be set");
         assert!(session.user_id.is_some());
 
+        // After authorization, no NotifyCmd is sent -- the connection handler
+        // picks up the current template from the watch channel instead.
         let notify_cmd = notify_rx.try_recv();
         assert!(
-            notify_cmd.is_ok(),
-            "Notification should be sent to the client after authorization"
+            notify_cmd.is_err(),
+            "No NotifyCmd should be sent after authorization (handled by watch channel)"
+        );
+
+        // Verify the session's needs_first_notify flag was set
+        assert!(
+            session.needs_first_notify,
+            "needs_first_notify should be set after authorization"
         );
 
         // Check difficulty notification
@@ -232,17 +237,6 @@ mod tests {
             difficulty_notification.params[0], 1000,
             "Expected difficulty notification to match pool minimum difficulty"
         );
-
-        match notify_cmd.unwrap() {
-            NotifyCmd::SendToClient {
-                client_address,
-                clean_jobs,
-            } => {
-                assert_eq!(client_address, SocketAddr::from(([127, 0, 0, 1], 8080)));
-                assert!(clean_jobs, "Expected clean_jobs to be true");
-            }
-            _ => panic!("Expected NotifyCmd::SendToClient"),
-        };
     }
 
     #[tokio::test]
