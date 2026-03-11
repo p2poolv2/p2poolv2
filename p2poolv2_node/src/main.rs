@@ -140,10 +140,6 @@ async fn main() -> ExitCode {
     );
 
     let stratum_config = config.stratum.clone().parse().unwrap();
-    let miner_address = config.miner.as_ref().map(|miner_config| {
-        p2poolv2_lib::config::parse_address(&miner_config.address, stratum_config.network)
-            .expect("Invalid miner address in config")
-    });
     let bitcoinrpc_config = config.bitcoinrpc.clone();
 
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
@@ -178,22 +174,20 @@ async fn main() -> ExitCode {
     });
 
     let connections_handle = start_connections_handler().await;
-    let connections_cloned = connections_handle.clone();
 
-    let tracker_handle_cloned = tracker_handle.clone();
+    // Watch channel for broadcasting prepared templates to all connection handlers
+    let (template_tx, template_rx) = tokio::sync::watch::channel(None);
+
     let chain_store_handle_for_notify = chain_store_handle.clone();
 
     let cloned_stratum_config = stratum_config.clone();
     tokio::spawn(async move {
         info!("Starting Stratum notifier...");
-        // This will run indefinitely, sending new block templates to the Stratum server as they arrive
         start_notify(
             notify_rx,
-            connections_cloned,
+            template_tx,
             chain_store_handle_for_notify,
-            tracker_handle_cloned,
             &cloned_stratum_config,
-            miner_address,
         )
         .await;
     });
@@ -243,6 +237,7 @@ async fn main() -> ExitCode {
                 tracker_handle_cloned,
                 bitcoinrpc_config,
                 metrics_cloned,
+                template_rx,
             )
             .await;
         if result.is_err() {
