@@ -18,6 +18,7 @@ use crate::utils::time_provider::SystemTimeProvider;
 use crate::{
     stratum::difficulty_adjuster::DifficultyAdjusterTrait, utils::time_provider::TimeProvider,
 };
+use bitcoin::Address;
 use bitcoin::secp256k1::rand::{self, Rng};
 use std::time::SystemTime;
 
@@ -42,6 +43,8 @@ pub struct Session<D: DifficultyAdjusterTrait> {
     pub username: Option<String>,
     /// bitcoin address used as user identifier
     pub btcaddress: Option<String>,
+    /// Parsed and network-checked bitcoin Address, set once at authorization time
+    pub parsed_address: Option<Address>,
     /// Worker name for the mining device
     pub workername: Option<String>,
     /// Optional password of the miner, supplied by the miner, we just store it in session
@@ -62,6 +65,8 @@ pub struct Session<D: DifficultyAdjusterTrait> {
     pub last_share_time: Option<SystemTime>,
     /// Authorization failed once
     pub auth_failed_once: bool,
+    /// Set after authorization to trigger the first notify from the watch channel
+    pub needs_first_notify: bool,
 }
 
 impl<D: DifficultyAdjusterTrait> Session<D> {
@@ -83,6 +88,7 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
             username: None,
             workername: None,
             btcaddress: None,
+            parsed_address: None,
             password: None,
             user_id: None,
             worker_id: None,
@@ -92,6 +98,7 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
             connected_at: now,
             last_share_time: None,
             auth_failed_once: false,
+            needs_first_notify: false,
         }
     }
 
