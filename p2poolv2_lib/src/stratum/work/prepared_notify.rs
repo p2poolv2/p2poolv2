@@ -296,14 +296,16 @@ pub(crate) fn build_notify_from_prepared(
     let job_id = tracker_handle.get_next_job_id();
     let job_id_hex = format!("{job_id:016x}");
 
-    // Clone the JSON template and overwrite the placeholders
+    // Clone the JSON template and overwrite the fixed-size placeholders.
     let mut notify_json = prepared.json_template.clone();
-    // Safety: we are replacing ASCII hex chars with ASCII hex chars of the same length
-    let json_bytes = unsafe { notify_json.as_bytes_mut() };
-    json_bytes[prepared.job_id_offset..prepared.job_id_offset + 16]
-        .copy_from_slice(job_id_hex.as_bytes());
-    json_bytes[prepared.commitment_hash_offset..prepared.commitment_hash_offset + 64]
-        .copy_from_slice(commitment_hash_hex.as_bytes());
+    notify_json.replace_range(
+        prepared.job_id_offset..prepared.job_id_offset + 16,
+        &job_id_hex,
+    );
+    notify_json.replace_range(
+        prepared.commitment_hash_offset..prepared.commitment_hash_offset + 64,
+        &commitment_hash_hex,
+    );
 
     // Build the ShareCommitment struct for the tracker
     let share_commitment = ShareCommitment {
@@ -565,13 +567,16 @@ mod tests {
 
         // Manually overwrite placeholders and verify JSON remains valid
         let mut json = prepared.json_template.clone();
-        let json_bytes = unsafe { json.as_bytes_mut() };
         let test_job_id = "abcdef0123456789";
         let test_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        json_bytes[prepared.job_id_offset..prepared.job_id_offset + 16]
-            .copy_from_slice(test_job_id.as_bytes());
-        json_bytes[prepared.commitment_hash_offset..prepared.commitment_hash_offset + 64]
-            .copy_from_slice(test_hash.as_bytes());
+        json.replace_range(
+            prepared.job_id_offset..prepared.job_id_offset + 16,
+            test_job_id,
+        );
+        json.replace_range(
+            prepared.commitment_hash_offset..prepared.commitment_hash_offset + 64,
+            test_hash,
+        );
 
         let parsed: serde_json::Value =
             serde_json::from_str(&json).expect("Overwritten JSON should still be valid");
