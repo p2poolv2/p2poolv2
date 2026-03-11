@@ -51,7 +51,6 @@ async fn register_user<D: DifficultyAdjusterTrait>(
 pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
     message: SimpleRequest<'a>,
     session: &mut Session<D>,
-    addr: std::net::SocketAddr,
     ctx: StratumContext,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.authorize message");
@@ -137,7 +136,6 @@ mod tests {
     use crate::stratum::work::tracker::start_tracker_actor;
     use crate::test_utils::setup_test_chain_store_handle;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
-    use std::net::SocketAddr;
     use tokio::sync::mpsc;
 
     #[tokio::test]
@@ -175,14 +173,7 @@ mod tests {
         };
 
         // Execute
-        let message = handle_authorize(
-            request,
-            &mut session,
-            SocketAddr::from(([127, 0, 0, 1], 8080)),
-            ctx,
-        )
-        .await
-        .unwrap();
+        let message = handle_authorize(request, &mut session, ctx).await.unwrap();
 
         let (subscribe_response, difficulty_notification) = match &message[..] {
             [
@@ -275,13 +266,7 @@ mod tests {
         };
 
         // Execute
-        let message = handle_authorize(
-            request,
-            &mut session,
-            SocketAddr::from(([127, 0, 0, 1], 8080)),
-            ctx,
-        )
-        .await;
+        let message = handle_authorize(request, &mut session, ctx).await;
 
         // Verify
         assert!(message.is_err());
@@ -413,13 +398,7 @@ mod tests {
         };
 
         // Execute
-        let result = handle_authorize(
-            request,
-            &mut session,
-            SocketAddr::from(([127, 0, 0, 1], 8080)),
-            ctx,
-        )
-        .await;
+        let result = handle_authorize(request, &mut session, ctx).await;
 
         // Verify - first invalid username should return Ok with error response
         assert!(
@@ -513,13 +492,7 @@ mod tests {
         };
 
         // Execute
-        let result = handle_authorize(
-            request,
-            &mut session,
-            SocketAddr::from(([127, 0, 0, 1], 8080)),
-            ctx,
-        )
-        .await;
+        let result = handle_authorize(request, &mut session, ctx).await;
 
         // Verify - second invalid username should return Err
         assert!(result.is_err(), "Second invalid username should return Err");

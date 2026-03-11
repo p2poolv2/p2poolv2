@@ -586,6 +586,6 @@ mod tests {
         let coinbase1 = params[2].as_str().unwrap();
         assert!(coinbase1.contains(test_hash));
         // clean_jobs should be true
-        assert_eq!(params[8].as_bool().unwrap(), true);
+        assert!(params[8].as_bool().unwrap());
     }
 }

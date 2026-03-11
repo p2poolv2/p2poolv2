@@ -14,8 +14,6 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use std::net::SocketAddr;
-
 use crate::stratum::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::stratum::error::Error;
 use crate::stratum::messages::{Message, Request, SimpleRequest};
@@ -45,7 +43,6 @@ pub mod suggest_difficulty;
 pub(crate) async fn handle_message<'a, D: DifficultyAdjusterTrait>(
     message: Request<'a>,
     session: &mut Session<D>,
-    addr: SocketAddr,
     ctx: StratumContext,
 ) -> Result<Vec<Message<'a>>, Error> {
     match message {
@@ -54,7 +51,7 @@ pub(crate) async fn handle_message<'a, D: DifficultyAdjusterTrait>(
             handle_suggest_difficulty(suggest_difficulty_request, session).await
         }
         Request::SimpleRequest(simple_request) => {
-            handle_simple_request(simple_request, session, addr, ctx).await
+            handle_simple_request(simple_request, session, ctx).await
         }
     }
 }
@@ -62,13 +59,12 @@ pub(crate) async fn handle_message<'a, D: DifficultyAdjusterTrait>(
 async fn handle_simple_request<'a, D: DifficultyAdjusterTrait>(
     message: SimpleRequest<'a>,
     session: &mut Session<D>,
-    addr: SocketAddr,
     ctx: StratumContext,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling simple request: {}", message.method);
     match message.method.as_ref() {
         "mining.subscribe" => handle_subscribe(message, session, ctx.start_difficulty).await,
-        "mining.authorize" => handle_authorize(message, session, addr, ctx).await,
+        "mining.authorize" => handle_authorize(message, session, ctx).await,
         "mining.submit" => handle_submit(message, session, ctx).await,
         method => Err(Error::InvalidMethod(method.to_string())),
     }
