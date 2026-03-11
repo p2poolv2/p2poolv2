@@ -122,8 +122,7 @@ fn build_json_template(
     json.push_str(coinbase2);
     json.push_str(r#"","#);
     json.push_str(&serialize_merkle_branches_json(merkle_branches));
-    json.push_str(r#","#);
-    json.push_str(r#"""#);
+    json.push_str(r#",""#);
     json.push_str(version_hex);
     json.push_str(r#"",""#);
     json.push_str(nbits);
