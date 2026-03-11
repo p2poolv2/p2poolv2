@@ -29,8 +29,6 @@ use bitcoin::transaction::Version;
 use bitcoin::{Address, BlockHash, CompactTarget, TxMerkleNode};
 use std::sync::Arc;
 
-use super::tracker::JobId;
-
 /// Pre-serialized notify message with placeholders for per-miner fields.
 ///
 /// Contains the fully built JSON notify string with fixed-size placeholders
@@ -122,7 +120,8 @@ fn build_json_template(
     json.push_str(coinbase2);
     json.push_str(r#"","#);
     json.push_str(&serialize_merkle_branches_json(merkle_branches));
-    json.push_str(r#",""#);
+    json.push_str(r#","#);
+    json.push_str(r#"""#);
     json.push_str(version_hex);
     json.push_str(r#"",""#);
     json.push_str(nbits);
@@ -254,26 +253,26 @@ pub(crate) fn prepare_notify_params(
     })
 }
 
-/// Compute the hex-encoded commitment hash for a specific miner address.
+/// Compute the hex-encoded commitment hash for a miner address.
 ///
-/// Appends the consensus-encoded address to the pre-built commitment prefix
-/// and returns the SHA256 hash as a 64-char hex string.
-fn get_commitment_hex_with_address(
+/// When an address is provided, appends its consensus-encoded form to the
+/// pre-built commitment prefix. When None (solo mode), hashes the prefix
+/// with empty address bytes.
+fn get_commitment_hex(
     commitment_prefix: &[u8],
-    miner_address: &Address,
+    miner_address: Option<&Address>,
 ) -> Result<String, WorkError> {
-    let address_string = miner_address.to_string();
-    let mut address_bytes = Vec::with_capacity(address_string.len() + 9);
-    address_string
-        .consensus_encode(&mut address_bytes)
-        .map_err(|error| WorkError {
-            message: format!("Failed to encode miner address: {error}"),
-        })?;
-
-    let total_len = commitment_prefix.len() + address_bytes.len();
-    let mut commitment_binary = Vec::with_capacity(total_len);
+    let mut commitment_binary = Vec::with_capacity(commitment_prefix.len() + 64);
     commitment_binary.extend_from_slice(commitment_prefix);
-    commitment_binary.extend_from_slice(&address_bytes);
+
+    if let Some(address) = miner_address {
+        address
+            .script_pubkey()
+            .consensus_encode(&mut commitment_binary)
+            .map_err(|error| WorkError {
+                message: format!("Failed to encode miner address script_pubkey: {error}"),
+            })?;
+    }
 
     let commitment_hash = hashes::sha256::Hash::hash(&commitment_binary);
     Ok(hex::encode(commitment_hash.as_byte_array()))
@@ -283,13 +282,14 @@ fn get_commitment_hex_with_address(
 ///
 /// Computes the miner-specific commitment hash, overwrites the placeholders
 /// in the pre-built JSON, and inserts the job into the tracker.
+/// When miner_address is None (solo mode), a commitment hash is still
+/// computed from the prefix alone.
 pub(crate) fn build_notify_from_prepared(
     prepared: &PreparedNotifyParams,
-    miner_address: &Address,
+    miner_address: Option<&Address>,
     tracker_handle: &JobTracker,
-) -> Result<(String, ShareCommitment, JobId), WorkError> {
-    let commitment_hash_hex =
-        get_commitment_hex_with_address(&prepared.commitment_prefix, miner_address)?;
+) -> Result<String, WorkError> {
+    let commitment_hash_hex = get_commitment_hex(&prepared.commitment_prefix, miner_address)?;
 
     // Get next job_id
     let job_id = tracker_handle.get_next_job_id();
@@ -306,32 +306,32 @@ pub(crate) fn build_notify_from_prepared(
         &commitment_hash_hex,
     );
 
-    // Build the ShareCommitment struct for the tracker
-    let share_commitment = ShareCommitment {
-        prev_share_blockhash: prepared.prev_share_blockhash,
-        uncles: prepared.uncles.clone(),
-        miner_address: miner_address.clone(),
-        merkle_root: prepared.merkle_root,
-        bits: prepared.bits,
-        time: prepared.time,
-    };
-
     // Build coinbase1 with the actual commitment hash
     let coinbase1 = format!(
         "{}{}{}",
         prepared.coinbase1_before_hash, commitment_hash_hex, prepared.coinbase1_after_hash
     );
 
+    // Build ShareCommitment only when a miner address is available
+    let share_commitment = miner_address.map(|address| ShareCommitment {
+        prev_share_blockhash: prepared.prev_share_blockhash,
+        uncles: prepared.uncles.clone(),
+        miner_address: address.clone(),
+        merkle_root: prepared.merkle_root,
+        bits: prepared.bits,
+        time: prepared.time,
+    });
+
     // Insert job into tracker
     tracker_handle.insert_job(
         Arc::clone(&prepared.template),
         coinbase1,
         prepared.coinbase2.clone(),
-        Some(share_commitment.clone()),
+        share_commitment,
         job_id,
     );
 
-    Ok((notify_json, share_commitment, job_id))
+    Ok(notify_json)
 }
 
 /// Extract flags from template coinbaseaux and convert to PushBytesBuf.
@@ -348,7 +348,7 @@ fn parse_flags(flags: Option<String>) -> PushBytesBuf {
 mod tests {
     use super::*;
     use crate::stratum::work::block_template::BlockTemplate;
-    use crate::stratum::work::tracker::start_tracker_actor;
+    use crate::stratum::work::tracker::{JobId, start_tracker_actor};
     use bitcoin::{CompressedPublicKey, Network};
 
     fn test_template() -> BlockTemplate {
@@ -433,9 +433,8 @@ mod tests {
         )
         .expect("prepare_notify_params should succeed");
 
-        let (notify_json, commitment, job_id) =
-            build_notify_from_prepared(&prepared, &address, &tracker_handle)
-                .expect("build_notify_from_prepared should succeed");
+        let notify_json = build_notify_from_prepared(&prepared, Some(&address), &tracker_handle)
+            .expect("build_notify_from_prepared should succeed");
 
         // Verify the result is valid JSON
         let parsed: serde_json::Value =
@@ -446,15 +445,17 @@ mod tests {
         let params = parsed["params"].as_array().unwrap();
         let job_id_str = params[0].as_str().unwrap();
         assert_ne!(job_id_str, "0000000000000000");
-        assert_eq!(job_id_str, format!("{job_id:016x}"));
 
-        // Verify commitment has the correct miner address
-        assert_eq!(commitment.miner_address, address);
-        assert_eq!(commitment.prev_share_blockhash, BlockHash::all_zeros());
-
-        // Verify job was inserted in tracker
+        // Verify job was inserted in tracker by parsing the job_id from JSON
+        let job_id = JobId(u64::from_str_radix(job_id_str, 16).unwrap());
         let job_details = tracker_handle.get_job(job_id);
         assert!(job_details.is_some());
+
+        // Verify commitment was stored with correct miner address
+        let details = job_details.unwrap();
+        let commitment = details.share_commitment.as_ref().unwrap();
+        assert_eq!(commitment.miner_address, address);
+        assert_eq!(commitment.prev_share_blockhash, BlockHash::all_zeros());
     }
 
     #[tokio::test]
@@ -482,9 +483,15 @@ mod tests {
         )
         .expect("prepare_notify_params should succeed");
 
-        let (_notify_json, commitment, _job_id) =
-            build_notify_from_prepared(&prepared, &address, &tracker_handle)
-                .expect("build_notify_from_prepared should succeed");
+        let notify_json = build_notify_from_prepared(&prepared, Some(&address), &tracker_handle)
+            .expect("build_notify_from_prepared should succeed");
+
+        // Parse job_id from JSON to look up the tracker entry
+        let parsed: serde_json::Value = serde_json::from_str(&notify_json).unwrap();
+        let job_id_str = parsed["params"][0].as_str().unwrap();
+        let job_id = JobId(u64::from_str_radix(job_id_str, 16).unwrap());
+        let details = tracker_handle.get_job(job_id).unwrap();
+        let commitment = details.share_commitment.as_ref().unwrap();
 
         // Build the same commitment directly and compare hashes
         let direct_commitment = ShareCommitment {
@@ -530,14 +537,12 @@ mod tests {
                 .unwrap();
         let address2 = Address::p2wpkh(&other_pubkey, Network::Signet);
 
-        let (notify1, commitment1, _) =
-            build_notify_from_prepared(&prepared, &address1, &tracker_handle).unwrap();
-        let (notify2, commitment2, _) =
-            build_notify_from_prepared(&prepared, &address2, &tracker_handle).unwrap();
+        let notify1 =
+            build_notify_from_prepared(&prepared, Some(&address1), &tracker_handle).unwrap();
+        let notify2 =
+            build_notify_from_prepared(&prepared, Some(&address2), &tracker_handle).unwrap();
 
-        // Different addresses must produce different commitment hashes
-        assert_ne!(commitment1.hash(), commitment2.hash());
-        // And different notify JSON (different coinbase1 content)
+        // Different addresses must produce different notify JSON (different coinbase1 content)
         assert_ne!(notify1, notify2);
     }
 
