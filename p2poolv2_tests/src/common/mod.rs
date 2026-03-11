@@ -16,7 +16,7 @@
 
 use bitcoindrpc::BitcoinRpcConfig;
 use p2poolv2_lib::config::{
-    ApiConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig, StratumConfig,
+    ApiConfig, Config, LoggingConfig, NetworkConfig, StoreConfig, StratumConfig,
 };
 
 /// Build a default test configuration with test values that can be replaced later by each test
@@ -54,9 +54,6 @@ pub fn default_test_config() -> Config {
             pplns_ttl_days: 3,
         },
         stratum: StratumConfig::new_for_test_default(),
-        miner: Some(MinerConfig {
-            address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
-        }),
         logging: LoggingConfig {
             console: Some(true),
             level: "info".to_string(),

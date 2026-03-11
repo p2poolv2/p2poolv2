@@ -292,16 +292,6 @@ fn default_pplns_ttl_days() -> u64 {
     7
 }
 
-/// Configuration for local miner on P2Pool node
-///
-/// This is optional in Config to support standalone pools that don't
-/// connect to p2poolv2.
-#[derive(Debug, Deserialize, Clone)]
-pub struct MinerConfig {
-    /// The bitcoin address for the local miner
-    pub address: String,
-}
-
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct LoggingConfig {
     /// Log to file if specified
@@ -359,9 +349,8 @@ impl std::fmt::Debug for ApiConfig {
 
 /// Config for p2poolv2 nodes
 ///
-/// The network and miner configs switch to defaults if not
-/// provided. This is the case for standalone PPPLNS pools like
-/// Hydrapool.
+/// The network config switches to defaults if not provided. This is
+/// the case for standalone PPLNS pools like Hydrapool.
 #[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
 pub struct Config {
@@ -369,7 +358,6 @@ pub struct Config {
     pub network: NetworkConfig,
     pub store: StoreConfig,
     pub stratum: StratumConfig,
-    pub miner: Option<MinerConfig>,
     pub bitcoinrpc: BitcoinRpcConfig,
     pub logging: LoggingConfig,
     pub api: ApiConfig,
@@ -485,11 +473,6 @@ impl Config {
         self
     }
 
-    pub fn with_miner_address(mut self, address: String) -> Self {
-        self.miner = Some(MinerConfig { address });
-        self
-    }
-
     pub fn with_bitcoinrpc_url(mut self, bitcoin_url: String) -> Self {
         self.bitcoinrpc.url = bitcoin_url;
         self
@@ -572,7 +555,6 @@ mod tests {
             .with_maximum_difficulty(Some(100))
             .with_difficulty_multiplier(2.0)
             .with_ignore_difficulty(Some(true))
-            .with_miner_address("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string())
             .with_bitcoinrpc_url("http://localhost:8332".to_string())
             .with_bitcoinrpc_username("testuser".to_string())
             .with_bitcoinrpc_password("testpass".to_string())
@@ -610,10 +592,6 @@ mod tests {
             "bcrt1qxyz123example456bitcoin789address".to_string()
         );
 
-        assert_eq!(
-            config.miner.unwrap().address,
-            "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
-        );
         assert_eq!(config.bitcoinrpc.url, "http://localhost:8332");
         assert_eq!(config.bitcoinrpc.username, "testuser");
         assert_eq!(config.bitcoinrpc.password, "testpass");
