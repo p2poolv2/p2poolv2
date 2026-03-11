@@ -435,7 +435,7 @@ impl Node {
 mod tests {
     use super::ChainStoreHandle;
     use crate::config::{
-        ApiConfig, Config, LoggingConfig, MinerConfig, NetworkConfig, StoreConfig, StratumConfig,
+        ApiConfig, Config, LoggingConfig, NetworkConfig, StoreConfig, StratumConfig,
     };
     use crate::node::Node;
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
@@ -486,9 +486,6 @@ mod tests {
             },
 
             stratum: StratumConfig::new_for_test_default(),
-            miner: Some(MinerConfig {
-                address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
-            }),
             logging: LoggingConfig {
                 console: Some(true),
                 level: "info".to_string(),

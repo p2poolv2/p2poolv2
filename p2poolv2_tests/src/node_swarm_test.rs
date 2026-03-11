@@ -35,17 +35,14 @@ async fn test_three_nodes_connectivity() {
 
     let config1 = common::default_test_config()
         .with_listen_address("/ip4/127.0.0.1/tcp/6884".to_string())
-        .with_store_path("test_chain_1.db".to_string())
-        .with_miner_address("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        .with_store_path("test_chain_1.db".to_string());
     let config2 = common::default_test_config()
         .with_listen_address("/ip4/127.0.0.1/tcp/6885".to_string())
         .with_store_path("test_chain_2.db".to_string())
-        .with_miner_address("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string())
         .with_dial_peers(vec!["/ip4/127.0.0.1/tcp/6884".to_string()]);
     let config3 = common::default_test_config()
         .with_listen_address("/ip4/127.0.0.1/tcp/6886".to_string())
         .with_store_path("test_chain_3.db".to_string())
-        .with_miner_address("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string())
         .with_dial_peers(vec![
             "/ip4/127.0.0.1/tcp/6884".to_string(),
             "/ip4/127.0.0.1/tcp/6885".to_string(),
@@ -194,26 +191,21 @@ async fn test_three_nodes_connectivity() {
 #[tokio::test]
 async fn test_three_nodes_share_sync() {
     const SHARE_COUNT: u32 = 50;
-    const MINER_ADDRESS: &str = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk";
-
     // Configure three nodes on unique ports with higher rate limit for fast sync
     let config1 = common::default_test_config()
         .with_listen_address("/ip4/127.0.0.1/tcp/6894".to_string())
         .with_store_path("test_sync_chain_1.db".to_string())
-        .with_miner_address(MINER_ADDRESS.to_string())
         .with_max_requests_per_second(100)
         .with_api_port(3010);
     let config2 = common::default_test_config()
         .with_listen_address("/ip4/127.0.0.1/tcp/6895".to_string())
         .with_store_path("test_sync_chain_2.db".to_string())
-        .with_miner_address(MINER_ADDRESS.to_string())
         .with_max_requests_per_second(100)
         .with_api_port(3011)
         .with_dial_peers(vec!["/ip4/127.0.0.1/tcp/6894".to_string()]);
     let config3 = common::default_test_config()
         .with_listen_address("/ip4/127.0.0.1/tcp/6896".to_string())
         .with_store_path("test_sync_chain_3.db".to_string())
-        .with_miner_address(MINER_ADDRESS.to_string())
         .with_max_requests_per_second(100)
         .with_api_port(3012)
         .with_dial_peers(vec!["/ip4/127.0.0.1/tcp/6894".to_string()]);
