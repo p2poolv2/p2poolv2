@@ -29,6 +29,7 @@ use crate::stratum::messages::Request;
 use crate::stratum::session::Session;
 use crate::stratum::session_timeout::{self, check_session_timeouts};
 use crate::stratum::work::notify::NotifyCmd;
+use crate::stratum::work::prepared_notify::{PreparedNotifyParams, build_notify_from_prepared};
 use crate::stratum::work::tracker::JobTracker;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoindrpc::BitcoinRpcConfig;
@@ -36,7 +37,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, LinesCodec};
 use tracing::{debug, error, info};
@@ -179,7 +180,7 @@ impl StratumServerBuilder {
 }
 
 impl StratumServer {
-    // A method to start the Stratum server
+    /// Start the Stratum server, accepting connections and spawning handlers.
     pub async fn start(
         &mut self,
         ready_tx: Option<oneshot::Sender<()>>,
@@ -187,6 +188,7 @@ impl StratumServer {
         tracker_handle: Arc<JobTracker>,
         bitcoinrpc_config: BitcoinRpcConfig,
         metrics: metrics::MetricsHandle,
+        template_rx: watch::Receiver<Option<Arc<PreparedNotifyParams>>>,
     ) -> Result<(), Box<dyn std::error::Error + Send>> {
         info!("Starting Stratum server at {}:{}", self.hostname, self.port);
 
@@ -242,6 +244,7 @@ impl StratumServer {
                                 chain_store_handle: self.chain_store_handle.clone(),
                             };
                             let version_mask = self.version_mask;
+                            let connection_template_rx = template_rx.clone();
                             // Spawn a new task for each connection
                             tokio::spawn(async move {
                                 // Handle the connection with graceful shutdown support
@@ -254,6 +257,7 @@ impl StratumServer {
                                     version_mask,
                                     ctx,
                                     &SystemTimeProvider {},
+                                    connection_template_rx,
                                 )
                                 .await
                                 .is_err()
@@ -293,9 +297,13 @@ pub(crate) struct StratumContext {
     pub chain_store_handle: ChainStoreHandle,
 }
 
-/// Handles a single connection to the Stratum server.
-/// This function reads lines from the connection, processes them,
-/// and sends responses back to the client.
+/// Handles a single connection to the Stratum server.  This function
+/// reads lines from the connection, processes them, and sends
+/// responses back to the client.
+///
+/// Handling new notify on new templates. Watches for new prepared
+/// templates via the watch channel and builds per-miner notify
+/// messages.
 async fn handle_connection<R, W, T: TimeProvider>(
     reader: R,
     mut writer: W,
@@ -305,6 +313,7 @@ async fn handle_connection<R, W, T: TimeProvider>(
     version_mask: i32,
     ctx: StratumContext,
     time_provider: &T,
+    mut template_rx: watch::Receiver<Option<Arc<PreparedNotifyParams>>>,
 ) -> Result<(), Box<dyn std::error::Error + Send>>
 where
     R: AsyncBufReadExt + Unpin,
@@ -330,6 +339,31 @@ where
 
     // Process each line as it arrives
     loop {
+        // After authorization, send the first notify from the current template
+        if session.needs_first_notify {
+            session.needs_first_notify = false;
+            // Clone inside a block to ensure the watch Ref guard is dropped before await
+            let prepared_template = { template_rx.borrow_and_update().clone() };
+            if let Some(prepared) = prepared_template {
+                if let Some(address) = session.parsed_address.as_ref() {
+                    match build_notify_from_prepared(&prepared, address, &ctx.tracker_handle) {
+                        Ok((notify_json, _commitment, _job_id)) => {
+                            if let Err(e) = writer
+                                .write_all(format!("{notify_json}\n").as_bytes())
+                                .await
+                            {
+                                error!("Failed to write first notify to {addr}: {e}");
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to build first notify for {addr}: {e}");
+                        }
+                    }
+                }
+            }
+        }
+
         tokio::select! {
             // Check for shutdown signal
             _ = &mut shutdown_rx => {
@@ -339,12 +373,35 @@ where
             // receive a message on the channel used by server to send_to_all
             Some(message) = message_rx.recv() => {
                 if session.username.is_none() {
-                    continue; // Ignore messages until the user has authorized
+                    // Ignore messages until the user has authorized
+                } else {
+                    info!("Tx {addr} {message:?}");
+                    if let Err(e) = writer.write_all(format!("{message}\n").as_bytes()).await {
+                        error!("Failed to write to {}: {}", addr, e);
+                        break;
+                    }
                 }
-                info!("Tx {addr} {message:?}");
-                if let Err(e) = writer.write_all(format!("{message}\n").as_bytes()).await {
-                    error!("Failed to write to {}: {}", addr, e);
-                    break;
+            }
+            // Watch for new prepared templates from the notifier
+            Ok(()) = template_rx.changed() => {
+                // Clone inside a block to ensure the watch Ref guard is dropped before await
+                let prepared_template = { template_rx.borrow_and_update().clone() };
+                if session.username.is_none() {
+                    // Not yet authorized, skip building notify
+                } else if let Some(prepared) = prepared_template {
+                    if let Some(address) = session.parsed_address.as_ref() {
+                        match build_notify_from_prepared(&prepared, address, &ctx.tracker_handle) {
+                            Ok((notify_json, _commitment, _job_id)) => {
+                                if let Err(e) = writer.write_all(format!("{notify_json}\n").as_bytes()).await {
+                                    error!("Failed to write notify to {addr}: {e}");
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                error!("Failed to build notify for {addr}: {e}");
+                            }
+                        }
+                    }
                 }
             }
             // Read a line from the stream
@@ -353,9 +410,8 @@ where
                 match line {
                     Some(Ok(line)) => {
                         if line.is_empty() {
-                            continue; // Ignore empty lines
-                        }
-                        if let Err(e) = process_incoming_message(
+                            // Ignore empty lines
+                        } else if let Err(e) = process_incoming_message(
                             &line,
                             &mut writer,
                             session,
@@ -503,6 +559,7 @@ mod stratum_server_tests {
 
         let (ready_tx, ready_rx) = oneshot::channel();
         let (notify_tx, _notify_rx) = mpsc::channel(10);
+        let (_template_tx, template_rx) = watch::channel(None);
 
         // Start the server in a separate task so we can shut it down
         let server_handle = tokio::spawn(async move {
@@ -514,6 +571,7 @@ mod stratum_server_tests {
                     tracker_handle.clone(),
                     bitcoinrpc_config,
                     metrics_handle,
+                    template_rx,
                 )
                 .await;
         });
@@ -571,6 +629,7 @@ mod stratum_server_tests {
         };
 
         // Run the handler
+        let (_template_tx, template_rx) = watch::channel(None);
         let result = handle_connection(
             reader,
             &mut writer,
@@ -580,6 +639,7 @@ mod stratum_server_tests {
             0x1fffe000,
             ctx,
             &SystemTimeProvider {},
+            template_rx,
         )
         .await;
 
@@ -686,6 +746,7 @@ mod stratum_server_tests {
         };
 
         // Run the handler
+        let (_template_tx, template_rx) = watch::channel(None);
         let result = handle_connection(
             reader,
             &mut writer,
@@ -695,6 +756,7 @@ mod stratum_server_tests {
             0x1fffe000,
             ctx,
             &SystemTimeProvider {},
+            template_rx,
         )
         .await;
 
@@ -755,6 +817,7 @@ mod stratum_server_tests {
         };
 
         // Run the handler
+        let (_template_tx, template_rx) = watch::channel(None);
         let result = handle_connection(
             input,
             &mut writer,
@@ -764,6 +827,7 @@ mod stratum_server_tests {
             0x1fffe000,
             ctx,
             &SystemTimeProvider {},
+            template_rx,
         )
         .await;
 
@@ -829,6 +893,7 @@ mod stratum_server_tests {
         };
 
         // Run the handler
+        let (_template_tx, template_rx) = watch::channel(None);
         let result = server::handle_connection(
             reader,
             &mut writer,
@@ -838,6 +903,7 @@ mod stratum_server_tests {
             0x1fffe000,
             ctx,
             &SystemTimeProvider {},
+            template_rx,
         )
         .await;
 
@@ -923,6 +989,7 @@ mod stratum_server_tests {
         };
 
         // Spawn the handler in a separate task
+        let (_template_tx, template_rx) = watch::channel(None);
         let handle = tokio::spawn(async move {
             // Wrap the mock reader with a BufReader to implement AsyncBufReadExt
             let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
@@ -935,6 +1002,7 @@ mod stratum_server_tests {
                 0x1fffe000,
                 ctx,
                 &SystemTimeProvider {},
+                template_rx,
             )
             .await;
 
@@ -1036,6 +1104,7 @@ mod stratum_server_tests {
         };
 
         // Spawn the handler in a separate task
+        let (_template_tx, template_rx) = watch::channel(None);
         let handle = tokio::spawn(async move {
             // Wrap the mock reader with a BufReader to implement AsyncBufReadExt
             let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
@@ -1048,6 +1117,7 @@ mod stratum_server_tests {
                 0x1fffe000,
                 ctx,
                 &SystemTimeProvider {},
+                template_rx,
             )
             .await;
 
@@ -1146,6 +1216,7 @@ mod stratum_server_tests {
             let time_provider = TestTimeProvider::new(std::time::SystemTime::now());
             let mut time_provider_cloned = time_provider.clone();
 
+            let (_template_tx, template_rx) = watch::channel(None);
             let handle = tokio::spawn(async move {
                 let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
                 handle_connection(
@@ -1157,6 +1228,7 @@ mod stratum_server_tests {
                     0x1fffe000,
                     ctx,
                     &time_provider,
+                    template_rx,
                 )
                 .await
             });
@@ -1234,6 +1306,7 @@ mod stratum_server_tests {
             let time_provider = TestTimeProvider::new(std::time::SystemTime::now());
             let mut time_provider_cloned = time_provider.clone();
 
+            let (_template_tx, template_rx) = watch::channel(None);
             let handle = tokio::spawn(async move {
                 let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
                 handle_connection(
@@ -1245,6 +1318,7 @@ mod stratum_server_tests {
                     0x1fffe000,
                     ctx,
                     &time_provider,
+                    template_rx,
                 )
                 .await
             });

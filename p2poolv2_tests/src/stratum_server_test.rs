@@ -84,6 +84,7 @@ async fn test_stratum_server_subscribe() {
 
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let tracker_handle = start_tracker_actor();
+    let (_template_tx, template_rx) = tokio::sync::watch::channel(None);
 
     tokio::spawn(async move {
         let _result = server
@@ -93,6 +94,7 @@ async fn test_stratum_server_subscribe() {
                 tracker_handle,
                 bitcoinrpc_config,
                 metrics_handle,
+                template_rx,
             )
             .await;
     });

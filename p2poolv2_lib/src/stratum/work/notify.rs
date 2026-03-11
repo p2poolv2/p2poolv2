@@ -18,7 +18,7 @@ use super::block_template::BlockTemplate;
 use super::coinbase::{build_coinbase_transaction, split_coinbase};
 use super::error::WorkError;
 use super::gbt::build_merkle_branches_for_template;
-use super::tracker::{JobId, JobTracker};
+use super::tracker::JobId;
 use crate::accounting::OutputPair;
 use crate::accounting::payout::payout_distribution::PayoutDistribution;
 use crate::accounting::payout::simple_pplns::payout::Payout;
@@ -29,25 +29,16 @@ use crate::pool_difficulty;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::shares::share_commitment::ShareCommitment;
 use crate::stratum::messages::{Notify, NotifyParams};
 use crate::stratum::util::reverse_four_byte_chunks;
 use crate::stratum::util::to_be_hex;
-use crate::stratum::work::prepared_notify::{build_notify_from_prepared, prepare_notify_params};
+use crate::stratum::work::prepared_notify::{PreparedNotifyParams, prepare_notify_params};
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
-use bitcoin::Address;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::Version;
-use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::{debug, error};
-
-#[cfg(not(test))]
-use crate::stratum::client_connections::ClientConnectionsHandle;
-#[cfg(test)]
-#[mockall_double::double]
-use crate::stratum::client_connections::ClientConnectionsHandle;
 
 /// Session-level context for building notify messages.
 ///
@@ -55,9 +46,7 @@ use crate::stratum::client_connections::ClientConnectionsHandle;
 pub(crate) struct NotifyContext {
     pub chain_store_handle: ChainStoreHandle,
     pub config: StratumConfig<crate::config::Parsed>,
-    pub miner_address: Option<Address>,
     pub pool_signature: Vec<u8>,
-    pub tracker_handle: Arc<JobTracker>,
     pub pool_difficulty: pool_difficulty::PoolDifficulty,
 }
 
@@ -146,113 +135,68 @@ pub fn build_notify(
     Ok(Notify::new_notify(params))
 }
 
-/// Helper function to build notify, build share commitment and insert
-/// job into tracker. We need to do all this for SendToAll and
-/// SendToClient. So we DRY it here.
+/// Build a PreparedNotifyParams from a template using the notify context.
 ///
-/// When a miner_address is present, uses the PreparedNotifyParams path
-/// for efficient pre-serialized JSON with placeholder replacement.
-/// When no miner_address is present (solo mode), falls back to the
-/// direct build path without a commitment.
-///
-/// Returns the serialized notify string on success.
-async fn build_notify_and_commitment(
+/// Queries chain state (tip, uncles, difficulty) and prepares the
+/// pre-serialized notify template for per-miner customization.
+fn build_prepared_notify(
     template: &Arc<BlockTemplate>,
     clean_jobs: bool,
     context: &NotifyContext,
-) -> Result<(String, Option<ShareCommitment>), WorkError> {
+) -> Result<PreparedNotifyParams, WorkError> {
     let output_distribution =
         build_output_distribution(template, &context.chain_store_handle, &context.config);
 
-    match &context.miner_address {
-        Some(address) => {
-            // Use the prepared approach: pre-serialize once, overwrite placeholders
-            let (tip, uncles) = context
-                .chain_store_handle
-                .get_chain_tip_and_uncles()
-                .map_err(|error| WorkError {
-                    message: format!("Failed to get chain tip: {error}"),
-                })?;
-            let (tip_height, parent_time) = context
-                .chain_store_handle
-                .get_tip_height_and_time()
-                .map_err(|error| WorkError {
-                    message: format!("Failed to get tip height: {error}"),
-                })?;
-            let target = context
-                .pool_difficulty
-                .calculate_target(parent_time, tip_height);
-            let merkle_root = template.get_merkle_root_without_coinbase();
-            let time = SystemTimeProvider.seconds_since_epoch() as u32;
+    let (tip, uncles) = context
+        .chain_store_handle
+        .get_chain_tip_and_uncles()
+        .map_err(|error| WorkError {
+            message: format!("Failed to get chain tip: {error}"),
+        })?;
+    let (tip_height, parent_time) = context
+        .chain_store_handle
+        .get_tip_height_and_time()
+        .map_err(|error| WorkError {
+            message: format!("Failed to get tip height: {error}"),
+        })?;
+    let target = context
+        .pool_difficulty
+        .calculate_target(parent_time, tip_height);
+    let merkle_root = template.get_merkle_root_without_coinbase();
+    let time = SystemTimeProvider.seconds_since_epoch() as u32;
 
-            let prepared = prepare_notify_params(
-                template,
-                output_distribution,
-                &context.pool_signature,
-                tip,
-                uncles.into_iter().collect(),
-                merkle_root,
-                target,
-                time,
-                clean_jobs,
-            )?;
-
-            let (serialized_notify, share_commitment, _job_id) =
-                build_notify_from_prepared(&prepared, address, &context.tracker_handle)?;
-
-            Ok((serialized_notify, Some(share_commitment)))
-        }
-        None => {
-            // Solo mode: no commitment, build directly
-            let job_id = context.tracker_handle.get_next_job_id();
-            let notify = build_notify(
-                template,
-                output_distribution,
-                job_id,
-                clean_jobs,
-                &context.pool_signature,
-                None,
-            )?;
-
-            let serialized_notify =
-                serde_json::to_string(&notify).expect("Failed to serialize Notify message");
-
-            context.tracker_handle.insert_job(
-                Arc::clone(template),
-                notify.params.coinbase1.to_string(),
-                notify.params.coinbase2.to_string(),
-                None,
-                job_id,
-            );
-
-            Ok((serialized_notify, None))
-        }
-    }
+    prepare_notify_params(
+        template,
+        output_distribution,
+        &context.pool_signature,
+        tip,
+        uncles.into_iter().collect(),
+        merkle_root,
+        target,
+        time,
+        clean_jobs,
+    )
 }
 
-/// NotifyCmd is used to send notify to all clients or a single client.
+/// NotifyCmd is used to send a new block template to the notifier.
 pub enum NotifyCmd {
     SendToAll {
         /// The block template to notify clients about.
         template: Arc<BlockTemplate>,
     },
-    SendToClient {
-        /// The address of the client to notify, if None, notify all clients.
-        /// The latest template is used for the notify, so there is not template here.
-        client_address: SocketAddr,
-        clean_jobs: bool,
-    },
 }
 
-/// Start a task that listens for new block template events.
-/// As new templates arrive, build new Notify messages and send them to all connected clients.
+/// Start the notifier task that broadcasts prepared templates via a watch channel.
+///
+/// Listens for new block templates on notifier_rx, builds a
+/// PreparedNotifyParams once per template, and publishes it via the
+/// watch channel. Each connection handler receives the prepared
+/// template and builds per-miner notifies independently.
 pub async fn start_notify(
     mut notifier_rx: mpsc::Receiver<NotifyCmd>,
-    connections: ClientConnectionsHandle,
+    template_tx: watch::Sender<Option<Arc<PreparedNotifyParams>>>,
     chain_store_handle: ChainStoreHandle,
-    tracker_handle: Arc<JobTracker>,
     config: &StratumConfig<crate::config::Parsed>,
-    miner_address: Option<Address>,
 ) {
     let pool_difficulty = match pool_difficulty::PoolDifficulty::build(&chain_store_handle) {
         Ok(pool_difficulty) => pool_difficulty,
@@ -270,9 +214,7 @@ pub async fn start_notify(
     let notify_context = NotifyContext {
         chain_store_handle,
         config: config.clone(),
-        miner_address,
         pool_signature,
-        tracker_handle,
         pool_difficulty,
     };
 
@@ -282,51 +224,22 @@ pub async fn start_notify(
         match cmd {
             NotifyCmd::SendToAll { template } => {
                 let clean_jobs = latest_template.is_none()
-                    || latest_template.unwrap().previousblockhash != template.previousblockhash;
+                    || latest_template.as_ref().unwrap().previousblockhash
+                        != template.previousblockhash;
                 latest_template = Some(Arc::clone(&template));
 
-                let (notify_str, _share_commitment) =
-                    match build_notify_and_commitment(&template, clean_jobs, &notify_context).await
-                    {
-                        Ok(serialized) => serialized,
-                        Err(e) => {
-                            tracing::error!("Failed to build notify: {}. Skipping.", e);
-                            continue;
-                        }
-                    };
-
-                connections.send_to_all(Arc::new(notify_str.clone())).await;
-            }
-            NotifyCmd::SendToClient {
-                client_address,
-                clean_jobs,
-            } => {
-                if latest_template.is_none() {
-                    debug!(
-                        "No latest template available to send to client: {}",
-                        client_address
-                    );
-                    continue;
-                }
-
-                let template = latest_template.as_ref().unwrap();
-                let (notify_str, _share_commitment) = match build_notify_and_commitment(
-                    template,
-                    clean_jobs,
-                    &notify_context,
-                )
-                .await
-                {
-                    Ok(serialized) => serialized,
-                    Err(e) => {
-                        tracing::error!("Failed to build notify: {}. Skipping.", e);
+                let prepared = match build_prepared_notify(&template, clean_jobs, &notify_context) {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        tracing::error!("Failed to build notify: {error}. Skipping.");
                         continue;
                     }
                 };
 
-                connections
-                    .send_to_client(client_address, Arc::new(notify_str.clone()))
-                    .await;
+                if template_tx.send(Some(Arc::new(prepared))).is_err() {
+                    error!("All template receivers dropped. Stopping notifier.");
+                    return;
+                }
             }
         }
     }
@@ -338,6 +251,7 @@ mod tests {
     use crate::accounting::payout::simple_pplns::SimplePplnsShare;
     use crate::stratum::work::block_template::{BlockTemplate, TemplateTransaction};
     use crate::stratum::work::coinbase::extract_outputs_from_coinbase2;
+    use crate::stratum::work::prepared_notify::build_notify_from_prepared;
     use crate::stratum::work::tracker::start_tracker_actor;
     use crate::test_utils::genesis_for_tests;
     use bitcoin::CompressedPublicKey;
@@ -433,23 +347,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_notify() {
-        // Set up mock connections
-        let mut mock_connections = ClientConnectionsHandle::default();
-
-        // Set up expectations
-        mock_connections
-            .expect_send_to_all()
-            .times(1)
-            .returning(|_| ());
-        mock_connections
-            .expect_send_to_client()
-            .times(1)
-            .returning(|_, _| true);
+        // Create watch channel for prepared templates
+        let (template_tx, mut template_rx) =
+            watch::channel::<Option<Arc<PreparedNotifyParams>>>(None);
 
         // Create a channel for block template notifications
         let (notify_tx, notify_rx) = mpsc::channel::<NotifyCmd>(10);
-
-        let work_map_handle = start_tracker_actor();
 
         // Setup mock PPLNS provider
         let n_time = (SystemTime::now()
@@ -492,22 +395,9 @@ mod tests {
             .returning(|| Ok((0, genesis_for_tests().header.time)));
 
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
-        let miner_pubkey: CompressedPublicKey =
-            "020202020202020202020202020202020202020202020202020202020202020202"
-                .parse()
-                .unwrap();
-        let miner_address = Address::p2wpkh(&miner_pubkey, Network::Signet);
 
         let task_handle = tokio::spawn(async move {
-            start_notify(
-                notify_rx,
-                mock_connections,
-                chain_store_handle,
-                work_map_handle,
-                &stratum_config,
-                Some(miner_address),
-            )
-            .await;
+            start_notify(notify_rx, template_tx, chain_store_handle, &stratum_config).await;
         });
 
         // Load a sample block template
@@ -526,27 +416,32 @@ mod tests {
             .await
             .expect("Failed to send template");
 
-        // Give some time for the message to be processed
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        // Wait for the watch channel to receive the prepared template
+        template_rx.changed().await.expect("Watch channel closed");
+        let prepared = template_rx.borrow_and_update().clone();
+        assert!(
+            prepared.is_some(),
+            "Watch channel should contain PreparedNotifyParams"
+        );
 
-        notify_tx
-            .send(NotifyCmd::SendToClient {
-                client_address: SocketAddr::from(([127, 0, 0, 1], 8080)), // dummy client address, mock client connections won't use this.
-                clean_jobs: false,
-            })
-            .await
-            .expect("Failed to send template to client");
-
-        // Give some time for the message to be processed
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        // Verify we can build a per-miner notify from the prepared template
+        let miner_pubkey: CompressedPublicKey =
+            "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap();
+        let miner_address = Address::p2wpkh(&miner_pubkey, Network::Signet);
+        let tracker_handle = start_tracker_actor();
+        let result =
+            build_notify_from_prepared(prepared.as_ref().unwrap(), &miner_address, &tracker_handle);
+        assert!(result.is_ok(), "build_notify_from_prepared should succeed");
 
         // Cleanup
-        drop(notify_tx); // Close the channel to terminate the task
+        drop(notify_tx);
         task_handle.await.expect("Task failed");
     }
 
     #[tokio::test]
-    async fn test_build_notify_and_commitment() {
+    async fn test_build_prepared_notify() {
         // Load a sample block template
         let data = include_str!(
             "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json"
@@ -605,19 +500,19 @@ mod tests {
         let context = NotifyContext {
             chain_store_handle,
             config: stratum_config,
-            miner_address: Some(btcaddress.clone()),
             pool_signature: b"test_pool".to_vec(),
-            tracker_handle,
             pool_difficulty,
         };
 
-        // Call build_notify_and_commitment
-        let result =
-            build_notify_and_commitment(&Arc::new(template.clone()), false, &context).await;
+        // Build prepared notify
+        let prepared = build_prepared_notify(&Arc::new(template.clone()), false, &context);
+        assert!(prepared.is_ok());
+        let prepared = prepared.unwrap();
 
-        // Verify the result
+        // Build per-miner notify from prepared
+        let result = build_notify_from_prepared(&prepared, &btcaddress, &tracker_handle);
         assert!(result.is_ok());
-        let (notify_str, share_commitment) = result.unwrap();
+        let (notify_str, commitment, _job_id) = result.unwrap();
 
         // Verify notify string is valid JSON
         let notify: Notify = serde_json::from_str(&notify_str).expect("Invalid notify JSON");
@@ -625,14 +520,12 @@ mod tests {
         assert_eq!(notify.params.nbits, "207fffff");
         assert!(!notify.params.clean_jobs);
 
-        // Verify share commitment was created
-        assert!(share_commitment.is_some());
-        let commitment = share_commitment.unwrap();
+        // Verify share commitment was created with correct address
         assert_eq!(commitment.miner_address, btcaddress);
 
         // Verify the job was inserted in the tracker
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
-        let job_details = context.tracker_handle.get_job(job_id);
+        let job_details = tracker_handle.get_job(job_id);
         assert!(job_details.is_some());
         let details = job_details.unwrap();
 
