@@ -29,7 +29,6 @@ pub mod background_tasks;
 pub mod block_tx_metadata;
 pub mod column_families;
 pub mod dag_store;
-pub mod job_store;
 pub mod organise;
 mod pplns_shares;
 pub mod share_store;
@@ -130,7 +129,6 @@ impl Store {
         let bitcoin_txids_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::BitcoinTxids, RocksDbOptions::default());
 
-        let job_cf = ColumnFamilyDescriptor::new(ColumnFamily::Job, RocksDbOptions::default());
         let share_cf = ColumnFamilyDescriptor::new(ColumnFamily::Share, RocksDbOptions::default());
         let user_cf = ColumnFamilyDescriptor::new(ColumnFamily::User, RocksDbOptions::default());
         let user_index_cf =
@@ -152,7 +150,6 @@ impl Store {
             block_index_cf,
             block_height_cf,
             bitcoin_txids_cf,
-            job_cf,
             share_cf,
             user_cf,
             user_index_cf,

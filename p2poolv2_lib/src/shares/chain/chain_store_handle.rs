@@ -501,20 +501,6 @@ impl ChainStoreHandle {
         self.store_handle.add_pplns_share(pplns_share).await
     }
 
-    /// Add a job with current timestamp.
-    pub async fn add_job(&self, serialized_notify: String) -> Result<(), StoreError> {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let timestamp_micros = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_micros() as u64;
-        self.store_handle
-            .add_job(timestamp_micros, serialized_notify)
-            .await?;
-        Ok(())
-    }
-
     /// Add a user.
     pub async fn add_user(&self, btcaddress: String) -> Result<u64, StoreError> {
         self.store_handle.add_user(btcaddress).await
@@ -598,7 +584,6 @@ mockall::mock! {
         pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
         pub async fn add_share_block(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), StoreError>;
         pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError>;
-        pub async fn add_job(&self, serialized_notify: String) -> Result<(), StoreError>;
         pub async fn add_user(&self, btcaddress: String) -> Result<u64, StoreError>;
     }
 

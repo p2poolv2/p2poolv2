@@ -148,16 +148,6 @@ impl StoreHandle {
             .get_pplns_shares_filtered(limit, start_time, end_time)
     }
 
-    /// Get jobs within a time range.
-    pub fn get_jobs(
-        &self,
-        start_time: Option<u64>,
-        end_time: Option<u64>,
-        limit: usize,
-    ) -> Result<Vec<(u64, String)>, StoreError> {
-        self.store.get_jobs(start_time, end_time, limit)
-    }
-
     /// Get user by user ID.
     pub fn get_user_by_id(&self, user_id: u64) -> Result<Option<StoredUser>, StoreError> {
         self.store.get_user_by_id(user_id)
@@ -234,23 +224,6 @@ impl StoreHandle {
         self.write_tx
             .send(WriteCommand::InitChainStateFromStore {
                 genesis_hash,
-                reply: reply_tx,
-            })
-            .map_err(|_| StoreError::ChannelClosed)?;
-        reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
-    }
-
-    /// Add a job to the store.
-    pub async fn add_job(
-        &self,
-        timestamp: u64,
-        serialized_notify: String,
-    ) -> Result<(), StoreError> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.write_tx
-            .send(WriteCommand::AddJob {
-                timestamp,
-                serialized_notify,
                 reply: reply_tx,
             })
             .map_err(|_| StoreError::ChannelClosed)?;
@@ -341,7 +314,6 @@ mockall::mock! {
         pub fn get_confirmed_at_height(&self, height: u32) -> Result<BlockHash, StoreError>;
         pub fn get_pplns_shares(&self) -> Vec<SimplePplnsShare>;
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
-        pub fn get_jobs(&self, start_time: Option<u64>, end_time: Option<u64>, limit: usize) -> Result<Vec<(u64, String)>, StoreError>;
         pub fn get_user_by_id(&self, user_id: u64) -> Result<Option<StoredUser>, StoreError>;
         pub fn get_user_by_btcaddress(&self, btcaddress: &str) -> Result<Option<StoredUser>, StoreError>;
         pub fn get_btcaddresses_for_user_ids(&self, user_ids: &[u64]) -> Result<Vec<(u64, String)>, StoreError>;
@@ -353,7 +325,6 @@ mockall::mock! {
         pub async fn add_share_block(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), StoreError>;
         pub async fn setup_genesis(&self, genesis: ShareBlock) -> Result<(), StoreError>;
         pub async fn init_chain_state_from_store(&self, genesis_hash: BlockHash) -> Result<(), StoreError>;
-        pub async fn add_job(&self, timestamp: u64, serialized_notify: String) -> Result<(), StoreError>;
         pub async fn add_user(&self, btcaddress: String) -> Result<u64, StoreError>;
         pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError>;
 
