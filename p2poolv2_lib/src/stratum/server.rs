@@ -472,7 +472,7 @@ where
 {
     match serde_json::from_str::<Request>(line) {
         Ok(message) => {
-            let responses = handle_message(message, session, addr, ctx).await;
+            let responses = handle_message(message, session, ctx).await;
 
             if let Ok(responses) = responses {
                 // Send the response back to the client
