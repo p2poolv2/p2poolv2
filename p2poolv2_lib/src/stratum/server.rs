@@ -345,20 +345,22 @@ where
             // Clone inside a block to ensure the watch Ref guard is dropped before await
             let prepared_template = { template_rx.borrow_and_update().clone() };
             if let Some(prepared) = prepared_template {
-                if let Some(address) = session.parsed_address.as_ref() {
-                    match build_notify_from_prepared(&prepared, address, &ctx.tracker_handle) {
-                        Ok((notify_json, _commitment, _job_id)) => {
-                            if let Err(e) = writer
-                                .write_all(format!("{notify_json}\n").as_bytes())
-                                .await
-                            {
-                                error!("Failed to write first notify to {addr}: {e}");
-                                break;
-                            }
+                match build_notify_from_prepared(
+                    &prepared,
+                    session.parsed_address.as_ref(),
+                    &ctx.tracker_handle,
+                ) {
+                    Ok(notify_json) => {
+                        if let Err(e) = writer
+                            .write_all(format!("{notify_json}\n").as_bytes())
+                            .await
+                        {
+                            error!("Failed to write first notify to {addr}: {e}");
+                            break;
                         }
-                        Err(e) => {
-                            error!("Failed to build first notify for {addr}: {e}");
-                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to build first notify for {addr}: {e}");
                     }
                 }
             }
@@ -389,17 +391,15 @@ where
                 if session.username.is_none() {
                     // Not yet authorized, skip building notify
                 } else if let Some(prepared) = prepared_template {
-                    if let Some(address) = session.parsed_address.as_ref() {
-                        match build_notify_from_prepared(&prepared, address, &ctx.tracker_handle) {
-                            Ok((notify_json, _commitment, _job_id)) => {
-                                if let Err(e) = writer.write_all(format!("{notify_json}\n").as_bytes()).await {
-                                    error!("Failed to write notify to {addr}: {e}");
-                                    break;
-                                }
+                    match build_notify_from_prepared(&prepared, session.parsed_address.as_ref(), &ctx.tracker_handle) {
+                        Ok(notify_json) => {
+                            if let Err(e) = writer.write_all(format!("{notify_json}\n").as_bytes()).await {
+                                error!("Failed to write notify to {addr}: {e}");
+                                break;
                             }
-                            Err(e) => {
-                                error!("Failed to build notify for {addr}: {e}");
-                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to build notify for {addr}: {e}");
                         }
                     }
                 }

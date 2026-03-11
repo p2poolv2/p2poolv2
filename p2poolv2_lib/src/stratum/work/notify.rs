@@ -431,8 +431,11 @@ mod tests {
                 .unwrap();
         let miner_address = Address::p2wpkh(&miner_pubkey, Network::Signet);
         let tracker_handle = start_tracker_actor();
-        let result =
-            build_notify_from_prepared(prepared.as_ref().unwrap(), &miner_address, &tracker_handle);
+        let result = build_notify_from_prepared(
+            prepared.as_ref().unwrap(),
+            Some(&miner_address),
+            &tracker_handle,
+        );
         assert!(result.is_ok(), "build_notify_from_prepared should succeed");
 
         // Cleanup
@@ -510,18 +513,14 @@ mod tests {
         let prepared = prepared.unwrap();
 
         // Build per-miner notify from prepared
-        let result = build_notify_from_prepared(&prepared, &btcaddress, &tracker_handle);
-        assert!(result.is_ok());
-        let (notify_str, commitment, _job_id) = result.unwrap();
+        let notify_str = build_notify_from_prepared(&prepared, Some(&btcaddress), &tracker_handle)
+            .expect("build_notify_from_prepared should succeed");
 
         // Verify notify string is valid JSON
         let notify: Notify = serde_json::from_str(&notify_str).expect("Invalid notify JSON");
         assert_eq!(notify.params.version, "20000000");
         assert_eq!(notify.params.nbits, "207fffff");
         assert!(!notify.params.clean_jobs);
-
-        // Verify share commitment was created with correct address
-        assert_eq!(commitment.miner_address, btcaddress);
 
         // Verify the job was inserted in the tracker
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());

@@ -66,15 +66,15 @@ impl ShareCommitment {
     /// Make a SHA256 hash for commitment using consensus encoding.
     ///
     /// Encodes all shared fields via consensus_encode, then appends
-    /// the miner_address encoding and hashes the result.
+    /// the miner address script_pubkey and hashes the result.
     pub fn hash(&self) -> hashes::sha256::Hash {
         let mut serialized = Vec::new();
         self.consensus_encode(&mut serialized)
             .expect("encoding commitment should never fail");
-        let addr_str = self.miner_address.to_string();
-        addr_str
+        self.miner_address
+            .script_pubkey()
             .consensus_encode(&mut serialized)
-            .expect("encoding address should never fail");
+            .expect("encoding address script_pubkey should never fail");
         bitcoin::hashes::sha256::Hash::hash(&serialized)
     }
 }
@@ -86,8 +86,8 @@ impl Encodable for ShareCommitment {
     ///
     /// The miner_address is intentionally excluded so that the encoded bytes
     /// can be reused as a prefix across miners. Each miner only needs to
-    /// append their address encoding. The hash() method appends the address
-    /// before hashing.
+    /// append their address script_pubkey. The hash() method appends the
+    /// script_pubkey before hashing.
     fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, bitcoin::io::Error> {
         let mut len = 0;
         len += self.prev_share_blockhash.consensus_encode(w)?;
