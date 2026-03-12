@@ -24,6 +24,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareHeader;
 use crate::shares::validation::validate_share_header;
+use bitcoin::block::ValidationError;
 use bitcoin::{BlockHash, hashes::Hash};
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -48,15 +49,8 @@ pub async fn handle_share_headers<C: Send + Sync>(
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     block_fetcher_handle: BlockFetcherHandle,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let all_valid = share_headers
-        .iter()
-        .all(|header| validate_share_header(header, &chain_store_handle).is_ok());
-    if !all_valid {
-        // TODO - Request headers from another peer
-        info!("Peer sent invalid share headers. We should try a different peer");
-    }
-
     for header in &share_headers {
+        validate_share_header(header, &chain_store_handle)?;
         chain_store_handle.organise_header(header.clone()).await?;
     }
 
@@ -136,9 +130,13 @@ mod tests {
 
     /// Build a Vec of share headers with the given count by cloning a
     /// single test header. This avoids constructing thousands of unique
-    /// blocks when only the collection length matters.
+    /// blocks when only the collection length matters. Uses an easy
+    /// target so that headers pass PoW validation.
     fn build_share_headers(count: usize) -> Vec<ShareHeader> {
-        let template_header = TestShareBlockBuilder::new().build().header;
+        let template_header = TestShareBlockBuilder::new()
+            .with_easy_target()
+            .build()
+            .header;
         vec![template_header; count]
     }
 
@@ -166,7 +164,6 @@ mod tests {
             block_fetcher_handle,
         )
         .await;
-
         assert!(result.is_ok());
 
         // No follow-up getheaders request should have been sent
