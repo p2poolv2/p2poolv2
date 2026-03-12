@@ -120,8 +120,7 @@ fn build_json_template(
     json.push_str(coinbase2);
     json.push_str(r#"","#);
     json.push_str(&serialize_merkle_branches_json(merkle_branches));
-    json.push_str(r#","#);
-    json.push_str(r#"""#);
+    json.push_str(r#",""#);
     json.push_str(version_hex);
     json.push_str(r#"",""#);
     json.push_str(nbits);
@@ -255,9 +254,9 @@ pub(crate) fn prepare_notify_params(
 
 /// Compute the hex-encoded commitment hash for a miner address.
 ///
-/// When an address is provided, appends its consensus-encoded form to the
-/// pre-built commitment prefix. When None (solo mode), hashes the prefix
-/// with empty address bytes.
+/// When an address is provided, appends its script pubkey to the
+/// pre-built commitment prefix. When None (solo mode), hashes the
+/// prefix with empty pubkey bytes.
 fn get_commitment_hex(
     commitment_prefix: &[u8],
     miner_address: Option<&Address>,
@@ -591,5 +590,64 @@ mod tests {
         assert!(coinbase1.contains(test_hash));
         // clean_jobs should be true
         assert!(params[8].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_build_notify_from_prepared_with_none_address() {
+        let template = Arc::new(test_template());
+        let output_distribution = test_output_distribution(&template);
+        let prev_share_blockhash = BlockHash::all_zeros();
+        let uncles = Vec::new();
+        let merkle_root = template.get_merkle_root_without_coinbase();
+        let bits = CompactTarget::from_consensus(0x1d00ffff);
+        let time = 1700000000u32;
+        let tracker_handle = start_tracker_actor();
+
+        let prepared = prepare_notify_params(
+            &template,
+            output_distribution,
+            b"test_pool",
+            prev_share_blockhash,
+            uncles,
+            merkle_root,
+            bits,
+            time,
+            false,
+        )
+        .expect("prepare_notify_params should succeed");
+
+        let notify_json = build_notify_from_prepared(&prepared, None, &tracker_handle)
+            .expect("build_notify_from_prepared with None address should succeed");
+
+        // Verify the result is valid JSON
+        let parsed: serde_json::Value =
+            serde_json::from_str(&notify_json).expect("notify JSON should be valid");
+        assert_eq!(parsed["method"], "mining.notify");
+
+        // Verify job_id was filled in (not zeros)
+        let params = parsed["params"].as_array().unwrap();
+        let job_id_str = params[0].as_str().unwrap();
+        assert_ne!(job_id_str, "0000000000000000");
+
+        // Verify commitment hash was computed and placed in coinbase1.
+        // The original placeholder is 64 hex zeros at commitment_hash_offset
+        // in the JSON; after replace_range the coinbase1 field should contain
+        // the hash of the commitment prefix (no address appended).
+        let coinbase1 = params[2].as_str().unwrap();
+        let expected_hash = get_commitment_hex(&prepared.commitment_prefix, None).unwrap();
+        assert!(
+            coinbase1.contains(&expected_hash),
+            "coinbase1 should contain the commitment hash for None address"
+        );
+
+        // Verify job was inserted in tracker with no share_commitment
+        let job_id = JobId(u64::from_str_radix(job_id_str, 16).unwrap());
+        let details = tracker_handle
+            .get_job(job_id)
+            .expect("Job should be in tracker");
+        assert!(
+            details.share_commitment.is_none(),
+            "share_commitment should be None for solo mode"
+        );
     }
 }
