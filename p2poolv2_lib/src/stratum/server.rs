@@ -351,6 +351,7 @@ where
                     &ctx.tracker_handle,
                 ) {
                     Ok(notify_json) => {
+                        debug!("Sending first notify after authorize");
                         if let Err(e) = writer
                             .write_all(format!("{notify_json}\n").as_bytes())
                             .await
@@ -393,6 +394,7 @@ where
                 } else if let Some(prepared) = prepared_template {
                     match build_notify_from_prepared(&prepared, session.parsed_address.as_ref(), &ctx.tracker_handle) {
                         Ok(notify_json) => {
+                            debug!("Send notify in reponse to new template");
                             if let Err(e) = writer.write_all(format!("{notify_json}\n").as_bytes()).await {
                                 error!("Failed to write notify to {addr}: {e}");
                                 break;
@@ -1331,5 +1333,421 @@ mod stratum_server_tests {
             let result = handle.await.unwrap();
             assert!(result.is_ok());
         });
+    }
+
+    /// Helper to create a PreparedNotifyParams for testing.
+    fn create_test_prepared_notify() -> Arc<PreparedNotifyParams> {
+        use crate::accounting::OutputPair;
+        use crate::stratum::work::block_template::BlockTemplate;
+        use crate::stratum::work::prepared_notify::prepare_notify_params;
+        use bitcoin::hashes::Hash;
+        use bitcoin::{BlockHash, CompactTarget, CompressedPublicKey, Network};
+
+        let data =
+            include_str!("../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json");
+        let template: BlockTemplate =
+            serde_json::from_str(data).expect("Failed to parse BlockTemplate");
+        let template = Arc::new(template);
+
+        let miner_pubkey: CompressedPublicKey =
+            "020202020202020202020202020202020202020202020202020202020202020202"
+                .parse()
+                .unwrap();
+        let address = bitcoin::Address::p2wpkh(&miner_pubkey, Network::Signet);
+        let output_distribution = vec![OutputPair {
+            address,
+            amount: bitcoin::Amount::from_sat(template.coinbasevalue),
+        }];
+
+        let merkle_root = template.get_merkle_root_without_coinbase();
+        let prepared = prepare_notify_params(
+            &template,
+            output_distribution,
+            b"test_pool",
+            BlockHash::all_zeros(),
+            Vec::new(),
+            merkle_root,
+            CompactTarget::from_consensus(0x1d00ffff),
+            1700000000u32,
+            false,
+        )
+        .expect("prepare_notify_params should succeed");
+
+        Arc::new(prepared)
+    }
+
+    /// Test that the first notify is sent after authorization when a template
+    /// is already available in the watch channel (needs_first_notify branch).
+    #[tokio::test]
+    async fn test_handle_connection_sends_first_notify_after_authorize() {
+        let (_message_tx, message_rx) = mpsc::channel(10);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let (writer_tx, writer_rx) = oneshot::channel::<Vec<u8>>();
+
+        let subscribe_message =
+            SimpleRequest::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+        let subscribe_str = serde_json::to_string(&subscribe_message).unwrap();
+
+        let authorize_message = SimpleRequest::new_authorize(
+            2,
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
+            Some("test_password".to_string()),
+        );
+        let authorize_str = serde_json::to_string(&authorize_message).unwrap();
+
+        let mut mock_reader = tokio_test::io::Builder::new()
+            .read(format!("{subscribe_str}\n").as_bytes())
+            .read(format!("{authorize_str}\n").as_bytes())
+            .wait(std::time::Duration::from_millis(10_000))
+            .build();
+
+        let mut writer = Vec::new();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8090);
+
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
+        let tracker_handle = start_tracker_actor();
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle: tracker_handle.clone(),
+            bitcoinrpc_config,
+            metrics: metrics_handle,
+            start_difficulty: 10000,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet,
+            chain_store_handle,
+        };
+
+        // Pre-load a template before starting handle_connection
+        let prepared = create_test_prepared_notify();
+        let (_template_tx, template_rx) = watch::channel(Some(prepared));
+
+        let handle = tokio::spawn(async move {
+            let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
+            let result = handle_connection(
+                buf_reader,
+                &mut writer,
+                addr,
+                message_rx,
+                shutdown_rx,
+                0x1fffe000,
+                ctx,
+                &SystemTimeProvider {},
+                template_rx,
+            )
+            .await;
+
+            assert!(
+                result.is_ok(),
+                "handle_connection should gracefully handle shutdown"
+            );
+            let _ = writer_tx.send(writer);
+        });
+
+        // Wait for subscribe + authorize + first notify to be processed
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        shutdown_tx
+            .send(())
+            .expect("Failed to send shutdown signal");
+
+        let _ = handle.await;
+
+        let writer_content = writer_rx.await.expect("Failed to get writer content");
+        let response_str = String::from_utf8_lossy(&writer_content);
+        let responses: Vec<&str> = response_str.split('\n').filter(|s| !s.is_empty()).collect();
+
+        // Expect: subscribe response, set_difficulty, authorize response,
+        // version mask, and the first notify from the template
+        assert!(
+            responses.len() >= 5,
+            "Should have at least 5 responses (subscribe, set_difficulty, authorize, version mask, first notify), got {}",
+            responses.len()
+        );
+
+        // The last response should be a mining.notify message
+        let last_response: serde_json::Value = serde_json::from_str(responses[responses.len() - 1])
+            .expect("Last response should be valid JSON");
+        assert_eq!(
+            last_response.get("method").and_then(|m| m.as_str()),
+            Some("mining.notify"),
+            "Last response should be a mining.notify message"
+        );
+
+        // Verify notify params structure
+        let params = last_response["params"]
+            .as_array()
+            .expect("notify params should be an array");
+        assert_eq!(params.len(), 9, "mining.notify should have 9 params");
+
+        // Job ID should not be the placeholder
+        let job_id = params[0].as_str().unwrap();
+        assert_ne!(
+            job_id, "0000000000000000",
+            "Job ID should be filled in, not placeholder"
+        );
+    }
+
+    /// Test that a notify is sent when a new template arrives on
+    /// template_rx after the session is authorized (template_rx.changed branch).
+    #[tokio::test]
+    async fn test_handle_connection_sends_notify_on_template_change() {
+        let (_message_tx, message_rx) = mpsc::channel(10);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let (writer_tx, writer_rx) = oneshot::channel::<Vec<u8>>();
+
+        let subscribe_message =
+            SimpleRequest::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+        let subscribe_str = serde_json::to_string(&subscribe_message).unwrap();
+
+        let authorize_message = SimpleRequest::new_authorize(
+            2,
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
+            Some("test_password".to_string()),
+        );
+        let authorize_str = serde_json::to_string(&authorize_message).unwrap();
+
+        let mut mock_reader = tokio_test::io::Builder::new()
+            .read(format!("{subscribe_str}\n").as_bytes())
+            .read(format!("{authorize_str}\n").as_bytes())
+            .wait(std::time::Duration::from_millis(10_000))
+            .build();
+
+        let mut writer = Vec::new();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8091);
+
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
+        let tracker_handle = start_tracker_actor();
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle: tracker_handle.clone(),
+            bitcoinrpc_config,
+            metrics: metrics_handle,
+            start_difficulty: 10000,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet,
+            chain_store_handle,
+        };
+
+        // Start with no template - will send one after authorization
+        let (template_tx, template_rx) = watch::channel(None);
+
+        let handle = tokio::spawn(async move {
+            let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
+            let result = handle_connection(
+                buf_reader,
+                &mut writer,
+                addr,
+                message_rx,
+                shutdown_rx,
+                0x1fffe000,
+                ctx,
+                &SystemTimeProvider {},
+                template_rx,
+            )
+            .await;
+
+            assert!(
+                result.is_ok(),
+                "handle_connection should gracefully handle shutdown"
+            );
+            let _ = writer_tx.send(writer);
+        });
+
+        // Wait for subscribe + authorize to be processed
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // Now send a template update through the watch channel
+        let prepared = create_test_prepared_notify();
+        template_tx
+            .send(Some(prepared))
+            .expect("Failed to send template");
+
+        // Wait for the notify to be processed
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        shutdown_tx
+            .send(())
+            .expect("Failed to send shutdown signal");
+
+        let _ = handle.await;
+
+        let writer_content = writer_rx.await.expect("Failed to get writer content");
+        let response_str = String::from_utf8_lossy(&writer_content);
+        let responses: Vec<&str> = response_str.split('\n').filter(|s| !s.is_empty()).collect();
+
+        // Expect: subscribe response, set_difficulty, authorize response,
+        // version mask, and the notify from the template change
+        assert!(
+            responses.len() >= 5,
+            "Should have at least 5 responses (subscribe, set_difficulty, authorize, version mask, template notify), got {}",
+            responses.len()
+        );
+
+        // Find the mining.notify response
+        let notify_responses: Vec<&str> = responses
+            .iter()
+            .filter(|r| {
+                serde_json::from_str::<serde_json::Value>(r)
+                    .ok()
+                    .and_then(|v| v.get("method").and_then(|m| m.as_str()).map(String::from))
+                    == Some("mining.notify".to_string())
+            })
+            .copied()
+            .collect();
+
+        assert!(
+            !notify_responses.is_empty(),
+            "Should have at least one mining.notify response from template change"
+        );
+
+        // Verify the notify message structure
+        let notify_json: serde_json::Value =
+            serde_json::from_str(notify_responses[0]).expect("Notify should be valid JSON");
+        let params = notify_json["params"]
+            .as_array()
+            .expect("notify params should be an array");
+        assert_eq!(params.len(), 9, "mining.notify should have 9 params");
+
+        let job_id = params[0].as_str().unwrap();
+        assert_ne!(
+            job_id, "0000000000000000",
+            "Job ID should be filled in, not placeholder"
+        );
+    }
+
+    /// Test that template_rx.changed() is ignored when the session
+    /// is not yet authorized (no username set).
+    #[tokio::test]
+    async fn test_handle_connection_ignores_template_change_before_authorize() {
+        let (_message_tx, message_rx) = mpsc::channel(10);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let (writer_tx, writer_rx) = oneshot::channel::<Vec<u8>>();
+
+        // Only subscribe, do not authorize
+        let subscribe_message =
+            SimpleRequest::new_subscribe(1, "agent".to_string(), "1.0".to_string(), None);
+        let subscribe_str = serde_json::to_string(&subscribe_message).unwrap();
+
+        let mut mock_reader = tokio_test::io::Builder::new()
+            .read(format!("{subscribe_str}\n").as_bytes())
+            .wait(std::time::Duration::from_millis(10_000))
+            .build();
+
+        let mut writer = Vec::new();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8092);
+
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
+        let tracker_handle = start_tracker_actor();
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle: tracker_handle.clone(),
+            bitcoinrpc_config,
+            metrics: metrics_handle,
+            start_difficulty: 10000,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Regtest,
+            chain_store_handle,
+        };
+
+        let (template_tx, template_rx) = watch::channel(None);
+
+        let handle = tokio::spawn(async move {
+            let buf_reader = tokio::io::BufReader::new(&mut mock_reader);
+            let result = handle_connection(
+                buf_reader,
+                &mut writer,
+                addr,
+                message_rx,
+                shutdown_rx,
+                0x1fffe000,
+                ctx,
+                &SystemTimeProvider {},
+                template_rx,
+            )
+            .await;
+
+            assert!(
+                result.is_ok(),
+                "handle_connection should gracefully handle shutdown"
+            );
+            let _ = writer_tx.send(writer);
+        });
+
+        // Wait for subscribe to be processed
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // Send a template update while not authorized
+        let prepared = create_test_prepared_notify();
+        template_tx
+            .send(Some(prepared))
+            .expect("Failed to send template");
+
+        // Wait for potential processing
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        shutdown_tx
+            .send(())
+            .expect("Failed to send shutdown signal");
+
+        let _ = handle.await;
+
+        let writer_content = writer_rx.await.expect("Failed to get writer content");
+        let response_str = String::from_utf8_lossy(&writer_content);
+        let responses: Vec<&str> = response_str.split('\n').filter(|s| !s.is_empty()).collect();
+
+        // Should only have subscribe response and set_difficulty, no mining.notify
+        let notify_count = responses
+            .iter()
+            .filter(|r| {
+                serde_json::from_str::<serde_json::Value>(r)
+                    .ok()
+                    .and_then(|v| v.get("method").and_then(|m| m.as_str()).map(String::from))
+                    == Some("mining.notify".to_string())
+            })
+            .count();
+
+        assert_eq!(
+            notify_count, 0,
+            "Should not send mining.notify before authorization"
+        );
     }
 }
