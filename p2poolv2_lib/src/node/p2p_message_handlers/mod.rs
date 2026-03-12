@@ -699,8 +699,8 @@ mod tests {
             .returning(|| Ok(Vec::new()));
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
-        let block1 = TestShareBlockBuilder::new().build();
-        let block2 = TestShareBlockBuilder::new().build();
+        let block1 = TestShareBlockBuilder::new().with_easy_target().build();
+        let block2 = TestShareBlockBuilder::new().with_easy_target().build();
         let share_headers = vec![block1.header.clone(), block2.header.clone()];
 
         let (block_fetcher_handle, validation_tx) = test_handles();

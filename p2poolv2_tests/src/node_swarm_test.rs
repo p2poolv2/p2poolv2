@@ -233,6 +233,7 @@ async fn test_three_nodes_share_sync() {
     let mut prev_hash = genesis.block_hash();
     for index in 1..=SHARE_COUNT {
         let share = TestShareBlockBuilder::new()
+            .with_easy_target()
             .prev_share_blockhash(prev_hash.to_string())
             .nonce(index)
             .build();

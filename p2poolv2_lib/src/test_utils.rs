@@ -307,6 +307,11 @@ impl TestShareBlockBuilder {
         self
     }
 
+    pub fn with_easy_target(self) -> Self {
+        let easy_target = bitcoin::CompactTarget::from_consensus(0x2100ffff);
+        self.bits(easy_target)
+    }
+
     pub fn build(self) -> ShareBlock {
         let default_pubkey_hex =
             "020202020202020202020202020202020202020202020202020202020202020202";
