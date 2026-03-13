@@ -261,6 +261,22 @@ impl PoolDifficulty {
     }
 }
 
+// Mock for PoolDifficulty using mockall.
+// Use with #[mockall_double::double] to swap the real type for mock in tests.
+#[cfg(test)]
+mockall::mock! {
+    pub PoolDifficulty {
+        pub fn new(anchor_target: CompactTarget, anchor_parent_time: u32, anchor_height: u32) -> Self;
+        pub fn build(chain_store_handle: &ChainStoreHandle) -> Result<Self, PoolDifficultyError>;
+        pub fn calculate_target(&self, block_parent_time: u32, block_height: u32) -> CompactTarget;
+        pub fn calculate_target_consensus(&self, block_parent_time: u32, block_height: u32) -> u32;
+    }
+
+    impl Clone for PoolDifficulty {
+        fn clone(&self) -> Self;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
