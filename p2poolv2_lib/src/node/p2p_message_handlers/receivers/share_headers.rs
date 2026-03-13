@@ -130,8 +130,11 @@ mod tests {
     use crate::node::messages::Message;
     use crate::node::request_response_handler::block_fetcher;
     #[mockall_double::double]
+    use crate::pool_difficulty::PoolDifficulty;
+    #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-    use crate::test_utils::TestShareBlockBuilder;
+    use crate::test_utils::{TestShareBlockBuilder, setup_pool_difficulty_mocks};
+    use bitcoin::BlockHash;
     use tokio::sync::{mpsc, oneshot};
 
     /// Build a Vec of share headers with the given count by cloning a
@@ -150,6 +153,17 @@ mod tests {
     async fn test_fewer_than_max_headers_does_not_send_getheaders() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
+        let mut mock_pool_difficulty = PoolDifficulty::default();
+        setup_pool_difficulty_mocks(
+            &mut chain_store_handle,
+            &mut mock_pool_difficulty,
+            BlockHash::all_zeros(),
+            0x207FFFFF,
+        );
+        let _build_context = PoolDifficulty::build_context();
+        _build_context
+            .expect()
+            .return_once(move |_| Ok(mock_pool_difficulty));
         chain_store_handle
             .expect_organise_header()
             .returning(|_| Ok(None));
@@ -180,6 +194,10 @@ mod tests {
     async fn test_empty_headers_does_not_send_getheaders() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
+        let build_context = PoolDifficulty::build_context();
+        build_context
+            .expect()
+            .returning(move |_| Ok(PoolDifficulty::default()));
         chain_store_handle
             .expect_get_candidate_blocks_missing_data()
             .returning(|| Ok(Vec::new()));
@@ -206,6 +224,17 @@ mod tests {
     async fn test_max_headers_sends_getheaders_to_same_peer() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
+        let mut mock_pool_difficulty = PoolDifficulty::default();
+        setup_pool_difficulty_mocks(
+            &mut chain_store_handle,
+            &mut mock_pool_difficulty,
+            BlockHash::all_zeros(),
+            0x207FFFFF,
+        );
+        let _build_context = PoolDifficulty::build_context();
+        _build_context
+            .expect()
+            .return_once(move |_| Ok(mock_pool_difficulty));
         chain_store_handle
             .expect_organise_header()
             .returning(|_| Ok(None));
@@ -244,6 +273,17 @@ mod tests {
     async fn test_fewer_than_max_headers_sends_fetch_blocks_event() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
+        let mut mock_pool_difficulty = PoolDifficulty::default();
+        setup_pool_difficulty_mocks(
+            &mut chain_store_handle,
+            &mut mock_pool_difficulty,
+            BlockHash::all_zeros(),
+            0x207FFFFF,
+        );
+        let _build_context = PoolDifficulty::build_context();
+        _build_context
+            .expect()
+            .return_once(move |_| Ok(mock_pool_difficulty));
         chain_store_handle
             .expect_organise_header()
             .returning(|_| Ok(None));

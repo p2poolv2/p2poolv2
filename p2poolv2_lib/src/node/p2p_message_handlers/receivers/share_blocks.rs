@@ -187,9 +187,13 @@ mod tests {
     use super::*;
     use crate::node::request_response_handler::block_fetcher;
     use crate::node::validation_worker;
+    #[mockall_double::double]
+    use crate::pool_difficulty::PoolDifficulty;
     use crate::shares::share_block::ShareHeader;
     use crate::store::writer::StoreError;
-    use crate::test_utils::{empty_share_block_from_header, load_share_headers_test_data};
+    use crate::test_utils::{
+        empty_share_block_from_header, load_share_headers_test_data, setup_pool_difficulty_mocks,
+    };
     use mockall::predicate::*;
 
     /// Create test block fetcher and validation handles, returning
@@ -231,6 +235,18 @@ mod tests {
             .expect_is_candidate()
             .with(eq(block_hash))
             .returning(|_| false);
+
+        let mut mock_pool_difficulty = PoolDifficulty::default();
+        setup_pool_difficulty_mocks(
+            &mut chain_store_handle,
+            &mut mock_pool_difficulty,
+            BlockHash::all_zeros(),
+            0x207FFFFF,
+        );
+        let _build_context = PoolDifficulty::build_context();
+        _build_context
+            .expect()
+            .return_once(move |_| Ok(mock_pool_difficulty));
 
         chain_store_handle
             .expect_add_share_block()
@@ -278,6 +294,18 @@ mod tests {
             .expect_is_candidate()
             .with(eq(block_hash))
             .returning(|_| false);
+
+        let mut mock_pool_difficulty = PoolDifficulty::default();
+        setup_pool_difficulty_mocks(
+            &mut chain_store_handle,
+            &mut mock_pool_difficulty,
+            BlockHash::all_zeros(),
+            0x207FFFFF,
+        );
+        let _build_context = PoolDifficulty::build_context();
+        _build_context
+            .expect()
+            .return_once(move |_| Ok(mock_pool_difficulty));
 
         chain_store_handle
             .expect_add_share_block()
@@ -364,6 +392,18 @@ mod tests {
             .expect_is_candidate()
             .with(eq(block_hash))
             .returning(|_| false);
+
+        let mut mock_pool_difficulty = PoolDifficulty::default();
+        setup_pool_difficulty_mocks(
+            &mut chain_store_handle,
+            &mut mock_pool_difficulty,
+            BlockHash::all_zeros(),
+            0x01010000,
+        );
+        let _build_context = PoolDifficulty::build_context();
+        _build_context
+            .expect()
+            .return_once(move |_| Ok(mock_pool_difficulty));
 
         // add_share_block should NOT be called for invalid header
         let (block_fetcher_handle, _block_fetcher_rx, validation_tx, mut validation_rx) =

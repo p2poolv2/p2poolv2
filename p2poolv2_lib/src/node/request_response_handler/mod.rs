@@ -277,8 +277,14 @@ mod tests {
     use crate::node::SwarmSend;
     use crate::node::messages::{InventoryMessage, Message};
     #[mockall_double::double]
+    use crate::pool_difficulty::PoolDifficulty;
+    #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-    use crate::test_utils::{TestShareBlockBuilder, valid_share_block_from_fixture};
+    use crate::store::block_tx_metadata::{BlockMetadata, Status};
+    use crate::test_utils::genesis_for_tests;
+    use crate::test_utils::{
+        TestShareBlockBuilder, setup_pool_difficulty_mocks, valid_share_block_from_fixture,
+    };
     use bitcoin::BlockHash;
     use bitcoin::hashes::Hash as _;
     use std::future::Future;
@@ -337,8 +343,33 @@ mod tests {
     async fn test_dispatch_response_share_headers() {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let mut chain_store_handle = ChainStoreHandle::default();
+
+        let _build_context = PoolDifficulty::build_context();
+        _build_context.expect().returning(move |_| {
+            let mut mock_pool_difficulty = PoolDifficulty::default();
+            mock_pool_difficulty
+                .expect_calculate_target()
+                .returning(move |_, _| bitcoin::CompactTarget::from_consensus(0x207FFFFF));
+            Ok(mock_pool_difficulty)
+        });
+
         chain_store_handle.expect_clone().returning(|| {
             let mut cloned = ChainStoreHandle::default();
+            cloned
+                .expect_get_share()
+                .with(mockall::predicate::eq(BlockHash::all_zeros()))
+                .returning(move |_| Some(genesis_for_tests()));
+            cloned
+                .expect_get_block_metadata()
+                .with(mockall::predicate::eq(BlockHash::all_zeros()))
+                .returning(|_| {
+                    Ok(BlockMetadata {
+                        expected_height: Some(0),
+                        chain_work: bitcoin::Work::from_hex("0x00").unwrap(),
+                        status: Status::Confirmed,
+                    })
+                });
+
             cloned.expect_organise_header().returning(|_| Ok(None));
             cloned
                 .expect_get_candidate_blocks_missing_data()
@@ -349,8 +380,8 @@ mod tests {
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
         let peer_id = libp2p::PeerId::random();
-        let block1 = TestShareBlockBuilder::new().build();
-        let block2 = TestShareBlockBuilder::new().build();
+        let block1 = TestShareBlockBuilder::new().with_easy_target().build();
+        let block2 = TestShareBlockBuilder::new().with_easy_target().build();
         let share_headers = vec![block1.header.clone(), block2.header.clone()];
 
         let result = handler
@@ -549,12 +580,37 @@ mod tests {
     async fn test_dispatch_response_records_share_block_knowledge() {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let mut chain_store_handle = ChainStoreHandle::default();
+
+        let _build_context = PoolDifficulty::build_context();
+        _build_context.expect().returning(move |_| {
+            let mut mock_pool_difficulty = PoolDifficulty::default();
+            mock_pool_difficulty
+                .expect_calculate_target()
+                .returning(move |_, _| bitcoin::CompactTarget::from_consensus(0x207FFFFF));
+            Ok(mock_pool_difficulty)
+        });
+
         // The cloned handle is used by handle_response -> handle_share_block,
         // which checks for duplicates, validates header, and stores the block.
         chain_store_handle.expect_clone().returning(|| {
             let mut cloned = ChainStoreHandle::default();
             cloned.expect_share_block_exists().returning(|_| false);
             cloned.expect_is_candidate().returning(|_| false);
+            cloned
+                .expect_get_share()
+                .with(mockall::predicate::eq(BlockHash::all_zeros()))
+                .returning(move |_| Some(genesis_for_tests()));
+            cloned
+                .expect_get_block_metadata()
+                .with(mockall::predicate::eq(BlockHash::all_zeros()))
+                .returning(|_| {
+                    Ok(BlockMetadata {
+                        expected_height: Some(0),
+                        chain_work: bitcoin::Work::from_hex("0x00").unwrap(),
+                        status: Status::Confirmed,
+                    })
+                });
+
             cloned.expect_add_share_block().returning(|_, _| Ok(()));
             cloned
         });
