@@ -448,6 +448,10 @@ fn test_share_block(
             .unwrap()
             .into();
 
+    let share_bits = bits.unwrap_or(CompactTarget::from_consensus(
+        0x01e0377ae * work.unwrap_or(1),
+    ));
+
     let (bitcoin_header, bitcoin_transactions) = match bitcoin_block {
         Some(block) => (block.header, block.txdata),
         None => (
@@ -456,16 +460,12 @@ fn test_share_block(
                 prev_blockhash: BlockHash::all_zeros(),
                 merkle_root: share_merkle_root,
                 time: 0x01e0377ae,
-                bits: CompactTarget::from_consensus(0x01e0377ae),
+                bits: share_bits,
                 nonce: nonce.unwrap_or(0xe9695791),
             },
             vec![coinbase], // list of transactions with a copy of the pool coinbase, just to provide some test data
         ),
     };
-
-    let share_bits = bits.unwrap_or(CompactTarget::from_consensus(
-        0x01e0377ae * work.unwrap_or(1),
-    ));
 
     let header = ShareHeader {
         prev_share_blockhash: BlockHash::from_str(prev_share_blockhash).unwrap(),

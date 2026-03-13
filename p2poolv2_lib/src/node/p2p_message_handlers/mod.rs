@@ -728,7 +728,7 @@ mod tests {
             &mut chain_store_handle,
             &mut mock_pool_difficulty,
             BlockHash::all_zeros(),
-            0x207FFFFF,
+            0x2100ffff,
         );
         let _build_context = PoolDifficulty::build_context();
         _build_context

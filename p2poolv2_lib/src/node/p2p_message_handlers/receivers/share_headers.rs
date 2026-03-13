@@ -137,6 +137,10 @@ mod tests {
     use bitcoin::BlockHash;
     use tokio::sync::{mpsc, oneshot};
 
+    /// The easy target used by build_share_headers and the corresponding
+    /// pool difficulty mocks in share header tests.
+    const TEST_EASY_TARGET: u32 = 0x2100ffff;
+
     /// Build a Vec of share headers with the given count by cloning a
     /// single test header. This avoids constructing thousands of unique
     /// blocks when only the collection length matters. Uses an easy
@@ -158,7 +162,7 @@ mod tests {
             &mut chain_store_handle,
             &mut mock_pool_difficulty,
             BlockHash::all_zeros(),
-            0x207FFFFF,
+            TEST_EASY_TARGET,
         );
         let _build_context = PoolDifficulty::build_context();
         _build_context
@@ -229,7 +233,7 @@ mod tests {
             &mut chain_store_handle,
             &mut mock_pool_difficulty,
             BlockHash::all_zeros(),
-            0x207FFFFF,
+            TEST_EASY_TARGET,
         );
         let _build_context = PoolDifficulty::build_context();
         _build_context
@@ -278,7 +282,7 @@ mod tests {
             &mut chain_store_handle,
             &mut mock_pool_difficulty,
             BlockHash::all_zeros(),
-            0x207FFFFF,
+            TEST_EASY_TARGET,
         );
         let _build_context = PoolDifficulty::build_context();
         _build_context
