@@ -178,9 +178,13 @@ mod tests {
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
     use crate::node::validation_worker::ValidationSender;
     #[mockall_double::double]
+    use crate::pool_difficulty::PoolDifficulty;
+    #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::share_block::Txids;
-    use crate::test_utils::{TestShareBlockBuilder, valid_share_block_from_fixture};
+    use crate::test_utils::{
+        TestShareBlockBuilder, setup_pool_difficulty_mocks, valid_share_block_from_fixture,
+    };
     use crate::utils::time_provider::TestTimeProvider;
     use bitcoin::BlockHash;
     use bitcoin::hashes::Hash as _;
@@ -612,6 +616,19 @@ mod tests {
             .expect_is_candidate()
             .returning(|_| false);
 
+        // Set up pool difficulty mock for PoW validation
+        let mut mock_pool_difficulty = PoolDifficulty::default();
+        setup_pool_difficulty_mocks(
+            &mut chain_store_handle,
+            &mut mock_pool_difficulty,
+            BlockHash::all_zeros(),
+            0x207FFFFF,
+        );
+        let _build_context = PoolDifficulty::build_context();
+        _build_context
+            .expect()
+            .return_once(move |_| Ok(mock_pool_difficulty));
+
         // Mock storage: add block succeeds
         chain_store_handle
             .expect_add_share_block()
@@ -663,6 +680,19 @@ mod tests {
             .expect_is_candidate()
             .returning(|_| false);
 
+        // Set up pool difficulty mock for PoW validation
+        let mut mock_pool_difficulty = PoolDifficulty::default();
+        setup_pool_difficulty_mocks(
+            &mut chain_store_handle,
+            &mut mock_pool_difficulty,
+            BlockHash::all_zeros(),
+            0x207FFFFF,
+        );
+        let _build_context = PoolDifficulty::build_context();
+        _build_context
+            .expect()
+            .return_once(move |_| Ok(mock_pool_difficulty));
+
         // Mock storage: add block fails
         chain_store_handle
             .expect_add_share_block()
@@ -691,6 +721,20 @@ mod tests {
     async fn test_handle_response_share_headers() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
+
+        // Set up pool difficulty mock for PoW validation
+        let mut mock_pool_difficulty = PoolDifficulty::default();
+        setup_pool_difficulty_mocks(
+            &mut chain_store_handle,
+            &mut mock_pool_difficulty,
+            BlockHash::all_zeros(),
+            0x207FFFFF,
+        );
+        let _build_context = PoolDifficulty::build_context();
+        _build_context
+            .expect()
+            .return_once(move |_| Ok(mock_pool_difficulty));
+
         chain_store_handle
             .expect_organise_header()
             .returning(|_| Ok(None));
