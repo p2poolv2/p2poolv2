@@ -103,9 +103,9 @@ pub const MAX_TIME_DIFF: u64 = 60;
 
 /// Validate the share header by checking proof of work and uncle count.
 ///
-/// Verifies that the bitcoin block hash meets the share chain compact target (bits),
-/// since the bitcoin block header is what the miner actually mines with proof of work.
-/// Also verifies that the number of uncles does not exceed MAX_UNCLES.
+/// Verifies that the number of uncles does not exceed MAX_UNCLES.
+///
+/// Verifies that the bitcoin block hash meets the current pool difficulty.
 pub fn validate_share_header(
     share_header: &ShareHeader,
     chain_store_handle: &ChainStoreHandle,
