@@ -110,9 +110,9 @@ pub fn on_schedule_pool_difficulty() -> PoolDifficulty {
 /// Set up mock expectations on a MockChainStoreHandle and MockPoolDifficulty
 /// for validate_with_pool_difficulty.
 ///
-/// Configures get_share and get_block_metadata on the chain store to return
-/// a genesis parent at height 0, and calculate_target on the pool difficulty
-/// to return the given target_bits.
+/// Configures get_share_header and get_block_metadata on the chain
+/// store to return a genesis parent at height 0, and calculate_target
+/// on the pool difficulty to return the given target_bits.
 #[cfg(test)]
 pub fn setup_pool_difficulty_mocks(
     chain_store_handle: &mut MockChainStoreHandle,
