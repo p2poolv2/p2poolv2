@@ -19,6 +19,11 @@ mod bitcoin_block_validation;
 use super::share_block::ShareHeader;
 #[cfg(test)]
 #[mockall_double::double]
+use crate::pool_difficulty::PoolDifficulty;
+#[cfg(not(test))]
+use crate::pool_difficulty::PoolDifficulty;
+#[cfg(test)]
+#[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -45,6 +50,8 @@ pub enum ValidationError {
     },
     /// An uncle referenced in the share was not found in the chain store
     UncleNotFound { uncle_hash: BlockHash },
+    /// The parent share referenced by prev_share_blockhash was not found
+    ParentNotFound { parent_hash: BlockHash },
     /// Bitcoin block validation failed via RPC
     BitcoinBlockValidation(String),
 }
@@ -77,6 +84,9 @@ impl fmt::Display for ValidationError {
             Self::UncleNotFound { uncle_hash } => {
                 write!(formatter, "Uncle {uncle_hash} not found in store")
             }
+            Self::ParentNotFound { parent_hash } => {
+                write!(formatter, "Parent share {parent_hash} not found in store")
+            }
             Self::BitcoinBlockValidation(message) => {
                 write!(formatter, "Bitcoin block validation failed: {message}")
             }
@@ -98,7 +108,8 @@ pub const MAX_TIME_DIFF: u64 = 60;
 /// Also verifies that the number of uncles does not exceed MAX_UNCLES.
 pub fn validate_share_header(
     share_header: &ShareHeader,
-    _chain_store_handle: &ChainStoreHandle,
+    chain_store_handle: &ChainStoreHandle,
+    pool_difficulty: &PoolDifficulty,
 ) -> Result<(), ValidationError> {
     if share_header.uncles.len() > MAX_UNCLES {
         return Err(ValidationError::TooManyUncles {
@@ -107,8 +118,40 @@ pub fn validate_share_header(
         });
     }
 
-    let target = Target::from_compact(share_header.bits);
+    validate_with_pool_difficulty(share_header, chain_store_handle, pool_difficulty)
+}
+
+/// Validate that the bitcoin header in the share header meets the pool difficulty.
+///
+/// Looks up the parent share in the chain store to obtain the parent timestamp
+/// and height, then uses the pool difficulty to calculate the expected target
+/// for this share. Returns an error if the bitcoin block hash does not meet
+/// the calculated target.
+pub fn validate_with_pool_difficulty(
+    share_header: &ShareHeader,
+    chain_store_handle: &ChainStoreHandle,
+    pool_difficulty: &PoolDifficulty,
+) -> Result<(), ValidationError> {
+    let parent_hash = share_header.prev_share_blockhash;
+    let parent_share = chain_store_handle
+        .get_share(&parent_hash)
+        .ok_or(ValidationError::ParentNotFound { parent_hash })?;
+
+    let parent_metadata = chain_store_handle
+        .get_block_metadata(&parent_hash)
+        .map_err(|_| ValidationError::ParentNotFound { parent_hash })?;
+
+    let parent_height = parent_metadata
+        .expected_height
+        .ok_or(ValidationError::ParentNotFound { parent_hash })?;
+
+    let parent_time = parent_share.header.time;
+    let share_height = parent_height + 1;
+
+    let calculated_target = pool_difficulty.calculate_target(parent_time, share_height);
+    let target = Target::from_compact(calculated_target);
     let bitcoin_block_hash = share_header.bitcoin_header.block_hash();
+
     if !target.is_met_by(bitcoin_block_hash) {
         return Err(ValidationError::InsufficientWork {
             block_hash: bitcoin_block_hash,
