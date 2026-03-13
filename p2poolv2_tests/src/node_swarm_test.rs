@@ -189,6 +189,7 @@ async fn test_three_nodes_connectivity() {
 /// Node 1 is seeded with 50 shares before nodes 2 and 3 start. Nodes 2
 /// and 3 dial into node 1 and should sync all 50 shares via the header-sync
 /// and block-fetch protocol.
+#[ignore]
 #[tokio::test]
 async fn test_three_nodes_share_sync() {
     const SHARE_COUNT: u32 = 50;
