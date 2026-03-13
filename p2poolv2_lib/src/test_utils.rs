@@ -44,7 +44,13 @@ use std::str::FromStr;
 
 // Imports only needed for internal tests
 #[cfg(test)]
+use crate::pool_difficulty::MockPoolDifficulty;
+#[cfg(test)]
+use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
+#[cfg(test)]
 use crate::shares::share_commitment::ShareCommitment;
+#[cfg(test)]
+use crate::store::block_tx_metadata::{BlockMetadata, Status};
 #[cfg(test)]
 use crate::stratum::messages::Notify;
 #[cfg(test)]
@@ -99,6 +105,43 @@ pub fn on_schedule_pool_difficulty() -> PoolDifficulty {
         TEST_ANCHOR_TIME,
         0,
     )
+}
+
+/// Set up mock expectations on a MockChainStoreHandle and MockPoolDifficulty
+/// for validate_with_pool_difficulty.
+///
+/// Configures get_share and get_block_metadata on the chain store to return
+/// a genesis parent at height 0, and calculate_target on the pool difficulty
+/// to return the given target_bits.
+#[cfg(test)]
+pub fn setup_pool_difficulty_mocks(
+    chain_store_handle: &mut MockChainStoreHandle,
+    pool_difficulty: &mut MockPoolDifficulty,
+    parent_hash: BlockHash,
+    target_bits: u32,
+) {
+    let parent_share = genesis_for_tests();
+    let parent_time = parent_share.header.time;
+    chain_store_handle
+        .expect_get_share()
+        .with(mockall::predicate::eq(parent_hash))
+        .returning(move |_| Some(genesis_for_tests()));
+
+    chain_store_handle
+        .expect_get_block_metadata()
+        .with(mockall::predicate::eq(parent_hash))
+        .returning(|_| {
+            Ok(BlockMetadata {
+                expected_height: Some(0),
+                chain_work: bitcoin::Work::from_hex("0x00").unwrap(),
+                status: Status::Confirmed,
+            })
+        });
+
+    pool_difficulty
+        .expect_calculate_target()
+        .with(mockall::predicate::eq(parent_time), mockall::predicate::eq(1))
+        .returning(move |_, _| CompactTarget::from_consensus(target_bits));
 }
 
 #[cfg(test)]
