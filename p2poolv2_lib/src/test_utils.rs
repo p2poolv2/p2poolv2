@@ -123,9 +123,9 @@ pub fn setup_pool_difficulty_mocks(
     let parent_share = genesis_for_tests();
     let parent_time = parent_share.header.time;
     chain_store_handle
-        .expect_get_share()
+        .expect_get_share_header()
         .with(mockall::predicate::eq(parent_hash))
-        .returning(move |_| Some(genesis_for_tests()));
+        .returning(move |_| Ok(genesis_for_tests().header));
 
     chain_store_handle
         .expect_get_block_metadata()
@@ -305,6 +305,7 @@ pub struct TestShareBlockBuilder {
     work: Option<u32>,
     nonce: Option<u32>,
     bits: Option<CompactTarget>,
+    time: Option<u32>,
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -353,6 +354,11 @@ impl TestShareBlockBuilder {
         self
     }
 
+    pub fn time(mut self, time: u32) -> Self {
+        self.time = Some(time);
+        self
+    }
+
     pub fn with_easy_target(self) -> Self {
         let easy_target = bitcoin::CompactTarget::from_consensus(0x2100ffff);
         self.bits(easy_target)
@@ -382,6 +388,7 @@ impl TestShareBlockBuilder {
             self.work,
             self.nonce,
             self.bits,
+            self.time,
         )
     }
 }
@@ -432,6 +439,7 @@ fn test_share_block(
     work: Option<u32>,
     nonce: Option<u32>,
     bits: Option<CompactTarget>,
+    time: Option<u32>,
 ) -> ShareBlock {
     let coinbase = test_coinbase_transaction();
 
@@ -465,7 +473,7 @@ fn test_share_block(
         miner_address: btcaddress.clone(),
         merkle_root: share_merkle_root,
         bitcoin_header,
-        time: 1700000000u32,
+        time: time.unwrap_or(1700000000u32),
         bits: share_bits,
     };
 

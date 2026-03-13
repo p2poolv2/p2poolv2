@@ -122,6 +122,21 @@ impl ChainStoreHandle {
         self.store_handle.get_share_headers(share_hashes)
     }
 
+    /// Get a single share header by blockhash.
+    ///
+    /// Delegates to get_share_headers and returns the first result,
+    /// or a NotFound error if no header exists for the given hash.
+    pub fn get_share_header(
+        &self,
+        share_hash: &BlockHash,
+    ) -> Result<ShareHeader, StoreError> {
+        let headers = self.get_share_headers(&[*share_hash])?;
+        headers
+            .into_iter()
+            .next()
+            .ok_or(StoreError::NotFound(share_hash.to_string()))
+    }
+
     /// Get headers for a locator.
     pub fn get_headers_for_locator(
         &self,
@@ -555,6 +570,7 @@ mockall::mock! {
         pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock>;
         pub fn get_shares_at_height(&self, height: u32) -> Result<HashMap<BlockHash, ShareBlock>, StoreError>;
         pub fn get_share_headers(&self, share_hashes: &[BlockHash]) -> Result<Vec<ShareHeader>, StoreError>;
+        pub fn get_share_header(&self, share_hash: &BlockHash) -> Result<ShareHeader, StoreError>;
         pub fn get_headers_for_locator(&self, block_hashes: &[BlockHash], stop_block_hash: &BlockHash, limit: usize) -> Result<Vec<ShareHeader>, StoreError>;
         pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_tip_height(&self) -> Result<Option<u32>, StoreError>;

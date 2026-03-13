@@ -133,9 +133,9 @@ pub fn validate_with_pool_difficulty(
     pool_difficulty: &PoolDifficulty,
 ) -> Result<(), ValidationError> {
     let parent_hash = share_header.prev_share_blockhash;
-    let parent_share = chain_store_handle
-        .get_share(&parent_hash)
-        .ok_or(ValidationError::ParentNotFound { parent_hash })?;
+    let parent_header = chain_store_handle
+        .get_share_header(&parent_hash)
+        .map_err(|_| ValidationError::ParentNotFound { parent_hash })?;
 
     let parent_metadata = chain_store_handle
         .get_block_metadata(&parent_hash)
@@ -145,7 +145,7 @@ pub fn validate_with_pool_difficulty(
         .expected_height
         .ok_or(ValidationError::ParentNotFound { parent_hash })?;
 
-    let parent_time = parent_share.header.time;
+    let parent_time = parent_header.time;
     let share_height = parent_height + 1;
 
     let calculated_target = pool_difficulty.calculate_target(parent_time, share_height);
