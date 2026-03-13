@@ -126,10 +126,7 @@ impl ChainStoreHandle {
     ///
     /// Delegates to get_share_headers and returns the first result,
     /// or a NotFound error if no header exists for the given hash.
-    pub fn get_share_header(
-        &self,
-        share_hash: &BlockHash,
-    ) -> Result<ShareHeader, StoreError> {
+    pub fn get_share_header(&self, share_hash: &BlockHash) -> Result<ShareHeader, StoreError> {
         let headers = self.get_share_headers(&[*share_hash])?;
         headers
             .into_iter()

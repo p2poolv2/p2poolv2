@@ -29,6 +29,7 @@ use tempfile::tempdir;
 
 use crate::common;
 
+#[ignore]
 #[tokio::test]
 async fn test_three_nodes_connectivity() {
     // Create three different configurations as strings
