@@ -123,6 +123,9 @@ pub fn validate_share_header(
 
 /// Validate that the bitcoin header in the share header meets the pool difficulty.
 ///
+/// Also validate that the advertised bits in the share header is the
+/// same as the pool difficulty as computed by our node.
+///
 /// Looks up the parent share in the chain store to obtain the parent timestamp
 /// and height, then uses the pool difficulty to calculate the expected target
 /// for this share. Returns an error if the bitcoin block hash does not meet
@@ -151,6 +154,14 @@ pub fn validate_with_pool_difficulty(
     let calculated_target = pool_difficulty.calculate_target(parent_time, share_height);
     let target = Target::from_compact(calculated_target);
     let bitcoin_block_hash = share_header.bitcoin_header.block_hash();
+
+    // Ensure the advertised header bits match the calculated pool target.
+    if share_header.bits != calculated_target {
+        return Err(ValidationError::InsufficientWork {
+            block_hash: bitcoin_block_hash,
+            target,
+        });
+    }
 
     if !target.is_met_by(bitcoin_block_hash) {
         return Err(ValidationError::InsufficientWork {
