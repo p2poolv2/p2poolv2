@@ -425,7 +425,6 @@ mod gbt_server_tests {
             NotifyCmd::SendToAll { template } => {
                 assert_eq!(template.height, 108);
             }
-            _ => panic!("Expected NotifyCmd::SendToAll"),
         }
     }
 
@@ -486,7 +485,6 @@ mod gbt_server_tests {
             NotifyCmd::SendToAll { template } => {
                 assert_eq!(template.height, 108);
             }
-            _ => panic!("Expected NotifyCmd::SendToAll"),
         }
     }
 }
