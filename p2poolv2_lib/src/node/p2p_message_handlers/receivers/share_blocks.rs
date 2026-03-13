@@ -18,6 +18,11 @@ use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, Bl
 use crate::node::validation_worker::{ValidationEvent, ValidationSender};
 #[cfg(test)]
 #[mockall_double::double]
+use crate::pool_difficulty::PoolDifficulty;
+#[cfg(not(test))]
+use crate::pool_difficulty::PoolDifficulty;
+#[cfg(test)]
+#[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -70,9 +75,12 @@ pub async fn handle_share_block(
     // headers arrive before full blocks). Otherwise require valid proof of
     // work to prevent peers from flooding our database with garbage headers.
     if !chain_store_handle.is_candidate(&block_hash) {
-        if let Err(validation_error) =
-            validation::validate_share_header(&share_block.header, chain_store_handle)
-        {
+        let pool_difficulty = PoolDifficulty::build(chain_store_handle)?;
+        if let Err(validation_error) = validation::validate_share_header(
+            &share_block.header,
+            chain_store_handle,
+            &pool_difficulty,
+        ) {
             warn!("Rejecting share block {block_hash} with invalid header: {validation_error}");
             return Err(format!("Invalid share header: {validation_error}").into());
         }

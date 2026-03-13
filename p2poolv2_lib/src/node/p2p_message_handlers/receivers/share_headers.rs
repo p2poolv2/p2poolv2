@@ -19,12 +19,16 @@ use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, Bl
 use crate::node::{SwarmSend, messages::Message};
 #[cfg(test)]
 #[mockall_double::double]
+use crate::pool_difficulty::PoolDifficulty;
+#[cfg(not(test))]
+use crate::pool_difficulty::PoolDifficulty;
+#[cfg(test)]
+#[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareHeader;
 use crate::shares::validation::validate_share_header;
-use bitcoin::block::ValidationError;
 use bitcoin::{BlockHash, hashes::Hash};
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -49,8 +53,10 @@ pub async fn handle_share_headers<C: Send + Sync>(
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     block_fetcher_handle: BlockFetcherHandle,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let pool_difficulty = PoolDifficulty::build(&chain_store_handle)?;
+
     for header in &share_headers {
-        validate_share_header(header, &chain_store_handle)?;
+        validate_share_header(header, &chain_store_handle, &pool_difficulty)?;
         chain_store_handle.organise_header(header.clone()).await?;
     }
 

@@ -140,7 +140,10 @@ pub fn setup_pool_difficulty_mocks(
 
     pool_difficulty
         .expect_calculate_target()
-        .with(mockall::predicate::eq(parent_time), mockall::predicate::eq(1))
+        .with(
+            mockall::predicate::eq(parent_time),
+            mockall::predicate::eq(1),
+        )
         .returning(move |_, _| CompactTarget::from_consensus(target_bits));
 }
 

@@ -243,6 +243,7 @@ mod tests {
     use super::*;
     use crate::test_utils::{
         TestShareBlockBuilder, genesis_for_tests, load_share_headers_test_data,
+        setup_pool_difficulty_mocks,
     };
     use crate::utils::time_provider::TestTimeProvider;
     use bitcoin::{BlockHash, hashes::Hash};
@@ -454,23 +455,40 @@ mod tests {
 
     #[test]
     fn test_validate_share_header_valid() {
-        let chain_store_handle = ChainStoreHandle::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let mut pool_difficulty = PoolDifficulty::default();
         let test_data = load_share_headers_test_data();
         let header: ShareHeader =
             serde_json::from_value(test_data["valid_header"].clone()).unwrap();
 
-        let result = validate_share_header(&header, &chain_store_handle);
+        setup_pool_difficulty_mocks(
+            &mut chain_store_handle,
+            &mut pool_difficulty,
+            BlockHash::all_zeros(),
+            0x207FFFFF,
+        );
+
+        let result = validate_share_header(&header, &chain_store_handle, &pool_difficulty);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_validate_share_header_fails_for_hash_not_meeting_target() {
-        let chain_store_handle = ChainStoreHandle::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let mut pool_difficulty = PoolDifficulty::default();
         let test_data = load_share_headers_test_data();
         let header: ShareHeader =
             serde_json::from_value(test_data["tight_target_header"].clone()).unwrap();
 
-        let error = validate_share_header(&header, &chain_store_handle).unwrap_err();
+        setup_pool_difficulty_mocks(
+            &mut chain_store_handle,
+            &mut pool_difficulty,
+            BlockHash::all_zeros(),
+            0x01010000,
+        );
+
+        let error =
+            validate_share_header(&header, &chain_store_handle, &pool_difficulty).unwrap_err();
         assert!(
             matches!(error, ValidationError::InsufficientWork { .. }),
             "Expected InsufficientWork, got: {error:?}"
@@ -481,11 +499,13 @@ mod tests {
     #[test]
     fn test_validate_share_header_fails_for_too_many_uncles() {
         let chain_store_handle = ChainStoreHandle::default();
+        let pool_difficulty = PoolDifficulty::default();
         let test_data = load_share_headers_test_data();
         let header: ShareHeader =
             serde_json::from_value(test_data["too_many_uncles_header"].clone()).unwrap();
 
-        let error = validate_share_header(&header, &chain_store_handle).unwrap_err();
+        let error =
+            validate_share_header(&header, &chain_store_handle, &pool_difficulty).unwrap_err();
         assert!(
             matches!(error, ValidationError::TooManyUncles { .. }),
             "Expected TooManyUncles, got: {error:?}"
@@ -495,12 +515,20 @@ mod tests {
 
     #[test]
     fn test_validate_share_header_succeeds_with_max_uncles() {
-        let chain_store_handle = ChainStoreHandle::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let mut pool_difficulty = PoolDifficulty::default();
         let test_data = load_share_headers_test_data();
         let header: ShareHeader =
             serde_json::from_value(test_data["max_uncles_header"].clone()).unwrap();
 
-        let result = validate_share_header(&header, &chain_store_handle);
+        setup_pool_difficulty_mocks(
+            &mut chain_store_handle,
+            &mut pool_difficulty,
+            BlockHash::all_zeros(),
+            0x207FFFFF,
+        );
+
+        let result = validate_share_header(&header, &chain_store_handle, &pool_difficulty);
         assert!(result.is_ok(), "Expected Ok but got: {:?}", result.err());
     }
 }
