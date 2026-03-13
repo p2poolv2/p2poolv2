@@ -282,9 +282,7 @@ mod tests {
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::store::block_tx_metadata::{BlockMetadata, Status};
     use crate::test_utils::genesis_for_tests;
-    use crate::test_utils::{
-        TestShareBlockBuilder, setup_pool_difficulty_mocks, valid_share_block_from_fixture,
-    };
+    use crate::test_utils::{TestShareBlockBuilder, valid_share_block_from_fixture};
     use bitcoin::BlockHash;
     use bitcoin::hashes::Hash as _;
     use std::future::Future;

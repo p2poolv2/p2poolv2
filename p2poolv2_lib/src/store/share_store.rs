@@ -14,13 +14,13 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use super::block_tx_metadata::{BlockMetadata, Status};
+use super::block_tx_metadata::BlockMetadata;
 use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::share_block::{
     ShareBlock, ShareHeader, ShareTransaction, StorageShareBlock, Txids,
 };
+use bitcoin::BlockHash;
 use bitcoin::consensus::{self, Encodable, encode};
-use bitcoin::{BlockHash, Work};
 use std::collections::HashMap;
 use tracing::debug;
 

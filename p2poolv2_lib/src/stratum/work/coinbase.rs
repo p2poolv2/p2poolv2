@@ -226,7 +226,7 @@ pub fn extract_outputs_from_coinbase2(
 #[cfg(test)]
 mod tests {
     use crate::shares::share_commitment::ShareCommitment;
-    use bitcoin::{CompactTarget, hex::DisplayHex};
+    use bitcoin::hex::DisplayHex;
     use std::str::FromStr;
 
     use super::*;

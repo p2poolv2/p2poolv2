@@ -444,7 +444,6 @@ impl ChainStoreHandle {
     ) -> Result<(), StoreError> {
         debug!("Adding share to chain: {:?}", share.block_hash());
 
-        let blockhash = share.block_hash();
         let share_work = share.header.get_work();
         debug!("Share work: {}", share_work);
 
