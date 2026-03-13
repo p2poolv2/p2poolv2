@@ -33,7 +33,7 @@ use crate::node::organise_worker::{OrganiseEvent, OrganiseSender};
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::shares::validation;
+use crate::shares::validation::{DefaultShareValidator, ShareValidator};
 use crate::utils::cpu::available_cpus;
 use bitcoin::BlockHash;
 use libp2p::request_response::ResponseChannel;
@@ -187,8 +187,9 @@ async fn validate_and_emit(
         }
     };
 
+    let share_validator = DefaultShareValidator;
     if let Err(validation_error) =
-        validation::validate_share_block(&share_block, &chain_store_handle)
+        share_validator.validate_share_block(&share_block, &chain_store_handle)
     {
         error!("Share block {block_hash} validation failed: {validation_error}");
         return;

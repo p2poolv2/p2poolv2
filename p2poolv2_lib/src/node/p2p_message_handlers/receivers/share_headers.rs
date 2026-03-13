@@ -28,7 +28,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareHeader;
-use crate::shares::validation::validate_share_header;
+use crate::shares::validation::{DefaultShareValidator, ShareValidator};
 use bitcoin::{BlockHash, hashes::Hash};
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -54,9 +54,10 @@ pub async fn handle_share_headers<C: Send + Sync>(
     block_fetcher_handle: BlockFetcherHandle,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let pool_difficulty = PoolDifficulty::build(&chain_store_handle)?;
+    let share_validator = DefaultShareValidator;
 
     for header in &share_headers {
-        validate_share_header(header, &chain_store_handle, &pool_difficulty)?;
+        share_validator.validate_share_header(header, &chain_store_handle, &pool_difficulty)?;
         chain_store_handle.organise_header(header.clone()).await?;
     }
 

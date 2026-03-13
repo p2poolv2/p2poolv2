@@ -27,7 +27,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
-use crate::shares::validation;
+use crate::shares::validation::{DefaultShareValidator, ShareValidator};
 use bitcoin::{BlockHash, hashes::Hash};
 use std::collections::HashSet;
 use std::error::Error;
@@ -76,7 +76,8 @@ pub async fn handle_share_block(
     // work to prevent peers from flooding our database with garbage headers.
     if !chain_store_handle.is_candidate(&block_hash) {
         let pool_difficulty = PoolDifficulty::build(chain_store_handle)?;
-        if let Err(validation_error) = validation::validate_share_header(
+        let share_validator = DefaultShareValidator;
+        if let Err(validation_error) = share_validator.validate_share_header(
             &share_block.header,
             chain_store_handle,
             &pool_difficulty,
