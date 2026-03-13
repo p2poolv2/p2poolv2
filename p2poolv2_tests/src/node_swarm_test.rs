@@ -223,19 +223,24 @@ async fn test_three_nodes_share_sync() {
     let store_handle1 = StoreHandle::new(store1, write_tx1);
     let chain_store_handle1 = ChainStoreHandle::new(store_handle1, config1.stratum.network);
 
-    let genesis = ShareBlock::build_genesis_for_network(config1.stratum.network);
+    let mut genesis = ShareBlock::build_genesis_for_network(config1.stratum.network);
+    genesis.header.bits = bitcoin::CompactTarget::from_consensus(0x2100ffff);
     chain_store_handle1
         .init_or_setup_genesis(genesis.clone())
         .await
         .unwrap();
 
-    // Seed 50 shares chained from genesis
+    // Seed 50 shares chained from genesis.
+    // Each share's timestamp advances by 10 seconds (the ASERT ideal block
+    // time) so that pool difficulty stays stable during validation.
+    let genesis_time = 1700000000u32;
     let mut prev_hash = genesis.block_hash();
     for index in 1..=SHARE_COUNT {
         let share = TestShareBlockBuilder::new()
             .with_easy_target()
             .prev_share_blockhash(prev_hash.to_string())
             .nonce(index)
+            .time(genesis_time + index * 10)
             .build();
         let share_hash = share.block_hash();
         chain_store_handle1
@@ -267,9 +272,7 @@ async fn test_three_nodes_share_sync() {
     let store_handle2 = StoreHandle::new(store2, write_tx2);
     let chain_store_handle2 = ChainStoreHandle::new(store_handle2, config2.stratum.network);
     chain_store_handle2
-        .init_or_setup_genesis(ShareBlock::build_genesis_for_network(
-            config2.stratum.network,
-        ))
+        .init_or_setup_genesis(genesis.clone())
         .await
         .unwrap();
 
@@ -282,9 +285,7 @@ async fn test_three_nodes_share_sync() {
     let store_handle3 = StoreHandle::new(store3, write_tx3);
     let chain_store_handle3 = ChainStoreHandle::new(store_handle3, config3.stratum.network);
     chain_store_handle3
-        .init_or_setup_genesis(ShareBlock::build_genesis_for_network(
-            config3.stratum.network,
-        ))
+        .init_or_setup_genesis(genesis.clone())
         .await
         .unwrap();
 

@@ -356,9 +356,9 @@ mod tests {
         chain_store_handle.expect_clone().returning(|| {
             let mut cloned = ChainStoreHandle::default();
             cloned
-                .expect_get_share()
+                .expect_get_share_header()
                 .with(mockall::predicate::eq(BlockHash::all_zeros()))
-                .returning(move |_| Some(genesis_for_tests()));
+                .returning(move |_| Ok(genesis_for_tests().header));
             cloned
                 .expect_get_block_metadata()
                 .with(mockall::predicate::eq(BlockHash::all_zeros()))
@@ -597,9 +597,9 @@ mod tests {
             cloned.expect_share_block_exists().returning(|_| false);
             cloned.expect_is_candidate().returning(|_| false);
             cloned
-                .expect_get_share()
+                .expect_get_share_header()
                 .with(mockall::predicate::eq(BlockHash::all_zeros()))
-                .returning(move |_| Some(genesis_for_tests()));
+                .returning(move |_| Ok(genesis_for_tests().header));
             cloned
                 .expect_get_block_metadata()
                 .with(mockall::predicate::eq(BlockHash::all_zeros()))
