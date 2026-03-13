@@ -18,16 +18,11 @@ use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, Bl
 use crate::node::validation_worker::{ValidationEvent, ValidationSender};
 #[cfg(test)]
 #[mockall_double::double]
-use crate::pool_difficulty::PoolDifficulty;
-#[cfg(not(test))]
-use crate::pool_difficulty::PoolDifficulty;
-#[cfg(test)]
-#[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
-use crate::shares::validation::{DefaultShareValidator, ShareValidator};
+use crate::shares::validation::ShareValidator;
 use bitcoin::{BlockHash, hashes::Hash};
 use std::collections::HashSet;
 use std::error::Error;
@@ -59,6 +54,7 @@ pub async fn handle_share_block(
     chain_store_handle: &ChainStoreHandle,
     block_fetcher_handle: BlockFetcherHandle,
     validation_tx: ValidationSender,
+    share_validator: &(dyn ShareValidator + Send + Sync),
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Received share block: {:?}", share_block);
 
@@ -75,13 +71,9 @@ pub async fn handle_share_block(
     // headers arrive before full blocks). Otherwise require valid proof of
     // work to prevent peers from flooding our database with garbage headers.
     if !chain_store_handle.is_candidate(&block_hash) {
-        let pool_difficulty = PoolDifficulty::build(chain_store_handle)?;
-        let share_validator = DefaultShareValidator;
-        if let Err(validation_error) = share_validator.validate_share_header(
-            &share_block.header,
-            chain_store_handle,
-            &pool_difficulty,
-        ) {
+        if let Err(validation_error) =
+            share_validator.validate_share_header(&share_block.header, chain_store_handle)
+        {
             warn!("Rejecting share block {block_hash} with invalid header: {validation_error}");
             return Err(format!("Invalid share header: {validation_error}").into());
         }
@@ -188,13 +180,10 @@ mod tests {
     use super::*;
     use crate::node::request_response_handler::block_fetcher;
     use crate::node::validation_worker;
-    #[mockall_double::double]
-    use crate::pool_difficulty::PoolDifficulty;
     use crate::shares::share_block::ShareHeader;
+    use crate::shares::validation::{MockDefaultShareValidator, ValidationError};
     use crate::store::writer::StoreError;
-    use crate::test_utils::{
-        empty_share_block_from_header, load_share_headers_test_data, setup_pool_difficulty_mocks,
-    };
+    use crate::test_utils::{empty_share_block_from_header, load_share_headers_test_data};
     use mockall::predicate::*;
 
     /// Create test block fetcher and validation handles, returning
@@ -231,23 +220,16 @@ mod tests {
             .with(eq(block_hash))
             .returning(|_| false);
 
-        // Not on candidate chain, so PoW will be checked (valid_header passes)
+        // Not on candidate chain, so PoW will be checked
         chain_store_handle
             .expect_is_candidate()
             .with(eq(block_hash))
             .returning(|_| false);
 
-        let mut mock_pool_difficulty = PoolDifficulty::default();
-        setup_pool_difficulty_mocks(
-            &mut chain_store_handle,
-            &mut mock_pool_difficulty,
-            BlockHash::all_zeros(),
-            0x207FFFFF,
-        );
-        let _build_context = PoolDifficulty::build_context();
-        _build_context
-            .expect()
-            .return_once(move |_| Ok(mock_pool_difficulty));
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_share_header()
+            .returning(|_, _| Ok(()));
 
         chain_store_handle
             .expect_add_share_block()
@@ -262,6 +244,7 @@ mod tests {
             &chain_store_handle,
             block_fetcher_handle,
             validation_tx,
+            &mock_validator,
         )
         .await;
         assert!(result.is_ok());
@@ -290,23 +273,16 @@ mod tests {
             .with(eq(block_hash))
             .returning(|_| false);
 
-        // Not on candidate chain, so PoW will be checked (valid_header passes)
+        // Not on candidate chain, so PoW will be checked
         chain_store_handle
             .expect_is_candidate()
             .with(eq(block_hash))
             .returning(|_| false);
 
-        let mut mock_pool_difficulty = PoolDifficulty::default();
-        setup_pool_difficulty_mocks(
-            &mut chain_store_handle,
-            &mut mock_pool_difficulty,
-            BlockHash::all_zeros(),
-            0x207FFFFF,
-        );
-        let _build_context = PoolDifficulty::build_context();
-        _build_context
-            .expect()
-            .return_once(move |_| Ok(mock_pool_difficulty));
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_share_header()
+            .returning(|_, _| Ok(()));
 
         chain_store_handle
             .expect_add_share_block()
@@ -321,6 +297,7 @@ mod tests {
             &chain_store_handle,
             block_fetcher_handle,
             validation_tx,
+            &mock_validator,
         )
         .await;
         assert!(result.is_err());
@@ -352,6 +329,8 @@ mod tests {
             .with(eq(block_hash))
             .returning(|_| true);
 
+        let mock_validator = MockDefaultShareValidator::default();
+
         // add_share_block should NOT be called for a duplicate
         let (block_fetcher_handle, _block_fetcher_rx, validation_tx, mut validation_rx) =
             test_handles();
@@ -361,6 +340,7 @@ mod tests {
             &chain_store_handle,
             block_fetcher_handle,
             validation_tx,
+            &mock_validator,
         )
         .await;
         assert!(result.is_ok());
@@ -388,23 +368,21 @@ mod tests {
             .with(eq(block_hash))
             .returning(|_| false);
 
-        // Not on candidate chain, so PoW will be checked (tight_target fails)
+        // Not on candidate chain, so PoW will be checked
         chain_store_handle
             .expect_is_candidate()
             .with(eq(block_hash))
             .returning(|_| false);
 
-        let mut mock_pool_difficulty = PoolDifficulty::default();
-        setup_pool_difficulty_mocks(
-            &mut chain_store_handle,
-            &mut mock_pool_difficulty,
-            BlockHash::all_zeros(),
-            0x01010000,
-        );
-        let _build_context = PoolDifficulty::build_context();
-        _build_context
-            .expect()
-            .return_once(move |_| Ok(mock_pool_difficulty));
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_share_header()
+            .returning(|_, _| {
+                Err(ValidationError::InsufficientWork {
+                    block_hash: BlockHash::all_zeros(),
+                    target: bitcoin::Target::from_be_bytes([0xff; 32]),
+                })
+            });
 
         // add_share_block should NOT be called for invalid header
         let (block_fetcher_handle, _block_fetcher_rx, validation_tx, mut validation_rx) =
@@ -415,6 +393,7 @@ mod tests {
             &chain_store_handle,
             block_fetcher_handle,
             validation_tx,
+            &mock_validator,
         )
         .await;
         assert!(result.is_err());
@@ -475,6 +454,7 @@ mod tests {
             .with(eq(uncle_hash_b))
             .returning(|_| false);
 
+        let mock_validator = MockDefaultShareValidator::default();
         let (block_fetcher_handle, mut block_fetcher_rx, validation_tx, mut validation_rx) =
             test_handles();
         let result = handle_share_block(
@@ -483,6 +463,7 @@ mod tests {
             &chain_store_handle,
             block_fetcher_handle,
             validation_tx,
+            &mock_validator,
         )
         .await;
         assert!(result.is_ok());
@@ -549,6 +530,7 @@ mod tests {
             .with(eq(uncle_hash))
             .returning(|_| true);
 
+        let mock_validator = MockDefaultShareValidator::default();
         let (block_fetcher_handle, mut block_fetcher_rx, validation_tx, mut validation_rx) =
             test_handles();
         let result = handle_share_block(
@@ -557,6 +539,7 @@ mod tests {
             &chain_store_handle,
             block_fetcher_handle,
             validation_tx,
+            &mock_validator,
         )
         .await;
         assert!(result.is_ok());
@@ -617,6 +600,7 @@ mod tests {
             .with(eq(parent_hash))
             .returning(|_| false);
 
+        let mock_validator = MockDefaultShareValidator::default();
         let (block_fetcher_handle, mut block_fetcher_rx, validation_tx, mut validation_rx) =
             test_handles();
         let result = handle_share_block(
@@ -625,6 +609,7 @@ mod tests {
             &chain_store_handle,
             block_fetcher_handle,
             validation_tx,
+            &mock_validator,
         )
         .await;
         assert!(result.is_ok());

@@ -19,16 +19,11 @@ use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, Bl
 use crate::node::{SwarmSend, messages::Message};
 #[cfg(test)]
 #[mockall_double::double]
-use crate::pool_difficulty::PoolDifficulty;
-#[cfg(not(test))]
-use crate::pool_difficulty::PoolDifficulty;
-#[cfg(test)]
-#[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareHeader;
-use crate::shares::validation::{DefaultShareValidator, ShareValidator};
+use crate::shares::validation::ShareValidator;
 use bitcoin::{BlockHash, hashes::Hash};
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -52,12 +47,10 @@ pub async fn handle_share_headers<C: Send + Sync>(
     chain_store_handle: ChainStoreHandle,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     block_fetcher_handle: BlockFetcherHandle,
+    share_validator: &(dyn ShareValidator + Send + Sync),
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let pool_difficulty = PoolDifficulty::build(&chain_store_handle)?;
-    let share_validator = DefaultShareValidator;
-
     for header in &share_headers {
-        share_validator.validate_share_header(header, &chain_store_handle, &pool_difficulty)?;
+        share_validator.validate_share_header(header, &chain_store_handle)?;
         chain_store_handle.organise_header(header.clone()).await?;
     }
 
@@ -131,26 +124,16 @@ mod tests {
     use crate::node::messages::Message;
     use crate::node::request_response_handler::block_fetcher;
     #[mockall_double::double]
-    use crate::pool_difficulty::PoolDifficulty;
-    #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-    use crate::test_utils::{TestShareBlockBuilder, setup_pool_difficulty_mocks};
-    use bitcoin::BlockHash;
+    use crate::shares::validation::MockDefaultShareValidator;
+    use crate::test_utils::TestShareBlockBuilder;
     use tokio::sync::{mpsc, oneshot};
-
-    /// The easy target used by build_share_headers and the corresponding
-    /// pool difficulty mocks in share header tests.
-    const TEST_EASY_TARGET: u32 = 0x2100ffff;
 
     /// Build a Vec of share headers with the given count by cloning a
     /// single test header. This avoids constructing thousands of unique
-    /// blocks when only the collection length matters. Uses an easy
-    /// target so that headers pass PoW validation.
+    /// blocks when only the collection length matters.
     fn build_share_headers(count: usize) -> Vec<ShareHeader> {
-        let template_header = TestShareBlockBuilder::new()
-            .with_easy_target()
-            .build()
-            .header;
+        let template_header = TestShareBlockBuilder::new().build().header;
         vec![template_header; count]
     }
 
@@ -158,17 +141,6 @@ mod tests {
     async fn test_fewer_than_max_headers_does_not_send_getheaders() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
-        let mut mock_pool_difficulty = PoolDifficulty::default();
-        setup_pool_difficulty_mocks(
-            &mut chain_store_handle,
-            &mut mock_pool_difficulty,
-            BlockHash::all_zeros(),
-            TEST_EASY_TARGET,
-        );
-        let _build_context = PoolDifficulty::build_context();
-        _build_context
-            .expect()
-            .return_once(move |_| Ok(mock_pool_difficulty));
         chain_store_handle
             .expect_organise_header()
             .returning(|_| Ok(None));
@@ -179,6 +151,11 @@ mod tests {
         let (block_fetcher_handle, _block_fetcher_rx) =
             block_fetcher::create_block_fetcher_channel();
 
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_share_header()
+            .returning(|_, _| Ok(()));
+
         let share_headers = build_share_headers(10);
 
         let result = handle_share_headers(
@@ -187,6 +164,7 @@ mod tests {
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,
+            &mock_validator,
         )
         .await;
         assert!(result.is_ok());
@@ -199,10 +177,6 @@ mod tests {
     async fn test_empty_headers_does_not_send_getheaders() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
-        let build_context = PoolDifficulty::build_context();
-        build_context
-            .expect()
-            .returning(move |_| Ok(PoolDifficulty::default()));
         chain_store_handle
             .expect_get_candidate_blocks_missing_data()
             .returning(|| Ok(Vec::new()));
@@ -210,6 +184,7 @@ mod tests {
         let (block_fetcher_handle, _block_fetcher_rx) =
             block_fetcher::create_block_fetcher_channel();
 
+        let mock_validator = MockDefaultShareValidator::default();
         let share_headers: Vec<ShareHeader> = Vec::new();
 
         let result = handle_share_headers(
@@ -218,6 +193,7 @@ mod tests {
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,
+            &mock_validator,
         )
         .await;
 
@@ -229,23 +205,17 @@ mod tests {
     async fn test_max_headers_sends_getheaders_to_same_peer() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
-        let mut mock_pool_difficulty = PoolDifficulty::default();
-        setup_pool_difficulty_mocks(
-            &mut chain_store_handle,
-            &mut mock_pool_difficulty,
-            BlockHash::all_zeros(),
-            TEST_EASY_TARGET,
-        );
-        let _build_context = PoolDifficulty::build_context();
-        _build_context
-            .expect()
-            .return_once(move |_| Ok(mock_pool_difficulty));
         chain_store_handle
             .expect_organise_header()
             .returning(|_| Ok(None));
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
         let (block_fetcher_handle, _block_fetcher_rx) =
             block_fetcher::create_block_fetcher_channel();
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_share_header()
+            .returning(|_, _| Ok(()));
 
         let share_headers = build_share_headers(MAX_HEADERS_IN_RESPONSE);
         let last_block_hash = share_headers.last().unwrap().block_hash();
@@ -256,6 +226,7 @@ mod tests {
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,
+            &mock_validator,
         )
         .await;
 
@@ -278,17 +249,6 @@ mod tests {
     async fn test_fewer_than_max_headers_sends_fetch_blocks_event() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
-        let mut mock_pool_difficulty = PoolDifficulty::default();
-        setup_pool_difficulty_mocks(
-            &mut chain_store_handle,
-            &mut mock_pool_difficulty,
-            BlockHash::all_zeros(),
-            TEST_EASY_TARGET,
-        );
-        let _build_context = PoolDifficulty::build_context();
-        _build_context
-            .expect()
-            .return_once(move |_| Ok(mock_pool_difficulty));
         chain_store_handle
             .expect_organise_header()
             .returning(|_| Ok(None));
@@ -304,6 +264,11 @@ mod tests {
         let (block_fetcher_handle, mut block_fetcher_rx) =
             block_fetcher::create_block_fetcher_channel();
 
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_share_header()
+            .returning(|_, _| Ok(()));
+
         let share_headers = build_share_headers(3);
 
         let result = handle_share_headers(
@@ -312,6 +277,7 @@ mod tests {
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,
+            &mock_validator,
         )
         .await;
 

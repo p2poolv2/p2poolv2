@@ -64,10 +64,12 @@ mod tests {
     use crate::service::p2p_service::{P2PService, RequestContext};
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+    use crate::shares::validation::MockDefaultShareValidator;
     use crate::utils::time_provider::TestTimeProvider;
     use libp2p::PeerId;
     use std::future::Future;
     use std::pin::Pin;
+    use std::sync::Arc;
     use std::task::{Context, Poll};
     use std::time::Instant;
     use std::time::SystemTime;
@@ -181,6 +183,7 @@ mod tests {
             time_provider: time_provider.clone(),
             block_fetcher_handle: block_fetcher_handle.clone(),
             validation_tx: validation_tx.clone(),
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let ctx2 = RequestContext {
@@ -192,6 +195,7 @@ mod tests {
             time_provider: time_provider.clone(),
             block_fetcher_handle: block_fetcher_handle.clone(),
             validation_tx: validation_tx.clone(),
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let ctx3 = RequestContext {
@@ -203,6 +207,7 @@ mod tests {
             time_provider: time_provider.clone(),
             block_fetcher_handle,
             validation_tx,
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         // First request should succeed
@@ -293,6 +298,7 @@ mod tests {
             time_provider: time_provider.clone(),
             block_fetcher_handle,
             validation_tx,
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         // Try service.ready(), and on failure, trigger disconnect manually
@@ -369,6 +375,7 @@ mod tests {
             time_provider: time_provider.clone(),
             block_fetcher_handle: block_fetcher_handle.clone(),
             validation_tx: validation_tx.clone(),
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let ctx1 = RequestContext {
@@ -380,6 +387,7 @@ mod tests {
             time_provider: time_provider.clone(),
             block_fetcher_handle,
             validation_tx,
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let mut service =
@@ -461,6 +469,7 @@ mod tests {
             time_provider: time_provider.clone(),
             block_fetcher_handle,
             validation_tx,
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let mut service =

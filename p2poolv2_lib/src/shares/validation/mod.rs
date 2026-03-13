@@ -109,13 +109,13 @@ pub const MAX_TIME_DIFF: u64 = 60;
 pub trait ShareValidator {
     /// Validate the share header by checking proof of work and uncle count.
     ///
-    /// Verifies that the number of uncles does not exceed MAX_UNCLES.
-    /// Verifies that the bitcoin block hash meets the current pool difficulty.
+    /// Verifies that the number of uncles does not exceed MAX_UNCLES,
+    /// then delegates to validate_with_pool_difficulty using the stored
+    /// pool difficulty instance.
     fn validate_share_header(
         &self,
         share_header: &ShareHeader,
         chain_store_handle: &ChainStoreHandle,
-        pool_difficulty: &PoolDifficulty,
     ) -> Result<(), ValidationError>;
 
     /// Validate that the bitcoin header in the share header meets the pool difficulty.
@@ -124,14 +124,13 @@ pub trait ShareValidator {
     /// the pool difficulty as computed by our node.
     ///
     /// Looks up the parent share in the chain store to obtain the parent timestamp
-    /// and height, then uses the pool difficulty to calculate the expected target
-    /// for this share. Returns an error if the bitcoin block hash does not meet
-    /// the calculated target.
+    /// and height, then uses the stored pool difficulty to calculate the expected
+    /// target for this share. Returns an error if the bitcoin block hash does not
+    /// meet the calculated target.
     fn validate_with_pool_difficulty(
         &self,
         share_header: &ShareHeader,
         chain_store_handle: &ChainStoreHandle,
-        pool_difficulty: &PoolDifficulty,
     ) -> Result<(), ValidationError>;
 
     /// Validate the share block, returning ValidationError in case of failure.
@@ -168,14 +167,28 @@ pub trait ShareValidator {
 }
 
 /// Production implementation of ShareValidator.
-pub struct DefaultShareValidator;
+///
+/// Stores a `PoolDifficulty` instance initialized at construction time,
+/// avoiding repeated builds on each validation call.
+pub struct DefaultShareValidator {
+    pool_difficulty: PoolDifficulty,
+}
+
+impl DefaultShareValidator {
+    /// Create a new DefaultShareValidator with the given pool difficulty.
+    ///
+    /// Callers should build the `PoolDifficulty` from the chain store
+    /// (via `PoolDifficulty::build`) and pass it here.
+    pub fn new(pool_difficulty: PoolDifficulty) -> Self {
+        Self { pool_difficulty }
+    }
+}
 
 impl ShareValidator for DefaultShareValidator {
     fn validate_share_header(
         &self,
         share_header: &ShareHeader,
         chain_store_handle: &ChainStoreHandle,
-        pool_difficulty: &PoolDifficulty,
     ) -> Result<(), ValidationError> {
         if share_header.uncles.len() > MAX_UNCLES {
             return Err(ValidationError::TooManyUncles {
@@ -184,14 +197,13 @@ impl ShareValidator for DefaultShareValidator {
             });
         }
 
-        self.validate_with_pool_difficulty(share_header, chain_store_handle, pool_difficulty)
+        self.validate_with_pool_difficulty(share_header, chain_store_handle)
     }
 
     fn validate_with_pool_difficulty(
         &self,
         share_header: &ShareHeader,
         chain_store_handle: &ChainStoreHandle,
-        pool_difficulty: &PoolDifficulty,
     ) -> Result<(), ValidationError> {
         let parent_hash = share_header.prev_share_blockhash;
         let parent_header = chain_store_handle
@@ -209,7 +221,9 @@ impl ShareValidator for DefaultShareValidator {
         let parent_time = parent_header.time;
         let share_height = parent_height + 1;
 
-        let calculated_target = pool_difficulty.calculate_target(parent_time, share_height);
+        let calculated_target = self
+            .pool_difficulty
+            .calculate_target(parent_time, share_height);
         let target = Target::from_compact(calculated_target);
         let bitcoin_block_hash = share_header.bitcoin_header.block_hash();
 
@@ -309,14 +323,12 @@ mockall::mock! {
             &self,
             share_header: &ShareHeader,
             chain_store_handle: &ChainStoreHandle,
-            pool_difficulty: &PoolDifficulty,
         ) -> Result<(), ValidationError>;
 
         fn validate_with_pool_difficulty(
             &self,
             share_header: &ShareHeader,
             chain_store_handle: &ChainStoreHandle,
-            pool_difficulty: &PoolDifficulty,
         ) -> Result<(), ValidationError>;
 
         fn validate_share_block(
@@ -352,7 +364,11 @@ mod tests {
     use std::time::SystemTime;
 
     fn validator() -> DefaultShareValidator {
-        DefaultShareValidator
+        DefaultShareValidator::new(PoolDifficulty::default())
+    }
+
+    fn validator_with(pool_difficulty: PoolDifficulty) -> DefaultShareValidator {
+        DefaultShareValidator::new(pool_difficulty)
     }
 
     #[tokio::test]
@@ -417,7 +433,11 @@ mod tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
-        assert!(validator().validate_timestamp(&share, &time_provider).is_ok());
+        assert!(
+            validator()
+                .validate_timestamp(&share, &time_provider)
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -490,9 +510,11 @@ mod tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
-        assert!(validator()
-            .validate_uncles(&valid_share, &chain_store_handle)
-            .is_ok());
+        assert!(
+            validator()
+                .validate_uncles(&valid_share, &chain_store_handle)
+                .is_ok()
+        );
 
         // Test share with too many uncles (> MAX_UNCLES)
         let invalid_share = TestShareBlockBuilder::new()
@@ -505,13 +527,17 @@ mod tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
-        assert!(validator()
-            .validate_uncles(&invalid_share, &chain_store_handle)
-            .is_err());
+        assert!(
+            validator()
+                .validate_uncles(&invalid_share, &chain_store_handle)
+                .is_err()
+        );
 
-        assert!(validator()
-            .validate_uncles(&invalid_share, &chain_store_handle)
-            .is_err());
+        assert!(
+            validator()
+                .validate_uncles(&invalid_share, &chain_store_handle)
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -581,8 +607,8 @@ mod tests {
             0x207FFFFF,
         );
 
-        let result =
-            validator().validate_share_header(&header, &chain_store_handle, &pool_difficulty);
+        let result = validator_with(pool_difficulty)
+            .validate_with_pool_difficulty(&header, &chain_store_handle);
         assert!(result.is_ok());
     }
 
@@ -601,8 +627,8 @@ mod tests {
             0x01010000,
         );
 
-        let error = validator()
-            .validate_share_header(&header, &chain_store_handle, &pool_difficulty)
+        let error = validator_with(pool_difficulty)
+            .validate_with_pool_difficulty(&header, &chain_store_handle)
             .unwrap_err();
         assert!(
             matches!(error, ValidationError::InsufficientWork { .. }),
@@ -614,13 +640,12 @@ mod tests {
     #[test]
     fn test_validate_share_header_fails_for_too_many_uncles() {
         let chain_store_handle = ChainStoreHandle::default();
-        let pool_difficulty = PoolDifficulty::default();
         let test_data = load_share_headers_test_data();
         let header: ShareHeader =
             serde_json::from_value(test_data["too_many_uncles_header"].clone()).unwrap();
 
         let error = validator()
-            .validate_share_header(&header, &chain_store_handle, &pool_difficulty)
+            .validate_share_header(&header, &chain_store_handle)
             .unwrap_err();
         assert!(
             matches!(error, ValidationError::TooManyUncles { .. }),
@@ -644,8 +669,8 @@ mod tests {
             0x207FFFFF,
         );
 
-        let result =
-            validator().validate_share_header(&header, &chain_store_handle, &pool_difficulty);
+        let result = validator_with(pool_difficulty)
+            .validate_with_pool_difficulty(&header, &chain_store_handle);
         assert!(result.is_ok(), "Expected Ok but got: {:?}", result.err());
     }
 }

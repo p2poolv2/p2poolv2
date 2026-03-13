@@ -27,6 +27,7 @@ use crate::service::p2p_service::RequestContext;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use crate::shares::validation::ShareValidator;
 use crate::utils::time_provider::TimeProvider;
 use receivers::getblocks::handle_getblocks;
 use receivers::getdata::handle_getdata_block;
@@ -35,6 +36,7 @@ use receivers::inventory::handle_inventory;
 use receivers::share_blocks::handle_share_block;
 use receivers::share_headers::handle_share_headers;
 use std::error::Error;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
@@ -101,6 +103,7 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
             &ctx.chain_store_handle,
             ctx.block_fetcher_handle,
             ctx.validation_tx,
+            ctx.share_validator.as_ref(),
         )
         .await
         .map_err(|e| {
@@ -131,6 +134,7 @@ pub async fn handle_response<C: Send + Sync>(
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     block_fetcher_handle: BlockFetcherHandle,
     validation_tx: ValidationSender,
+    share_validator: Arc<dyn ShareValidator + Send + Sync>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Handling response {} from peer: {}", response, peer);
     match response {
@@ -140,6 +144,7 @@ pub async fn handle_response<C: Send + Sync>(
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,
+            share_validator.as_ref(),
         )
         .await
         .map_err(|e| {
@@ -152,6 +157,7 @@ pub async fn handle_response<C: Send + Sync>(
             &chain_store_handle,
             block_fetcher_handle,
             validation_tx,
+            share_validator.as_ref(),
         )
         .await
         .map_err(|e| {
@@ -178,16 +184,14 @@ mod tests {
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
     use crate::node::validation_worker::ValidationSender;
     #[mockall_double::double]
-    use crate::pool_difficulty::PoolDifficulty;
-    #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::share_block::Txids;
-    use crate::test_utils::{
-        TestShareBlockBuilder, setup_pool_difficulty_mocks, valid_share_block_from_fixture,
-    };
+    use crate::shares::validation::MockDefaultShareValidator;
+    use crate::test_utils::{TestShareBlockBuilder, valid_share_block_from_fixture};
     use crate::utils::time_provider::TestTimeProvider;
     use bitcoin::BlockHash;
     use bitcoin::hashes::Hash as _;
+    use std::sync::Arc;
     use std::time::SystemTime;
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
@@ -230,6 +234,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let result = handle_request(ctx).await;
@@ -276,6 +281,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let result = handle_request(ctx).await;
@@ -328,6 +334,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let result = handle_request(ctx).await;
@@ -376,6 +383,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let result = handle_request(ctx).await;
@@ -405,6 +413,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let result = handle_request(ctx).await;
@@ -443,6 +452,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let result = handle_request(ctx).await;
@@ -484,6 +494,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let result = handle_request(ctx).await;
@@ -520,6 +531,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let result = handle_request(ctx).await;
@@ -548,6 +560,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let result = handle_request(ctx).await;
@@ -584,6 +597,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let result = handle_request(ctx).await;
@@ -611,23 +625,16 @@ mod tests {
             .expect_share_block_exists()
             .returning(|_| false);
 
-        // Not on candidate chain, PoW checked (valid fixture passes)
+        // Not on candidate chain
         chain_store_handle
             .expect_is_candidate()
             .returning(|_| false);
 
-        // Set up pool difficulty mock for PoW validation
-        let mut mock_pool_difficulty = PoolDifficulty::default();
-        setup_pool_difficulty_mocks(
-            &mut chain_store_handle,
-            &mut mock_pool_difficulty,
-            BlockHash::all_zeros(),
-            0x207FFFFF,
-        );
-        let _build_context = PoolDifficulty::build_context();
-        _build_context
-            .expect()
-            .return_once(move |_| Ok(mock_pool_difficulty));
+        // Mock share validator to accept the share header
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_share_header()
+            .returning(|_, _| Ok(()));
 
         // Mock storage: add block succeeds
         chain_store_handle
@@ -643,6 +650,7 @@ mod tests {
             time_provider,
             block_fetcher_handle: block_fetcher_tx,
             validation_tx,
+            share_validator: Arc::new(mock_validator),
         };
 
         let result = handle_request(ctx).await;
@@ -675,23 +683,16 @@ mod tests {
             .expect_share_block_exists()
             .returning(|_| false);
 
-        // Not on candidate chain, PoW checked (valid fixture passes)
+        // Not on candidate chain
         chain_store_handle
             .expect_is_candidate()
             .returning(|_| false);
 
-        // Set up pool difficulty mock for PoW validation
-        let mut mock_pool_difficulty = PoolDifficulty::default();
-        setup_pool_difficulty_mocks(
-            &mut chain_store_handle,
-            &mut mock_pool_difficulty,
-            BlockHash::all_zeros(),
-            0x207FFFFF,
-        );
-        let _build_context = PoolDifficulty::build_context();
-        _build_context
-            .expect()
-            .return_once(move |_| Ok(mock_pool_difficulty));
+        // Mock share validator to accept the share header
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_share_header()
+            .returning(|_, _| Ok(()));
 
         // Mock storage: add block fails
         chain_store_handle
@@ -711,6 +712,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            share_validator: Arc::new(mock_validator),
         };
 
         let result = handle_request(ctx).await;
@@ -722,18 +724,11 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
 
-        // Set up pool difficulty mock for PoW validation
-        let mut mock_pool_difficulty = PoolDifficulty::default();
-        setup_pool_difficulty_mocks(
-            &mut chain_store_handle,
-            &mut mock_pool_difficulty,
-            BlockHash::all_zeros(),
-            0x2100ffff,
-        );
-        let _build_context = PoolDifficulty::build_context();
-        _build_context
-            .expect()
-            .return_once(move |_| Ok(mock_pool_difficulty));
+        // Mock share validator to accept share headers
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_share_header()
+            .returning(|_, _| Ok(()));
 
         chain_store_handle
             .expect_organise_header()
@@ -755,6 +750,7 @@ mod tests {
             swarm_tx,
             block_fetcher_handle,
             validation_tx,
+            Arc::new(mock_validator),
         )
         .await;
 
@@ -775,6 +771,7 @@ mod tests {
             swarm_tx,
             block_fetcher_handle,
             validation_tx,
+            Arc::new(MockDefaultShareValidator::default()),
         )
         .await;
 
@@ -802,6 +799,7 @@ mod tests {
             swarm_tx,
             block_fetcher_handle,
             validation_tx,
+            Arc::new(MockDefaultShareValidator::default()),
         )
         .await;
 
@@ -822,6 +820,7 @@ mod tests {
             swarm_tx,
             block_fetcher_handle,
             validation_tx,
+            Arc::new(MockDefaultShareValidator::default()),
         )
         .await;
 
