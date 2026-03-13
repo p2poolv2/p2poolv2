@@ -30,6 +30,11 @@ use crate::node::messages::Message;
 use crate::node::organise_worker::{OrganiseEvent, OrganiseSender};
 #[cfg(test)]
 #[mockall_double::double]
+use crate::pool_difficulty::PoolDifficulty;
+#[cfg(not(test))]
+use crate::pool_difficulty::PoolDifficulty;
+#[cfg(test)]
+#[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -128,6 +133,14 @@ impl ValidationWorker {
     /// Returns `Err(ValidationWorkerError)` on fatal failure.
     pub async fn run(mut self) -> Result<(), ValidationWorkerError> {
         info!("Validation worker started");
+
+        let pool_difficulty = PoolDifficulty::build(&self.chain_store_handle).map_err(|error| {
+            ValidationWorkerError {
+                message: format!("Failed to build pool difficulty: {error}"),
+            }
+        })?;
+        let share_validator = Arc::new(DefaultShareValidator::new(pool_difficulty));
+
         while let Some(event) = self.validation_rx.recv().await {
             match event {
                 ValidationEvent::ValidateBlock(block_hash) => {
@@ -144,11 +157,13 @@ impl ValidationWorker {
                     let organise_tx = self.organise_tx.clone();
                     let swarm_tx = self.swarm_tx.clone();
                     let validation_tx = self.validation_tx.clone();
+                    let validator = Arc::clone(&share_validator);
 
                     tokio::spawn(async move {
                         let _permit = permit;
                         validate_and_emit(
                             block_hash,
+                            validator,
                             chain_store_handle,
                             organise_tx,
                             swarm_tx,
@@ -174,6 +189,7 @@ impl ValidationWorker {
 /// with `BlockValid` status.
 async fn validate_and_emit(
     block_hash: BlockHash,
+    share_validator: Arc<DefaultShareValidator>,
     chain_store_handle: ChainStoreHandle,
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
@@ -187,7 +203,6 @@ async fn validate_and_emit(
         }
     };
 
-    let share_validator = DefaultShareValidator;
     if let Err(validation_error) =
         share_validator.validate_share_block(&share_block, &chain_store_handle)
     {
@@ -273,6 +288,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_worker_validates_and_sends_organise_event() {
+        let _pool_difficulty_build_ctx = PoolDifficulty::build_context();
+        _pool_difficulty_build_ctx
+            .expect()
+            .returning(|_| Ok(PoolDifficulty::default()));
+
         let (validation_tx, validation_rx) = create_validation_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
 
@@ -320,6 +340,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_worker_sends_inv_on_success() {
+        let _pool_difficulty_build_ctx = PoolDifficulty::build_context();
+        _pool_difficulty_build_ctx
+            .expect()
+            .returning(|_| Ok(PoolDifficulty::default()));
+
         let (validation_tx, validation_rx) = create_validation_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
 
@@ -366,6 +391,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_worker_skips_missing_block() {
+        let _pool_difficulty_build_ctx = PoolDifficulty::build_context();
+        _pool_difficulty_build_ctx
+            .expect()
+            .returning(|_| Ok(PoolDifficulty::default()));
+
         let (validation_tx, validation_rx) = create_validation_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
 
@@ -414,6 +444,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_worker_skips_invalid_block() {
+        let _pool_difficulty_build_ctx = PoolDifficulty::build_context();
+        _pool_difficulty_build_ctx
+            .expect()
+            .returning(|_| Ok(PoolDifficulty::default()));
+
         let (validation_tx, validation_rx) = create_validation_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
 
@@ -479,6 +514,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_worker_schedules_children() {
+        let _pool_difficulty_build_ctx = PoolDifficulty::build_context();
+        _pool_difficulty_build_ctx
+            .expect()
+            .returning(|_| Ok(PoolDifficulty::default()));
+
         let (validation_tx, validation_rx) = create_validation_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
 
@@ -496,6 +536,7 @@ mod tests {
         parent_mock
             .expect_get_share()
             .returning(move |_| Some(parent_clone.clone()));
+
         parent_mock.expect_has_status().returning(|_, _| false);
         // schedule_dependents: parent has one child
         parent_mock
@@ -568,6 +609,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_worker_schedules_nephews() {
+        let _pool_difficulty_build_ctx = PoolDifficulty::build_context();
+        _pool_difficulty_build_ctx
+            .expect()
+            .returning(|_| Ok(PoolDifficulty::default()));
+
         let (validation_tx, validation_rx) = create_validation_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
 

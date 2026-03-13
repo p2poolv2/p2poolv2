@@ -32,9 +32,11 @@ use crate::service::p2p_service::RequestContext;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use crate::shares::validation::ShareValidator;
 use crate::utils::time_provider::SystemTimeProvider;
 use libp2p::request_response::ResponseChannel;
 use std::error::Error;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tower::util::BoxService;
@@ -64,6 +66,7 @@ pub struct RequestResponseHandler<C: Send + Sync> {
     block_fetcher_handle: BlockFetcherHandle,
     validation_tx: ValidationSender,
     peer_block_knowledge: PeerBlockKnowledge,
+    share_validator: Arc<dyn ShareValidator + Send + Sync>,
 }
 
 /// Implementation of ResponseChannel<Message>, used in production.
@@ -77,6 +80,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
         swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
         block_fetcher_handle: BlockFetcherHandle,
         validation_tx: ValidationSender,
+        share_validator: Arc<dyn ShareValidator + Send + Sync>,
     ) -> Self {
         let service =
             build_service::<ResponseChannel<Message>, _>(network_config, swarm_tx.clone());
@@ -87,6 +91,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
             block_fetcher_handle,
             validation_tx,
             peer_block_knowledge: PeerBlockKnowledge::default(),
+            share_validator,
         }
     }
 
@@ -211,6 +216,7 @@ impl<C: Send + Sync> RequestResponseHandler<C> {
             time_provider: SystemTimeProvider,
             block_fetcher_handle: self.block_fetcher_handle.clone(),
             validation_tx: self.validation_tx.clone(),
+            share_validator: self.share_validator.clone(),
         };
 
         match tokio::time::timeout(Duration::from_secs(1), self.request_service.ready()).await {
@@ -261,6 +267,7 @@ impl<C: Send + Sync> RequestResponseHandler<C> {
             self.swarm_tx.clone(),
             self.block_fetcher_handle.clone(),
             self.validation_tx.clone(),
+            self.share_validator.clone(),
         )
         .await
         {
@@ -277,11 +284,8 @@ mod tests {
     use crate::node::SwarmSend;
     use crate::node::messages::{InventoryMessage, Message};
     #[mockall_double::double]
-    use crate::pool_difficulty::PoolDifficulty;
-    #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-    use crate::store::block_tx_metadata::{BlockMetadata, Status};
-    use crate::test_utils::genesis_for_tests;
+    use crate::shares::validation::MockDefaultShareValidator;
     use crate::test_utils::{TestShareBlockBuilder, valid_share_block_from_fixture};
     use bitcoin::BlockHash;
     use bitcoin::hashes::Hash as _;
@@ -305,6 +309,18 @@ mod tests {
         chain_store_handle: ChainStoreHandle,
         swarm_tx: mpsc::Sender<SwarmSend<TestChannel>>,
     ) -> RequestResponseHandler<TestChannel> {
+        build_test_handler_with_validator(
+            chain_store_handle,
+            swarm_tx,
+            Arc::new(MockDefaultShareValidator::default()),
+        )
+    }
+
+    fn build_test_handler_with_validator(
+        chain_store_handle: ChainStoreHandle,
+        swarm_tx: mpsc::Sender<SwarmSend<TestChannel>>,
+        share_validator: Arc<dyn ShareValidator + Send + Sync>,
+    ) -> RequestResponseHandler<TestChannel> {
         let service = build_service::<TestChannel, _>(test_network_config(), swarm_tx.clone());
         let (block_fetcher_tx, _block_fetcher_rx) = block_fetcher::create_block_fetcher_channel();
         let (validation_tx, _validation_rx) =
@@ -316,6 +332,7 @@ mod tests {
             block_fetcher_handle: block_fetcher_tx,
             validation_tx,
             peer_block_knowledge: PeerBlockKnowledge::default(),
+            share_validator,
         }
     }
 
@@ -342,32 +359,8 @@ mod tests {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let mut chain_store_handle = ChainStoreHandle::default();
 
-        let _build_context = PoolDifficulty::build_context();
-        _build_context.expect().returning(move |_| {
-            let mut mock_pool_difficulty = PoolDifficulty::default();
-            mock_pool_difficulty
-                .expect_calculate_target()
-                .returning(move |_, _| bitcoin::CompactTarget::from_consensus(0x207FFFFF));
-            Ok(mock_pool_difficulty)
-        });
-
         chain_store_handle.expect_clone().returning(|| {
             let mut cloned = ChainStoreHandle::default();
-            cloned
-                .expect_get_share_header()
-                .with(mockall::predicate::eq(BlockHash::all_zeros()))
-                .returning(move |_| Ok(genesis_for_tests().header));
-            cloned
-                .expect_get_block_metadata()
-                .with(mockall::predicate::eq(BlockHash::all_zeros()))
-                .returning(|_| {
-                    Ok(BlockMetadata {
-                        expected_height: Some(0),
-                        chain_work: bitcoin::Work::from_hex("0x00").unwrap(),
-                        status: Status::Confirmed,
-                    })
-                });
-
             cloned.expect_organise_header().returning(|_| Ok(None));
             cloned
                 .expect_get_candidate_blocks_missing_data()
@@ -375,11 +368,20 @@ mod tests {
             cloned
         });
 
-        let mut handler = build_test_handler(chain_store_handle, swarm_tx);
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_share_header()
+            .returning(|_, _| Ok(()));
+
+        let mut handler = build_test_handler_with_validator(
+            chain_store_handle,
+            swarm_tx,
+            Arc::new(mock_validator),
+        );
 
         let peer_id = libp2p::PeerId::random();
-        let block1 = TestShareBlockBuilder::new().with_easy_target().build();
-        let block2 = TestShareBlockBuilder::new().with_easy_target().build();
+        let block1 = TestShareBlockBuilder::new().build();
+        let block2 = TestShareBlockBuilder::new().build();
         let share_headers = vec![block1.header.clone(), block2.header.clone()];
 
         let result = handler
@@ -520,6 +522,7 @@ mod tests {
             block_fetcher_handle: block_fetcher_tx,
             validation_tx,
             peer_block_knowledge: PeerBlockKnowledge::default(),
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let peer_id = libp2p::PeerId::random();
@@ -579,41 +582,26 @@ mod tests {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let mut chain_store_handle = ChainStoreHandle::default();
 
-        let _build_context = PoolDifficulty::build_context();
-        _build_context.expect().returning(move |_| {
-            let mut mock_pool_difficulty = PoolDifficulty::default();
-            mock_pool_difficulty
-                .expect_calculate_target()
-                .returning(move |_, _| bitcoin::CompactTarget::from_consensus(0x207FFFFF));
-            Ok(mock_pool_difficulty)
-        });
-
         // The cloned handle is used by handle_response -> handle_share_block,
         // which checks for duplicates, validates header, and stores the block.
         chain_store_handle.expect_clone().returning(|| {
             let mut cloned = ChainStoreHandle::default();
             cloned.expect_share_block_exists().returning(|_| false);
             cloned.expect_is_candidate().returning(|_| false);
-            cloned
-                .expect_get_share_header()
-                .with(mockall::predicate::eq(BlockHash::all_zeros()))
-                .returning(move |_| Ok(genesis_for_tests().header));
-            cloned
-                .expect_get_block_metadata()
-                .with(mockall::predicate::eq(BlockHash::all_zeros()))
-                .returning(|_| {
-                    Ok(BlockMetadata {
-                        expected_height: Some(0),
-                        chain_work: bitcoin::Work::from_hex("0x00").unwrap(),
-                        status: Status::Confirmed,
-                    })
-                });
-
             cloned.expect_add_share_block().returning(|_, _| Ok(()));
             cloned
         });
 
-        let mut handler = build_test_handler(chain_store_handle, swarm_tx);
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_share_header()
+            .returning(|_, _| Ok(()));
+
+        let mut handler = build_test_handler_with_validator(
+            chain_store_handle,
+            swarm_tx,
+            Arc::new(mock_validator),
+        );
 
         let peer_id = libp2p::PeerId::random();
         let block = valid_share_block_from_fixture();

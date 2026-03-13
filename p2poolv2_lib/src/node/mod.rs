@@ -33,10 +33,16 @@ use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
 use crate::node::validation_worker::ValidationSender;
 #[cfg(test)]
 #[mockall_double::double]
+use crate::pool_difficulty::PoolDifficulty;
+#[cfg(not(test))]
+use crate::pool_difficulty::PoolDifficulty;
+#[cfg(test)]
+#[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
+use crate::shares::validation::{DefaultShareValidator, ShareValidator};
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use bitcoin::BlockHash;
 use libp2p::PeerId;
@@ -51,6 +57,7 @@ use libp2p::{
     swarm::SwarmEvent,
 };
 use std::error::Error;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -192,12 +199,17 @@ impl Node {
 
         let (swarm_tx, swarm_rx) = mpsc::channel(100);
 
+        let pool_difficulty = PoolDifficulty::build(&chain_store_handle)
+            .expect("Failed to build pool difficulty from chain store");
+        let share_validator: Arc<dyn ShareValidator + Send + Sync> =
+            Arc::new(DefaultShareValidator::new(pool_difficulty));
         let request_response_handler = RequestResponseHandler::new(
             config.network.clone(),
             chain_store_handle.clone(),
             swarm_tx.clone(),
             block_fetcher_handle,
             validation_tx,
+            share_validator,
         );
 
         Ok(Self {
@@ -434,6 +446,7 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::ChainStoreHandle;
+    use super::PoolDifficulty;
     use crate::config::{
         ApiConfig, Config, LoggingConfig, NetworkConfig, StoreConfig, StratumConfig,
     };
@@ -506,6 +519,11 @@ mod tests {
         chain_store_handle
             .expect_clone()
             .returning(ChainStoreHandle::default);
+
+        let _pool_difficulty_build_ctx = PoolDifficulty::build_context();
+        _pool_difficulty_build_ctx
+            .expect()
+            .returning(|_| Ok(PoolDifficulty::default()));
 
         let (block_fetcher_tx, _block_fetcher_rx) = create_block_fetcher_channel();
         let (validation_tx, _validation_rx) = create_validation_channel();
