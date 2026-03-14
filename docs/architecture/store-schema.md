@@ -54,7 +54,17 @@ pub struct BlockMetadata {
 
 ---
 
-### 2. `BlockIndex` - Parent→Children Index
+### 1b. `Header` - Share Headers
+
+Stores share headers independently, enabling header-first sync before full blocks arrive.
+
+| Key                    | Value                        | Notes                                |
+|------------------------|------------------------------|--------------------------------------|
+| `blockhash` (32 bytes) | `ShareHeader` (serialized)   | Written during header sync and block storage |
+
+---
+
+### 2. `BlockIndex` - Parent->Children Index
 
 Tracks parent-to-children relationships for DAG traversal. Uses merge operator for atomic appends.
 

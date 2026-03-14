@@ -44,6 +44,9 @@ impl Store {
             header.prev_share_blockhash
         );
 
+        // Persist the header so it can be looked up by later shares
+        self.add_share_header(header, batch)?;
+
         let share_work = header.get_work();
 
         // Calculate height and chain work
