@@ -88,7 +88,8 @@ impl Store {
     /// Create a new share store
     pub fn new(path: String, read_only: bool) -> Result<Self, StoreError> {
         // for now we use default options for all column families, we can tweak this later based on performance testing
-        let block_cf = ColumnFamilyDescriptor::new(ColumnFamily::Block, RocksDbOptions::default());
+        let block_metadata_cf_descriptor =
+            ColumnFamilyDescriptor::new(ColumnFamily::BlockMetadata, RocksDbOptions::default());
         let block_txids_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::BlockTxids, RocksDbOptions::default());
         let inputs_cf =
@@ -143,7 +144,7 @@ impl Store {
             ColumnFamilyDescriptor::new(ColumnFamily::Header, RocksDbOptions::default());
 
         let cfs = vec![
-            block_cf,
+            block_metadata_cf_descriptor,
             block_txids_cf,
             txids_blocks_cf,
             uncles_cf,
