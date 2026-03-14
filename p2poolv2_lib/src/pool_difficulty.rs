@@ -232,16 +232,22 @@ impl PoolDifficulty {
         })
     }
 
-    /// Calculate the required target for a block at the given height and time.
+    /// Calculate the required target for a block given its parent's height and time.
     ///
-    /// This is a pure computation from the anchor point.
+    /// This is a pure computation from the anchor point. The ASERT formula
+    /// internally adds 1 to the height delta, so callers should pass the
+    /// parent's height, not the height of the block being mined.
     ///
     /// Parameters:
     ///   - `block_parent_time`: the timestamp of the current block's parent
-    ///   - `block_height`: the height of the block being mined
-    pub fn calculate_target(&self, block_parent_time: u32, block_height: u32) -> CompactTarget {
+    ///   - `block_parent_height`: the height of the current block's parent
+    pub fn calculate_target(
+        &self,
+        block_parent_time: u32,
+        block_parent_height: u32,
+    ) -> CompactTarget {
         let time_delta = block_parent_time as i64 - self.anchor_parent_time as i64;
-        let height_delta = block_height as i64 - self.anchor_height as i64;
+        let height_delta = block_parent_height as i64 - self.anchor_height as i64;
 
         asert_calculate_target(
             self.anchor_target,
@@ -255,8 +261,12 @@ impl PoolDifficulty {
     /// Calculate the target and return it as a consensus u32.
     ///
     /// Convenience wrapper for compatibility with `ChainStoreHandle::get_current_target()`.
-    pub fn calculate_target_consensus(&self, block_parent_time: u32, block_height: u32) -> u32 {
-        self.calculate_target(block_parent_time, block_height)
+    pub fn calculate_target_consensus(
+        &self,
+        block_parent_time: u32,
+        block_parent_height: u32,
+    ) -> u32 {
+        self.calculate_target(block_parent_time, block_parent_height)
             .to_consensus()
     }
 }
@@ -268,8 +278,8 @@ mockall::mock! {
     pub PoolDifficulty {
         pub fn new(anchor_target: CompactTarget, anchor_parent_time: u32, anchor_height: u32) -> Self;
         pub fn build(chain_store_handle: &ChainStoreHandle) -> Result<Self, PoolDifficultyError>;
-        pub fn calculate_target(&self, block_parent_time: u32, block_height: u32) -> CompactTarget;
-        pub fn calculate_target_consensus(&self, block_parent_time: u32, block_height: u32) -> u32;
+        pub fn calculate_target(&self, block_parent_time: u32, block_parent_height: u32) -> CompactTarget;
+        pub fn calculate_target_consensus(&self, block_parent_time: u32, block_parent_height: u32) -> u32;
     }
 
     impl Clone for PoolDifficulty {
@@ -589,7 +599,7 @@ mod tests {
     fn test_pool_difficulty_on_schedule() {
         let pool_difficulty =
             PoolDifficulty::new(CompactTarget::from_consensus(0x1b4188f5), 1_700_000_000, 0);
-        // Block at height 1, exactly 20 seconds after anchor (on schedule: 10 * (1+1) = 20)
+        // Parent at height 1, on schedule: 10 * (1+1) = 20 seconds after anchor
         let target = pool_difficulty.calculate_target(1_700_000_020, 1);
         assert_eq!(target.to_consensus(), 0x1b4188f5);
     }
@@ -608,7 +618,7 @@ mod tests {
         let pool_difficulty =
             PoolDifficulty::new(CompactTarget::from_consensus(0x1b4188f5), 1_700_000_000, 0);
 
-        // On schedule: block_parent_time = anchor_parent_time + ideal_block_time * (height + 1)
+        // On schedule: block_parent_time = anchor_parent_time + ideal_block_time * (parent_height + 1)
         let on_schedule_1 = pool_difficulty.calculate_target(1_700_000_020, 1);
         let on_schedule_5 = pool_difficulty.calculate_target(1_700_000_060, 5);
         let on_schedule_100 = pool_difficulty.calculate_target(1_700_001_010, 100);
@@ -622,9 +632,9 @@ mod tests {
     fn test_pool_difficulty_slightly_ahead() {
         let pool_difficulty =
             PoolDifficulty::new(CompactTarget::from_consensus(0x1b4188f5), 1_700_000_000, 0);
-        // Block at height 1, only 10 seconds later (ahead of schedule by 10s)
+        // Parent at height 1, only 10 seconds after anchor (ahead of schedule)
         //
-        // on-schedule time is ideal_block_time * (height_delta + 1) =
+        // On-schedule time is ideal_block_time * (parent_height + 1) =
         //  10 * (1 + 1) = 20 seconds after the anchor.
         let target = pool_difficulty.calculate_target(1_700_000_010, 1);
         let anchor_wide = target_to_u512(Target::from_compact(CompactTarget::from_consensus(
@@ -659,6 +669,42 @@ mod tests {
             0x1b4188f5,
             "target should clamp to max when blocks are far behind schedule"
         );
+    }
+
+    #[test]
+    fn test_asert_matches_fixture_share_headers() {
+        use crate::shares::share_block::ShareHeader;
+
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../p2poolv2_tests/test_data/share_sync/share_headers.json");
+        let json_string =
+            std::fs::read_to_string(&fixture_path).expect("Failed to read fixture file");
+        let headers: Vec<ShareHeader> =
+            serde_json::from_str(&json_string).expect("Failed to parse fixture JSON");
+
+        assert!(
+            headers.len() >= 2,
+            "Fixture must have at least genesis + one share"
+        );
+
+        let genesis = &headers[0];
+        let pool_difficulty = PoolDifficulty::new(genesis.bits, genesis.time, 0);
+
+        for index in 1..headers.len() {
+            let parent_time = headers[index - 1].time;
+            let parent_height = (index - 1) as u32;
+            let calculated_bits = pool_difficulty.calculate_target(parent_time, parent_height);
+
+            assert_eq!(
+                calculated_bits.to_consensus(),
+                headers[index].bits.to_consensus(),
+                "Share {} (parent_height {}): ASERT calculated 0x{:08X} but fixture has 0x{:08X}",
+                index,
+                parent_height,
+                calculated_bits.to_consensus(),
+                headers[index].bits.to_consensus(),
+            );
+        }
     }
 
     #[test]
