@@ -4,8 +4,11 @@ image:https://codecov.io/gh/p2poolv2/p2poolv2/graph/badge.svg?token=Xeu4GFdASS[C
 == P2Pool V2
 
 ****
-**Mission:** A mining pool run by miners, paying for all your work.
+**Mission:** Replace pool operators with miners.
 ****
+
+P2Poolv2 is a peer-to-peer Bitcoin mining pool where miners coordinate
+directly and verify their rewards without centralized operators.
 
 1. Share chain with uncles - all your work is accounted for.
 2. Pay large miners in coinbase - non custodial solution for top N miners.
