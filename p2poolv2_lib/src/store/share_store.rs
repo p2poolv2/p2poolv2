@@ -172,42 +172,38 @@ impl Store {
         self.get_share(&tip)
     }
 
-    /// Get a share headers matching the vector of blockhashes
+    /// Get share headers matching the vector of blockhashes from the Header CF.
     pub fn get_share_headers(
         &self,
         blockhashes: &[BlockHash],
     ) -> Result<Vec<ShareHeader>, StoreError> {
         debug!("Getting share headers from store: {:?}", blockhashes);
-        let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
+        let header_cf = self.db.cf_handle(&ColumnFamily::Header).unwrap();
         let keys = blockhashes
             .iter()
-            .map(|h| (&share_cf, consensus::serialize(h)))
+            .map(|h| (&header_cf, consensus::serialize(h)))
             .collect::<Vec<_>>();
-        let shares = self.db.multi_get_cf(keys);
-        let share_headers = shares
+        let results = self.db.multi_get_cf(keys);
+        let share_headers = results
             .into_iter()
-            .map(|v| {
-                if let Ok(Some(v)) = v {
-                    if let Ok(storage_share) = encode::deserialize::<StorageShareBlock>(&v) {
-                        Some(storage_share.header)
-                    } else {
-                        None
-                    }
+            .filter_map(|v| {
+                if let Ok(Some(data)) = v {
+                    encode::deserialize::<ShareHeader>(&data).ok()
                 } else {
                     None
                 }
             })
-            .collect::<Vec<_>>();
-        Ok(share_headers.into_iter().flatten().collect())
+            .collect();
+        Ok(share_headers)
     }
 
-    // Find the first blockhash that exists by checking key existence
+    /// Find the first blockhash that exists by checking the Header CF.
     pub(crate) fn get_first_existing_blockhash(&self, locator: &[BlockHash]) -> Option<BlockHash> {
-        let block_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
+        let header_cf = self.db.cf_handle(&ColumnFamily::Header).unwrap();
         for blockhash in locator {
             if self
                 .db
-                .key_may_exist_cf(&block_cf, consensus::serialize(blockhash))
+                .key_may_exist_cf(&header_cf, consensus::serialize(blockhash))
             {
                 return Some(*blockhash);
             }
@@ -333,16 +329,17 @@ impl Store {
         }
     }
 
-    /// Check which blockhashes from the provided list are missing from the store
-    /// Returns a vector of blockhashes that are not present in the store
+    /// Check which blockhashes from the provided list are missing from the store.
+    ///
+    /// Checks the Header CF, so "missing" means we have never seen this header.
     pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash> {
-        let block_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
+        let header_cf = self.db.cf_handle(&ColumnFamily::Header).unwrap();
         blockhashes
             .iter()
             .filter(|&hash| {
                 !self
                     .db
-                    .key_may_exist_cf(&block_cf, consensus::serialize(hash))
+                    .key_may_exist_cf(&header_cf, consensus::serialize(hash))
             })
             .cloned()
             .collect()
@@ -367,17 +364,17 @@ impl Store {
         Ok(())
     }
 
-    /// Get a share header from the store
+    /// Get a share header from the Header column family.
     pub fn get_share_header(
         &self,
         blockhash: &BlockHash,
     ) -> Result<Option<ShareHeader>, StoreError> {
         debug!("Getting share header from store: {:?}", blockhash);
-        let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
-        match self.db.get_cf::<&[u8]>(&share_cf, blockhash.as_ref())? {
-            Some(share) => {
-                let storage_share: StorageShareBlock = encode::deserialize(&share)?;
-                Ok(Some(storage_share.header))
+        let header_cf = self.db.cf_handle(&ColumnFamily::Header).unwrap();
+        match self.db.get_cf::<&[u8]>(&header_cf, blockhash.as_ref())? {
+            Some(data) => {
+                let header: ShareHeader = encode::deserialize(&data)?;
+                Ok(Some(header))
             }
             None => Ok(None),
         }
