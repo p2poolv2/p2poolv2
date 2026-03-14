@@ -29,7 +29,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::utils::time_provider::TimeProvider;
-use bitcoin::{BlockHash, Target};
+use bitcoin::{BlockHash, CompactTarget, Target};
 use std::fmt;
 
 /// Validation errors for share headers and share blocks.
@@ -41,6 +41,11 @@ pub enum ValidationError {
     InsufficientWork {
         block_hash: BlockHash,
         target: Target,
+    },
+    /// The share header advertises a target (bits) that does not match the calculated pool target
+    BitsMismatch {
+        expected: CompactTarget,
+        actual: CompactTarget,
     },
     /// The share timestamp is too far from the current time
     TimestampOutOfRange {
@@ -69,6 +74,14 @@ impl fmt::Display for ValidationError {
                 write!(
                     formatter,
                     "Bitcoin block hash {block_hash} does not meet share target {target}"
+                )
+            }
+            Self::BitsMismatch { expected, actual } => {
+                write!(
+                    formatter,
+                    "Share header bits {:#010x} does not match calculated pool target {:#010x}",
+                    actual.to_consensus(),
+                    expected.to_consensus()
                 )
             }
             Self::TimestampOutOfRange {
@@ -228,9 +241,9 @@ impl ShareValidator for DefaultShareValidator {
 
         // Ensure the advertised header bits match the calculated pool target.
         if share_header.bits != calculated_target {
-            return Err(ValidationError::InsufficientWork {
-                block_hash: bitcoin_block_hash,
-                target,
+            return Err(ValidationError::BitsMismatch {
+                expected: calculated_target,
+                actual: share_header.bits,
             });
         }
 
@@ -612,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_share_header_fails_for_hash_not_meeting_target() {
+    fn test_validate_share_header_fails_for_bits_mismatch() {
         let mut chain_store_handle = ChainStoreHandle::default();
         let mut pool_difficulty = PoolDifficulty::default();
         let test_data = load_share_headers_test_data();
@@ -623,7 +636,41 @@ mod tests {
             &mut chain_store_handle,
             &mut pool_difficulty,
             BlockHash::all_zeros(),
-            0x01010000,
+            0x02020000,
+        );
+
+        let error = validator_with(pool_difficulty)
+            .validate_with_pool_difficulty(&header, &chain_store_handle)
+            .unwrap_err();
+        assert!(
+            matches!(error, ValidationError::BitsMismatch { .. }),
+            "Expected BitsMismatch, got: {error:?}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("does not match calculated pool target")
+        );
+    }
+
+    #[test]
+    fn test_validate_share_header_fails_for_insufficient_work() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let mut pool_difficulty = PoolDifficulty::default();
+        let test_data = load_share_headers_test_data();
+        let mut header: ShareHeader =
+            serde_json::from_value(test_data["tight_target_header"].clone()).unwrap();
+
+        // Use a tight target that matches the header bits so the bits check
+        // passes, but the block hash will not meet this tight target.
+        let tight_target_bits = 0x01010000u32;
+        header.bits = bitcoin::CompactTarget::from_consensus(tight_target_bits);
+
+        setup_pool_difficulty_mocks(
+            &mut chain_store_handle,
+            &mut pool_difficulty,
+            BlockHash::all_zeros(),
+            tight_target_bits,
         );
 
         let error = validator_with(pool_difficulty)
