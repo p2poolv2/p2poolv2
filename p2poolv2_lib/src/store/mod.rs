@@ -139,6 +139,9 @@ impl Store {
         let spends_index_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::SpendsIndex, RocksDbOptions::default());
 
+        let header_cf =
+            ColumnFamilyDescriptor::new(ColumnFamily::Header, RocksDbOptions::default());
+
         let cfs = vec![
             block_cf,
             block_txids_cf,
@@ -155,6 +158,7 @@ impl Store {
             user_index_cf,
             metadata_cf,
             spends_index_cf,
+            header_cf,
         ];
 
         // for the db too, we use default options for now
@@ -276,6 +280,7 @@ impl Store {
     ) -> Result<(), StoreError> {
         let blockhash = genesis.block_hash();
         let genesis_work = genesis.header.get_work();
+        self.add_share_header(&genesis.header, batch)?;
         self.add_share_block(genesis, true, batch)?;
 
         self.set_height_to_blockhash(&blockhash, 0, batch)?;
@@ -375,10 +380,12 @@ impl Store {
 
     /// Create Valid metadata for a share without storing its block data.
     ///
-    /// Used to set up metadata for intermediate shares so that
-    /// downstream children can compute their cumulative height and work
-    /// correctly, even when the intermediate share has not arrived yet
-    /// in the test scenario.
+    /// Also stores the header in the Header CF so that downstream
+    /// children can look up parent timestamps and heights. Used to set
+    /// up metadata for intermediate shares so that downstream children
+    /// can compute their cumulative height and work correctly, even
+    /// when the intermediate share has not arrived yet in the test
+    /// scenario.
     pub fn create_valid_metadata_only(&self, share: &ShareBlock) {
         let blockhash = share.block_hash();
         let share_work = share.header.get_work();
@@ -391,6 +398,7 @@ impl Store {
             Err(_) => (1, share_work),
         };
         let mut batch = Store::get_write_batch();
+        self.add_share_header(&share.header, &mut batch).unwrap();
         self.set_height_to_blockhash(&blockhash, height, &mut batch)
             .unwrap();
         let metadata = BlockMetadata {

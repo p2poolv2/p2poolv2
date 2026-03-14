@@ -95,7 +95,38 @@ impl Store {
         storage_share_block.consensus_encode(&mut encoded_share_block)?;
         batch.put_cf::<&[u8], Vec<u8>>(&block_cf, blockhash.as_ref(), encoded_share_block);
 
+        // Store the header in the dedicated Header CF
+        self.add_share_header(&share.header, batch)?;
+
         Ok(())
+    }
+
+    /// Store a share header in the dedicated Header column family.
+    ///
+    /// This is idempotent -- writing the same header twice is safe.
+    /// Called during header sync (via organise_header) and when
+    /// storing full blocks (via add_share_block).
+    pub fn add_share_header(
+        &self,
+        header: &ShareHeader,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), StoreError> {
+        let blockhash = header.block_hash();
+        let header_cf = self.db.cf_handle(&ColumnFamily::Header).unwrap();
+        let mut encoded_header = Vec::new();
+        header.consensus_encode(&mut encoded_header)?;
+        batch.put_cf::<&[u8], Vec<u8>>(&header_cf, blockhash.as_ref(), encoded_header);
+        Ok(())
+    }
+
+    /// Check whether a share header exists in the Header column family.
+    pub fn share_header_exists(&self, blockhash: &BlockHash) -> bool {
+        let header_cf = self.db.cf_handle(&ColumnFamily::Header).unwrap();
+        self.db
+            .get_cf::<&[u8]>(&header_cf, blockhash.as_ref())
+            .ok()
+            .flatten()
+            .is_some()
     }
 
     /// Check whether a share block exists in the store without deserializing it.
@@ -385,6 +416,72 @@ mod tests {
     }
 
     #[test]
+    fn test_add_share_header_and_exists() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block = TestShareBlockBuilder::new().build();
+        let blockhash = block.block_hash();
+
+        assert!(!store.share_header_exists(&blockhash));
+
+        let mut batch = Store::get_write_batch();
+        store.add_share_header(&block.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert!(store.share_header_exists(&blockhash));
+
+        // Verify round-trip: read back and compare
+        let header_cf = store.db.cf_handle(&ColumnFamily::Header).unwrap();
+        let raw = store
+            .db
+            .get_cf::<&[u8]>(&header_cf, blockhash.as_ref())
+            .unwrap()
+            .unwrap();
+        let stored_header: ShareHeader = consensus::encode::deserialize(&raw).unwrap();
+        assert_eq!(stored_header, block.header);
+    }
+
+    #[test]
+    fn test_organise_header_stores_header_in_header_cf() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Create a child share and organise its header (without storing the full block)
+        let child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+
+        assert!(!store.share_header_exists(&child.block_hash()));
+
+        let mut batch = Store::get_write_batch();
+        store.organise_header(&child.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Header should now be in the Header CF
+        assert!(store.share_header_exists(&child.block_hash()));
+    }
+
+    #[test]
+    fn test_setup_genesis_stores_header_in_header_cf() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert!(store.share_header_exists(&genesis.block_hash()));
+    }
+
+    #[test]
     fn test_chain_with_uncles() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
@@ -544,6 +641,31 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         assert!(store.share_block_exists(&blockhash));
+    }
+
+    #[test]
+    fn test_add_share_block_stores_header_in_header_cf() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block = TestShareBlockBuilder::new().build();
+        let blockhash = block.block_hash();
+
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&block, true, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Verify the header was written to the Header CF
+        let header_cf = store.db.cf_handle(&ColumnFamily::Header).unwrap();
+        let raw = store
+            .db
+            .get_cf::<&[u8]>(&header_cf, blockhash.as_ref())
+            .unwrap();
+        assert!(raw.is_some(), "Header should exist in Header CF");
+
+        // Deserialize and verify it matches the original header
+        let stored_header: ShareHeader = consensus::encode::deserialize(&raw.unwrap()).unwrap();
+        assert_eq!(stored_header, block.header);
     }
 
     #[test]
