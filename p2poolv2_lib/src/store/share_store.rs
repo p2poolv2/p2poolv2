@@ -202,12 +202,8 @@ impl Store {
 
     /// Find the first blockhash that exists by checking the Header CF.
     pub(crate) fn get_first_existing_blockhash(&self, locator: &[BlockHash]) -> Option<BlockHash> {
-        let header_cf = self.db.cf_handle(&ColumnFamily::Header).unwrap();
         for blockhash in locator {
-            if self
-                .db
-                .key_may_exist_cf(&header_cf, consensus::serialize(blockhash))
-            {
+            if self.share_header_exists(blockhash) {
                 return Some(*blockhash);
             }
         }
@@ -299,16 +295,11 @@ impl Store {
 
     /// Check which blockhashes from the provided list are missing from the store.
     ///
-    /// Checks the Header CF, so "missing" means we have never seen this header.
+    /// Uses share_header_exists, so "missing" means we have never seen this header.
     pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash> {
-        let header_cf = self.db.cf_handle(&ColumnFamily::Header).unwrap();
         blockhashes
             .iter()
-            .filter(|&hash| {
-                !self
-                    .db
-                    .key_may_exist_cf(&header_cf, consensus::serialize(hash))
-            })
+            .filter(|&hash| !self.share_header_exists(hash))
             .cloned()
             .collect()
     }
