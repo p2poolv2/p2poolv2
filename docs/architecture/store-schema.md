@@ -35,14 +35,13 @@ Managed by `Store` using `Arc<RwLock<T>>`:
 
 ## Column Families
 
-### 1. `Block` - Share Blocks
+### 1. `Block` - Block Metadata
 
-Stores share block headers (without transactions).
+Stores block metadata (height, chain work, status).
 
 | Key                    | Value                            | Notes                                    |
 |------------------------|----------------------------------|------------------------------------------|
-| `blockhash` (32 bytes) | `StorageShareBlock` (serialized) | Block header only, txs stored separately |
-| `blockhash` + `_md`    | `BlockMetadata` (serialized)     | Height and chain_work                    |
+| `blockhash` + `_md`    | `BlockMetadata` (serialized)     | Height, chain_work, and status           |
 
 **BlockMetadata Structure:**
 ```rust
@@ -251,7 +250,7 @@ const PPLNS_WINDOW: usize = 2160;            // PPLNS window in shares
 4. Update `BlockIndex` (parent→child relationship)
 5. Update `BlockHeight` (height→blockhash mapping)
 6. Store `BlockMetadata` (height + chain_work)
-7. Store `StorageShareBlock` in `Block`
+7. Store `ShareHeader` in `Header`
 8. Handle reorg if new chain has more work
 
 ### Reorg Logic
