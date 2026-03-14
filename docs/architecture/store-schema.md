@@ -35,13 +35,13 @@ Managed by `Store` using `Arc<RwLock<T>>`:
 
 ## Column Families
 
-### 1. `Block` - Block Metadata
+### 1. `BlockMetadata` - Block Metadata
 
 Stores block metadata (height, chain work, status).
 
 | Key                    | Value                            | Notes                                    |
 |------------------------|----------------------------------|------------------------------------------|
-| `blockhash` + `_md`    | `BlockMetadata` (serialized)     | Height, chain_work, and status           |
+| `blockhash` (32 bytes) | `BlockMetadata` (serialized)     | Height, chain_work, and status           |
 
 **BlockMetadata Structure:**
 ```rust

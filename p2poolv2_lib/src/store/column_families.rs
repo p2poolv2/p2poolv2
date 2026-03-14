@@ -17,7 +17,7 @@
 /// Column families strings defined in one place for type safety
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ColumnFamily {
-    Block,
+    BlockMetadata,
     BlockTxids,
     TxidsBlocks,
     Uncles,
@@ -38,7 +38,7 @@ pub enum ColumnFamily {
 impl ColumnFamily {
     pub fn as_str(&self) -> &'static str {
         match self {
-            ColumnFamily::Block => "block",
+            ColumnFamily::BlockMetadata => "block_metadata",
             ColumnFamily::BlockTxids => "block_txids",
             ColumnFamily::TxidsBlocks => "txids_blocks",
             ColumnFamily::Uncles => "uncles",

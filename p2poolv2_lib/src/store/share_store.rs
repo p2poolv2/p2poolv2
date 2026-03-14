@@ -281,10 +281,8 @@ impl Store {
         &self,
         blockhash: &BlockHash,
     ) -> Result<BlockMetadata, StoreError> {
-        let block_metadata_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
-
-        let mut metadata_key = consensus::serialize(blockhash);
-        metadata_key.extend_from_slice(b"_md");
+        let block_metadata_cf = self.db.cf_handle(&ColumnFamily::BlockMetadata).unwrap();
+        let metadata_key = consensus::serialize(blockhash);
 
         match self.db.get_cf::<&[u8]>(&block_metadata_cf, &metadata_key) {
             Ok(Some(metadata_serialized)) => match encode::deserialize(&metadata_serialized) {
@@ -322,10 +320,8 @@ impl Store {
         metadata: &BlockMetadata,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), StoreError> {
-        let block_metadata_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
-
-        let mut metadata_key = consensus::serialize(blockhash);
-        metadata_key.extend_from_slice(b"_md");
+        let block_metadata_cf = self.db.cf_handle(&ColumnFamily::BlockMetadata).unwrap();
+        let metadata_key = consensus::serialize(blockhash);
 
         let mut serialized = Vec::new();
         metadata.consensus_encode(&mut serialized)?;
