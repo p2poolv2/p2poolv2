@@ -17,10 +17,10 @@
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
+use p2poolv2_lib::shares::share_block::ShareHeader;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::writer::{StoreHandle, StoreWriter, write_channel};
 use p2poolv2_lib::stratum::emission::Emission;
-use p2poolv2_lib::test_utils::TestShareBlockBuilder;
 use p2poolv2_lib::{node::actor::NodeHandle, shares::share_block::ShareBlock};
 use std::sync::Arc;
 
@@ -29,7 +29,6 @@ use tempfile::tempdir;
 
 use crate::common;
 
-#[ignore]
 #[tokio::test]
 async fn test_three_nodes_connectivity() {
     // Create three different configurations as strings
@@ -184,15 +183,28 @@ async fn test_three_nodes_connectivity() {
         .expect("Failed to shutdown node 3");
 }
 
+/// Load share headers from the share_sync fixture file.
+///
+/// Returns a vector of ShareHeader ordered by chain height (genesis first).
+fn load_share_sync_headers() -> Vec<ShareHeader> {
+    let json_string = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test_data/share_sync/share_headers.json"),
+    )
+    .expect("Failed to read share_sync fixture");
+    serde_json::from_str(&json_string).expect("Failed to parse share_sync fixture")
+}
+
 /// Test that shares seeded on one node sync to two other nodes via p2p.
 ///
-/// Node 1 is seeded with 50 shares before nodes 2 and 3 start. Nodes 2
-/// and 3 dial into node 1 and should sync all 50 shares via the header-sync
-/// and block-fetch protocol.
-#[ignore]
+/// Node 1 is seeded with 5 real share headers (from store.db fixture) before
+/// nodes 2 and 3 start. Nodes 2 and 3 dial into node 1 and should sync all
+/// shares via the header-sync and block-fetch protocol.
 #[tokio::test]
+#[ignore] // Requires storing share headers separately from blocks
 async fn test_three_nodes_share_sync() {
-    const SHARE_COUNT: u32 = 50;
+    let fixture_headers = load_share_sync_headers();
+    let share_count = (fixture_headers.len() - 1) as u32;
     // Configure three nodes on unique ports with higher rate limit for fast sync
     let config1 = common::default_test_config()
         .with_listen_address("/ip4/127.0.0.1/tcp/6894".to_string())
@@ -225,26 +237,25 @@ async fn test_three_nodes_share_sync() {
     let store_handle1 = StoreHandle::new(store1, write_tx1);
     let chain_store_handle1 = ChainStoreHandle::new(store_handle1, config1.stratum.network);
 
-    let mut genesis = ShareBlock::build_genesis_for_network(config1.stratum.network);
-    genesis.header.bits = bitcoin::CompactTarget::from_consensus(0x2100ffff);
+    // Load genesis from fixture and seed into store 1
+    let genesis_header = fixture_headers[0].clone();
+    let genesis = ShareBlock {
+        header: genesis_header,
+        transactions: Vec::new(),
+        bitcoin_transactions: Vec::new(),
+    };
     chain_store_handle1
         .init_or_setup_genesis(genesis.clone())
         .await
         .unwrap();
 
-    // Seed 50 shares chained from genesis.
-    // Each share's timestamp advances by 10 seconds (the ASERT ideal block
-    // time) so that pool difficulty stays stable during validation.
-    let genesis_time = 1700000000u32;
-    let mut prev_hash = genesis.block_hash();
-    for index in 1..=SHARE_COUNT {
-        let share = TestShareBlockBuilder::new()
-            .with_easy_target()
-            .prev_share_blockhash(prev_hash.to_string())
-            .nonce(index)
-            .time(genesis_time + index * 10)
-            .build();
-        let share_hash = share.block_hash();
+    // Seed non-genesis shares from fixture into store 1
+    for header in &fixture_headers[1..] {
+        let share = ShareBlock {
+            header: header.clone(),
+            transactions: Vec::new(),
+            bitcoin_transactions: Vec::new(),
+        };
         chain_store_handle1
             .add_share_block(share.clone(), true)
             .await
@@ -254,15 +265,14 @@ async fn test_three_nodes_share_sync() {
             .await
             .unwrap();
         chain_store_handle1.organise_block().await.unwrap();
-        prev_hash = share_hash;
     }
 
     // Verify node 1 has all shares
     let tip_height1 = chain_store_handle1.get_tip_height().unwrap();
     assert_eq!(
         tip_height1,
-        Some(SHARE_COUNT),
-        "Node 1 should have {SHARE_COUNT} shares after seeding"
+        Some(share_count),
+        "Node 1 should have {share_count} shares after seeding"
     );
 
     // Setup store 2 with only genesis
@@ -353,7 +363,7 @@ async fn test_three_nodes_share_sync() {
     while tokio::time::Instant::now() < deadline {
         let height2 = chain_store_handle2_poll.get_tip_height().unwrap();
         let height3 = chain_store_handle3_poll.get_tip_height().unwrap();
-        if height2 == Some(SHARE_COUNT) && height3 == Some(SHARE_COUNT) {
+        if height2 == Some(share_count) && height3 == Some(share_count) {
             synced = true;
             break; // intentional: exit polling loop on success
         }
