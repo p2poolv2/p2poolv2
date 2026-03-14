@@ -309,12 +309,12 @@ impl ShareValidator for DefaultShareValidator {
     ) -> Result<(), ValidationError> {
         let current_time = time_provider.seconds_since_epoch();
 
-        let block_timestamp = share.header.bitcoin_header.time as u64;
-        let time_diff = current_time.abs_diff(block_timestamp);
+        let share_timestamp = share.header.time as u64;
+        let time_diff = current_time.abs_diff(share_timestamp);
 
         if time_diff > MAX_TIME_DIFF {
             return Err(ValidationError::TimestampOutOfRange {
-                share_timestamp: block_timestamp,
+                share_timestamp,
                 current_time,
                 max_difference: MAX_TIME_DIFF,
             });
@@ -390,7 +390,7 @@ mod tests {
             .build();
 
         let mut time_provider = TestTimeProvider::new(SystemTime::now());
-        let share_timestamp = share.header.bitcoin_header.time as u64 - 120;
+        let share_timestamp = share.header.time as u64 - 120;
 
         time_provider
             .set_time(bitcoin::absolute::Time::from_consensus(share_timestamp as u32).unwrap());
@@ -405,7 +405,7 @@ mod tests {
             error.to_string(),
             format!(
                 "Share timestamp {} is more than {MAX_TIME_DIFF} seconds from current time {}",
-                share.header.bitcoin_header.time as u64,
+                share.header.time as u64,
                 time_provider.seconds_since_epoch()
             )
         );
@@ -417,7 +417,7 @@ mod tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
         let mut time_provider = TestTimeProvider::new(SystemTime::now());
-        let future_time = share.header.bitcoin_header.time as u64 + 120;
+        let future_time = share.header.time as u64 + 120;
         time_provider
             .set_time(bitcoin::absolute::Time::from_consensus(future_time as u32).unwrap());
 
@@ -437,9 +437,7 @@ mod tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
         let mut time_provider = TestTimeProvider::new(SystemTime::now());
-        time_provider.set_time(
-            bitcoin::absolute::Time::from_consensus(share.header.bitcoin_header.time).unwrap(),
-        );
+        time_provider.set_time(bitcoin::absolute::Time::from_consensus(share.header.time).unwrap());
 
         let share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
