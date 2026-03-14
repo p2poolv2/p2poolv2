@@ -219,11 +219,10 @@ impl ShareValidator for DefaultShareValidator {
             .ok_or(ValidationError::ParentNotFound { parent_hash })?;
 
         let parent_time = parent_header.time;
-        let share_height = parent_height + 1;
 
         let calculated_target = self
             .pool_difficulty
-            .calculate_target(parent_time, share_height);
+            .calculate_target(parent_time, parent_height);
         let target = Target::from_compact(calculated_target);
         let bitcoin_block_hash = share_header.bitcoin_header.block_hash();
 
