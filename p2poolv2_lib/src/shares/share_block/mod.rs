@@ -17,7 +17,6 @@
 pub mod share_coinbase;
 pub mod share_transaction;
 pub mod short_ids;
-pub mod storage_share_block;
 
 use super::transactions;
 use crate::shares::genesis;
@@ -33,7 +32,6 @@ use core::mem;
 use serde::{Deserialize, Serialize};
 pub use share_transaction::ShareTransaction;
 use std::error::Error;
-pub use storage_share_block::StorageShareBlock;
 
 /// Header for the share chain block.
 ///

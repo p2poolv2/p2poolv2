@@ -16,9 +16,7 @@
 
 use super::block_tx_metadata::BlockMetadata;
 use super::{ColumnFamily, Store, writer::StoreError};
-use crate::shares::share_block::{
-    ShareBlock, ShareHeader, ShareTransaction, StorageShareBlock, Txids,
-};
+use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction, Txids};
 use bitcoin::BlockHash;
 use bitcoin::consensus::{self, Encodable, encode};
 use std::collections::HashMap;
@@ -28,11 +26,9 @@ impl Store {
     /// Add a share to the store.
     ///
     /// Returns early if the block already exists (duplicate guard).
-    /// Uses StorageShareBlock to serialize the share so that
-    /// transactions are not serialized with the block.
-    ///
-    /// Transactions are stored separately. All writes are done in a
-    /// single atomic batch.
+    /// Stores the header in the Header CF and transaction indexes in
+    /// BlockTxids/BitcoinTxids CFs. Full share chain transactions are
+    /// stored separately. All writes are done in a single atomic batch.
     pub fn add_share_block(
         &self,
         share: &ShareBlock,
@@ -88,13 +84,6 @@ impl Store {
         // Update block index for parent
         self.update_block_index(&share.header.prev_share_blockhash, &blockhash, batch)?;
 
-        // Add the share block itself
-        let storage_share_block: StorageShareBlock = share.into();
-        let block_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
-        let mut encoded_share_block = Vec::new();
-        storage_share_block.consensus_encode(&mut encoded_share_block)?;
-        batch.put_cf::<&[u8], Vec<u8>>(&block_cf, blockhash.as_ref(), encoded_share_block);
-
         // Store the header in the dedicated Header CF
         self.add_share_header(&share.header, batch)?;
 
@@ -120,37 +109,52 @@ impl Store {
     }
 
     /// Check whether a share header exists in the Header column family.
+    ///
+    /// Uses key_may_exist as a fast negative filter, then confirms
+    /// with a full read on a positive result since key_may_exist can
+    /// return false positives.
     pub fn share_header_exists(&self, blockhash: &BlockHash) -> bool {
         let header_cf = self.db.cf_handle(&ColumnFamily::Header).unwrap();
+        let serialized = consensus::serialize(blockhash);
+        if !self.db.key_may_exist_cf(&header_cf, &serialized) {
+            return false;
+        }
         self.db
-            .get_cf::<&[u8]>(&header_cf, blockhash.as_ref())
+            .get_cf::<&[u8]>(&header_cf, &serialized)
             .ok()
             .flatten()
             .is_some()
     }
 
-    /// Check whether a share block exists in the store without deserializing it.
+    /// Check whether a share block (full block data) exists in the store.
+    ///
+    /// Checks the BlockTxids CF for the txids key, since txids are
+    /// written as part of add_share_block and their presence indicates
+    /// the full block data has been stored.
     pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool {
-        let block_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
+        let block_txids_cf = self.db.cf_handle(&ColumnFamily::BlockTxids).unwrap();
+        let mut key = consensus::serialize(blockhash);
+        key.extend_from_slice(b"_txids");
         self.db
-            .get_cf::<&[u8]>(&block_cf, blockhash.as_ref())
+            .get_cf::<&[u8]>(&block_txids_cf, &key)
             .ok()
             .flatten()
             .is_some()
     }
 
-    /// Get a share from the store
+    /// Get a share from the store by reconstructing it from the Header CF
+    /// and transaction CFs.
+    ///
+    /// Returns None if the header or txids are missing.
     pub fn get_share(&self, blockhash: &BlockHash) -> Option<ShareBlock> {
         debug!("Getting share from store: {:?}", blockhash);
-        let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
-        let share = match self.db.get_cf::<&[u8]>(&share_cf, blockhash.as_ref()) {
-            Ok(Some(share)) => share,
-            Ok(None) | Err(_) => return None,
+        let header = match self.get_share_header(blockhash) {
+            Ok(Some(header)) => header,
+            _ => return None,
         };
-        let share: StorageShareBlock = match encode::deserialize(&share) {
-            Ok(share) => share,
-            Err(_) => return None,
-        };
+        if !self.share_block_exists(blockhash) {
+            return None;
+        }
         let transactions: Vec<ShareTransaction> = self
             .get_txs_for_blockhash(blockhash, ColumnFamily::BlockTxids)
             .into_iter()
@@ -158,12 +162,11 @@ impl Store {
             .collect();
         let bitcoin_transactions =
             self.get_txs_for_blockhash(blockhash, ColumnFamily::BitcoinTxids);
-        let share = ShareBlock {
-            header: share.header,
+        Some(ShareBlock {
+            header,
             transactions,
             bitcoin_transactions,
-        };
-        Some(share)
+        })
     }
 
     /// Get current confirmed chain tip and find the ShareBlock for it.
@@ -211,51 +214,18 @@ impl Store {
         None
     }
 
-    /// Get multiple shares from the store
+    /// Get multiple shares from the store by reconstructing each from
+    /// the Header CF and transaction CFs.
     pub fn get_shares(
         &self,
         blockhashes: &[BlockHash],
     ) -> Result<HashMap<BlockHash, ShareBlock>, StoreError> {
         debug!("Getting shares from store: {:?}", blockhashes);
-        let share_cf = self.db.cf_handle(&ColumnFamily::Block).unwrap();
-        let keys = blockhashes
-            .iter()
-            .map(|h| (&share_cf, consensus::serialize(h)))
-            .collect::<Vec<_>>();
-        let shares = self.db.multi_get_cf(keys);
-        // iterate over the blockhashes and shares, filter out the ones that are not found or can't be deserialized
-        // then convert the storage share to share block and return as a hashmap
         let found_shares = blockhashes
             .iter()
-            .zip(shares)
-            .filter_map(|(blockhash, result)| {
-                if let Ok(Some(data)) = result {
-                    if let Ok(storage_share) = encode::deserialize::<StorageShareBlock>(&data) {
-                        let transactions: Vec<ShareTransaction> = self
-                            .get_txs_for_blockhash(blockhash, ColumnFamily::BlockTxids)
-                            .into_iter()
-                            .map(ShareTransaction)
-                            .collect();
-                        let bitcoin_transactions =
-                            self.get_txs_for_blockhash(blockhash, ColumnFamily::BitcoinTxids);
-                        Some((
-                            *blockhash,
-                            ShareBlock {
-                                header: storage_share.header,
-                                transactions,
-                                bitcoin_transactions,
-                            },
-                        ))
-                    } else {
-                        tracing::warn!(
-                            "Could not deserialize share for blockhash: {:?}",
-                            blockhash
-                        );
-                        None
-                    }
-                } else {
-                    None
-                }
+            .filter_map(|blockhash| {
+                let share = self.get_share(blockhash)?;
+                Some((*blockhash, share))
             })
             .collect();
         Ok(found_shares)
