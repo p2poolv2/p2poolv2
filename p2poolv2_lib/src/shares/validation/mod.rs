@@ -137,7 +137,7 @@ impl DefaultShareValidator {
         Self { pool_difficulty }
     }
 
-    /// Validate that the total size of share transactions does not exceed BLOCK_SIZE_LIMIT.
+    /// Validate that the total size of share transactions does not exceed BLOCK_TXS_SIZE_LIMIT.
     fn validate_block_size(&self, share: &ShareBlock) -> Result<(), ValidationError> {
         let total_size: usize = share.transactions.iter().map(|tx| tx.total_size()).sum();
         if total_size > BLOCK_TXS_SIZE_LIMIT as usize {
@@ -216,15 +216,13 @@ impl DefaultShareValidator {
             }
             if transaction.output.is_empty() {
                 return Err(ValidationError::new(format!(
-                    "Transaction {} has no outputs",
-                    transaction.compute_txid()
+                    "Transaction {txid} has no outputs",
                 )));
             }
 
             if !transaction.is_coinbase() && transaction.input.is_empty() {
                 return Err(ValidationError::new(format!(
-                    "Non-coinbase transaction {} has no inputs",
-                    transaction.compute_txid()
+                    "Non-coinbase transaction {txid} has no inputs",
                 )));
             }
 
@@ -234,8 +232,7 @@ impl DefaultShareValidator {
                 for input in &transaction.input {
                     if !seen_outpoints.insert(input.previous_output) {
                         return Err(ValidationError::new(format!(
-                            "Transaction {} has duplicate input {}",
-                            transaction.compute_txid(),
+                            "Transaction {txid} has duplicate input {}",
                             input.previous_output
                         )));
                     }
@@ -246,23 +243,17 @@ impl DefaultShareValidator {
             for output in &transaction.output {
                 if output.value > Amount::MAX_MONEY {
                     return Err(ValidationError::new(format!(
-                        "Transaction {} output value {} exceeds maximum",
-                        transaction.compute_txid(),
+                        "Transaction {txid} output value {} exceeds maximum",
                         output.value
                     )));
                 }
                 total_output = total_output.checked_add(output.value).ok_or_else(|| {
-                    ValidationError::new(format!(
-                        "Transaction {} total output value overflow",
-                        transaction.compute_txid()
-                    ))
+                    ValidationError::new(format!("Transaction {txid} total output value overflow",))
                 })?;
             }
             if total_output > Amount::MAX_MONEY {
                 return Err(ValidationError::new(format!(
-                    "Transaction {} total output value {} exceeds maximum",
-                    transaction.compute_txid(),
-                    total_output
+                    "Transaction {txid} total output value {total_output} exceeds maximum",
                 )));
             }
         }
@@ -656,7 +647,7 @@ mod tests {
 
         chain_store_handle
             .expect_setup_share_for_chain()
-            .returning(|share_block| Ok(share_block));
+            .returning(Ok);
 
         let result = validator().validate_share_block(&share_block, &chain_store_handle);
 
