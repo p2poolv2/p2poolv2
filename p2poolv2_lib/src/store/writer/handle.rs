@@ -55,6 +55,14 @@ impl StoreHandle {
     // DIRECT READS - These delegate directly to Store (may block briefly)
     // ========================================================================
 
+    /// Retrieve all previous outputs spent by a transaction's inputs.
+    pub fn get_all_prevouts(
+        &self,
+        transaction: &bitcoin::Transaction,
+    ) -> Result<Vec<(usize, bitcoin::TxOut)>, StoreError> {
+        self.store.get_all_prevouts(transaction)
+    }
+
     /// Retrieve a single transaction output by txid and output index.
     pub fn get_output(
         &self,
