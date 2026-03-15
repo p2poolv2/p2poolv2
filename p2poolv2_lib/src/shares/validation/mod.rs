@@ -202,8 +202,8 @@ impl DefaultShareValidator {
         share: &ShareBlock,
         chain_store_handle: &ChainStoreHandle,
     ) -> Result<(), ValidationError> {
-        for transaction in &share.transactions {
-            if transaction.is_coinbase() {
+        for (index, transaction) in share.transactions.iter().enumerate() {
+            if index == 0 {
                 continue;
             }
             let txid = transaction.compute_txid();
