@@ -37,6 +37,7 @@ rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
 zmq = { workspace = true }
 bitcoin = { workspace = true }
+bitcoinconsensus = { workspace = true }
 base64 = { workspace = true }
 void = { workspace = true }
 tower = { version = "0.5", features = ["util", "limit"] }
