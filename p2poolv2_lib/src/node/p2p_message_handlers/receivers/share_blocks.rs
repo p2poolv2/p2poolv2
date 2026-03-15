@@ -378,10 +378,9 @@ mod tests {
         mock_validator
             .expect_validate_share_header()
             .returning(|_, _| {
-                Err(ValidationError::InsufficientWork {
-                    block_hash: BlockHash::all_zeros(),
-                    target: bitcoin::Target::from_be_bytes([0xff; 32]),
-                })
+                Err(ValidationError::new(
+                    "Insufficient work: block hash does not meet share target",
+                ))
             });
 
         // add_share_block should NOT be called for invalid header
