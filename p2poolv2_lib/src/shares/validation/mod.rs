@@ -56,7 +56,7 @@ pub const MAX_UNCLES: usize = 3;
 /// Maximum time difference allowed between current tip and received shares
 pub const MAX_TIME_DIFF: u64 = 60;
 /// Maximum block size not counting bitcoin blocks limited to 200kB
-pub const BLOCK_SIZE_LIMIT: u32 = 200 * 1024;
+pub const BLOCK_TXS_SIZE_LIMIT: u32 = 200 * 1024;
 
 /// Trait for share validation operations.
 ///
@@ -140,8 +140,14 @@ impl DefaultShareValidator {
         Self { pool_difficulty }
     }
 
-    /// Block size should with all the transactions size should not exceed BLOCK_SIZE_LIMIT
+    /// Validate that the total size of share transactions does not exceed BLOCK_SIZE_LIMIT.
     fn validate_block_size(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        let total_size: usize = share.transactions.iter().map(|tx| tx.total_size()).sum();
+        if total_size > BLOCK_TXS_SIZE_LIMIT as usize {
+            return Err(ValidationError::new(format!(
+                "Block transactions size {total_size} exceeds limit of {BLOCK_TXS_SIZE_LIMIT}"
+            )));
+        }
         Ok(())
     }
 
@@ -356,7 +362,7 @@ mod tests {
         setup_pool_difficulty_mocks,
     };
     use crate::utils::time_provider::TestTimeProvider;
-    use bitcoin::{BlockHash, hashes::Hash};
+    use bitcoin::{BlockHash, ScriptBuf, TxOut, hashes::Hash};
     use mockall::predicate::*;
     use std::time::SystemTime;
 
@@ -685,5 +691,69 @@ mod tests {
         let result = validator_with(pool_difficulty)
             .validate_with_pool_difficulty(&header, &chain_store_handle);
         assert!(result.is_ok(), "Expected Ok but got: {:?}", result.err());
+    }
+
+    /// Build a transaction with a large script to produce a specific serialized size.
+    fn build_large_transaction(target_size: usize) -> bitcoin::Transaction {
+        let script = ScriptBuf::from_bytes(vec![0u8; target_size]);
+        bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: Vec::new(),
+            output: vec![TxOut {
+                value: bitcoin::Amount::ZERO,
+                script_pubkey: script,
+            }],
+        }
+    }
+
+    #[test]
+    fn test_validate_block_size_succeeds_for_small_block() {
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+
+        let result = validator().validate_block_size(&share);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_block_size_fails_when_exceeding_limit() {
+        let large_tx = build_large_transaction(BLOCK_TXS_SIZE_LIMIT as usize);
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(large_tx)
+            .build();
+
+        let result = validator().validate_block_size(&share);
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("exceeds limit of"));
+    }
+
+    #[test]
+    fn test_validate_block_size_succeeds_at_exactly_limit() {
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        let coinbase_size: usize = share.transactions.iter().map(|tx| tx.total_size()).sum();
+        let remaining = BLOCK_TXS_SIZE_LIMIT as usize - coinbase_size;
+
+        // Use a two-pass approach: build a candidate transaction, measure its
+        // total size, then adjust the script size to hit the exact target.
+        let candidate_tx = build_large_transaction(remaining);
+        let overshoot = candidate_tx.total_size() - remaining;
+        let fill_size = remaining - overshoot;
+
+        let fill_tx = build_large_transaction(fill_size);
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(fill_tx)
+            .build();
+
+        let total_size: usize = share.transactions.iter().map(|tx| tx.total_size()).sum();
+        assert_eq!(total_size, BLOCK_TXS_SIZE_LIMIT as usize);
+
+        let result = validator().validate_block_size(&share);
+        assert!(result.is_ok());
     }
 }
