@@ -57,6 +57,8 @@ pub const MAX_UNCLES: usize = 3;
 pub const MAX_TIME_DIFF: u64 = 60;
 /// Maximum block size not counting bitcoin blocks limited to 200kB
 pub const BLOCK_TXS_SIZE_LIMIT: u32 = 200 * 1024;
+/// Maximum number of transactions allowed in a share block
+pub const TXS_COUNT_LIMIT: u32 = 100;
 
 /// Trait for share validation operations.
 ///
@@ -96,12 +98,6 @@ pub trait ShareValidator {
     /// BlockValid, allowing re-scheduled blocks (e.g. children of a
     /// newly validated parent) to skip redundant validation while still
     /// proceeding through organise_block.
-    ///
-    /// TODO: validate nonce and blockhash meets pool difficulty
-    /// validate prev_share_blockhash is in store
-    /// validate uncles are in store and no more than MAX_UNCLES
-    /// TODO: validate merkle root
-    /// TODO: validate coinbase transaction
     fn validate_share_block(
         &self,
         share: &ShareBlock,
@@ -183,7 +179,14 @@ impl DefaultShareValidator {
         Ok(())
     }
 
+    /// Validate that the total number of transactions does not exceed TXS_COUNT_LIMIT.
     fn validate_transaction_count(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        let count = share.transactions.len() as u32;
+        if count > TXS_COUNT_LIMIT {
+            return Err(ValidationError::new(format!(
+                "Transaction count {count} exceeds limit of {TXS_COUNT_LIMIT}"
+            )));
+        }
         Ok(())
     }
 
@@ -805,5 +808,47 @@ mod tests {
 
         let error = validator().validate_merkle_root(&share).unwrap_err();
         assert!(error.to_string().contains("Merkle root mismatch"));
+    }
+
+    #[test]
+    fn test_validate_transaction_count_succeeds_for_small_block() {
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+
+        let result = validator().validate_transaction_count(&share);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_transaction_count_succeeds_at_exactly_limit() {
+        let mut builder = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202");
+
+        // Builder already includes 1 coinbase tx, so add TXS_COUNT_LIMIT - 1 more
+        for _ in 0..(TXS_COUNT_LIMIT - 1) {
+            builder = builder.add_transaction(build_large_transaction(10));
+        }
+        let share = builder.build();
+
+        assert_eq!(share.transactions.len() as u32, TXS_COUNT_LIMIT);
+        let result = validator().validate_transaction_count(&share);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_transaction_count_fails_when_exceeding_limit() {
+        let mut builder = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202");
+
+        // Builder already includes 1 coinbase tx, so add TXS_COUNT_LIMIT more to exceed
+        for _ in 0..TXS_COUNT_LIMIT {
+            builder = builder.add_transaction(build_large_transaction(10));
+        }
+        let share = builder.build();
+
+        assert!(share.transactions.len() as u32 > TXS_COUNT_LIMIT);
+        let error = validator().validate_transaction_count(&share).unwrap_err();
+        assert!(error.to_string().contains("exceeds limit of"));
     }
 }
