@@ -37,12 +37,14 @@ pub async fn validate_bitcoin_block(
 
     // Call getblocktemplate RPC method using config values
     let bitcoind = BitcoindRpcClient::new(&config.url, &config.username, &config.password)
-        .map_err(|e| ValidationError::BitcoinBlockValidation(e.to_string()))?;
+        .map_err(|e| ValidationError::new(format!("Bitcoin block validation failed: {e}")))?;
     let result: Result<serde_json::Value, _> = bitcoind.request("getblocktemplate", params).await;
 
     match result {
         Ok(response) => Ok(response == "duplicate"),
-        Err(e) => Err(ValidationError::BitcoinBlockValidation(e.to_string())),
+        Err(e) => Err(ValidationError::new(format!(
+            "Bitcoin block validation failed: {e}"
+        ))),
     }
 }
 

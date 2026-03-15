@@ -29,81 +29,23 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::utils::time_provider::TimeProvider;
-use bitcoin::{BlockHash, CompactTarget, Target};
+use bitcoin::Target;
 use std::fmt;
 
-/// Validation errors for share headers and share blocks.
+/// Validation error wrapping a descriptive message string.
 #[derive(Debug)]
-pub enum ValidationError {
-    /// The number of uncles exceeds MAX_UNCLES
-    TooManyUncles { count: usize, maximum: usize },
-    /// The bitcoin block hash does not meet the share target
-    InsufficientWork {
-        block_hash: BlockHash,
-        target: Target,
-    },
-    /// The share header advertises a target (bits) that does not match the calculated pool target
-    BitsMismatch {
-        expected: CompactTarget,
-        actual: CompactTarget,
-    },
-    /// The share timestamp is too far from the current time
-    TimestampOutOfRange {
-        share_timestamp: u64,
-        current_time: u64,
-        max_difference: u64,
-    },
-    /// An uncle referenced in the share was not found in the chain store
-    UncleNotFound { uncle_hash: BlockHash },
-    /// The parent share referenced by prev_share_blockhash was not found
-    ParentNotFound { parent_hash: BlockHash },
-    /// Bitcoin block validation failed via RPC
-    BitcoinBlockValidation(String),
+pub struct ValidationError(String);
+
+impl ValidationError {
+    /// Create a new ValidationError with the given message.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
 }
 
 impl fmt::Display for ValidationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::TooManyUncles { count, maximum } => {
-                write!(
-                    formatter,
-                    "Too many uncles: {count} exceeds maximum of {maximum}"
-                )
-            }
-            Self::InsufficientWork { block_hash, target } => {
-                write!(
-                    formatter,
-                    "Bitcoin block hash {block_hash} does not meet share target {target}"
-                )
-            }
-            Self::BitsMismatch { expected, actual } => {
-                write!(
-                    formatter,
-                    "Share header bits {:#010x} does not match calculated pool target {:#010x}",
-                    actual.to_consensus(),
-                    expected.to_consensus()
-                )
-            }
-            Self::TimestampOutOfRange {
-                share_timestamp,
-                current_time,
-                max_difference,
-            } => {
-                write!(
-                    formatter,
-                    "Share timestamp {share_timestamp} is more than {max_difference} seconds from current time {current_time}"
-                )
-            }
-            Self::UncleNotFound { uncle_hash } => {
-                write!(formatter, "Uncle {uncle_hash} not found in store")
-            }
-            Self::ParentNotFound { parent_hash } => {
-                write!(formatter, "Parent share {parent_hash} not found in store")
-            }
-            Self::BitcoinBlockValidation(message) => {
-                write!(formatter, "Bitcoin block validation failed: {message}")
-            }
-        }
+        write!(formatter, "{}", self.0)
     }
 }
 
@@ -113,6 +55,8 @@ impl std::error::Error for ValidationError {}
 pub const MAX_UNCLES: usize = 3;
 /// Maximum time difference allowed between current tip and received shares
 pub const MAX_TIME_DIFF: u64 = 60;
+/// Maximum block size not counting bitcoin blocks limited to 200kB
+pub const BLOCK_SIZE_LIMIT: u32 = 200 * 1024;
 
 /// Trait for share validation operations.
 ///
@@ -195,6 +139,38 @@ impl DefaultShareValidator {
     pub fn new(pool_difficulty: PoolDifficulty) -> Self {
         Self { pool_difficulty }
     }
+
+    /// Block size should with all the transactions size should not exceed BLOCK_SIZE_LIMIT
+    fn validate_block_size(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        Ok(())
+    }
+
+    /// Validate the first share transaction in the share block is a coinbase transaction.
+    fn validate_coinbase(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        let first_tx = share
+            .transactions
+            .first()
+            .ok_or_else(|| ValidationError::new("Share block has no transactions"))?;
+        if first_tx.is_coinbase() {
+            Ok(())
+        } else {
+            Err(ValidationError::new(
+                "First transaction in share block is not a coinbase transaction",
+            ))
+        }
+    }
+
+    fn validate_merkle_root(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        Ok(())
+    }
+
+    fn validate_transaction_count(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        Ok(())
+    }
+
+    fn validate_transactions(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        Ok(())
+    }
 }
 
 impl ShareValidator for DefaultShareValidator {
@@ -204,10 +180,11 @@ impl ShareValidator for DefaultShareValidator {
         chain_store_handle: &ChainStoreHandle,
     ) -> Result<(), ValidationError> {
         if share_header.uncles.len() > MAX_UNCLES {
-            return Err(ValidationError::TooManyUncles {
-                count: share_header.uncles.len(),
-                maximum: MAX_UNCLES,
-            });
+            return Err(ValidationError::new(format!(
+                "Too many uncles: {} exceeds maximum of {}",
+                share_header.uncles.len(),
+                MAX_UNCLES
+            )));
         }
 
         self.validate_with_pool_difficulty(share_header, chain_store_handle)
@@ -221,15 +198,19 @@ impl ShareValidator for DefaultShareValidator {
         let parent_hash = share_header.prev_share_blockhash;
         let parent_header = chain_store_handle
             .get_share_header(&parent_hash)
-            .map_err(|_| ValidationError::ParentNotFound { parent_hash })?;
+            .map_err(|_| {
+                ValidationError::new(format!("Parent share {parent_hash} not found in store"))
+            })?;
 
         let parent_metadata = chain_store_handle
             .get_block_metadata(&parent_hash)
-            .map_err(|_| ValidationError::ParentNotFound { parent_hash })?;
+            .map_err(|_| {
+                ValidationError::new(format!("Parent share {parent_hash} not found in store"))
+            })?;
 
-        let parent_height = parent_metadata
-            .expected_height
-            .ok_or(ValidationError::ParentNotFound { parent_hash })?;
+        let parent_height = parent_metadata.expected_height.ok_or_else(|| {
+            ValidationError::new(format!("Parent share {parent_hash} not found in store"))
+        })?;
 
         let parent_time = parent_header.time;
 
@@ -241,17 +222,17 @@ impl ShareValidator for DefaultShareValidator {
 
         // Ensure the advertised header bits match the calculated pool target.
         if share_header.bits != calculated_target {
-            return Err(ValidationError::BitsMismatch {
-                expected: calculated_target,
-                actual: share_header.bits,
-            });
+            return Err(ValidationError::new(format!(
+                "Share header bits {:#010x} does not match calculated pool target {:#010x}",
+                share_header.bits.to_consensus(),
+                calculated_target.to_consensus()
+            )));
         }
 
         if !target.is_met_by(bitcoin_block_hash) {
-            return Err(ValidationError::InsufficientWork {
-                block_hash: bitcoin_block_hash,
-                target,
-            });
+            return Err(ValidationError::new(format!(
+                "Bitcoin block hash {bitcoin_block_hash} does not meet share target {target}"
+            )));
         }
 
         Ok(())
@@ -278,8 +259,11 @@ impl ShareValidator for DefaultShareValidator {
             return Ok(());
         }
         self.validate_uncles(share, chain_store_handle)?;
-        // TODO: Populate bitcoin block from ShortIDs in share and use bitcoin_block_validation to validate difficulty
-        // OR - Fetch difficulty from bitcoind rpc and validate share blockhash meets difficulty
+        self.validate_block_size(share)?;
+        // self.validate_coinbase(share)?;
+        self.validate_merkle_root(share)?;
+        self.validate_transaction_count(share)?;
+        self.validate_transactions(share)?;
         Ok(())
     }
 
@@ -289,14 +273,17 @@ impl ShareValidator for DefaultShareValidator {
         chain_store_handle: &ChainStoreHandle,
     ) -> Result<(), ValidationError> {
         if share.header.uncles.len() > MAX_UNCLES {
-            return Err(ValidationError::TooManyUncles {
-                count: share.header.uncles.len(),
-                maximum: MAX_UNCLES,
-            });
+            return Err(ValidationError::new(format!(
+                "Too many uncles: {} exceeds maximum of {}",
+                share.header.uncles.len(),
+                MAX_UNCLES
+            )));
         }
         for uncle in &share.header.uncles {
             if chain_store_handle.get_share(uncle).is_none() {
-                return Err(ValidationError::UncleNotFound { uncle_hash: *uncle });
+                return Err(ValidationError::new(format!(
+                    "Uncle {uncle} not found in store"
+                )));
             }
         }
         Ok(())
@@ -313,11 +300,9 @@ impl ShareValidator for DefaultShareValidator {
         let time_diff = current_time.abs_diff(share_timestamp);
 
         if time_diff > MAX_TIME_DIFF {
-            return Err(ValidationError::TimestampOutOfRange {
-                share_timestamp,
-                current_time,
-                max_difference: MAX_TIME_DIFF,
-            });
+            return Err(ValidationError::new(format!(
+                "Share timestamp {share_timestamp} is more than {MAX_TIME_DIFF} seconds from current time {current_time}"
+            )));
         }
         Ok(())
     }
@@ -397,10 +382,6 @@ mod tests {
 
         let result = validator().validate_timestamp(&share, &time_provider);
         let error = result.unwrap_err();
-        assert!(
-            matches!(error, ValidationError::TimestampOutOfRange { .. }),
-            "Expected TimestampOutOfRange, got: {error:?}"
-        );
         assert_eq!(
             error.to_string(),
             format!(
@@ -428,7 +409,7 @@ mod tests {
         let error = validator()
             .validate_timestamp(&share, &time_provider)
             .unwrap_err();
-        assert!(matches!(error, ValidationError::TimestampOutOfRange { .. }));
+        assert!(error.to_string().contains("seconds from current time"));
     }
 
     #[tokio::test]
@@ -641,10 +622,6 @@ mod tests {
             .validate_with_pool_difficulty(&header, &chain_store_handle)
             .unwrap_err();
         assert!(
-            matches!(error, ValidationError::BitsMismatch { .. }),
-            "Expected BitsMismatch, got: {error:?}"
-        );
-        assert!(
             error
                 .to_string()
                 .contains("does not match calculated pool target")
@@ -674,10 +651,6 @@ mod tests {
         let error = validator_with(pool_difficulty)
             .validate_with_pool_difficulty(&header, &chain_store_handle)
             .unwrap_err();
-        assert!(
-            matches!(error, ValidationError::InsufficientWork { .. }),
-            "Expected InsufficientWork, got: {error:?}"
-        );
         assert!(error.to_string().contains("does not meet share target"));
     }
 
@@ -691,10 +664,6 @@ mod tests {
         let error = validator()
             .validate_share_header(&header, &chain_store_handle)
             .unwrap_err();
-        assert!(
-            matches!(error, ValidationError::TooManyUncles { .. }),
-            "Expected TooManyUncles, got: {error:?}"
-        );
         assert!(error.to_string().contains("Too many uncles"));
     }
 
