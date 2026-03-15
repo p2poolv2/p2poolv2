@@ -55,6 +55,15 @@ impl StoreHandle {
     // DIRECT READS - These delegate directly to Store (may block briefly)
     // ========================================================================
 
+    /// Retrieve a single transaction output by txid and output index.
+    pub fn get_output(
+        &self,
+        txid: &bitcoin::Txid,
+        vout: u32,
+    ) -> Result<bitcoin::TxOut, StoreError> {
+        self.store.get_output(txid, vout)
+    }
+
     /// Check whether a share block exists without deserializing it.
     pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool {
         self.store.share_block_exists(blockhash)
