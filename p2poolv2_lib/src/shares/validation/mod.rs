@@ -29,7 +29,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::utils::time_provider::TimeProvider;
-use bitcoin::Target;
+use bitcoin::{Target, TxMerkleNode};
 use std::fmt;
 
 /// Validation error wrapping a descriptive message string.
@@ -166,7 +166,20 @@ impl DefaultShareValidator {
         }
     }
 
+    /// Validate the merkle root in the header matches the computed merkle root from transactions.
     fn validate_merkle_root(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        let computed_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
+            share.transactions.iter().map(|tx| tx.compute_txid()),
+        )
+        .ok_or_else(|| ValidationError::new("Cannot compute merkle root from empty transactions"))?
+        .into();
+
+        if share.header.merkle_root != computed_root {
+            return Err(ValidationError::new(format!(
+                "Merkle root mismatch: header has {} but transactions compute to {}",
+                share.header.merkle_root, computed_root
+            )));
+        }
         Ok(())
     }
 
@@ -267,6 +280,7 @@ impl ShareValidator for DefaultShareValidator {
         self.validate_uncles(share, chain_store_handle)?;
         self.validate_block_size(share)?;
         // self.validate_coinbase(share)?;
+        // self.validate_commitment(share);
         self.validate_merkle_root(share)?;
         self.validate_transaction_count(share)?;
         self.validate_transactions(share)?;
@@ -755,5 +769,41 @@ mod tests {
 
         let result = validator().validate_block_size(&share);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_merkle_root_succeeds_for_valid_share() {
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+
+        let result = validator().validate_merkle_root(&share);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_merkle_root_fails_for_tampered_header() {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+
+        share.header.merkle_root = TxMerkleNode::all_zeros();
+
+        let error = validator().validate_merkle_root(&share).unwrap_err();
+        assert!(error.to_string().contains("Merkle root mismatch"));
+    }
+
+    #[test]
+    fn test_validate_merkle_root_fails_when_transaction_removed() {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(build_large_transaction(100))
+            .build();
+
+        // Remove the last transaction so the computed merkle root diverges from header
+        share.transactions.pop();
+
+        let error = validator().validate_merkle_root(&share).unwrap_err();
+        assert!(error.to_string().contains("Merkle root mismatch"));
     }
 }
