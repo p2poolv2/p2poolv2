@@ -445,7 +445,7 @@ fn test_share_block(
     let coinbase = test_coinbase_transaction();
 
     let share_merkle_root =
-        bitcoin::merkle_tree::calculate_root([coinbase.clone()].iter().map(|tx| tx.compute_txid()))
+        bitcoin::merkle_tree::calculate_root(transactions.iter().map(|tx| tx.compute_txid()))
             .unwrap()
             .into();
 
