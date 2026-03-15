@@ -193,6 +193,9 @@ impl DefaultShareValidator {
 
     /// Validate each transaction in the share block (context-free checks).
     ///
+    /// Checks performed on the block:
+    /// - No duplicate transactions
+    ///
     /// Checks performed per transaction:
     /// - Has at least one output
     /// - Non-coinbase transactions have at least one input
@@ -203,7 +206,14 @@ impl DefaultShareValidator {
     /// Script validation and signature verification are not performed here
     /// as rust-bitcoin does not provide a script execution engine.
     fn validate_transactions(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        let mut seen_txids = HashSet::with_capacity(share.transactions.len());
         for transaction in &share.transactions {
+            let txid = transaction.compute_txid();
+            if !seen_txids.insert(txid) {
+                return Err(ValidationError::new(format!(
+                    "Duplicate transaction {txid} in block"
+                )));
+            }
             if transaction.output.is_empty() {
                 return Err(ValidationError::new(format!(
                     "Transaction {} has no outputs",
@@ -995,7 +1005,9 @@ mod tests {
         let mut share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share.transactions.push(ShareTransaction(duplicate_input_tx));
+        share
+            .transactions
+            .push(ShareTransaction(duplicate_input_tx));
 
         let error = validator().validate_transactions(&share).unwrap_err();
         assert!(error.to_string().contains("has duplicate input"));
@@ -1049,8 +1061,31 @@ mod tests {
 
         let error = validator().validate_transactions(&share).unwrap_err();
         assert!(
-            error.to_string().contains("exceeds maximum")
-                || error.to_string().contains("overflow")
+            error.to_string().contains("exceeds maximum") || error.to_string().contains("overflow")
         );
+    }
+
+    #[test]
+    fn test_validate_transactions_fails_for_duplicate_transactions() {
+        let duplicate_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn::default()],
+            output: vec![TxOut {
+                value: bitcoin::Amount::from_sat(1000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share
+            .transactions
+            .push(ShareTransaction(duplicate_tx.clone()));
+        share.transactions.push(ShareTransaction(duplicate_tx));
+
+        let error = validator().validate_transactions(&share).unwrap_err();
+        assert!(error.to_string().contains("Duplicate transaction"));
     }
 }
