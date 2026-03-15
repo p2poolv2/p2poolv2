@@ -27,6 +27,22 @@ const OUTPOINT_SIZE: usize = 36;
 
 #[allow(dead_code)]
 impl Store {
+    /// Retrieve a single transaction output by txid and output index.
+    ///
+    /// Looks up the output in the Outputs column family using the
+    /// key format `{txid}:{vout}`.
+    pub(crate) fn get_output(&self, txid: &Txid, vout: u32) -> Result<bitcoin::TxOut, StoreError> {
+        let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
+        let output_key = format!("{txid}:{vout}");
+        match self.db.get_cf::<&[u8]>(&outputs_cf, output_key.as_ref())? {
+            Some(data) => encode::deserialize(&data)
+                .map_err(|_| StoreError::Serialization("Failed to deserialize output".to_string())),
+            None => Err(StoreError::NotFound(format!(
+                "Output not found for {txid}:{vout}"
+            ))),
+        }
+    }
+
     /// Store share chain transactions in the store
     ///
     /// Store inputs and outputs for each transaction in separate column families
@@ -423,6 +439,44 @@ mod tests {
             let tx = store.get_tx(&tx_meta.txid).unwrap();
             assert_eq!(tx.compute_txid(), tx_meta.txid);
         }
+    }
+
+    #[test]
+    fn test_get_output_succeeds_for_stored_output() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(1_000_000),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(2_000_000),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
+            ],
+        };
+
+        let txid = tx.compute_txid();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(&[ShareTransaction(tx)], false, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let output_0 = store.get_output(&txid, 0).unwrap();
+        assert_eq!(output_0.value, bitcoin::Amount::from_sat(1_000_000));
+
+        let output_1 = store.get_output(&txid, 1).unwrap();
+        assert_eq!(output_1.value, bitcoin::Amount::from_sat(2_000_000));
+
+        let missing = store.get_output(&txid, 99);
+        assert!(missing.is_err());
     }
 
     #[test]

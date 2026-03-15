@@ -66,6 +66,7 @@ rust_decimal = { version = "1.36.0", features = [
 rust_decimal_macros = "1.36.0"
 zmq = "0.10"
 bitcoin = { version = "0.32.5", features = ["serde", "rand"] }
+bitcoinconsensus = "0.106.0"
 base64 = "0.22.1"
 void = "1.0.2"
 chrono = { version = "0.4", features = ["serde"] }
