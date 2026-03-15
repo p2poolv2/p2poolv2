@@ -29,7 +29,8 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::utils::time_provider::TimeProvider;
-use bitcoin::{Target, TxMerkleNode};
+use bitcoin::{Amount, Target, TxMerkleNode};
+use std::collections::HashSet;
 use std::fmt;
 
 /// Validation error wrapping a descriptive message string.
@@ -190,7 +191,71 @@ impl DefaultShareValidator {
         Ok(())
     }
 
+    /// Validate each transaction in the share block (context-free checks).
+    ///
+    /// Checks performed per transaction:
+    /// - Has at least one output
+    /// - Non-coinbase transactions have at least one input
+    /// - No duplicate inputs (non-coinbase only)
+    /// - Each output value does not exceed MAX_MONEY
+    /// - Total output value does not overflow or exceed MAX_MONEY
+    ///
+    /// Script validation and signature verification are not performed here
+    /// as rust-bitcoin does not provide a script execution engine.
     fn validate_transactions(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        for transaction in &share.transactions {
+            if transaction.output.is_empty() {
+                return Err(ValidationError::new(format!(
+                    "Transaction {} has no outputs",
+                    transaction.compute_txid()
+                )));
+            }
+
+            if !transaction.is_coinbase() && transaction.input.is_empty() {
+                return Err(ValidationError::new(format!(
+                    "Non-coinbase transaction {} has no inputs",
+                    transaction.compute_txid()
+                )));
+            }
+
+            if !transaction.is_coinbase() {
+                let capacity = transaction.input.len();
+                let mut seen_outpoints = HashSet::with_capacity(capacity);
+                for input in &transaction.input {
+                    if !seen_outpoints.insert(input.previous_output) {
+                        return Err(ValidationError::new(format!(
+                            "Transaction {} has duplicate input {}",
+                            transaction.compute_txid(),
+                            input.previous_output
+                        )));
+                    }
+                }
+            }
+
+            let mut total_output = Amount::ZERO;
+            for output in &transaction.output {
+                if output.value > Amount::MAX_MONEY {
+                    return Err(ValidationError::new(format!(
+                        "Transaction {} output value {} exceeds maximum",
+                        transaction.compute_txid(),
+                        output.value
+                    )));
+                }
+                total_output = total_output.checked_add(output.value).ok_or_else(|| {
+                    ValidationError::new(format!(
+                        "Transaction {} total output value overflow",
+                        transaction.compute_txid()
+                    ))
+                })?;
+            }
+            if total_output > Amount::MAX_MONEY {
+                return Err(ValidationError::new(format!(
+                    "Transaction {} total output value {} exceeds maximum",
+                    transaction.compute_txid(),
+                    total_output
+                )));
+            }
+        }
         Ok(())
     }
 }
@@ -374,6 +439,7 @@ mockall::mock! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shares::share_block::ShareTransaction;
     use crate::test_utils::{
         TestShareBlockBuilder, genesis_for_tests, load_share_headers_test_data,
         setup_pool_difficulty_mocks,
@@ -850,5 +916,141 @@ mod tests {
         assert!(share.transactions.len() as u32 > TXS_COUNT_LIMIT);
         let error = validator().validate_transaction_count(&share).unwrap_err();
         assert!(error.to_string().contains("exceeds limit of"));
+    }
+
+    #[test]
+    fn test_validate_transactions_succeeds_for_valid_block() {
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+
+        let result = validator().validate_transactions(&share);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_transactions_fails_for_empty_outputs() {
+        let empty_output_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn::default()],
+            output: Vec::new(),
+        };
+
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share.transactions.push(ShareTransaction(empty_output_tx));
+
+        let error = validator().validate_transactions(&share).unwrap_err();
+        assert!(error.to_string().contains("has no outputs"));
+    }
+
+    #[test]
+    fn test_validate_transactions_fails_for_empty_inputs_non_coinbase() {
+        let no_input_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: Vec::new(),
+            output: vec![TxOut {
+                value: bitcoin::Amount::from_sat(1000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share.transactions.push(ShareTransaction(no_input_tx));
+
+        let error = validator().validate_transactions(&share).unwrap_err();
+        assert!(error.to_string().contains("has no inputs"));
+    }
+
+    #[test]
+    fn test_validate_transactions_fails_for_duplicate_inputs() {
+        let outpoint = bitcoin::OutPoint {
+            txid: bitcoin::Txid::all_zeros(),
+            vout: 0,
+        };
+        let duplicate_input_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![
+                bitcoin::TxIn {
+                    previous_output: outpoint,
+                    ..Default::default()
+                },
+                bitcoin::TxIn {
+                    previous_output: outpoint,
+                    ..Default::default()
+                },
+            ],
+            output: vec![TxOut {
+                value: bitcoin::Amount::from_sat(1000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share.transactions.push(ShareTransaction(duplicate_input_tx));
+
+        let error = validator().validate_transactions(&share).unwrap_err();
+        assert!(error.to_string().contains("has duplicate input"));
+    }
+
+    #[test]
+    fn test_validate_transactions_fails_for_output_exceeding_max_money() {
+        let over_max_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn::default()],
+            output: vec![TxOut {
+                value: bitcoin::Amount::MAX_MONEY + bitcoin::Amount::from_sat(1),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share.transactions.push(ShareTransaction(over_max_tx));
+
+        let error = validator().validate_transactions(&share).unwrap_err();
+        assert!(error.to_string().contains("output value"));
+        assert!(error.to_string().contains("exceeds maximum"));
+    }
+
+    #[test]
+    fn test_validate_transactions_fails_for_total_output_overflow() {
+        let near_max = bitcoin::Amount::MAX_MONEY;
+        let overflow_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn::default()],
+            output: vec![
+                TxOut {
+                    value: near_max,
+                    script_pubkey: ScriptBuf::new(),
+                },
+                TxOut {
+                    value: bitcoin::Amount::from_sat(1),
+                    script_pubkey: ScriptBuf::new(),
+                },
+            ],
+        };
+
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share.transactions.push(ShareTransaction(overflow_tx));
+
+        let error = validator().validate_transactions(&share).unwrap_err();
+        assert!(
+            error.to_string().contains("exceeds maximum")
+                || error.to_string().contains("overflow")
+        );
     }
 }
