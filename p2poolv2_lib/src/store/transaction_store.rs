@@ -27,6 +27,49 @@ const OUTPOINT_SIZE: usize = 36;
 
 #[allow(dead_code)]
 impl Store {
+    /// Retrieve all previous outputs spent by a transaction's inputs.
+    ///
+    /// Uses a single batch query to fetch all spent outputs, avoiding
+    /// N+1 lookups. Returns a vector of (input_index, TxOut) pairs in
+    /// input order.
+    pub(crate) fn get_all_prevouts(
+        &self,
+        transaction: &bitcoin::Transaction,
+    ) -> Result<Vec<(usize, bitcoin::TxOut)>, StoreError> {
+        let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
+        let keys: Vec<(_, String)> = transaction
+            .input
+            .iter()
+            .map(|input| {
+                let key = format!(
+                    "{}:{}",
+                    input.previous_output.txid, input.previous_output.vout
+                );
+                (&outputs_cf, key)
+            })
+            .collect();
+
+        let cf_keys: Vec<(_, &[u8])> = keys.iter().map(|(cf, key)| (*cf, key.as_bytes())).collect();
+
+        // results are in the same order as keys
+        let results = self.db.multi_get_cf(cf_keys);
+        let mut prevouts = Vec::with_capacity(results.len());
+        for (input_index, result) in results.into_iter().enumerate() {
+            let data = result?.ok_or_else(|| {
+                let outpoint = &transaction.input[input_index].previous_output;
+                StoreError::NotFound(format!(
+                    "Output not found for {}:{}",
+                    outpoint.txid, outpoint.vout
+                ))
+            })?;
+            let txout: bitcoin::TxOut = encode::deserialize(&data).map_err(|_| {
+                StoreError::Serialization("Failed to deserialize output".to_string())
+            })?;
+            prevouts.push((input_index, txout));
+        }
+        Ok(prevouts)
+    }
+
     /// Retrieve a single transaction output by txid and output index.
     ///
     /// Looks up the output in the Outputs column family using the
@@ -439,6 +482,82 @@ mod tests {
             let tx = store.get_tx(&tx_meta.txid).unwrap();
             assert_eq!(tx.compute_txid(), tx_meta.txid);
         }
+    }
+
+    #[test]
+    fn test_get_all_prevouts_succeeds_for_stored_outputs() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Create a funding transaction with two outputs
+        let funding_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(1_000_000),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(2_000_000),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
+            ],
+        };
+        let funding_txid = funding_tx.compute_txid();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(&[ShareTransaction(funding_tx)], false, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Build a spending transaction that consumes both outputs
+        let spending_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![
+                bitcoin::TxIn {
+                    previous_output: bitcoin::OutPoint::new(funding_txid, 0),
+                    ..Default::default()
+                },
+                bitcoin::TxIn {
+                    previous_output: bitcoin::OutPoint::new(funding_txid, 1),
+                    ..Default::default()
+                },
+            ],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(2_900_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+
+        let prevouts = store.get_all_prevouts(&spending_tx).unwrap();
+        assert_eq!(prevouts.len(), 2);
+        assert_eq!(prevouts[0].0, 0);
+        assert_eq!(prevouts[0].1.value, bitcoin::Amount::from_sat(1_000_000));
+        assert_eq!(prevouts[1].0, 1);
+        assert_eq!(prevouts[1].1.value, bitcoin::Amount::from_sat(2_000_000));
+    }
+
+    #[test]
+    fn test_get_all_prevouts_fails_for_missing_output() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let spending_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(Txid::all_zeros(), 0),
+                ..Default::default()
+            }],
+            output: vec![],
+        };
+
+        let result = store.get_all_prevouts(&spending_tx);
+        assert!(result.is_err());
     }
 
     #[test]

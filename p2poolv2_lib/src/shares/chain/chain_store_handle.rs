@@ -96,6 +96,14 @@ impl ChainStoreHandle {
     // DIRECT READS - These delegate to StoreHandle (may block briefly)
     // ========================================================================
 
+    /// Retrieve all previous outputs spent by a transaction's inputs.
+    pub fn get_all_prevouts(
+        &self,
+        transaction: &bitcoin::Transaction,
+    ) -> Result<Vec<(usize, bitcoin::TxOut)>, StoreError> {
+        self.store_handle.get_all_prevouts(transaction)
+    }
+
     /// Retrieve a single transaction output by txid and output index.
     pub fn get_output(
         &self,
@@ -571,6 +579,7 @@ mockall::mock! {
         pub fn has_status(&self, hash: &BlockHash, status: Status) -> bool;
         pub fn get_blockhashes_for_height(&self, height: u32) -> Vec<BlockHash>;
         pub fn network(&self) -> bitcoin::Network;
+        pub fn get_all_prevouts(&self, transaction: &bitcoin::Transaction) -> Result<Vec<(usize, bitcoin::TxOut)>, StoreError>;
         pub fn get_output(&self, txid: &bitcoin::Txid, vout: u32) -> Result<bitcoin::TxOut, StoreError>;
         pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool;
         pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock>;
