@@ -27,7 +27,7 @@ use crate::pool_difficulty::PoolDifficulty;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::shares::share_block::ShareBlock;
+use crate::shares::share_block::{ShareBlock, ShareTransaction};
 use crate::utils::time_provider::TimeProvider;
 use bitcoin::{Amount, Target, TxMerkleNode};
 use std::collections::HashSet;
@@ -193,8 +193,8 @@ impl DefaultShareValidator {
 
     /// Validate scripts and signatures for all non-coinbase transactions.
     ///
-    /// For each input of each non-coinbase transaction, looks up the spent
-    /// output from the chain store and verifies the script using
+    /// Iterates over each non-coinbase transaction, collects spent outputs
+    /// from the chain store, and verifies each input script using
     /// libbitcoinconsensus. Coinbase transactions are skipped since they
     /// have no inputs to validate.
     fn validate_scripts(
@@ -206,37 +206,77 @@ impl DefaultShareValidator {
             if transaction.is_coinbase() {
                 continue;
             }
-
             let txid = transaction.compute_txid();
-            let serialized_tx = bitcoin::consensus::serialize(&transaction.0);
+            let spent_outputs =
+                Self::collect_spent_outputs(transaction, chain_store_handle, &txid)?;
+            Self::validate_scripts_for_tx(transaction, &spent_outputs, &txid)?;
+        }
+        Ok(())
+    }
 
-            for (input_index, input) in transaction.input.iter().enumerate() {
-                let spent_output = chain_store_handle
-                    .get_output(
-                        &input.previous_output.txid,
-                        input.previous_output.vout,
-                    )
-                    .map_err(|error| {
-                        ValidationError::new(format!(
-                            "Failed to look up spent output {} for transaction {txid} input {input_index}: {error}",
-                            input.previous_output
-                        ))
-                    })?;
-
-                // Not checking for taproot yet.
-                bitcoinconsensus::verify(
-                    spent_output.script_pubkey.as_bytes(),
-                    spent_output.value.to_sat(),
-                    &serialized_tx,
-                    None,
-                    input_index,
+    /// Collect all spent outputs for a transaction from the chain store.
+    ///
+    /// Taproot verification requires the full set of spent outputs for
+    /// signature hashing, so all outputs are collected upfront rather
+    /// than one at a time.
+    fn collect_spent_outputs(
+        transaction: &ShareTransaction,
+        chain_store_handle: &ChainStoreHandle,
+        txid: &bitcoin::Txid,
+    ) -> Result<Vec<bitcoin::TxOut>, ValidationError> {
+        let mut spent_outputs = Vec::with_capacity(transaction.input.len());
+        for (input_index, input) in transaction.input.iter().enumerate() {
+            let spent_output = chain_store_handle
+                .get_output(
+                    &input.previous_output.txid,
+                    input.previous_output.vout,
                 )
                 .map_err(|error| {
                     ValidationError::new(format!(
-                        "Script verification failed for transaction {txid} input {input_index}: {error:?}"
+                        "Failed to look up spent output {} for transaction {txid} input {input_index}: {error}",
+                        input.previous_output
                     ))
                 })?;
-            }
+            spent_outputs.push(spent_output);
+        }
+        Ok(spent_outputs)
+    }
+
+    /// Verify all input scripts for a single transaction.
+    ///
+    /// Builds the bitcoinconsensus Utxo slice from the spent outputs and
+    /// calls the consensus script verifier for each input. The Utxo
+    /// struct holds raw pointers into the TxOut data, so spent_outputs
+    /// must remain alive for the duration of verification.
+    fn validate_scripts_for_tx(
+        transaction: &ShareTransaction,
+        spent_outputs: &[bitcoin::TxOut],
+        txid: &bitcoin::Txid,
+    ) -> Result<(), ValidationError> {
+        let serialized_tx = bitcoin::consensus::serialize(&transaction.0);
+
+        let utxos: Vec<bitcoinconsensus::Utxo> = spent_outputs
+            .iter()
+            .map(|txout| bitcoinconsensus::Utxo {
+                script_pubkey: txout.script_pubkey.as_bytes().as_ptr(),
+                script_pubkey_len: txout.script_pubkey.len() as u32,
+                value: txout.value.to_sat() as i64,
+            })
+            .collect();
+
+        for (input_index, spent_output) in spent_outputs.iter().enumerate() {
+            bitcoinconsensus::verify(
+                spent_output.script_pubkey.as_bytes(),
+                spent_output.value.to_sat(),
+                &serialized_tx,
+                Some(&utxos),
+                input_index,
+            )
+            .map_err(|error| {
+                ValidationError::new(format!(
+                    "Script verification failed for transaction {txid} input {input_index}: {error:?}"
+                ))
+            })?;
         }
         Ok(())
     }
