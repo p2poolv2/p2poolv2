@@ -191,6 +191,56 @@ impl DefaultShareValidator {
         Ok(())
     }
 
+    /// Validate scripts and signatures for all non-coinbase transactions.
+    ///
+    /// For each input of each non-coinbase transaction, looks up the spent
+    /// output from the chain store and verifies the script using
+    /// libbitcoinconsensus. Coinbase transactions are skipped since they
+    /// have no inputs to validate.
+    fn validate_scripts(
+        &self,
+        share: &ShareBlock,
+        chain_store_handle: &ChainStoreHandle,
+    ) -> Result<(), ValidationError> {
+        for transaction in &share.transactions {
+            if transaction.is_coinbase() {
+                continue;
+            }
+
+            let txid = transaction.compute_txid();
+            let serialized_tx = bitcoin::consensus::serialize(&transaction.0);
+
+            for (input_index, input) in transaction.input.iter().enumerate() {
+                let spent_output = chain_store_handle
+                    .get_output(
+                        &input.previous_output.txid,
+                        input.previous_output.vout,
+                    )
+                    .map_err(|error| {
+                        ValidationError::new(format!(
+                            "Failed to look up spent output {} for transaction {txid} input {input_index}: {error}",
+                            input.previous_output
+                        ))
+                    })?;
+
+                // Not checking for taproot yet.
+                bitcoinconsensus::verify(
+                    spent_output.script_pubkey.as_bytes(),
+                    spent_output.value.to_sat(),
+                    &serialized_tx,
+                    None,
+                    input_index,
+                )
+                .map_err(|error| {
+                    ValidationError::new(format!(
+                        "Script verification failed for transaction {txid} input {input_index}: {error:?}"
+                    ))
+                })?;
+            }
+        }
+        Ok(())
+    }
+
     /// Validate each transaction in the share block (context-free checks).
     ///
     /// Checks performed on the block:
@@ -353,6 +403,7 @@ impl ShareValidator for DefaultShareValidator {
         self.validate_merkle_root(share)?;
         self.validate_transaction_count(share)?;
         self.validate_transactions(share)?;
+        self.validate_scripts(share, chain_store_handle)?;
         Ok(())
     }
 
@@ -1078,5 +1129,188 @@ mod tests {
 
         let error = validator().validate_transactions(&share).unwrap_err();
         assert!(error.to_string().contains("Duplicate transaction"));
+    }
+
+    #[test]
+    fn test_validate_scripts_succeeds_for_coinbase_only() {
+        let chain_store_handle = ChainStoreHandle::default();
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+
+        let result = validator().validate_scripts(&share, &chain_store_handle);
+        assert!(
+            result.is_ok(),
+            "Coinbase-only block should pass script validation"
+        );
+    }
+
+    /// Build a spending transaction that uses OP_TRUE as redeem script via P2SH.
+    ///
+    /// The scriptPubKey is P2SH `hash160 OP_TRUE equal`, and the scriptSig pushes
+    /// the OP_TRUE redeem script. This creates a valid spend without needing
+    /// real signatures.
+    fn build_p2sh_op_true_spent_output_and_spending_tx() -> (bitcoin::TxOut, bitcoin::Transaction) {
+        // Redeem script: OP_TRUE (0x51)
+        let redeem_script = bitcoin::Script::builder()
+            .push_opcode(bitcoin::opcodes::all::OP_PUSHNUM_1)
+            .into_script();
+
+        // P2SH scriptPubKey: OP_HASH160 <hash(redeem_script)> OP_EQUAL
+        let script_pubkey = redeem_script.to_p2sh();
+
+        let spent_output = bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(50_000),
+            script_pubkey,
+        };
+
+        // scriptSig pushes the redeem script.
+        // Build the push manually: <length> <redeem_script_bytes>
+        let mut script_sig_bytes = Vec::with_capacity(1 + redeem_script.len());
+        script_sig_bytes.push(redeem_script.len() as u8);
+        script_sig_bytes.extend_from_slice(redeem_script.as_bytes());
+        let script_sig = ScriptBuf::from(script_sig_bytes);
+
+        let spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint {
+                    txid: bitcoin::Txid::all_zeros(),
+                    vout: 0,
+                },
+                script_sig,
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(49_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        (spent_output, spending_tx)
+    }
+
+    #[test]
+    fn test_validate_scripts_succeeds_for_valid_p2sh_script() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        let (spent_output, spending_tx) = build_p2sh_op_true_spent_output_and_spending_tx();
+
+        let spent_output_clone = spent_output.clone();
+        chain_store_handle
+            .expect_get_output()
+            .returning(move |_txid, _vout| Ok(spent_output_clone.clone()));
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spending_tx)
+            .build();
+
+        let result = validator().validate_scripts(&share, &chain_store_handle);
+        assert!(
+            result.is_ok(),
+            "Valid P2SH OP_TRUE spend should pass: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_validate_scripts_fails_for_invalid_script() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        // Build a spent output with P2SH wrapping OP_TRUE
+        let redeem_script = bitcoin::Script::builder()
+            .push_opcode(bitcoin::opcodes::all::OP_PUSHNUM_1)
+            .into_script();
+        let script_pubkey = redeem_script.to_p2sh();
+
+        let spent_output = bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(50_000),
+            script_pubkey,
+        };
+
+        // Spending tx with EMPTY scriptSig -- does not push the redeem script
+        let invalid_spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint {
+                    txid: bitcoin::Txid::all_zeros(),
+                    vout: 0,
+                },
+                script_sig: ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(49_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        let spent_output_clone = spent_output.clone();
+        chain_store_handle
+            .expect_get_output()
+            .returning(move |_txid, _vout| Ok(spent_output_clone.clone()));
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(invalid_spending_tx)
+            .build();
+
+        let error = validator()
+            .validate_scripts(&share, &chain_store_handle)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("Script verification failed"),
+            "Expected script verification failure, got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_validate_scripts_fails_for_missing_utxo() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        let spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint {
+                    txid: bitcoin::Txid::all_zeros(),
+                    vout: 0,
+                },
+                script_sig: ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(49_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        chain_store_handle
+            .expect_get_output()
+            .returning(|_txid, _vout| {
+                Err(crate::store::writer::StoreError::NotFound(
+                    "Output not found".to_string(),
+                ))
+            });
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spending_tx)
+            .build();
+
+        let error = validator()
+            .validate_scripts(&share, &chain_store_handle)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("Failed to look up spent output"),
+            "Expected UTXO lookup failure, got: {error}"
+        );
     }
 }
