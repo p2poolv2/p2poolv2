@@ -216,30 +216,22 @@ impl DefaultShareValidator {
 
     /// Collect all spent outputs for a transaction from the chain store.
     ///
-    /// Taproot verification requires the full set of spent outputs for
-    /// signature hashing, so all outputs are collected upfront rather
-    /// than one at a time.
+    /// Uses a batch query to fetch all previous outputs in a single
+    /// store call. Taproot verification requires the full set of spent
+    /// outputs for signature hashing, so all outputs are collected
+    /// upfront. Returns (input_index, TxOut) pairs in input order.
     fn collect_spent_outputs(
         transaction: &ShareTransaction,
         chain_store_handle: &ChainStoreHandle,
         txid: &bitcoin::Txid,
-    ) -> Result<Vec<bitcoin::TxOut>, ValidationError> {
-        let mut spent_outputs = Vec::with_capacity(transaction.input.len());
-        for (input_index, input) in transaction.input.iter().enumerate() {
-            let spent_output = chain_store_handle
-                .get_output(
-                    &input.previous_output.txid,
-                    input.previous_output.vout,
-                )
-                .map_err(|error| {
-                    ValidationError::new(format!(
-                        "Failed to look up spent output {} for transaction {txid} input {input_index}: {error}",
-                        input.previous_output
-                    ))
-                })?;
-            spent_outputs.push(spent_output);
-        }
-        Ok(spent_outputs)
+    ) -> Result<Vec<(usize, bitcoin::TxOut)>, ValidationError> {
+        chain_store_handle
+            .get_all_prevouts(&transaction.0)
+            .map_err(|error| {
+                ValidationError::new(format!(
+                    "Failed to look up spent outputs for transaction {txid}: {error}"
+                ))
+            })
     }
 
     /// Verify all input scripts for a single transaction.
@@ -250,27 +242,27 @@ impl DefaultShareValidator {
     /// must remain alive for the duration of verification.
     fn validate_scripts_for_tx(
         transaction: &ShareTransaction,
-        spent_outputs: &[bitcoin::TxOut],
+        spent_outputs: &[(usize, bitcoin::TxOut)],
         txid: &bitcoin::Txid,
     ) -> Result<(), ValidationError> {
         let serialized_tx = bitcoin::consensus::serialize(&transaction.0);
 
         let utxos: Vec<bitcoinconsensus::Utxo> = spent_outputs
             .iter()
-            .map(|txout| bitcoinconsensus::Utxo {
+            .map(|(_index, txout)| bitcoinconsensus::Utxo {
                 script_pubkey: txout.script_pubkey.as_bytes().as_ptr(),
                 script_pubkey_len: txout.script_pubkey.len() as u32,
                 value: txout.value.to_sat() as i64,
             })
             .collect();
 
-        for (input_index, spent_output) in spent_outputs.iter().enumerate() {
+        for (input_index, spent_output) in spent_outputs {
             bitcoinconsensus::verify(
                 spent_output.script_pubkey.as_bytes(),
                 spent_output.value.to_sat(),
                 &serialized_tx,
                 Some(&utxos),
-                input_index,
+                *input_index,
             )
             .map_err(|error| {
                 ValidationError::new(format!(
@@ -1241,8 +1233,8 @@ mod tests {
 
         let spent_output_clone = spent_output.clone();
         chain_store_handle
-            .expect_get_output()
-            .returning(move |_txid, _vout| Ok(spent_output_clone.clone()));
+            .expect_get_all_prevouts()
+            .returning(move |_tx| Ok(vec![(0, spent_output_clone.clone())]));
 
         let share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
@@ -1293,8 +1285,8 @@ mod tests {
 
         let spent_output_clone = spent_output.clone();
         chain_store_handle
-            .expect_get_output()
-            .returning(move |_txid, _vout| Ok(spent_output_clone.clone()));
+            .expect_get_all_prevouts()
+            .returning(move |_tx| Ok(vec![(0, spent_output_clone.clone())]));
 
         let share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
@@ -1333,8 +1325,8 @@ mod tests {
         };
 
         chain_store_handle
-            .expect_get_output()
-            .returning(|_txid, _vout| {
+            .expect_get_all_prevouts()
+            .returning(|_tx| {
                 Err(crate::store::writer::StoreError::NotFound(
                     "Output not found".to_string(),
                 ))
@@ -1349,7 +1341,9 @@ mod tests {
             .validate_scripts(&share, &chain_store_handle)
             .unwrap_err();
         assert!(
-            error.to_string().contains("Failed to look up spent output"),
+            error
+                .to_string()
+                .contains("Failed to look up spent outputs"),
             "Expected UTXO lookup failure, got: {error}"
         );
     }
