@@ -19,8 +19,8 @@
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::shares::share_block::share_coinbase::build_share_coinbase;
 use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
+use crate::shares::transactions::coinbase::create_coinbase_transaction;
 use crate::stratum::emission::Emission;
 use bitcoin::merkle_tree;
 use std::error::Error;
@@ -36,8 +36,7 @@ pub async fn handle_stratum_share(
 ) -> Result<Option<ShareBlock>, Box<dyn Error + Send + Sync>> {
     // Send share to peers only in p2p mode, i.e. if the pool is run with a miner address that results in a commitment
     if let Some(share_commitment) = emission.share_commitment {
-        let share_coinbase = build_share_coinbase(&share_commitment.miner_address)
-            .map_err(|e| format!("Failed to build coinbase. {e}"))?;
+        let share_coinbase = create_coinbase_transaction(&share_commitment.miner_address);
 
         // TODO: Get share chain transactions and use them here.
         let share_transactions = vec![ShareTransaction(share_coinbase)];
