@@ -29,6 +29,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::{ShareBlock, ShareTransaction};
 use crate::shares::share_commitment::ShareCommitment;
+use crate::stratum::work::coinbase;
 use crate::utils::time_provider::TimeProvider;
 use bitcoin::{Amount, Target, TxMerkleNode};
 use std::collections::HashSet;
@@ -366,6 +367,44 @@ impl DefaultShareValidator {
 
         Ok(())
     }
+
+    /// Validate the commitment hash in the bitcoin coinbase scriptSig matches
+    /// the expected commitment reconstructed from the share header.
+    fn validate_commitment_hash(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        let bitcoin_coinbase = share
+            .bitcoin_transactions
+            .first()
+            .ok_or_else(|| ValidationError::new("Share block has no bitcoin transactions"))?;
+
+        let extracted_hash = coinbase::extract_commitment_hash_from_coinbase(bitcoin_coinbase)
+            .map_err(|error| {
+                ValidationError::new(format!("Failed to extract commitment hash: {error}"))
+            })?;
+
+        let bitcoin_template_transactions = if share.bitcoin_transactions.len() > 1 {
+            &share.bitcoin_transactions[1..]
+        } else {
+            &[]
+        };
+        let expected_commitment =
+            ShareCommitment::from_share_header(&share.header, bitcoin_template_transactions);
+        let expected_hash = expected_commitment.hash();
+
+        if extracted_hash != expected_hash {
+            return Err(ValidationError::new(format!(
+                "Commitment hash mismatch: coinbase has {extracted_hash} but share computes to {expected_hash}"
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Validate the coinbase payouts match expected and the share commitment
+    /// in the bitcoin coinbase matches the share block.
+    fn validate_bitcoin_coinbase(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        self.validate_commitment_hash(share)?;
+        Ok(())
+    }
 }
 
 impl ShareValidator for DefaultShareValidator {
@@ -456,7 +495,7 @@ impl ShareValidator for DefaultShareValidator {
         self.validate_uncles(share, chain_store_handle)?;
         self.validate_block_size(share)?;
         self.validate_share_coinbase(share)?;
-        // self.validate_bitcoin_coinbase(share)?;
+        self.validate_bitcoin_coinbase(share)?;
         self.validate_merkle_root(share)?;
         self.validate_transaction_count(share)?;
         self.validate_transactions(share)?;

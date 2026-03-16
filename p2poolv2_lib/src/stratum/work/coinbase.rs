@@ -538,7 +538,7 @@ mod tests {
         let share_commitment = create_test_commitment();
         let share_commitment = ShareCommitment {
             prev_share_blockhash: genesis.block_hash(),
-            merkle_root: template.get_merkle_root_without_coinbase(),
+            bitcoin_merkle_root: template.get_merkle_root_without_coinbase(),
             ..share_commitment
         };
 
@@ -724,7 +724,7 @@ mod tests {
 
         let share_commitment = ShareCommitment {
             prev_share_blockhash: genesis_for_tests().block_hash(),
-            merkle_root: template.get_merkle_root_without_coinbase(),
+            bitcoin_merkle_root: template.get_merkle_root_without_coinbase(),
             ..create_test_commitment()
         };
         let expected_hash = share_commitment.hash();

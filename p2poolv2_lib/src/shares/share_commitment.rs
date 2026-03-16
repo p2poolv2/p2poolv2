@@ -55,8 +55,8 @@ pub struct ShareCommitment {
     /// Bitcoin address identifying the miner mining the share
     #[serde(serialize_with = "address_serde::serialize")]
     pub miner_address: Address,
-    /// Share block transactions merkle root. If there are no transactions, this is None.
-    pub merkle_root: Option<TxMerkleNode>,
+    /// Bitcoin transactions merkle root excluding the coinbase.
+    pub bitcoin_merkle_root: Option<TxMerkleNode>,
     /// Share chain difficult as compact target
     pub bits: CompactTarget,
     /// Timestamp for the share, as set by the miner
@@ -99,7 +99,7 @@ impl ShareCommitment {
             prev_share_blockhash: header.prev_share_blockhash,
             uncles: header.uncles.clone(),
             miner_address: header.miner_address.clone(),
-            merkle_root,
+            bitcoin_merkle_root: merkle_root,
             bits: header.bits,
             time: header.time,
         }
@@ -120,7 +120,7 @@ impl Encodable for ShareCommitment {
         len += self.prev_share_blockhash.consensus_encode(w)?;
         len += self.uncles.consensus_encode(w)?;
 
-        match &self.merkle_root {
+        match &self.bitcoin_merkle_root {
             Some(root) => {
                 len += true.consensus_encode(w)?;
                 len += root.consensus_encode(w)?;
@@ -162,7 +162,7 @@ pub(crate) fn build_share_commitment(
             prev_share_blockhash: tip,
             uncles: uncles.into_iter().collect(),
             miner_address: address,
-            merkle_root,
+            bitcoin_merkle_root: merkle_root,
             bits: target,
             time,
         })),
@@ -264,7 +264,7 @@ mod tests {
         assert_ne!(commitment1.hash(), commitment3.hash());
 
         let mut commitment4 = create_test_commitment();
-        commitment4.merkle_root = None;
+        commitment4.bitcoin_merkle_root = None;
         assert_ne!(commitment1.hash(), commitment4.hash());
     }
 
@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn test_serialization_with_none_merkle_root() {
         let mut commitment = create_test_commitment();
-        commitment.merkle_root = None;
+        commitment.bitcoin_merkle_root = None;
 
         let mut serialized = Vec::new();
         commitment.consensus_encode(&mut serialized).unwrap();
@@ -361,7 +361,7 @@ mod tests {
         // Time should be current, so just verify it's set
         assert!(commitment.time > 0);
         // Merkle root should be None for template with no transactions
-        assert_eq!(commitment.merkle_root, None);
+        assert_eq!(commitment.bitcoin_merkle_root, None);
     }
 
     #[test]
@@ -570,7 +570,7 @@ mod tests {
         )
         .map(|txid| txid.into());
 
-        assert_eq!(reconstructed.merkle_root, expected_merkle_root);
+        assert_eq!(reconstructed.bitcoin_merkle_root, expected_merkle_root);
     }
 
     #[test]
@@ -583,7 +583,7 @@ mod tests {
             serde_json::from_str(json_content).expect("Failed to parse template JSON");
 
         let mut commitment = create_test_commitment();
-        commitment.merkle_root = template.get_merkle_root_without_coinbase();
+        commitment.bitcoin_merkle_root = template.get_merkle_root_without_coinbase();
         let expected_hash = commitment.hash();
 
         let (header, bitcoin_transactions) =
