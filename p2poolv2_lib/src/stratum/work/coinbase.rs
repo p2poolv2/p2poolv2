@@ -22,9 +22,10 @@ use bitcoin::blockdata::script::{Builder, ScriptBuf};
 use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::hashes::{self, Hash, sha256d};
 use bitcoin::network::Network;
-use bitcoin::script::PushBytesBuf;
+use bitcoin::script::{Instruction, PushBytesBuf};
 use bitcoin::transaction::{Sequence, Transaction, TxIn, TxOut, Version};
 use bitcoin::{Address, Amount};
+use hashes::sha256;
 use hex::FromHex;
 
 #[allow(dead_code)]
@@ -112,7 +113,7 @@ pub(crate) fn build_coinbase_transaction(
     aux_flags: PushBytesBuf,
     default_witness_commitment: Option<String>,
     pool_signature: &[u8],
-    commitment_hash: Option<hashes::sha256::Hash>,
+    commitment_hash: Option<sha256::Hash>,
 ) -> Result<Transaction, WorkError> {
     if output_data.is_empty() {
         return Err(WorkError {
@@ -221,6 +222,53 @@ pub fn extract_outputs_from_coinbase2(
     deserialize::<Vec<TxOut>>(output_data).map_err(|_| WorkError {
         message: "Bad outputs in coinbase2".into(),
     })
+}
+
+/// Extract the commitment hash from a bitcoin coinbase transaction's scriptSig.
+///
+/// The coinbase scriptSig layout is: push(height), push(commitment_hash_32bytes), ...
+/// Skips the first instruction (block height) and reads the second instruction
+/// which should be a 32-byte push containing the commitment hash.
+pub fn extract_commitment_hash_from_coinbase(
+    coinbase: &Transaction,
+) -> Result<sha256::Hash, WorkError> {
+    let input = coinbase.input.first().ok_or_else(|| WorkError {
+        message: "Bitcoin coinbase has no inputs".to_string(),
+    })?;
+
+    let mut instructions = input.script_sig.instructions();
+
+    // Skip block height (first instruction)
+    instructions
+        .next()
+        .ok_or_else(|| WorkError {
+            message: "Bitcoin coinbase scriptSig is empty".to_string(),
+        })?
+        .map_err(|error| WorkError {
+            message: format!("Invalid bitcoin coinbase scriptSig: {error}"),
+        })?;
+
+    // Second instruction should be the 32-byte commitment hash
+    let commitment_instruction = instructions
+        .next()
+        .ok_or_else(|| WorkError {
+            message: "Bitcoin coinbase scriptSig missing commitment hash".to_string(),
+        })?
+        .map_err(|error| WorkError {
+            message: format!("Invalid bitcoin coinbase scriptSig: {error}"),
+        })?;
+
+    match commitment_instruction {
+        Instruction::PushBytes(bytes) if bytes.len() == 32 => {
+            let mut hash_bytes = [0u8; 32];
+            hash_bytes.copy_from_slice(bytes.as_bytes());
+            Ok(sha256::Hash::from_byte_array(hash_bytes))
+        }
+        _ => Err(WorkError {
+            message: "Bitcoin coinbase scriptSig does not contain a 32-byte commitment hash"
+                .to_string(),
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -659,5 +707,89 @@ mod tests {
         let result = extract_outputs_from_coinbase2("not_valid_hex!", 8);
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("parsing coinbase hex"));
+    }
+
+    #[test]
+    fn test_extract_commitment_hash_from_coinbase_with_commitment() {
+        let data = include_str!(
+            "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/four-txns/gbt.json"
+        );
+        let template: BlockTemplate = serde_json::from_str(data).expect("Invalid JSON");
+
+        let address = parse_address(
+            "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr",
+            bitcoin::Network::Regtest,
+        )
+        .unwrap();
+
+        let share_commitment = ShareCommitment {
+            prev_share_blockhash: genesis_for_tests().block_hash(),
+            merkle_root: template.get_merkle_root_without_coinbase(),
+            ..create_test_commitment()
+        };
+        let expected_hash = share_commitment.hash();
+
+        let coinbase = build_coinbase_transaction(
+            Version(1),
+            &[OutputPair {
+                address: address.clone(),
+                amount: Amount::from_str("50 BTC").unwrap(),
+            }],
+            template.height as i64,
+            PushBytesBuf::from(&[0u8]),
+            None,
+            b"P2Poolv2",
+            Some(expected_hash),
+        )
+        .unwrap();
+
+        let extracted_hash = extract_commitment_hash_from_coinbase(&coinbase).unwrap();
+        assert_eq!(extracted_hash, expected_hash);
+    }
+
+    #[test]
+    fn test_extract_commitment_hash_from_coinbase_without_commitment() {
+        let address = parse_address(
+            "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr",
+            bitcoin::Network::Regtest,
+        )
+        .unwrap();
+
+        let coinbase = build_coinbase_transaction(
+            Version(1),
+            &[OutputPair {
+                address: address.clone(),
+                amount: Amount::from_str("50 BTC").unwrap(),
+            }],
+            100,
+            PushBytesBuf::from(&[0u8]),
+            None,
+            b"P2Poolv2",
+            None,
+        )
+        .unwrap();
+
+        let result = extract_commitment_hash_from_coinbase(&coinbase);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .message
+                .contains("does not contain a 32-byte commitment hash")
+        );
+    }
+
+    #[test]
+    fn test_extract_commitment_hash_from_coinbase_empty_inputs() {
+        let coinbase = Transaction {
+            version: Version(1),
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+
+        let result = extract_commitment_hash_from_coinbase(&coinbase);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("no inputs"));
     }
 }
