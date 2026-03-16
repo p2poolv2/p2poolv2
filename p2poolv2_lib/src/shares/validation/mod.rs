@@ -31,7 +31,7 @@ use crate::shares::share_block::{ShareBlock, ShareTransaction};
 use crate::shares::share_commitment::ShareCommitment;
 use crate::stratum::work::coinbase;
 use crate::utils::time_provider::TimeProvider;
-use bitcoin::{Amount, Target, TxMerkleNode};
+use bitcoin::{Amount, Target, Transaction, TxMerkleNode};
 use std::collections::HashSet;
 use std::fmt;
 
@@ -370,12 +370,11 @@ impl DefaultShareValidator {
 
     /// Validate the commitment hash in the bitcoin coinbase scriptSig matches
     /// the expected commitment reconstructed from the share header.
-    fn validate_commitment_hash(&self, share: &ShareBlock) -> Result<(), ValidationError> {
-        let bitcoin_coinbase = share
-            .bitcoin_transactions
-            .first()
-            .ok_or_else(|| ValidationError::new("Share block has no bitcoin transactions"))?;
-
+    fn validate_commitment_hash(
+        &self,
+        share: &ShareBlock,
+        bitcoin_coinbase: &Transaction,
+    ) -> Result<(), ValidationError> {
         let extracted_hash = coinbase::extract_commitment_hash_from_coinbase(bitcoin_coinbase)
             .map_err(|error| {
                 ValidationError::new(format!("Failed to extract commitment hash: {error}"))
@@ -402,7 +401,18 @@ impl DefaultShareValidator {
     /// Validate the coinbase payouts match expected and the share commitment
     /// in the bitcoin coinbase matches the share block.
     fn validate_bitcoin_coinbase(&self, share: &ShareBlock) -> Result<(), ValidationError> {
-        self.validate_commitment_hash(share)?;
+        let bitcoin_coinbase = share
+            .bitcoin_transactions
+            .first()
+            .ok_or_else(|| ValidationError::new("Share block has no bitcoin transactions"))?;
+
+        if !bitcoin_coinbase.is_coinbase() {
+            return Err(ValidationError::new(
+                "First transaction of bitcoin block is not a coinbase",
+            ));
+        }
+
+        self.validate_commitment_hash(share, &bitcoin_coinbase)?;
         Ok(())
     }
 }
