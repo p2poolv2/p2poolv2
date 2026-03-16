@@ -83,7 +83,7 @@ impl ShareCommitment {
     ///
     /// The template transactions are the non-coinbase bitcoin transactions
     /// (bitcoin_transactions[1..] from the ShareBlock). Their merkle root is
-    /// computed and stored as the commitment's merkle_root field.
+    /// computed and stored as the commitment's bitcoin_merkle_root field.
     pub fn from_share_header(
         header: &ShareHeader,
         bitcoin_template_transactions: &[Transaction],
