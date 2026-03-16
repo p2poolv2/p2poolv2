@@ -226,7 +226,7 @@ pub(crate) fn prepare_notify_params(
         prev_share_blockhash,
         uncles: uncles.clone(),
         miner_address: output_distribution[0].address.clone(),
-        merkle_root,
+        bitcoin_merkle_root: merkle_root,
         bits,
         time,
     };
@@ -316,7 +316,7 @@ pub(crate) fn build_notify_from_prepared(
         prev_share_blockhash: prepared.prev_share_blockhash,
         uncles: prepared.uncles.clone(),
         miner_address: address.clone(),
-        merkle_root: prepared.merkle_root,
+        bitcoin_merkle_root: prepared.merkle_root,
         bits: prepared.bits,
         time: prepared.time,
     });
@@ -497,7 +497,7 @@ mod tests {
             prev_share_blockhash,
             uncles,
             miner_address: address,
-            merkle_root,
+            bitcoin_merkle_root: merkle_root,
             bits,
             time,
         };

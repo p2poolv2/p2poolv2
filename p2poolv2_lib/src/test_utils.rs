@@ -161,7 +161,7 @@ pub fn create_test_commitment() -> ShareCommitment {
         .unwrap(),
         uncles: vec![],
         miner_address: btcaddress,
-        merkle_root: Some(TxMerkleNode::all_zeros()),
+        bitcoin_merkle_root: Some(TxMerkleNode::all_zeros()),
         bits: CompactTarget::from_consensus(0x1b4188f5),
         time: 1700000000,
     }
@@ -237,25 +237,70 @@ pub fn load_valid_stratum_work_components(
 
 #[cfg(test)]
 pub fn build_block_from_work_components(path: &str) -> ShareBlock {
+    use crate::accounting::OutputPair;
+    use crate::shares::share_commitment::ShareCommitment;
+    use crate::stratum::work::coinbase::build_coinbase_transaction;
     use bitcoin::TxMerkleNode;
+    use bitcoin::script::PushBytesBuf;
 
     let (template, _notify, submit, _authorize) = load_valid_stratum_work_components(path);
 
-    let coinbase = test_coinbase_transaction();
+    let share_coinbase = test_coinbase_transaction();
 
-    let share_merkle_root: TxMerkleNode =
-        bitcoin::merkle_tree::calculate_root([coinbase.clone()].iter().map(|tx| tx.compute_txid()))
-            .unwrap()
-            .into();
+    let share_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
+        [share_coinbase.clone()].iter().map(|tx| tx.compute_txid()),
+    )
+    .unwrap()
+    .into();
 
-    let mut bitcoin_transactions: Vec<Transaction> = template
+    let pubkey = CompressedPublicKey::from_str(
+        "020202020202020202020202020202020202020202020202020202020202020202",
+    )
+    .unwrap();
+    let btcaddress = Address::p2wpkh(&pubkey, bitcoin::Network::Signet);
+
+    // Build template (non-coinbase) bitcoin transactions
+    let template_transactions: Vec<Transaction> = template
         .transactions
         .iter()
         .map(bitcoin::Transaction::from)
         .collect();
 
-    // For the tests use the same coinbase as share block, i.e. using the same pubkey. This is so we don't have empty transactions and end up with a None merkle root.
-    bitcoin_transactions.insert(0, coinbase.clone());
+    // Compute the commitment merkle root from template transactions
+    let commitment_merkle_root: Option<TxMerkleNode> = bitcoin::merkle_tree::calculate_root(
+        template_transactions.iter().map(|tx| tx.compute_txid()),
+    )
+    .map(|txid| txid.into());
+
+    // Build the share commitment and compute its hash
+    let share_commitment = ShareCommitment {
+        prev_share_blockhash: BlockHash::all_zeros(),
+        uncles: vec![],
+        miner_address: btcaddress.clone(),
+        bitcoin_merkle_root: commitment_merkle_root,
+        bits: CompactTarget::from_consensus(0x1b4188f5),
+        time: 1700000000u32,
+    };
+    let commitment_hash = share_commitment.hash();
+
+    // Build bitcoin coinbase with the commitment hash embedded in scriptSig
+    let bitcoin_coinbase = build_coinbase_transaction(
+        bitcoin::transaction::Version(1),
+        &[OutputPair {
+            address: btcaddress.clone(),
+            amount: bitcoin::Amount::from_sat(template.coinbasevalue),
+        }],
+        template.height as i64,
+        PushBytesBuf::from(&[0u8]),
+        template.default_witness_commitment.clone(),
+        b"P2Poolv2",
+        Some(commitment_hash),
+    )
+    .expect("Failed to build bitcoin coinbase for test");
+
+    let mut bitcoin_transactions = Vec::with_capacity(template_transactions.len() + 1);
+    bitcoin_transactions.push(bitcoin_coinbase);
+    bitcoin_transactions.extend(template_transactions);
 
     let bitcoin_merkle_root = bitcoin::merkle_tree::calculate_root(
         bitcoin_transactions.iter().map(|tx| tx.compute_txid()),
@@ -272,12 +317,6 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
         nonce: u32::from_str_radix(submit.params[4].as_ref().unwrap(), 16).unwrap(),
     };
 
-    let pubkey = CompressedPublicKey::from_str(
-        "020202020202020202020202020202020202020202020202020202020202020202",
-    )
-    .unwrap();
-    let btcaddress = Address::p2wpkh(&pubkey, bitcoin::Network::Signet);
-
     let share_header = ShareHeader {
         prev_share_blockhash: BlockHash::all_zeros(),
         uncles: vec![],
@@ -290,7 +329,7 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
 
     ShareBlock {
         header: share_header,
-        transactions: vec![ShareTransaction(coinbase)],
+        transactions: vec![ShareTransaction(share_coinbase)],
         bitcoin_transactions,
     }
 }
@@ -442,7 +481,10 @@ fn test_share_block(
     bits: Option<CompactTarget>,
     time: Option<u32>,
 ) -> ShareBlock {
-    let coinbase = test_coinbase_transaction();
+    use crate::accounting::OutputPair;
+    use crate::shares::share_commitment::ShareCommitment;
+    use crate::stratum::work::coinbase::build_coinbase_transaction;
+    use bitcoin::script::PushBytesBuf;
 
     let share_merkle_root =
         bitcoin::merkle_tree::calculate_root(transactions.iter().map(|tx| tx.compute_txid()))
@@ -452,29 +494,65 @@ fn test_share_block(
     let share_bits = bits.unwrap_or(CompactTarget::from_consensus(
         0x01e0377ae * work.unwrap_or(1),
     ));
+    let share_time = time.unwrap_or(1700000000u32);
+    let prev_blockhash = BlockHash::from_str(prev_share_blockhash).unwrap();
 
     let (bitcoin_header, bitcoin_transactions) = match bitcoin_block {
         Some(block) => (block.header, block.txdata),
-        None => (
-            Header {
-                version: bitcoin::block::Version::TWO,
-                prev_blockhash: BlockHash::all_zeros(),
-                merkle_root: share_merkle_root,
-                time: 0x01e0377ae,
+        None => {
+            // Build a commitment matching the share header fields
+            let commitment = ShareCommitment {
+                prev_share_blockhash: prev_blockhash,
+                uncles: uncles.clone(),
+                miner_address: btcaddress.clone(),
+                bitcoin_merkle_root: None,
                 bits: share_bits,
-                nonce: nonce.unwrap_or(0xe9695791),
-            },
-            vec![coinbase], // list of transactions with a copy of the pool coinbase, just to provide some test data
-        ),
+                time: share_time,
+            };
+
+            let bitcoin_coinbase = build_coinbase_transaction(
+                bitcoin::transaction::Version::TWO,
+                &[OutputPair {
+                    address: btcaddress.clone(),
+                    amount: bitcoin::Amount::ONE_BTC,
+                }],
+                1,
+                PushBytesBuf::from(&[0u8]),
+                None,
+                b"P2Poolv2",
+                Some(commitment.hash()),
+            )
+            .expect("Failed to build bitcoin coinbase for test");
+
+            let bitcoin_merkle_root = bitcoin::merkle_tree::calculate_root(
+                [bitcoin_coinbase.clone()]
+                    .iter()
+                    .map(|tx| tx.compute_txid()),
+            )
+            .unwrap()
+            .into();
+
+            (
+                Header {
+                    version: bitcoin::block::Version::TWO,
+                    prev_blockhash: BlockHash::all_zeros(),
+                    merkle_root: bitcoin_merkle_root,
+                    time: 0x01e0377ae,
+                    bits: share_bits,
+                    nonce: nonce.unwrap_or(0xe9695791),
+                },
+                vec![bitcoin_coinbase],
+            )
+        }
     };
 
     let header = ShareHeader {
-        prev_share_blockhash: BlockHash::from_str(prev_share_blockhash).unwrap(),
+        prev_share_blockhash: prev_blockhash,
         uncles,
         miner_address: btcaddress.clone(),
         merkle_root: share_merkle_root,
         bitcoin_header,
-        time: time.unwrap_or(1700000000u32),
+        time: share_time,
         bits: share_bits,
     };
 

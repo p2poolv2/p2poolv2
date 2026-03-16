@@ -521,7 +521,7 @@ mod tests {
             .unwrap(),
             uncles: vec![],
             miner_address: btcaddress,
-            merkle_root: None,
+            bitcoin_merkle_root: None,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             time: 1700000000,
         };
