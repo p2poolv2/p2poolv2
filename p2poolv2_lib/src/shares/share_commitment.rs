@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::address_serde;
+use super::share_block::ShareHeader;
 use crate::pool_difficulty::PoolDifficulty;
 #[cfg(test)]
 #[mockall_double::double]
@@ -26,7 +27,7 @@ use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::Hash;
 use bitcoin::io::Write;
-use bitcoin::{Address, BlockHash, CompactTarget, TxMerkleNode, hashes};
+use bitcoin::{Address, BlockHash, CompactTarget, Transaction, TxMerkleNode, hashes};
 use serde::Serialize;
 use std::error::Error;
 use std::sync::Arc;
@@ -76,6 +77,32 @@ impl ShareCommitment {
             .consensus_encode(&mut serialized)
             .expect("encoding address script_pubkey should never fail");
         bitcoin::hashes::sha256::Hash::hash(&serialized)
+    }
+
+    /// Reconstruct a ShareCommitment from a ShareHeader and bitcoin template transactions.
+    ///
+    /// The template transactions are the non-coinbase bitcoin transactions
+    /// (bitcoin_transactions[1..] from the ShareBlock). Their merkle root is
+    /// computed and stored as the commitment's merkle_root field.
+    pub fn from_share_header(
+        header: &ShareHeader,
+        bitcoin_template_transactions: &[Transaction],
+    ) -> Self {
+        let merkle_root: Option<TxMerkleNode> = bitcoin::merkle_tree::calculate_root(
+            bitcoin_template_transactions
+                .iter()
+                .map(|tx| tx.compute_txid()),
+        )
+        .map(|txid| txid.into());
+
+        Self {
+            prev_share_blockhash: header.prev_share_blockhash,
+            uncles: header.uncles.clone(),
+            miner_address: header.miner_address.clone(),
+            merkle_root,
+            bits: header.bits,
+            time: header.time,
+        }
     }
 }
 
@@ -148,6 +175,7 @@ mod tests {
     use super::*;
     use crate::store::writer::StoreError;
     use crate::stratum::work::block_template::BlockTemplate;
+    use crate::test_utils::test_coinbase_transaction;
     use crate::test_utils::{TEST_TIP_TIME, create_test_commitment, on_schedule_pool_difficulty};
     use bitcoin::hashes::Hash;
     use bitcoin::{CompressedPublicKey, Network};
@@ -459,5 +487,110 @@ mod tests {
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
+    }
+
+    /// Build a ShareHeader from a commitment and a realistic bitcoin coinbase,
+    /// returning both the header and the bitcoin transactions list.
+    fn header_and_bitcoin_transactions_from_commitment(
+        commitment: ShareCommitment,
+    ) -> (ShareHeader, Vec<bitcoin::Transaction>) {
+        let coinbase = test_coinbase_transaction();
+
+        let share_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
+            [coinbase.clone()].iter().map(|tx| tx.compute_txid()),
+        )
+        .unwrap()
+        .into();
+
+        let json_content =
+            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
+        let template: BlockTemplate =
+            serde_json::from_str(json_content).expect("Failed to parse template JSON");
+
+        let mut bitcoin_transactions: Vec<bitcoin::Transaction> = template
+            .transactions
+            .iter()
+            .map(bitcoin::Transaction::from)
+            .collect();
+        bitcoin_transactions.insert(0, coinbase);
+
+        let bitcoin_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
+            bitcoin_transactions.iter().map(|tx| tx.compute_txid()),
+        )
+        .unwrap()
+        .into();
+
+        let bitcoin_header = bitcoin::block::Header {
+            version: bitcoin::block::Version::from_consensus(template.version),
+            prev_blockhash: BlockHash::from_str(&template.previousblockhash).unwrap(),
+            merkle_root: bitcoin_merkle_root,
+            time: 1700000000,
+            bits: CompactTarget::from_unprefixed_hex(&template.bits).unwrap(),
+            nonce: 0,
+        };
+
+        let header =
+            ShareHeader::from_commitment_and_header(commitment, bitcoin_header, share_merkle_root);
+
+        (header, bitcoin_transactions)
+    }
+
+    #[test]
+    fn test_from_share_header_copies_header_fields() {
+        let commitment = create_test_commitment();
+        let expected_prev = commitment.prev_share_blockhash;
+        let expected_uncles = commitment.uncles.clone();
+        let expected_address = commitment.miner_address.clone();
+        let expected_bits = commitment.bits;
+        let expected_time = commitment.time;
+
+        let (header, bitcoin_transactions) =
+            header_and_bitcoin_transactions_from_commitment(commitment);
+
+        let reconstructed = ShareCommitment::from_share_header(&header, &bitcoin_transactions[1..]);
+
+        assert_eq!(reconstructed.prev_share_blockhash, expected_prev);
+        assert_eq!(reconstructed.uncles, expected_uncles);
+        assert_eq!(reconstructed.miner_address, expected_address);
+        assert_eq!(reconstructed.bits, expected_bits);
+        assert_eq!(reconstructed.time, expected_time);
+    }
+
+    #[test]
+    fn test_from_share_header_computes_merkle_root_from_template_transactions() {
+        let commitment = create_test_commitment();
+        let (header, bitcoin_transactions) =
+            header_and_bitcoin_transactions_from_commitment(commitment);
+
+        let template_transactions = &bitcoin_transactions[1..];
+        let reconstructed = ShareCommitment::from_share_header(&header, template_transactions);
+
+        let expected_merkle_root: Option<TxMerkleNode> = bitcoin::merkle_tree::calculate_root(
+            template_transactions.iter().map(|tx| tx.compute_txid()),
+        )
+        .map(|txid| txid.into());
+
+        assert_eq!(reconstructed.merkle_root, expected_merkle_root);
+    }
+
+    #[test]
+    fn test_from_share_header_hash_roundtrip() {
+        // Build a commitment whose merkle_root matches the template transactions,
+        // then verify from_share_header produces the same hash.
+        let json_content =
+            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
+        let template: BlockTemplate =
+            serde_json::from_str(json_content).expect("Failed to parse template JSON");
+
+        let mut commitment = create_test_commitment();
+        commitment.merkle_root = template.get_merkle_root_without_coinbase();
+        let expected_hash = commitment.hash();
+
+        let (header, bitcoin_transactions) =
+            header_and_bitcoin_transactions_from_commitment(commitment);
+
+        let reconstructed = ShareCommitment::from_share_header(&header, &bitcoin_transactions[1..]);
+
+        assert_eq!(reconstructed.hash(), expected_hash);
     }
 }
