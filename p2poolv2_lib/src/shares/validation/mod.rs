@@ -430,7 +430,7 @@ impl ShareValidator for DefaultShareValidator {
         }
         self.validate_uncles(share, chain_store_handle)?;
         self.validate_block_size(share)?;
-        // self.validate_coinbase(share)?;
+        self.validate_coinbase(share)?;
         // self.validate_commitment(share);
         self.validate_merkle_root(share)?;
         self.validate_transaction_count(share)?;
