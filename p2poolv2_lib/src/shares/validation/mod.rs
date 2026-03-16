@@ -28,6 +28,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::{ShareBlock, ShareTransaction};
+use crate::shares::share_commitment::ShareCommitment;
 use crate::utils::time_provider::TimeProvider;
 use bitcoin::{Amount, Target, TxMerkleNode};
 use std::collections::HashSet;
@@ -146,21 +147,6 @@ impl DefaultShareValidator {
             )));
         }
         Ok(())
-    }
-
-    /// Validate the first share transaction in the share block is a coinbase transaction.
-    fn validate_coinbase(&self, share: &ShareBlock) -> Result<(), ValidationError> {
-        let first_tx = share
-            .transactions
-            .first()
-            .ok_or_else(|| ValidationError::new("Share block has no transactions"))?;
-        if first_tx.is_coinbase() {
-            Ok(())
-        } else {
-            Err(ValidationError::new(
-                "First transaction in share block is not a coinbase transaction",
-            ))
-        }
     }
 
     /// Validate the merkle root in the header matches the computed merkle root from transactions.
@@ -341,6 +327,45 @@ impl DefaultShareValidator {
         }
         Ok(())
     }
+
+    /// Validate the share coinbase pays 1 BTC to the miner address in the header.
+    fn validate_share_coinbase(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        let coinbase = share
+            .transactions
+            .first()
+            .ok_or_else(|| ValidationError::new("Share block has no transactions"))?;
+
+        if !coinbase.is_coinbase() {
+            return Err(ValidationError::new(
+                "First transaction in share block is not a coinbase transaction",
+            ));
+        }
+
+        if coinbase.output.len() != 1 {
+            return Err(ValidationError::new(format!(
+                "Share coinbase has {} outputs, expected 1",
+                coinbase.output.len()
+            )));
+        }
+
+        let output = &coinbase.output[0];
+        if output.value != Amount::ONE_BTC {
+            return Err(ValidationError::new(format!(
+                "Share coinbase pays {} but expected {}",
+                output.value,
+                Amount::ONE_BTC
+            )));
+        }
+
+        let expected_script = share.header.miner_address.script_pubkey();
+        if output.script_pubkey != expected_script {
+            return Err(ValidationError::new(
+                "Share coinbase output does not pay to the miner address in header",
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 impl ShareValidator for DefaultShareValidator {
@@ -430,8 +455,8 @@ impl ShareValidator for DefaultShareValidator {
         }
         self.validate_uncles(share, chain_store_handle)?;
         self.validate_block_size(share)?;
-        self.validate_coinbase(share)?;
-        // self.validate_commitment(share);
+        self.validate_share_coinbase(share)?;
+        // self.validate_bitcoin_coinbase(share)?;
         self.validate_merkle_root(share)?;
         self.validate_transaction_count(share)?;
         self.validate_transactions(share)?;
