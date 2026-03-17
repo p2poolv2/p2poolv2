@@ -38,6 +38,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::stratum::emission::EmissionReceiver;
+use crate::stratum::work::notify::NotifySender;
 use libp2p::futures::StreamExt;
 use std::error::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -60,6 +61,7 @@ impl NodeHandle {
         emissions_rx: EmissionReceiver,
         metrics: MetricsHandle,
         monitoring_event_sender: MonitoringEventSender,
+        notify_tx: NotifySender,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
         let (node_actor, stopping_rx) = NodeActor::new(
@@ -69,6 +71,7 @@ impl NodeHandle {
             emissions_rx,
             metrics,
             monitoring_event_sender,
+            notify_tx,
         )
         .unwrap();
 
@@ -220,6 +223,7 @@ impl NodeActor {
         emissions_rx: EmissionReceiver,
         metrics: MetricsHandle,
         monitoring_event_sender: MonitoringEventSender,
+        notify_tx: NotifySender,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>> {
         // Create organise channel
         let (organise_tx, organise_rx) = create_organise_channel();
@@ -246,6 +250,7 @@ impl NodeActor {
             organise_rx,
             chain_store_handle.clone(),
             monitoring_event_sender,
+            notify_tx,
         );
         let organise_handle = tokio::spawn(organise_worker.run());
 

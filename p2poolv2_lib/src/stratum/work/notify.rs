@@ -180,10 +180,39 @@ fn build_prepared_notify(
 
 /// NotifyCmd is used to send a new block template to the notifier.
 pub enum NotifyCmd {
+    /// Send a new block template to all connected miners.
     SendToAll {
         /// The block template to notify clients about.
         template: Arc<BlockTemplate>,
     },
+    /// Rebuild and resend work using the latest template.
+    ///
+    /// Sent by the organise worker when the confirmed chain catches
+    /// up to the candidate tip, meaning the payout distribution has
+    /// changed and miners need updated work, and also we avoid uncles
+    /// while miners build on previous blockhash
+    NewNotify,
+}
+
+/// Sender half of the notify command channel.
+pub type NotifySender = mpsc::Sender<NotifyCmd>;
+pub type NotifyReceiver = mpsc::Receiver<NotifyCmd>;
+
+/// Build a PreparedNotifyParams and publish it via the watch channel.
+///
+/// Returns Ok(()) on success, or Err if all receivers have been dropped.
+fn publish_prepared_notify(
+    template: &Arc<BlockTemplate>,
+    clean_jobs: bool,
+    context: &NotifyContext,
+    template_tx: &watch::Sender<Option<Arc<PreparedNotifyParams>>>,
+) -> Result<(), WorkError> {
+    let prepared = build_prepared_notify(template, clean_jobs, context)?;
+    template_tx
+        .send(Some(Arc::new(prepared)))
+        .map_err(|_| WorkError {
+            message: "All template receivers dropped".to_string(),
+        })
 }
 
 /// Start the notifier task that broadcasts prepared templates via a watch channel.
@@ -228,17 +257,24 @@ pub async fn start_notify(
                         != template.previousblockhash;
                 latest_template = Some(Arc::clone(&template));
 
-                let prepared = match build_prepared_notify(&template, clean_jobs, &notify_context) {
-                    Ok(prepared) => prepared,
-                    Err(error) => {
-                        tracing::error!("Failed to build notify: {error}. Skipping.");
-                        continue;
-                    }
-                };
-
-                if template_tx.send(Some(Arc::new(prepared))).is_err() {
-                    error!("All template receivers dropped. Stopping notifier.");
+                if let Err(error) =
+                    publish_prepared_notify(&template, clean_jobs, &notify_context, &template_tx)
+                {
+                    error!("Failed to publish notify: {error}");
                     return;
+                }
+            }
+            NotifyCmd::NewNotify => {
+                if let Some(ref template) = latest_template {
+                    debug!("NewNotify: sending notify with latest template");
+                    if let Err(error) =
+                        publish_prepared_notify(template, true, &notify_context, &template_tx)
+                    {
+                        error!("Failed to publish new notify: {error}");
+                        return;
+                    }
+                } else {
+                    debug!("NewNotify received but no template available yet");
                 }
             }
         }
