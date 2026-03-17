@@ -62,6 +62,19 @@ use crate::stratum::work::block_template::BlockTemplate;
 #[cfg(test)]
 use bitcoin::TxMerkleNode;
 
+/// Well-known secp256k1 compressed public keys (multiples of the generator G).
+/// Use these when constructing test share blocks that need distinct, valid miner keys.
+#[cfg(any(test, feature = "test-utils"))]
+pub const PUBKEY_G: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+#[cfg(any(test, feature = "test-utils"))]
+pub const PUBKEY_2G: &str = "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5";
+#[cfg(any(test, feature = "test-utils"))]
+pub const PUBKEY_3G: &str = "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9";
+#[cfg(any(test, feature = "test-utils"))]
+pub const PUBKEY_4G: &str = "02e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13";
+#[cfg(any(test, feature = "test-utils"))]
+pub const PUBKEY_5G: &str = "022f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4";
+
 /// Setup returns both chain handle and tempdir (tempdir must stay alive)
 ///
 /// Optionally starts the writer background task. Some tests that use

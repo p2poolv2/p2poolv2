@@ -279,6 +279,9 @@ mod tests {
         // validate_share_block calls has_status to check for BlockValid
         mock_clone.expect_has_status().returning(|_, _| false);
 
+        // validate_uncles checks uncle existence and confirmed status
+        mock_clone.expect_share_block_exists().returning(|_| true);
+
         // schedule_dependents checks children and nephews
         mock_clone
             .expect_get_children_blockhashes()
