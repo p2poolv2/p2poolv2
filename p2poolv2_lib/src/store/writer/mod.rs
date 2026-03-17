@@ -30,7 +30,7 @@ pub use handle::StoreHandle;
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
-use bitcoin::{BlockHash, Work};
+use bitcoin::BlockHash;
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;

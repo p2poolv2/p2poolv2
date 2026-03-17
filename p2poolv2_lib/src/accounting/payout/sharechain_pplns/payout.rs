@@ -23,7 +23,7 @@
 use super::ShareChainPplnsShare;
 use crate::accounting::OutputPair;
 use crate::accounting::payout::payout_distribution::{
-    PayoutDistribution, append_proportional_distribution, group_shares_by_address,
+    PayoutDistribution, append_proportional_distribution,
 };
 #[cfg(test)]
 #[mockall_double::double]
@@ -32,6 +32,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::store::dag_store::ShareDag;
 use bitcoin::{Address, Amount};
+use std::collections::HashMap;
 use std::error::Error;
 use tracing::warn;
 
@@ -94,7 +95,7 @@ impl Payout {
         Ok(share_dag)
     }
 
-    /// Compute weighted PPLNS shares from a ShareDag.
+    /// Accumulate weighted difficulty per miner address from a ShareDag.
     ///
     /// For each confirmed share:
     /// - Base work from the share's difficulty target
@@ -104,13 +105,14 @@ impl Payout {
     /// - 90% of the uncle's own work
     ///
     /// Stops accumulating once total_difficulty is reached.
-    fn compute_weighted_shares(
+    /// Returns a map from miner address string to total weighted difficulty.
+    fn accumulate_weighted_difficulty(
         &self,
         share_dag: &ShareDag,
         total_difficulty: f64,
-    ) -> Vec<ShareChainPplnsShare> {
-        let capacity = share_dag.confirmed_headers.len() + share_dag.uncle_headers.len();
-        let mut shares = Vec::with_capacity(capacity);
+    ) -> HashMap<String, u64> {
+        let estimated_miners = share_dag.confirmed_headers.len() + share_dag.uncle_headers.len();
+        let mut address_difficulty: HashMap<String, u64> = HashMap::with_capacity(estimated_miners);
         let mut accumulated_difficulty: f64 = 0.0;
 
         for (blockhash, header) in &share_dag.confirmed_headers {
@@ -128,10 +130,9 @@ impl Payout {
 
                     // Uncle gets 90% of its work
                     let uncle_weighted_work = (uncle_base_work as f64 * UNCLE_WEIGHT_FACTOR) as u64;
-                    shares.push(ShareChainPplnsShare::new(
-                        uncle_header.miner_address.to_string(),
-                        uncle_weighted_work,
-                    ));
+                    *address_difficulty
+                        .entry(uncle_header.miner_address.to_string())
+                        .or_insert(0) += uncle_weighted_work;
                     accumulated_difficulty += uncle_weighted_work as f64;
 
                     // Nephew gets 10% bonus per uncle
@@ -140,18 +141,17 @@ impl Payout {
             }
 
             let weighted_work = base_work + nephew_bonus;
-            shares.push(ShareChainPplnsShare::new(
-                header.miner_address.to_string(),
-                weighted_work,
-            ));
+            *address_difficulty
+                .entry(header.miner_address.to_string())
+                .or_insert(0) += weighted_work;
             accumulated_difficulty += weighted_work as f64;
 
             if accumulated_difficulty >= total_difficulty {
-                return shares;
+                return address_difficulty;
             }
         }
 
-        shares
+        address_difficulty
     }
 }
 
@@ -188,9 +188,10 @@ impl PayoutDistribution<ShareChainPplnsShare> for Payout {
             return Ok(());
         }
 
-        let weighted_shares = self.compute_weighted_shares(&share_dag, total_difficulty);
+        let address_difficulty_map =
+            self.accumulate_weighted_difficulty(&share_dag, total_difficulty);
 
-        if weighted_shares.is_empty() {
+        if address_difficulty_map.is_empty() {
             distribution.push(OutputPair {
                 address: bootstrap_address,
                 amount: remaining_total_amount,
@@ -198,7 +199,6 @@ impl PayoutDistribution<ShareChainPplnsShare> for Payout {
             return Ok(());
         }
 
-        let address_difficulty_map = group_shares_by_address(&weighted_shares);
         append_proportional_distribution(
             address_difficulty_map,
             remaining_total_amount,
