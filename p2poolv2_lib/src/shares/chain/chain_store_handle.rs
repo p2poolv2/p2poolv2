@@ -290,6 +290,25 @@ impl ChainStoreHandle {
         self.store_handle.store().get_nephews(uncle)
     }
 
+    /// Get confirmed share headers for a height range, returned newest-to-oldest.
+    ///
+    /// Performs two store calls: one range scan on the confirmed height index,
+    /// then a batch fetch of share headers. This avoids per-height round trips.
+    pub fn get_confirmed_headers_in_range(
+        &self,
+        from_height: u32,
+        to_height: u32,
+    ) -> Result<Vec<ShareHeader>, StoreError> {
+        let chain = self
+            .store_handle
+            .store()
+            .get_confirmed(from_height, to_height)?;
+        let blockhashes: Vec<BlockHash> = chain.into_iter().map(|(_, hash)| hash).collect();
+        let mut headers = self.get_share_headers(&blockhashes)?;
+        headers.reverse();
+        Ok(headers)
+    }
+
     /// Build a locator for the chain.
     pub fn build_locator(&self) -> Result<Vec<BlockHash>, StoreError> {
         let tip_height = self.get_tip_height()?;
@@ -599,6 +618,7 @@ mockall::mock! {
         pub fn get_genesis_header(&self) -> Result<ShareHeader, StoreError>;
         pub fn get_children_blockhashes(&self, blockhash: &BlockHash) -> Result<Option<Vec<BlockHash>>, StoreError>;
         pub fn get_nephews(&self, uncle: &BlockHash) -> Option<Vec<BlockHash>>;
+        pub fn get_confirmed_headers_in_range(&self, from_height: u32, to_height: u32) -> Result<Vec<ShareHeader>, StoreError>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
         pub fn get_candidate_blocks_missing_data(&self) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_depth(&self, blockhash: &BlockHash) -> Option<usize>;
@@ -851,5 +871,64 @@ mod tests {
             .build();
 
         chain_handle.add_share_block(share2, true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_get_confirmed_headers_in_range() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        let mut prev_hash = genesis.block_hash();
+        let mut shares = vec![genesis.clone()];
+        for _ in 0..4 {
+            let share = TestShareBlockBuilder::new()
+                .prev_share_blockhash(prev_hash.to_string())
+                .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+                .work(2)
+                .build();
+            chain_handle
+                .add_share_block(share.clone(), true)
+                .await
+                .unwrap();
+            chain_handle
+                .organise_header(share.header.clone())
+                .await
+                .unwrap();
+            chain_handle.organise_block().await.unwrap();
+            prev_hash = share.block_hash();
+            shares.push(share);
+        }
+
+        // Full range: heights 0..4, returned newest-to-oldest
+        let headers = chain_handle.get_confirmed_headers_in_range(0, 4).unwrap();
+        assert_eq!(headers.len(), 5);
+        assert_eq!(headers[0].block_hash(), shares[4].block_hash());
+        assert_eq!(headers[4].block_hash(), genesis.block_hash());
+
+        // Partial range: heights 2..4, returned newest-to-oldest
+        let headers = chain_handle.get_confirmed_headers_in_range(2, 4).unwrap();
+        assert_eq!(headers.len(), 3);
+        assert_eq!(headers[0].block_hash(), shares[4].block_hash());
+        assert_eq!(headers[2].block_hash(), shares[2].block_hash());
+
+        // Long range: heights 0..10, returned newest-to-oldest
+        let headers = chain_handle.get_confirmed_headers_in_range(0, 10).unwrap();
+        assert_eq!(headers.len(), 5);
+        assert_eq!(headers[0].block_hash(), shares[4].block_hash());
+        assert_eq!(headers[4].block_hash(), shares[0].block_hash());
+    }
+
+    #[tokio::test]
+    async fn test_get_confirmed_headers_in_range_empty() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+
+        // No genesis, no confirmed shares -- range query returns empty
+        let headers = chain_handle.get_confirmed_headers_in_range(0, 10).unwrap();
+        assert!(headers.is_empty());
     }
 }
