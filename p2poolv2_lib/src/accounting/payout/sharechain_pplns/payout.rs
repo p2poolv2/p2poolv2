@@ -16,9 +16,9 @@
 
 //! Share chain PPLNS payout distribution implementation.
 //!
-//! Walks the confirmed share chain, applies uncle weighting (90% for uncles,
-//! 10% bonus for nephews), and distributes payouts proportionally by
-//! weighted difficulty.
+//! Walks the confirmed share chain, applies uncle weighting (9/10 for uncles,
+//! 1/10 bonus for nephews), and distributes payouts proportionally by
+//! weighted difficulty. Uses integer arithmetic to keep weighting deterministic.
 
 use super::ShareChainPplnsShare;
 use crate::accounting::OutputPair;
@@ -45,11 +45,14 @@ const MAX_PPLNS_WINDOW_SECONDS: u32 = 2 * 7 * 24 * 60 * 60;
 /// variable block times.
 const ESTIMATED_MAX_SHARES_IN_WINDOW: u32 = MAX_PPLNS_WINDOW_SECONDS / 10 * 2;
 
-/// Uncle weight factor: uncles receive 90% of their work.
-const UNCLE_WEIGHT_FACTOR: f64 = 0.9;
+/// Uncle weight: 9/10 of their work. Multiply by numerator then divide by denominator
+/// to avoid integer division truncating to zero.
+const UNCLE_WEIGHT_NUMERATOR: u64 = 9;
+const UNCLE_WEIGHT_DENOMINATOR: u64 = 10;
 
-/// Nephew bonus factor: nephews receive 10% of each uncle's work.
-const NEPHEW_BONUS_FACTOR: f64 = 0.1;
+/// Nephew bonus: 1/10 of each uncle's work. Multiply by numerator then divide by denominator.
+const NEPHEW_BONUS_NUMERATOR: u64 = 1;
+const NEPHEW_BONUS_DENOMINATOR: u64 = 10;
 
 /// Convert bitcoin::Work (U256) to u64.
 ///
@@ -99,10 +102,10 @@ impl Payout {
     ///
     /// For each confirmed share:
     /// - Base work from the share's difficulty target
-    /// - Plus 10% of each referenced uncle's work as nephew bonus
+    /// - Plus 1/10 of each referenced uncle's work as nephew bonus
     ///
     /// For each uncle:
-    /// - 90% of the uncle's own work
+    /// - 9/10 of the uncle's own work
     ///
     /// Stops accumulating once total_difficulty is reached.
     /// Returns a map from miner address string to total weighted difficulty.
@@ -128,15 +131,17 @@ impl Payout {
 
                     let uncle_base_work = work_to_u64(uncle_header.get_work());
 
-                    // Uncle gets 90% of its work
-                    let uncle_weighted_work = (uncle_base_work as f64 * UNCLE_WEIGHT_FACTOR) as u64;
+                    // Uncle gets 9/10 of its work
+                    let uncle_weighted_work =
+                        uncle_base_work * UNCLE_WEIGHT_NUMERATOR / UNCLE_WEIGHT_DENOMINATOR;
                     *address_difficulty
                         .entry(uncle_header.miner_address.to_string())
                         .or_insert(0) += uncle_weighted_work;
                     accumulated_difficulty += uncle_weighted_work as f64;
 
-                    // Nephew gets 10% bonus per uncle
-                    nephew_bonus += (uncle_base_work as f64 * NEPHEW_BONUS_FACTOR) as u64;
+                    // Nephew gets 1/10 bonus per uncle
+                    nephew_bonus +=
+                        uncle_base_work * NEPHEW_BONUS_NUMERATOR / NEPHEW_BONUS_DENOMINATOR;
                 }
             }
 
@@ -426,8 +431,9 @@ mod tests {
             .unwrap();
 
         // Uncle gets 90% of its work, nephew gets base + 10% of uncle's work
-        let expected_uncle_weight = (uncle_work as f64 * UNCLE_WEIGHT_FACTOR) as u64;
-        let expected_nephew_weight = nephew_work + (uncle_work as f64 * NEPHEW_BONUS_FACTOR) as u64;
+        let expected_uncle_weight = uncle_work * UNCLE_WEIGHT_NUMERATOR / UNCLE_WEIGHT_DENOMINATOR;
+        let expected_nephew_weight =
+            nephew_work + uncle_work * NEPHEW_BONUS_NUMERATOR / NEPHEW_BONUS_DENOMINATOR;
         let total_weight = expected_uncle_weight + expected_nephew_weight;
 
         let total_distributed: Amount = result.iter().map(|pair| pair.amount).sum();
@@ -507,10 +513,12 @@ mod tests {
 
         // Nephew gets base + 10% of uncle1 + 10% of uncle2
         let expected_nephew_weight = nephew_work
-            + (uncle1_work as f64 * NEPHEW_BONUS_FACTOR) as u64
-            + (uncle2_work as f64 * NEPHEW_BONUS_FACTOR) as u64;
-        let expected_uncle1_weight = (uncle1_work as f64 * UNCLE_WEIGHT_FACTOR) as u64;
-        let expected_uncle2_weight = (uncle2_work as f64 * UNCLE_WEIGHT_FACTOR) as u64;
+            + uncle1_work * NEPHEW_BONUS_NUMERATOR / NEPHEW_BONUS_DENOMINATOR
+            + uncle2_work * NEPHEW_BONUS_NUMERATOR / NEPHEW_BONUS_DENOMINATOR;
+        let expected_uncle1_weight =
+            uncle1_work * UNCLE_WEIGHT_NUMERATOR / UNCLE_WEIGHT_DENOMINATOR;
+        let expected_uncle2_weight =
+            uncle2_work * UNCLE_WEIGHT_NUMERATOR / UNCLE_WEIGHT_DENOMINATOR;
         let total_weight = expected_nephew_weight + expected_uncle1_weight + expected_uncle2_weight;
 
         let total_distributed: Amount = result.iter().map(|pair| pair.amount).sum();
