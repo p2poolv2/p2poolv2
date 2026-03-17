@@ -95,6 +95,7 @@ impl ShareDag {
     pub fn collect_uncle_references(
         confirmed_headers: &[(BlockHash, ShareHeader)],
     ) -> (Vec<BlockHash>, HashMap<BlockHash, Vec<BlockHash>>) {
+        let mut seen_uncles: HashSet<BlockHash> = HashSet::new();
         let mut all_uncle_hashes = Vec::with_capacity(confirmed_headers.len());
         let mut nephew_to_uncles: HashMap<BlockHash, Vec<BlockHash>> =
             HashMap::with_capacity(confirmed_headers.len());
@@ -102,7 +103,11 @@ impl ShareDag {
         for (blockhash, header) in confirmed_headers {
             if !header.uncles.is_empty() {
                 nephew_to_uncles.insert(*blockhash, header.uncles.clone());
-                all_uncle_hashes.extend_from_slice(&header.uncles);
+                for uncle_hash in &header.uncles {
+                    if seen_uncles.insert(*uncle_hash) {
+                        all_uncle_hashes.push(*uncle_hash);
+                    }
+                }
             }
         }
 
