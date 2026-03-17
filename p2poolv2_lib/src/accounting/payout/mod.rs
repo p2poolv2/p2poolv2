@@ -15,4 +15,5 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod payout_distribution;
+pub mod sharechain_pplns;
 pub mod simple_pplns;
