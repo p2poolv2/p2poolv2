@@ -91,7 +91,7 @@ impl StoreHandle {
     pub fn get_share_headers(
         &self,
         blockhashes: &[BlockHash],
-    ) -> Result<Vec<ShareHeader>, StoreError> {
+    ) -> Result<Vec<(BlockHash, ShareHeader)>, StoreError> {
         self.store.get_share_headers(blockhashes)
     }
 
@@ -319,7 +319,7 @@ mockall::mock! {
         pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool;
         pub fn get_share(&self, blockhash: &BlockHash) -> Option<ShareBlock>;
         pub fn get_share_at_tip(&self) -> Option<ShareBlock>;
-        pub fn get_share_headers(&self, blockhashes: &[BlockHash]) -> Result<Vec<ShareHeader>, StoreError>;
+        pub fn get_share_headers(&self, blockhashes: &[BlockHash]) -> Result<Vec<(BlockHash, ShareHeader)>, StoreError>;
         pub fn get_share_header(&self, blockhash: &BlockHash) -> Result<Option<ShareHeader>, StoreError>;
         pub fn get_shares(&self, blockhashes: &[BlockHash]) -> Result<HashMap<BlockHash, ShareBlock>, StoreError>;
         pub fn get_shares_at_height(&self, height: u32) -> Result<HashMap<BlockHash, ShareBlock>, StoreError>;

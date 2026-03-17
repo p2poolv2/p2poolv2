@@ -21,7 +21,7 @@ use crate::shares::validation::MAX_UNCLES;
 use bitcoin::consensus::{self, Encodable, encode};
 use bitcoin::{BlockHash, CompactTarget, Work};
 use serde::Serialize;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::debug;
 
 /// Max depth to look for uncles when building new share blocks
@@ -47,6 +47,67 @@ pub struct UncleInfo {
     pub miner_address: String,
     pub timestamp: u32,
     pub height: Option<u32>,
+}
+
+/// A window of confirmed share chain data with uncle relationships.
+///
+/// Contains confirmed headers (newest-to-oldest), the mapping from
+/// each nephew to its uncle blockhashes, and the fetched uncle headers
+/// keyed by blockhash for random-access lookup.
+#[derive(Clone)]
+pub struct ShareDag {
+    /// Confirmed share headers ordered newest-to-oldest.
+    pub confirmed_headers: Vec<(BlockHash, ShareHeader)>,
+    /// Map from confirmed share blockhash to its referenced uncle blockhashes.
+    pub nephew_to_uncles: HashMap<BlockHash, Vec<BlockHash>>,
+    /// Uncle headers keyed by blockhash for lookup during weighting.
+    pub uncle_headers: HashMap<BlockHash, ShareHeader>,
+}
+
+impl ShareDag {
+    /// Create an empty ShareDag with no confirmed headers or uncles.
+    pub fn empty() -> Self {
+        Self {
+            confirmed_headers: Vec::new(),
+            nephew_to_uncles: HashMap::new(),
+            uncle_headers: HashMap::new(),
+        }
+    }
+
+    /// Remove confirmed headers with timestamps before the given cutoff.
+    ///
+    /// Since headers are ordered newest-to-oldest, stops at the first
+    /// header that falls before the cutoff time.
+    pub fn filter_confirmed_by_time(&mut self, earliest_allowed_time: u32) {
+        if let Some(cutoff_position) = self
+            .confirmed_headers
+            .iter()
+            .position(|(_, header)| header.time < earliest_allowed_time)
+        {
+            self.confirmed_headers.truncate(cutoff_position);
+        }
+    }
+
+    /// Build uncle references from confirmed headers without hitting the store.
+    ///
+    /// Extracts all uncle blockhashes and builds the nephew-to-uncles mapping.
+    /// Returns (all_uncle_hashes, nephew_to_uncles).
+    pub fn collect_uncle_references(
+        confirmed_headers: &[(BlockHash, ShareHeader)],
+    ) -> (Vec<BlockHash>, HashMap<BlockHash, Vec<BlockHash>>) {
+        let mut all_uncle_hashes = Vec::with_capacity(confirmed_headers.len());
+        let mut nephew_to_uncles: HashMap<BlockHash, Vec<BlockHash>> =
+            HashMap::with_capacity(confirmed_headers.len());
+
+        for (blockhash, header) in confirmed_headers {
+            if !header.uncles.is_empty() {
+                nephew_to_uncles.insert(*blockhash, header.uncles.clone());
+                all_uncle_hashes.extend_from_slice(&header.uncles);
+            }
+        }
+
+        (all_uncle_hashes, nephew_to_uncles)
+    }
 }
 
 impl Store {
@@ -128,7 +189,7 @@ impl Store {
         self.get_descendant_blockhashes(&start_blockhash, stop_blockhash, limit)
     }
 
-    /// Get headers to satisy the locator query.
+    /// Get headers to satisfy the locator query.
     pub fn get_headers_for_locator(
         &self,
         locator: &[BlockHash],
@@ -136,7 +197,9 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<ShareHeader>, StoreError> {
         let blockhashes = self.get_blockhashes_for_locator(locator, stop_blockhash, limit)?;
-        self.get_share_headers(&blockhashes)
+        let headers = self.get_share_headers(&blockhashes)?;
+        let ordered: Vec<ShareHeader> = headers.into_iter().map(|(_, header)| header).collect();
+        Ok(ordered)
     }
 
     /// Get descendants headers of a share
@@ -165,7 +228,9 @@ impl Store {
                 None => break,
             };
         }
-        self.get_share_headers(&descendants)
+        let headers = self.get_share_headers(&descendants)?;
+        let ordered: Vec<ShareHeader> = headers.into_iter().map(|(_, header)| header).collect();
+        Ok(ordered)
     }
 
     /// Get the parent of a share as a ShareBlock

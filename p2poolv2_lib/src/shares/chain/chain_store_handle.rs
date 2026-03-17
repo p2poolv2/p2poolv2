@@ -23,7 +23,7 @@
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::block_tx_metadata::{BlockMetadata, Status};
-use crate::store::dag_store::UncleInfo;
+use crate::store::dag_store::{ShareDag, UncleInfo};
 use crate::store::writer::{StoreError, StoreHandle};
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Work};
@@ -132,22 +132,26 @@ impl ChainStoreHandle {
     }
 
     /// Get share headers for multiple blockhashes.
+    ///
+    /// Returns (BlockHash, ShareHeader) pairs in the same order as input,
+    /// skipping any hashes not found.
     pub fn get_share_headers(
         &self,
         share_hashes: &[BlockHash],
-    ) -> Result<Vec<ShareHeader>, StoreError> {
+    ) -> Result<Vec<(BlockHash, ShareHeader)>, StoreError> {
         self.store_handle.get_share_headers(share_hashes)
     }
 
     /// Get a single share header by blockhash.
     ///
-    /// Delegates to get_share_headers and returns the first result,
+    /// Delegates to get_share_headers and returns the matching header,
     /// or a NotFound error if no header exists for the given hash.
     pub fn get_share_header(&self, share_hash: &BlockHash) -> Result<ShareHeader, StoreError> {
         let headers = self.get_share_headers(&[*share_hash])?;
         headers
             .into_iter()
             .next()
+            .map(|(_, header)| header)
             .ok_or(StoreError::NotFound(share_hash.to_string()))
     }
 
@@ -213,6 +217,7 @@ impl ChainStoreHandle {
         headers
             .into_iter()
             .next()
+            .map(|(_, header)| header)
             .ok_or_else(|| StoreError::NotFound("No header found for chain tip".into()))
     }
 
@@ -234,6 +239,7 @@ impl ChainStoreHandle {
         let tip_header = headers
             .into_iter()
             .next()
+            .map(|(_, header)| header)
             .ok_or_else(|| StoreError::NotFound("No header found for chain tip".into()))?;
 
         let metadata = self.get_block_metadata(&tip_blockhash)?;
@@ -259,6 +265,7 @@ impl ChainStoreHandle {
         headers
             .into_iter()
             .next()
+            .map(|(_, header)| header)
             .ok_or_else(|| StoreError::NotFound("No header found at genesis".into()))
     }
 
@@ -294,19 +301,47 @@ impl ChainStoreHandle {
     ///
     /// Performs two store calls: one range scan on the confirmed height index,
     /// then a batch fetch of share headers. This avoids per-height round trips.
+    /// Returns (BlockHash, ShareHeader) pairs so callers do not need to
+    /// recompute blockhashes from headers.
     pub fn get_confirmed_headers_in_range(
         &self,
         from_height: u32,
         to_height: u32,
-    ) -> Result<Vec<ShareHeader>, StoreError> {
+    ) -> Result<Vec<(BlockHash, ShareHeader)>, StoreError> {
         let chain = self
             .store_handle
             .store()
             .get_confirmed(from_height, to_height)?;
-        let blockhashes: Vec<BlockHash> = chain.into_iter().map(|(_, hash)| hash).collect();
-        let mut headers = self.get_share_headers(&blockhashes)?;
-        headers.reverse();
-        Ok(headers)
+        // Collect blockhashes in reverse (newest-to-oldest) for the query
+        let blockhashes: Vec<BlockHash> = chain.iter().rev().map(|(_, hash)| *hash).collect();
+        // get_share_headers preserves input order, so result is newest-to-oldest
+        self.get_share_headers(&blockhashes)
+    }
+
+    /// Get a ShareDag for the given height range.
+    ///
+    /// Fetches confirmed headers in the range, extracts uncle references,
+    /// and batch-fetches uncle headers. Returns a ShareDag containing all
+    /// three pieces of data for payout computation.
+    pub fn get_share_dag(&self, from_height: u32, to_height: u32) -> Result<ShareDag, StoreError> {
+        let confirmed_headers = self.get_confirmed_headers_in_range(from_height, to_height)?;
+        let (all_uncle_hashes, nephew_to_uncles) =
+            ShareDag::collect_uncle_references(&confirmed_headers);
+
+        let uncle_headers: HashMap<BlockHash, ShareHeader> = if all_uncle_hashes.is_empty() {
+            HashMap::new()
+        } else {
+            self.get_share_headers(&all_uncle_hashes)
+                .unwrap_or_default()
+                .into_iter()
+                .collect()
+        };
+
+        Ok(ShareDag {
+            confirmed_headers,
+            nephew_to_uncles,
+            uncle_headers,
+        })
     }
 
     /// Build a locator for the chain.
@@ -445,7 +480,7 @@ impl ChainStoreHandle {
         let headers = self.get_share_headers(&[tip])?;
         match headers.first() {
             None => Err(StoreError::NotFound("No tips found".into())),
-            Some(header) => Ok(header.bits.to_consensus()),
+            Some((_, header)) => Ok(header.bits.to_consensus()),
         }
     }
 
@@ -603,7 +638,7 @@ mockall::mock! {
         pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool;
         pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock>;
         pub fn get_shares_at_height(&self, height: u32) -> Result<HashMap<BlockHash, ShareBlock>, StoreError>;
-        pub fn get_share_headers(&self, share_hashes: &[BlockHash]) -> Result<Vec<ShareHeader>, StoreError>;
+        pub fn get_share_headers(&self, share_hashes: &[BlockHash]) -> Result<Vec<(BlockHash, ShareHeader)>, StoreError>;
         pub fn get_share_header(&self, share_hash: &BlockHash) -> Result<ShareHeader, StoreError>;
         pub fn get_headers_for_locator(&self, block_hashes: &[BlockHash], stop_block_hash: &BlockHash, limit: usize) -> Result<Vec<ShareHeader>, StoreError>;
         pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Result<Vec<BlockHash>, StoreError>;
@@ -618,7 +653,8 @@ mockall::mock! {
         pub fn get_genesis_header(&self) -> Result<ShareHeader, StoreError>;
         pub fn get_children_blockhashes(&self, blockhash: &BlockHash) -> Result<Option<Vec<BlockHash>>, StoreError>;
         pub fn get_nephews(&self, uncle: &BlockHash) -> Option<Vec<BlockHash>>;
-        pub fn get_confirmed_headers_in_range(&self, from_height: u32, to_height: u32) -> Result<Vec<ShareHeader>, StoreError>;
+        pub fn get_confirmed_headers_in_range(&self, from_height: u32, to_height: u32) -> Result<Vec<(BlockHash, ShareHeader)>, StoreError>;
+        pub fn get_share_dag(&self, from_height: u32, to_height: u32) -> Result<ShareDag, StoreError>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
         pub fn get_candidate_blocks_missing_data(&self) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_depth(&self, blockhash: &BlockHash) -> Option<usize>;
@@ -907,20 +943,20 @@ mod tests {
         // Full range: heights 0..4, returned newest-to-oldest
         let headers = chain_handle.get_confirmed_headers_in_range(0, 4).unwrap();
         assert_eq!(headers.len(), 5);
-        assert_eq!(headers[0].block_hash(), shares[4].block_hash());
-        assert_eq!(headers[4].block_hash(), genesis.block_hash());
+        assert_eq!(headers[0].0, shares[4].block_hash());
+        assert_eq!(headers[4].0, genesis.block_hash());
 
         // Partial range: heights 2..4, returned newest-to-oldest
         let headers = chain_handle.get_confirmed_headers_in_range(2, 4).unwrap();
         assert_eq!(headers.len(), 3);
-        assert_eq!(headers[0].block_hash(), shares[4].block_hash());
-        assert_eq!(headers[2].block_hash(), shares[2].block_hash());
+        assert_eq!(headers[0].0, shares[4].block_hash());
+        assert_eq!(headers[2].0, shares[2].block_hash());
 
         // Long range: heights 0..10, returned newest-to-oldest
         let headers = chain_handle.get_confirmed_headers_in_range(0, 10).unwrap();
         assert_eq!(headers.len(), 5);
-        assert_eq!(headers[0].block_hash(), shares[4].block_hash());
-        assert_eq!(headers[4].block_hash(), shares[0].block_hash());
+        assert_eq!(headers[0].0, shares[4].block_hash());
+        assert_eq!(headers[4].0, shares[0].block_hash());
     }
 
     #[tokio::test]
