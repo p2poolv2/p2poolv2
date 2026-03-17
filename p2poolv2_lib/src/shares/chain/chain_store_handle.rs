@@ -331,8 +331,7 @@ impl ChainStoreHandle {
         let uncle_headers: HashMap<BlockHash, ShareHeader> = if all_uncle_hashes.is_empty() {
             HashMap::new()
         } else {
-            self.get_share_headers(&all_uncle_hashes)
-                .unwrap_or_default()
+            self.get_share_headers(&all_uncle_hashes)?
                 .into_iter()
                 .collect()
         };
