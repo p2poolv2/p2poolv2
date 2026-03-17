@@ -14,3 +14,44 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+//! Share chain PPLNS payout distribution.
+//!
+//! Computes payout distributions directly from the confirmed share chain,
+//! applying uncle weighting: uncles receive 90% of their work, and
+//! confirmed shares that reference uncles receive a 10% bonus per uncle.
+
+pub mod payout;
+
+pub use payout::Payout;
+
+use super::payout_distribution::PayoutShare;
+
+/// A share chain entry with pre-computed weighted difficulty for payout distribution.
+///
+/// This is ephemeral -- created during payout computation and never stored.
+/// The weighted_difficulty already accounts for uncle penalties (90%) or
+/// nephew bonuses (base work + 10% of each referenced uncle's work).
+pub struct ShareChainPplnsShare {
+    miner_address: String,
+    weighted_difficulty: u64,
+}
+
+impl ShareChainPplnsShare {
+    /// Create a new share chain PPLNS share with pre-computed weighted difficulty.
+    pub fn new(miner_address: String, weighted_difficulty: u64) -> Self {
+        Self {
+            miner_address,
+            weighted_difficulty,
+        }
+    }
+}
+
+impl PayoutShare for ShareChainPplnsShare {
+    fn get_btcaddress(&self) -> Option<&str> {
+        Some(&self.miner_address)
+    }
+
+    fn get_difficulty(&self) -> u64 {
+        self.weighted_difficulty
+    }
+}
