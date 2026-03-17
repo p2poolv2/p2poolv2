@@ -29,9 +29,10 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::{ShareBlock, ShareTransaction};
 use crate::shares::share_commitment::ShareCommitment;
+use crate::store::block_tx_metadata::Status;
 use crate::stratum::work::coinbase;
 use crate::utils::time_provider::TimeProvider;
-use bitcoin::{Amount, Target, Transaction, TxMerkleNode};
+use bitcoin::{Amount, BlockHash, Target, Transaction, TxMerkleNode};
 use std::collections::HashSet;
 use std::fmt;
 
@@ -107,7 +108,8 @@ pub trait ShareValidator {
         chain_store_handle: &ChainStoreHandle,
     ) -> Result<(), ValidationError>;
 
-    /// Validate the share uncles are in store and no more than MAX_UNCLES.
+    /// Validate uncles: count within MAX_UNCLES, no duplicates, each exists
+    /// in store, and none are on the confirmed chain.
     fn validate_uncles(
         &self,
         share: &ShareBlock,
@@ -496,10 +498,7 @@ impl ShareValidator for DefaultShareValidator {
         // but that check avoids duplicate organise/inv events, while
         // this one avoids redundant validation work if a caller bypasses
         // validate_and_emit.
-        if chain_store_handle.has_status(
-            &share.block_hash(),
-            crate::store::block_tx_metadata::Status::BlockValid,
-        ) {
+        if chain_store_handle.has_status(&share.block_hash(), Status::BlockValid) {
             return Ok(());
         }
         self.validate_uncles(share, chain_store_handle)?;
@@ -525,10 +524,19 @@ impl ShareValidator for DefaultShareValidator {
                 MAX_UNCLES
             )));
         }
+        let unique_uncles: HashSet<&BlockHash> = share.header.uncles.iter().collect();
+        if share.header.uncles.len() != unique_uncles.len() {
+            return Err(ValidationError::new("Share has duplicate uncles"));
+        }
         for uncle in &share.header.uncles {
-            if chain_store_handle.get_share(uncle).is_none() {
+            if !chain_store_handle.share_block_exists(uncle) {
                 return Err(ValidationError::new(format!(
                     "Uncle {uncle} not found in store"
+                )));
+            };
+            if chain_store_handle.has_status(uncle, Status::Confirmed) {
+                return Err(ValidationError::new(format!(
+                    "Uncle {uncle} is on confirmed chain"
                 )));
             }
         }
@@ -599,8 +607,8 @@ mod tests {
     use super::*;
     use crate::shares::share_block::ShareTransaction;
     use crate::test_utils::{
-        TestShareBlockBuilder, genesis_for_tests, load_share_headers_test_data,
-        setup_pool_difficulty_mocks,
+        TestShareBlockBuilder, build_block_from_work_components, genesis_for_tests,
+        load_share_headers_test_data, setup_pool_difficulty_mocks,
     };
     use crate::utils::time_provider::TestTimeProvider;
     use bitcoin::{BlockHash, ScriptBuf, TxOut, hashes::Hash};
@@ -678,74 +686,31 @@ mod tests {
         );
     }
 
+    use crate::test_utils::{PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_G};
+
     #[tokio::test]
-    async fn test_validate_uncles() {
-        let mut seq = mockall::Sequence::new();
+    async fn test_validate_uncles_valid() {
         let mut chain_store_handle = ChainStoreHandle::default();
 
-        // Create initial shares to use as uncles
-        let uncle1 = TestShareBlockBuilder::new()
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .build();
+        let uncle1 = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_G).build();
+        let uncle2 = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_2G).build();
+        let uncle3 = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_3G).build();
 
-        let uncle1_clone = uncle1.clone();
+        // All uncles exist and are not confirmed
         chain_store_handle
-            .expect_get_share()
-            .times(1)
-            .in_sequence(&mut seq)
-            .with(mockall::predicate::eq(uncle1.block_hash()))
-            .returning(move |_| Some(uncle1_clone.clone()));
-
-        let uncle2 = TestShareBlockBuilder::new()
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .build();
-
-        let uncle2_clone = uncle2.clone();
-
+            .expect_share_block_exists()
+            .returning(|_| true);
         chain_store_handle
-            .expect_get_share()
-            .times(1)
-            .in_sequence(&mut seq)
-            .with(mockall::predicate::eq(uncle2.block_hash()))
-            .returning(move |_| Some(uncle2_clone.clone()));
+            .expect_has_status()
+            .returning(|_, _| false);
 
-        let uncle3 = TestShareBlockBuilder::new()
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .build();
-
-        let uncle3_clone = uncle3.clone();
-
-        chain_store_handle
-            .expect_get_share()
-            .times(1)
-            .in_sequence(&mut seq)
-            .with(mockall::predicate::eq(uncle3.block_hash()))
-            .returning(move |_| Some(uncle3_clone.clone()));
-
-        let uncle4 = TestShareBlockBuilder::new()
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .build();
-
-        let _uncle4_clone = uncle4.clone();
-
-        // Test share with non-existent uncle
-        let non_existent_hash = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
-            .parse::<BlockHash>()
-            .unwrap();
-
-        let _invalid_share_b = TestShareBlockBuilder::new()
-            .uncles(vec![uncle1.block_hash(), non_existent_hash])
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .build();
-
-        // Test share with valid number of uncles (MAX_UNCLES = 3)
         let valid_share = TestShareBlockBuilder::new()
             .uncles(vec![
                 uncle1.block_hash(),
                 uncle2.block_hash(),
                 uncle3.block_hash(),
             ])
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .miner_pubkey(PUBKEY_G)
             .build();
 
         assert!(
@@ -753,8 +718,17 @@ mod tests {
                 .validate_uncles(&valid_share, &chain_store_handle)
                 .is_ok()
         );
+    }
 
-        // Test share with too many uncles (> MAX_UNCLES)
+    #[tokio::test]
+    async fn test_validate_uncles_too_many() {
+        let chain_store_handle = ChainStoreHandle::default();
+
+        let uncle1 = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_G).build();
+        let uncle2 = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_2G).build();
+        let uncle3 = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_3G).build();
+        let uncle4 = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_4G).build();
+
         let invalid_share = TestShareBlockBuilder::new()
             .uncles(vec![
                 uncle1.block_hash(),
@@ -762,19 +736,83 @@ mod tests {
                 uncle3.block_hash(),
                 uncle4.block_hash(),
             ])
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .miner_pubkey(PUBKEY_G)
             .build();
 
-        assert!(
-            validator()
-                .validate_uncles(&invalid_share, &chain_store_handle)
-                .is_err()
-        );
+        let result = validator().validate_uncles(&invalid_share, &chain_store_handle);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Too many uncles"));
+    }
 
+    #[tokio::test]
+    async fn test_validate_uncles_duplicate() {
+        let chain_store_handle = ChainStoreHandle::default();
+
+        let uncle1 = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_G).build();
+
+        let invalid_share = TestShareBlockBuilder::new()
+            .uncles(vec![uncle1.block_hash(), uncle1.block_hash()])
+            .miner_pubkey(PUBKEY_G)
+            .build();
+
+        let result = validator().validate_uncles(&invalid_share, &chain_store_handle);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("duplicate uncles"));
+    }
+
+    #[tokio::test]
+    async fn test_validate_uncles_not_in_store() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        chain_store_handle
+            .expect_share_block_exists()
+            .returning(|_| false);
+
+        let non_existent_hash = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
+            .parse::<BlockHash>()
+            .unwrap();
+
+        let invalid_share = TestShareBlockBuilder::new()
+            .uncles(vec![non_existent_hash])
+            .miner_pubkey(PUBKEY_G)
+            .build();
+
+        let result = validator().validate_uncles(&invalid_share, &chain_store_handle);
+        assert!(result.is_err());
         assert!(
-            validator()
-                .validate_uncles(&invalid_share, &chain_store_handle)
-                .is_err()
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not found in store")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_uncles_on_confirmed_chain() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        let uncle1 = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_G).build();
+
+        // Uncle exists but is on the confirmed chain
+        chain_store_handle
+            .expect_share_block_exists()
+            .returning(|_| true);
+        chain_store_handle
+            .expect_has_status()
+            .returning(|_, _| true);
+
+        let invalid_share = TestShareBlockBuilder::new()
+            .uncles(vec![uncle1.block_hash()])
+            .miner_pubkey(PUBKEY_G)
+            .build();
+
+        let result = validator().validate_uncles(&invalid_share, &chain_store_handle);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("on confirmed chain")
         );
     }
 
@@ -782,9 +820,8 @@ mod tests {
     async fn test_validate_share() {
         let mut chain_store_handle = ChainStoreHandle::default();
 
-        let share_block = crate::test_utils::build_block_from_work_components(
-            "../p2poolv2_tests/test_data/validation/stratum/b/",
-        );
+        let share_block =
+            build_block_from_work_components("../p2poolv2_tests/test_data/validation/stratum/b/");
 
         // Set up mock expectations
         chain_store_handle

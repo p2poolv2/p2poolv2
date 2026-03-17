@@ -220,7 +220,7 @@ mod tests {
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
     use crate::shares::share_block::ShareHeader;
     use crate::store::dag_store::ShareDag;
-    use crate::test_utils::TestShareBlockBuilder;
+    use crate::test_utils::{PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_G, TestShareBlockBuilder};
     use bitcoin::BlockHash;
     use bitcoin::hashes::Hash;
     use p2poolv2_config::StratumConfig;
@@ -312,11 +312,7 @@ mod tests {
     #[test]
     fn test_single_share_no_uncles() {
         let genesis_hash = BlockHash::all_zeros();
-        let header = build_test_header(
-            &genesis_hash.to_string(),
-            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-            2,
-        );
+        let header = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let miner_address = header.miner_address.to_string();
         let tip_hash = header.block_hash();
 
@@ -342,16 +338,8 @@ mod tests {
     #[test]
     fn test_two_shares_equal_work_no_uncles() {
         let genesis_hash = BlockHash::all_zeros();
-        let header1 = build_test_header(
-            &genesis_hash.to_string(),
-            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-            2,
-        );
-        let header2 = build_test_header(
-            &header1.block_hash().to_string(),
-            "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
-            2,
-        );
+        let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
+        let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
         let miner1 = header1.miner_address.to_string();
         let miner2 = header2.miner_address.to_string();
         let tip_hash = header2.block_hash();
@@ -393,22 +381,14 @@ mod tests {
         let genesis_hash = BlockHash::all_zeros();
 
         // Uncle: a share not on the confirmed chain
-        let uncle_header = build_test_header(
-            &genesis_hash.to_string(),
-            "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
-            2,
-        );
+        let uncle_header = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 2);
         let uncle_hash = uncle_header.block_hash();
         let uncle_work = work_to_u64(uncle_header.get_work());
         let uncle_miner = uncle_header.miner_address.to_string();
 
         // Nephew: confirmed share that references the uncle
-        let nephew_header = build_test_header_with_uncles(
-            &genesis_hash.to_string(),
-            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-            2,
-            vec![uncle_hash],
-        );
+        let nephew_header =
+            build_test_header_with_uncles(&genesis_hash.to_string(), PUBKEY_G, 2, vec![uncle_hash]);
         let nephew_work = work_to_u64(nephew_header.get_work());
         let nephew_miner = nephew_header.miner_address.to_string();
         let tip_hash = nephew_header.block_hash();
@@ -470,16 +450,9 @@ mod tests {
     fn test_share_with_multiple_uncles() {
         let genesis_hash = BlockHash::all_zeros();
 
-        let uncle1_header = build_test_header(
-            &genesis_hash.to_string(),
-            "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
-            2,
-        );
-        let uncle2_header = build_test_header(
-            &uncle1_header.block_hash().to_string(),
-            "02e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13",
-            2,
-        );
+        let uncle1_header = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 2);
+        let uncle2_header =
+            build_test_header(&uncle1_header.block_hash().to_string(), PUBKEY_4G, 2);
         let uncle1_hash = uncle1_header.block_hash();
         let uncle2_hash = uncle2_header.block_hash();
         let uncle1_work = work_to_u64(uncle1_header.get_work());
@@ -487,7 +460,7 @@ mod tests {
 
         let nephew_header = build_test_header_with_uncles(
             &genesis_hash.to_string(),
-            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            PUBKEY_G,
             2,
             vec![uncle1_hash, uncle2_hash],
         );
@@ -537,21 +510,9 @@ mod tests {
         let genesis_hash = BlockHash::all_zeros();
 
         // Create 3 confirmed shares, newest to oldest
-        let header1 = build_test_header(
-            &genesis_hash.to_string(),
-            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-            2,
-        );
-        let header2 = build_test_header(
-            &header1.block_hash().to_string(),
-            "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
-            2,
-        );
-        let header3 = build_test_header(
-            &header2.block_hash().to_string(),
-            "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
-            2,
-        );
+        let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
+        let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
+        let header3 = build_test_header(&header2.block_hash().to_string(), PUBKEY_3G, 2);
         let miner3 = header3.miner_address.to_string();
         let tip_hash = header3.block_hash();
 
@@ -590,19 +551,11 @@ mod tests {
         let genesis_hash = BlockHash::all_zeros();
 
         // Recent share with current timestamp
-        let recent_header = build_test_header(
-            &genesis_hash.to_string(),
-            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-            2,
-        );
+        let recent_header = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let recent_miner = recent_header.miner_address.to_string();
 
         // Old share with timestamp beyond two weeks
-        let mut old_header = build_test_header(
-            &genesis_hash.to_string(),
-            "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
-            2,
-        );
+        let mut old_header = build_test_header(&genesis_hash.to_string(), PUBKEY_2G, 2);
         // Set old header time to 3 weeks ago relative to recent
         old_header.time = recent_header.time.saturating_sub(3 * 7 * 24 * 60 * 60);
 
@@ -638,26 +591,18 @@ mod tests {
         let genesis_hash = BlockHash::all_zeros();
 
         // Miner A: confirmed share at height 1
-        let header_a = build_test_header(
-            &genesis_hash.to_string(),
-            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-            2,
-        );
+        let header_a = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let miner_a = header_a.miner_address.to_string();
 
         // Uncle by miner B, referenced by miner C's share
-        let uncle_header = build_test_header(
-            &genesis_hash.to_string(),
-            "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
-            2,
-        );
+        let uncle_header = build_test_header(&genesis_hash.to_string(), PUBKEY_2G, 2);
         let uncle_hash = uncle_header.block_hash();
         let miner_b = uncle_header.miner_address.to_string();
 
         // Miner C: confirmed share at height 2 that references uncle
         let header_c = build_test_header_with_uncles(
             &header_a.block_hash().to_string(),
-            "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
+            PUBKEY_3G,
             2,
             vec![uncle_hash],
         );
