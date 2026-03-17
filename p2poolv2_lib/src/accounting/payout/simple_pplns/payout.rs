@@ -123,8 +123,7 @@ impl Payout {
                     if accumulated_difficulty < total_difficulty {
                         accumulated_difficulty += share.difficulty as f64;
                         if let Some(btcaddress) = share.btcaddress {
-                            *address_difficulty.entry(btcaddress).or_insert(0) +=
-                                share.difficulty;
+                            *address_difficulty.entry(btcaddress).or_insert(0) += share.difficulty;
                         }
                     }
                 }
