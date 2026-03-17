@@ -261,7 +261,7 @@ pub async fn start_notify(
                     publish_prepared_notify(&template, clean_jobs, &notify_context, &template_tx)
                 {
                     error!("Failed to publish notify: {error}");
-                    return;
+                    continue;
                 }
             }
             NotifyCmd::NewNotify => {
@@ -271,7 +271,7 @@ pub async fn start_notify(
                         publish_prepared_notify(template, true, &notify_context, &template_tx)
                     {
                         error!("Failed to publish new notify: {error}");
-                        return;
+                        continue;
                     }
                 } else {
                     debug!("NewNotify received but no template available yet");
