@@ -176,10 +176,14 @@ impl Store {
     }
 
     /// Get share headers matching the vector of blockhashes from the Header CF.
+    ///
+    /// Returns (BlockHash, ShareHeader) pairs in the same order as the input,
+    /// skipping any hashes not found. Preserving order and returning the
+    /// blockhash avoids callers needing to recompute block_hash().
     pub fn get_share_headers(
         &self,
         blockhashes: &[BlockHash],
-    ) -> Result<Vec<ShareHeader>, StoreError> {
+    ) -> Result<Vec<(BlockHash, ShareHeader)>, StoreError> {
         debug!("Getting share headers from store: {:?}", blockhashes);
         let header_cf = self.db.cf_handle(&ColumnFamily::Header).unwrap();
         let keys = blockhashes
@@ -187,16 +191,14 @@ impl Store {
             .map(|h| (&header_cf, consensus::serialize(h)))
             .collect::<Vec<_>>();
         let results = self.db.multi_get_cf(keys);
-        let share_headers = results
-            .into_iter()
-            .filter_map(|v| {
-                if let Ok(Some(data)) = v {
-                    encode::deserialize::<ShareHeader>(&data).ok()
-                } else {
-                    None
+        let mut share_headers = Vec::with_capacity(blockhashes.len());
+        for (blockhash, result) in blockhashes.iter().zip(results.into_iter()) {
+            if let Ok(Some(data)) = result {
+                if let Ok(header) = encode::deserialize::<ShareHeader>(&data) {
+                    share_headers.push((*blockhash, header));
                 }
-            })
-            .collect();
+            }
+        }
         Ok(share_headers)
     }
 
