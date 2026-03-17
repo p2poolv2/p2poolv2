@@ -73,7 +73,8 @@ pub async fn handle_stratum_share(
             share_block.transactions.len()
         );
 
-        // Store share block via ChainStoreHandle
+        // Store share block via ChainStoreHandle. This is later
+        // organised in emission worker once this function returns.
         chain_store_handle
             .add_share_block(share_block.clone(), true)
             .await

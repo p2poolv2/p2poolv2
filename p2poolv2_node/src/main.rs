@@ -207,6 +207,7 @@ async fn main() -> ExitCode {
     let stats_dir_for_shutdown = config.logging.stats_dir.clone();
     let chain_store_handle_for_stratum = chain_store_handle.clone();
     let tracker_handle_cloned = tracker_handle.clone();
+    let notify_tx_for_node = notify_tx.clone();
     let exit_sender_stratum = exit_sender.clone();
 
     tokio::spawn(async move {
@@ -256,6 +257,7 @@ async fn main() -> ExitCode {
         emissions_rx,
         metrics_handle.clone(),
         monitoring_event_sender.clone(),
+        notify_tx_for_node,
     )
     .await
     {

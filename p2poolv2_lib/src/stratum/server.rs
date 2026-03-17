@@ -28,7 +28,7 @@ use crate::stratum::message_handlers::handle_message;
 use crate::stratum::messages::Request;
 use crate::stratum::session::Session;
 use crate::stratum::session_timeout::{self, check_session_timeouts};
-use crate::stratum::work::notify::NotifyCmd;
+use crate::stratum::work::notify::NotifySender;
 use crate::stratum::work::prepared_notify::{PreparedNotifyParams, build_notify_from_prepared};
 use crate::stratum::work::tracker::JobTracker;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
@@ -184,7 +184,7 @@ impl StratumServer {
     pub async fn start(
         &mut self,
         ready_tx: Option<oneshot::Sender<()>>,
-        notify_tx: mpsc::Sender<NotifyCmd>,
+        notify_tx: NotifySender,
         tracker_handle: Arc<JobTracker>,
         bitcoinrpc_config: BitcoinRpcConfig,
         metrics: metrics::MetricsHandle,
@@ -283,7 +283,7 @@ impl StratumServer {
 /// A context for the Stratum server easing the number of parameters passed around.
 #[derive(Clone)]
 pub(crate) struct StratumContext {
-    pub notify_tx: mpsc::Sender<NotifyCmd>,
+    pub notify_tx: NotifySender,
     pub tracker_handle: Arc<JobTracker>,
     pub bitcoinrpc_config: BitcoinRpcConfig,
     pub start_difficulty: u64,

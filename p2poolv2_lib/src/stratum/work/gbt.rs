@@ -16,7 +16,7 @@
 
 use crate::stratum::work::block_template::BlockTemplate;
 use crate::stratum::work::error::WorkError;
-use crate::stratum::work::notify::NotifyCmd;
+use crate::stratum::work::notify::{NotifyCmd, NotifySender};
 use bitcoin::hashes::{Hash, sha256d};
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use std::sync::Arc;
@@ -89,7 +89,7 @@ async fn get_block_template(
 /// Otherwise, poll for new block templates every poll_interval seconds.
 pub async fn start_gbt(
     bitcoin_config: BitcoinRpcConfig,
-    result_tx: tokio::sync::mpsc::Sender<NotifyCmd>,
+    result_tx: NotifySender,
     poll_interval: u64,
     network: bitcoin::Network,
     mut zmq_trigger_rx: tokio::sync::mpsc::Receiver<()>,
@@ -421,11 +421,10 @@ mod gbt_server_tests {
 
         assert!(timeout.is_ok());
         let cmd = timeout.unwrap().unwrap();
-        match cmd {
-            NotifyCmd::SendToAll { template } => {
-                assert_eq!(template.height, 108);
-            }
-        }
+        let NotifyCmd::SendToAll { template } = cmd else {
+            panic!("Expected SendToAll");
+        };
+        assert_eq!(template.height, 108);
     }
 
     #[tokio::test]
@@ -481,10 +480,9 @@ mod gbt_server_tests {
 
         assert!(timeout.is_ok());
         let cmd = timeout.unwrap().unwrap();
-        match cmd {
-            NotifyCmd::SendToAll { template } => {
-                assert_eq!(template.height, 108);
-            }
-        }
+        let NotifyCmd::SendToAll { template } = cmd else {
+            panic!("Expected SendToAll");
+        };
+        assert_eq!(template.height, 108);
     }
 }

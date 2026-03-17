@@ -30,6 +30,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::dag_store::ShareInfo;
 use crate::store::writer::StoreError;
+use crate::stratum::work::notify::{NotifyCmd, NotifySender};
 use std::fmt;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
@@ -81,6 +82,7 @@ pub struct OrganiseWorker {
     organise_rx: OrganiseReceiver,
     chain_store_handle: ChainStoreHandle,
     monitoring_event_sender: MonitoringEventSender,
+    notify_tx: NotifySender,
 }
 
 impl OrganiseWorker {
@@ -89,11 +91,13 @@ impl OrganiseWorker {
         organise_rx: OrganiseReceiver,
         chain_store_handle: ChainStoreHandle,
         monitoring_event_sender: MonitoringEventSender,
+        notify_tx: NotifySender,
     ) -> Self {
         Self {
             organise_rx,
             chain_store_handle,
             monitoring_event_sender,
+            notify_tx,
         }
     }
 
@@ -131,6 +135,15 @@ impl OrganiseWorker {
                         .await
                     {
                         Ok(Some(height)) => {
+                            if let Ok(Some(candidate_tip_height)) =
+                                self.chain_store_handle.get_candidate_tip_height()
+                            {
+                                if height >= candidate_tip_height {
+                                    self.send_new_notify(height, candidate_tip_height).await;
+                                }
+                            } else {
+                                debug!("No candidate tip found");
+                            }
                             self.emit_share_monitoring_event(&share_block, height);
                         }
                         Ok(None) => {}
@@ -149,6 +162,20 @@ impl OrganiseWorker {
         }
         info!("Organise worker stopped - channel closed");
         Ok(())
+    }
+
+    /// Send new notify message to workers after share chain is
+    /// extended. This is important to keep uncles from being generated.
+    ///
+    /// Sends a NewNotify command to the notifier when the confirmed chain
+    /// catches up to the candidate tip.
+    async fn send_new_notify(&self, confirmed_height: u32, candidate_tip_height: u32) {
+        debug!(
+            "Confirmed height {confirmed_height} caught up to candidate tip {candidate_tip_height}. Sending new work to miners."
+        );
+        if self.notify_tx.send(NotifyCmd::NewNotify).await.is_err() {
+            error!("Notify channel closed. Cannot send new work to miners.");
+        }
     }
 
     /// Emits a Share monitoring event for a confirmed share.
@@ -181,6 +208,12 @@ mod tests {
     use super::*;
     use crate::monitoring_events::create_monitoring_event_channel;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
+    use crate::stratum::work::notify::{NotifyCmd, NotifyReceiver};
+
+    /// Create a notify channel for tests, returning the sender and receiver.
+    fn create_test_notify_channel() -> (NotifySender, NotifyReceiver) {
+        tokio::sync::mpsc::channel::<NotifyCmd>(10)
+    }
 
     #[tokio::test]
     async fn test_organise_worker_stops_on_channel_close() {
@@ -190,7 +223,8 @@ mod tests {
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
-        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle, monitoring_tx);
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle, monitoring_tx, notify_tx);
 
         // Drop sender so recv() returns None immediately
         drop(_organise_tx);
@@ -211,7 +245,8 @@ mod tests {
             .returning(|_| Ok(None));
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
-        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle, monitoring_tx);
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle, monitoring_tx, notify_tx);
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
             .nonce(0xe9695791)
@@ -238,7 +273,8 @@ mod tests {
             .returning(|_| Ok(None));
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
-        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle, monitoring_tx);
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle, monitoring_tx, notify_tx);
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
             .nonce(0xe9695791)
@@ -262,7 +298,8 @@ mod tests {
             .returning(|_| Err(StoreError::ChannelClosed));
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
-        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle, monitoring_tx);
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle, monitoring_tx, notify_tx);
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
             .nonce(0xe9695791)
@@ -286,7 +323,8 @@ mod tests {
             .returning(|_| Err(StoreError::Database("test error".to_string())));
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
-        let worker = OrganiseWorker::new(rx, mock_chain_handle, monitoring_tx);
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let worker = OrganiseWorker::new(rx, mock_chain_handle, monitoring_tx, notify_tx);
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
             .nonce(0xe9695791)
@@ -297,5 +335,76 @@ mod tests {
         // Worker should continue past the non-fatal error and exit cleanly
         let result = worker.run().await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_organise_worker_sends_new_notify_when_confirmed_catches_up() {
+        let (organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_clone()
+            .return_once(MockChainStoreHandle::new);
+        mock_chain_handle
+            .expect_promote_block()
+            .returning(|_| Ok(Some(5)));
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(5)));
+        mock_chain_handle
+            .expect_get_uncle_infos()
+            .returning(|_| Vec::new());
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, mut notify_rx) = create_test_notify_channel();
+        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle, monitoring_tx, notify_tx);
+
+        let share = crate::test_utils::TestShareBlockBuilder::new()
+            .nonce(0xe9695791)
+            .build();
+        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        drop(organise_tx);
+
+        let result = worker.run().await;
+        assert!(result.is_ok());
+
+        // Verify NewNotify was sent on the notify channel
+        let cmd = notify_rx.try_recv();
+        assert!(cmd.is_ok());
+        assert!(matches!(cmd.unwrap(), NotifyCmd::NewNotify));
+    }
+
+    #[tokio::test]
+    async fn test_organise_worker_no_new_notify_when_confirmed_below_candidate() {
+        let (organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_clone()
+            .return_once(MockChainStoreHandle::new);
+        // Confirmed height 3 is below candidate tip 5
+        mock_chain_handle
+            .expect_promote_block()
+            .returning(|_| Ok(Some(3)));
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(5)));
+        mock_chain_handle
+            .expect_get_uncle_infos()
+            .returning(|_| Vec::new());
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, mut notify_rx) = create_test_notify_channel();
+        let worker = OrganiseWorker::new(organise_rx, mock_chain_handle, monitoring_tx, notify_tx);
+
+        let share = crate::test_utils::TestShareBlockBuilder::new()
+            .nonce(0xe9695791)
+            .build();
+        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        drop(organise_tx);
+
+        let result = worker.run().await;
+        assert!(result.is_ok());
+
+        // No NewNotify should have been sent
+        assert!(notify_rx.try_recv().is_err());
     }
 }
