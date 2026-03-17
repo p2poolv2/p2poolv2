@@ -412,7 +412,7 @@ impl DefaultShareValidator {
             ));
         }
 
-        self.validate_commitment_hash(share, &bitcoin_coinbase)?;
+        self.validate_commitment_hash(share, bitcoin_coinbase)?;
         Ok(())
     }
 }
