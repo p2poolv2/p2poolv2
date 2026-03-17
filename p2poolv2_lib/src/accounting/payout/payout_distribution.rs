@@ -122,19 +122,6 @@ fn include_address_and_cut(
     total_amount
 }
 
-/// Groups shares by bitcoin address and sums their difficulties.
-pub(crate) fn group_shares_by_address<P: PayoutShare>(shares: &[P]) -> HashMap<String, u64> {
-    let mut address_difficulty_map = HashMap::new();
-    for share in shares {
-        if let Some(btcaddress) = share.get_btcaddress() {
-            *address_difficulty_map
-                .entry(btcaddress.to_owned())
-                .or_insert(0) += share.get_difficulty();
-        }
-    }
-    address_difficulty_map
-}
-
 /// Appends proportional distribution of amount based on difficulty weights to the distribtuion
 pub(crate) fn append_proportional_distribution(
     address_difficulty_map: HashMap<String, u64>,
@@ -168,49 +155,6 @@ pub(crate) fn append_proportional_distribution(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounting::payout::simple_pplns::SimplePplnsShare;
-
-    #[test]
-    fn test_group_shares_by_address() {
-        let shares = vec![
-            SimplePplnsShare::new(
-                1,
-                100,
-                "addr1".to_string(),
-                "worker1".to_string(),
-                1000,
-                "job".to_string(),
-                "extra".to_string(),
-                "nonce".to_string(),
-            ),
-            SimplePplnsShare::new(
-                2,
-                200,
-                "addr2".to_string(),
-                "worker2".to_string(),
-                2000,
-                "job".to_string(),
-                "extra".to_string(),
-                "nonce".to_string(),
-            ),
-            SimplePplnsShare::new(
-                1,
-                300,
-                "addr1".to_string(),
-                "worker3".to_string(),
-                3000,
-                "job".to_string(),
-                "extra".to_string(),
-                "nonce".to_string(),
-            ),
-        ];
-
-        let result = group_shares_by_address(&shares);
-
-        assert_eq!(result.len(), 2);
-        assert_eq!(result.get("addr1"), Some(&400)); // 100 + 300
-        assert_eq!(result.get("addr2"), Some(&200));
-    }
 
     #[test]
     fn test_create_proportional_distribution() {

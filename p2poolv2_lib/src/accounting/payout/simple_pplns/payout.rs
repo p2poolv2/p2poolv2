@@ -16,7 +16,7 @@
 
 use crate::accounting::OutputPair;
 use crate::accounting::payout::payout_distribution::{
-    PayoutDistribution, append_proportional_distribution, group_shares_by_address,
+    PayoutDistribution, append_proportional_distribution,
 };
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 #[cfg(test)]
@@ -25,6 +25,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use bitcoin::{Address, Amount};
+use std::collections::HashMap;
 use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -49,16 +50,15 @@ impl PayoutDistribution<SimplePplnsShare> for Payout {
         // This avoids parsing miner addresses when 100% goes to donation/fee
         // This also avoids running PPLNS share look ups when we don't need to use that data
         if remaining_total_amount > bitcoin::Amount::ZERO {
-            let shares = self.get_shares_for_difficulty(chain_store_handle, total_difficulty)?;
+            let address_difficulty_map =
+                self.accumulate_difficulty_by_address(chain_store_handle, total_difficulty)?;
 
-            if shares.is_empty() {
+            if address_difficulty_map.is_empty() {
                 *distribution = vec![OutputPair {
                     address: bootstrap_address,
                     amount: total_amount,
                 }];
             } else {
-                let address_difficulty_map = group_shares_by_address(&shares);
-
                 distribution.reserve(address_difficulty_map.len());
 
                 append_proportional_distribution(
@@ -83,27 +83,20 @@ impl Payout {
         Self { step_size_seconds }
     }
 
-    /// Get shares from chain starting from the latest, going back in time until
-    /// the total difficulty is reached. Uses optimized batch querying to avoid
-    /// sequential single-share queries.
+    /// Accumulate difficulty per miner address from PPLNS shares.
     ///
-    /// # Arguments
-    /// * `store` - Handle to the chain store for querying PPLNS shares
-    /// * `total_difficulty` - Target cumulative difficulty to collect shares for
+    /// Queries shares in time windows going backwards from the current time,
+    /// accumulating difficulty per address directly into a HashMap. This avoids
+    /// building an intermediate Vec of shares and a second grouping pass.
     ///
-    /// # Returns
-    /// Vector of shares ordered from newest to oldest that sum up to at least total_difficulty
-    ///
-    /// # Implementation
-    /// Queries shares in time windows going backwards from the latest timestamp.
-    /// Uses the configured step_size_seconds to determine batch size, defaulting to 1 day.
-    /// Continues querying additional time windows if total difficulty hasn't been reached.
-    fn get_shares_for_difficulty(
+    /// Continues querying additional time windows if total difficulty hasn't
+    /// been reached.
+    fn accumulate_difficulty_by_address(
         &self,
         store: &ChainStoreHandle,
         total_difficulty: f64,
-    ) -> Result<Vec<SimplePplnsShare>, Box<dyn Error + Send + Sync>> {
-        let mut result_shares = Vec::new();
+    ) -> Result<HashMap<String, u64>, Box<dyn Error + Send + Sync>> {
+        let mut address_difficulty: HashMap<String, u64> = HashMap::new();
         let mut accumulated_difficulty = 0f64;
 
         // Start from current time and work backwards
@@ -126,11 +119,13 @@ impl Payout {
             has_more_shares = !batch_shares.is_empty();
 
             if has_more_shares {
-                // Process shares from newest to oldest within this batch
                 for share in batch_shares.into_iter() {
                     if accumulated_difficulty < total_difficulty {
                         accumulated_difficulty += share.difficulty as f64;
-                        result_shares.push(share);
+                        if let Some(btcaddress) = share.btcaddress {
+                            *address_difficulty.entry(btcaddress).or_insert(0) +=
+                                share.difficulty;
+                        }
                     }
                 }
 
@@ -141,7 +136,7 @@ impl Payout {
             }
         }
 
-        Ok(result_shares)
+        Ok(address_difficulty)
     }
 }
 
@@ -152,17 +147,16 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_get_shares_for_difficulty_exact_match() {
+    async fn test_accumulate_difficulty_exact_match() {
         let payout = Payout::new(86400);
         let mut chain_store_handle = ChainStoreHandle::default();
 
-        // Get current time and create recent timestamps (within last hour)
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
 
-        // Create shares with total difficulty of 1000
+        // Create shares with total difficulty of 1000 across 4 addresses
         let shares = vec![
             SimplePplnsShare::new(
                 1,
@@ -173,7 +167,7 @@ mod tests {
                 "job".to_string(),
                 "extra".to_string(),
                 "nonce".to_string(),
-            ), // 30 min ago
+            ),
             SimplePplnsShare::new(
                 2,
                 300,
@@ -183,7 +177,7 @@ mod tests {
                 "job".to_string(),
                 "extra".to_string(),
                 "nonce".to_string(),
-            ), // 40 min ago
+            ),
             SimplePplnsShare::new(
                 3,
                 200,
@@ -193,7 +187,7 @@ mod tests {
                 "job".to_string(),
                 "extra".to_string(),
                 "nonce".to_string(),
-            ), // 50 min ago
+            ),
             SimplePplnsShare::new(
                 4,
                 100,
@@ -203,7 +197,7 @@ mod tests {
                 "job".to_string(),
                 "extra".to_string(),
                 "nonce".to_string(),
-            ), // 60 min ago
+            ),
         ];
 
         chain_store_handle
@@ -211,25 +205,23 @@ mod tests {
             .return_const(shares);
 
         let result = payout
-            .get_shares_for_difficulty(&chain_store_handle, 1000.0)
+            .accumulate_difficulty_by_address(&chain_store_handle, 1000.0)
             .unwrap();
 
-        // Should return all shares since total difficulty is exactly 1000
+        // All 4 addresses should be present
         assert_eq!(result.len(), 4);
-
-        // Verify shares are in newest-to-oldest order
-        assert_eq!(result[0].n_time, (current_time - 1800) * 1_000_000); // 30 min ago
-        assert_eq!(result[1].n_time, (current_time - 2400) * 1_000_000); // 40 min ago
-        assert_eq!(result[2].n_time, (current_time - 3000) * 1_000_000); // 50 min ago
-        assert_eq!(result[3].n_time, (current_time - 3600) * 1_000_000); // 60 min ago
+        assert_eq!(result.get("addr1"), Some(&400));
+        assert_eq!(result.get("addr2"), Some(&300));
+        assert_eq!(result.get("addr3"), Some(&200));
+        assert_eq!(result.get("addr4"), Some(&100));
 
         // Verify total difficulty
-        let total: u64 = result.iter().map(|s| s.difficulty).sum();
+        let total: u64 = result.values().sum();
         assert_eq!(total, 1000);
     }
 
     #[tokio::test]
-    async fn test_get_shares_for_difficulty_partial_match() {
+    async fn test_accumulate_difficulty_cutoff() {
         let payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -238,6 +230,8 @@ mod tests {
 
         let mut chain_store_handle = ChainStoreHandle::default();
 
+        // Four shares totalling 1000, but target is 750
+        // Shares are processed in order: 400 + 300 + 200 = 900 >= 750, stops
         let shares = vec![
             SimplePplnsShare::new(
                 1,
@@ -286,21 +280,22 @@ mod tests {
             .return_const(shares);
 
         let result = payout
-            .get_shares_for_difficulty(&chain_store_handle, 750.0)
+            .accumulate_difficulty_by_address(&chain_store_handle, 750.0)
             .unwrap();
 
-        // Should return first 3 shares (400 + 300 + 200 = 900, which exceeds 750)
+        // addr4 (100 difficulty) should not be included since cutoff reached at 900
         assert_eq!(result.len(), 3);
-        assert_eq!(result[0].difficulty, 400);
-        assert_eq!(result[1].difficulty, 300);
-        assert_eq!(result[2].difficulty, 200);
+        assert_eq!(result.get("addr1"), Some(&400));
+        assert_eq!(result.get("addr2"), Some(&300));
+        assert_eq!(result.get("addr3"), Some(&200));
+        assert!(result.get("addr4").is_none());
 
-        let total: u64 = result.iter().map(|s| s.difficulty).sum();
+        let total: u64 = result.values().sum();
         assert_eq!(total, 900);
     }
 
     #[tokio::test]
-    async fn test_get_shares_for_difficulty_insufficient_shares() {
+    async fn test_accumulate_difficulty_insufficient_shares() {
         let payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -347,18 +342,20 @@ mod tests {
             .return_const(vec![]);
 
         let result = payout
-            .get_shares_for_difficulty(&chain_store_handle, 500.0)
+            .accumulate_difficulty_by_address(&chain_store_handle, 500.0)
             .unwrap();
 
-        // Should return all available shares even though total difficulty (300) < target (500)
+        // All available shares included even though total (300) < target (500)
         assert_eq!(result.len(), 2);
+        assert_eq!(result.get("addr1"), Some(&100));
+        assert_eq!(result.get("addr2"), Some(&200));
 
-        let total: u64 = result.iter().map(|s| s.difficulty).sum();
+        let total: u64 = result.values().sum();
         assert_eq!(total, 300);
     }
 
     #[tokio::test]
-    async fn test_get_shares_for_difficulty_empty_store() {
+    async fn test_accumulate_difficulty_empty_store() {
         let payout = Payout::new(86400);
         let mut chain_store_handle = ChainStoreHandle::default();
 
@@ -367,14 +364,14 @@ mod tests {
             .return_const(vec![]);
 
         let result = payout
-            .get_shares_for_difficulty(&chain_store_handle, 1000.0)
+            .accumulate_difficulty_by_address(&chain_store_handle, 1000.0)
             .unwrap();
 
-        assert_eq!(result.len(), 0);
+        assert!(result.is_empty());
     }
 
     #[tokio::test]
-    async fn test_get_shares_for_difficulty_single_share_exceeds_target() {
+    async fn test_accumulate_difficulty_single_share_exceeds_target() {
         let payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -399,18 +396,17 @@ mod tests {
             .return_const(shares);
 
         let result = payout
-            .get_shares_for_difficulty(&chain_store_handle, 1000.0)
+            .accumulate_difficulty_by_address(&chain_store_handle, 1000.0)
             .unwrap();
 
-        // Should return the single share even though it exceeds target
+        // Single share included even though it exceeds target
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].difficulty, 1500);
+        assert_eq!(result.get("addr1"), Some(&1500));
     }
 
     #[tokio::test]
-    async fn test_get_shares_for_difficulty_multiple_batches() {
-        // Test with a small step size to force multiple batch queries
-        let payout = Payout::new(100); // 100 second step size
+    async fn test_accumulate_difficulty_same_address_aggregation() {
+        let payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -418,7 +414,7 @@ mod tests {
 
         let mut chain_store_handle = ChainStoreHandle::default();
 
-        // Create shares spanning 300 seconds (3 batches)
+        // Two shares from addr1, one from addr2 -- total difficulty 600
         let shares = vec![
             SimplePplnsShare::new(
                 1,
@@ -429,7 +425,7 @@ mod tests {
                 "job".to_string(),
                 "extra".to_string(),
                 "nonce".to_string(),
-            ), // 50s ago
+            ),
             SimplePplnsShare::new(
                 2,
                 200,
@@ -439,27 +435,17 @@ mod tests {
                 "job".to_string(),
                 "extra".to_string(),
                 "nonce".to_string(),
-            ), // 150s ago
+            ),
             SimplePplnsShare::new(
                 3,
                 300,
-                "addr3".to_string(),
+                "addr1".to_string(),
                 "worker3".to_string(),
                 (current_time - 250) * 1_000_000,
                 "job".to_string(),
                 "extra".to_string(),
                 "nonce".to_string(),
-            ), // 250s ago
-            SimplePplnsShare::new(
-                4,
-                400,
-                "addr4".to_string(),
-                "worker4".to_string(),
-                (current_time - 350) * 1_000_000,
-                "job".to_string(),
-                "extra".to_string(),
-                "nonce".to_string(),
-            ), // 350s ago
+            ),
         ];
 
         let mut seq = mockall::Sequence::new();
@@ -468,27 +454,22 @@ mod tests {
             .expect_get_pplns_shares_filtered()
             .times(1)
             .in_sequence(&mut seq)
-            .return_const(Vec::from_iter(shares[0..3].iter().cloned()));
-        // store
-        //     .expect_get_pplns_shares_filtered()
-        //     .times(1)
-        //     .in_sequence(&mut seq)
-        //     .return_const(Vec::from_iter(shares[3..].iter().cloned()));
+            .return_const(shares);
+
+        chain_store_handle
+            .expect_get_pplns_shares_filtered()
+            .times(1)
+            .in_sequence(&mut seq)
+            .return_const(vec![]);
 
         let result = payout
-            .get_shares_for_difficulty(&chain_store_handle, 550.0)
+            .accumulate_difficulty_by_address(&chain_store_handle, 1000.0)
             .unwrap();
 
-        // Should return first 3 shares (100 + 200 + 300 = 600, which exceeds 550)
-        assert_eq!(result.len(), 3);
-
-        // Verify order (newest first)
-        assert_eq!(result[0].n_time, (current_time - 50) * 1_000_000);
-        assert_eq!(result[1].n_time, (current_time - 150) * 1_000_000);
-        assert_eq!(result[2].n_time, (current_time - 250) * 1_000_000);
-
-        let total: u64 = result.iter().map(|s| s.difficulty).sum();
-        assert_eq!(total, 600);
+        // addr1 shares aggregated: 100 + 300 = 400
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.get("addr1"), Some(&400));
+        assert_eq!(result.get("addr2"), Some(&200));
     }
 
     #[tokio::test]
