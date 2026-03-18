@@ -21,8 +21,10 @@
 //! confirmed shares that reference uncles receive a 10% bonus per uncle.
 
 pub mod payout;
+pub mod pplns_window;
 
 pub use payout::Payout;
+pub use pplns_window::PplnsWindow;
 
 use super::payout_distribution::PayoutShare;
 

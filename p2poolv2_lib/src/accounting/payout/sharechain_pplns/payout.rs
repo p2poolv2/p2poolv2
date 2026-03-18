@@ -25,6 +25,10 @@ use crate::accounting::OutputPair;
 use crate::accounting::payout::payout_distribution::{
     PayoutDistribution, append_proportional_distribution,
 };
+use crate::accounting::payout::sharechain_pplns::pplns_window::{
+    ESTIMATED_MAX_SHARES_IN_WINDOW, MAX_PPLNS_WINDOW_SECONDS, NEPHEW_BONUS_FACTOR,
+    UNCLE_WEIGHT_FACTOR,
+};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -35,21 +39,6 @@ use bitcoin::{Address, Amount};
 use std::collections::HashMap;
 use std::error::Error;
 use tracing::warn;
-
-/// Maximum PPLNS window duration: two weeks in seconds.
-const MAX_PPLNS_WINDOW_SECONDS: u32 = 2 * 7 * 24 * 60 * 60;
-
-/// Estimated shares per second on the share chain (approximately 6 per minute).
-/// Used to estimate the minimum height for the PPLNS window query.
-/// We use a conservative multiplier (2x) to avoid missing shares due to
-/// variable block times.
-const ESTIMATED_MAX_SHARES_IN_WINDOW: u32 = MAX_PPLNS_WINDOW_SECONDS / 10 * 2;
-
-/// Uncle weight factor: uncles receive 90% of their difficulty.
-const UNCLE_WEIGHT_FACTOR: f64 = 0.9;
-
-/// Nephew bonus factor: nephews receive 10% of each uncle's difficulty as bonus.
-const NEPHEW_BONUS_FACTOR: f64 = 0.1;
 
 /// Share chain PPLNS payout distribution.
 ///
