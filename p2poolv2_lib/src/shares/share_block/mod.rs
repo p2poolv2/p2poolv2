@@ -58,9 +58,17 @@ pub struct ShareHeader {
 }
 
 impl ShareHeader {
-    /// Get the work defined by the bits field
+    /// Get the work defined by the bits field.
     pub(crate) fn get_work(&self) -> bitcoin::Work {
         Target::from_compact(self.bits).to_work()
+    }
+
+    /// Get the share chain difficulty as f64 from the bits field.
+    ///
+    /// Difficulty is the ratio of the maximum target to the share's target,
+    /// representing how hard this share was to find.
+    pub(crate) fn get_difficulty(&self) -> f64 {
+        Target::from_compact(self.bits).difficulty_float()
     }
 
     /// Build a ShareHeader from a commitment and a bitcoin header

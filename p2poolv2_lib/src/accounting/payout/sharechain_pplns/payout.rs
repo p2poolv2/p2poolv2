@@ -18,7 +18,7 @@
 //!
 //! Walks the confirmed share chain, applies uncle weighting (9/10 for uncles,
 //! 1/10 bonus for nephews), and distributes payouts proportionally by
-//! weighted difficulty. Uses integer arithmetic to keep weighting deterministic.
+//! weighted difficulty.
 
 use super::ShareChainPplnsShare;
 use crate::accounting::OutputPair;
@@ -45,22 +45,11 @@ const MAX_PPLNS_WINDOW_SECONDS: u32 = 2 * 7 * 24 * 60 * 60;
 /// variable block times.
 const ESTIMATED_MAX_SHARES_IN_WINDOW: u32 = MAX_PPLNS_WINDOW_SECONDS / 10 * 2;
 
-/// Uncle weight: 9/10 of their work. Multiply by numerator then divide by denominator
-/// to avoid integer division truncating to zero.
-const UNCLE_WEIGHT_NUMERATOR: u128 = 9;
-const UNCLE_WEIGHT_DENOMINATOR: u128 = 10;
+/// Uncle weight factor: uncles receive 90% of their difficulty.
+const UNCLE_WEIGHT_FACTOR: f64 = 0.9;
 
-/// Nephew bonus: 1/10 of each uncle's work. Multiply by numerator then divide by denominator.
-const NEPHEW_BONUS_NUMERATOR: u128 = 1;
-const NEPHEW_BONUS_DENOMINATOR: u128 = 10;
-
-/// Convert bitcoin::Work (U256) to u128.
-///
-/// Reads the low 16 bytes of the 32-byte little-endian representation.
-fn work_to_u128(work: bitcoin::Work) -> u128 {
-    let bytes = work.to_le_bytes();
-    u128::from_le_bytes(bytes[0..16].try_into().expect("slice length is always 16"))
-}
+/// Nephew bonus factor: nephews receive 10% of each uncle's difficulty as bonus.
+const NEPHEW_BONUS_FACTOR: f64 = 0.1;
 
 /// Share chain PPLNS payout distribution.
 ///
@@ -97,27 +86,29 @@ impl Payout {
     /// Accumulate weighted difficulty per miner address from a ShareDag.
     ///
     /// For each confirmed share:
-    /// - Base work from the share's difficulty target
-    /// - Plus 1/10 of each referenced uncle's work as nephew bonus
+    /// - Full difficulty from the share's bits target
+    /// - Plus 10% of each referenced uncle's difficulty as nephew bonus
     ///
     /// For each uncle:
-    /// - 9/10 of the uncle's own work
+    /// - 90% of the uncle's difficulty
     ///
-    /// Stops accumulating once total_difficulty is reached.
-    /// Returns a map from miner address string to total weighted difficulty.
+    /// Stops accumulating once accumulated difficulty reaches total_difficulty.
+    ///
+    /// Returns a map from miner address string to total weighted difficulty
+    /// for proportional payout distribution.
     fn accumulate_weighted_difficulty(
         &self,
         share_dag: &ShareDag,
         total_difficulty: f64,
-    ) -> HashMap<String, u128> {
+    ) -> HashMap<String, f64> {
         let estimated_miners = share_dag.confirmed_headers.len() + share_dag.uncle_headers.len();
-        let mut address_difficulty: HashMap<String, u128> =
+        let mut address_difficulty_map: HashMap<String, f64> =
             HashMap::with_capacity(estimated_miners);
         let mut accumulated_difficulty: f64 = 0.0;
 
         for (blockhash, header) in &share_dag.confirmed_headers {
-            let base_work = work_to_u128(header.get_work());
-            let mut nephew_bonus: u128 = 0;
+            let share_difficulty = header.get_difficulty();
+            let mut nephew_bonus: f64 = 0.0;
 
             if let Some(uncle_hashes) = share_dag.nephew_to_uncles.get(blockhash) {
                 for uncle_hash in uncle_hashes {
@@ -126,34 +117,36 @@ impl Payout {
                         continue;
                     };
 
-                    let uncle_base_work = work_to_u128(uncle_header.get_work());
+                    let uncle_difficulty = uncle_header.get_difficulty();
 
-                    // Uncle gets 9/10 of its work
-                    let uncle_weighted_work =
-                        uncle_base_work * UNCLE_WEIGHT_NUMERATOR / UNCLE_WEIGHT_DENOMINATOR;
-                    *address_difficulty
+                    // Uncle gets 90% of its difficulty
+                    let uncle_weighted_difficulty = uncle_difficulty * UNCLE_WEIGHT_FACTOR;
+                    *address_difficulty_map
                         .entry(uncle_header.miner_address.to_string())
-                        .or_insert(0) += uncle_weighted_work;
-                    accumulated_difficulty += uncle_weighted_work as f64;
+                        .or_insert(0.0) += uncle_weighted_difficulty;
 
-                    // Nephew gets 1/10 bonus per uncle
-                    nephew_bonus +=
-                        uncle_base_work * NEPHEW_BONUS_NUMERATOR / NEPHEW_BONUS_DENOMINATOR;
+                    // Uncle contributes its weighted difficulty to the PPLNS window
+                    accumulated_difficulty += uncle_weighted_difficulty;
+
+                    // Nephew gets 10% bonus per uncle's difficulty
+                    nephew_bonus += uncle_difficulty * NEPHEW_BONUS_FACTOR;
                 }
             }
 
-            let weighted_work = base_work + nephew_bonus;
-            *address_difficulty
+            let weighted_difficulty = share_difficulty + nephew_bonus;
+            *address_difficulty_map
                 .entry(header.miner_address.to_string())
-                .or_insert(0) += weighted_work;
-            accumulated_difficulty += weighted_work as f64;
+                .or_insert(0.0) += weighted_difficulty;
+
+            // Confirmed share contributes its full difficulty to the PPLNS window
+            accumulated_difficulty += share_difficulty;
 
             if accumulated_difficulty >= total_difficulty {
-                return address_difficulty;
+                return address_difficulty_map;
             }
         }
 
-        address_difficulty
+        address_difficulty_map
     }
 }
 
@@ -380,13 +373,13 @@ mod tests {
         // Uncle: a share not on the confirmed chain
         let uncle_header = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 2);
         let uncle_hash = uncle_header.block_hash();
-        let uncle_work = work_to_u128(uncle_header.get_work());
+        let uncle_difficulty = uncle_header.get_difficulty();
         let uncle_miner = uncle_header.miner_address.to_string();
 
         // Nephew: confirmed share that references the uncle
         let nephew_header =
             build_test_header_with_uncles(&genesis_hash.to_string(), PUBKEY_G, 2, vec![uncle_hash]);
-        let nephew_work = work_to_u128(nephew_header.get_work());
+        let nephew_difficulty = nephew_header.get_difficulty();
         let nephew_miner = nephew_header.miner_address.to_string();
         let tip_hash = nephew_header.block_hash();
 
@@ -407,10 +400,9 @@ mod tests {
             .get_output_distribution(&mock, f64::MAX, total_amount, &config)
             .unwrap();
 
-        // Uncle gets 90% of its work, nephew gets base + 10% of uncle's work
-        let expected_uncle_weight = uncle_work * UNCLE_WEIGHT_NUMERATOR / UNCLE_WEIGHT_DENOMINATOR;
-        let expected_nephew_weight =
-            nephew_work + uncle_work * NEPHEW_BONUS_NUMERATOR / NEPHEW_BONUS_DENOMINATOR;
+        // Uncle gets 90% of its difficulty, nephew gets base + 10% of uncle's difficulty
+        let expected_uncle_weight = uncle_difficulty * UNCLE_WEIGHT_FACTOR;
+        let expected_nephew_weight = nephew_difficulty + uncle_difficulty * NEPHEW_BONUS_FACTOR;
         let total_weight = expected_uncle_weight + expected_nephew_weight;
 
         let total_distributed: Amount = result.iter().map(|pair| pair.amount).sum();
@@ -419,8 +411,8 @@ mod tests {
         for pair in &result {
             let address_str = pair.address.to_string();
             if address_str == nephew_miner {
-                let expected_sats = (total_amount.to_sat() as f64 * expected_nephew_weight as f64
-                    / total_weight as f64)
+                let expected_sats = (total_amount.to_sat() as f64 * expected_nephew_weight
+                    / total_weight)
                     .round() as u64;
                 // Allow 1 sat rounding tolerance
                 let diff = (pair.amount.to_sat() as i64 - expected_sats as i64).unsigned_abs();
@@ -430,8 +422,8 @@ mod tests {
                     actual = pair.amount.to_sat()
                 );
             } else if address_str == uncle_miner {
-                let expected_sats = (total_amount.to_sat() as f64 * expected_uncle_weight as f64
-                    / total_weight as f64)
+                let expected_sats = (total_amount.to_sat() as f64 * expected_uncle_weight
+                    / total_weight)
                     .round() as u64;
                 let diff = (pair.amount.to_sat() as i64 - expected_sats as i64).unsigned_abs();
                 assert!(
@@ -452,8 +444,8 @@ mod tests {
             build_test_header(&uncle1_header.block_hash().to_string(), PUBKEY_4G, 2);
         let uncle1_hash = uncle1_header.block_hash();
         let uncle2_hash = uncle2_header.block_hash();
-        let uncle1_work = work_to_u128(uncle1_header.get_work());
-        let uncle2_work = work_to_u128(uncle2_header.get_work());
+        let uncle1_difficulty = uncle1_header.get_difficulty();
+        let uncle2_difficulty = uncle2_header.get_difficulty();
 
         let nephew_header = build_test_header_with_uncles(
             &genesis_hash.to_string(),
@@ -461,7 +453,7 @@ mod tests {
             2,
             vec![uncle1_hash, uncle2_hash],
         );
-        let nephew_work = work_to_u128(nephew_header.get_work());
+        let nephew_difficulty = nephew_header.get_difficulty();
         let tip_hash = nephew_header.block_hash();
 
         let dag = build_dag_with_uncles(
@@ -482,13 +474,11 @@ mod tests {
             .unwrap();
 
         // Nephew gets base + 10% of uncle1 + 10% of uncle2
-        let expected_nephew_weight = nephew_work
-            + uncle1_work * NEPHEW_BONUS_NUMERATOR / NEPHEW_BONUS_DENOMINATOR
-            + uncle2_work * NEPHEW_BONUS_NUMERATOR / NEPHEW_BONUS_DENOMINATOR;
-        let expected_uncle1_weight =
-            uncle1_work * UNCLE_WEIGHT_NUMERATOR / UNCLE_WEIGHT_DENOMINATOR;
-        let expected_uncle2_weight =
-            uncle2_work * UNCLE_WEIGHT_NUMERATOR / UNCLE_WEIGHT_DENOMINATOR;
+        let expected_nephew_weight = nephew_difficulty
+            + uncle1_difficulty * NEPHEW_BONUS_FACTOR
+            + uncle2_difficulty * NEPHEW_BONUS_FACTOR;
+        let expected_uncle1_weight = uncle1_difficulty * UNCLE_WEIGHT_FACTOR;
+        let expected_uncle2_weight = uncle2_difficulty * UNCLE_WEIGHT_FACTOR;
         let total_weight = expected_nephew_weight + expected_uncle1_weight + expected_uncle2_weight;
 
         let total_distributed: Amount = result.iter().map(|pair| pair.amount).sum();
@@ -496,10 +486,10 @@ mod tests {
 
         // Verify weights are reasonable
         assert!(
-            expected_nephew_weight > nephew_work,
+            expected_nephew_weight > nephew_difficulty,
             "Nephew should have bonus"
         );
-        assert!(total_weight > 0, "Total weight should be positive");
+        assert!(total_weight > 0.0, "Total weight should be positive");
     }
 
     #[test]
@@ -513,8 +503,8 @@ mod tests {
         let miner3 = header3.miner_address.to_string();
         let tip_hash = header3.block_hash();
 
-        // Work per share
-        let work_per_share = work_to_u128(header1.get_work()) as f64;
+        // Difficulty per share (from bits)
+        let difficulty_per_share = header1.get_difficulty();
 
         let dag = build_dag_no_uncles(vec![
             (header3.block_hash(), header3.clone()),
@@ -531,10 +521,10 @@ mod tests {
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
 
-        // Set total_difficulty to just one share's worth -- should include
+        // Set total_difficulty to just one share's difficulty -- should include
         // the first (newest) share only
         let result = payout
-            .get_output_distribution(&mock, work_per_share, total_amount, &config)
+            .get_output_distribution(&mock, difficulty_per_share, total_amount, &config)
             .unwrap();
 
         // Only the newest share (header3) should be included

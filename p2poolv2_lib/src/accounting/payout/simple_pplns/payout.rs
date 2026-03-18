@@ -95,8 +95,8 @@ impl Payout {
         &self,
         store: &ChainStoreHandle,
         total_difficulty: f64,
-    ) -> Result<HashMap<String, u128>, Box<dyn Error + Send + Sync>> {
-        let mut address_difficulty: HashMap<String, u128> = HashMap::new();
+    ) -> Result<HashMap<String, f64>, Box<dyn Error + Send + Sync>> {
+        let mut address_difficulty: HashMap<String, f64> = HashMap::new();
         let mut accumulated_difficulty = 0f64;
 
         // Start from current time and work backwards
@@ -123,8 +123,8 @@ impl Payout {
                     if accumulated_difficulty < total_difficulty {
                         accumulated_difficulty += share.difficulty as f64;
                         if let Some(btcaddress) = share.btcaddress {
-                            *address_difficulty.entry(btcaddress).or_insert(0) +=
-                                share.difficulty as u128;
+                            *address_difficulty.entry(btcaddress).or_insert(0.0) +=
+                                share.difficulty as f64;
                         }
                     }
                 }
@@ -210,14 +210,14 @@ mod tests {
 
         // All 4 addresses should be present
         assert_eq!(result.len(), 4);
-        assert_eq!(result.get("addr1"), Some(&400));
-        assert_eq!(result.get("addr2"), Some(&300));
-        assert_eq!(result.get("addr3"), Some(&200));
-        assert_eq!(result.get("addr4"), Some(&100));
+        assert_eq!(result.get("addr1"), Some(&400.0));
+        assert_eq!(result.get("addr2"), Some(&300.0));
+        assert_eq!(result.get("addr3"), Some(&200.0));
+        assert_eq!(result.get("addr4"), Some(&100.0));
 
         // Verify total difficulty
-        let total: u128 = result.values().sum();
-        assert_eq!(total, 1000);
+        let total: f64 = result.values().sum();
+        assert_eq!(total, 1000.0);
     }
 
     #[tokio::test]
@@ -285,13 +285,13 @@ mod tests {
 
         // addr4 (100 difficulty) should not be included since cutoff reached at 900
         assert_eq!(result.len(), 3);
-        assert_eq!(result.get("addr1"), Some(&400));
-        assert_eq!(result.get("addr2"), Some(&300));
-        assert_eq!(result.get("addr3"), Some(&200));
+        assert_eq!(result.get("addr1"), Some(&400.0));
+        assert_eq!(result.get("addr2"), Some(&300.0));
+        assert_eq!(result.get("addr3"), Some(&200.0));
         assert!(result.get("addr4").is_none());
 
-        let total: u128 = result.values().sum();
-        assert_eq!(total, 900);
+        let total: f64 = result.values().sum();
+        assert_eq!(total, 900.0);
     }
 
     #[tokio::test]
@@ -347,11 +347,11 @@ mod tests {
 
         // All available shares included even though total (300) < target (500)
         assert_eq!(result.len(), 2);
-        assert_eq!(result.get("addr1"), Some(&100));
-        assert_eq!(result.get("addr2"), Some(&200));
+        assert_eq!(result.get("addr1"), Some(&100.0));
+        assert_eq!(result.get("addr2"), Some(&200.0));
 
-        let total: u128 = result.values().sum();
-        assert_eq!(total, 300);
+        let total: f64 = result.values().sum();
+        assert_eq!(total, 300.0);
     }
 
     #[tokio::test]
@@ -401,7 +401,7 @@ mod tests {
 
         // Single share included even though it exceeds target
         assert_eq!(result.len(), 1);
-        assert_eq!(result.get("addr1"), Some(&1500));
+        assert_eq!(result.get("addr1"), Some(&1500.0));
     }
 
     #[tokio::test]
@@ -468,8 +468,8 @@ mod tests {
 
         // addr1 shares aggregated: 100 + 300 = 400
         assert_eq!(result.len(), 2);
-        assert_eq!(result.get("addr1"), Some(&400));
-        assert_eq!(result.get("addr2"), Some(&200));
+        assert_eq!(result.get("addr1"), Some(&400.0));
+        assert_eq!(result.get("addr2"), Some(&200.0));
     }
 
     #[tokio::test]
