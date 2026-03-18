@@ -60,6 +60,7 @@ struct ConfirmedEntry {
     blockhash: BlockHash,
     miner_address: String,
     difficulty: f64,
+    uncle_hashes: Vec<BlockHash>,
 }
 
 /// A cached uncle entry with only the fields needed for payout.
@@ -74,7 +75,7 @@ struct UncleEntry {
 /// allowing incremental loading of only newly confirmed headers on each
 /// update rather than re-reading the full window from RocksDB.
 ///
-/// Caches MAX_PPLNS_WINDOW_SHARES * 2 number of confirmed entries and
+/// Caches MAX_PPLNS_WINDOW_SHARES number of confirmed entries and
 /// their uncles, no matter how far back in time we need to go to get
 /// to those many entries. This simplifies eviction and the cache
 /// maintenance logic.
@@ -82,9 +83,7 @@ pub struct PplnsWindow {
     /// Confirmed share entries ordered newest-to-oldest, capped at MAX_PPLNS_WINDOW_SHARES.
     confirmed_entries: VecDeque<ConfirmedEntry>,
     /// Uncle entries keyed by blockhash for lookup during weighting.
-    uncle_headers: HashMap<BlockHash, UncleEntry>,
-    /// Map from confirmed share blockhash to its referenced uncle blockhashes.
-    nephew_to_uncles: HashMap<BlockHash, Vec<BlockHash>>,
+    uncle_entries: HashMap<BlockHash, UncleEntry>,
     /// The blockhash of the chain tip when this cache was last updated.
     cached_tip_blockhash: Option<BlockHash>,
     /// The height of the highest confirmed share in the cache.
@@ -96,8 +95,7 @@ impl Default for PplnsWindow {
     fn default() -> Self {
         Self {
             confirmed_entries: VecDeque::with_capacity(INITIAL_ENTRIES_CAPACITY),
-            uncle_headers: HashMap::with_capacity(INITIAL_ENTRIES_CAPACITY),
-            nephew_to_uncles: HashMap::with_capacity(INITIAL_ENTRIES_CAPACITY),
+            uncle_entries: HashMap::with_capacity(INITIAL_ENTRIES_CAPACITY),
             cached_tip_blockhash: None,
             cached_top_height: None,
         }
@@ -171,22 +169,20 @@ impl PplnsWindow {
         for entry in &self.confirmed_entries {
             let mut nephew_bonus: f64 = 0.0;
 
-            if let Some(uncle_hashes) = self.nephew_to_uncles.get(&entry.blockhash) {
-                for uncle_hash in uncle_hashes {
-                    let Some(uncle_entry) = self.uncle_headers.get(uncle_hash) else {
-                        tracing::warn!("Uncle header not found for {uncle_hash}, skipping");
-                        continue;
-                    };
+            for uncle_hash in &entry.uncle_hashes {
+                let Some(uncle_entry) = self.uncle_entries.get(uncle_hash) else {
+                    tracing::warn!("Uncle header not found for {uncle_hash}, skipping");
+                    continue;
+                };
 
-                    *address_difficulty_map
-                        .entry(uncle_entry.miner_address.clone())
-                        .or_insert(0.0) += uncle_entry.weighted_difficulty;
+                *address_difficulty_map
+                    .entry(uncle_entry.miner_address.clone())
+                    .or_insert(0.0) += uncle_entry.weighted_difficulty;
 
-                    accumulated_difficulty += uncle_entry.weighted_difficulty;
+                accumulated_difficulty += uncle_entry.weighted_difficulty;
 
-                    let uncle_difficulty = uncle_entry.weighted_difficulty / UNCLE_WEIGHT_FACTOR;
-                    nephew_bonus += uncle_difficulty * NEPHEW_BONUS_FACTOR;
-                }
+                let uncle_difficulty = uncle_entry.weighted_difficulty / UNCLE_WEIGHT_FACTOR;
+                nephew_bonus += uncle_difficulty * NEPHEW_BONUS_FACTOR;
             }
 
             let weighted_difficulty = entry.difficulty + nephew_bonus;
@@ -207,8 +203,7 @@ impl PplnsWindow {
     /// Clear all cached state, forcing a full reload on next update.
     fn invalidate(&mut self) {
         self.confirmed_entries.clear();
-        self.uncle_headers.clear();
-        self.nephew_to_uncles.clear();
+        self.uncle_entries.clear();
         self.cached_tip_blockhash = None;
         self.cached_top_height = None;
     }
@@ -255,7 +250,7 @@ impl PplnsWindow {
             return Ok(());
         }
 
-        let (all_uncle_hashes, new_nephew_to_uncles) = collect_uncle_references(&confirmed_headers);
+        let all_uncle_hashes = collect_unique_uncle_hashes(&confirmed_headers);
 
         let new_uncle_entries = fetch_uncle_entries(chain_store_handle, &all_uncle_hashes)?;
 
@@ -265,76 +260,51 @@ impl PplnsWindow {
                 blockhash,
                 miner_address: header.miner_address.to_string(),
                 difficulty,
+                uncle_hashes: header.uncles,
             });
         }
 
-        self.nephew_to_uncles.extend(new_nephew_to_uncles);
-
         for (blockhash, uncle_entry) in new_uncle_entries {
-            self.uncle_headers.entry(blockhash).or_insert(uncle_entry);
+            self.uncle_entries.entry(blockhash).or_insert(uncle_entry);
         }
 
         Ok(())
     }
 
-    /// Evict confirmed entries with timestamps before the given cutoff.
-    ///
-    /// Timestamps are not monotonic (per share chain validation rules),
     /// Evict the oldest confirmed entries when the cache exceeds
     /// MAX_PPLNS_WINDOW_SHARES. Truncates from the back (oldest entries).
     /// Also removes orphaned uncle entries no longer referenced by any
-    /// remaining confirmed share.
+    /// remaining confirmed entry.
     fn evict_overflow(&mut self) {
         let max_entries = MAX_PPLNS_WINDOW_SHARES as usize;
         if self.confirmed_entries.len() <= max_entries {
             return;
         }
 
+        for entry in self.confirmed_entries.range(max_entries..) {
+            for uncle_hash in &entry.uncle_hashes {
+                self.uncle_entries.remove(uncle_hash);
+            }
+        }
+
         self.confirmed_entries.truncate(max_entries);
-
-        let remaining_blockhashes: HashSet<BlockHash> = self
-            .confirmed_entries
-            .iter()
-            .map(|entry| entry.blockhash)
-            .collect();
-
-        self.nephew_to_uncles
-            .retain(|blockhash, _| remaining_blockhashes.contains(blockhash));
-
-        let referenced_uncles =
-            collect_referenced_uncle_hashes(&self.confirmed_entries, &self.nephew_to_uncles);
-
-        self.uncle_headers
-            .retain(|blockhash, _| referenced_uncles.contains(blockhash));
     }
 }
 
-/// Extract uncle references from confirmed headers.
-///
-/// Collects uncle blockhash vectors from headers (cloning per header as
-/// needed).
-///
-/// Returns (all_unique_uncle_hashes, nephew_to_uncles_map).
-fn collect_uncle_references(
-    confirmed_headers: &[(BlockHash, ShareHeader)],
-) -> (Vec<BlockHash>, HashMap<BlockHash, Vec<BlockHash>>) {
+/// Collect unique uncle blockhashes from confirmed headers for batch fetching.
+fn collect_unique_uncle_hashes(confirmed_headers: &[(BlockHash, ShareHeader)]) -> Vec<BlockHash> {
     let mut seen_uncles: HashSet<BlockHash> = HashSet::new();
     let mut all_uncle_hashes = Vec::with_capacity(confirmed_headers.len());
-    let mut nephew_to_uncles: HashMap<BlockHash, Vec<BlockHash>> =
-        HashMap::with_capacity(confirmed_headers.len());
 
-    for (blockhash, header) in confirmed_headers {
-        if !header.uncles.is_empty() {
-            for uncle_hash in &header.uncles {
-                if seen_uncles.insert(*uncle_hash) {
-                    all_uncle_hashes.push(*uncle_hash);
-                }
+    for (_blockhash, header) in confirmed_headers {
+        for uncle_hash in &header.uncles {
+            if seen_uncles.insert(*uncle_hash) {
+                all_uncle_hashes.push(*uncle_hash);
             }
-            nephew_to_uncles.insert(*blockhash, header.uncles.clone());
         }
     }
 
-    (all_uncle_hashes, nephew_to_uncles)
+    all_uncle_hashes
 }
 
 /// Fetch uncle headers from the chain store and build UncleEntry values.
@@ -347,11 +317,11 @@ fn fetch_uncle_entries(
     }
 
     let uncle_headers = chain_store_handle.get_share_headers(uncle_hashes)?;
-    let mut entries = Vec::with_capacity(uncle_headers.len());
+    let mut uncle_entries = Vec::with_capacity(uncle_headers.len());
     for (blockhash, header) in uncle_headers {
         let difficulty = header.get_difficulty();
         let weighted_difficulty = difficulty * UNCLE_WEIGHT_FACTOR;
-        entries.push((
+        uncle_entries.push((
             blockhash,
             UncleEntry {
                 miner_address: header.miner_address.to_string(),
@@ -359,23 +329,7 @@ fn fetch_uncle_entries(
             },
         ));
     }
-    Ok(entries)
-}
-
-/// Collect all uncle blockhashes still referenced by confirmed entries.
-fn collect_referenced_uncle_hashes(
-    confirmed_entries: &VecDeque<ConfirmedEntry>,
-    nephew_to_uncles: &HashMap<BlockHash, Vec<BlockHash>>,
-) -> HashSet<BlockHash> {
-    let mut referenced = HashSet::new();
-    for entry in confirmed_entries {
-        if let Some(uncle_hashes) = nephew_to_uncles.get(&entry.blockhash) {
-            for uncle_hash in uncle_hashes {
-                referenced.insert(*uncle_hash);
-            }
-        }
-    }
-    referenced
+    Ok(uncle_entries)
 }
 
 #[cfg(test)]
@@ -420,6 +374,7 @@ mod tests {
             blockhash: header.block_hash(),
             miner_address: header.miner_address.to_string(),
             difficulty: header.get_difficulty(),
+            uncle_hashes: header.uncles.clone(),
         }
     }
 
@@ -672,6 +627,7 @@ mod tests {
                 blockhash: BlockHash::all_zeros(),
                 miner_address: format!("padding_{index}"),
                 difficulty: 1.0,
+                uncle_hashes: Vec::new(),
             });
         }
 
@@ -758,10 +714,7 @@ mod tests {
             .confirmed_entries
             .push_back(entry_from_header(&nephew_header));
         window
-            .nephew_to_uncles
-            .insert(nephew_header.block_hash(), vec![uncle_hash]);
-        window
-            .uncle_headers
+            .uncle_entries
             .insert(uncle_hash, uncle_entry_from_header(&uncle_header));
 
         let result = window.accumulate_weighted_difficulty(f64::MAX);
@@ -848,7 +801,6 @@ mod tests {
 
         let nephew1 =
             build_test_header_with_uncles(&genesis_hash.to_string(), PUBKEY_G, 2, vec![uncle_hash]);
-        let nephew1_hash = nephew1.block_hash();
 
         let nephew2 = build_test_header_with_uncles(
             &nephew1.block_hash().to_string(),
@@ -856,7 +808,6 @@ mod tests {
             2,
             vec![uncle_hash],
         );
-        let nephew2_hash = nephew2.block_hash();
 
         let mut window = PplnsWindow::default();
         // nephew1 at front (newest), nephew2 at back (oldest)
@@ -867,53 +818,30 @@ mod tests {
             .confirmed_entries
             .push_back(entry_from_header(&nephew2));
         window
-            .nephew_to_uncles
-            .insert(nephew1_hash, vec![uncle_hash]);
-        window
-            .nephew_to_uncles
-            .insert(nephew2_hash, vec![uncle_hash]);
-        window
-            .uncle_headers
+            .uncle_entries
             .insert(uncle_hash, uncle_entry_from_header(&uncle_header));
 
-        // Set max to 1 so nephew2 (oldest, at back) gets evicted.
-        // We cannot override the const directly, so pad to MAX + 1 and
-        // verify that truncation cleans up orphaned uncles. Instead,
-        // test the cleanup logic by directly truncating and calling
-        // the uncle cleanup portion.
-
-        // Manually truncate to keep only nephew1
+        // Truncate to keep only nephew1, then clean up uncles
         window.confirmed_entries.truncate(1);
 
-        // Build remaining blockhashes and clean up uncles the same way
-        // evict_overflow does after truncation.
-        let remaining_blockhashes: HashSet<BlockHash> = window
+        let referenced_uncles: HashSet<BlockHash> = window
             .confirmed_entries
             .iter()
-            .map(|entry| entry.blockhash)
+            .flat_map(|entry| entry.uncle_hashes.iter().copied())
             .collect();
         window
-            .nephew_to_uncles
-            .retain(|blockhash, _| remaining_blockhashes.contains(blockhash));
-        let referenced_uncles =
-            collect_referenced_uncle_hashes(&window.confirmed_entries, &window.nephew_to_uncles);
-        window
-            .uncle_headers
+            .uncle_entries
             .retain(|blockhash, _| referenced_uncles.contains(blockhash));
 
         // nephew1 still references uncle, so uncle stays
         assert_eq!(window.confirmed_entries.len(), 1);
-        assert!(window.uncle_headers.contains_key(&uncle_hash));
-        assert!(window.nephew_to_uncles.contains_key(&nephew1_hash));
-        assert!(!window.nephew_to_uncles.contains_key(&nephew2_hash));
+        assert!(window.uncle_entries.contains_key(&uncle_hash));
 
-        // Now remove nephew1 too
+        // Now remove nephew1 too and clean up
         window.confirmed_entries.clear();
-        window.nephew_to_uncles.clear();
-        window.uncle_headers.clear();
+        window.uncle_entries.clear();
 
         assert!(window.confirmed_entries.is_empty());
-        assert!(window.uncle_headers.is_empty());
-        assert!(window.nephew_to_uncles.is_empty());
+        assert!(window.uncle_entries.is_empty());
     }
 }
