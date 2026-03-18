@@ -66,13 +66,13 @@ impl Payout {
         &self,
         chain_store_handle: &ChainStoreHandle,
     ) -> Result<ShareDag, Box<dyn Error + Send + Sync>> {
-        let tip_height = chain_store_handle.get_tip_height()?;
-        let Some(tip_height) = tip_height else {
+        let tip_blockhash = chain_store_handle.get_chain_tip()?;
+        let tip_header = chain_store_handle.get_share_header(&tip_blockhash)?;
+        let tip_metadata = chain_store_handle.get_block_metadata(&tip_blockhash)?;
+        let Some(tip_height) = tip_metadata.expected_height else {
             return Ok(ShareDag::empty());
         };
 
-        let tip_blockhash = chain_store_handle.get_chain_tip()?;
-        let tip_header = chain_store_handle.get_share_header(&tip_blockhash)?;
         let earliest_allowed_time = tip_header.time.saturating_sub(MAX_PPLNS_WINDOW_SECONDS);
 
         let estimated_min_height = tip_height.saturating_sub(ESTIMATED_MAX_SHARES_IN_WINDOW);
@@ -209,10 +209,11 @@ mod tests {
     use super::*;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
     use crate::shares::share_block::ShareHeader;
+    use crate::store::block_tx_metadata::{BlockMetadata, Status};
     use crate::store::dag_store::ShareDag;
     use crate::test_utils::{PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_G, TestShareBlockBuilder};
-    use bitcoin::BlockHash;
     use bitcoin::hashes::Hash;
+    use bitcoin::{BlockHash, Work};
     use p2poolv2_config::StratumConfig;
     use std::collections::{HashMap, HashSet};
 
@@ -269,24 +270,42 @@ mod tests {
         }
     }
 
-    /// Set up common mock expectations for tip height, chain tip, and share header.
+    /// Set up common mock expectations for chain tip, share header, and block metadata.
     fn setup_tip_mocks(
         mock: &mut MockChainStoreHandle,
         tip_height: u32,
         tip_hash: BlockHash,
         tip_header: ShareHeader,
     ) {
-        mock.expect_get_tip_height()
-            .returning(move || Ok(Some(tip_height)));
         mock.expect_get_chain_tip().returning(move || Ok(tip_hash));
         mock.expect_get_share_header()
             .returning(move |_| Ok(tip_header.clone()));
+        mock.expect_get_block_metadata().returning(move |_| {
+            Ok(BlockMetadata {
+                expected_height: Some(tip_height),
+                chain_work: Work::from_le_bytes([0u8; 32]),
+                status: Status::Confirmed,
+            })
+        });
     }
 
     #[test]
     fn test_empty_chain_uses_bootstrap() {
+        let genesis_hash = BlockHash::all_zeros();
+        let header = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
+
         let mut mock = MockChainStoreHandle::default();
-        mock.expect_get_tip_height().returning(|| Ok(None));
+        mock.expect_get_chain_tip()
+            .returning(move || Ok(genesis_hash));
+        mock.expect_get_share_header()
+            .returning(move |_| Ok(header.clone()));
+        mock.expect_get_block_metadata().returning(|_| {
+            Ok(BlockMetadata {
+                expected_height: None,
+                chain_work: Work::from_le_bytes([0u8; 32]),
+                status: Status::Confirmed,
+            })
+        });
 
         let payout = Payout;
         let config = make_test_config();
