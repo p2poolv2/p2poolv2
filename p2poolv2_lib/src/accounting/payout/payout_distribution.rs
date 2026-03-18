@@ -129,6 +129,12 @@ pub(crate) fn append_proportional_distribution(
     distribution: &mut Vec<OutputPair>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let total_difficulty: f64 = address_difficulty_map.values().sum();
+    if !total_difficulty.is_finite() || total_difficulty <= 0.0 {
+        return Err(format!(
+            "Invalid total difficulty ({total_difficulty}) when computing proportional payout"
+        )
+        .into());
+    }
     let mut distributed_amount = bitcoin::Amount::ZERO;
 
     for (i, (address_str, difficulty)) in address_difficulty_map.iter().enumerate() {
