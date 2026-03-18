@@ -47,23 +47,19 @@ const ESTIMATED_MAX_SHARES_IN_WINDOW: u32 = MAX_PPLNS_WINDOW_SECONDS / 10 * 2;
 
 /// Uncle weight: 9/10 of their work. Multiply by numerator then divide by denominator
 /// to avoid integer division truncating to zero.
-const UNCLE_WEIGHT_NUMERATOR: u64 = 9;
-const UNCLE_WEIGHT_DENOMINATOR: u64 = 10;
+const UNCLE_WEIGHT_NUMERATOR: u128 = 9;
+const UNCLE_WEIGHT_DENOMINATOR: u128 = 10;
 
 /// Nephew bonus: 1/10 of each uncle's work. Multiply by numerator then divide by denominator.
-const NEPHEW_BONUS_NUMERATOR: u64 = 1;
-const NEPHEW_BONUS_DENOMINATOR: u64 = 10;
+const NEPHEW_BONUS_NUMERATOR: u128 = 1;
+const NEPHEW_BONUS_DENOMINATOR: u128 = 10;
 
-/// Convert bitcoin::Work (U256) to u64.
+/// Convert bitcoin::Work (U256) to u128.
 ///
-/// Share chain work fits in u64. Debug-asserts that upper bytes are zero.
-fn work_to_u64(work: bitcoin::Work) -> u64 {
+/// Reads the low 16 bytes of the 32-byte little-endian representation.
+fn work_to_u128(work: bitcoin::Work) -> u128 {
     let bytes = work.to_le_bytes();
-    debug_assert!(
-        bytes[8..].iter().all(|byte| *byte == 0),
-        "Share chain work exceeds u64 range"
-    );
-    u64::from_le_bytes(bytes[0..8].try_into().expect("slice length is always 8"))
+    u128::from_le_bytes(bytes[0..16].try_into().expect("slice length is always 16"))
 }
 
 /// Share chain PPLNS payout distribution.
@@ -113,14 +109,15 @@ impl Payout {
         &self,
         share_dag: &ShareDag,
         total_difficulty: f64,
-    ) -> HashMap<String, u64> {
+    ) -> HashMap<String, u128> {
         let estimated_miners = share_dag.confirmed_headers.len() + share_dag.uncle_headers.len();
-        let mut address_difficulty: HashMap<String, u64> = HashMap::with_capacity(estimated_miners);
+        let mut address_difficulty: HashMap<String, u128> =
+            HashMap::with_capacity(estimated_miners);
         let mut accumulated_difficulty: f64 = 0.0;
 
         for (blockhash, header) in &share_dag.confirmed_headers {
-            let base_work = work_to_u64(header.get_work());
-            let mut nephew_bonus: u64 = 0;
+            let base_work = work_to_u128(header.get_work());
+            let mut nephew_bonus: u128 = 0;
 
             if let Some(uncle_hashes) = share_dag.nephew_to_uncles.get(blockhash) {
                 for uncle_hash in uncle_hashes {
@@ -129,7 +126,7 @@ impl Payout {
                         continue;
                     };
 
-                    let uncle_base_work = work_to_u64(uncle_header.get_work());
+                    let uncle_base_work = work_to_u128(uncle_header.get_work());
 
                     // Uncle gets 9/10 of its work
                     let uncle_weighted_work =
@@ -383,13 +380,13 @@ mod tests {
         // Uncle: a share not on the confirmed chain
         let uncle_header = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 2);
         let uncle_hash = uncle_header.block_hash();
-        let uncle_work = work_to_u64(uncle_header.get_work());
+        let uncle_work = work_to_u128(uncle_header.get_work());
         let uncle_miner = uncle_header.miner_address.to_string();
 
         // Nephew: confirmed share that references the uncle
         let nephew_header =
             build_test_header_with_uncles(&genesis_hash.to_string(), PUBKEY_G, 2, vec![uncle_hash]);
-        let nephew_work = work_to_u64(nephew_header.get_work());
+        let nephew_work = work_to_u128(nephew_header.get_work());
         let nephew_miner = nephew_header.miner_address.to_string();
         let tip_hash = nephew_header.block_hash();
 
@@ -455,8 +452,8 @@ mod tests {
             build_test_header(&uncle1_header.block_hash().to_string(), PUBKEY_4G, 2);
         let uncle1_hash = uncle1_header.block_hash();
         let uncle2_hash = uncle2_header.block_hash();
-        let uncle1_work = work_to_u64(uncle1_header.get_work());
-        let uncle2_work = work_to_u64(uncle2_header.get_work());
+        let uncle1_work = work_to_u128(uncle1_header.get_work());
+        let uncle2_work = work_to_u128(uncle2_header.get_work());
 
         let nephew_header = build_test_header_with_uncles(
             &genesis_hash.to_string(),
@@ -464,7 +461,7 @@ mod tests {
             2,
             vec![uncle1_hash, uncle2_hash],
         );
-        let nephew_work = work_to_u64(nephew_header.get_work());
+        let nephew_work = work_to_u128(nephew_header.get_work());
         let tip_hash = nephew_header.block_hash();
 
         let dag = build_dag_with_uncles(
@@ -517,7 +514,7 @@ mod tests {
         let tip_hash = header3.block_hash();
 
         // Work per share
-        let work_per_share = work_to_u64(header1.get_work()) as f64;
+        let work_per_share = work_to_u128(header1.get_work()) as f64;
 
         let dag = build_dag_no_uncles(vec![
             (header3.block_hash(), header3.clone()),
