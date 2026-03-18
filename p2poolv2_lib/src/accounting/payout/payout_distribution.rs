@@ -122,13 +122,13 @@ fn include_address_and_cut(
     total_amount
 }
 
-/// Appends proportional distribution of amount based on difficulty weights to the distribtuion
+/// Appends proportional distribution of amount based on difficulty weights to the distribution
 pub(crate) fn append_proportional_distribution(
-    address_difficulty_map: HashMap<String, u128>,
+    address_difficulty_map: HashMap<String, f64>,
     total_amount: bitcoin::Amount,
     distribution: &mut Vec<OutputPair>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let total_difficulty: u128 = address_difficulty_map.values().sum();
+    let total_difficulty: f64 = address_difficulty_map.values().sum();
     let mut distributed_amount = bitcoin::Amount::ZERO;
 
     for (i, (address_str, difficulty)) in address_difficulty_map.iter().enumerate() {
@@ -141,7 +141,7 @@ pub(crate) fn append_proportional_distribution(
             // Last address gets remainder to handle rounding
             total_amount - distributed_amount
         } else {
-            let proportion = *difficulty as f64 / total_difficulty as f64;
+            let proportion = *difficulty / total_difficulty;
             let amount_sats = (total_amount.to_sat() as f64 * proportion).round() as u64;
             bitcoin::Amount::from_sat(amount_sats)
         };
@@ -161,11 +161,11 @@ mod tests {
         let mut address_difficulty_map = HashMap::new();
         address_difficulty_map.insert(
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(),
-            600,
+            600.0,
         );
         address_difficulty_map.insert(
             "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(),
-            400,
+            400.0,
         );
 
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
