@@ -139,6 +139,7 @@ impl Payout {
                 .or_insert(0.0) += weighted_difficulty;
 
             // Confirmed share contributes its full difficulty to the PPLNS window
+            // We accumulate non-factored difficulty, even when we apply weights to get the distribution.
             accumulated_difficulty += share_difficulty;
 
             if accumulated_difficulty >= total_difficulty {
