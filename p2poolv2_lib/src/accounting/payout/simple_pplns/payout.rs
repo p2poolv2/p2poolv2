@@ -95,8 +95,8 @@ impl Payout {
         &self,
         store: &ChainStoreHandle,
         total_difficulty: f64,
-    ) -> Result<HashMap<String, u64>, Box<dyn Error + Send + Sync>> {
-        let mut address_difficulty: HashMap<String, u64> = HashMap::new();
+    ) -> Result<HashMap<String, u128>, Box<dyn Error + Send + Sync>> {
+        let mut address_difficulty: HashMap<String, u128> = HashMap::new();
         let mut accumulated_difficulty = 0f64;
 
         // Start from current time and work backwards
@@ -123,7 +123,8 @@ impl Payout {
                     if accumulated_difficulty < total_difficulty {
                         accumulated_difficulty += share.difficulty as f64;
                         if let Some(btcaddress) = share.btcaddress {
-                            *address_difficulty.entry(btcaddress).or_insert(0) += share.difficulty;
+                            *address_difficulty.entry(btcaddress).or_insert(0) +=
+                                share.difficulty as u128;
                         }
                     }
                 }
@@ -215,7 +216,7 @@ mod tests {
         assert_eq!(result.get("addr4"), Some(&100));
 
         // Verify total difficulty
-        let total: u64 = result.values().sum();
+        let total: u128 = result.values().sum();
         assert_eq!(total, 1000);
     }
 
@@ -289,7 +290,7 @@ mod tests {
         assert_eq!(result.get("addr3"), Some(&200));
         assert!(result.get("addr4").is_none());
 
-        let total: u64 = result.values().sum();
+        let total: u128 = result.values().sum();
         assert_eq!(total, 900);
     }
 
@@ -349,7 +350,7 @@ mod tests {
         assert_eq!(result.get("addr1"), Some(&100));
         assert_eq!(result.get("addr2"), Some(&200));
 
-        let total: u64 = result.values().sum();
+        let total: u128 = result.values().sum();
         assert_eq!(total, 300);
     }
 
