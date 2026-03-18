@@ -76,16 +76,12 @@ impl ShareDag {
 
     /// Remove confirmed headers with timestamps before the given cutoff.
     ///
-    /// Since headers are ordered newest-to-oldest, stops at the first
-    /// header that falls before the cutoff time.
+    /// Retains all headers with time >= earliest_allowed_time regardless
+    /// of position, since timestamp monotonicity is not enforced by
+    /// validation and out-of-order timestamps are possible.
     pub fn filter_confirmed_by_time(&mut self, earliest_allowed_time: u32) {
-        if let Some(cutoff_position) = self
-            .confirmed_headers
-            .iter()
-            .position(|(_, header)| header.time < earliest_allowed_time)
-        {
-            self.confirmed_headers.truncate(cutoff_position);
-        }
+        self.confirmed_headers
+            .retain(|(_, header)| header.time >= earliest_allowed_time);
     }
 
     /// Build uncle references from confirmed headers without hitting the store.
