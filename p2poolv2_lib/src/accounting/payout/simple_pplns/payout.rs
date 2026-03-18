@@ -473,6 +473,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_accumulate_difficulty_multiple_batches() {
+        let payout = Payout::new(86400);
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        // First batch: shares from the most recent time window (total difficulty 300)
+        let batch_one = vec![
+            SimplePplnsShare::new(
+                1,
+                100,
+                "addr1".to_string(),
+                "worker1".to_string(),
+                (current_time - 1800) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
+            ),
+            SimplePplnsShare::new(
+                2,
+                200,
+                "addr2".to_string(),
+                "worker2".to_string(),
+                (current_time - 2400) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
+            ),
+        ];
+
+        // Second batch: shares from the older time window (total difficulty 400)
+        let batch_two = vec![
+            SimplePplnsShare::new(
+                3,
+                150,
+                "addr1".to_string(),
+                "worker3".to_string(),
+                (current_time - 90000) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
+            ),
+            SimplePplnsShare::new(
+                4,
+                250,
+                "addr3".to_string(),
+                "worker4".to_string(),
+                (current_time - 100000) * 1_000_000,
+                "job".to_string(),
+                "extra".to_string(),
+                "nonce".to_string(),
+            ),
+        ];
+
+        let mut seq = mockall::Sequence::new();
+
+        // First call returns batch_one (300 total difficulty < 600 target)
+        chain_store_handle
+            .expect_get_pplns_shares_filtered()
+            .times(1)
+            .in_sequence(&mut seq)
+            .return_const(batch_one);
+
+        // Second call returns batch_two (300 + 400 = 700 >= 600 target)
+        chain_store_handle
+            .expect_get_pplns_shares_filtered()
+            .times(1)
+            .in_sequence(&mut seq)
+            .return_const(batch_two);
+
+        let result = payout
+            .accumulate_difficulty_by_address(&chain_store_handle, 600.0)
+            .unwrap();
+
+        // All shares from both batches should be included since batch_one (300)
+        // is insufficient and batch_two pushes us over the 600 target.
+        // addr1: 100 (batch 1) + 150 (batch 2) = 250
+        // addr2: 200 (batch 1)
+        // addr3: 250 (batch 2)
+        assert_eq!(result.len(), 3);
+        assert_eq!(result.get("addr1"), Some(&250.0));
+        assert_eq!(result.get("addr2"), Some(&200.0));
+        assert_eq!(result.get("addr3"), Some(&250.0));
+
+        let total: f64 = result.values().sum();
+        assert_eq!(total, 700.0);
+    }
+
+    #[tokio::test]
     async fn test_payout_constructors() {
         let payout1 = Payout::new(3600);
         assert_eq!(payout1.step_size_seconds, 3600);
