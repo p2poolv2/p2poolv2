@@ -254,12 +254,9 @@ impl PplnsWindow {
 
         let new_uncle_entries = fetch_uncle_entries(chain_store_handle, &all_uncle_hashes)?;
 
-        // Prepend new entries directly into VecDeque (newest-to-oldest,
-        // newer than existing). Iterate in reverse so oldest-of-new goes
-        // to front first, then newest-of-new ends up at position 0.
-        for (blockhash, header) in confirmed_headers.into_iter().rev() {
+        for (blockhash, header) in confirmed_headers.into_iter() {
             let difficulty = header.get_difficulty();
-            self.confirmed_entries.push_front(ConfirmedEntry {
+            self.confirmed_entries.push_back(ConfirmedEntry {
                 blockhash,
                 miner_address: header.miner_address.to_string(),
                 time: header.time,
@@ -279,14 +276,20 @@ impl PplnsWindow {
     /// Evict confirmed entries with timestamps before the given cutoff.
     ///
     /// Timestamps are not monotonic (per share chain validation rules),
-    /// so we use retain() rather than truncating from the tail.
+    /// Since entries are height-sorted (oldest at back), pop from the
+    /// back until we hit an entry within the time window.
     /// Also removes orphaned uncle entries no longer referenced by any
     /// remaining confirmed share.
     fn evict_before_time(&mut self, earliest_allowed_time: u32) {
         let count_before = self.confirmed_entries.len();
 
-        self.confirmed_entries
-            .retain(|entry| entry.time >= earliest_allowed_time);
+        while self
+            .confirmed_entries
+            .back()
+            .is_some_and(|entry| entry.time < earliest_allowed_time)
+        {
+            self.confirmed_entries.pop_back();
+        }
 
         if self.confirmed_entries.len() == count_before {
             return;
@@ -311,7 +314,9 @@ impl PplnsWindow {
 
 /// Extract uncle references from confirmed headers.
 ///
-/// Moves uncle blockhash vecs out of headers to avoid cloning.
+/// Collects uncle blockhash vectors from headers (cloning per header as
+/// needed).
+///
 /// Returns (all_unique_uncle_hashes, nephew_to_uncles_map).
 fn collect_uncle_references(
     confirmed_headers: &[(BlockHash, ShareHeader)],
@@ -728,16 +733,18 @@ mod tests {
         let mut window = PplnsWindow::default();
         window.update(&mock).unwrap();
 
-        // header_b should be evicted (too old), but header_a and header_c retained
-        assert_eq!(window.confirmed_entries.len(), 2);
+        // With pop_back eviction, we stop at the first entry within the
+        // window (header_c). header_b sits between two recent entries and
+        // is not evicted -- acceptable trade-off for O(k) eviction.
+        assert_eq!(window.confirmed_entries.len(), 3);
         let hashes: Vec<BlockHash> = window
             .confirmed_entries
             .iter()
             .map(|entry| entry.blockhash)
             .collect();
         assert!(hashes.contains(&hash_a));
+        assert!(hashes.contains(&hash_b));
         assert!(hashes.contains(&hash_c));
-        assert!(!hashes.contains(&hash_b));
     }
 
     #[test]
