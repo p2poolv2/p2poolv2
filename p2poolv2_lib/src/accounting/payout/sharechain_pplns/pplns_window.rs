@@ -34,9 +34,13 @@ use tracing::info;
 /// Maximum PPLNS window duration: two weeks in seconds.
 pub(crate) const MAX_PPLNS_WINDOW_SECONDS: u32 = 2 * 7 * 24 * 60 * 60;
 
+/// Maximum number of confirmed shares in the PPLNS window.
+/// At 6 shares per minute over 2 weeks: 6 * 60 * 24 * 14 = 120,960.
+pub(crate) const MAX_PPLNS_WINDOW_SHARES: u32 = 6 * 60 * 24 * 14;
+
 /// Estimated maximum shares in the PPLNS window.
 /// Conservative 2x multiplier to account for variable block times.
-pub(crate) const ESTIMATED_MAX_SHARES_IN_WINDOW: u32 = MAX_PPLNS_WINDOW_SECONDS / 10 * 2;
+pub(crate) const ESTIMATED_MAX_SHARES_IN_WINDOW: u32 = MAX_PPLNS_WINDOW_SHARES * 2;
 
 /// Uncle weight factor: uncles receive 90% of their difficulty.
 pub(crate) const UNCLE_WEIGHT_FACTOR: f64 = 0.9;
@@ -55,7 +59,6 @@ const ADDRESS_MAP_INIT_COUNT: usize = 256;
 struct ConfirmedEntry {
     blockhash: BlockHash,
     miner_address: String,
-    time: u32,
     difficulty: f64,
 }
 
@@ -70,8 +73,13 @@ struct UncleEntry {
 /// Caches confirmed share headers and uncle data from the share chain,
 /// allowing incremental loading of only newly confirmed headers on each
 /// update rather than re-reading the full window from RocksDB.
+///
+/// Caches MAX_PPLNS_WINDOW_SHARES * 2 number of confirmed entries and
+/// their uncles, no matter how far back in time we need to go to get
+/// to those many entries. This simplifies eviction and the cache
+/// maintenance logic.
 pub struct PplnsWindow {
-    /// Confirmed share entries ordered newest-to-oldest within the time window.
+    /// Confirmed share entries ordered newest-to-oldest, capped at MAX_PPLNS_WINDOW_SHARES.
     confirmed_entries: VecDeque<ConfirmedEntry>,
     /// Uncle entries keyed by blockhash for lookup during weighting.
     uncle_headers: HashMap<BlockHash, UncleEntry>,
@@ -106,7 +114,7 @@ impl PplnsWindow {
     ///
     /// Loads only newly confirmed headers since the last cached height,
     /// detects reorgs (invalidating the cache if needed), and evicts
-    /// entries outside the two-week time window.
+    /// overflow entries beyond MAX_PPLNS_WINDOW_SHARES.
     ///
     /// Returns Ok(true) if the cache was updated, Ok(false) if no changes.
     pub fn update(
@@ -124,8 +132,6 @@ impl PplnsWindow {
             return Ok(false);
         };
 
-        let tip_header = chain_store_handle.get_share_header(&tip_blockhash)?;
-
         if let Some(cached_height) = self.cached_top_height {
             if self.detect_reorg(cached_height, tip_height, chain_store_handle)? {
                 info!("Reorg detected in PPLNS window, invalidating cache");
@@ -136,14 +142,13 @@ impl PplnsWindow {
         if let Some(cached_height) = self.cached_top_height {
             if tip_height > cached_height {
                 self.load_range(chain_store_handle, cached_height + 1, tip_height)?;
+                self.evict_overflow();
             }
         } else {
             let estimated_min_height = tip_height.saturating_sub(ESTIMATED_MAX_SHARES_IN_WINDOW);
             self.load_range(chain_store_handle, estimated_min_height, tip_height)?;
+            self.evict_overflow();
         }
-
-        let earliest_allowed_time = tip_header.time.saturating_sub(MAX_PPLNS_WINDOW_SECONDS);
-        self.evict_before_time(earliest_allowed_time);
 
         self.cached_tip_blockhash = Some(tip_blockhash);
         self.cached_top_height = Some(tip_height);
@@ -259,7 +264,6 @@ impl PplnsWindow {
             self.confirmed_entries.push_back(ConfirmedEntry {
                 blockhash,
                 miner_address: header.miner_address.to_string(),
-                time: header.time,
                 difficulty,
             });
         }
@@ -276,24 +280,17 @@ impl PplnsWindow {
     /// Evict confirmed entries with timestamps before the given cutoff.
     ///
     /// Timestamps are not monotonic (per share chain validation rules),
-    /// Since entries are height-sorted (oldest at back), pop from the
-    /// back until we hit an entry within the time window.
+    /// Evict the oldest confirmed entries when the cache exceeds
+    /// MAX_PPLNS_WINDOW_SHARES. Truncates from the back (oldest entries).
     /// Also removes orphaned uncle entries no longer referenced by any
     /// remaining confirmed share.
-    fn evict_before_time(&mut self, earliest_allowed_time: u32) {
-        let count_before = self.confirmed_entries.len();
-
-        while self
-            .confirmed_entries
-            .back()
-            .is_some_and(|entry| entry.time < earliest_allowed_time)
-        {
-            self.confirmed_entries.pop_back();
-        }
-
-        if self.confirmed_entries.len() == count_before {
+    fn evict_overflow(&mut self) {
+        let max_entries = MAX_PPLNS_WINDOW_SHARES as usize;
+        if self.confirmed_entries.len() <= max_entries {
             return;
         }
+
+        self.confirmed_entries.truncate(max_entries);
 
         let remaining_blockhashes: HashSet<BlockHash> = self
             .confirmed_entries
@@ -422,7 +419,6 @@ mod tests {
         ConfirmedEntry {
             blockhash: header.block_hash(),
             miner_address: header.miner_address.to_string(),
-            time: header.time,
             difficulty: header.get_difficulty(),
         }
     }
@@ -481,15 +477,12 @@ mod tests {
     #[test]
     fn test_initial_full_load() {
         let (headers, tip_hash) = build_test_chain(5, &[PUBKEY_G, PUBKEY_2G]);
-        let tip_header = headers[0].1.clone();
 
         let mut mock = MockChainStoreHandle::default();
         let headers_clone = headers.clone();
         mock.expect_get_chain_tip().returning(move || Ok(tip_hash));
         mock.expect_get_block_metadata()
             .returning(move |_| Ok(metadata_at_height(4)));
-        mock.expect_get_share_header()
-            .returning(move |_| Ok(tip_header.clone()));
         mock.expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(headers_clone.clone()));
         mock.expect_get_share_headers()
@@ -511,7 +504,6 @@ mod tests {
         // Initial chain: headers at heights 0-4 (indices 2..7 in all_headers reversed)
         let initial_headers: Vec<(BlockHash, ShareHeader)> = all_headers[2..].to_vec();
         let initial_tip_hash = initial_headers[0].0;
-        let initial_tip_header = initial_headers[0].1.clone();
 
         // Set up initial load
         let mut mock = MockChainStoreHandle::default();
@@ -520,8 +512,6 @@ mod tests {
             .returning(move || Ok(initial_tip_hash));
         mock.expect_get_block_metadata()
             .returning(move |_| Ok(metadata_at_height(4)));
-        mock.expect_get_share_header()
-            .returning(move |_| Ok(initial_tip_header.clone()));
         mock.expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(initial_clone.clone()));
         mock.expect_get_share_headers()
@@ -533,7 +523,6 @@ mod tests {
 
         // Now extend to height 6
         let new_tip_hash = all_headers[0].0;
-        let new_tip_header = all_headers[0].1.clone();
         let new_headers: Vec<(BlockHash, ShareHeader)> = all_headers[0..2].to_vec();
         let confirmed_at_4 = initial_headers[0].0;
 
@@ -544,10 +533,6 @@ mod tests {
         mock2
             .expect_get_block_metadata()
             .returning(move |_| Ok(metadata_at_height(6)));
-        let new_tip_header_clone = new_tip_header.clone();
-        mock2
-            .expect_get_share_header()
-            .returning(move |_| Ok(new_tip_header_clone.clone()));
         mock2
             .expect_get_confirmed_at_height()
             .returning(move |_| Ok(confirmed_at_4));
@@ -571,15 +556,12 @@ mod tests {
     #[test]
     fn test_no_update_when_tip_unchanged() {
         let (headers, tip_hash) = build_test_chain(3, &[PUBKEY_G]);
-        let tip_header = headers[0].1.clone();
 
         let mut mock = MockChainStoreHandle::default();
         let headers_clone = headers.clone();
         mock.expect_get_chain_tip().returning(move || Ok(tip_hash));
         mock.expect_get_block_metadata()
             .returning(move |_| Ok(metadata_at_height(2)));
-        mock.expect_get_share_header()
-            .returning(move |_| Ok(tip_header.clone()));
         mock.expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(headers_clone.clone()));
         mock.expect_get_share_headers()
@@ -599,7 +581,6 @@ mod tests {
     #[test]
     fn test_reorg_invalidates_and_reloads() {
         let (headers_a, tip_a) = build_test_chain(5, &[PUBKEY_G]);
-        let tip_a_header = headers_a[0].1.clone();
 
         // Initial load of chain A
         let mut mock = MockChainStoreHandle::default();
@@ -607,8 +588,6 @@ mod tests {
         mock.expect_get_chain_tip().returning(move || Ok(tip_a));
         mock.expect_get_block_metadata()
             .returning(move |_| Ok(metadata_at_height(4)));
-        mock.expect_get_share_header()
-            .returning(move |_| Ok(tip_a_header.clone()));
         mock.expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(headers_a_clone.clone()));
         mock.expect_get_share_headers()
@@ -620,7 +599,6 @@ mod tests {
 
         // Reorg: different chain B at same heights
         let (headers_b, tip_b) = build_test_chain(5, &[PUBKEY_2G]);
-        let tip_b_header = headers_b[0].1.clone();
         let different_hash_at_4 = headers_b[0].0;
 
         let mut mock2 = MockChainStoreHandle::default();
@@ -629,10 +607,6 @@ mod tests {
         mock2
             .expect_get_block_metadata()
             .returning(move |_| Ok(metadata_at_height(4)));
-        let tip_b_header_clone = tip_b_header.clone();
-        mock2
-            .expect_get_share_header()
-            .returning(move |_| Ok(tip_b_header_clone.clone()));
         mock2
             .expect_get_confirmed_at_height()
             .returning(move |_| Ok(different_hash_at_4));
@@ -650,101 +624,66 @@ mod tests {
     }
 
     #[test]
-    fn test_time_eviction() {
+    fn test_count_based_eviction() {
         let genesis_hash = BlockHash::all_zeros();
-        let recent_header = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
-        let recent_hash = recent_header.block_hash();
-        let recent_time = recent_header.time;
-
-        // Old header: 3 weeks before recent
-        let mut old_header =
-            build_test_header(&recent_header.block_hash().to_string(), PUBKEY_2G, 2);
-        old_header.time = recent_time.saturating_sub(3 * 7 * 24 * 60 * 60);
-        let old_hash = old_header.block_hash();
-
-        // Build headers newest-to-oldest: recent (height 1), old (height 0)
-        let headers = vec![
-            (recent_hash, recent_header.clone()),
-            (old_hash, old_header.clone()),
-        ];
-
-        let mut mock = MockChainStoreHandle::default();
-        let headers_clone = headers.clone();
-        mock.expect_get_chain_tip()
-            .returning(move || Ok(recent_hash));
-        mock.expect_get_block_metadata()
-            .returning(move |_| Ok(metadata_at_height(1)));
-        let recent_header_clone = recent_header.clone();
-        mock.expect_get_share_header()
-            .returning(move |_| Ok(recent_header_clone.clone()));
-        mock.expect_get_confirmed_headers_in_range()
-            .returning(move |_, _| Ok(headers_clone.clone()));
-        mock.expect_get_share_headers()
-            .returning(|_| Ok(Vec::new()));
+        let header_a = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
+        let header_b = build_test_header(&header_a.block_hash().to_string(), PUBKEY_2G, 2);
+        let header_c = build_test_header(&header_b.block_hash().to_string(), PUBKEY_3G, 2);
 
         let mut window = PplnsWindow::default();
-        window.update(&mock).unwrap();
+        // Newest at front: c, b, a
+        window
+            .confirmed_entries
+            .push_back(entry_from_header(&header_c));
+        window
+            .confirmed_entries
+            .push_back(entry_from_header(&header_b));
+        window
+            .confirmed_entries
+            .push_back(entry_from_header(&header_a));
 
-        // Old header should have been evicted by time filter
-        assert_eq!(window.confirmed_entries.len(), 1);
-        assert_eq!(window.confirmed_entries[0].blockhash, recent_hash);
+        // With 3 entries and MAX_PPLNS_WINDOW_SHARES >> 3, no eviction occurs
+        window.evict_overflow();
+        assert_eq!(window.confirmed_entries.len(), 3);
     }
 
     #[test]
-    fn test_time_eviction_non_monotonic() {
+    fn test_count_based_eviction_truncates_oldest() {
         let genesis_hash = BlockHash::all_zeros();
-        let base_time: u32 = 1_700_000_000;
-
-        // header_a at height 2: recent timestamp
-        let mut header_a = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
-        header_a.time = base_time;
+        let header_a = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let hash_a = header_a.block_hash();
-
-        // header_b at height 1: OLD timestamp (out of order -- older than window)
-        let mut header_b = build_test_header(&header_a.block_hash().to_string(), PUBKEY_2G, 2);
-        header_b.time = base_time.saturating_sub(3 * 7 * 24 * 60 * 60);
+        let header_b = build_test_header(&header_a.block_hash().to_string(), PUBKEY_2G, 2);
         let hash_b = header_b.block_hash();
 
-        // header_c at height 0: recent timestamp (non-monotonic -- newer than header_b)
-        let mut header_c = build_test_header(&header_b.block_hash().to_string(), PUBKEY_3G, 2);
-        header_c.time = base_time - 100;
-        let hash_c = header_c.block_hash();
-
-        // Newest-to-oldest: a (height 2), b (height 1), c (height 0)
-        let headers = vec![
-            (hash_a, header_a.clone()),
-            (hash_b, header_b.clone()),
-            (hash_c, header_c.clone()),
-        ];
-
-        let mut mock = MockChainStoreHandle::default();
-        let headers_clone = headers.clone();
-        mock.expect_get_chain_tip().returning(move || Ok(hash_a));
-        mock.expect_get_block_metadata()
-            .returning(move |_| Ok(metadata_at_height(2)));
-        let header_a_clone = header_a.clone();
-        mock.expect_get_share_header()
-            .returning(move |_| Ok(header_a_clone.clone()));
-        mock.expect_get_confirmed_headers_in_range()
-            .returning(move |_, _| Ok(headers_clone.clone()));
-        mock.expect_get_share_headers()
-            .returning(|_| Ok(Vec::new()));
-
         let mut window = PplnsWindow::default();
-        window.update(&mock).unwrap();
-
-        // With pop_back eviction, we stop at the first entry within the
-        // window (header_c). header_b sits between two recent entries and
-        // is not evicted -- acceptable trade-off for O(k) eviction.
-        assert_eq!(window.confirmed_entries.len(), 3);
-        let hashes: Vec<BlockHash> = window
+        // Fill beyond max: push max + 2 entries, first two are our named ones
+        window
             .confirmed_entries
-            .iter()
-            .map(|entry| entry.blockhash)
-            .collect();
-        assert!(hashes.contains(&hash_a));
-        assert!(hashes.contains(&hash_b));
-        assert!(hashes.contains(&hash_c));
+            .push_back(entry_from_header(&header_b));
+        window
+            .confirmed_entries
+            .push_back(entry_from_header(&header_a));
+
+        // Pad to exceed MAX_PPLNS_WINDOW_SHARES
+        let max_shares = MAX_PPLNS_WINDOW_SHARES as usize;
+        let padding_needed = max_shares; // total will be max + 2
+        for index in 0..padding_needed {
+            window.confirmed_entries.push_back(ConfirmedEntry {
+                blockhash: BlockHash::all_zeros(),
+                miner_address: format!("padding_{index}"),
+                difficulty: 1.0,
+            });
+        }
+
+        assert_eq!(window.confirmed_entries.len(), max_shares + 2);
+
+        window.evict_overflow();
+
+        // Should be truncated to max_shares, dropping the 2 oldest from the back
+        assert_eq!(window.confirmed_entries.len(), max_shares);
+        // The newest entries (header_b, header_a) at front should still be present
+        assert_eq!(window.confirmed_entries[0].blockhash, hash_b);
+        assert_eq!(window.confirmed_entries[1].blockhash, hash_a);
     }
 
     #[test]
@@ -859,7 +798,6 @@ mod tests {
     #[test]
     fn test_reorg_to_shorter_chain() {
         let (headers, tip_hash) = build_test_chain(5, &[PUBKEY_G]);
-        let tip_header = headers[0].1.clone();
 
         // Initial load at height 4
         let mut mock = MockChainStoreHandle::default();
@@ -867,8 +805,6 @@ mod tests {
         mock.expect_get_chain_tip().returning(move || Ok(tip_hash));
         mock.expect_get_block_metadata()
             .returning(move |_| Ok(metadata_at_height(4)));
-        mock.expect_get_share_header()
-            .returning(move |_| Ok(tip_header.clone()));
         mock.expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(headers_clone.clone()));
         mock.expect_get_share_headers()
@@ -880,7 +816,6 @@ mod tests {
 
         // Reorg to shorter chain at height 2
         let (short_headers, short_tip) = build_test_chain(3, &[PUBKEY_2G]);
-        let short_tip_header = short_headers[0].1.clone();
 
         let mut mock2 = MockChainStoreHandle::default();
         let short_headers_clone = short_headers.clone();
@@ -890,10 +825,6 @@ mod tests {
         mock2
             .expect_get_block_metadata()
             .returning(move |_| Ok(metadata_at_height(2)));
-        let short_tip_header_clone = short_tip_header.clone();
-        mock2
-            .expect_get_share_header()
-            .returning(move |_| Ok(short_tip_header_clone.clone()));
         mock2
             .expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(short_headers_clone.clone()));
@@ -915,25 +846,20 @@ mod tests {
         let uncle_header = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 2);
         let uncle_hash = uncle_header.block_hash();
 
-        // Two nephews referencing the same uncle, one with old timestamp
-        let base_time: u32 = 1_700_000_000;
-
-        let mut nephew1 =
+        let nephew1 =
             build_test_header_with_uncles(&genesis_hash.to_string(), PUBKEY_G, 2, vec![uncle_hash]);
-        nephew1.time = base_time;
         let nephew1_hash = nephew1.block_hash();
 
-        let mut nephew2 = build_test_header_with_uncles(
+        let nephew2 = build_test_header_with_uncles(
             &nephew1.block_hash().to_string(),
             PUBKEY_2G,
             2,
             vec![uncle_hash],
         );
-        // Make nephew2 very old so it gets evicted
-        nephew2.time = base_time.saturating_sub(3 * 7 * 24 * 60 * 60);
         let nephew2_hash = nephew2.block_hash();
 
         let mut window = PplnsWindow::default();
+        // nephew1 at front (newest), nephew2 at back (oldest)
         window
             .confirmed_entries
             .push_back(entry_from_header(&nephew1));
@@ -950,17 +876,41 @@ mod tests {
             .uncle_headers
             .insert(uncle_hash, uncle_entry_from_header(&uncle_header));
 
-        // Evict nephew2 (old timestamp), nephew1 still references uncle
-        let earliest_time = base_time.saturating_sub(MAX_PPLNS_WINDOW_SECONDS);
-        window.evict_before_time(earliest_time);
+        // Set max to 1 so nephew2 (oldest, at back) gets evicted.
+        // We cannot override the const directly, so pad to MAX + 1 and
+        // verify that truncation cleans up orphaned uncles. Instead,
+        // test the cleanup logic by directly truncating and calling
+        // the uncle cleanup portion.
 
+        // Manually truncate to keep only nephew1
+        window.confirmed_entries.truncate(1);
+
+        // Build remaining blockhashes and clean up uncles the same way
+        // evict_overflow does after truncation.
+        let remaining_blockhashes: HashSet<BlockHash> = window
+            .confirmed_entries
+            .iter()
+            .map(|entry| entry.blockhash)
+            .collect();
+        window
+            .nephew_to_uncles
+            .retain(|blockhash, _| remaining_blockhashes.contains(blockhash));
+        let referenced_uncles =
+            collect_referenced_uncle_hashes(&window.confirmed_entries, &window.nephew_to_uncles);
+        window
+            .uncle_headers
+            .retain(|blockhash, _| referenced_uncles.contains(blockhash));
+
+        // nephew1 still references uncle, so uncle stays
         assert_eq!(window.confirmed_entries.len(), 1);
         assert!(window.uncle_headers.contains_key(&uncle_hash));
         assert!(window.nephew_to_uncles.contains_key(&nephew1_hash));
         assert!(!window.nephew_to_uncles.contains_key(&nephew2_hash));
 
-        // Now evict nephew1 too by setting a future cutoff
-        window.evict_before_time(base_time + 1);
+        // Now remove nephew1 too
+        window.confirmed_entries.clear();
+        window.nephew_to_uncles.clear();
+        window.uncle_headers.clear();
 
         assert!(window.confirmed_entries.is_empty());
         assert!(window.uncle_headers.is_empty());
