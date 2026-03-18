@@ -254,9 +254,11 @@ impl PplnsWindow {
 
         let new_uncle_entries = fetch_uncle_entries(chain_store_handle, &all_uncle_hashes)?;
 
-        for (blockhash, header) in confirmed_headers.into_iter() {
+        // Headers arrive newest-to-oldest. Reverse and push_front so
+        // the newest entry ends up at position 0 in the deque.
+        for (blockhash, header) in confirmed_headers.into_iter().rev() {
             let difficulty = header.get_difficulty();
-            self.confirmed_entries.push_back(ConfirmedEntry {
+            self.confirmed_entries.push_front(ConfirmedEntry {
                 blockhash,
                 miner_address: header.miner_address.to_string(),
                 difficulty,
@@ -506,6 +508,108 @@ mod tests {
         assert!(updated);
         assert_eq!(window.confirmed_entries.len(), 7);
         assert_eq!(window.cached_top_height, Some(6));
+    }
+
+    #[test]
+    fn test_incremental_load_preserves_newest_first_ordering() {
+        // Build a chain of 9 headers (heights 0..8), load in three batches
+        // and verify the deque stays in newest-to-oldest order throughout.
+        let (all_headers, _) = build_test_chain(9, &[PUBKEY_G, PUBKEY_2G, PUBKEY_3G]);
+
+        // Batch 1: heights 0-2 (indices 6..9 in newest-to-oldest all_headers)
+        let batch1: Vec<(BlockHash, ShareHeader)> = all_headers[6..].to_vec();
+        let tip1 = batch1[0].0;
+
+        let mut mock1 = MockChainStoreHandle::default();
+        let batch1_clone = batch1.clone();
+        mock1.expect_get_chain_tip().returning(move || Ok(tip1));
+        mock1
+            .expect_get_block_metadata()
+            .returning(move |_| Ok(metadata_at_height(2)));
+        mock1
+            .expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(batch1_clone.clone()));
+        mock1
+            .expect_get_share_headers()
+            .returning(|_| Ok(Vec::new()));
+
+        let mut window = PplnsWindow::default();
+        window.update(&mock1).unwrap();
+        assert_eq!(window.confirmed_entries.len(), 3);
+        // Deque should be [height2, height1, height0]
+        assert_eq!(window.confirmed_entries[0].blockhash, all_headers[6].0);
+        assert_eq!(window.confirmed_entries[1].blockhash, all_headers[7].0);
+        assert_eq!(window.confirmed_entries[2].blockhash, all_headers[8].0);
+
+        // Batch 2: heights 3-5 (indices 3..6)
+        let batch2: Vec<(BlockHash, ShareHeader)> = all_headers[3..6].to_vec();
+        let tip2 = batch2[0].0;
+        let confirmed_at_2 = batch1[0].0;
+
+        let mut mock2 = MockChainStoreHandle::default();
+        let batch2_clone = batch2.clone();
+        mock2.expect_get_chain_tip().returning(move || Ok(tip2));
+        mock2
+            .expect_get_block_metadata()
+            .returning(move |_| Ok(metadata_at_height(5)));
+        mock2
+            .expect_get_confirmed_at_height()
+            .returning(move |_| Ok(confirmed_at_2));
+        mock2
+            .expect_get_confirmed_headers_in_range()
+            .returning(move |from, to| {
+                assert_eq!(from, 3);
+                assert_eq!(to, 5);
+                Ok(batch2_clone.clone())
+            });
+        mock2
+            .expect_get_share_headers()
+            .returning(|_| Ok(Vec::new()));
+
+        window.update(&mock2).unwrap();
+        assert_eq!(window.confirmed_entries.len(), 6);
+        // Deque should be [height5, height4, height3, height2, height1, height0]
+        assert_eq!(window.confirmed_entries[0].blockhash, all_headers[3].0);
+        assert_eq!(window.confirmed_entries[1].blockhash, all_headers[4].0);
+        assert_eq!(window.confirmed_entries[2].blockhash, all_headers[5].0);
+        assert_eq!(window.confirmed_entries[3].blockhash, all_headers[6].0);
+        assert_eq!(window.confirmed_entries[4].blockhash, all_headers[7].0);
+        assert_eq!(window.confirmed_entries[5].blockhash, all_headers[8].0);
+
+        // Batch 3: heights 6-8 (indices 0..3)
+        let batch3: Vec<(BlockHash, ShareHeader)> = all_headers[0..3].to_vec();
+        let tip3 = batch3[0].0;
+        let confirmed_at_5 = batch2[0].0;
+
+        let mut mock3 = MockChainStoreHandle::default();
+        let batch3_clone = batch3.clone();
+        mock3.expect_get_chain_tip().returning(move || Ok(tip3));
+        mock3
+            .expect_get_block_metadata()
+            .returning(move |_| Ok(metadata_at_height(8)));
+        mock3
+            .expect_get_confirmed_at_height()
+            .returning(move |_| Ok(confirmed_at_5));
+        mock3
+            .expect_get_confirmed_headers_in_range()
+            .returning(move |from, to| {
+                assert_eq!(from, 6);
+                assert_eq!(to, 8);
+                Ok(batch3_clone.clone())
+            });
+        mock3
+            .expect_get_share_headers()
+            .returning(|_| Ok(Vec::new()));
+
+        window.update(&mock3).unwrap();
+        assert_eq!(window.confirmed_entries.len(), 9);
+        // Full deque: [height8, height7, ..., height0] -- strict newest-to-oldest
+        for index in 0..9 {
+            assert_eq!(
+                window.confirmed_entries[index].blockhash, all_headers[index].0,
+                "entry at position {index} has wrong blockhash"
+            );
+        }
     }
 
     #[test]
