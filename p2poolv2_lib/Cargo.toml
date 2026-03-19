@@ -62,3 +62,9 @@ mockall.workspace = true
 mockall_double.workspace = true
 temp-env = "0.3.6"
 tokio-test.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "pplns_window"
+harness = false
+required-features = ["test-utils"]

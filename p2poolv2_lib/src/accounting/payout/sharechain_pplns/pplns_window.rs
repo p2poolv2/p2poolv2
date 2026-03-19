@@ -43,7 +43,7 @@ pub(crate) const MAX_PPLNS_WINDOW_SHARES: u32 = 6 * 60 * 24 * 14;
 pub(crate) const ESTIMATED_MAX_SHARES_IN_WINDOW: u32 = MAX_PPLNS_WINDOW_SHARES * 2;
 
 /// Uncle weight factor: uncles receive 90% of their difficulty.
-pub(crate) const UNCLE_WEIGHT_FACTOR: f64 = 0.9;
+pub const UNCLE_WEIGHT_FACTOR: f64 = 0.9;
 
 /// Nephew bonus factor: nephews receive 10% of each uncle's difficulty as bonus.
 pub(crate) const NEPHEW_BONUS_FACTOR: f64 = 0.1;
@@ -60,13 +60,15 @@ struct ConfirmedEntry {
     blockhash: BlockHash,
     miner_address: String,
     difficulty: f64,
-    uncle_hashes: Vec<BlockHash>,
+    uncle_entries: Vec<UncleEntry>,
 }
 
 /// A cached uncle entry with only the fields needed for payout.
-struct UncleEntry {
-    miner_address: String,
-    weighted_difficulty: f64,
+pub struct UncleEntry {
+    /// Miner address string for the uncle share.
+    pub miner_address: String,
+    /// Pre-weighted difficulty (base difficulty * UNCLE_WEIGHT_FACTOR).
+    pub weighted_difficulty: f64,
 }
 
 /// Incremental PPLNS window cache.
@@ -81,9 +83,8 @@ struct UncleEntry {
 /// maintenance logic.
 pub struct PplnsWindow {
     /// Confirmed share entries ordered newest-to-oldest, capped at MAX_PPLNS_WINDOW_SHARES.
+    /// Each entry embeds its own uncle data, so no separate uncle index is needed.
     confirmed_entries: VecDeque<ConfirmedEntry>,
-    /// Uncle entries keyed by blockhash for lookup during weighting.
-    uncle_entries: HashMap<BlockHash, UncleEntry>,
     /// The blockhash of the chain tip when this cache was last updated.
     cached_tip_blockhash: Option<BlockHash>,
     /// The height of the highest confirmed share in the cache.
@@ -95,7 +96,6 @@ impl Default for PplnsWindow {
     fn default() -> Self {
         Self {
             confirmed_entries: VecDeque::with_capacity(INITIAL_ENTRIES_CAPACITY),
-            uncle_entries: HashMap::with_capacity(INITIAL_ENTRIES_CAPACITY),
             cached_tip_blockhash: None,
             cached_top_height: None,
         }
@@ -169,12 +169,7 @@ impl PplnsWindow {
         for entry in &self.confirmed_entries {
             let mut nephew_bonus: f64 = 0.0;
 
-            for uncle_hash in &entry.uncle_hashes {
-                let Some(uncle_entry) = self.uncle_entries.get(uncle_hash) else {
-                    tracing::warn!("Uncle header not found for {uncle_hash}, skipping");
-                    continue;
-                };
-
+            for uncle_entry in &entry.uncle_entries {
                 *address_difficulty_map
                     .entry(uncle_entry.miner_address.clone())
                     .or_insert(0.0) += uncle_entry.weighted_difficulty;
@@ -203,7 +198,6 @@ impl PplnsWindow {
     /// Clear all cached state, forcing a full reload on next update.
     fn invalidate(&mut self) {
         self.confirmed_entries.clear();
-        self.uncle_entries.clear();
         self.cached_tip_blockhash = None;
         self.cached_top_height = None;
     }
@@ -251,23 +245,19 @@ impl PplnsWindow {
         }
 
         let all_uncle_hashes = collect_unique_uncle_hashes(&confirmed_headers);
-
-        let new_uncle_entries = fetch_uncle_entries(chain_store_handle, &all_uncle_hashes)?;
+        let uncle_lookup = fetch_uncle_lookup(chain_store_handle, &all_uncle_hashes)?;
 
         // Headers arrive newest-to-oldest. Reverse and push_front so
         // the newest entry ends up at position 0 in the deque.
         for (blockhash, header) in confirmed_headers.into_iter().rev() {
             let difficulty = header.get_difficulty();
+            let uncle_entries = resolve_uncle_entries(&header.uncles, &uncle_lookup);
             self.confirmed_entries.push_front(ConfirmedEntry {
                 blockhash,
                 miner_address: header.miner_address.to_string(),
                 difficulty,
-                uncle_hashes: header.uncles,
+                uncle_entries,
             });
-        }
-
-        for (blockhash, uncle_entry) in new_uncle_entries {
-            self.uncle_entries.entry(blockhash).or_insert(uncle_entry);
         }
 
         Ok(())
@@ -275,18 +265,11 @@ impl PplnsWindow {
 
     /// Evict the oldest confirmed entries when the cache exceeds
     /// MAX_PPLNS_WINDOW_SHARES. Truncates from the back (oldest entries).
-    /// Also removes orphaned uncle entries no longer referenced by any
-    /// remaining confirmed entry.
+    /// Uncle data is embedded in each entry so no separate cleanup is needed.
     fn evict_overflow(&mut self) {
         let max_entries = MAX_PPLNS_WINDOW_SHARES as usize;
         if self.confirmed_entries.len() <= max_entries {
             return;
-        }
-
-        for entry in self.confirmed_entries.range(max_entries..) {
-            for uncle_hash in &entry.uncle_hashes {
-                self.uncle_entries.remove(uncle_hash);
-            }
         }
 
         self.confirmed_entries.truncate(max_entries);
@@ -309,29 +292,122 @@ fn collect_unique_uncle_hashes(confirmed_headers: &[(BlockHash, ShareHeader)]) -
     all_uncle_hashes
 }
 
-/// Fetch uncle headers from the chain store and build UncleEntry values.
-fn fetch_uncle_entries(
+/// Fetch uncle headers from the chain store and build a lookup table.
+fn fetch_uncle_lookup(
     chain_store_handle: &ChainStoreHandle,
     uncle_hashes: &[BlockHash],
-) -> Result<Vec<(BlockHash, UncleEntry)>, Box<dyn Error + Send + Sync>> {
+) -> Result<HashMap<BlockHash, UncleEntry>, Box<dyn Error + Send + Sync>> {
     if uncle_hashes.is_empty() {
-        return Ok(Vec::new());
+        return Ok(HashMap::new());
     }
 
     let uncle_headers = chain_store_handle.get_share_headers(uncle_hashes)?;
-    let mut uncle_entries = Vec::with_capacity(uncle_headers.len());
+    let mut uncle_lookup = HashMap::with_capacity(uncle_headers.len());
     for (blockhash, header) in uncle_headers {
         let difficulty = header.get_difficulty();
         let weighted_difficulty = difficulty * UNCLE_WEIGHT_FACTOR;
-        uncle_entries.push((
+        uncle_lookup.insert(
             blockhash,
             UncleEntry {
                 miner_address: header.miner_address.to_string(),
                 weighted_difficulty,
             },
-        ));
+        );
     }
-    Ok(uncle_entries)
+    Ok(uncle_lookup)
+}
+
+/// Resolve uncle hashes into UncleEntry values using a pre-built lookup table.
+fn resolve_uncle_entries(
+    uncle_hashes: &[BlockHash],
+    uncle_lookup: &HashMap<BlockHash, UncleEntry>,
+) -> Vec<UncleEntry> {
+    let mut entries = Vec::with_capacity(uncle_hashes.len());
+    for uncle_hash in uncle_hashes {
+        if let Some(uncle_entry) = uncle_lookup.get(uncle_hash) {
+            entries.push(UncleEntry {
+                miner_address: uncle_entry.miner_address.clone(),
+                weighted_difficulty: uncle_entry.weighted_difficulty,
+            });
+        } else {
+            tracing::warn!("Uncle header not found for {uncle_hash}, skipping");
+        }
+    }
+    entries
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl PplnsWindow {
+    /// Populate the window cache directly for benchmarking.
+    ///
+    /// Accepts confirmed shares and uncles as tuples of primitives,
+    /// bypassing the chain store. Confirmed shares should be ordered
+    /// newest-to-oldest.
+    pub fn populate_for_benchmark(
+        &mut self,
+        confirmed_shares: Vec<(BlockHash, String, f64, Vec<UncleEntry>)>,
+    ) {
+        self.confirmed_entries.clear();
+        self.confirmed_entries.reserve(confirmed_shares.len());
+
+        for (blockhash, miner_address, difficulty, uncle_entries) in confirmed_shares {
+            self.confirmed_entries.push_back(ConfirmedEntry {
+                blockhash,
+                miner_address,
+                difficulty,
+                uncle_entries,
+            });
+        }
+
+        if let Some(entry) = self.confirmed_entries.front() {
+            self.cached_tip_blockhash = Some(entry.blockhash);
+        }
+        self.cached_top_height = Some(self.confirmed_entries.len() as u32);
+    }
+
+    /// Simulate the computational work of an incremental update for benchmarking.
+    ///
+    /// Performs the same processing as update -> load_range -> evict_overflow
+    /// without requiring a ChainStoreHandle. Takes confirmed headers in
+    /// newest-to-oldest order (as returned by the chain store) and uncle
+    /// headers to process.
+    pub fn load_entries_for_benchmark(
+        &mut self,
+        confirmed_headers: Vec<(BlockHash, ShareHeader)>,
+        uncle_headers: Vec<(BlockHash, ShareHeader)>,
+    ) {
+        let mut uncle_lookup: HashMap<BlockHash, UncleEntry> =
+            HashMap::with_capacity(uncle_headers.len());
+        for (blockhash, header) in uncle_headers {
+            let difficulty = header.get_difficulty();
+            let weighted_difficulty = difficulty * UNCLE_WEIGHT_FACTOR;
+            uncle_lookup.insert(
+                blockhash,
+                UncleEntry {
+                    miner_address: header.miner_address.to_string(),
+                    weighted_difficulty,
+                },
+            );
+        }
+
+        for (blockhash, header) in confirmed_headers.into_iter().rev() {
+            let difficulty = header.get_difficulty();
+            let uncle_entries = resolve_uncle_entries(&header.uncles, &uncle_lookup);
+            self.confirmed_entries.push_front(ConfirmedEntry {
+                blockhash,
+                miner_address: header.miner_address.to_string(),
+                difficulty,
+                uncle_entries,
+            });
+        }
+
+        if let Some(entry) = self.confirmed_entries.front() {
+            self.cached_tip_blockhash = Some(entry.blockhash);
+        }
+        self.cached_top_height = Some(self.confirmed_entries.len() as u32);
+
+        self.evict_overflow();
+    }
 }
 
 #[cfg(test)]
@@ -370,13 +446,26 @@ mod tests {
             .header
     }
 
-    /// Create a ConfirmedEntry from a ShareHeader for test setup.
+    /// Create a ConfirmedEntry from a ShareHeader with no uncles.
     fn entry_from_header(header: &ShareHeader) -> ConfirmedEntry {
         ConfirmedEntry {
             blockhash: header.block_hash(),
             miner_address: header.miner_address.to_string(),
             difficulty: header.get_difficulty(),
-            uncle_hashes: header.uncles.clone(),
+            uncle_entries: Vec::new(),
+        }
+    }
+
+    /// Create a ConfirmedEntry from a ShareHeader with resolved uncle entries.
+    fn entry_from_header_with_uncles(
+        header: &ShareHeader,
+        uncle_entries: Vec<UncleEntry>,
+    ) -> ConfirmedEntry {
+        ConfirmedEntry {
+            blockhash: header.block_hash(),
+            miner_address: header.miner_address.to_string(),
+            difficulty: header.get_difficulty(),
+            uncle_entries,
         }
     }
 
@@ -731,7 +820,7 @@ mod tests {
                 blockhash: BlockHash::all_zeros(),
                 miner_address: format!("padding_{index}"),
                 difficulty: 1.0,
-                uncle_hashes: Vec::new(),
+                uncle_entries: Vec::new(),
             });
         }
 
@@ -814,12 +903,10 @@ mod tests {
         let nephew_difficulty = nephew_header.get_difficulty();
 
         let mut window = PplnsWindow::default();
-        window
-            .confirmed_entries
-            .push_back(entry_from_header(&nephew_header));
-        window
-            .uncle_entries
-            .insert(uncle_hash, uncle_entry_from_header(&uncle_header));
+        window.confirmed_entries.push_back(entry_from_header_with_uncles(
+            &nephew_header,
+            vec![uncle_entry_from_header(&uncle_header)],
+        ));
 
         let result = window.accumulate_weighted_difficulty(f64::MAX);
 
@@ -896,10 +983,9 @@ mod tests {
     }
 
     #[test]
-    fn test_orphaned_uncle_cleanup() {
+    fn test_uncle_data_dropped_with_entry() {
         let genesis_hash = BlockHash::all_zeros();
 
-        // Uncle header
         let uncle_header = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 2);
         let uncle_hash = uncle_header.block_hash();
 
@@ -913,39 +999,29 @@ mod tests {
             vec![uncle_hash],
         );
 
+        let uncle_entry = uncle_entry_from_header(&uncle_header);
+
         let mut window = PplnsWindow::default();
-        // nephew1 at front (newest), nephew2 at back (oldest)
-        window
-            .confirmed_entries
-            .push_back(entry_from_header(&nephew1));
-        window
-            .confirmed_entries
-            .push_back(entry_from_header(&nephew2));
-        window
-            .uncle_entries
-            .insert(uncle_hash, uncle_entry_from_header(&uncle_header));
+        window.confirmed_entries.push_back(entry_from_header_with_uncles(
+            &nephew1,
+            vec![uncle_entry_from_header(&uncle_header)],
+        ));
+        window.confirmed_entries.push_back(entry_from_header_with_uncles(
+            &nephew2,
+            vec![uncle_entry],
+        ));
 
-        // Truncate to keep only nephew1, then clean up uncles
+        assert_eq!(window.confirmed_entries.len(), 2);
+        assert_eq!(window.confirmed_entries[0].uncle_entries.len(), 1);
+        assert_eq!(window.confirmed_entries[1].uncle_entries.len(), 1);
+
+        // Truncate to keep only nephew1; nephew2's uncle data is dropped with it
         window.confirmed_entries.truncate(1);
-
-        let referenced_uncles: HashSet<BlockHash> = window
-            .confirmed_entries
-            .iter()
-            .flat_map(|entry| entry.uncle_hashes.iter().copied())
-            .collect();
-        window
-            .uncle_entries
-            .retain(|blockhash, _| referenced_uncles.contains(blockhash));
-
-        // nephew1 still references uncle, so uncle stays
         assert_eq!(window.confirmed_entries.len(), 1);
-        assert!(window.uncle_entries.contains_key(&uncle_hash));
+        assert_eq!(window.confirmed_entries[0].uncle_entries.len(), 1);
 
-        // Now remove nephew1 too and clean up
+        // Clear everything
         window.confirmed_entries.clear();
-        window.uncle_entries.clear();
-
         assert!(window.confirmed_entries.is_empty());
-        assert!(window.uncle_entries.is_empty());
     }
 }
