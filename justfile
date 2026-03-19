@@ -91,6 +91,18 @@ fmt:
     cargo fmt --all
     just --fmt --unstable
 
+# Run benchmarks for a package and bench target
+bench package="p2poolv2_lib" name="pplns_window":
+    cargo bench --package {{ package }} --bench {{ name }} --features test-utils
+
+# Run benchmarks with symbols for profiling
+bench-profile package="p2poolv2_lib" name="pplns_window":
+    CARGO_PROFILE_BENCH_STRIP=none cargo bench --package {{ package }} --bench {{ name }} --features test-utils
+
+# Generate flamegraph for a specific benchmark function
+bench-flamegraph package="p2poolv2_lib" name="pplns_window" function="accumulate_weighted_difficulty_full_window":
+    CARGO_PROFILE_BENCH_STRIP=none cargo flamegraph -o flamegraph_{{ function }}.svg --bench {{ name }} --features test-utils -p {{ package }} -- --bench "{{ function }}" --profile-time 5
+
 # fix common warnings
 fix:
     cargo fix
