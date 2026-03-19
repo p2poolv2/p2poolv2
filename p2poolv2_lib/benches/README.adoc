@@ -1,0 +1,46 @@
+= P2Poolv2 Benchmarks
+
+Benchmarks for the PPLNS window payout computation.
+
+== Benchmarks
+
+=== pplns_window
+
+Measures two operations on a fully loaded PPLNS window (120,960 confirmed
+entries with 10% uncle ratio):
+
+* `accumulate_weighted_difficulty_full_window` -- walks the entire window
+  computing per-miner weighted difficulty.
+* `update_incremental` -- loads 960 new entries into a pre-filled window
+  with eviction.
+
+== Running
+
+Using just:
+
+    just bench
+
+Or directly with cargo:
+
+    cargo bench --package p2poolv2_lib --bench pplns_window --features test-utils
+
+Results are saved in `target/criterion/` with HTML reports at
+`target/criterion/report/index.html`.
+
+== Profiling
+
+To generate a flamegraph (requires `perf` and `cargo-flamegraph`):
+
+    just bench-flamegraph accumulate_weighted_difficulty_full_window
+    just bench-flamegraph update_incremental
+
+This produces `flamegraph_<name>.svg` in the project root. Open in a
+browser for interactive exploration.
+
+To run benchmarks with symbols preserved (for `perf report`):
+
+    just bench-profile
+
+Or pass the env var directly:
+
+    CARGO_PROFILE_BENCH_STRIP=none cargo bench --package p2poolv2_lib --bench pplns_window --features test-utils
