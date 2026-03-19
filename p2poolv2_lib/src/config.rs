@@ -21,7 +21,6 @@ use bitcoin::{Address, CompressedPublicKey};
 use bitcoindrpc::BitcoinRpcConfig;
 use serde::Deserialize;
 use std::marker::PhantomData;
-use std::time::Duration;
 use url::Url;
 
 /// Max length for pool signature P2Poolv2 + 8 more bytes for users to add
@@ -90,14 +89,14 @@ pub struct StratumConfig<State = Raw> {
     #[serde(default)]
     pub payout_file_path: Option<String>,
     #[serde(default)]
-    pub downstream_payout_url: Option<Url>,  // or Option<String> if you parse later
+    pub downstream_payout_url: Option<Url>, // or Option<String> if you parse later
 
     #[serde(default = "default_payout_refresh_interval")]
     pub payout_refresh_interval: u64,
 }
 
 fn default_payout_refresh_interval() -> u64 {
-    30  // e.g., 30 seconds default
+    30 // e.g., 30 seconds default
 }
 
 impl StratumConfig<Raw> {
@@ -147,7 +146,7 @@ impl StratumConfig<Raw> {
             _state: PhantomData,
             payout_file_path: self.payout_file_path,
             downstream_payout_url: self.downstream_payout_url,
-            payout_refresh_interval: self.payout_refresh_interval
+            payout_refresh_interval: self.payout_refresh_interval,
         })
     }
 }
@@ -200,11 +199,9 @@ impl StratumConfig<Raw> {
             _state: PhantomData,
             payout_file_path: None,
             downstream_payout_url: None,
-            payout_refresh_interval: default_payout_refresh_interval()
+            payout_refresh_interval: default_payout_refresh_interval(),
         }
     }
-        
-    
 }
 
 /// helper function to deserialize the network from the config file, which is provided as a string like Core

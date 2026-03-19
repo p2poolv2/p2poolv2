@@ -41,8 +41,7 @@ tracing-appender = { workspace = true }
 bitcoindrpc = { path = "../bitcoindrpc" }
 chrono = { workspace = true }
 dashmap = { workspace = true }
-parking_lot = { workspace = true }
-url = "2.5"
+url = { version = "2.5", features = ["serde"] }
 
 [dev-dependencies]
 bitcoindrpc = { path = "../bitcoindrpc", features = ["test-utils"] }

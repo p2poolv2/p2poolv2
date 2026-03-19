@@ -30,6 +30,7 @@ const METRICS_SAVE_INTERVAL: u64 = 5;
 
 /// Represents the metrics for the P2Poolv2 pool, we derive the stats every five minutes from this
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct PoolMetrics {
     /// Start time in unix timestamp
     pub start_time: u64,

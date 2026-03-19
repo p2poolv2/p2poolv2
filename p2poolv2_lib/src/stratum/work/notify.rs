@@ -31,16 +31,16 @@ use crate::shares::share_commitment::{ShareCommitment, build_share_commitment};
 use crate::stratum::messages::{Notify, NotifyParams};
 use crate::stratum::util::reverse_four_byte_chunks;
 use crate::stratum::util::to_be_hex;
+use crate::stratum::work::coinbase::parse_address;
 use bitcoin::CompressedPublicKey;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::Version;
+use serde_json::Value;
+use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::debug;
-use std::fs;
-use serde_json::Value;
-use crate::stratum::work::coinbase::parse_address;
 
 #[cfg(not(test))]
 use crate::stratum::client_connections::ClientConnectionsHandle;
@@ -74,14 +74,24 @@ async fn build_output_distribution(
             Ok(dist) => {
                 // Debug for file mode
                 for output in &dist {
-                    debug!("Payout: {} -> {} sats", output.address, output.amount.to_sat());
+                    debug!(
+                        "Payout: {} -> {} sats",
+                        output.address,
+                        output.amount.to_sat()
+                    );
                 }
                 let total_sat = dist.iter().map(|o| o.amount.to_sat()).sum::<u64>();
-                debug!("Total distribution (file): {} sats (out of {} available)", total_sat, template.coinbasevalue);
+                debug!(
+                    "Total distribution (file): {} sats (out of {} available)",
+                    total_sat, template.coinbasevalue
+                );
                 return dist;
             }
             Err(e) => {
-                debug!("File payout load failed ({}): {}; falling back to PPLNS", path, e);
+                debug!(
+                    "File payout load failed ({}): {}; falling back to PPLNS",
+                    path, e
+                );
             }
         }
     }
@@ -103,10 +113,18 @@ async fn build_output_distribution(
         Ok(distribution) => {
             // Debug for PPLNS mode
             for output in &distribution {
-                debug!("Payout: {} -> {} sats", output.address, output.amount.to_sat());
+                debug!(
+                    "Payout: {} -> {} sats",
+                    output.address,
+                    output.amount.to_sat()
+                );
             }
             let total_sat = distribution.iter().map(|o| o.amount.to_sat()).sum::<u64>();
-            debug!("Total distribution (PPLNS): {} sats (out of {} available)", total_sat, total_amount.to_sat());
+            debug!(
+                "Total distribution (PPLNS): {} sats (out of {} available)",
+                total_sat,
+                total_amount.to_sat()
+            );
             distribution
         }
         Err(e) => {
@@ -135,7 +153,10 @@ async fn load_payouts_from_file(
         .ok_or("Missing or invalid 'payouts' list")?
         .iter()
         .map(|entry| {
-            let addr_str = entry["Address"].as_str().ok_or("Missing Address")?.to_string();
+            let addr_str = entry["Address"]
+                .as_str()
+                .ok_or("Missing Address")?
+                .to_string();
             let value_sat: u64 = entry["Value"].as_u64().ok_or("Invalid Value")?;
 
             // Assuming parse_address is available in scope as per your previous code
@@ -157,10 +178,17 @@ async fn load_payouts_from_file(
     let mut distribution: Vec<OutputPair> = Vec::with_capacity(external_payouts.len() + 1);
 
     // Calculate sums
-    let sum_payouts_sat: u64 = external_payouts.iter().map(|OutputPair { amount: a, .. }| a.to_sat()).sum();
-    
+    let sum_payouts_sat: u64 = external_payouts
+        .iter()
+        .map(|OutputPair { amount: a, .. }| a.to_sat())
+        .sum();
+
     if sum_payouts_sat > coinbase_sats {
-        return Err(format!("Payouts sum {} > coinbase total {} sats", sum_payouts_sat, coinbase_sats).into());
+        return Err(format!(
+            "Payouts sum {} > coinbase total {} sats",
+            sum_payouts_sat, coinbase_sats
+        )
+        .into());
     }
 
     // 3. Logic Change: Calculate leftover and insert it FIRST
