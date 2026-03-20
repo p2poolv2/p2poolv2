@@ -38,9 +38,6 @@ pub struct ConfirmedHeaderResult {
     pub header: ShareHeader,
 }
 
-/// The minimum number of shares that must be on the chain for a share to be considered confirmed
-const MIN_CONFIRMATION_DEPTH: usize = 100;
-
 /// Common ancestor depth we look at when finding common ancestors
 /// For now it is the same as PPLNS window
 pub(crate) const COMMON_ANCESTOR_DEPTH: usize = 2160; // 6 shares per minute * 60 * 6 hours.
@@ -614,14 +611,6 @@ impl ChainStoreHandle {
     /// Add a user.
     pub async fn add_user(&self, btcaddress: String) -> Result<u64, StoreError> {
         self.store_handle.add_user(btcaddress).await
-    }
-
-    /// Check if a share is confirmed.
-    pub fn is_confirmed(&self, share: &ShareBlock) -> bool {
-        if share.header.prev_share_blockhash == BlockHash::all_zeros() {
-            return true;
-        }
-        self.get_depth(&share.block_hash()).unwrap_or_default() > MIN_CONFIRMATION_DEPTH
     }
 
     /// Check if a block is on the confirmed chain or is an uncle of a confirmed block.
