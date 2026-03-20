@@ -71,7 +71,7 @@ fn build_output_distribution(
     config: &StratumConfig<crate::config::Parsed>,
 ) -> Vec<OutputPair> {
     const DEFAULT_STEP_SIZE_SECONDS: u64 = 24 * 60 * 60; // 1 day
-    let payout = Payout::new(DEFAULT_STEP_SIZE_SECONDS);
+    let mut payout = Payout::new(DEFAULT_STEP_SIZE_SECONDS);
     let total_amount = bitcoin::Amount::from_sat(template.coinbasevalue);
 
     let compact_target = bitcoin::pow::CompactTarget::from_unprefixed_hex(&template.bits).unwrap();

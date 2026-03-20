@@ -89,11 +89,11 @@ fn build_benchmark_window(share_count: usize) -> PplnsWindow {
 
         let uncle_entries = if share_index % UNCLE_INTERVAL == 0 {
             let uncle_miner = miner_addresses[(uncle_counter + 2) % miner_count].clone();
-            let uncle_weighted_difficulty = (BASE_DIFFICULTY * 0.8) * UNCLE_WEIGHT_FACTOR;
+            let uncle_difficulty = BASE_DIFFICULTY * 0.8;
             uncle_counter += 1;
             vec![UncleEntry {
                 miner_address: uncle_miner,
-                weighted_difficulty: uncle_weighted_difficulty,
+                difficulty: uncle_difficulty,
             }]
         } else {
             Vec::new()
@@ -158,14 +158,14 @@ fn build_new_headers_for_update(
     (confirmed_headers, uncle_headers)
 }
 
-fn bench_accumulate_weighted_difficulty(criterion: &mut Criterion) {
+fn bench_get_address_difficulty_map(criterion: &mut Criterion) {
     let window = build_benchmark_window(TOTAL_CONFIRMED_SHARES);
 
     criterion.bench_function(
-        "accumulate_weighted_difficulty_full_window",
+        "get_address_difficulty_map_full_window",
         |bencher| {
             bencher.iter(|| {
-                black_box(window.accumulate_weighted_difficulty(black_box(f64::MAX)));
+                black_box(window.get_address_difficulty_map());
             });
         },
     );
@@ -188,7 +188,7 @@ fn bench_update(criterion: &mut Criterion) {
             },
             |(mut window, confirmed_headers, uncle_headers)| {
                 black_box(
-                    window.load_entries_for_benchmark(confirmed_headers, uncle_headers),
+                    window.load_entries_for_benchmark(confirmed_headers, uncle_headers, f64::MAX),
                 );
             },
             criterion::BatchSize::LargeInput,
@@ -196,5 +196,5 @@ fn bench_update(criterion: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_accumulate_weighted_difficulty, bench_update);
+criterion_group!(benches, bench_get_address_difficulty_map, bench_update);
 criterion_main!(benches);
