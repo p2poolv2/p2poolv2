@@ -38,7 +38,7 @@ pub struct Payout {
 
 impl PayoutDistribution<SimplePplnsShare> for Payout {
     fn fill_distribution_from_shares(
-        &self,
+        &mut self,
         distribution: &mut Vec<OutputPair>,
         chain_store_handle: &ChainStoreHandle,
         total_difficulty: f64,
@@ -572,7 +572,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_single_address() {
-        let payout = Payout::new(86400);
+        let mut payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -613,7 +613,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_multiple_addresses() {
-        let payout = Payout::new(86400);
+        let mut payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -682,7 +682,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_same_address_multiple_shares() {
-        let payout = Payout::new(86400);
+        let mut payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -751,7 +751,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_empty_shares() {
-        let payout = Payout::new(86400);
+        let mut payout = Payout::new(86400);
         let mut chain_store_handle = ChainStoreHandle::default();
 
         let total_amount = bitcoin::Amount::from_sat(100_000_000);
@@ -773,7 +773,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_with_donation() {
-        let payout = Payout::new(86400);
+        let mut payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -861,7 +861,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_with_fee() {
-        let payout = Payout::new(86400);
+        let mut payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -952,7 +952,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_with_donation_and_fee() {
-        let payout = Payout::new(86400);
+        let mut payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -1059,7 +1059,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_with_donation_empty_shares() {
-        let payout = Payout::new(86400);
+        let mut payout = Payout::new(86400);
         let mut chain_store_handle = ChainStoreHandle::default();
 
         chain_store_handle
@@ -1087,7 +1087,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_with_zero_donation() {
-        let payout = Payout::new(86400);
+        let mut payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -1172,7 +1172,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_with_zero_fee() {
-        let payout = Payout::new(86400);
+        let mut payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -1236,7 +1236,7 @@ mod tests {
     async fn test_get_output_distribution_with_full_donation_and_invalid_miner_addresses() {
         // This test verifies that when donation is 100%, we don't try to parse miner addresses
         // which allows non-standard usernames when validate_address is false
-        let payout = Payout::new(86400);
+        let mut payout = Payout::new(86400);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()

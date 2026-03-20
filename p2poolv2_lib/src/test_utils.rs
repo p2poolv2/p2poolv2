@@ -102,6 +102,38 @@ pub fn genesis_for_tests() -> ShareBlock {
     TestShareBlockBuilder::new().build()
 }
 
+/// Build a share header with a specific miner pubkey and work level.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn build_test_header(
+    prev_hash: &str,
+    miner_pubkey: &str,
+    work: u32,
+) -> crate::shares::share_block::ShareHeader {
+    TestShareBlockBuilder::new()
+        .prev_share_blockhash(prev_hash.to_string())
+        .miner_pubkey(miner_pubkey)
+        .work(work)
+        .build()
+        .header
+}
+
+/// Build a share header that references uncles.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn build_test_header_with_uncles(
+    prev_hash: &str,
+    miner_pubkey: &str,
+    work: u32,
+    uncles: Vec<BlockHash>,
+) -> crate::shares::share_block::ShareHeader {
+    TestShareBlockBuilder::new()
+        .prev_share_blockhash(prev_hash.to_string())
+        .miner_pubkey(miner_pubkey)
+        .work(work)
+        .uncles(uncles)
+        .build()
+        .header
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 pub const TEST_ANCHOR_TIME: u32 = 1_700_000_000;
 

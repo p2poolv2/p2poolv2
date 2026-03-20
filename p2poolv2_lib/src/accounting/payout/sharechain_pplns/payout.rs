@@ -25,125 +25,37 @@ use crate::accounting::OutputPair;
 use crate::accounting::payout::payout_distribution::{
     PayoutDistribution, append_proportional_distribution,
 };
-use crate::accounting::payout::sharechain_pplns::pplns_window::{
-    ESTIMATED_MAX_SHARES_IN_WINDOW, MAX_PPLNS_WINDOW_SECONDS, NEPHEW_BONUS_FACTOR,
-    UNCLE_WEIGHT_FACTOR,
-};
+use crate::accounting::payout::sharechain_pplns::pplns_window::PplnsWindow;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::store::dag_store::ShareDag;
 use bitcoin::{Address, Amount};
-use std::collections::HashMap;
 use std::error::Error;
-use tracing::warn;
 
 /// Share chain PPLNS payout distribution.
 ///
-/// Computes payout distribution from confirmed share chain headers
-/// with uncle weighting applied.
-pub struct Payout;
+/// Holds a PplnsWindow that incrementally maintains the weighted difficulty
+/// aggregate across calls. Each call to fill_distribution_from_shares
+/// updates the window and reads the cached aggregate directly.
+pub struct Payout {
+    pplns_window: PplnsWindow,
+}
 
 impl Payout {
-    /// Get the PPLNS window ShareDag from the chain store.
-    ///
-    /// Computes the height range from the tip, fetches the ShareDag,
-    /// then filters confirmed headers by the two-week time window.
-    fn get_pplns_share_dag(
-        &self,
-        chain_store_handle: &ChainStoreHandle,
-    ) -> Result<ShareDag, Box<dyn Error + Send + Sync>> {
-        let tip_blockhash = chain_store_handle.get_chain_tip()?;
-        let tip_header = chain_store_handle.get_share_header(&tip_blockhash)?;
-        let tip_metadata = chain_store_handle.get_block_metadata(&tip_blockhash)?;
-        let Some(tip_height) = tip_metadata.expected_height else {
-            return Ok(ShareDag::empty());
-        };
-
-        let earliest_allowed_time = tip_header.time.saturating_sub(MAX_PPLNS_WINDOW_SECONDS);
-
-        let estimated_min_height = tip_height.saturating_sub(ESTIMATED_MAX_SHARES_IN_WINDOW);
-        let mut share_dag = chain_store_handle.get_share_dag(estimated_min_height, tip_height)?;
-
-        share_dag.filter_confirmed_by_time(earliest_allowed_time);
-
-        Ok(share_dag)
-    }
-
-    /// Accumulate weighted difficulty per miner address from a ShareDag.
-    ///
-    /// For each confirmed share:
-    /// - Full difficulty from the share's bits target
-    /// - Plus 10% of each referenced uncle's difficulty as nephew bonus
-    ///
-    /// For each uncle:
-    /// - 90% of the uncle's difficulty
-    ///
-    /// Stops accumulating once accumulated difficulty reaches total_difficulty.
-    ///
-    /// Returns a map from miner address string to total weighted difficulty
-    /// for proportional payout distribution.
-    fn accumulate_weighted_difficulty(
-        &self,
-        share_dag: &ShareDag,
-        total_difficulty: f64,
-    ) -> HashMap<String, f64> {
-        let estimated_miners = share_dag.confirmed_headers.len() + share_dag.uncle_headers.len();
-        let mut address_difficulty_map: HashMap<String, f64> =
-            HashMap::with_capacity(estimated_miners);
-        let mut accumulated_difficulty: f64 = 0.0;
-
-        for (blockhash, header) in &share_dag.confirmed_headers {
-            let share_difficulty = header.get_difficulty();
-            let mut nephew_bonus: f64 = 0.0;
-
-            if let Some(uncle_hashes) = share_dag.nephew_to_uncles.get(blockhash) {
-                for uncle_hash in uncle_hashes {
-                    let Some(uncle_header) = share_dag.uncle_headers.get(uncle_hash) else {
-                        warn!("Uncle header not found for {uncle_hash}, skipping");
-                        continue;
-                    };
-
-                    let uncle_difficulty = uncle_header.get_difficulty();
-
-                    // Uncle gets 90% of its difficulty
-                    let uncle_weighted_difficulty = uncle_difficulty * UNCLE_WEIGHT_FACTOR;
-                    *address_difficulty_map
-                        .entry(uncle_header.miner_address.to_string())
-                        .or_insert(0.0) += uncle_weighted_difficulty;
-
-                    // Uncle contributes its weighted difficulty to the PPLNS window
-                    accumulated_difficulty += uncle_weighted_difficulty;
-
-                    // Nephew gets 10% bonus per uncle's difficulty
-                    nephew_bonus += uncle_difficulty * NEPHEW_BONUS_FACTOR;
-                }
-            }
-
-            let weighted_difficulty = share_difficulty + nephew_bonus;
-            *address_difficulty_map
-                .entry(header.miner_address.to_string())
-                .or_insert(0.0) += weighted_difficulty;
-
-            // Confirmed share contributes its full difficulty to the PPLNS window
-            // We accumulate non-factored difficulty, even when we apply weights to get the distribution.
-            accumulated_difficulty += share_difficulty;
-
-            if accumulated_difficulty >= total_difficulty {
-                return address_difficulty_map;
-            }
+    /// Create a new Payout with an empty PPLNS window.
+    pub fn new() -> Self {
+        Self {
+            pplns_window: PplnsWindow::default(),
         }
-
-        address_difficulty_map
     }
 }
 
 impl PayoutDistribution<ShareChainPplnsShare> for Payout {
-    /// Fill payout distribution from share chain confirmed shares with uncle weighting.
+    /// Fill payout distribution from the incrementally maintained PPLNS window.
     fn fill_distribution_from_shares(
-        &self,
+        &mut self,
         distribution: &mut Vec<OutputPair>,
         chain_store_handle: &ChainStoreHandle,
         total_difficulty: f64,
@@ -163,18 +75,10 @@ impl PayoutDistribution<ShareChainPplnsShare> for Payout {
             return Ok(());
         }
 
-        let share_dag = self.get_pplns_share_dag(chain_store_handle)?;
+        self.pplns_window
+            .update(chain_store_handle, total_difficulty)?;
 
-        if share_dag.confirmed_headers.is_empty() {
-            distribution.push(OutputPair {
-                address: bootstrap_address,
-                amount: remaining_total_amount,
-            });
-            return Ok(());
-        }
-
-        let address_difficulty_map =
-            self.accumulate_weighted_difficulty(&share_dag, total_difficulty);
+        let address_difficulty_map = self.pplns_window.get_address_difficulty_map();
 
         if address_difficulty_map.is_empty() {
             distribution.push(OutputPair {
@@ -185,7 +89,7 @@ impl PayoutDistribution<ShareChainPplnsShare> for Payout {
         }
 
         append_proportional_distribution(
-            address_difficulty_map,
+            address_difficulty_map.clone(),
             remaining_total_amount,
             distribution,
         )?;
@@ -197,98 +101,31 @@ impl PayoutDistribution<ShareChainPplnsShare> for Payout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accounting::payout::sharechain_pplns::pplns_window::{
+        NEPHEW_BONUS_FACTOR, UNCLE_WEIGHT_FACTOR,
+    };
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
     use crate::shares::share_block::ShareHeader;
     use crate::store::block_tx_metadata::{BlockMetadata, Status};
-    use crate::store::dag_store::ShareDag;
-    use crate::test_utils::{PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_G, TestShareBlockBuilder};
+    use crate::test_utils::{
+        PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_G, build_test_header, build_test_header_with_uncles,
+    };
     use bitcoin::hashes::Hash;
     use bitcoin::{BlockHash, Work};
     use p2poolv2_config::StratumConfig;
-    use std::collections::{HashMap, HashSet};
-
-    /// Build a share header with a specific miner pubkey and work level.
-    fn build_test_header(prev_hash: &str, miner_pubkey: &str, work: u32) -> ShareHeader {
-        TestShareBlockBuilder::new()
-            .prev_share_blockhash(prev_hash.to_string())
-            .miner_pubkey(miner_pubkey)
-            .work(work)
-            .build()
-            .header
-    }
-
-    /// Build a share header that references uncles.
-    fn build_test_header_with_uncles(
-        prev_hash: &str,
-        miner_pubkey: &str,
-        work: u32,
-        uncles: Vec<BlockHash>,
-    ) -> ShareHeader {
-        TestShareBlockBuilder::new()
-            .prev_share_blockhash(prev_hash.to_string())
-            .miner_pubkey(miner_pubkey)
-            .work(work)
-            .uncles(uncles)
-            .build()
-            .header
-    }
+    use std::collections::HashSet;
 
     fn make_test_config() -> crate::config::StratumConfig<crate::config::Parsed> {
         StratumConfig::new_for_test_default().parse().unwrap()
     }
 
-    /// Build a ShareDag from confirmed headers with no uncles.
-    fn build_dag_no_uncles(confirmed: Vec<(BlockHash, ShareHeader)>) -> ShareDag {
-        ShareDag {
-            confirmed_headers: confirmed,
-            nephew_to_uncles: HashMap::new(),
-            uncle_headers: HashMap::new(),
-        }
-    }
-
-    /// Build a ShareDag from confirmed headers with uncle data.
-    fn build_dag_with_uncles(
-        confirmed: Vec<(BlockHash, ShareHeader)>,
-        uncle_pairs: Vec<(BlockHash, ShareHeader)>,
-    ) -> ShareDag {
-        let (_, nephew_to_uncles) = ShareDag::collect_uncle_references(&confirmed);
-        let uncle_headers: HashMap<BlockHash, ShareHeader> = uncle_pairs.into_iter().collect();
-        ShareDag {
-            confirmed_headers: confirmed,
-            nephew_to_uncles,
-            uncle_headers,
-        }
-    }
-
-    /// Set up common mock expectations for chain tip, share header, and block metadata.
-    fn setup_tip_mocks(
-        mock: &mut MockChainStoreHandle,
-        tip_height: u32,
-        tip_hash: BlockHash,
-        tip_header: ShareHeader,
-    ) {
-        mock.expect_get_chain_tip().returning(move || Ok(tip_hash));
-        mock.expect_get_share_header()
-            .returning(move |_| Ok(tip_header.clone()));
-        mock.expect_get_block_metadata().returning(move |_| {
-            Ok(BlockMetadata {
-                expected_height: Some(tip_height),
-                chain_work: Work::from_le_bytes([0u8; 32]),
-                status: Status::Confirmed,
-            })
-        });
-    }
-
     #[test]
     fn test_empty_chain_uses_bootstrap() {
         let genesis_hash = BlockHash::all_zeros();
-        let header = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
 
         let mut mock = MockChainStoreHandle::default();
         mock.expect_get_chain_tip()
             .returning(move || Ok(genesis_hash));
-        mock.expect_get_share_header()
-            .returning(move |_| Ok(header.clone()));
         mock.expect_get_block_metadata().returning(|_| {
             Ok(BlockMetadata {
                 expected_height: None,
@@ -297,7 +134,7 @@ mod tests {
             })
         });
 
-        let payout = Payout;
+        let mut payout = Payout::new();
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
@@ -315,18 +152,27 @@ mod tests {
         let miner_address = header.miner_address.to_string();
         let tip_hash = header.block_hash();
 
-        let dag = build_dag_no_uncles(vec![(tip_hash, header.clone())]);
+        let confirmed_headers = vec![(tip_hash, header.clone())];
 
         let mut mock = MockChainStoreHandle::default();
-        setup_tip_mocks(&mut mock, 0, tip_hash, header);
-        mock.expect_get_share_dag()
-            .returning(move |_, _| Ok(dag.clone()));
+        mock.expect_get_chain_tip().returning(move || Ok(tip_hash));
+        mock.expect_get_block_metadata().returning(move |_| {
+            Ok(BlockMetadata {
+                expected_height: Some(0),
+                chain_work: Work::from_le_bytes([0u8; 32]),
+                status: Status::Confirmed,
+            })
+        });
+        mock.expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(confirmed_headers.clone()));
+        mock.expect_get_share_headers()
+            .returning(|_| Ok(Vec::new()));
 
-        let payout = Payout;
+        let mut payout = Payout::new();
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
-            .get_output_distribution(&mock, 1.0, total_amount, &config)
+            .get_output_distribution(&mock, f64::MAX, total_amount, &config)
             .unwrap();
 
         assert_eq!(result.len(), 1);
@@ -343,17 +189,27 @@ mod tests {
         let miner2 = header2.miner_address.to_string();
         let tip_hash = header2.block_hash();
 
-        let dag = build_dag_no_uncles(vec![
+        // Newest-to-oldest order
+        let confirmed_headers = vec![
             (header2.block_hash(), header2.clone()),
             (header1.block_hash(), header1.clone()),
-        ]);
+        ];
 
         let mut mock = MockChainStoreHandle::default();
-        setup_tip_mocks(&mut mock, 1, tip_hash, header2);
-        mock.expect_get_share_dag()
-            .returning(move |_, _| Ok(dag.clone()));
+        mock.expect_get_chain_tip().returning(move || Ok(tip_hash));
+        mock.expect_get_block_metadata().returning(move |_| {
+            Ok(BlockMetadata {
+                expected_height: Some(1),
+                chain_work: Work::from_le_bytes([0u8; 32]),
+                status: Status::Confirmed,
+            })
+        });
+        mock.expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(confirmed_headers.clone()));
+        mock.expect_get_share_headers()
+            .returning(|_| Ok(Vec::new()));
 
-        let payout = Payout;
+        let mut payout = Payout::new();
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
@@ -392,17 +248,24 @@ mod tests {
         let nephew_miner = nephew_header.miner_address.to_string();
         let tip_hash = nephew_header.block_hash();
 
-        let dag = build_dag_with_uncles(
-            vec![(tip_hash, nephew_header.clone())],
-            vec![(uncle_hash, uncle_header)],
-        );
+        let confirmed_headers = vec![(tip_hash, nephew_header.clone())];
+        let uncle_headers = vec![(uncle_hash, uncle_header)];
 
         let mut mock = MockChainStoreHandle::default();
-        setup_tip_mocks(&mut mock, 0, tip_hash, nephew_header);
-        mock.expect_get_share_dag()
-            .returning(move |_, _| Ok(dag.clone()));
+        mock.expect_get_chain_tip().returning(move || Ok(tip_hash));
+        mock.expect_get_block_metadata().returning(move |_| {
+            Ok(BlockMetadata {
+                expected_height: Some(0),
+                chain_work: Work::from_le_bytes([0u8; 32]),
+                status: Status::Confirmed,
+            })
+        });
+        mock.expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(confirmed_headers.clone()));
+        mock.expect_get_share_headers()
+            .returning(move |_| Ok(uncle_headers.clone()));
 
-        let payout = Payout;
+        let mut payout = Payout::new();
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
@@ -465,17 +328,24 @@ mod tests {
         let nephew_difficulty = nephew_header.get_difficulty();
         let tip_hash = nephew_header.block_hash();
 
-        let dag = build_dag_with_uncles(
-            vec![(tip_hash, nephew_header.clone())],
-            vec![(uncle1_hash, uncle1_header), (uncle2_hash, uncle2_header)],
-        );
+        let confirmed_headers = vec![(tip_hash, nephew_header.clone())];
+        let uncle_headers = vec![(uncle1_hash, uncle1_header), (uncle2_hash, uncle2_header)];
 
         let mut mock = MockChainStoreHandle::default();
-        setup_tip_mocks(&mut mock, 0, tip_hash, nephew_header);
-        mock.expect_get_share_dag()
-            .returning(move |_, _| Ok(dag.clone()));
+        mock.expect_get_chain_tip().returning(move || Ok(tip_hash));
+        mock.expect_get_block_metadata().returning(move |_| {
+            Ok(BlockMetadata {
+                expected_height: Some(0),
+                chain_work: Work::from_le_bytes([0u8; 32]),
+                status: Status::Confirmed,
+            })
+        });
+        mock.expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(confirmed_headers.clone()));
+        mock.expect_get_share_headers()
+            .returning(move |_| Ok(uncle_headers.clone()));
 
-        let payout = Payout;
+        let mut payout = Payout::new();
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
@@ -513,27 +383,37 @@ mod tests {
         let tip_hash = header3.block_hash();
 
         // Difficulty per share (from bits)
-        let difficulty_per_share = header1.get_difficulty();
+        let single_share_difficulty = header1.get_difficulty();
 
-        let dag = build_dag_no_uncles(vec![
+        // Newest-to-oldest order
+        let confirmed_headers = vec![
             (header3.block_hash(), header3.clone()),
             (header2.block_hash(), header2.clone()),
             (header1.block_hash(), header1.clone()),
-        ]);
+        ];
 
         let mut mock = MockChainStoreHandle::default();
-        setup_tip_mocks(&mut mock, 2, tip_hash, header3);
-        mock.expect_get_share_dag()
-            .returning(move |_, _| Ok(dag.clone()));
+        mock.expect_get_chain_tip().returning(move || Ok(tip_hash));
+        mock.expect_get_block_metadata().returning(move |_| {
+            Ok(BlockMetadata {
+                expected_height: Some(2),
+                chain_work: Work::from_le_bytes([0u8; 32]),
+                status: Status::Confirmed,
+            })
+        });
+        mock.expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(confirmed_headers.clone()));
+        mock.expect_get_share_headers()
+            .returning(|_| Ok(Vec::new()));
 
-        let payout = Payout;
+        let mut payout = Payout::new();
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
 
         // Set total_difficulty to just one share's difficulty -- should include
         // the first (newest) share only
         let result = payout
-            .get_output_distribution(&mock, difficulty_per_share, total_amount, &config)
+            .get_output_distribution(&mock, single_share_difficulty, total_amount, &config)
             .unwrap();
 
         // Only the newest share (header3) should be included
@@ -543,50 +423,65 @@ mod tests {
     }
 
     #[test]
-    fn test_time_cutoff() {
+    fn test_difficulty_cutoff_two_of_three() {
         let genesis_hash = BlockHash::all_zeros();
 
-        // Recent share with current timestamp
-        let recent_header = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
-        let recent_miner = recent_header.miner_address.to_string();
+        // Create 3 confirmed shares with different miners
+        let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
+        let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
+        let header3 = build_test_header(&header2.block_hash().to_string(), PUBKEY_3G, 2);
+        let miner2 = header2.miner_address.to_string();
+        let miner3 = header3.miner_address.to_string();
+        let tip_hash = header3.block_hash();
 
-        // Old share with timestamp beyond two weeks
-        let mut old_header = build_test_header(&genesis_hash.to_string(), PUBKEY_2G, 2);
-        // Set old header time to 3 weeks ago relative to recent
-        old_header.time = recent_header.time.saturating_sub(3 * 7 * 24 * 60 * 60);
+        let single_share_difficulty = header1.get_difficulty();
 
-        let tip_hash = recent_header.block_hash();
-
-        // The dag includes both -- time filtering happens in get_pplns_share_dag
-        let dag = build_dag_no_uncles(vec![
-            (recent_header.block_hash(), recent_header.clone()),
-            (old_header.block_hash(), old_header.clone()),
-        ]);
+        // Newest-to-oldest order
+        let confirmed_headers = vec![
+            (header3.block_hash(), header3.clone()),
+            (header2.block_hash(), header2.clone()),
+            (header1.block_hash(), header1.clone()),
+        ];
 
         let mut mock = MockChainStoreHandle::default();
-        setup_tip_mocks(&mut mock, 1, tip_hash, recent_header);
-        mock.expect_get_share_dag()
-            .returning(move |_, _| Ok(dag.clone()));
+        mock.expect_get_chain_tip().returning(move || Ok(tip_hash));
+        mock.expect_get_block_metadata().returning(move |_| {
+            Ok(BlockMetadata {
+                expected_height: Some(2),
+                chain_work: Work::from_le_bytes([0u8; 32]),
+                status: Status::Confirmed,
+            })
+        });
+        mock.expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(confirmed_headers.clone()));
+        mock.expect_get_share_headers()
+            .returning(|_| Ok(Vec::new()));
 
-        let payout = Payout;
+        let mut payout = Payout::new();
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
 
+        // Set total_difficulty to two shares' worth -- should include
+        // only the two newest shares (header3 and header2)
         let result = payout
-            .get_output_distribution(&mock, f64::MAX, total_amount, &config)
+            .get_output_distribution(&mock, single_share_difficulty * 2.0, total_amount, &config)
             .unwrap();
 
-        // Only the recent share should be included (old one is beyond 2 weeks)
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].address.to_string(), recent_miner);
-        assert_eq!(result[0].amount, total_amount);
+        assert_eq!(result.len(), 2);
+        let addresses: HashSet<String> =
+            result.iter().map(|pair| pair.address.to_string()).collect();
+        assert!(addresses.contains(&miner2));
+        assert!(addresses.contains(&miner3));
+
+        let total_distributed: Amount = result.iter().map(|pair| pair.amount).sum();
+        assert_eq!(total_distributed, total_amount);
     }
 
     #[test]
     fn test_different_miners_with_uncles() {
         let genesis_hash = BlockHash::all_zeros();
 
-        // Miner A: confirmed share at height 1
+        // Miner A: confirmed share at height 0
         let header_a = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let miner_a = header_a.miner_address.to_string();
 
@@ -595,7 +490,7 @@ mod tests {
         let uncle_hash = uncle_header.block_hash();
         let miner_b = uncle_header.miner_address.to_string();
 
-        // Miner C: confirmed share at height 2 that references uncle
+        // Miner C: confirmed share at height 1 that references uncle
         let header_c = build_test_header_with_uncles(
             &header_a.block_hash().to_string(),
             PUBKEY_3G,
@@ -605,20 +500,28 @@ mod tests {
         let miner_c = header_c.miner_address.to_string();
         let tip_hash = header_c.block_hash();
 
-        let dag = build_dag_with_uncles(
-            vec![
-                (header_c.block_hash(), header_c.clone()),
-                (header_a.block_hash(), header_a.clone()),
-            ],
-            vec![(uncle_hash, uncle_header)],
-        );
+        // Newest-to-oldest order
+        let confirmed_headers = vec![
+            (header_c.block_hash(), header_c.clone()),
+            (header_a.block_hash(), header_a.clone()),
+        ];
+        let uncle_headers = vec![(uncle_hash, uncle_header)];
 
         let mut mock = MockChainStoreHandle::default();
-        setup_tip_mocks(&mut mock, 1, tip_hash, header_c);
-        mock.expect_get_share_dag()
-            .returning(move |_, _| Ok(dag.clone()));
+        mock.expect_get_chain_tip().returning(move || Ok(tip_hash));
+        mock.expect_get_block_metadata().returning(move |_| {
+            Ok(BlockMetadata {
+                expected_height: Some(1),
+                chain_work: Work::from_le_bytes([0u8; 32]),
+                status: Status::Confirmed,
+            })
+        });
+        mock.expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(confirmed_headers.clone()));
+        mock.expect_get_share_headers()
+            .returning(move |_| Ok(uncle_headers.clone()));
 
-        let payout = Payout;
+        let mut payout = Payout::new();
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
 

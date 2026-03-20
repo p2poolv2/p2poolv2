@@ -42,7 +42,7 @@ pub trait PayoutDistribution<P: PayoutShare> {
     /// donation and fees amount have already been filled by the trait
     /// common implementation of get_outpoint_distribution
     fn fill_distribution_from_shares(
-        &self,
+        &mut self,
         distribution: &mut Vec<OutputPair>,
         chain_store_handle: &ChainStoreHandle,
         total_difficulty: f64,
@@ -61,7 +61,7 @@ pub trait PayoutDistribution<P: PayoutShare> {
     /// # Returns
     /// Vector of OutputPair containing addresses and their proportional amounts
     fn get_output_distribution(
-        &self,
+        &mut self,
         chain_store_handle: &ChainStoreHandle,
         total_difficulty: f64,
         total_amount: bitcoin::Amount,
