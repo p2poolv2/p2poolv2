@@ -232,7 +232,6 @@ Reserved for general metadata storage.
 
 ```rust
 // From chain_store.rs
-const MIN_CONFIRMATION_DEPTH: usize = 100;   // Shares needed to confirm
 const MAX_UNCLE_DEPTH: usize = 3;            // Max uncle inclusion depth
 const COMMON_ANCESTOR_DEPTH: usize = 2160;   // Ancestor search depth (6 hours)
 const PPLNS_WINDOW: usize = 2160;            // PPLNS window in shares
