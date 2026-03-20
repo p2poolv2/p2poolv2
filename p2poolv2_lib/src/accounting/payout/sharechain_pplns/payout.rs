@@ -89,7 +89,7 @@ impl PayoutDistribution<ShareChainPplnsShare> for Payout {
         }
 
         append_proportional_distribution(
-            address_difficulty_map.clone(),
+            address_difficulty_map,
             remaining_total_amount,
             distribution,
         )?;
@@ -105,7 +105,6 @@ mod tests {
         NEPHEW_BONUS_FACTOR, UNCLE_WEIGHT_FACTOR,
     };
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
-    use crate::shares::share_block::ShareHeader;
     use crate::store::block_tx_metadata::{BlockMetadata, Status};
     use crate::test_utils::{
         PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_G, build_test_header, build_test_header_with_uncles,

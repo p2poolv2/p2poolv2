@@ -31,9 +31,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
 use tracing::info;
 
-/// Maximum PPLNS window duration: two weeks in seconds.
-pub(crate) const MAX_PPLNS_WINDOW_SECONDS: u32 = 2 * 7 * 24 * 60 * 60;
-
 /// Maximum number of confirmed shares in the PPLNS window.
 /// At 6 shares per minute over 2 weeks: 6 * 60 * 24 * 14 = 120,960.
 pub(crate) const MAX_PPLNS_WINDOW_SHARES: u32 = 6 * 60 * 24 * 14;

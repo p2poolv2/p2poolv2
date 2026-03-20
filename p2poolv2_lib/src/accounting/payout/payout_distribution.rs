@@ -124,7 +124,7 @@ fn include_address_and_cut(
 
 /// Appends proportional distribution of amount based on difficulty weights to the distribution
 pub(crate) fn append_proportional_distribution(
-    address_difficulty_map: HashMap<String, f64>,
+    address_difficulty_map: &HashMap<String, f64>,
     total_amount: bitcoin::Amount,
     distribution: &mut Vec<OutputPair>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -176,7 +176,7 @@ mod tests {
 
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
         let mut result = Vec::new();
-        append_proportional_distribution(address_difficulty_map, total_amount, &mut result)
+        append_proportional_distribution(&address_difficulty_map, total_amount, &mut result)
             .unwrap();
 
         assert_eq!(result.len(), 2);
