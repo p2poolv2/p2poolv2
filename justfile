@@ -100,7 +100,7 @@ bench-profile package="p2poolv2_lib" name="pplns_window":
     CARGO_PROFILE_BENCH_STRIP=none cargo bench --package {{ package }} --bench {{ name }} --features test-utils
 
 # Generate flamegraph for a specific benchmark function
-bench-flamegraph package="p2poolv2_lib" name="pplns_window" function="accumulate_weighted_difficulty_full_window":
+bench-flamegraph package="p2poolv2_lib" name="pplns_window" function="get_address_difficulty_map_full_window":
     CARGO_PROFILE_BENCH_STRIP=none cargo flamegraph -o flamegraph_{{ function }}.svg --bench {{ name }} --features test-utils -p {{ package }} -- --bench "{{ function }}" --profile-time 5
 
 # fix common warnings

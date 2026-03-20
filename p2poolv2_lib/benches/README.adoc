@@ -9,8 +9,8 @@ Benchmarks for the PPLNS window payout computation.
 Measures two operations on a fully loaded PPLNS window (120,960 confirmed
 entries with 10% uncle ratio):
 
-* `accumulate_weighted_difficulty_full_window` -- walks the entire window
-  computing per-miner weighted difficulty.
+* `get_address_difficulty_map_full_window` -- walks the entire window
+  computing per-miner difficulty from the maintained running tally.
 * `update_incremental` -- loads 960 new entries into a pre-filled window
   with eviction.
 
@@ -31,7 +31,7 @@ Results are saved in `target/criterion/` with HTML reports at
 
 To generate a flamegraph (requires `perf` and `cargo-flamegraph`):
 
-    just bench-flamegraph accumulate_weighted_difficulty_full_window
+    just bench-flamegraph get_address_difficulty_map_full_window
     just bench-flamegraph update_incremental
 
 This produces `flamegraph_<name>.svg` in the project root. Open in a
