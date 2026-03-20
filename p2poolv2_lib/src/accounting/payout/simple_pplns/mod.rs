@@ -14,7 +14,6 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use super::payout_distribution::PayoutShare;
 use bitcoin::consensus::{Decodable, Encodable};
 use serde::{Deserialize, Serialize};
 
@@ -44,15 +43,6 @@ pub struct SimplePplnsShare {
     pub extranonce2: String,
     /// nonce from the mining session, used to build block
     pub nonce: String,
-}
-
-impl PayoutShare for SimplePplnsShare {
-    fn get_btcaddress(&self) -> Option<&str> {
-        self.btcaddress.as_deref()
-    }
-    fn get_difficulty(&self) -> u64 {
-        self.difficulty
-    }
 }
 
 impl SimplePplnsShare {

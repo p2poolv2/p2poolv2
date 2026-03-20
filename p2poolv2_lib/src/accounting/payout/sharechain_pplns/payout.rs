@@ -20,7 +20,6 @@
 //! 1/10 bonus for nephews), and distributes payouts proportionally by
 //! weighted difficulty.
 
-use super::ShareChainPplnsShare;
 use crate::accounting::OutputPair;
 use crate::accounting::payout::payout_distribution::{
     PayoutDistribution, append_proportional_distribution,
@@ -52,7 +51,7 @@ impl Payout {
     }
 }
 
-impl PayoutDistribution<ShareChainPplnsShare> for Payout {
+impl PayoutDistribution for Payout {
     /// Fill payout distribution from the incrementally maintained PPLNS window.
     fn fill_distribution_from_shares(
         &mut self,

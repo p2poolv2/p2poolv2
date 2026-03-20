@@ -16,6 +16,7 @@
 
 use clap::Parser;
 use p2poolv2_api::start_api_server;
+use p2poolv2_lib::accounting::payout::simple_pplns::payout::Payout;
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::logging::setup_logging;
@@ -55,6 +56,9 @@ const FULL_DONATION_BIPS: u16 = 10_000;
 /// space is available. We want to avoid this blocking for up to 1000
 /// notifications from new clients.
 const NOTIFY_CHANNEL_CAPACITY: usize = 1000;
+
+/// Default step size used for simple pplns implementation
+const PPLNS_DEFAULT_STEP_SIZE_SECONDS: u64 = 24 * 60 * 60;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -183,11 +187,13 @@ async fn main() -> ExitCode {
     let cloned_stratum_config = stratum_config.clone();
     tokio::spawn(async move {
         info!("Starting Stratum notifier...");
+        let payout = Box::new(Payout::new(PPLNS_DEFAULT_STEP_SIZE_SECONDS));
         start_notify(
             notify_rx,
             template_tx,
             chain_store_handle_for_notify,
             &cloned_stratum_config,
+            payout,
         )
         .await;
     });
