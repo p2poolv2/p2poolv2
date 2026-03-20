@@ -25,19 +25,15 @@ use bitcoin::{Address, Amount};
 use std::collections::HashMap;
 use std::error::Error;
 
-pub trait PayoutShare {
-    fn get_btcaddress(&self) -> Option<&str>;
-    fn get_difficulty(&self) -> u64;
-}
-
-/// A trait for implementing a payout distribution
+/// A trait for implementing a payout distribution.
 ///
 /// payout::simple_pplns implements this trait to provide a payout
 /// distribution based on centralised PPLNS algorithm.
 ///
 /// payout::share_chain_payout implements this trait from the share
 /// chain data.
-pub trait PayoutDistribution<P: PayoutShare> {
+#[cfg_attr(test, mockall::automock)]
+pub trait PayoutDistribution {
     /// Fill distribution according to the the Payout mechanism.  The
     /// donation and fees amount have already been filled by the trait
     /// common implementation of get_outpoint_distribution

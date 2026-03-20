@@ -21,7 +21,6 @@ use super::gbt::build_merkle_branches_for_template;
 use super::tracker::JobId;
 use crate::accounting::OutputPair;
 use crate::accounting::payout::payout_distribution::PayoutDistribution;
-use crate::accounting::payout::simple_pplns::payout::Payout;
 use crate::config::StratumConfig;
 use crate::pool_difficulty;
 #[cfg(test)]
@@ -48,6 +47,7 @@ pub(crate) struct NotifyContext {
     pub config: StratumConfig<crate::config::Parsed>,
     pub pool_signature: Vec<u8>,
     pub pool_difficulty: pool_difficulty::PoolDifficulty,
+    pub payout: Box<dyn PayoutDistribution + Send>,
 }
 
 /// Extract flags from template coinbaseaux and convert to PushBytesBuf
@@ -67,23 +67,24 @@ fn parse_flags(flags: Option<String>) -> PushBytesBuf {
 /// to match to collect all the shares to use to compute output distribution.
 fn build_output_distribution(
     template: &BlockTemplate,
-    chain_store_handle: &ChainStoreHandle,
-    config: &StratumConfig<crate::config::Parsed>,
+    context: &mut NotifyContext,
 ) -> Vec<OutputPair> {
-    const DEFAULT_STEP_SIZE_SECONDS: u64 = 24 * 60 * 60; // 1 day
-    let mut payout = Payout::new(DEFAULT_STEP_SIZE_SECONDS);
     let total_amount = bitcoin::Amount::from_sat(template.coinbasevalue);
 
     let compact_target = bitcoin::pow::CompactTarget::from_unprefixed_hex(&template.bits).unwrap();
     let required_target = bitcoin::Target::from_compact(compact_target);
 
-    let total_difficulty = required_target.difficulty_float() * config.difficulty_multiplier;
+    let total_difficulty =
+        required_target.difficulty_float() * context.config.difficulty_multiplier;
 
-    match payout.get_output_distribution(chain_store_handle, total_difficulty, total_amount, config)
-    {
+    match context.payout.get_output_distribution(
+        &context.chain_store_handle,
+        total_difficulty,
+        total_amount,
+        &context.config,
+    ) {
         Ok(distribution) => distribution,
         Err(e) => {
-            // Log error and return empty distribution
             debug!("PPLNS accounting failed: {}", e);
             Vec::new()
         }
@@ -142,10 +143,9 @@ pub fn build_notify(
 fn build_prepared_notify(
     template: &Arc<BlockTemplate>,
     clean_jobs: bool,
-    context: &NotifyContext,
+    context: &mut NotifyContext,
 ) -> Result<PreparedNotifyParams, WorkError> {
-    let output_distribution =
-        build_output_distribution(template, &context.chain_store_handle, &context.config);
+    let output_distribution = build_output_distribution(template, context);
 
     let (tip, uncles) = context
         .chain_store_handle
@@ -204,7 +204,7 @@ pub type NotifyReceiver = mpsc::Receiver<NotifyCmd>;
 fn publish_prepared_notify(
     template: &Arc<BlockTemplate>,
     clean_jobs: bool,
-    context: &NotifyContext,
+    context: &mut NotifyContext,
     template_tx: &watch::Sender<Option<Arc<PreparedNotifyParams>>>,
 ) -> Result<(), WorkError> {
     let prepared = build_prepared_notify(template, clean_jobs, context)?;
@@ -226,6 +226,7 @@ pub async fn start_notify(
     template_tx: watch::Sender<Option<Arc<PreparedNotifyParams>>>,
     chain_store_handle: ChainStoreHandle,
     config: &StratumConfig<crate::config::Parsed>,
+    payout: Box<dyn PayoutDistribution + Send>,
 ) {
     let pool_difficulty = match pool_difficulty::PoolDifficulty::build(&chain_store_handle) {
         Ok(pool_difficulty) => pool_difficulty,
@@ -240,11 +241,12 @@ pub async fn start_notify(
         None => Vec::new(),
     };
 
-    let notify_context = NotifyContext {
+    let mut notify_context = NotifyContext {
         chain_store_handle,
         config: config.clone(),
         pool_signature,
         pool_difficulty,
+        payout,
     };
 
     let mut latest_template: Option<Arc<BlockTemplate>> = None;
@@ -257,9 +259,12 @@ pub async fn start_notify(
                         != template.previousblockhash;
                 latest_template = Some(Arc::clone(&template));
 
-                if let Err(error) =
-                    publish_prepared_notify(&template, clean_jobs, &notify_context, &template_tx)
-                {
+                if let Err(error) = publish_prepared_notify(
+                    &template,
+                    clean_jobs,
+                    &mut notify_context,
+                    &template_tx,
+                ) {
                     error!("Failed to publish notify: {error}");
                     continue;
                 }
@@ -268,7 +273,7 @@ pub async fn start_notify(
                 if let Some(ref template) = latest_template {
                     debug!("NewNotify: sending notify with latest template");
                     if let Err(error) =
-                        publish_prepared_notify(template, true, &notify_context, &template_tx)
+                        publish_prepared_notify(template, true, &mut notify_context, &template_tx)
                     {
                         error!("Failed to publish new notify: {error}");
                         continue;
@@ -284,7 +289,7 @@ pub async fn start_notify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounting::payout::simple_pplns::SimplePplnsShare;
+    use crate::accounting::payout::payout_distribution::MockPayoutDistribution;
     use crate::stratum::work::block_template::{BlockTemplate, TemplateTransaction};
     use crate::stratum::work::coinbase::extract_outputs_from_coinbase2;
     use crate::stratum::work::prepared_notify::build_notify_from_prepared;
@@ -294,8 +299,16 @@ mod tests {
     use bitcoin::{Address, Amount, Network, ScriptBuf, TxOut};
     use std::collections::HashMap;
     use std::str::FromStr;
-    use std::time::SystemTime;
     use tokio::sync::mpsc;
+
+    /// Create a mock payout that returns a fixed output distribution.
+    fn mock_payout_with_distribution(distribution: Vec<OutputPair>) -> MockPayoutDistribution {
+        let mut mock_payout = MockPayoutDistribution::default();
+        mock_payout
+            .expect_get_output_distribution()
+            .return_once(move |_, _, _, _| Ok(distribution));
+        mock_payout
+    }
 
     #[tokio::test]
     async fn test_build_notify_from_gbt_and_compare_to_expected() {
@@ -315,34 +328,32 @@ mod tests {
 
         let job_id = JobId(1);
 
-        let n_time = (SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            - 60)
-            * 1_000_000;
-
-        let mut chain_store_handle = ChainStoreHandle::default();
-
-        let shares = vec![SimplePplnsShare {
-            user_id: 1,
-            difficulty: 100,
-            btcaddress: Some("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string()),
-            workername: Some("".to_string()),
-            n_time,
-            job_id: "test_job".to_string(),
-            extranonce2: "test_extra".to_string(),
-            nonce: "test_nonce".to_string(),
-        }];
-
-        chain_store_handle
-            .expect_get_pplns_shares_filtered()
-            .return_const(shares);
-
+        let chain_store_handle = ChainStoreHandle::default();
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
-        let output_distribution =
-            build_output_distribution(&template, &chain_store_handle, &stratum_config);
+        let test_distribution = vec![OutputPair {
+            address: "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
+                .parse::<bitcoin::Address<_>>()
+                .unwrap()
+                .assume_checked(),
+            amount: Amount::from_sat(template.coinbasevalue),
+        }];
+
+        let mock_payout = mock_payout_with_distribution(test_distribution);
+
+        let mut context = NotifyContext {
+            chain_store_handle,
+            config: stratum_config,
+            pool_signature: Vec::new(),
+            pool_difficulty: pool_difficulty::PoolDifficulty::new(
+                genesis_for_tests().header.bits,
+                genesis_for_tests().header.time,
+                0,
+            ),
+            payout: Box::new(mock_payout),
+        };
+
+        let output_distribution = build_output_distribution(&template, &mut context);
         // Build Notify
         let notify = build_notify(&template, output_distribution, job_id, false, &[], None)
             .expect("Failed to build notify");
@@ -357,9 +368,6 @@ mod tests {
             "aadbdeb0c770ef1cc9115a42aa0a34e91732c422c0cd7ddbe71b3d9145f85fa6"
         );
 
-        // TODO: Mock current time so we can compare coinbase1 and coinbase2
-        // // assert_eq!(notify.params.coinbase1, expected_notify.params.coinbase1);
-        // // assert_eq!(notify.params.coinbase2, expected_notify.params.coinbase2);
         assert_eq!(
             notify.params.merkle_branches,
             vec!["fecdf8cf1147587b0b3a262b16a955849053c6dfe0239718559f6a3d3ed20523".to_string()]
@@ -390,30 +398,7 @@ mod tests {
         // Create a channel for block template notifications
         let (notify_tx, notify_rx) = mpsc::channel::<NotifyCmd>(10);
 
-        // Setup mock PPLNS provider
-        let n_time = (SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            - 60)
-            * 1_000_000;
-
         let mut chain_store_handle = ChainStoreHandle::default();
-
-        let shares = vec![SimplePplnsShare {
-            user_id: 1,
-            difficulty: 100,
-            btcaddress: Some("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string()),
-            workername: Some("".to_string()),
-            n_time,
-            job_id: "test_job".to_string(),
-            extranonce2: "test_extra".to_string(),
-            nonce: "test_nonce".to_string(),
-        }];
-
-        chain_store_handle
-            .expect_get_pplns_shares_filtered()
-            .return_const(shares);
 
         let genesis = genesis_for_tests();
         let genesis_hash = genesis.block_hash();
@@ -432,8 +417,27 @@ mod tests {
 
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
+        let test_distribution = vec![OutputPair {
+            address: "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
+                .parse::<bitcoin::Address<_>>()
+                .unwrap()
+                .assume_checked(),
+            amount: Amount::from_sat(5000000000),
+        }];
+        let mut mock_payout = MockPayoutDistribution::default();
+        mock_payout
+            .expect_get_output_distribution()
+            .returning(move |_, _, _, _| Ok(test_distribution.clone()));
+
         let task_handle = tokio::spawn(async move {
-            start_notify(notify_rx, template_tx, chain_store_handle, &stratum_config).await;
+            start_notify(
+                notify_rx,
+                template_tx,
+                chain_store_handle,
+                &stratum_config,
+                Box::new(mock_payout),
+            )
+            .await;
         });
 
         // Load a sample block template
@@ -489,30 +493,7 @@ mod tests {
         let template: BlockTemplate =
             serde_json::from_value(gbt_json.clone()).expect("Failed to parse BlockTemplate");
 
-        // Setup mock chain store
-        let n_time = (SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            - 60)
-            * 1_000_000;
-
         let mut chain_store_handle = ChainStoreHandle::default();
-
-        let shares = vec![SimplePplnsShare {
-            user_id: 1,
-            difficulty: 100,
-            btcaddress: Some("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr".to_string()),
-            workername: Some("".to_string()),
-            n_time,
-            job_id: "test_job".to_string(),
-            extranonce2: "test_extra".to_string(),
-            nonce: "test_nonce".to_string(),
-        }];
-
-        chain_store_handle
-            .expect_get_pplns_shares_filtered()
-            .return_const(shares);
 
         let genesis = genesis_for_tests();
         let genesis_hash = genesis.block_hash();
@@ -536,15 +517,25 @@ mod tests {
         let pool_difficulty =
             pool_difficulty::PoolDifficulty::new(genesis.header.bits, genesis.header.time, 0);
 
-        let context = NotifyContext {
+        let test_distribution = vec![OutputPair {
+            address: "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
+                .parse::<bitcoin::Address<_>>()
+                .unwrap()
+                .assume_checked(),
+            amount: Amount::from_sat(template.coinbasevalue),
+        }];
+        let mock_payout = mock_payout_with_distribution(test_distribution);
+
+        let mut context = NotifyContext {
             chain_store_handle,
             config: stratum_config,
             pool_signature: b"test_pool".to_vec(),
             pool_difficulty,
+            payout: Box::new(mock_payout),
         };
 
         // Build prepared notify
-        let prepared = build_prepared_notify(&Arc::new(template.clone()), false, &context);
+        let prepared = build_prepared_notify(&Arc::new(template.clone()), false, &mut context);
         assert!(prepared.is_ok());
         let prepared = prepared.unwrap();
 

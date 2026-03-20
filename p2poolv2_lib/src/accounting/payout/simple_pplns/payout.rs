@@ -18,7 +18,6 @@ use crate::accounting::OutputPair;
 use crate::accounting::payout::payout_distribution::{
     PayoutDistribution, append_proportional_distribution,
 };
-use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -36,7 +35,7 @@ pub struct Payout {
     step_size_seconds: u64,
 }
 
-impl PayoutDistribution<SimplePplnsShare> for Payout {
+impl PayoutDistribution for Payout {
     fn fill_distribution_from_shares(
         &mut self,
         distribution: &mut Vec<OutputPair>,
@@ -142,6 +141,7 @@ impl Payout {
 
 #[cfg(test)]
 mod tests {
+    use crate::accounting::payout::simple_pplns::SimplePplnsShare;
     use p2poolv2_config::StratumConfig;
 
     use super::*;

@@ -25,35 +25,3 @@ pub mod pplns_window;
 
 pub use payout::Payout;
 pub use pplns_window::PplnsWindow;
-
-use super::payout_distribution::PayoutShare;
-
-/// A share chain entry with pre-computed weighted difficulty for payout distribution.
-///
-/// This is ephemeral -- created during payout computation and never stored.
-/// The weighted_difficulty already accounts for uncle penalties (90%) or
-/// nephew bonuses (base work + 10% of each referenced uncle's work).
-pub struct ShareChainPplnsShare {
-    miner_address: String,
-    weighted_difficulty: u64,
-}
-
-impl ShareChainPplnsShare {
-    /// Create a new share chain PPLNS share with pre-computed weighted difficulty.
-    pub fn new(miner_address: String, weighted_difficulty: u64) -> Self {
-        Self {
-            miner_address,
-            weighted_difficulty,
-        }
-    }
-}
-
-impl PayoutShare for ShareChainPplnsShare {
-    fn get_btcaddress(&self) -> Option<&str> {
-        Some(&self.miner_address)
-    }
-
-    fn get_difficulty(&self) -> u64 {
-        self.weighted_difficulty
-    }
-}
