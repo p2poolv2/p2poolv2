@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::{ColumnFamily, Store, writer::StoreError};
-use crate::shares::chain::chain_store_handle::COMMON_ANCESTOR_DEPTH;
+use crate::shares::chain::chain_store_handle::{COMMON_ANCESTOR_DEPTH, ConfirmedHeaderResult};
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::shares::validation::MAX_UNCLES;
 use bitcoin::consensus::{self, Encodable, encode};
@@ -56,8 +56,8 @@ pub struct UncleInfo {
 /// keyed by blockhash for random-access lookup.
 #[derive(Clone)]
 pub struct ShareDag {
-    /// Confirmed share headers ordered newest-to-oldest.
-    pub confirmed_headers: Vec<(BlockHash, ShareHeader)>,
+    /// Confirmed share headers ordered newest-to-oldest with their heights.
+    pub confirmed_headers: Vec<ConfirmedHeaderResult>,
     /// Map from confirmed share blockhash to its referenced uncle blockhashes.
     pub nephew_to_uncles: HashMap<BlockHash, Vec<BlockHash>>,
     /// Uncle headers keyed by blockhash for lookup during weighting.
@@ -81,7 +81,7 @@ impl ShareDag {
     /// validation and out-of-order timestamps are possible.
     pub fn filter_confirmed_by_time(&mut self, earliest_allowed_time: u32) {
         self.confirmed_headers
-            .retain(|(_, header)| header.time >= earliest_allowed_time);
+            .retain(|result| result.header.time >= earliest_allowed_time);
     }
 
     /// Build uncle references from confirmed headers without hitting the store.
@@ -89,17 +89,17 @@ impl ShareDag {
     /// Extracts all uncle blockhashes and builds the nephew-to-uncles mapping.
     /// Returns (all_uncle_hashes, nephew_to_uncles).
     pub fn collect_uncle_references(
-        confirmed_headers: &[(BlockHash, ShareHeader)],
+        confirmed_headers: &[ConfirmedHeaderResult],
     ) -> (Vec<BlockHash>, HashMap<BlockHash, Vec<BlockHash>>) {
         let mut seen_uncles: HashSet<BlockHash> = HashSet::new();
         let mut all_uncle_hashes = Vec::with_capacity(confirmed_headers.len());
         let mut nephew_to_uncles: HashMap<BlockHash, Vec<BlockHash>> =
             HashMap::with_capacity(confirmed_headers.len());
 
-        for (blockhash, header) in confirmed_headers {
-            if !header.uncles.is_empty() {
-                nephew_to_uncles.insert(*blockhash, header.uncles.clone());
-                for uncle_hash in &header.uncles {
+        for result in confirmed_headers {
+            if !result.header.uncles.is_empty() {
+                nephew_to_uncles.insert(result.blockhash, result.header.uncles.clone());
+                for uncle_hash in &result.header.uncles {
                     if seen_uncles.insert(*uncle_hash) {
                         all_uncle_hashes.push(*uncle_hash);
                     }

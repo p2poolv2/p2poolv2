@@ -30,6 +30,14 @@ use bitcoin::{BlockHash, Work};
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, info};
 
+/// A confirmed header with its height, blockhash, and share header.
+#[derive(Clone, Debug)]
+pub struct ConfirmedHeaderResult {
+    pub height: u32,
+    pub blockhash: BlockHash,
+    pub header: ShareHeader,
+}
+
 /// The minimum number of shares that must be on the chain for a share to be considered confirmed
 const MIN_CONFIRMATION_DEPTH: usize = 100;
 
@@ -301,13 +309,13 @@ impl ChainStoreHandle {
     ///
     /// Performs two store calls: one range scan on the confirmed height index,
     /// then a batch fetch of share headers. This avoids per-height round trips.
-    /// Returns (BlockHash, ShareHeader) pairs so callers do not need to
-    /// recompute blockhashes from headers.
+    /// Returns (height, BlockHash, ShareHeader) triples so callers have the
+    /// confirmed height without recomputing it.
     pub fn get_confirmed_headers_in_range(
         &self,
         from_height: u32,
         to_height: u32,
-    ) -> Result<Vec<(BlockHash, ShareHeader)>, StoreError> {
+    ) -> Result<Vec<ConfirmedHeaderResult>, StoreError> {
         let chain = self
             .store_handle
             .store()
@@ -315,7 +323,28 @@ impl ChainStoreHandle {
         // Collect blockhashes in reverse (newest-to-oldest) for the query
         let blockhashes: Vec<BlockHash> = chain.iter().rev().map(|(_, hash)| *hash).collect();
         // get_share_headers preserves input order, so result is newest-to-oldest
-        self.get_share_headers(&blockhashes)
+        let headers = self.get_share_headers(&blockhashes)?;
+
+        // Build height lookup from chain (height -> blockhash)
+        let height_by_hash: HashMap<BlockHash, u32> = chain
+            .iter()
+            .map(|(height, hash)| (*hash, *height))
+            .collect();
+
+        // Join headers with their heights
+        let result = headers
+            .into_iter()
+            .map(|(blockhash, header)| {
+                let height = height_by_hash[&blockhash];
+                ConfirmedHeaderResult {
+                    height,
+                    blockhash,
+                    header,
+                }
+            })
+            .collect();
+
+        Ok(result)
     }
 
     /// Get a ShareDag for the given height range.
@@ -652,7 +681,7 @@ mockall::mock! {
         pub fn get_genesis_header(&self) -> Result<ShareHeader, StoreError>;
         pub fn get_children_blockhashes(&self, blockhash: &BlockHash) -> Result<Option<Vec<BlockHash>>, StoreError>;
         pub fn get_nephews(&self, uncle: &BlockHash) -> Option<Vec<BlockHash>>;
-        pub fn get_confirmed_headers_in_range(&self, from_height: u32, to_height: u32) -> Result<Vec<(BlockHash, ShareHeader)>, StoreError>;
+        pub fn get_confirmed_headers_in_range(&self, from_height: u32, to_height: u32) -> Result<Vec<ConfirmedHeaderResult>, StoreError>;
         pub fn get_share_dag(&self, from_height: u32, to_height: u32) -> Result<ShareDag, StoreError>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
         pub fn get_candidate_blocks_missing_data(&self) -> Result<Vec<BlockHash>, StoreError>;
@@ -942,20 +971,20 @@ mod tests {
         // Full range: heights 0..4, returned newest-to-oldest
         let headers = chain_handle.get_confirmed_headers_in_range(0, 4).unwrap();
         assert_eq!(headers.len(), 5);
-        assert_eq!(headers[0].0, shares[4].block_hash());
-        assert_eq!(headers[4].0, genesis.block_hash());
+        assert_eq!(headers[0].blockhash, shares[4].block_hash());
+        assert_eq!(headers[4].blockhash, genesis.block_hash());
 
         // Partial range: heights 2..4, returned newest-to-oldest
         let headers = chain_handle.get_confirmed_headers_in_range(2, 4).unwrap();
         assert_eq!(headers.len(), 3);
-        assert_eq!(headers[0].0, shares[4].block_hash());
-        assert_eq!(headers[2].0, shares[2].block_hash());
+        assert_eq!(headers[0].blockhash, shares[4].block_hash());
+        assert_eq!(headers[2].blockhash, shares[2].block_hash());
 
         // Long range: heights 0..10, returned newest-to-oldest
         let headers = chain_handle.get_confirmed_headers_in_range(0, 10).unwrap();
         assert_eq!(headers.len(), 5);
-        assert_eq!(headers[0].0, shares[4].block_hash());
-        assert_eq!(headers[4].0, shares[0].block_hash());
+        assert_eq!(headers[0].blockhash, shares[4].block_hash());
+        assert_eq!(headers[4].blockhash, shares[0].block_hash());
     }
 
     #[tokio::test]

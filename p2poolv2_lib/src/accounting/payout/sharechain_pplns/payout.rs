@@ -104,6 +104,7 @@ mod tests {
     use crate::accounting::payout::sharechain_pplns::pplns_window::{
         NEPHEW_BONUS_FACTOR, UNCLE_WEIGHT_FACTOR,
     };
+    use crate::shares::chain::chain_store_handle::ConfirmedHeaderResult;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
     use crate::store::block_tx_metadata::{BlockMetadata, Status};
     use crate::test_utils::{
@@ -151,7 +152,11 @@ mod tests {
         let miner_address = header.miner_address.to_string();
         let tip_hash = header.block_hash();
 
-        let confirmed_headers = vec![(tip_hash, header.clone())];
+        let confirmed_headers = vec![ConfirmedHeaderResult {
+            height: 0,
+            blockhash: tip_hash,
+            header: header.clone(),
+        }];
 
         let mut mock = MockChainStoreHandle::default();
         mock.expect_get_chain_tip().returning(move || Ok(tip_hash));
@@ -190,8 +195,16 @@ mod tests {
 
         // Newest-to-oldest order
         let confirmed_headers = vec![
-            (header2.block_hash(), header2.clone()),
-            (header1.block_hash(), header1.clone()),
+            ConfirmedHeaderResult {
+                height: 1,
+                blockhash: header2.block_hash(),
+                header: header2.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 0,
+                blockhash: header1.block_hash(),
+                header: header1.clone(),
+            },
         ];
 
         let mut mock = MockChainStoreHandle::default();
@@ -247,7 +260,11 @@ mod tests {
         let nephew_miner = nephew_header.miner_address.to_string();
         let tip_hash = nephew_header.block_hash();
 
-        let confirmed_headers = vec![(tip_hash, nephew_header.clone())];
+        let confirmed_headers = vec![ConfirmedHeaderResult {
+            height: 0,
+            blockhash: tip_hash,
+            header: nephew_header.clone(),
+        }];
         let uncle_headers = vec![(uncle_hash, uncle_header)];
 
         let mut mock = MockChainStoreHandle::default();
@@ -327,7 +344,11 @@ mod tests {
         let nephew_difficulty = nephew_header.get_difficulty();
         let tip_hash = nephew_header.block_hash();
 
-        let confirmed_headers = vec![(tip_hash, nephew_header.clone())];
+        let confirmed_headers = vec![ConfirmedHeaderResult {
+            height: 0,
+            blockhash: tip_hash,
+            header: nephew_header.clone(),
+        }];
         let uncle_headers = vec![(uncle1_hash, uncle1_header), (uncle2_hash, uncle2_header)];
 
         let mut mock = MockChainStoreHandle::default();
@@ -386,9 +407,21 @@ mod tests {
 
         // Newest-to-oldest order
         let confirmed_headers = vec![
-            (header3.block_hash(), header3.clone()),
-            (header2.block_hash(), header2.clone()),
-            (header1.block_hash(), header1.clone()),
+            ConfirmedHeaderResult {
+                height: 2,
+                blockhash: header3.block_hash(),
+                header: header3.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 1,
+                blockhash: header2.block_hash(),
+                header: header2.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 0,
+                blockhash: header1.block_hash(),
+                header: header1.clone(),
+            },
         ];
 
         let mut mock = MockChainStoreHandle::default();
@@ -437,9 +470,21 @@ mod tests {
 
         // Newest-to-oldest order
         let confirmed_headers = vec![
-            (header3.block_hash(), header3.clone()),
-            (header2.block_hash(), header2.clone()),
-            (header1.block_hash(), header1.clone()),
+            ConfirmedHeaderResult {
+                height: 2,
+                blockhash: header3.block_hash(),
+                header: header3.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 1,
+                blockhash: header2.block_hash(),
+                header: header2.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 0,
+                blockhash: header1.block_hash(),
+                header: header1.clone(),
+            },
         ];
 
         let mut mock = MockChainStoreHandle::default();
@@ -501,8 +546,16 @@ mod tests {
 
         // Newest-to-oldest order
         let confirmed_headers = vec![
-            (header_c.block_hash(), header_c.clone()),
-            (header_a.block_hash(), header_a.clone()),
+            ConfirmedHeaderResult {
+                height: 1,
+                blockhash: header_c.block_hash(),
+                header: header_c.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 0,
+                blockhash: header_a.block_hash(),
+                header: header_a.clone(),
+            },
         ];
         let uncle_headers = vec![(uncle_hash, uncle_header)];
 
