@@ -265,7 +265,7 @@ impl PplnsWindow {
             .entry(entry.miner_address.clone())
             .or_insert(0.0) += entry.difficulty + nephew_bonus;
 
-        self.total_accumulated_difficulty += entry.difficulty;
+        self.total_accumulated_difficulty += entry.total_weighted_difficulty;
     }
 
     /// Remove a confirmed entry's weighted difficulty contributions from the aggregate.
@@ -288,7 +288,7 @@ impl PplnsWindow {
             *value -= entry.difficulty + nephew_bonus;
         }
 
-        self.total_accumulated_difficulty -= entry.difficulty;
+        self.total_accumulated_difficulty -= entry.total_weighted_difficulty;
 
         self.address_difficulty_map
             .retain(|_, difficulty| *difficulty > f64::EPSILON);
@@ -582,6 +582,15 @@ mod tests {
         assert_eq!(window.confirmed_entries.len(), 5);
         assert_eq!(window.cached_tip_blockhash, Some(tip_hash));
         assert_eq!(window.cached_top_height, Some(4));
+
+        // All 5 entries have same difficulty (no uncles), total should be 5 * difficulty
+        let difficulty = headers[0].1.get_difficulty();
+        let expected_total = 5.0 * difficulty;
+        assert!(
+            (window.total_accumulated_difficulty - expected_total).abs() < 0.001,
+            "expected total_accumulated_difficulty {expected_total}, got {}",
+            window.total_accumulated_difficulty
+        );
     }
 
     #[test]
@@ -809,21 +818,30 @@ mod tests {
         let header_b = build_test_header(&header_a.block_hash().to_string(), PUBKEY_2G, 2);
         let header_c = build_test_header(&header_b.block_hash().to_string(), PUBKEY_3G, 2);
 
+        let difficulty = header_a.get_difficulty();
+
         let mut window = PplnsWindow::default();
         // Newest at front: c, b, a
-        window
-            .confirmed_entries
-            .push_back(entry_from_header(&header_c));
-        window
-            .confirmed_entries
-            .push_back(entry_from_header(&header_b));
-        window
-            .confirmed_entries
-            .push_back(entry_from_header(&header_a));
+        let entry_c = entry_from_header(&header_c);
+        let entry_b = entry_from_header(&header_b);
+        let entry_a = entry_from_header(&header_a);
+        window.add_entry_to_aggregate(&entry_c);
+        window.confirmed_entries.push_back(entry_c);
+        window.add_entry_to_aggregate(&entry_b);
+        window.confirmed_entries.push_back(entry_b);
+        window.add_entry_to_aggregate(&entry_a);
+        window.confirmed_entries.push_back(entry_a);
 
         // With 3 entries and MAX_PPLNS_WINDOW_SHARES >> 3, no eviction occurs
         window.evict_overflow(f64::MAX);
         assert_eq!(window.confirmed_entries.len(), 3);
+
+        let expected_total = 3.0 * difficulty;
+        assert!(
+            (window.total_accumulated_difficulty - expected_total).abs() < 0.001,
+            "expected total_accumulated_difficulty {expected_total}, got {}",
+            window.total_accumulated_difficulty
+        );
     }
 
     #[test]
@@ -889,6 +907,14 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert!((result[&miner1] - difficulty1).abs() < 0.001);
         assert!((result[&miner2] - difficulty2).abs() < 0.001);
+
+        // No uncles, so total_weighted == difficulty for each entry
+        let expected_total = difficulty1 + difficulty2;
+        assert!(
+            (window.total_accumulated_difficulty - expected_total).abs() < 0.001,
+            "expected total_accumulated_difficulty {expected_total}, got {}",
+            window.total_accumulated_difficulty
+        );
     }
 
     #[test]
@@ -910,9 +936,16 @@ mod tests {
         window.add_entry_to_aggregate(&entry1);
         window.confirmed_entries.push_back(entry1);
 
-        // All shares have the same difficulty, total is 3x. Evict with cutoff
-        // that allows exactly one share's difficulty. After evicting the two
-        // oldest entries the total drops to 1x which satisfies the limit.
+        // All shares have the same difficulty, total is 3x
+        let expected_total_before = 3.0 * difficulty;
+        assert!(
+            (window.total_accumulated_difficulty - expected_total_before).abs() < 0.001,
+            "before eviction: expected {expected_total_before}, got {}",
+            window.total_accumulated_difficulty
+        );
+
+        // Evict with cutoff that allows exactly one share's difficulty.
+        // After evicting the two oldest entries the total drops to 1x.
         window.evict_overflow(difficulty);
 
         // Only the newest share (header3) should remain
@@ -922,6 +955,12 @@ mod tests {
         let miner3 = header3.miner_address.to_string();
         assert_eq!(result.len(), 1);
         assert!(result.contains_key(&miner3));
+
+        assert!(
+            (window.total_accumulated_difficulty - difficulty).abs() < 0.001,
+            "after eviction: expected {difficulty}, got {}",
+            window.total_accumulated_difficulty
+        );
     }
 
     #[test]
@@ -958,6 +997,16 @@ mod tests {
         // Nephew gets base difficulty + 10% of uncle's difficulty
         let expected_nephew_weight = nephew_difficulty + uncle_difficulty * NEPHEW_BONUS_FACTOR;
         assert!((result[&nephew_miner] - expected_nephew_weight).abs() < 0.001);
+
+        // total_accumulated_difficulty includes nephew base + uncle weighted + nephew bonus
+        let expected_total = nephew_difficulty
+            + uncle_difficulty * UNCLE_WEIGHT_FACTOR
+            + uncle_difficulty * NEPHEW_BONUS_FACTOR;
+        assert!(
+            (window.total_accumulated_difficulty - expected_total).abs() < 0.001,
+            "expected total_accumulated_difficulty {expected_total}, got {}",
+            window.total_accumulated_difficulty
+        );
     }
 
     #[test]

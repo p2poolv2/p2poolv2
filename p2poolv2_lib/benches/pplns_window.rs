@@ -19,16 +19,16 @@
 //! Fills the PPLNS window to its maximum capacity (120,960 confirmed entries)
 //! with 10% uncle ratio, then benchmarks both operations.
 
-use bitcoin::hashes::Hash;
 use bitcoin::BlockHash;
 use bitcoin::CompressedPublicKey;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use bitcoin::hashes::Hash;
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::{
-    PplnsWindow, UncleEntry, UNCLE_WEIGHT_FACTOR,
+    PplnsWindow, UNCLE_WEIGHT_FACTOR, UncleEntry,
 };
 use p2poolv2_lib::shares::share_block::ShareHeader;
 use p2poolv2_lib::test_utils::{
-    TestShareBlockBuilder, PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G, PUBKEY_G,
+    PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G, PUBKEY_G, TestShareBlockBuilder,
 };
 
 /// Total confirmed shares to fill the window (MAX_PPLNS_WINDOW_SHARES).
@@ -161,14 +161,11 @@ fn build_new_headers_for_update(
 fn bench_get_address_difficulty_map(criterion: &mut Criterion) {
     let window = build_benchmark_window(TOTAL_CONFIRMED_SHARES);
 
-    criterion.bench_function(
-        "get_address_difficulty_map_full_window",
-        |bencher| {
-            bencher.iter(|| {
-                black_box(window.get_address_difficulty_map());
-            });
-        },
-    );
+    criterion.bench_function("get_address_difficulty_map_full_window", |bencher| {
+        bencher.iter(|| {
+            black_box(window.get_address_difficulty_map());
+        });
+    });
 }
 
 fn bench_update(criterion: &mut Criterion) {
@@ -187,9 +184,11 @@ fn bench_update(criterion: &mut Criterion) {
                 (window, confirmed_clone.clone(), uncle_clone.clone())
             },
             |(mut window, confirmed_headers, uncle_headers)| {
-                black_box(
-                    window.load_entries_for_benchmark(confirmed_headers, uncle_headers, f64::MAX),
-                );
+                black_box(window.load_entries_for_benchmark(
+                    confirmed_headers,
+                    uncle_headers,
+                    f64::MAX,
+                ));
             },
             criterion::BatchSize::LargeInput,
         );
