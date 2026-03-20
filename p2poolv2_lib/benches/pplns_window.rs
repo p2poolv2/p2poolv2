@@ -24,6 +24,7 @@ use bitcoin::CompressedPublicKey;
 use bitcoin::hashes::Hash;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::{PplnsWindow, UncleEntry};
+use p2poolv2_lib::shares::chain::chain_store_handle::ConfirmedHeaderResult;
 use p2poolv2_lib::shares::share_block::ShareHeader;
 use p2poolv2_lib::test_utils::{
     PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G, PUBKEY_G, TestShareBlockBuilder,
@@ -112,8 +113,8 @@ fn build_benchmark_window(share_count: usize) -> PplnsWindow {
 fn build_new_headers_for_update(
     count: usize,
     start_prev_hash: &str,
-) -> (Vec<(BlockHash, ShareHeader)>, Vec<(BlockHash, ShareHeader)>) {
-    let mut confirmed_headers: Vec<(BlockHash, ShareHeader)> = Vec::with_capacity(count);
+) -> (Vec<ConfirmedHeaderResult>, Vec<(BlockHash, ShareHeader)>) {
+    let mut confirmed_headers: Vec<ConfirmedHeaderResult> = Vec::with_capacity(count);
     let mut uncle_headers: Vec<(BlockHash, ShareHeader)> = Vec::new();
     let mut prev_hash = start_prev_hash.to_string();
 
@@ -144,7 +145,11 @@ fn build_new_headers_for_update(
             .header;
         let blockhash = header.block_hash();
         prev_hash = blockhash.to_string();
-        confirmed_headers.push((blockhash, header));
+        confirmed_headers.push(ConfirmedHeaderResult {
+            height: index as u32,
+            blockhash,
+            header,
+        });
 
         if let Some(uncle_entry) = uncle_header_entry {
             uncle_headers.push(uncle_entry);
