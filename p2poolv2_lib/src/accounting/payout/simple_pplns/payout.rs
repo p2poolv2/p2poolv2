@@ -62,7 +62,7 @@ impl PayoutDistribution<SimplePplnsShare> for Payout {
                 distribution.reserve(address_difficulty_map.len());
 
                 append_proportional_distribution(
-                    address_difficulty_map,
+                    &address_difficulty_map,
                     remaining_total_amount,
                     distribution,
                 )?;

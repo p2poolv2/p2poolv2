@@ -23,9 +23,7 @@ use bitcoin::BlockHash;
 use bitcoin::CompressedPublicKey;
 use bitcoin::hashes::Hash;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::{
-    PplnsWindow, UNCLE_WEIGHT_FACTOR, UncleEntry,
-};
+use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::{PplnsWindow, UncleEntry};
 use p2poolv2_lib::shares::share_block::ShareHeader;
 use p2poolv2_lib::test_utils::{
     PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G, PUBKEY_G, TestShareBlockBuilder,
