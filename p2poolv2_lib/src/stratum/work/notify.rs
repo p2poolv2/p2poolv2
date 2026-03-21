@@ -61,7 +61,8 @@ fn parse_flags(flags: Option<String>) -> PushBytesBuf {
     }
 }
 
-/// Build the output distribution for the coinbase transaction using PPLNS accounting.
+/// Build the output distribution for the coinbase transaction using
+/// payout accounting in NotifyContext.
 ///
 /// difficulty_multiplier is used to get the total difficulty we need
 /// to match to collect all the shares to use to compute output distribution.
@@ -85,7 +86,7 @@ fn build_output_distribution(
     ) {
         Ok(distribution) => distribution,
         Err(e) => {
-            debug!("PPLNS accounting failed: {}", e);
+            debug!("Payout distribution failed: {}", e);
             Vec::new()
         }
     }
