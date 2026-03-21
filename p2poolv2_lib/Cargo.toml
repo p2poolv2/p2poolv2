@@ -68,3 +68,7 @@ criterion.workspace = true
 name = "pplns_window"
 harness = false
 required-features = ["test-utils"]
+
+[[bench]]
+name = "sum_u64"
+harness = false
