@@ -20,6 +20,7 @@
 //! applying uncle weighting: uncles receive 90% of their work, and
 //! confirmed shares that reference uncles receive a 10% bonus per uncle.
 
+mod address_keys;
 pub mod payout;
 pub mod pplns_window;
 
