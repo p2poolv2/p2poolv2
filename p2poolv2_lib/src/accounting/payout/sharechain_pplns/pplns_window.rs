@@ -532,6 +532,7 @@ impl PplnsWindow {
             self.cached_tip_blockhash = Some(entry.blockhash);
         }
         self.cached_top_height = Some(total_count.saturating_sub(1));
+        eprintln!("  populated {} in window", self.confirmed_entries.len());
     }
 
     /// Simulate the computational work of an incremental update for benchmarking.
