@@ -36,7 +36,7 @@ const INITIAL_SIZE: usize = 1000;
 ///
 /// We choose iterate twice over the vector than to do a hash of
 /// Address.
-struct AddressKeys(Vec<Option<Address>>);
+pub(super) struct AddressKeys(Vec<Option<Address>>);
 
 impl Default for AddressKeys {
     fn default() -> Self {
