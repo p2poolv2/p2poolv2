@@ -122,49 +122,78 @@ impl PplnsWindow {
 
     /// Compute the payout distribution by walking confirmed entries.
     ///
-    /// Iterates newest-to-oldest, accumulating weighted difficulty per
-    /// address using a Vec indexed by internal key. Stops when
-    /// accumulated difficulty meets total_difficulty. Returns a map of
-    /// Address to weighted difficulty. Also removes stale address keys
-    /// that have zero difficulty and did not overflow.
+    /// Iterates newest-to-oldest in two passes. The first pass
+    /// accumulates weighted difficulty per address until the threshold
+    /// is met. The second pass marks overflow entries so their address
+    /// keys are retained. Finally, stale address keys with zero
+    /// difficulty that did not overflow are removed.
     pub fn get_distribution(&mut self, total_difficulty: f64) -> HashMap<Address, f64> {
         let mut difficulty_by_key = vec![0.0f64; self.address_keys.len()];
-        let mut overflow_flags = vec![false; self.address_keys.len()];
         let mut accumulated_difficulty: f64 = 0.0;
 
-        let mut threshold_reached = false;
-        for entry in &self.confirmed_entries {
-            if threshold_reached {
-                overflow_flags[entry.internal_key] = true;
-                for uncle_entry in &entry.uncle_entries {
-                    overflow_flags[uncle_entry.internal_key] = true;
-                }
-            } else {
-                let mut nephew_bonus: f64 = 0.0;
+        let threshold_index = self.accumulate_difficulty(
+            &mut difficulty_by_key,
+            &mut accumulated_difficulty,
+            total_difficulty,
+        );
 
-                for uncle_entry in &entry.uncle_entries {
-                    difficulty_by_key[uncle_entry.internal_key] +=
-                        uncle_entry.difficulty * UNCLE_WEIGHT_FACTOR;
-                    nephew_bonus += uncle_entry.difficulty * NEPHEW_BONUS_FACTOR;
-                }
+        let overflow_flags = self.mark_overflow_entries(threshold_index);
 
-                difficulty_by_key[entry.internal_key] += entry.difficulty + nephew_bonus;
-                accumulated_difficulty += entry.total_weighted_difficulty;
+        self.remove_stale_keys(&difficulty_by_key, &overflow_flags);
 
-                if accumulated_difficulty.floor() >= total_difficulty.floor() {
-                    threshold_reached = true;
-                }
+        self.collect_distribution(&difficulty_by_key)
+    }
+
+    /// Walk entries from newest to oldest, accumulating difficulty per
+    /// address until accumulated difficulty meets the threshold.
+    /// Returns the index of the first entry past the threshold, or
+    /// the total entry count if the threshold was never reached.
+    fn accumulate_difficulty(
+        &self,
+        difficulty_by_key: &mut [f64],
+        accumulated_difficulty: &mut f64,
+        total_difficulty: f64,
+    ) -> usize {
+        for (index, entry) in self.confirmed_entries.iter().enumerate() {
+            let mut nephew_bonus: f64 = 0.0;
+
+            for uncle_entry in &entry.uncle_entries {
+                difficulty_by_key[uncle_entry.internal_key] +=
+                    uncle_entry.difficulty * UNCLE_WEIGHT_FACTOR;
+                nephew_bonus += uncle_entry.difficulty * NEPHEW_BONUS_FACTOR;
+            }
+
+            difficulty_by_key[entry.internal_key] += entry.difficulty + nephew_bonus;
+            *accumulated_difficulty += entry.total_weighted_difficulty;
+
+            if accumulated_difficulty.floor() >= total_difficulty.floor() {
+                return index + 1;
             }
         }
+        self.confirmed_entries.len()
+    }
 
-        // Remove address keys that are no longer contributing any difficulty
+    /// Mark address keys that appear in entries beyond the threshold
+    /// so they are not removed as stale.
+    fn mark_overflow_entries(&self, threshold_index: usize) -> Vec<bool> {
+        let mut overflow_flags = vec![false; self.address_keys.len()];
+        for entry in self.confirmed_entries.iter().skip(threshold_index) {
+            overflow_flags[entry.internal_key] = true;
+            for uncle_entry in &entry.uncle_entries {
+                overflow_flags[uncle_entry.internal_key] = true;
+            }
+        }
+        overflow_flags
+    }
+
+    /// Remove address keys that have zero difficulty and are not in
+    /// the overflow region.
+    fn remove_stale_keys(&mut self, difficulty_by_key: &[f64], overflow_flags: &[bool]) {
         for index in 0..difficulty_by_key.len() {
             if difficulty_by_key[index] == 0.0 && !overflow_flags[index] {
                 self.address_keys.remove(index);
             }
         }
-
-        self.collect_distribution(&difficulty_by_key)
     }
 
     /// Convert the Vec-based difficulty accumulation into a HashMap<Address, f64>.
