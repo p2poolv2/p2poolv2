@@ -37,10 +37,6 @@ use tracing::info;
 /// At 6 shares per minute over 2 weeks: 6 * 60 * 24 * 14 = 120,960.
 pub(crate) const MAX_PPLNS_WINDOW_SHARES: usize = 6 * 60 * 24 * 14;
 
-/// Estimated maximum shares in the PPLNS window.
-/// Conservative 2x multiplier to account for variable block times.
-pub(crate) const ESTIMATED_MAX_SHARES_IN_WINDOW: usize = MAX_PPLNS_WINDOW_SHARES * 2;
-
 /// Uncle weight factor: uncles receive 90% of their difficulty.
 pub const UNCLE_WEIGHT_FACTOR: f64 = 0.9;
 
@@ -87,13 +83,13 @@ struct UncleEntry {
 /// allowing incremental loading of only newly confirmed headers on each
 /// update rather than re-reading the full window from RocksDB.
 ///
-/// Caches ESTIMATED_MAX_SHARES_IN_WINDOW number of confirmed entries and
+/// Caches MAX_PPLNS_WINDOW_SHARES number of confirmed entries and
 /// their uncles, no matter how far back in time we need to go to get
 /// to those many entries. This simplifies eviction and the cache
 /// maintenance logic.
 pub struct PplnsWindow {
     /// Confirmed share entries ordered newest-to-oldest, capped by both
-    /// ESTIMATED_MAX_SHARES_IN_WINDOW and the total_difficulty threshold.
+    /// MAX_PPLNS_WINDOW_SHARES and the total_difficulty threshold.
     confirmed_entries: VecDeque<ConfirmedEntry>,
     /// The blockhash of the chain tip when this cache was last updated.
     cached_tip_blockhash: Option<BlockHash>,
@@ -172,13 +168,12 @@ impl PplnsWindow {
     /// Loads only newly confirmed headers since the last cached height,
     /// handles reorgs by removing only the divergent entries and loading
     /// the new fork, and evicts overflow entries that exceed either
-    /// ESTIMATED_MAX_SHARES_IN_WINDOW or total_difficulty.
+    /// MAX_PPLNS_WINDOW_SHARES
     ///
     /// Returns Ok(true) if the cache was updated, Ok(false) if no changes.
     pub fn update(
         &mut self,
         chain_store_handle: &ChainStoreHandle,
-        total_difficulty: f64,
     ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         let tip_blockhash = chain_store_handle.get_chain_tip()?;
 
@@ -202,12 +197,11 @@ impl PplnsWindow {
             }
         } else {
             // no cached top height, first load
-            let estimated_min_height =
-                tip_height.saturating_sub(ESTIMATED_MAX_SHARES_IN_WINDOW as u32);
+            let estimated_min_height = tip_height.saturating_sub(MAX_PPLNS_WINDOW_SHARES as u32);
             self.load_range(chain_store_handle, estimated_min_height, tip_height)?;
         }
 
-        self.evict_overflow(total_difficulty);
+        self.evict_overflow();
         self.cached_tip_blockhash = Some(tip_blockhash);
         self.cached_top_height = Some(tip_height);
 
@@ -254,7 +248,7 @@ impl PplnsWindow {
                 info!("Deep reorg detected in PPLNS window, full cache invalidation");
                 self.invalidate();
                 let estimated_min_height =
-                    tip_height.saturating_sub(ESTIMATED_MAX_SHARES_IN_WINDOW as u32);
+                    tip_height.saturating_sub(MAX_PPLNS_WINDOW_SHARES as u32);
                 self.load_range(chain_store_handle, estimated_min_height, tip_height)?;
             }
         }
@@ -365,20 +359,11 @@ impl PplnsWindow {
         self.total_accumulated_difficulty -= entry.total_weighted_difficulty;
     }
 
-    /// Evict the oldest confirmed entries until both the share count and
-    /// total accumulated difficulty are within their limits.
-    /// Check whether accumulated difficulty exceeds the threshold.
-    ///
-    /// Uses floor comparison to avoid floating point precision issues
-    /// where repeated subtraction leaves a tiny residual above the limit.
-    fn difficulty_exceeds_limit(&self, total_difficulty: f64) -> bool {
-        self.total_accumulated_difficulty.floor() > total_difficulty.floor()
-    }
-
-    fn evict_overflow(&mut self, total_difficulty: f64) {
-        while self.confirmed_entries.len() > ESTIMATED_MAX_SHARES_IN_WINDOW
-            || self.difficulty_exceeds_limit(total_difficulty)
-        {
+    /// Remove confirmed entries to only maintain
+    /// MAX_PPLNS_WINDOW_SHARES in confirmed entries. If difficulty is
+    /// not reached in these many shares, we only ever maintain these many shares.
+    fn evict_overflow(&mut self) {
+        while self.confirmed_entries.len() > MAX_PPLNS_WINDOW_SHARES {
             if let Some(entry) = self.confirmed_entries.pop_back() {
                 self.remove_from_running_total(&entry);
             } else {
@@ -534,59 +519,6 @@ impl PplnsWindow {
         self.cached_top_height = Some(total_count.saturating_sub(1));
         eprintln!("  populated {} in window", self.confirmed_entries.len());
     }
-
-    /// Simulate the computational work of an incremental update for benchmarking.
-    ///
-    /// Performs the same processing as update -> load_range -> evict_overflow
-    /// without requiring a ChainStoreHandle. Takes confirmed headers in
-    /// newest-to-oldest order (as returned by the chain store) and uncle
-    /// headers to process.
-    pub fn load_entries_for_benchmark(
-        &mut self,
-        confirmed_headers: Vec<ConfirmedHeaderResult>,
-        uncle_headers: Vec<(BlockHash, ShareHeader)>,
-        total_difficulty: f64,
-    ) {
-        let mut uncle_lookup: HashMap<BlockHash, UncleEntry> =
-            HashMap::with_capacity(uncle_headers.len());
-        for (blockhash, header) in uncle_headers {
-            let difficulty = header.get_difficulty();
-            let uncle_entry = self.build_uncle_entry(header.miner_address, difficulty);
-            uncle_lookup.insert(blockhash, uncle_entry);
-        }
-
-        let count = confirmed_headers.len() as u32;
-        let base_height = self.cached_top_height.map_or(0, |h| h + 1);
-        for (
-            index,
-            ConfirmedHeaderResult {
-                height: _confirmed_height,
-                blockhash,
-                header,
-            },
-        ) in confirmed_headers.into_iter().rev().enumerate()
-        {
-            let height = base_height + index as u32;
-            let difficulty = header.get_difficulty();
-            let uncle_entries = resolve_uncle_entries(&header.uncles, &uncle_lookup);
-            let entry = self.build_confirmed_entry(
-                blockhash,
-                height,
-                header.miner_address,
-                difficulty,
-                uncle_entries,
-            );
-            self.add_to_running_total(&entry);
-            self.confirmed_entries.push_front(entry);
-        }
-
-        if let Some(entry) = self.confirmed_entries.front() {
-            self.cached_tip_blockhash = Some(entry.blockhash);
-        }
-        self.cached_top_height = Some(base_height + count - 1);
-
-        self.evict_overflow(total_difficulty);
-    }
 }
 
 #[cfg(test)]
@@ -699,7 +631,7 @@ mod tests {
             .returning(|_| Ok(Vec::new()));
 
         let mut window = PplnsWindow::default();
-        let updated = window.update(&mock, f64::MAX).unwrap();
+        let updated = window.update(&mock).unwrap();
 
         assert!(updated);
         assert!(!window.is_empty());
@@ -737,7 +669,7 @@ mod tests {
             .returning(|_| Ok(Vec::new()));
 
         let mut window = PplnsWindow::default();
-        window.update(&mock, f64::MAX).unwrap();
+        window.update(&mock).unwrap();
         assert_eq!(window.confirmed_entries.len(), 5);
 
         // Now extend to height 6
@@ -763,7 +695,7 @@ mod tests {
             .expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let updated = window.update(&mock2, f64::MAX).unwrap();
+        let updated = window.update(&mock2).unwrap();
         assert!(updated);
         assert_eq!(window.confirmed_entries.len(), 7);
         assert_eq!(window.cached_top_height, Some(6));
@@ -793,7 +725,7 @@ mod tests {
             .returning(|_| Ok(Vec::new()));
 
         let mut window = PplnsWindow::default();
-        window.update(&mock1, f64::MAX).unwrap();
+        window.update(&mock1).unwrap();
         assert_eq!(window.confirmed_entries.len(), 3);
         // Deque should be [height2, height1, height0]
         assert_eq!(
@@ -831,7 +763,7 @@ mod tests {
             .expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        window.update(&mock2, f64::MAX).unwrap();
+        window.update(&mock2).unwrap();
         assert_eq!(window.confirmed_entries.len(), 6);
         // Deque should be [height5, height4, height3, height2, height1, height0]
         assert_eq!(
@@ -881,7 +813,7 @@ mod tests {
             .expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        window.update(&mock3, f64::MAX).unwrap();
+        window.update(&mock3).unwrap();
         assert_eq!(window.confirmed_entries.len(), 9);
         // Full deque: [height8, height7, ..., height0] -- strict newest-to-oldest
         for (index, entry) in window.confirmed_entries.iter().enumerate() {
@@ -907,13 +839,13 @@ mod tests {
             .returning(|_| Ok(Vec::new()));
 
         let mut window = PplnsWindow::default();
-        window.update(&mock, f64::MAX).unwrap();
+        window.update(&mock).unwrap();
 
         // Second update with same tip
         let mut mock2 = MockChainStoreHandle::default();
         mock2.expect_get_chain_tip().returning(move || Ok(tip_hash));
 
-        let updated = window.update(&mock2, f64::MAX).unwrap();
+        let updated = window.update(&mock2).unwrap();
         assert!(!updated);
     }
 
@@ -933,7 +865,7 @@ mod tests {
             .returning(|_| Ok(Vec::new()));
 
         let mut window = PplnsWindow::default();
-        window.update(&mock, f64::MAX).unwrap();
+        window.update(&mock).unwrap();
         assert_eq!(window.confirmed_entries.len(), 5);
 
         // Reorg: different chain B at same heights
@@ -956,7 +888,7 @@ mod tests {
             .expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let updated = window.update(&mock2, f64::MAX).unwrap();
+        let updated = window.update(&mock2).unwrap();
         assert!(updated);
         assert_eq!(window.confirmed_entries.len(), 5);
         assert_eq!(window.cached_tip_blockhash, Some(tip_b));
@@ -983,8 +915,8 @@ mod tests {
         window.add_to_running_total(&entry_a);
         window.confirmed_entries.push_back(entry_a);
 
-        // With 3 entries and ESTIMATED_MAX_SHARES_IN_WINDOW >> 3, no eviction occurs
-        window.evict_overflow(f64::MAX);
+        // With 3 entries and MAX_PPLNS_WINDOW_SHARES >> 3, no eviction occurs
+        window.evict_overflow();
         assert_eq!(window.confirmed_entries.len(), 3);
 
         let expected_total = 3.0 * difficulty;
@@ -1010,8 +942,8 @@ mod tests {
         let entry_a = entry_from_header(&mut window, &header_a, 0);
         window.confirmed_entries.push_back(entry_a);
 
-        // Pad to exceed ESTIMATED_MAX_SHARES_IN_WINDOW
-        let max_shares = ESTIMATED_MAX_SHARES_IN_WINDOW as usize;
+        // Pad to exceed MAX_PPLNS_WINDOW_SHARES
+        let max_shares = MAX_PPLNS_WINDOW_SHARES as usize;
         let padding_needed = max_shares; // total will be max + 2
         let padding_address = header_a.miner_address.clone();
         for index in 0..padding_needed {
@@ -1027,7 +959,7 @@ mod tests {
 
         assert_eq!(window.confirmed_entries.len(), max_shares + 2);
 
-        window.evict_overflow(f64::MAX);
+        window.evict_overflow();
 
         // Should be truncated to max_shares, dropping the 2 oldest from the back
         assert_eq!(window.confirmed_entries.len(), max_shares);
@@ -1066,52 +998,6 @@ mod tests {
             window.total_accumulated_difficulty
         );
     }
-
-    #[test]
-    fn test_difficulty_cutoff_evicts_oldest() {
-        let genesis_hash = BlockHash::all_zeros();
-        let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
-        let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
-        let header3 = build_test_header(&header2.block_hash().to_string(), PUBKEY_3G, 2);
-        let difficulty = header1.get_difficulty();
-
-        let mut window = PplnsWindow::default();
-        let entry3 = entry_from_header(&mut window, &header3, 2);
-        let entry2 = entry_from_header(&mut window, &header2, 1);
-        let entry1 = entry_from_header(&mut window, &header1, 0);
-        window.add_to_running_total(&entry3);
-        window.confirmed_entries.push_back(entry3);
-        window.add_to_running_total(&entry2);
-        window.confirmed_entries.push_back(entry2);
-        window.add_to_running_total(&entry1);
-        window.confirmed_entries.push_back(entry1);
-
-        // All shares have the same difficulty, total is 3x
-        let expected_total_before = 3.0 * difficulty;
-        assert!(
-            (window.total_accumulated_difficulty - expected_total_before).abs() < 0.001,
-            "before eviction: expected {expected_total_before}, got {}",
-            window.total_accumulated_difficulty
-        );
-
-        // Evict with cutoff that allows exactly one share's difficulty.
-        // After evicting the two oldest entries the total drops to 1x.
-        window.evict_overflow(difficulty);
-
-        // Only the newest share (header3) should remain
-        assert_eq!(window.confirmed_entries.len(), 1);
-        assert_eq!(window.confirmed_entries[0].blockhash, header3.block_hash());
-        let result = window.get_distribution(f64::MAX);
-        assert_eq!(result.len(), 1);
-        assert!(result.contains_key(&header3.miner_address));
-
-        assert!(
-            (window.total_accumulated_difficulty - difficulty).abs() < 0.001,
-            "after eviction: expected {difficulty}, got {}",
-            window.total_accumulated_difficulty
-        );
-    }
-
     #[test]
     fn test_uncle_weighting() {
         let genesis_hash = BlockHash::all_zeros();
@@ -1165,7 +1051,7 @@ mod tests {
             .returning(move |_| Ok(metadata_no_height()));
 
         let mut window = PplnsWindow::default();
-        let updated = window.update(&mock, f64::MAX).unwrap();
+        let updated = window.update(&mock).unwrap();
 
         assert!(!updated);
         assert!(window.is_empty());
@@ -1187,7 +1073,7 @@ mod tests {
             .returning(|_| Ok(Vec::new()));
 
         let mut window = PplnsWindow::default();
-        window.update(&mock, f64::MAX).unwrap();
+        window.update(&mock).unwrap();
         assert_eq!(window.cached_top_height, Some(4));
 
         // Reorg to shorter chain at height 2
@@ -1224,7 +1110,7 @@ mod tests {
             .expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let updated = window.update(&mock2, f64::MAX).unwrap();
+        let updated = window.update(&mock2).unwrap();
         assert!(updated);
         assert_eq!(window.confirmed_entries.len(), 3);
         assert_eq!(window.cached_top_height, Some(2));
@@ -1295,7 +1181,7 @@ mod tests {
             .returning(|_| Ok(Vec::new()));
 
         let mut window = PplnsWindow::default();
-        window.update(&mock, f64::MAX).unwrap();
+        window.update(&mock).unwrap();
         assert_eq!(window.confirmed_entries.len(), 5);
 
         // Save the blockhashes for heights 0-2 (they should survive the reorg)
@@ -1358,7 +1244,7 @@ mod tests {
             .expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let updated = window.update(&mock2, f64::MAX).unwrap();
+        let updated = window.update(&mock2).unwrap();
         assert!(updated);
         assert_eq!(window.confirmed_entries.len(), 5);
 
@@ -1390,7 +1276,7 @@ mod tests {
             .returning(|_| Ok(Vec::new()));
 
         let mut window = PplnsWindow::default();
-        window.update(&mock, f64::MAX).unwrap();
+        window.update(&mock).unwrap();
 
         let difficulty = headers_a[0].header.get_difficulty();
         let miner_g = &headers_a[0].header.miner_address;
@@ -1439,7 +1325,7 @@ mod tests {
             .expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        window.update(&mock2, f64::MAX).unwrap();
+        window.update(&mock2).unwrap();
 
         let miner_2g = &fork_header.miner_address;
 
@@ -1480,7 +1366,7 @@ mod tests {
             .returning(|_| Ok(Vec::new()));
 
         let mut window = PplnsWindow::default();
-        window.update(&mock, f64::MAX).unwrap();
+        window.update(&mock).unwrap();
 
         // Deque is newest-to-oldest: [height4, height3, height2, height1, height0]
         assert_eq!(window.confirmed_entries[0].height, 4);
@@ -1510,7 +1396,7 @@ mod tests {
             .returning(|_| Ok(Vec::new()));
 
         let mut window = PplnsWindow::default();
-        window.update(&mock, f64::MAX).unwrap();
+        window.update(&mock).unwrap();
         assert_eq!(window.confirmed_entries.len(), chain_len);
 
         // Reorg with completely different chain at same heights
@@ -1543,7 +1429,7 @@ mod tests {
             .expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let updated = window.update(&mock2, f64::MAX).unwrap();
+        let updated = window.update(&mock2).unwrap();
         assert!(updated);
         // Full invalidation + reload means all entries are from chain B
         assert_eq!(window.confirmed_entries.len(), chain_len);

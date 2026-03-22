@@ -74,8 +74,7 @@ impl PayoutDistribution for Payout {
             return Ok(());
         }
 
-        self.pplns_window
-            .update(chain_store_handle, total_difficulty)?;
+        self.pplns_window.update(chain_store_handle)?;
 
         let address_difficulty_map = self.pplns_window.get_distribution(total_difficulty);
 
