@@ -122,12 +122,21 @@ impl PplnsWindow {
 
     /// Compute the payout distribution by walking confirmed entries.
     ///
-    /// Iterates newest-to-oldest in two passes. The first pass
-    /// accumulates weighted difficulty per address until the threshold
-    /// is met. The second pass marks overflow entries so their address
-    /// keys are retained. Finally, stale address keys with zero
-    /// difficulty that did not overflow are removed.
-    pub fn get_distribution(&mut self, total_difficulty: f64) -> HashMap<Address, f64> {
+    /// When start_hash is None, iteration begins at the newest entry.
+    /// When start_hash is Some, iteration begins at the entry whose
+    /// blockhash matches, skipping newer entries.
+    ///
+    /// Iterates in two passes. The first pass accumulates weighted
+    /// difficulty per address until the threshold is met. The second
+    /// pass marks overflow entries so their address keys are retained.
+    /// Finally, stale address keys with zero difficulty that did not
+    /// overflow are removed.
+    pub fn get_distribution(
+        &mut self,
+        total_difficulty: f64,
+        start_hash: Option<BlockHash>,
+    ) -> HashMap<Address, f64> {
+        let start_index = self.find_start_index(start_hash);
         let mut difficulty_by_key = vec![0.0f64; self.address_keys.len()];
         let mut accumulated_difficulty: f64 = 0.0;
 
@@ -135,6 +144,7 @@ impl PplnsWindow {
             &mut difficulty_by_key,
             &mut accumulated_difficulty,
             total_difficulty,
+            start_index,
         );
 
         let overflow_flags = self.mark_overflow_entries(threshold_index);
@@ -144,8 +154,20 @@ impl PplnsWindow {
         self.collect_distribution(&difficulty_by_key)
     }
 
-    /// Walk entries from newest to oldest, accumulating difficulty per
-    /// address until accumulated difficulty meets the threshold.
+    /// Find the index at which to start accumulating difficulty.
+    /// Returns 0 when start_hash is None or the hash is not found.
+    fn find_start_index(&self, start_hash: Option<BlockHash>) -> usize {
+        let Some(hash) = start_hash else {
+            return 0;
+        };
+        self.confirmed_entries
+            .iter()
+            .position(|entry| entry.blockhash == hash)
+            .unwrap_or(0)
+    }
+
+    /// Walk entries starting at start_index, accumulating difficulty
+    /// per address until accumulated difficulty meets the threshold.
     /// Returns the index of the first entry past the threshold, or
     /// the total entry count if the threshold was never reached.
     fn accumulate_difficulty(
@@ -153,8 +175,9 @@ impl PplnsWindow {
         difficulty_by_key: &mut [f64],
         accumulated_difficulty: &mut f64,
         total_difficulty: f64,
+        start_index: usize,
     ) -> usize {
-        for (index, entry) in self.confirmed_entries.iter().enumerate() {
+        for (offset, entry) in self.confirmed_entries.iter().skip(start_index).enumerate() {
             let mut nephew_bonus: f64 = 0.0;
 
             for uncle_entry in &entry.uncle_entries {
@@ -167,7 +190,7 @@ impl PplnsWindow {
             *accumulated_difficulty += entry.total_weighted_difficulty;
 
             if accumulated_difficulty.floor() >= total_difficulty.floor() {
-                return index + 1;
+                return start_index + offset + 1;
             }
         }
         self.confirmed_entries.len()
@@ -1030,7 +1053,7 @@ mod tests {
         window.add_to_running_total(&entry1);
         window.confirmed_entries.push_back(entry1);
 
-        let result = window.get_distribution(f64::MAX);
+        let result = window.get_distribution(f64::MAX, None);
 
         assert_eq!(result.len(), 2);
         assert!((result[&header1.miner_address] - difficulty1).abs() < 0.001);
@@ -1044,6 +1067,65 @@ mod tests {
             window.total_accumulated_difficulty
         );
     }
+
+    #[test]
+    fn test_get_distribution_with_start_hash() {
+        let genesis_hash = BlockHash::all_zeros();
+        let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
+        let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
+        let header3 = build_test_header(&header2.block_hash().to_string(), PUBKEY_3G, 2);
+        let difficulty1 = header1.get_difficulty();
+        let difficulty2 = header2.get_difficulty();
+
+        // Entries are newest-to-oldest: header3 (index 0), header2 (index 1), header1 (index 2)
+        let mut window = PplnsWindow::default();
+        let entry3 = entry_from_header(&mut window, &header3, 2);
+        let entry2 = entry_from_header(&mut window, &header2, 1);
+        let entry1 = entry_from_header(&mut window, &header1, 0);
+        window.add_to_running_total(&entry3);
+        window.confirmed_entries.push_back(entry3);
+        window.add_to_running_total(&entry2);
+        window.confirmed_entries.push_back(entry2);
+        window.add_to_running_total(&entry1);
+        window.confirmed_entries.push_back(entry1);
+
+        // Starting from header2 should skip header3, include header2 and header1
+        let result = window.get_distribution(f64::MAX, Some(header2.block_hash()));
+        assert_eq!(result.len(), 2);
+        assert!((result[&header2.miner_address] - difficulty2).abs() < 0.001);
+        assert!((result[&header1.miner_address] - difficulty1).abs() < 0.001);
+        assert!(!result.contains_key(&header3.miner_address));
+
+        // Starting from the oldest entry should only include that entry
+        let result = window.get_distribution(f64::MAX, Some(header1.block_hash()));
+        assert_eq!(result.len(), 1);
+        assert!((result[&header1.miner_address] - difficulty1).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_get_distribution_with_unknown_start_hash_falls_back_to_top() {
+        let genesis_hash = BlockHash::all_zeros();
+        let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
+        let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
+        let difficulty1 = header1.get_difficulty();
+        let difficulty2 = header2.get_difficulty();
+
+        let mut window = PplnsWindow::default();
+        let entry2 = entry_from_header(&mut window, &header2, 1);
+        let entry1 = entry_from_header(&mut window, &header1, 0);
+        window.add_to_running_total(&entry2);
+        window.confirmed_entries.push_back(entry2);
+        window.add_to_running_total(&entry1);
+        window.confirmed_entries.push_back(entry1);
+
+        // A hash not in the window should fall back to starting from the top
+        let unknown_hash = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 3).block_hash();
+        let result = window.get_distribution(f64::MAX, Some(unknown_hash));
+        assert_eq!(result.len(), 2);
+        assert!((result[&header1.miner_address] - difficulty1).abs() < 0.001);
+        assert!((result[&header2.miner_address] - difficulty2).abs() < 0.001);
+    }
+
     #[test]
     fn test_uncle_weighting() {
         let genesis_hash = BlockHash::all_zeros();
@@ -1065,7 +1147,7 @@ mod tests {
         window.add_to_running_total(&nephew_entry);
         window.confirmed_entries.push_back(nephew_entry);
 
-        let result = window.get_distribution(f64::MAX);
+        let result = window.get_distribution(f64::MAX, None);
 
         // Uncle gets 90% of its difficulty
         let expected_uncle_weight = uncle_difficulty * UNCLE_WEIGHT_FACTOR;
@@ -1328,7 +1410,7 @@ mod tests {
         let miner_g = &headers_a[0].header.miner_address;
 
         // All 3 shares are by PUBKEY_G
-        let dist = window.get_distribution(f64::MAX);
+        let dist = window.get_distribution(f64::MAX, None);
         assert_eq!(dist.len(), 1);
         assert!((dist[miner_g] - 3.0 * difficulty).abs() < 0.001);
 
@@ -1376,7 +1458,7 @@ mod tests {
         let miner_2g = &fork_header.miner_address;
 
         // Now: 2 shares by PUBKEY_G (heights 0-1) + 1 share by PUBKEY_2G (height 2)
-        let dist = window.get_distribution(f64::MAX);
+        let dist = window.get_distribution(f64::MAX, None);
         assert_eq!(dist.len(), 2);
         assert!(
             (dist[miner_g] - 2.0 * difficulty).abs() < 0.001,
@@ -1449,7 +1531,7 @@ mod tests {
         window.confirmed_entries.pop_back();
 
         // get_distribution should remove miner A's stale key
-        let result = window.get_distribution(f64::MAX);
+        let result = window.get_distribution(f64::MAX, None);
         assert_eq!(result.len(), 1);
         assert!(result.contains_key(&header_b.miner_address));
 
@@ -1488,7 +1570,7 @@ mod tests {
 
         // Set threshold so only the newest entry (C) is included,
         // B and A overflow past the threshold
-        let result = window.get_distribution(single_difficulty);
+        let result = window.get_distribution(single_difficulty, None);
 
         // Only C should be in distribution
         assert_eq!(result.len(), 1);
@@ -1531,7 +1613,7 @@ mod tests {
 
         // Evict miner A, then trigger cleanup
         window.confirmed_entries.pop_back();
-        window.get_distribution(f64::MAX);
+        window.get_distribution(f64::MAX, None);
 
         assert!(
             window.address_keys.value_for(miner_a_key).is_none(),
@@ -1594,7 +1676,7 @@ mod tests {
 
         // Threshold = single difficulty, so only entry_top is included;
         // entry_nephew and its uncle are in overflow
-        let result = window.get_distribution(single_difficulty);
+        let result = window.get_distribution(single_difficulty, None);
 
         assert_eq!(result.len(), 1);
         assert!(result.contains_key(&header_top.miner_address));
