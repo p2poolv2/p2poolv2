@@ -125,25 +125,42 @@ impl PplnsWindow {
     /// Iterates newest-to-oldest, accumulating weighted difficulty per
     /// address using a Vec indexed by internal key. Stops when
     /// accumulated difficulty meets total_difficulty. Returns a map of
-    /// Address to weighted difficulty.
-    pub fn get_distribution(&self, total_difficulty: f64) -> HashMap<Address, f64> {
+    /// Address to weighted difficulty. Also removes stale address keys
+    /// that have zero difficulty and did not overflow.
+    pub fn get_distribution(&mut self, total_difficulty: f64) -> HashMap<Address, f64> {
         let mut difficulty_by_key = vec![0.0f64; self.address_keys.len()];
+        let mut overflow_flags = vec![false; self.address_keys.len()];
         let mut accumulated_difficulty: f64 = 0.0;
 
+        let mut threshold_reached = false;
         for entry in &self.confirmed_entries {
-            let mut nephew_bonus: f64 = 0.0;
+            if threshold_reached {
+                overflow_flags[entry.internal_key] = true;
+                for uncle_entry in &entry.uncle_entries {
+                    overflow_flags[uncle_entry.internal_key] = true;
+                }
+            } else {
+                let mut nephew_bonus: f64 = 0.0;
 
-            for uncle_entry in &entry.uncle_entries {
-                difficulty_by_key[uncle_entry.internal_key] +=
-                    uncle_entry.difficulty * UNCLE_WEIGHT_FACTOR;
-                nephew_bonus += uncle_entry.difficulty * NEPHEW_BONUS_FACTOR;
+                for uncle_entry in &entry.uncle_entries {
+                    difficulty_by_key[uncle_entry.internal_key] +=
+                        uncle_entry.difficulty * UNCLE_WEIGHT_FACTOR;
+                    nephew_bonus += uncle_entry.difficulty * NEPHEW_BONUS_FACTOR;
+                }
+
+                difficulty_by_key[entry.internal_key] += entry.difficulty + nephew_bonus;
+                accumulated_difficulty += entry.total_weighted_difficulty;
+
+                if accumulated_difficulty.floor() >= total_difficulty.floor() {
+                    threshold_reached = true;
+                }
             }
+        }
 
-            difficulty_by_key[entry.internal_key] += entry.difficulty + nephew_bonus;
-            accumulated_difficulty += entry.total_weighted_difficulty;
-
-            if accumulated_difficulty.floor() >= total_difficulty.floor() {
-                return self.collect_distribution(&difficulty_by_key);
+        // Remove address keys that are no longer contributing any difficulty
+        for index in 0..difficulty_by_key.len() {
+            if difficulty_by_key[index] == 0.0 && !overflow_flags[index] {
+                self.address_keys.remove(index);
             }
         }
 
@@ -1374,6 +1391,190 @@ mod tests {
         assert_eq!(window.confirmed_entries[2].height, 2);
         assert_eq!(window.confirmed_entries[3].height, 1);
         assert_eq!(window.confirmed_entries[4].height, 0);
+    }
+
+    #[test]
+    fn test_stale_address_key_removed_after_entry_evicted() {
+        let genesis_hash = BlockHash::all_zeros();
+
+        // Miner A at height 0, Miner B at height 1
+        let header_a = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
+        let header_b = build_test_header(&header_a.block_hash().to_string(), PUBKEY_2G, 2);
+
+        let mut window = PplnsWindow::default();
+        // entry_b built first -> gets key 0, entry_a built second -> gets key 1
+        let entry_b = entry_from_header(&mut window, &header_b, 1);
+        let entry_a = entry_from_header(&mut window, &header_a, 0);
+        let miner_b_key = entry_b.internal_key;
+        let miner_a_key = entry_a.internal_key;
+        window.add_to_running_total(&entry_b);
+        window.confirmed_entries.push_back(entry_b);
+        window.add_to_running_total(&entry_a);
+        window.confirmed_entries.push_back(entry_a);
+
+        assert_eq!(window.address_keys.len(), 2);
+        assert!(window.address_keys.value_for(miner_a_key).is_some());
+        assert!(window.address_keys.value_for(miner_b_key).is_some());
+
+        // Evict miner A's entry (oldest, at back)
+        window.confirmed_entries.pop_back();
+
+        // get_distribution should remove miner A's stale key
+        let result = window.get_distribution(f64::MAX);
+        assert_eq!(result.len(), 1);
+        assert!(result.contains_key(&header_b.miner_address));
+
+        assert!(
+            window.address_keys.value_for(miner_a_key).is_none(),
+            "stale key for evicted miner should be removed"
+        );
+        assert!(
+            window.address_keys.value_for(miner_b_key).is_some(),
+            "active miner key should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_overflow_address_key_preserved() {
+        let genesis_hash = BlockHash::all_zeros();
+
+        // Three miners: A (oldest), B (middle), C (newest)
+        let header_a = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
+        let header_b = build_test_header(&header_a.block_hash().to_string(), PUBKEY_2G, 2);
+        let header_c = build_test_header(&header_b.block_hash().to_string(), PUBKEY_3G, 2);
+        let single_difficulty = header_a.get_difficulty();
+
+        let mut window = PplnsWindow::default();
+        let entry_c = entry_from_header(&mut window, &header_c, 2);
+        let entry_b = entry_from_header(&mut window, &header_b, 1);
+        let entry_a = entry_from_header(&mut window, &header_a, 0);
+        window.add_to_running_total(&entry_c);
+        window.confirmed_entries.push_back(entry_c);
+        window.add_to_running_total(&entry_b);
+        window.confirmed_entries.push_back(entry_b);
+        window.add_to_running_total(&entry_a);
+        window.confirmed_entries.push_back(entry_a);
+
+        assert_eq!(window.address_keys.len(), 3);
+
+        // Set threshold so only the newest entry (C) is included,
+        // B and A overflow past the threshold
+        let result = window.get_distribution(single_difficulty);
+
+        // Only C should be in distribution
+        assert_eq!(result.len(), 1);
+        assert!(result.contains_key(&header_c.miner_address));
+
+        // All three keys should still exist because B and A are in overflow
+        assert!(
+            window.address_keys.value_for(0).is_some(),
+            "overflow miner key should be preserved"
+        );
+        assert!(
+            window.address_keys.value_for(1).is_some(),
+            "overflow miner key should be preserved"
+        );
+        assert!(
+            window.address_keys.value_for(2).is_some(),
+            "active miner key should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_stale_key_slot_reused_by_new_address() {
+        let genesis_hash = BlockHash::all_zeros();
+
+        // Miner A at height 0, Miner B at height 1
+        let header_a = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
+        let header_b = build_test_header(&header_a.block_hash().to_string(), PUBKEY_2G, 2);
+
+        let mut window = PplnsWindow::default();
+        // entry_b built first -> gets key 0, entry_a built second -> gets key 1
+        let entry_b = entry_from_header(&mut window, &header_b, 1);
+        let entry_a = entry_from_header(&mut window, &header_a, 0);
+        let miner_a_key = entry_a.internal_key;
+        window.add_to_running_total(&entry_b);
+        window.confirmed_entries.push_back(entry_b);
+        window.add_to_running_total(&entry_a);
+        window.confirmed_entries.push_back(entry_a);
+
+        assert_eq!(window.address_keys.len(), 2);
+
+        // Evict miner A, then trigger cleanup
+        window.confirmed_entries.pop_back();
+        window.get_distribution(f64::MAX);
+
+        assert!(
+            window.address_keys.value_for(miner_a_key).is_none(),
+            "stale key should be removed after cleanup"
+        );
+
+        // Add a new entry with miner C; it should reuse miner A's freed slot
+        let header_c = build_test_header(&header_b.block_hash().to_string(), PUBKEY_3G, 2);
+        let entry_c = entry_from_header(&mut window, &header_c, 2);
+        let miner_c_key = entry_c.internal_key;
+        window.add_to_running_total(&entry_c);
+        window.confirmed_entries.push_front(entry_c);
+
+        // Miner C should have taken the freed slot
+        assert_eq!(
+            miner_c_key, miner_a_key,
+            "new miner should reuse the freed key slot"
+        );
+        assert_eq!(
+            window.address_keys.value_for(miner_c_key),
+            Some(&header_c.miner_address),
+            "freed slot should now hold the new miner address"
+        );
+        // Total slots should still be 2, not grown to 3
+        assert_eq!(
+            window.address_keys.len(),
+            2,
+            "address keys should not grow when freed slots are available"
+        );
+    }
+
+    #[test]
+    fn test_overflow_uncle_address_key_preserved() {
+        let genesis_hash = BlockHash::all_zeros();
+
+        // Uncle miner (PUBKEY_3G) only appears as uncle in the overflow region
+        let uncle_header = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 2);
+        let uncle_hash = uncle_header.block_hash();
+
+        // Nephew at height 0 references the uncle (this will be in overflow)
+        let nephew_header =
+            build_test_header_with_uncles(&genesis_hash.to_string(), PUBKEY_G, 2, vec![uncle_hash]);
+
+        // A second entry at height 1 by a different miner (this hits the threshold)
+        let header_top = build_test_header(&nephew_header.block_hash().to_string(), PUBKEY_2G, 2);
+        let single_difficulty = header_top.get_difficulty();
+
+        let mut window = PplnsWindow::default();
+        // Uncle built first -> PUBKEY_3G gets key 0
+        let uncle_entry = uncle_entry_from_header(&mut window, &uncle_header);
+        let uncle_miner_key = uncle_entry.internal_key;
+        let entry_top = entry_from_header(&mut window, &header_top, 1);
+        let entry_nephew =
+            entry_from_header_with_uncles(&mut window, &nephew_header, 0, vec![uncle_entry]);
+
+        window.add_to_running_total(&entry_top);
+        window.confirmed_entries.push_back(entry_top);
+        window.add_to_running_total(&entry_nephew);
+        window.confirmed_entries.push_back(entry_nephew);
+
+        // Threshold = single difficulty, so only entry_top is included;
+        // entry_nephew and its uncle are in overflow
+        let result = window.get_distribution(single_difficulty);
+
+        assert_eq!(result.len(), 1);
+        assert!(result.contains_key(&header_top.miner_address));
+
+        // Uncle miner's key should be preserved because it is in overflow
+        assert!(
+            window.address_keys.value_for(uncle_miner_key).is_some(),
+            "uncle miner key in overflow should be preserved"
+        );
     }
 
     #[test]

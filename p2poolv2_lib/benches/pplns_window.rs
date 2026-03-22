@@ -102,7 +102,7 @@ fn build_benchmark_window(share_count: usize) -> PplnsWindow {
 }
 
 fn bench_get_distribution(criterion: &mut Criterion) {
-    let window = build_benchmark_window(TOTAL_CONFIRMED_SHARES);
+    let mut window = build_benchmark_window(TOTAL_CONFIRMED_SHARES);
 
     criterion.bench_function("get_distribution_full_window", |bencher| {
         bencher.iter(|| {
