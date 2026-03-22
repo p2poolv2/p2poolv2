@@ -119,6 +119,9 @@ fn include_address_and_cut(
 }
 
 /// Appends proportional distribution of amount based on difficulty weights to the distribution.
+///
+/// Entries are sorted by address string to ensure the remainder from
+/// rounding is always assigned to the same deterministic address.
 pub(crate) fn append_proportional_distribution(
     address_difficulty_map: &HashMap<Address, f64>,
     total_amount: bitcoin::Amount,
@@ -131,10 +134,17 @@ pub(crate) fn append_proportional_distribution(
         )
         .into());
     }
-    let mut distributed_amount = bitcoin::Amount::ZERO;
 
-    for (index, (address, difficulty)) in address_difficulty_map.iter().enumerate() {
-        let amount = if index == address_difficulty_map.len() - 1 {
+    let mut sorted_entries: Vec<(&Address, &f64)> = address_difficulty_map.iter().collect();
+    sorted_entries.sort_by(|(address_a, _), (address_b, _)| {
+        address_a.to_string().cmp(&address_b.to_string())
+    });
+
+    let mut distributed_amount = bitcoin::Amount::ZERO;
+    let entry_count = sorted_entries.len();
+
+    for (index, (address, difficulty)) in sorted_entries.into_iter().enumerate() {
+        let amount = if index == entry_count - 1 {
             // Last address gets remainder to handle rounding
             total_amount - distributed_amount
         } else {
@@ -160,14 +170,10 @@ mod tests {
     #[test]
     fn test_create_proportional_distribution() {
         let mut address_difficulty_map = HashMap::new();
-        address_difficulty_map.insert(
-            parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"),
-            600.0,
-        );
-        address_difficulty_map.insert(
-            parse_address_from_string("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"),
-            400.0,
-        );
+        let address_a = parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
+        let address_b = parse_address_from_string("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4");
+        address_difficulty_map.insert(address_a.clone(), 600.0);
+        address_difficulty_map.insert(address_b.clone(), 400.0);
 
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
         let mut result = Vec::new();
@@ -181,6 +187,48 @@ mod tests {
 
         // Check proportional amounts (60% and 40%)
         let amounts: Vec<_> = result.iter().map(|op| op.amount.to_sat()).collect();
-        assert!(amounts.contains(&60_000_000) || amounts.contains(&40_000_000));
+        assert!(amounts.contains(&60_000_000));
+        assert!(amounts.contains(&40_000_000));
+    }
+
+    #[test]
+    fn test_proportional_distribution_remainder_is_deterministic() {
+        let address_a = parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
+        let address_b = parse_address_from_string("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4");
+        let address_c = parse_address_from_string("bc1q34aq5drpuwy3wgl9lhup9892qp6svr8ldzyy7c");
+
+        // 3 addresses splitting 1 sat that cannot divide evenly
+        let mut address_difficulty_map = HashMap::new();
+        address_difficulty_map.insert(address_a.clone(), 1.0);
+        address_difficulty_map.insert(address_b.clone(), 1.0);
+        address_difficulty_map.insert(address_c.clone(), 1.0);
+
+        // 100 sats / 3 = 33 + 33 + 34 (1 sat remainder)
+        let total_amount = bitcoin::Amount::from_sat(100);
+
+        // Run multiple times to confirm the same address always gets the remainder
+        let mut remainder_addresses: Vec<Address> = Vec::with_capacity(10);
+        for _ in 0..10 {
+            let mut result = Vec::new();
+            append_proportional_distribution(&address_difficulty_map, total_amount, &mut result)
+                .unwrap();
+
+            let total_distributed: bitcoin::Amount = result.iter().map(|op| op.amount).sum();
+            assert_eq!(total_distributed, total_amount);
+
+            let remainder_entry = result
+                .iter()
+                .find(|output_pair| output_pair.amount.to_sat() == 34)
+                .expect("one address should receive the 1 sat remainder");
+            remainder_addresses.push(remainder_entry.address.clone());
+        }
+
+        let first_remainder = &remainder_addresses[0];
+        assert!(
+            remainder_addresses
+                .iter()
+                .all(|address| address == first_remainder),
+            "remainder should always go to the same address across runs"
+        );
     }
 }

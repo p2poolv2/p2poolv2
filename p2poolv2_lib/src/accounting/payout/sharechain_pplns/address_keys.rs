@@ -18,12 +18,13 @@ use bitcoin::Address;
 
 const INITIAL_SIZE: usize = 1000;
 
-/// Store mapping from Address to internal usize key.
+/// We track the keys as indices of a `Vec<Option<Address>>`, where each slot
+/// holds either an Address or `None` if the slot is free.
 ///
-/// We track the keys as index of a vec! which contains Option<String>.
-///
-/// We choose iterate twice over the vector than to do a hash of
-/// Address.
+/// `key_for` performs a single linear scan over the vector: it returns the
+/// index of an existing Address if found, otherwise it reuses the first
+/// `None` slot observed, or appends a new slot if none are free. This avoids
+/// hashing `Address` values.
 pub(super) struct AddressKeys(Vec<Option<Address>>);
 
 impl Default for AddressKeys {
