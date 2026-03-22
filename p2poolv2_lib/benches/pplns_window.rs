@@ -96,6 +96,8 @@ fn build_benchmark_window(share_count: usize) -> PplnsWindow {
         confirmed_shares.push((blockhash, miner_address, difficulty, uncle_data));
     }
 
+    eprintln!("  populated {} confirmed entries", confirmed_shares.len());
+
     let mut window = PplnsWindow::default();
     window.populate_for_benchmark(confirmed_shares);
     window
@@ -167,91 +169,5 @@ fn build_store_with_confirmed_shares(
     (chain_handle, temp_dir, runtime, tip_hash)
 }
 
-fn bench_update(criterion: &mut Criterion) {
-    eprintln!("Building RocksDB store with {STORE_SHARE_COUNT} confirmed shares...");
-    let start = std::time::Instant::now();
-    let (chain_store_handle, _temp_dir, runtime, tip_hash) =
-        build_store_with_confirmed_shares(STORE_SHARE_COUNT);
-    eprintln!("Store populated in {:.1}s", start.elapsed().as_secs_f64());
-
-    let total_difficulty = f64::MAX;
-
-    criterion.bench_function("update_full", |bencher| {
-        bencher.iter_batched(
-            || PplnsWindow::default(),
-            |mut window| {
-                black_box(
-                    window
-                        .update(&chain_store_handle, total_difficulty)
-                        .unwrap(),
-                );
-            },
-            criterion::BatchSize::LargeInput,
-        );
-    });
-
-    criterion.bench_function("update_incremental_noop", |bencher| {
-        let mut window = PplnsWindow::default();
-        window
-            .update(&chain_store_handle, total_difficulty)
-            .unwrap();
-
-        bencher.iter(|| {
-            black_box(
-                window
-                    .update(&chain_store_handle, total_difficulty)
-                    .unwrap(),
-            );
-        });
-    });
-
-    criterion.bench_function("update_incremental", |bencher| {
-        let mut window = PplnsWindow::default();
-        window
-            .update(&chain_store_handle, total_difficulty)
-            .unwrap();
-
-        let mut prev_hash = tip_hash;
-        let mut share_index: usize = STORE_SHARE_COUNT;
-
-        bencher.iter_custom(|iteration_count| {
-            let mut total_update_time = std::time::Duration::ZERO;
-
-            for _ in 0..iteration_count {
-                let pubkey = MINER_PUBKEYS[share_index % MINER_PUBKEYS.len()];
-                let share = TestShareBlockBuilder::new()
-                    .prev_share_blockhash(prev_hash.to_string())
-                    .miner_pubkey(pubkey)
-                    .work(2)
-                    .build();
-                prev_hash = share.block_hash();
-                share_index += 1;
-
-                runtime.block_on(async {
-                    chain_store_handle
-                        .add_share_block(share.clone(), true)
-                        .await
-                        .unwrap();
-                    chain_store_handle
-                        .organise_header(share.header.clone())
-                        .await
-                        .unwrap();
-                    chain_store_handle.organise_block().await.unwrap();
-                });
-
-                let timer_start = std::time::Instant::now();
-                black_box(
-                    window
-                        .update(&chain_store_handle, total_difficulty)
-                        .unwrap(),
-                );
-                total_update_time += timer_start.elapsed();
-            }
-
-            total_update_time
-        });
-    });
-}
-
-criterion_group!(benches, bench_get_distribution, bench_update);
+criterion_group!(benches, bench_get_distribution);
 criterion_main!(benches);
