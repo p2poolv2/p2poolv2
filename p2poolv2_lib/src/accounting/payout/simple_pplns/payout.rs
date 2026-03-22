@@ -94,8 +94,8 @@ impl Payout {
         &self,
         store: &ChainStoreHandle,
         total_difficulty: f64,
-    ) -> Result<HashMap<String, f64>, Box<dyn Error + Send + Sync>> {
-        let mut address_difficulty: HashMap<String, f64> = HashMap::new();
+    ) -> Result<HashMap<Address, f64>, Box<dyn Error + Send + Sync>> {
+        let mut address_difficulty: HashMap<Address, f64> = HashMap::new();
         let mut accumulated_difficulty = 0f64;
 
         // Start from current time and work backwards
@@ -122,7 +122,13 @@ impl Payout {
                     if accumulated_difficulty < total_difficulty {
                         accumulated_difficulty += share.difficulty as f64;
                         if let Some(btcaddress) = share.btcaddress {
-                            *address_difficulty.entry(btcaddress).or_insert(0.0) +=
+                            let address = btcaddress
+                                .parse::<bitcoin::Address<_>>()
+                                .map_err(|e| {
+                                    format!("Invalid bitcoin address '{btcaddress}': {e}")
+                                })?
+                                .assume_checked();
+                            *address_difficulty.entry(address).or_insert(0.0) +=
                                 share.difficulty as f64;
                         }
                     }
@@ -144,7 +150,21 @@ mod tests {
     use crate::accounting::payout::simple_pplns::SimplePplnsShare;
     use p2poolv2_config::StratumConfig;
 
+    use crate::test_utils::{PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_G};
+
     use super::*;
+
+    fn make_test_address(index: usize) -> Address {
+        let pubkey_hex = match index {
+            1 => PUBKEY_G,
+            2 => PUBKEY_2G,
+            3 => PUBKEY_3G,
+            4 => PUBKEY_4G,
+            _ => panic!("index must be 1-4"),
+        };
+        let pubkey: bitcoin::CompressedPublicKey = pubkey_hex.parse().unwrap();
+        Address::p2wpkh(&pubkey, bitcoin::Network::Regtest)
+    }
 
     #[tokio::test]
     async fn test_accumulate_difficulty_exact_match() {
@@ -161,7 +181,7 @@ mod tests {
             SimplePplnsShare::new(
                 1,
                 400,
-                "addr1".to_string(),
+                make_test_address(1).to_string(),
                 "worker1".to_string(),
                 (current_time - 1800) * 1_000_000,
                 "job".to_string(),
@@ -171,7 +191,7 @@ mod tests {
             SimplePplnsShare::new(
                 2,
                 300,
-                "addr2".to_string(),
+                make_test_address(2).to_string(),
                 "worker2".to_string(),
                 (current_time - 2400) * 1_000_000,
                 "job".to_string(),
@@ -181,7 +201,7 @@ mod tests {
             SimplePplnsShare::new(
                 3,
                 200,
-                "addr3".to_string(),
+                make_test_address(3).to_string(),
                 "worker3".to_string(),
                 (current_time - 3000) * 1_000_000,
                 "job".to_string(),
@@ -191,7 +211,7 @@ mod tests {
             SimplePplnsShare::new(
                 4,
                 100,
-                "addr4".to_string(),
+                make_test_address(4).to_string(),
                 "worker4".to_string(),
                 (current_time - 3600) * 1_000_000,
                 "job".to_string(),
@@ -210,10 +230,10 @@ mod tests {
 
         // All 4 addresses should be present
         assert_eq!(result.len(), 4);
-        assert_eq!(result.get("addr1"), Some(&400.0));
-        assert_eq!(result.get("addr2"), Some(&300.0));
-        assert_eq!(result.get("addr3"), Some(&200.0));
-        assert_eq!(result.get("addr4"), Some(&100.0));
+        assert_eq!(result.get(&make_test_address(1)), Some(&400.0));
+        assert_eq!(result.get(&make_test_address(2)), Some(&300.0));
+        assert_eq!(result.get(&make_test_address(3)), Some(&200.0));
+        assert_eq!(result.get(&make_test_address(4)), Some(&100.0));
 
         // Verify total difficulty
         let total: f64 = result.values().sum();
@@ -236,7 +256,7 @@ mod tests {
             SimplePplnsShare::new(
                 1,
                 400,
-                "addr1".to_string(),
+                make_test_address(1).to_string(),
                 "worker1".to_string(),
                 (current_time - 1800) * 1_000_000,
                 "job".to_string(),
@@ -246,7 +266,7 @@ mod tests {
             SimplePplnsShare::new(
                 2,
                 300,
-                "addr2".to_string(),
+                make_test_address(2).to_string(),
                 "worker2".to_string(),
                 (current_time - 2400) * 1_000_000,
                 "job".to_string(),
@@ -256,7 +276,7 @@ mod tests {
             SimplePplnsShare::new(
                 3,
                 200,
-                "addr3".to_string(),
+                make_test_address(3).to_string(),
                 "worker3".to_string(),
                 (current_time - 3000) * 1_000_000,
                 "job".to_string(),
@@ -266,7 +286,7 @@ mod tests {
             SimplePplnsShare::new(
                 4,
                 100,
-                "addr4".to_string(),
+                make_test_address(4).to_string(),
                 "worker4".to_string(),
                 (current_time - 3600) * 1_000_000,
                 "job".to_string(),
@@ -285,10 +305,10 @@ mod tests {
 
         // addr4 (100 difficulty) should not be included since cutoff reached at 900
         assert_eq!(result.len(), 3);
-        assert_eq!(result.get("addr1"), Some(&400.0));
-        assert_eq!(result.get("addr2"), Some(&300.0));
-        assert_eq!(result.get("addr3"), Some(&200.0));
-        assert!(result.get("addr4").is_none());
+        assert_eq!(result.get(&make_test_address(1)), Some(&400.0));
+        assert_eq!(result.get(&make_test_address(2)), Some(&300.0));
+        assert_eq!(result.get(&make_test_address(3)), Some(&200.0));
+        assert!(result.get(&make_test_address(4)).is_none());
 
         let total: f64 = result.values().sum();
         assert_eq!(total, 900.0);
@@ -308,7 +328,7 @@ mod tests {
             SimplePplnsShare::new(
                 1,
                 100,
-                "addr1".to_string(),
+                make_test_address(1).to_string(),
                 "worker1".to_string(),
                 (current_time - 1800) * 1_000_000,
                 "job".to_string(),
@@ -318,7 +338,7 @@ mod tests {
             SimplePplnsShare::new(
                 2,
                 200,
-                "addr2".to_string(),
+                make_test_address(2).to_string(),
                 "worker2".to_string(),
                 (current_time - 2400) * 1_000_000,
                 "job10".to_string(),
@@ -347,8 +367,8 @@ mod tests {
 
         // All available shares included even though total (300) < target (500)
         assert_eq!(result.len(), 2);
-        assert_eq!(result.get("addr1"), Some(&100.0));
-        assert_eq!(result.get("addr2"), Some(&200.0));
+        assert_eq!(result.get(&make_test_address(1)), Some(&100.0));
+        assert_eq!(result.get(&make_test_address(2)), Some(&200.0));
 
         let total: f64 = result.values().sum();
         assert_eq!(total, 300.0);
@@ -383,7 +403,7 @@ mod tests {
         let shares = vec![SimplePplnsShare::new(
             1,
             1500,
-            "addr1".to_string(),
+            make_test_address(1).to_string(),
             "worker1".to_string(),
             (current_time - 1800) * 1_000_000,
             "job".to_string(),
@@ -401,7 +421,7 @@ mod tests {
 
         // Single share included even though it exceeds target
         assert_eq!(result.len(), 1);
-        assert_eq!(result.get("addr1"), Some(&1500.0));
+        assert_eq!(result.get(&make_test_address(1)), Some(&1500.0));
     }
 
     #[tokio::test]
@@ -414,12 +434,12 @@ mod tests {
 
         let mut chain_store_handle = ChainStoreHandle::default();
 
-        // Two shares from addr1, one from addr2 -- total difficulty 600
+        // Two shares from address 1, one from address 2 -- total difficulty 600
         let shares = vec![
             SimplePplnsShare::new(
                 1,
                 100,
-                "addr1".to_string(),
+                make_test_address(1).to_string(),
                 "worker1".to_string(),
                 (current_time - 50) * 1_000_000,
                 "job".to_string(),
@@ -429,7 +449,7 @@ mod tests {
             SimplePplnsShare::new(
                 2,
                 200,
-                "addr2".to_string(),
+                make_test_address(2).to_string(),
                 "worker2".to_string(),
                 (current_time - 150) * 1_000_000,
                 "job".to_string(),
@@ -439,7 +459,7 @@ mod tests {
             SimplePplnsShare::new(
                 3,
                 300,
-                "addr1".to_string(),
+                make_test_address(1).to_string(),
                 "worker3".to_string(),
                 (current_time - 250) * 1_000_000,
                 "job".to_string(),
@@ -466,10 +486,10 @@ mod tests {
             .accumulate_difficulty_by_address(&chain_store_handle, 1000.0)
             .unwrap();
 
-        // addr1 shares aggregated: 100 + 300 = 400
+        // address 1 shares aggregated: 100 + 300 = 400
         assert_eq!(result.len(), 2);
-        assert_eq!(result.get("addr1"), Some(&400.0));
-        assert_eq!(result.get("addr2"), Some(&200.0));
+        assert_eq!(result.get(&make_test_address(1)), Some(&400.0));
+        assert_eq!(result.get(&make_test_address(2)), Some(&200.0));
     }
 
     #[tokio::test]
@@ -487,7 +507,7 @@ mod tests {
             SimplePplnsShare::new(
                 1,
                 100,
-                "addr1".to_string(),
+                make_test_address(1).to_string(),
                 "worker1".to_string(),
                 (current_time - 1800) * 1_000_000,
                 "job".to_string(),
@@ -497,7 +517,7 @@ mod tests {
             SimplePplnsShare::new(
                 2,
                 200,
-                "addr2".to_string(),
+                make_test_address(2).to_string(),
                 "worker2".to_string(),
                 (current_time - 2400) * 1_000_000,
                 "job".to_string(),
@@ -511,7 +531,7 @@ mod tests {
             SimplePplnsShare::new(
                 3,
                 150,
-                "addr1".to_string(),
+                make_test_address(1).to_string(),
                 "worker3".to_string(),
                 (current_time - 90000) * 1_000_000,
                 "job".to_string(),
@@ -521,7 +541,7 @@ mod tests {
             SimplePplnsShare::new(
                 4,
                 250,
-                "addr3".to_string(),
+                make_test_address(3).to_string(),
                 "worker4".to_string(),
                 (current_time - 100000) * 1_000_000,
                 "job".to_string(),
@@ -552,13 +572,13 @@ mod tests {
 
         // All shares from both batches should be included since batch_one (300)
         // is insufficient and batch_two pushes us over the 600 target.
-        // addr1: 100 (batch 1) + 150 (batch 2) = 250
-        // addr2: 200 (batch 1)
-        // addr3: 250 (batch 2)
+        // address 1: 100 (batch 1) + 150 (batch 2) = 250
+        // address 2: 200 (batch 1)
+        // address 3: 250 (batch 2)
         assert_eq!(result.len(), 3);
-        assert_eq!(result.get("addr1"), Some(&250.0));
-        assert_eq!(result.get("addr2"), Some(&200.0));
-        assert_eq!(result.get("addr3"), Some(&250.0));
+        assert_eq!(result.get(&make_test_address(1)), Some(&250.0));
+        assert_eq!(result.get(&make_test_address(2)), Some(&200.0));
+        assert_eq!(result.get(&make_test_address(3)), Some(&250.0));
 
         let total: f64 = result.values().sum();
         assert_eq!(total, 700.0);

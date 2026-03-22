@@ -35,11 +35,11 @@ use tracing::info;
 
 /// Maximum number of confirmed shares in the PPLNS window.
 /// At 6 shares per minute over 2 weeks: 6 * 60 * 24 * 14 = 120,960.
-pub(crate) const MAX_PPLNS_WINDOW_SHARES: u32 = 6 * 60 * 24 * 14;
+pub(crate) const MAX_PPLNS_WINDOW_SHARES: usize = 6 * 60 * 24 * 14;
 
 /// Estimated maximum shares in the PPLNS window.
 /// Conservative 2x multiplier to account for variable block times.
-pub(crate) const ESTIMATED_MAX_SHARES_IN_WINDOW: u32 = MAX_PPLNS_WINDOW_SHARES * 2;
+pub(crate) const ESTIMATED_MAX_SHARES_IN_WINDOW: usize = MAX_PPLNS_WINDOW_SHARES * 2;
 
 /// Uncle weight factor: uncles receive 90% of their difficulty.
 pub const UNCLE_WEIGHT_FACTOR: f64 = 0.9;
@@ -57,18 +57,16 @@ const MAX_REORG_SCAN_DEPTH: usize = 100;
 /// Based on typical PPLNS window of ~6 hours (6 shares/min * 60 * 6).
 const INITIAL_ENTRIES_CAPACITY: usize = 2160;
 
-/// Reasonable upper bound for distinct miners when sizing the difficulty map.
-const ADDRESS_MAP_INIT_COUNT: usize = 256;
-
 /// A cached confirmed share entry with only the fields needed for payout.
 struct ConfirmedEntry {
     blockhash: BlockHash,
     /// Confirmed chain height of this entry.
     height: u32,
-    miner_address: String,
-    /// Internal key used to track the miner address in the vector of confirmed entries
+    /// Internal key mapping the miner address in AddressKeys.
     internal_key: usize,
+    /// Difficult of the share
     difficulty: f64,
+    /// Uncle entries, if any, referenced by the share
     uncle_entries: Vec<UncleEntry>,
     /// Total weighted difficulty this entry contributes to the aggregate.
     /// Equals difficulty + nephew_bonus (from uncles) + sum of uncle weighted difficulties.
@@ -77,9 +75,7 @@ struct ConfirmedEntry {
 
 /// A cached uncle entry with only the fields needed for payout.
 struct UncleEntry {
-    /// Miner address string for the uncle share.
-    miner_address: String,
-    /// Internal key used to track the miner address in the address keys map.
+    /// Internal key mapping the miner address in AddressKeys.
     internal_key: usize,
     /// Base difficulty of the uncle share before weighting.
     difficulty: f64,
@@ -91,22 +87,19 @@ struct UncleEntry {
 /// allowing incremental loading of only newly confirmed headers on each
 /// update rather than re-reading the full window from RocksDB.
 ///
-/// Caches MAX_PPLNS_WINDOW_SHARES number of confirmed entries and
+/// Caches ESTIMATED_MAX_SHARES_IN_WINDOW number of confirmed entries and
 /// their uncles, no matter how far back in time we need to go to get
 /// to those many entries. This simplifies eviction and the cache
 /// maintenance logic.
 pub struct PplnsWindow {
     /// Confirmed share entries ordered newest-to-oldest, capped by both
-    /// MAX_PPLNS_WINDOW_SHARES and the total_difficulty threshold.
+    /// ESTIMATED_MAX_SHARES_IN_WINDOW and the total_difficulty threshold.
     confirmed_entries: VecDeque<ConfirmedEntry>,
     /// The blockhash of the chain tip when this cache was last updated.
     cached_tip_blockhash: Option<BlockHash>,
     /// The height of the highest confirmed share in the cache.
     cached_top_height: Option<u32>,
-    /// Incrementally maintained aggregate of weighted difficulty per
-    /// miner address. This gives us the payout distribution directly.
-    address_difficulty_map: HashMap<String, f64>,
-    /// Sum of all confirmed entries' difficulties  in the window.
+    /// Sum of all confirmed entries' difficulties in the window.
     total_accumulated_difficulty: f64,
     /// Address internal key mapping
     address_keys: AddressKeys,
@@ -119,7 +112,6 @@ impl Default for PplnsWindow {
             confirmed_entries: VecDeque::with_capacity(INITIAL_ENTRIES_CAPACITY),
             cached_tip_blockhash: None,
             cached_top_height: None,
-            address_difficulty_map: HashMap::with_capacity(ADDRESS_MAP_INIT_COUNT),
             total_accumulated_difficulty: 0.0,
             address_keys: AddressKeys::default(),
         }
@@ -132,12 +124,47 @@ impl PplnsWindow {
         self.confirmed_entries.is_empty()
     }
 
-    /// Return the cached address difficulty map.
+    /// Compute the payout distribution by walking confirmed entries.
     ///
-    /// This map is maintained incrementally by `update()` so no iteration
-    /// over confirmed entries is needed.
-    pub fn get_address_difficulty_map(&self) -> &HashMap<String, f64> {
-        &self.address_difficulty_map
+    /// Iterates newest-to-oldest, accumulating weighted difficulty per
+    /// address using a Vec indexed by internal key. Stops when
+    /// accumulated difficulty meets total_difficulty. Returns a map of
+    /// Address to weighted difficulty.
+    pub fn get_distribution(&self, total_difficulty: f64) -> HashMap<Address, f64> {
+        let mut difficulty_by_key = vec![0.0f64; self.address_keys.len()];
+        let mut accumulated_difficulty: f64 = 0.0;
+
+        for entry in &self.confirmed_entries {
+            let mut nephew_bonus: f64 = 0.0;
+
+            for uncle_entry in &entry.uncle_entries {
+                difficulty_by_key[uncle_entry.internal_key] +=
+                    uncle_entry.difficulty * UNCLE_WEIGHT_FACTOR;
+                nephew_bonus += uncle_entry.difficulty * NEPHEW_BONUS_FACTOR;
+            }
+
+            difficulty_by_key[entry.internal_key] += entry.difficulty + nephew_bonus;
+            accumulated_difficulty += entry.total_weighted_difficulty;
+
+            if accumulated_difficulty.floor() >= total_difficulty.floor() {
+                return self.collect_distribution(&difficulty_by_key);
+            }
+        }
+
+        self.collect_distribution(&difficulty_by_key)
+    }
+
+    /// Convert the Vec-based difficulty accumulation into a HashMap<Address, f64>.
+    fn collect_distribution(&self, difficulty_by_key: &[f64]) -> HashMap<Address, f64> {
+        let mut result = HashMap::with_capacity(difficulty_by_key.len());
+        for (index, difficulty) in difficulty_by_key.iter().enumerate() {
+            if *difficulty > f64::EPSILON {
+                if let Some(address) = self.address_keys.value_for(index) {
+                    result.insert(address.clone(), *difficulty);
+                }
+            }
+        }
+        result
     }
 
     /// Update the cache from the chain store incrementally.
@@ -145,7 +172,7 @@ impl PplnsWindow {
     /// Loads only newly confirmed headers since the last cached height,
     /// handles reorgs by removing only the divergent entries and loading
     /// the new fork, and evicts overflow entries that exceed either
-    /// MAX_PPLNS_WINDOW_SHARES or total_difficulty.
+    /// ESTIMATED_MAX_SHARES_IN_WINDOW or total_difficulty.
     ///
     /// Returns Ok(true) if the cache was updated, Ok(false) if no changes.
     pub fn update(
@@ -175,7 +202,8 @@ impl PplnsWindow {
             }
         } else {
             // no cached top height, first load
-            let estimated_min_height = tip_height.saturating_sub(ESTIMATED_MAX_SHARES_IN_WINDOW);
+            let estimated_min_height =
+                tip_height.saturating_sub(ESTIMATED_MAX_SHARES_IN_WINDOW as u32);
             self.load_range(chain_store_handle, estimated_min_height, tip_height)?;
         }
 
@@ -226,7 +254,7 @@ impl PplnsWindow {
                 info!("Deep reorg detected in PPLNS window, full cache invalidation");
                 self.invalidate();
                 let estimated_min_height =
-                    tip_height.saturating_sub(ESTIMATED_MAX_SHARES_IN_WINDOW);
+                    tip_height.saturating_sub(ESTIMATED_MAX_SHARES_IN_WINDOW as u32);
                 self.load_range(chain_store_handle, estimated_min_height, tip_height)?;
             }
         }
@@ -236,7 +264,6 @@ impl PplnsWindow {
     /// Clear all cached state, forcing a full reload on next update.
     fn invalidate(&mut self) {
         self.confirmed_entries.clear();
-        self.address_difficulty_map.clear();
         self.total_accumulated_difficulty = 0.0;
         self.cached_tip_blockhash = None;
         self.cached_top_height = None;
@@ -278,7 +305,7 @@ impl PplnsWindow {
                 return;
             }
             if let Some(entry) = self.confirmed_entries.pop_front() {
-                self.remove_entry_from_aggregate(&entry);
+                self.remove_from_running_total(&entry);
             }
         }
     }
@@ -321,59 +348,21 @@ impl PplnsWindow {
                 difficulty,
                 uncle_entries,
             );
-            self.add_entry_to_aggregate(&entry);
+            self.add_to_running_total(&entry);
             self.confirmed_entries.push_front(entry);
         }
 
         Ok(())
     }
 
-    /// Add a confirmed entry's weighted difficulty contributions to the aggregate.
-    fn add_entry_to_aggregate(&mut self, entry: &ConfirmedEntry) {
-        let mut nephew_bonus: f64 = 0.0;
-
-        for uncle_entry in &entry.uncle_entries {
-            let uncle_weighted = uncle_entry.difficulty * UNCLE_WEIGHT_FACTOR;
-            *self
-                .address_difficulty_map
-                .entry(uncle_entry.miner_address.clone())
-                .or_insert(0.0) += uncle_weighted;
-
-            nephew_bonus += uncle_entry.difficulty * NEPHEW_BONUS_FACTOR;
-        }
-
-        *self
-            .address_difficulty_map
-            .entry(entry.miner_address.clone())
-            .or_insert(0.0) += entry.difficulty + nephew_bonus;
-
+    /// Add a confirmed entry's weighted difficulty to the running total.
+    fn add_to_running_total(&mut self, entry: &ConfirmedEntry) {
         self.total_accumulated_difficulty += entry.total_weighted_difficulty;
     }
 
-    /// Remove a confirmed entry's weighted difficulty contributions from the aggregate.
-    fn remove_entry_from_aggregate(&mut self, entry: &ConfirmedEntry) {
-        let mut nephew_bonus: f64 = 0.0;
-
-        for uncle_entry in &entry.uncle_entries {
-            let uncle_weighted = uncle_entry.difficulty * UNCLE_WEIGHT_FACTOR;
-            if let Some(value) = self
-                .address_difficulty_map
-                .get_mut(&uncle_entry.miner_address)
-            {
-                *value -= uncle_weighted;
-            }
-
-            nephew_bonus += uncle_entry.difficulty * NEPHEW_BONUS_FACTOR;
-        }
-
-        if let Some(value) = self.address_difficulty_map.get_mut(&entry.miner_address) {
-            *value -= entry.difficulty + nephew_bonus;
-        }
-
+    /// Remove a confirmed entry's weighted difficulty from the running total.
+    fn remove_from_running_total(&mut self, entry: &ConfirmedEntry) {
         self.total_accumulated_difficulty -= entry.total_weighted_difficulty;
-
-        self.address_difficulty_map
-            .retain(|_, difficulty| *difficulty > f64::EPSILON);
     }
 
     /// Evict the oldest confirmed entries until both the share count and
@@ -387,13 +376,11 @@ impl PplnsWindow {
     }
 
     fn evict_overflow(&mut self, total_difficulty: f64) {
-        let max_entries = MAX_PPLNS_WINDOW_SHARES as usize;
-
-        while self.confirmed_entries.len() > max_entries
+        while self.confirmed_entries.len() > ESTIMATED_MAX_SHARES_IN_WINDOW
             || self.difficulty_exceeds_limit(total_difficulty)
         {
             if let Some(entry) = self.confirmed_entries.pop_back() {
-                self.remove_entry_from_aggregate(&entry);
+                self.remove_from_running_total(&entry);
             } else {
                 return;
             }
@@ -409,7 +396,6 @@ impl PplnsWindow {
         difficulty: f64,
         uncle_entries: Vec<UncleEntry>,
     ) -> ConfirmedEntry {
-        let miner_address_string = miner_address.to_string();
         let internal_key = self.address_keys.key_for(miner_address);
 
         let mut nephew_bonus: f64 = 0.0;
@@ -423,7 +409,6 @@ impl PplnsWindow {
         ConfirmedEntry {
             blockhash,
             height,
-            miner_address: miner_address_string,
             difficulty,
             uncle_entries,
             total_weighted_difficulty,
@@ -433,10 +418,8 @@ impl PplnsWindow {
 
     /// Build an UncleEntry, resolving the miner address to an internal key.
     fn build_uncle_entry(&mut self, miner_address: Address, difficulty: f64) -> UncleEntry {
-        let miner_address_string = miner_address.to_string();
         let internal_key = self.address_keys.key_for(miner_address);
         UncleEntry {
-            miner_address: miner_address_string,
             internal_key,
             difficulty,
         }
@@ -489,7 +472,6 @@ fn resolve_uncle_entries(
     for uncle_hash in uncle_hashes {
         if let Some(uncle_entry) = uncle_lookup.get(uncle_hash) {
             entries.push(UncleEntry {
-                miner_address: uncle_entry.miner_address.clone(),
                 difficulty: uncle_entry.difficulty,
                 internal_key: uncle_entry.internal_key,
             });
@@ -542,7 +524,7 @@ impl PplnsWindow {
                 difficulty,
                 uncle_entries,
             );
-            self.add_entry_to_aggregate(&entry);
+            self.add_to_running_total(&entry);
             self.confirmed_entries.push_back(entry);
         }
 
@@ -593,7 +575,7 @@ impl PplnsWindow {
                 difficulty,
                 uncle_entries,
             );
-            self.add_entry_to_aggregate(&entry);
+            self.add_to_running_total(&entry);
             self.confirmed_entries.push_front(entry);
         }
 
@@ -993,14 +975,14 @@ mod tests {
         let entry_c = entry_from_header(&mut window, &header_c, 2);
         let entry_b = entry_from_header(&mut window, &header_b, 1);
         let entry_a = entry_from_header(&mut window, &header_a, 0);
-        window.add_entry_to_aggregate(&entry_c);
+        window.add_to_running_total(&entry_c);
         window.confirmed_entries.push_back(entry_c);
-        window.add_entry_to_aggregate(&entry_b);
+        window.add_to_running_total(&entry_b);
         window.confirmed_entries.push_back(entry_b);
-        window.add_entry_to_aggregate(&entry_a);
+        window.add_to_running_total(&entry_a);
         window.confirmed_entries.push_back(entry_a);
 
-        // With 3 entries and MAX_PPLNS_WINDOW_SHARES >> 3, no eviction occurs
+        // With 3 entries and ESTIMATED_MAX_SHARES_IN_WINDOW >> 3, no eviction occurs
         window.evict_overflow(f64::MAX);
         assert_eq!(window.confirmed_entries.len(), 3);
 
@@ -1027,8 +1009,8 @@ mod tests {
         let entry_a = entry_from_header(&mut window, &header_a, 0);
         window.confirmed_entries.push_back(entry_a);
 
-        // Pad to exceed MAX_PPLNS_WINDOW_SHARES
-        let max_shares = MAX_PPLNS_WINDOW_SHARES as usize;
+        // Pad to exceed ESTIMATED_MAX_SHARES_IN_WINDOW
+        let max_shares = ESTIMATED_MAX_SHARES_IN_WINDOW as usize;
         let padding_needed = max_shares; // total will be max + 2
         let padding_address = header_a.miner_address.clone();
         for index in 0..padding_needed {
@@ -1054,7 +1036,7 @@ mod tests {
     }
 
     #[test]
-    fn test_address_difficulty_map() {
+    fn test_get_distribution() {
         let genesis_hash = BlockHash::all_zeros();
         let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
@@ -1064,18 +1046,16 @@ mod tests {
         let mut window = PplnsWindow::default();
         let entry2 = entry_from_header(&mut window, &header2, 1);
         let entry1 = entry_from_header(&mut window, &header1, 0);
-        window.add_entry_to_aggregate(&entry2);
+        window.add_to_running_total(&entry2);
         window.confirmed_entries.push_back(entry2);
-        window.add_entry_to_aggregate(&entry1);
+        window.add_to_running_total(&entry1);
         window.confirmed_entries.push_back(entry1);
 
-        let result = window.get_address_difficulty_map();
+        let result = window.get_distribution(f64::MAX);
 
-        let miner1 = header1.miner_address.to_string();
-        let miner2 = header2.miner_address.to_string();
         assert_eq!(result.len(), 2);
-        assert!((result[&miner1] - difficulty1).abs() < 0.001);
-        assert!((result[&miner2] - difficulty2).abs() < 0.001);
+        assert!((result[&header1.miner_address] - difficulty1).abs() < 0.001);
+        assert!((result[&header2.miner_address] - difficulty2).abs() < 0.001);
 
         // No uncles, so total_weighted == difficulty for each entry
         let expected_total = difficulty1 + difficulty2;
@@ -1098,11 +1078,11 @@ mod tests {
         let entry3 = entry_from_header(&mut window, &header3, 2);
         let entry2 = entry_from_header(&mut window, &header2, 1);
         let entry1 = entry_from_header(&mut window, &header1, 0);
-        window.add_entry_to_aggregate(&entry3);
+        window.add_to_running_total(&entry3);
         window.confirmed_entries.push_back(entry3);
-        window.add_entry_to_aggregate(&entry2);
+        window.add_to_running_total(&entry2);
         window.confirmed_entries.push_back(entry2);
-        window.add_entry_to_aggregate(&entry1);
+        window.add_to_running_total(&entry1);
         window.confirmed_entries.push_back(entry1);
 
         // All shares have the same difficulty, total is 3x
@@ -1120,10 +1100,9 @@ mod tests {
         // Only the newest share (header3) should remain
         assert_eq!(window.confirmed_entries.len(), 1);
         assert_eq!(window.confirmed_entries[0].blockhash, header3.block_hash());
-        let result = window.get_address_difficulty_map();
-        let miner3 = header3.miner_address.to_string();
+        let result = window.get_distribution(f64::MAX);
         assert_eq!(result.len(), 1);
-        assert!(result.contains_key(&miner3));
+        assert!(result.contains_key(&header3.miner_address));
 
         assert!(
             (window.total_accumulated_difficulty - difficulty).abs() < 0.001,
@@ -1150,21 +1129,18 @@ mod tests {
         let uncle_entry = uncle_entry_from_header(&mut window, &uncle_header);
         let nephew_entry =
             entry_from_header_with_uncles(&mut window, &nephew_header, 0, vec![uncle_entry]);
-        window.add_entry_to_aggregate(&nephew_entry);
+        window.add_to_running_total(&nephew_entry);
         window.confirmed_entries.push_back(nephew_entry);
 
-        let result = window.get_address_difficulty_map();
-
-        let nephew_miner = nephew_header.miner_address.to_string();
-        let uncle_miner = uncle_header.miner_address.to_string();
+        let result = window.get_distribution(f64::MAX);
 
         // Uncle gets 90% of its difficulty
         let expected_uncle_weight = uncle_difficulty * UNCLE_WEIGHT_FACTOR;
-        assert!((result[&uncle_miner] - expected_uncle_weight).abs() < 0.001);
+        assert!((result[&uncle_header.miner_address] - expected_uncle_weight).abs() < 0.001);
 
         // Nephew gets base difficulty + 10% of uncle's difficulty
         let expected_nephew_weight = nephew_difficulty + uncle_difficulty * NEPHEW_BONUS_FACTOR;
-        assert!((result[&nephew_miner] - expected_nephew_weight).abs() < 0.001);
+        assert!((result[&nephew_header.miner_address] - expected_nephew_weight).abs() < 0.001);
 
         // total_accumulated_difficulty includes nephew base + uncle weighted + nephew bonus
         let expected_total = nephew_difficulty
@@ -1416,11 +1392,12 @@ mod tests {
         window.update(&mock, f64::MAX).unwrap();
 
         let difficulty = headers_a[0].header.get_difficulty();
-        let miner_g = headers_a[0].header.miner_address.to_string();
+        let miner_g = &headers_a[0].header.miner_address;
 
         // All 3 shares are by PUBKEY_G
-        assert_eq!(window.get_address_difficulty_map().len(), 1);
-        assert!((window.get_address_difficulty_map()[&miner_g] - 3.0 * difficulty).abs() < 0.001);
+        let dist = window.get_distribution(f64::MAX);
+        assert_eq!(dist.len(), 1);
+        assert!((dist[miner_g] - 3.0 * difficulty).abs() < 0.001);
 
         // Reorg: replace height 2 with a share by PUBKEY_2G
         let preserved_hash_at_1 = headers_a[1].blockhash; // height 1
@@ -1463,19 +1440,20 @@ mod tests {
 
         window.update(&mock2, f64::MAX).unwrap();
 
-        let miner_2g = fork_header.miner_address.to_string();
+        let miner_2g = &fork_header.miner_address;
 
         // Now: 2 shares by PUBKEY_G (heights 0-1) + 1 share by PUBKEY_2G (height 2)
-        assert_eq!(window.get_address_difficulty_map().len(), 2);
+        let dist = window.get_distribution(f64::MAX);
+        assert_eq!(dist.len(), 2);
         assert!(
-            (window.get_address_difficulty_map()[&miner_g] - 2.0 * difficulty).abs() < 0.001,
+            (dist[miner_g] - 2.0 * difficulty).abs() < 0.001,
             "PUBKEY_G should have 2x difficulty, got {}",
-            window.get_address_difficulty_map()[&miner_g]
+            dist[miner_g]
         );
         assert!(
-            (window.get_address_difficulty_map()[&miner_2g] - difficulty).abs() < 0.001,
+            (dist[miner_2g] - difficulty).abs() < 0.001,
             "PUBKEY_2G should have 1x difficulty, got {}",
-            window.get_address_difficulty_map()[&miner_2g]
+            dist[miner_2g]
         );
 
         let expected_total = 3.0 * difficulty;

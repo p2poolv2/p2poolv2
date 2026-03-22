@@ -101,12 +101,12 @@ fn build_benchmark_window(share_count: usize) -> PplnsWindow {
     window
 }
 
-fn bench_get_address_difficulty_map(criterion: &mut Criterion) {
+fn bench_get_distribution(criterion: &mut Criterion) {
     let window = build_benchmark_window(TOTAL_CONFIRMED_SHARES);
 
-    criterion.bench_function("get_address_difficulty_map_full_window", |bencher| {
+    criterion.bench_function("get_distribution_full_window", |bencher| {
         bencher.iter(|| {
-            black_box(window.get_address_difficulty_map());
+            black_box(window.get_distribution(f64::MAX));
         });
     });
 }
@@ -253,5 +253,5 @@ fn bench_update(criterion: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_get_address_difficulty_map, bench_update);
+criterion_group!(benches, bench_get_distribution, bench_update);
 criterion_main!(benches);
