@@ -64,7 +64,7 @@ struct ConfirmedEntry {
     height: u32,
     /// Internal key mapping the miner address in AddressKeys.
     internal_key: usize,
-    /// Difficult of the share
+    /// Difficulty of the share
     difficulty: f64,
     /// Uncle entries, if any, referenced by the share
     uncle_entries: Vec<UncleEntry>,
