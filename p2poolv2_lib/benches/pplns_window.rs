@@ -23,7 +23,7 @@ use bitcoin::BlockHash;
 use bitcoin::CompressedPublicKey;
 use bitcoin::hashes::Hash;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::{PplnsWindow, UncleEntry};
+use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::PplnsWindow;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::test_utils::{
     PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G, PUBKEY_G, TestShareBlockBuilder, genesis_for_tests,
@@ -74,7 +74,7 @@ fn build_benchmark_window(share_count: usize) -> PplnsWindow {
     let miner_addresses = build_miner_addresses();
     let miner_count = miner_addresses.len();
 
-    let mut confirmed_shares: Vec<(BlockHash, String, f64, Vec<UncleEntry>)> =
+    let mut confirmed_shares: Vec<(BlockHash, String, f64, Vec<(String, f64)>)> =
         Vec::with_capacity(share_count);
 
     let mut uncle_counter: usize = 0;
@@ -84,19 +84,16 @@ fn build_benchmark_window(share_count: usize) -> PplnsWindow {
         let difficulty = BASE_DIFFICULTY + (share_index as f64) * 0.01;
         let blockhash = blockhash_from_index(share_index);
 
-        let uncle_entries = if share_index % UNCLE_INTERVAL == 0 {
+        let uncle_data = if share_index % UNCLE_INTERVAL == 0 {
             let uncle_miner = miner_addresses[(uncle_counter + 2) % miner_count].clone();
             let uncle_difficulty = BASE_DIFFICULTY * 0.8;
             uncle_counter += 1;
-            vec![UncleEntry {
-                miner_address: uncle_miner,
-                difficulty: uncle_difficulty,
-            }]
+            vec![(uncle_miner, uncle_difficulty)]
         } else {
             Vec::new()
         };
 
-        confirmed_shares.push((blockhash, miner_address, difficulty, uncle_entries));
+        confirmed_shares.push((blockhash, miner_address, difficulty, uncle_data));
     }
 
     let mut window = PplnsWindow::default();

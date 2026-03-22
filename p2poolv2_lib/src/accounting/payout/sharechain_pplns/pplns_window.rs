@@ -20,13 +20,14 @@
 //! allowing incremental updates (loading only newly confirmed headers)
 //! instead of re-reading the full window from RocksDB on every notify.
 
+use super::address_keys::AddressKeys;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ConfirmedHeaderResult;
-use crate::shares::share_block::ShareHeader;
+use bitcoin::Address;
 use bitcoin::BlockHash;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
@@ -65,6 +66,8 @@ struct ConfirmedEntry {
     /// Confirmed chain height of this entry.
     height: u32,
     miner_address: String,
+    /// Internal key used to track the miner address in the vector of confirmed entries
+    internal_key: usize,
     difficulty: f64,
     uncle_entries: Vec<UncleEntry>,
     /// Total weighted difficulty this entry contributes to the aggregate.
@@ -73,11 +76,13 @@ struct ConfirmedEntry {
 }
 
 /// A cached uncle entry with only the fields needed for payout.
-pub struct UncleEntry {
+struct UncleEntry {
     /// Miner address string for the uncle share.
-    pub miner_address: String,
+    miner_address: String,
+    /// Internal key used to track the miner address in the address keys map.
+    internal_key: usize,
     /// Base difficulty of the uncle share before weighting.
-    pub difficulty: f64,
+    difficulty: f64,
 }
 
 /// Incremental PPLNS window cache.
@@ -103,6 +108,8 @@ pub struct PplnsWindow {
     address_difficulty_map: HashMap<String, f64>,
     /// Sum of all confirmed entries' difficulties  in the window.
     total_accumulated_difficulty: f64,
+    /// Address internal key mapping
+    address_keys: AddressKeys,
 }
 
 impl Default for PplnsWindow {
@@ -114,6 +121,7 @@ impl Default for PplnsWindow {
             cached_top_height: None,
             address_difficulty_map: HashMap::with_capacity(ADDRESS_MAP_INIT_COUNT),
             total_accumulated_difficulty: 0.0,
+            address_keys: AddressKeys::default(),
         }
     }
 }
@@ -294,7 +302,7 @@ impl PplnsWindow {
         }
 
         let all_uncle_hashes = collect_unique_uncle_hashes(&confirmed_headers);
-        let uncle_lookup = fetch_uncle_lookup(chain_store_handle, &all_uncle_hashes)?;
+        let uncle_lookup = self.fetch_uncle_lookup(chain_store_handle, &all_uncle_hashes)?;
 
         // Headers arrive newest-to-oldest. Reverse to oldest-first so
         // the newest entry ends up at position 0 in the deque after push_front.
@@ -306,10 +314,10 @@ impl PplnsWindow {
         {
             let difficulty = header.get_difficulty();
             let uncle_entries = resolve_uncle_entries(&header.uncles, &uncle_lookup);
-            let entry = build_confirmed_entry(
+            let entry = self.build_confirmed_entry(
                 blockhash,
                 height,
-                header.miner_address.to_string(),
+                header.miner_address,
                 difficulty,
                 uncle_entries,
             );
@@ -391,31 +399,67 @@ impl PplnsWindow {
             }
         }
     }
-}
 
-/// Build a ConfirmedEntry with pre-computed total weighted difficulty.
-fn build_confirmed_entry(
-    blockhash: BlockHash,
-    height: u32,
-    miner_address: String,
-    difficulty: f64,
-    uncle_entries: Vec<UncleEntry>,
-) -> ConfirmedEntry {
-    let mut nephew_bonus: f64 = 0.0;
-    let mut uncle_weighted_sum: f64 = 0.0;
-    for uncle_entry in &uncle_entries {
-        uncle_weighted_sum += uncle_entry.difficulty * UNCLE_WEIGHT_FACTOR;
-        nephew_bonus += uncle_entry.difficulty * NEPHEW_BONUS_FACTOR;
+    /// Build a ConfirmedEntry, resolving the miner address to an internal key.
+    fn build_confirmed_entry(
+        &mut self,
+        blockhash: BlockHash,
+        height: u32,
+        miner_address: Address,
+        difficulty: f64,
+        uncle_entries: Vec<UncleEntry>,
+    ) -> ConfirmedEntry {
+        let miner_address_string = miner_address.to_string();
+        let internal_key = self.address_keys.key_for(miner_address);
+
+        let mut nephew_bonus: f64 = 0.0;
+        let mut uncle_weighted_sum: f64 = 0.0;
+        for uncle_entry in &uncle_entries {
+            uncle_weighted_sum += uncle_entry.difficulty * UNCLE_WEIGHT_FACTOR;
+            nephew_bonus += uncle_entry.difficulty * NEPHEW_BONUS_FACTOR;
+        }
+        let total_weighted_difficulty = difficulty + nephew_bonus + uncle_weighted_sum;
+
+        ConfirmedEntry {
+            blockhash,
+            height,
+            miner_address: miner_address_string,
+            difficulty,
+            uncle_entries,
+            total_weighted_difficulty,
+            internal_key,
+        }
     }
-    let total_weighted_difficulty = difficulty + nephew_bonus + uncle_weighted_sum;
 
-    ConfirmedEntry {
-        blockhash,
-        height,
-        miner_address,
-        difficulty,
-        uncle_entries,
-        total_weighted_difficulty,
+    /// Build an UncleEntry, resolving the miner address to an internal key.
+    fn build_uncle_entry(&mut self, miner_address: Address, difficulty: f64) -> UncleEntry {
+        let miner_address_string = miner_address.to_string();
+        let internal_key = self.address_keys.key_for(miner_address);
+        UncleEntry {
+            miner_address: miner_address_string,
+            internal_key,
+            difficulty,
+        }
+    }
+
+    /// Fetch uncle headers from the chain store and build a lookup table.
+    fn fetch_uncle_lookup(
+        &mut self,
+        chain_store_handle: &ChainStoreHandle,
+        uncle_hashes: &[BlockHash],
+    ) -> Result<HashMap<BlockHash, UncleEntry>, Box<dyn Error + Send + Sync>> {
+        if uncle_hashes.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let uncle_headers = chain_store_handle.get_share_headers(uncle_hashes)?;
+        let mut uncle_lookup = HashMap::with_capacity(uncle_headers.len());
+        for (blockhash, header) in uncle_headers {
+            let difficulty = header.get_difficulty();
+            let uncle_entry = self.build_uncle_entry(header.miner_address, difficulty);
+            uncle_lookup.insert(blockhash, uncle_entry);
+        }
+        Ok(uncle_lookup)
     }
 }
 
@@ -436,30 +480,6 @@ fn collect_unique_uncle_hashes(confirmed_headers: &[ConfirmedHeaderResult]) -> V
     all_uncle_hashes
 }
 
-/// Fetch uncle headers from the chain store and build a lookup table.
-fn fetch_uncle_lookup(
-    chain_store_handle: &ChainStoreHandle,
-    uncle_hashes: &[BlockHash],
-) -> Result<HashMap<BlockHash, UncleEntry>, Box<dyn Error + Send + Sync>> {
-    if uncle_hashes.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    let uncle_headers = chain_store_handle.get_share_headers(uncle_hashes)?;
-    let mut uncle_lookup = HashMap::with_capacity(uncle_headers.len());
-    for (blockhash, header) in uncle_headers {
-        let difficulty = header.get_difficulty();
-        uncle_lookup.insert(
-            blockhash,
-            UncleEntry {
-                miner_address: header.miner_address.to_string(),
-                difficulty,
-            },
-        );
-    }
-    Ok(uncle_lookup)
-}
-
 /// Resolve uncle hashes into UncleEntry values using a pre-built lookup table.
 fn resolve_uncle_entries(
     uncle_hashes: &[BlockHash],
@@ -471,6 +491,7 @@ fn resolve_uncle_entries(
             entries.push(UncleEntry {
                 miner_address: uncle_entry.miner_address.clone(),
                 difficulty: uncle_entry.difficulty,
+                internal_key: uncle_entry.internal_key,
             });
         } else {
             tracing::warn!("Uncle header not found for {uncle_hash}, skipping");
@@ -480,26 +501,47 @@ fn resolve_uncle_entries(
 }
 
 #[cfg(any(test, feature = "test-utils"))]
+use crate::shares::share_block::ShareHeader;
+
+#[cfg(any(test, feature = "test-utils"))]
 impl PplnsWindow {
     /// Populate the window cache directly for benchmarking.
     ///
     /// Accepts confirmed shares and uncles as tuples of primitives,
     /// bypassing the chain store. Confirmed shares should be ordered
-    /// newest-to-oldest.
+    /// newest-to-oldest. Uncle data is provided as (miner_address_string, difficulty).
     pub fn populate_for_benchmark(
         &mut self,
-        confirmed_shares: Vec<(BlockHash, String, f64, Vec<UncleEntry>)>,
+        confirmed_shares: Vec<(BlockHash, String, f64, Vec<(String, f64)>)>,
     ) {
         self.invalidate();
         self.confirmed_entries.reserve(confirmed_shares.len());
 
         let total_count = confirmed_shares.len() as u32;
-        for (index, (blockhash, miner_address, difficulty, uncle_entries)) in
+        for (index, (blockhash, miner_address_string, difficulty, uncle_data)) in
             confirmed_shares.into_iter().enumerate()
         {
+            let mut uncle_entries = Vec::with_capacity(uncle_data.len());
+            for (uncle_miner_string, uncle_difficulty) in uncle_data {
+                let uncle_miner = uncle_miner_string
+                    .parse::<bitcoin::Address<_>>()
+                    .unwrap()
+                    .assume_checked();
+                uncle_entries.push(self.build_uncle_entry(uncle_miner, uncle_difficulty));
+            }
+
+            let miner_address = miner_address_string
+                .parse::<bitcoin::Address<_>>()
+                .unwrap()
+                .assume_checked();
             let height = total_count - 1 - index as u32;
-            let entry =
-                build_confirmed_entry(blockhash, height, miner_address, difficulty, uncle_entries);
+            let entry = self.build_confirmed_entry(
+                blockhash,
+                height,
+                miner_address,
+                difficulty,
+                uncle_entries,
+            );
             self.add_entry_to_aggregate(&entry);
             self.confirmed_entries.push_back(entry);
         }
@@ -526,13 +568,8 @@ impl PplnsWindow {
             HashMap::with_capacity(uncle_headers.len());
         for (blockhash, header) in uncle_headers {
             let difficulty = header.get_difficulty();
-            uncle_lookup.insert(
-                blockhash,
-                UncleEntry {
-                    miner_address: header.miner_address.to_string(),
-                    difficulty,
-                },
-            );
+            let uncle_entry = self.build_uncle_entry(header.miner_address, difficulty);
+            uncle_lookup.insert(blockhash, uncle_entry);
         }
 
         let count = confirmed_headers.len() as u32;
@@ -549,10 +586,10 @@ impl PplnsWindow {
             let height = base_height + index as u32;
             let difficulty = header.get_difficulty();
             let uncle_entries = resolve_uncle_entries(&header.uncles, &uncle_lookup);
-            let entry = build_confirmed_entry(
+            let entry = self.build_confirmed_entry(
                 blockhash,
                 height,
-                header.miner_address.to_string(),
+                header.miner_address,
                 difficulty,
                 uncle_entries,
             );
@@ -582,11 +619,15 @@ mod tests {
     use bitcoin::hashes::Hash;
 
     /// Create a ConfirmedEntry from a ShareHeader with no uncles.
-    fn entry_from_header(header: &ShareHeader, height: u32) -> ConfirmedEntry {
-        build_confirmed_entry(
+    fn entry_from_header(
+        window: &mut PplnsWindow,
+        header: &ShareHeader,
+        height: u32,
+    ) -> ConfirmedEntry {
+        window.build_confirmed_entry(
             header.block_hash(),
             height,
-            header.miner_address.to_string(),
+            header.miner_address.clone(),
             header.get_difficulty(),
             Vec::new(),
         )
@@ -594,25 +635,23 @@ mod tests {
 
     /// Create a ConfirmedEntry from a ShareHeader with resolved uncle entries.
     fn entry_from_header_with_uncles(
+        window: &mut PplnsWindow,
         header: &ShareHeader,
         height: u32,
         uncle_entries: Vec<UncleEntry>,
     ) -> ConfirmedEntry {
-        build_confirmed_entry(
+        window.build_confirmed_entry(
             header.block_hash(),
             height,
-            header.miner_address.to_string(),
+            header.miner_address.clone(),
             header.get_difficulty(),
             uncle_entries,
         )
     }
 
-    /// Create a UncleEntry from a ShareHeader for test setup.
-    fn uncle_entry_from_header(header: &ShareHeader) -> UncleEntry {
-        UncleEntry {
-            miner_address: header.miner_address.to_string(),
-            difficulty: header.get_difficulty(),
-        }
+    /// Create an UncleEntry from a ShareHeader for test setup.
+    fn uncle_entry_from_header(window: &mut PplnsWindow, header: &ShareHeader) -> UncleEntry {
+        window.build_uncle_entry(header.miner_address.clone(), header.get_difficulty())
     }
 
     /// Create a BlockMetadata with the given height and Confirmed status.
@@ -951,9 +990,9 @@ mod tests {
 
         let mut window = PplnsWindow::default();
         // Newest at front: c, b, a
-        let entry_c = entry_from_header(&header_c, 2);
-        let entry_b = entry_from_header(&header_b, 1);
-        let entry_a = entry_from_header(&header_a, 0);
+        let entry_c = entry_from_header(&mut window, &header_c, 2);
+        let entry_b = entry_from_header(&mut window, &header_b, 1);
+        let entry_a = entry_from_header(&mut window, &header_a, 0);
         window.add_entry_to_aggregate(&entry_c);
         window.confirmed_entries.push_back(entry_c);
         window.add_entry_to_aggregate(&entry_b);
@@ -983,24 +1022,24 @@ mod tests {
 
         let mut window = PplnsWindow::default();
         // Fill beyond max: push max + 2 entries, first two are our named ones
-        window
-            .confirmed_entries
-            .push_back(entry_from_header(&header_b, 1));
-        window
-            .confirmed_entries
-            .push_back(entry_from_header(&header_a, 0));
+        let entry_b = entry_from_header(&mut window, &header_b, 1);
+        window.confirmed_entries.push_back(entry_b);
+        let entry_a = entry_from_header(&mut window, &header_a, 0);
+        window.confirmed_entries.push_back(entry_a);
 
         // Pad to exceed MAX_PPLNS_WINDOW_SHARES
         let max_shares = MAX_PPLNS_WINDOW_SHARES as usize;
         let padding_needed = max_shares; // total will be max + 2
+        let padding_address = header_a.miner_address.clone();
         for index in 0..padding_needed {
-            window.confirmed_entries.push_back(build_confirmed_entry(
+            let entry = window.build_confirmed_entry(
                 BlockHash::all_zeros(),
                 index as u32 + 2,
-                format!("padding_{index}"),
+                padding_address.clone(),
                 1.0,
                 Vec::new(),
-            ));
+            );
+            window.confirmed_entries.push_back(entry);
         }
 
         assert_eq!(window.confirmed_entries.len(), max_shares + 2);
@@ -1023,8 +1062,8 @@ mod tests {
         let difficulty2 = header2.get_difficulty();
 
         let mut window = PplnsWindow::default();
-        let entry2 = entry_from_header(&header2, 1);
-        let entry1 = entry_from_header(&header1, 0);
+        let entry2 = entry_from_header(&mut window, &header2, 1);
+        let entry1 = entry_from_header(&mut window, &header1, 0);
         window.add_entry_to_aggregate(&entry2);
         window.confirmed_entries.push_back(entry2);
         window.add_entry_to_aggregate(&entry1);
@@ -1056,9 +1095,9 @@ mod tests {
         let difficulty = header1.get_difficulty();
 
         let mut window = PplnsWindow::default();
-        let entry3 = entry_from_header(&header3, 2);
-        let entry2 = entry_from_header(&header2, 1);
-        let entry1 = entry_from_header(&header1, 0);
+        let entry3 = entry_from_header(&mut window, &header3, 2);
+        let entry2 = entry_from_header(&mut window, &header2, 1);
+        let entry1 = entry_from_header(&mut window, &header1, 0);
         window.add_entry_to_aggregate(&entry3);
         window.confirmed_entries.push_back(entry3);
         window.add_entry_to_aggregate(&entry2);
@@ -1108,11 +1147,9 @@ mod tests {
         let nephew_difficulty = nephew_header.get_difficulty();
 
         let mut window = PplnsWindow::default();
-        let nephew_entry = entry_from_header_with_uncles(
-            &nephew_header,
-            0,
-            vec![uncle_entry_from_header(&uncle_header)],
-        );
+        let uncle_entry = uncle_entry_from_header(&mut window, &uncle_header);
+        let nephew_entry =
+            entry_from_header_with_uncles(&mut window, &nephew_header, 0, vec![uncle_entry]);
         window.add_entry_to_aggregate(&nephew_entry);
         window.confirmed_entries.push_back(nephew_entry);
 
@@ -1237,23 +1274,16 @@ mod tests {
             vec![uncle_hash],
         );
 
-        let uncle_entry = uncle_entry_from_header(&uncle_header);
-
         let mut window = PplnsWindow::default();
-        window
-            .confirmed_entries
-            .push_back(entry_from_header_with_uncles(
-                &nephew1,
-                1,
-                vec![uncle_entry_from_header(&uncle_header)],
-            ));
-        window
-            .confirmed_entries
-            .push_back(entry_from_header_with_uncles(
-                &nephew2,
-                0,
-                vec![uncle_entry],
-            ));
+        let uncle_entry_1 = uncle_entry_from_header(&mut window, &uncle_header);
+        let entry_nephew1 =
+            entry_from_header_with_uncles(&mut window, &nephew1, 1, vec![uncle_entry_1]);
+        window.confirmed_entries.push_back(entry_nephew1);
+
+        let uncle_entry_2 = uncle_entry_from_header(&mut window, &uncle_header);
+        let entry_nephew2 =
+            entry_from_header_with_uncles(&mut window, &nephew2, 0, vec![uncle_entry_2]);
+        window.confirmed_entries.push_back(entry_nephew2);
 
         assert_eq!(window.confirmed_entries.len(), 2);
         assert_eq!(window.confirmed_entries[0].uncle_entries.len(), 1);
