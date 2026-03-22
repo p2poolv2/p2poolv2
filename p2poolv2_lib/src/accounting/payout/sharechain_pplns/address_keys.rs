@@ -69,6 +69,11 @@ impl AddressKeys {
         }
     }
 
+    /// Return the number of slots in the backing vector.
+    pub(super) fn len(&self) -> usize {
+        self.0.len()
+    }
+
     /// Get the address at the index
     pub(super) fn value_for(&self, index: usize) -> Option<&Address> {
         self.0.get(index)?.as_ref()
@@ -83,19 +88,13 @@ impl AddressKeys {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn make_address(addr_str: &str) -> Address {
-        addr_str
-            .parse::<bitcoin::Address<_>>()
-            .unwrap()
-            .assume_checked()
-    }
+    use crate::test_utils::parse_address_from_string;
 
     #[test]
     fn key_for_assigns_sequential_keys() {
         let mut address_keys = AddressKeys::default();
-        let addr_a = make_address("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr");
-        let addr_b = make_address("bcrt1qlk935ze2fsu86zjp395uvtegztrkaezawxx0wf");
+        let addr_a = parse_address_from_string("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr");
+        let addr_b = parse_address_from_string("bcrt1qlk935ze2fsu86zjp395uvtegztrkaezawxx0wf");
 
         assert_eq!(address_keys.key_for(addr_a), 0);
         assert_eq!(address_keys.key_for(addr_b), 1);
@@ -104,7 +103,7 @@ mod tests {
     #[test]
     fn key_for_returns_same_key_for_same_address() {
         let mut address_keys = AddressKeys::default();
-        let addr = make_address("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr");
+        let addr = parse_address_from_string("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr");
 
         let key_first = address_keys.key_for(addr.clone());
         let key_second = address_keys.key_for(addr);
@@ -115,7 +114,7 @@ mod tests {
     #[test]
     fn value_for_returns_inserted_address() {
         let mut address_keys = AddressKeys::default();
-        let addr = make_address("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr");
+        let addr = parse_address_from_string("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr");
 
         let key = address_keys.key_for(addr.clone());
 
@@ -133,7 +132,7 @@ mod tests {
     #[test]
     fn remove_frees_slot() {
         let mut address_keys = AddressKeys::default();
-        let addr = make_address("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr");
+        let addr = parse_address_from_string("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr");
 
         let key = address_keys.key_for(addr);
         address_keys.remove(key);
@@ -144,9 +143,9 @@ mod tests {
     #[test]
     fn removed_slot_is_reused() {
         let mut address_keys = AddressKeys::default();
-        let addr_a = make_address("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr");
-        let addr_b = make_address("bcrt1qlk935ze2fsu86zjp395uvtegztrkaezawxx0wf");
-        let addr_c = make_address("bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080");
+        let addr_a = parse_address_from_string("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr");
+        let addr_b = parse_address_from_string("bcrt1qlk935ze2fsu86zjp395uvtegztrkaezawxx0wf");
+        let addr_c = parse_address_from_string("bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080");
 
         let key_a = address_keys.key_for(addr_a);
         let _key_b = address_keys.key_for(addr_b);
@@ -159,8 +158,8 @@ mod tests {
     #[test]
     fn different_addresses_get_different_keys() {
         let mut address_keys = AddressKeys::default();
-        let addr_a = make_address("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr");
-        let addr_b = make_address("bcrt1qlk935ze2fsu86zjp395uvtegztrkaezawxx0wf");
+        let addr_a = parse_address_from_string("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr");
+        let addr_b = parse_address_from_string("bcrt1qlk935ze2fsu86zjp395uvtegztrkaezawxx0wf");
 
         let key_a = address_keys.key_for(addr_a);
         let key_b = address_keys.key_for(addr_b);

@@ -118,9 +118,9 @@ fn include_address_and_cut(
     total_amount
 }
 
-/// Appends proportional distribution of amount based on difficulty weights to the distribution
+/// Appends proportional distribution of amount based on difficulty weights to the distribution.
 pub(crate) fn append_proportional_distribution(
-    address_difficulty_map: &HashMap<String, f64>,
+    address_difficulty_map: &HashMap<Address, f64>,
     total_amount: bitcoin::Amount,
     distribution: &mut Vec<OutputPair>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -133,13 +133,8 @@ pub(crate) fn append_proportional_distribution(
     }
     let mut distributed_amount = bitcoin::Amount::ZERO;
 
-    for (i, (address_str, difficulty)) in address_difficulty_map.iter().enumerate() {
-        let address = address_str
-            .parse::<bitcoin::Address<_>>()
-            .map_err(|e| format!("Invalid bitcoin address '{address_str}': {e}"))?
-            .assume_checked();
-
-        let amount = if i == address_difficulty_map.len() - 1 {
+    for (index, (address, difficulty)) in address_difficulty_map.iter().enumerate() {
+        let amount = if index == address_difficulty_map.len() - 1 {
             // Last address gets remainder to handle rounding
             total_amount - distributed_amount
         } else {
@@ -149,7 +144,10 @@ pub(crate) fn append_proportional_distribution(
         };
 
         distributed_amount += amount;
-        distribution.push(OutputPair { address, amount });
+        distribution.push(OutputPair {
+            address: address.clone(),
+            amount,
+        });
     }
     Ok(())
 }
@@ -157,16 +155,17 @@ pub(crate) fn append_proportional_distribution(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::parse_address_from_string;
 
     #[test]
     fn test_create_proportional_distribution() {
         let mut address_difficulty_map = HashMap::new();
         address_difficulty_map.insert(
-            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq".to_string(),
+            parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"),
             600.0,
         );
         address_difficulty_map.insert(
-            "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(),
+            parse_address_from_string("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"),
             400.0,
         );
 

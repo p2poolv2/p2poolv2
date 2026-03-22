@@ -134,6 +134,15 @@ pub fn build_test_header_with_uncles(
         .header
 }
 
+/// Parse a bitcoin address string into a checked Address for tests.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn parse_address_from_string(address_str: &str) -> bitcoin::Address {
+    address_str
+        .parse::<bitcoin::Address<_>>()
+        .unwrap()
+        .assume_checked()
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 pub const TEST_ANCHOR_TIME: u32 = 1_700_000_000;
 
