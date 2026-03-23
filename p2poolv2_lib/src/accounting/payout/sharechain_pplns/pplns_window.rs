@@ -190,14 +190,22 @@ impl PplnsWindow {
             let mut nephew_bonus: u128 = 0;
 
             for uncle_entry in &entry.uncle_entries {
-                difficulty_by_key[uncle_entry.internal_key] +=
-                    uncle_entry.difficulty * UNCLE_SCALED_WEIGHT;
-                nephew_bonus += uncle_entry.difficulty * NEPHEW_SCALED_BONUS;
+                difficulty_by_key[uncle_entry.internal_key] = difficulty_by_key
+                    [uncle_entry.internal_key]
+                    .saturating_add(uncle_entry.difficulty.saturating_mul(UNCLE_SCALED_WEIGHT));
+                nephew_bonus = nephew_bonus
+                    .saturating_add(uncle_entry.difficulty.saturating_mul(NEPHEW_SCALED_BONUS));
             }
 
-            difficulty_by_key[entry.internal_key] +=
-                entry.difficulty * DIFFICULTY_SCALE + nephew_bonus;
-            *accumulated_difficulty += entry.total_weighted_difficulty;
+            difficulty_by_key[entry.internal_key] = difficulty_by_key[entry.internal_key]
+                .saturating_add(
+                    entry
+                        .difficulty
+                        .saturating_mul(DIFFICULTY_SCALE)
+                        .saturating_add(nephew_bonus),
+                );
+            *accumulated_difficulty =
+                accumulated_difficulty.saturating_add(entry.total_weighted_difficulty);
 
             if *accumulated_difficulty >= scaled_threshold {
                 return start_index + offset + 1;
@@ -430,7 +438,9 @@ impl PplnsWindow {
 
     /// Add a confirmed entry's weighted difficulty to the running total.
     fn add_to_running_total(&mut self, entry: &ConfirmedEntry) {
-        self.total_accumulated_difficulty += entry.total_weighted_difficulty;
+        self.total_accumulated_difficulty = self
+            .total_accumulated_difficulty
+            .saturating_add(entry.total_weighted_difficulty);
     }
 
     /// Remove a confirmed entry's weighted difficulty from the running total.
@@ -467,11 +477,15 @@ impl PplnsWindow {
         let mut nephew_bonus: u128 = 0;
         let mut uncle_weighted_sum: u128 = 0;
         for uncle_entry in &uncle_entries {
-            uncle_weighted_sum += uncle_entry.difficulty * UNCLE_SCALED_WEIGHT;
-            nephew_bonus += uncle_entry.difficulty * NEPHEW_SCALED_BONUS;
+            uncle_weighted_sum = uncle_weighted_sum
+                .saturating_add(uncle_entry.difficulty.saturating_mul(UNCLE_SCALED_WEIGHT));
+            nephew_bonus = nephew_bonus
+                .saturating_add(uncle_entry.difficulty.saturating_mul(NEPHEW_SCALED_BONUS));
         }
-        let total_weighted_difficulty =
-            difficulty * DIFFICULTY_SCALE + nephew_bonus + uncle_weighted_sum;
+        let total_weighted_difficulty = difficulty
+            .saturating_mul(DIFFICULTY_SCALE)
+            .saturating_add(nephew_bonus)
+            .saturating_add(uncle_weighted_sum);
 
         ConfirmedEntry {
             blockhash,
