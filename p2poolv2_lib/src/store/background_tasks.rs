@@ -18,38 +18,15 @@ use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::store::Store;
 use crate::store::column_families::ColumnFamily;
 use crate::store::writer::StoreError;
-use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::{debug, error, info};
-
-/// Start any background tasks required
-///
-/// Start a tokio task that runs every frequency period and
-/// deletes all shares older than pplns_share_ttl older than now.
-pub fn start_background_tasks(
-    store: Arc<Store>,
-    frequency: Duration,
-    pplns_ttl: Duration,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(frequency);
-        loop {
-            interval.tick().await;
-            debug!("Running background cleanup tasks");
-
-            if let Err(e) = store.prune_shares(pplns_ttl) {
-                error!("Error running shares cleanup: {:?}", e);
-            }
-        }
-    })
-}
+use tracing::info;
 
 impl Store {
-    /// Delete all PPLNS shares older than the given TTL
+    /// Delete all PPLNS shares older than the given TTL.
     ///
-    /// Uses RocksDB range delete for efficient bulk deletion
+    /// Uses RocksDB range delete for efficient bulk deletion.
     /// Keys are in format: n_time(8 bytes) + user_id(8 bytes) + seq(8 bytes)
-    fn prune_shares(&self, pplns_ttl: Duration) -> Result<(), StoreError> {
+    pub fn prune_shares(&self, pplns_ttl: Duration) -> Result<(), StoreError> {
         let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
 
         // Calculate cutoff time in microseconds
@@ -204,46 +181,5 @@ mod tests {
         // Verify still empty
         let shares = store.get_pplns_shares_filtered(None, None, None);
         assert_eq!(shares.len(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_start_background_tasks() {
-        let temp_dir = tempdir().unwrap();
-        let store =
-            Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap());
-
-        let user_id = store.add_user("addr1".to_string()).unwrap();
-
-        // Get current time in seconds
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        let now_secs = now.as_secs();
-
-        // Add an old share (1 hour ago)
-        let old_share = SimplePplnsShare::new(
-            user_id,
-            100,
-            "addr1".to_string(),
-            "worker1".to_string(),
-            now_secs - 3600,
-            "job".to_string(),
-            "extra".to_string(),
-            "nonce".to_string(),
-        );
-        store.add_pplns_share(old_share).unwrap();
-
-        // Start background task with short frequency and TTL of 30 minutes
-        let frequency = Duration::from_millis(100);
-        let ttl = Duration::from_secs(1800);
-        let handle = start_background_tasks(store.clone(), frequency, ttl);
-
-        // Wait for at least one cleanup cycle
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
-        // Verify share was deleted (it's 1 hour old, TTL is 30 minutes)
-        let remaining_shares = store.get_pplns_shares_filtered(None, None, None);
-        assert_eq!(remaining_shares.len(), 0);
-
-        // Cancel background task
-        handle.abort();
     }
 }

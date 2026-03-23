@@ -32,3 +32,4 @@ path = "src/main.rs"
 p2poolv2_lib = { workspace = true, features = ["test-utils"] }
 mockall.workspace = true
 mockall_double.workspace = true
+tempfile.workspace = true

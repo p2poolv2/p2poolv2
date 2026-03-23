@@ -39,6 +39,7 @@ use tracing::{error, info, trace};
 
 use crate::signal::{ShutdownReason, setup_signal_handler};
 
+mod background_tasks;
 mod signal;
 
 /// Interval in seconds to poll for new block templates since the last zmq event signal
@@ -138,11 +139,13 @@ async fn main() -> ExitCode {
     };
     info!("Latest tip {} at height {}", tip, height);
 
-    let background_tasks_store = store.clone();
-    p2poolv2_lib::store::background_tasks::start_background_tasks(
-        background_tasks_store,
-        Duration::from_secs(config.store.background_task_frequency_hours * 3600),
-        Duration::from_secs(config.store.pplns_ttl_days * 3600 * 24),
+    background_tasks::start_background_tasks(
+        store.clone(),
+        Duration::from_secs(
+            config.store.background_task_frequency_hours * background_tasks::SECONDS_PER_HOUR,
+        ),
+        Duration::from_secs(config.store.pplns_ttl_days * background_tasks::SECONDS_PER_DAY),
+        exit_sender.clone(),
     );
 
     let stratum_config = config.stratum.clone().parse().unwrap();
