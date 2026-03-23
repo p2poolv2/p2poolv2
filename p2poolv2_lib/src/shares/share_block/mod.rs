@@ -71,6 +71,15 @@ impl ShareHeader {
         Target::from_compact(self.bits).difficulty_float()
     }
 
+    /// Get the share chain difficulty as u128 from the bits field.
+    ///
+    /// Uses the network's max attainable target to compute the integer
+    /// difficulty ratio. Prefer this over get_difficulty() for precise
+    /// integer arithmetic in payout calculations.
+    pub(crate) fn get_difficulty_u128(&self, network: bitcoin::Network) -> u128 {
+        Target::from_compact(self.bits).difficulty(network)
+    }
+
     /// Build a ShareHeader from a commitment and a bitcoin header
     /// which contains a coinbase matching the commitment.
     ///
