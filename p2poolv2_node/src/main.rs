@@ -182,15 +182,16 @@ async fn main() -> ExitCode {
     let chain_store_handle_for_notify = chain_store_handle.clone();
 
     let cloned_stratum_config = stratum_config.clone();
+    let payout = Payout::new(cloned_stratum_config.network);
+    let shared_pplns_window = payout.shared_pplns_window();
     tokio::spawn(async move {
         info!("Starting Stratum notifier...");
-        let payout = Box::new(Payout::new(cloned_stratum_config.network));
         start_notify(
             notify_rx,
             template_tx,
             chain_store_handle_for_notify,
             &cloned_stratum_config,
-            payout,
+            Box::new(payout),
         )
         .await;
     });
@@ -261,6 +262,7 @@ async fn main() -> ExitCode {
         metrics_handle.clone(),
         monitoring_event_sender.clone(),
         notify_tx_for_node,
+        shared_pplns_window,
     )
     .await
     {

@@ -32,22 +32,32 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use bitcoin::{Address, Amount};
 use std::error::Error;
+use std::sync::{Arc, RwLock};
 
 /// Share chain PPLNS payout distribution.
 ///
-/// Holds a PplnsWindow that incrementally maintains the weighted difficulty
-/// aggregate across calls. Each call to fill_distribution_from_shares
-/// updates the window and reads the cached aggregate directly.
+/// Holds a shared PplnsWindow behind Arc<RwLock<>> so the same window
+/// can be read concurrently by the validation worker while the notify
+/// task writes updates. Each call to fill_distribution_from_shares
+/// acquires a write lock to update the window and compute the distribution.
 pub struct Payout {
-    pplns_window: PplnsWindow,
+    pplns_window: Arc<RwLock<PplnsWindow>>,
 }
 
 impl Payout {
     /// Create a new Payout with an empty PPLNS window for the given network.
     pub fn new(network: bitcoin::Network) -> Self {
         Self {
-            pplns_window: PplnsWindow::new(network),
+            pplns_window: Arc::new(RwLock::new(PplnsWindow::new(network))),
         }
+    }
+
+    /// Return a shared reference to the underlying PplnsWindow.
+    ///
+    /// Used to pass the same window to the validation worker so it
+    /// can call compute_distribution under a read lock.
+    pub fn shared_pplns_window(&self) -> Arc<RwLock<PplnsWindow>> {
+        Arc::clone(&self.pplns_window)
     }
 }
 
@@ -74,9 +84,13 @@ impl PayoutDistribution for Payout {
             return Ok(());
         }
 
-        self.pplns_window.update(chain_store_handle)?;
+        let mut window = self
+            .pplns_window
+            .write()
+            .map_err(|error| format!("PplnsWindow write lock poisoned: {error}"))?;
+        window.update(chain_store_handle)?;
 
-        let address_difficulty_map = self.pplns_window.get_distribution(total_difficulty, None);
+        let address_difficulty_map = window.get_distribution(total_difficulty);
 
         if address_difficulty_map.is_empty() {
             distribution.push(OutputPair {

@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::accounting::stats::metrics::MetricsHandle;
 use crate::command::Command;
@@ -41,6 +42,7 @@ use crate::stratum::emission::EmissionReceiver;
 use crate::stratum::work::notify::NotifySender;
 use libp2p::futures::StreamExt;
 use std::error::Error;
+use std::sync::{Arc, RwLock};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info};
 
@@ -62,6 +64,7 @@ impl NodeHandle {
         metrics: MetricsHandle,
         monitoring_event_sender: MonitoringEventSender,
         notify_tx: NotifySender,
+        pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
         let (node_actor, stopping_rx) = NodeActor::new(
@@ -72,6 +75,7 @@ impl NodeHandle {
             metrics,
             monitoring_event_sender,
             notify_tx,
+            pplns_window,
         )
         .unwrap();
 
@@ -224,6 +228,7 @@ impl NodeActor {
         metrics: MetricsHandle,
         monitoring_event_sender: MonitoringEventSender,
         notify_tx: NotifySender,
+        pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>> {
         // Create organise channel
         let (organise_tx, organise_rx) = create_organise_channel();
@@ -261,6 +266,7 @@ impl NodeActor {
             chain_store_handle.clone(),
             organise_tx.clone(),
             node.swarm_tx.clone(),
+            pplns_window,
         );
         let validation_handle = tokio::spawn(validation_worker.run());
 
