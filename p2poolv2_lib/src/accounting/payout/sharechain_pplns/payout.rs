@@ -248,13 +248,13 @@ mod tests {
         // Uncle: a share not on the confirmed chain
         let uncle_header = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 2);
         let uncle_hash = uncle_header.block_hash();
-        let uncle_difficulty = uncle_header.get_difficulty_u128(bitcoin::Network::Signet);
+        let uncle_difficulty = uncle_header.get_difficulty(bitcoin::Network::Signet);
         let uncle_miner = uncle_header.miner_address.to_string();
 
         // Nephew: confirmed share that references the uncle
         let nephew_header =
             build_test_header_with_uncles(&genesis_hash.to_string(), PUBKEY_G, 2, vec![uncle_hash]);
-        let nephew_difficulty = nephew_header.get_difficulty_u128(bitcoin::Network::Signet);
+        let nephew_difficulty = nephew_header.get_difficulty(bitcoin::Network::Signet);
         let nephew_miner = nephew_header.miner_address.to_string();
         let tip_hash = nephew_header.block_hash();
 
@@ -327,8 +327,8 @@ mod tests {
             build_test_header(&uncle1_header.block_hash().to_string(), PUBKEY_4G, 2);
         let uncle1_hash = uncle1_header.block_hash();
         let uncle2_hash = uncle2_header.block_hash();
-        let uncle1_difficulty = uncle1_header.get_difficulty_u128(bitcoin::Network::Signet);
-        let uncle2_difficulty = uncle2_header.get_difficulty_u128(bitcoin::Network::Signet);
+        let uncle1_difficulty = uncle1_header.get_difficulty(bitcoin::Network::Signet);
+        let uncle2_difficulty = uncle2_header.get_difficulty(bitcoin::Network::Signet);
 
         let nephew_header = build_test_header_with_uncles(
             &genesis_hash.to_string(),
@@ -336,7 +336,7 @@ mod tests {
             2,
             vec![uncle1_hash, uncle2_hash],
         );
-        let nephew_difficulty = nephew_header.get_difficulty_u128(bitcoin::Network::Signet);
+        let nephew_difficulty = nephew_header.get_difficulty(bitcoin::Network::Signet);
         let tip_hash = nephew_header.block_hash();
 
         let confirmed_headers = vec![ConfirmedHeaderResult {
@@ -398,7 +398,7 @@ mod tests {
         let tip_hash = header3.block_hash();
 
         // Difficulty per share (from bits)
-        let single_share_difficulty = header1.get_difficulty_u128(bitcoin::Network::Signet);
+        let single_share_difficulty = header1.get_difficulty(bitcoin::Network::Signet);
 
         // Newest-to-oldest order
         let confirmed_headers = vec![
@@ -461,7 +461,7 @@ mod tests {
         let miner3 = header3.miner_address.to_string();
         let tip_hash = header3.block_hash();
 
-        let single_share_difficulty = header1.get_difficulty_u128(bitcoin::Network::Signet);
+        let single_share_difficulty = header1.get_difficulty(bitcoin::Network::Signet);
 
         // Newest-to-oldest order
         let confirmed_headers = vec![
