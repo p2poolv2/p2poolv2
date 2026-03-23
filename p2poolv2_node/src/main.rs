@@ -110,10 +110,13 @@ async fn main() -> ExitCode {
     // single thread, if we need to start another thread as scale
     // increases, we can deal with that then.
     let exit_sender_store = exit_sender.clone();
+    let exit_receiver_store = exit_sender.subscribe();
     tokio::task::spawn_blocking(move || {
         store_writer.run();
-        tracing::error!("Store writer stopped unexpectedly");
-        let _ = exit_sender_store.send(ShutdownReason::Error);
+        if *exit_receiver_store.borrow() == ShutdownReason::None {
+            tracing::error!("Store writer stopped unexpectedly");
+            let _ = exit_sender_store.send(ShutdownReason::Error);
+        }
     });
 
     // Create StoreHandle and ChainStoreHandle for new components
@@ -146,6 +149,7 @@ async fn main() -> ExitCode {
         ),
         Duration::from_secs(config.store.pplns_ttl_days * background_tasks::SECONDS_PER_DAY),
         exit_sender.clone(),
+        exit_sender.subscribe(),
     );
 
     let stratum_config = config.stratum.clone().parse().unwrap();
@@ -167,6 +171,7 @@ async fn main() -> ExitCode {
     };
 
     let exit_sender_gbt = exit_sender.clone();
+    let exit_receiver_gbt = exit_sender.subscribe();
     tokio::spawn(async move {
         if let Err(e) = start_gbt(
             bitcoinrpc_config_cloned,
@@ -177,8 +182,10 @@ async fn main() -> ExitCode {
         )
         .await
         {
-            tracing::error!("Failed to fetch block template. Shutting down. \n {e}");
-            let _ = exit_sender_gbt.send(ShutdownReason::Error);
+            if *exit_receiver_gbt.borrow() == ShutdownReason::None {
+                tracing::error!("Failed to fetch block template. Shutting down. \n {e}");
+                let _ = exit_sender_gbt.send(ShutdownReason::Error);
+            }
         }
     });
 
@@ -193,6 +200,7 @@ async fn main() -> ExitCode {
     let payout = Payout::new(cloned_stratum_config.network);
     let shared_pplns_window = payout.shared_pplns_window();
     let exit_sender_notify = exit_sender.clone();
+    let exit_receiver_notify = exit_sender.subscribe();
     tokio::spawn(async move {
         info!("Starting Stratum notifier...");
         start_notify(
@@ -203,8 +211,10 @@ async fn main() -> ExitCode {
             Box::new(payout),
         )
         .await;
-        error!("Notifier stopped unexpectedly");
-        let _ = exit_sender_notify.send(ShutdownReason::Error);
+        if *exit_receiver_notify.borrow() == ShutdownReason::None {
+            error!("Notifier stopped unexpectedly");
+            let _ = exit_sender_notify.send(ShutdownReason::Error);
+        }
     });
 
     let (emissions_tx, emissions_rx) =
@@ -224,6 +234,7 @@ async fn main() -> ExitCode {
     let tracker_handle_cloned = tracker_handle.clone();
     let notify_tx_for_node = notify_tx.clone();
     let exit_sender_stratum = exit_sender.clone();
+    let exit_receiver_stratum = exit_sender.subscribe();
 
     tokio::spawn(async move {
         let mut stratum_server = StratumServerBuilder::default()
@@ -256,7 +267,7 @@ async fn main() -> ExitCode {
                 template_rx,
             )
             .await;
-        if result.is_err() {
+        if result.is_err() && *exit_receiver_stratum.borrow() == ShutdownReason::None {
             error!("Failed to start Stratum server: {}", result.unwrap_err());
             let _ = exit_sender_stratum.send(ShutdownReason::Error);
         }
