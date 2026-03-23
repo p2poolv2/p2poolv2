@@ -121,7 +121,7 @@ fn include_address_and_cut(
 /// Appends proportional distribution of amount based on difficulty weights to the distribution.
 ///
 /// Entries are sorted by address string to ensure the remainder from
-/// rounding is always assigned to the same deterministic address.
+/// integer truncation is always assigned to the same deterministic address.
 pub(crate) fn append_proportional_distribution(
     address_difficulty_map: &HashMap<Address, u128>,
     total_amount: bitcoin::Amount,
@@ -147,7 +147,7 @@ pub(crate) fn append_proportional_distribution(
 
     for (index, (address, difficulty)) in sorted_entries.into_iter().enumerate() {
         let amount = if index == entry_count - 1 {
-            // Last address gets remainder to handle rounding
+            // Last address gets remainder from truncation
             total_amount - distributed_amount
         } else {
             let amount_sats = (total_sats * *difficulty / total_difficulty) as u64;
