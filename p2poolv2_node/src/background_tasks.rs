@@ -43,9 +43,22 @@ pub fn start_background_tasks(
         loop {
             interval.tick().await;
             trace!("Running background cleanup tasks");
-            if let Err(cleanup_error) = store.prune_shares(pplns_ttl) {
-                if *exit_receiver.borrow() == ShutdownReason::None {
+            let store_clone = Arc::clone(&store);
+            let prune_result =
+                tokio::task::spawn_blocking(move || store_clone.prune_shares(pplns_ttl)).await;
+            let cleanup_failed = match prune_result {
+                Ok(Ok(())) => false,
+                Ok(Err(cleanup_error)) => {
                     error!("Background cleanup failed: {cleanup_error}");
+                    true
+                }
+                Err(join_error) => {
+                    error!("Background cleanup panicked: {join_error}");
+                    true
+                }
+            };
+            if cleanup_failed {
+                if *exit_receiver.borrow() == ShutdownReason::None {
                     let _ = exit_sender.send(ShutdownReason::Error);
                 }
                 return;
