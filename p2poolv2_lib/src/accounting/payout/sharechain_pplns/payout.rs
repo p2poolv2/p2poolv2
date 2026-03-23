@@ -43,10 +43,10 @@ pub struct Payout {
 }
 
 impl Payout {
-    /// Create a new Payout with an empty PPLNS window.
-    pub fn new() -> Self {
+    /// Create a new Payout with an empty PPLNS window for the given network.
+    pub fn new(network: bitcoin::Network) -> Self {
         Self {
-            pplns_window: PplnsWindow::default(),
+            pplns_window: PplnsWindow::new(network),
         }
     }
 }
@@ -76,14 +76,7 @@ impl PayoutDistribution for Payout {
 
         self.pplns_window.update(chain_store_handle)?;
 
-        let address_difficulty_f64 = self
-            .pplns_window
-            .get_distribution(total_difficulty as f64, None);
-        let address_difficulty_map: std::collections::HashMap<bitcoin::Address, u128> =
-            address_difficulty_f64
-                .into_iter()
-                .map(|(address, difficulty)| (address, difficulty as u128))
-                .collect();
+        let address_difficulty_map = self.pplns_window.get_distribution(total_difficulty, None);
 
         if address_difficulty_map.is_empty() {
             distribution.push(OutputPair {
@@ -107,7 +100,7 @@ impl PayoutDistribution for Payout {
 mod tests {
     use super::*;
     use crate::accounting::payout::sharechain_pplns::pplns_window::{
-        NEPHEW_BONUS_FACTOR, UNCLE_WEIGHT_FACTOR,
+        DIFFICULTY_SCALE, NEPHEW_SCALED_BONUS, UNCLE_SCALED_WEIGHT,
     };
     use crate::shares::chain::chain_store_handle::ConfirmedHeaderResult;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
@@ -139,7 +132,7 @@ mod tests {
             })
         });
 
-        let mut payout = Payout::new();
+        let mut payout = Payout::new(bitcoin::Network::Signet);
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
@@ -177,7 +170,7 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut payout = Payout::new();
+        let mut payout = Payout::new(bitcoin::Network::Signet);
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
@@ -226,7 +219,7 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut payout = Payout::new();
+        let mut payout = Payout::new(bitcoin::Network::Signet);
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
@@ -255,13 +248,13 @@ mod tests {
         // Uncle: a share not on the confirmed chain
         let uncle_header = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 2);
         let uncle_hash = uncle_header.block_hash();
-        let uncle_difficulty = uncle_header.get_difficulty();
+        let uncle_difficulty = uncle_header.get_difficulty_u128(bitcoin::Network::Signet);
         let uncle_miner = uncle_header.miner_address.to_string();
 
         // Nephew: confirmed share that references the uncle
         let nephew_header =
             build_test_header_with_uncles(&genesis_hash.to_string(), PUBKEY_G, 2, vec![uncle_hash]);
-        let nephew_difficulty = nephew_header.get_difficulty();
+        let nephew_difficulty = nephew_header.get_difficulty_u128(bitcoin::Network::Signet);
         let nephew_miner = nephew_header.miner_address.to_string();
         let tip_hash = nephew_header.block_hash();
 
@@ -286,18 +279,17 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(move |_| Ok(uncle_headers.clone()));
 
-        let mut payout = Payout::new();
+        let mut payout = Payout::new(bitcoin::Network::Signet);
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
             .get_output_distribution(&mock, u128::MAX, total_amount, &config)
             .unwrap();
 
-        // Uncle gets 90% of its difficulty, nephew gets base + 10% of uncle's difficulty.
-        // Weights are computed as f64 by get_distribution then cast to u128.
-        let expected_uncle_weight = (uncle_difficulty * UNCLE_WEIGHT_FACTOR) as u128;
+        // Uncle gets 9/10 of its difficulty, nephew gets base * 10 + 1/10 of uncle's difficulty.
+        let expected_uncle_weight = uncle_difficulty * UNCLE_SCALED_WEIGHT;
         let expected_nephew_weight =
-            (nephew_difficulty + uncle_difficulty * NEPHEW_BONUS_FACTOR) as u128;
+            nephew_difficulty * DIFFICULTY_SCALE + uncle_difficulty * NEPHEW_SCALED_BONUS;
         let total_weight = expected_uncle_weight + expected_nephew_weight;
 
         let total_distributed: Amount = result.iter().map(|pair| pair.amount).sum();
@@ -335,8 +327,8 @@ mod tests {
             build_test_header(&uncle1_header.block_hash().to_string(), PUBKEY_4G, 2);
         let uncle1_hash = uncle1_header.block_hash();
         let uncle2_hash = uncle2_header.block_hash();
-        let uncle1_difficulty = uncle1_header.get_difficulty();
-        let uncle2_difficulty = uncle2_header.get_difficulty();
+        let uncle1_difficulty = uncle1_header.get_difficulty_u128(bitcoin::Network::Signet);
+        let uncle2_difficulty = uncle2_header.get_difficulty_u128(bitcoin::Network::Signet);
 
         let nephew_header = build_test_header_with_uncles(
             &genesis_hash.to_string(),
@@ -344,7 +336,7 @@ mod tests {
             2,
             vec![uncle1_hash, uncle2_hash],
         );
-        let nephew_difficulty = nephew_header.get_difficulty();
+        let nephew_difficulty = nephew_header.get_difficulty_u128(bitcoin::Network::Signet);
         let tip_hash = nephew_header.block_hash();
 
         let confirmed_headers = vec![ConfirmedHeaderResult {
@@ -368,19 +360,19 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(move |_| Ok(uncle_headers.clone()));
 
-        let mut payout = Payout::new();
+        let mut payout = Payout::new(bitcoin::Network::Signet);
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
             .get_output_distribution(&mock, u128::MAX, total_amount, &config)
             .unwrap();
 
-        // Nephew gets base + 10% of uncle1 + 10% of uncle2
-        let expected_nephew_weight = (nephew_difficulty
-            + uncle1_difficulty * NEPHEW_BONUS_FACTOR
-            + uncle2_difficulty * NEPHEW_BONUS_FACTOR) as u128;
-        let expected_uncle1_weight = (uncle1_difficulty * UNCLE_WEIGHT_FACTOR) as u128;
-        let expected_uncle2_weight = (uncle2_difficulty * UNCLE_WEIGHT_FACTOR) as u128;
+        // Nephew gets base * 10 + 1/10 of each uncle's difficulty
+        let expected_nephew_weight = nephew_difficulty * DIFFICULTY_SCALE
+            + uncle1_difficulty * NEPHEW_SCALED_BONUS
+            + uncle2_difficulty * NEPHEW_SCALED_BONUS;
+        let expected_uncle1_weight = uncle1_difficulty * UNCLE_SCALED_WEIGHT;
+        let expected_uncle2_weight = uncle2_difficulty * UNCLE_SCALED_WEIGHT;
         let total_weight = expected_nephew_weight + expected_uncle1_weight + expected_uncle2_weight;
 
         let total_distributed: Amount = result.iter().map(|pair| pair.amount).sum();
@@ -388,7 +380,7 @@ mod tests {
 
         // Verify weights are reasonable
         assert!(
-            expected_nephew_weight > nephew_difficulty as u128,
+            expected_nephew_weight > nephew_difficulty * DIFFICULTY_SCALE,
             "Nephew should have bonus"
         );
         assert!(total_weight > 0, "Total weight should be positive");
@@ -406,7 +398,7 @@ mod tests {
         let tip_hash = header3.block_hash();
 
         // Difficulty per share (from bits)
-        let single_share_difficulty = header1.get_difficulty() as u128;
+        let single_share_difficulty = header1.get_difficulty_u128(bitcoin::Network::Signet);
 
         // Newest-to-oldest order
         let confirmed_headers = vec![
@@ -441,7 +433,7 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut payout = Payout::new();
+        let mut payout = Payout::new(bitcoin::Network::Signet);
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
 
@@ -469,7 +461,7 @@ mod tests {
         let miner3 = header3.miner_address.to_string();
         let tip_hash = header3.block_hash();
 
-        let single_share_difficulty = header1.get_difficulty() as u128;
+        let single_share_difficulty = header1.get_difficulty_u128(bitcoin::Network::Signet);
 
         // Newest-to-oldest order
         let confirmed_headers = vec![
@@ -504,7 +496,7 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut payout = Payout::new();
+        let mut payout = Payout::new(bitcoin::Network::Signet);
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
 
@@ -576,7 +568,7 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(move |_| Ok(uncle_headers.clone()));
 
-        let mut payout = Payout::new();
+        let mut payout = Payout::new(bitcoin::Network::Signet);
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
 
