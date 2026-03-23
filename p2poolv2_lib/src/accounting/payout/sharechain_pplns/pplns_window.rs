@@ -38,11 +38,15 @@ use tracing::info;
 /// Provide a 10% buffer 120,960 * 1.1 = 133056
 pub(crate) const MAX_PPLNS_WINDOW_SHARES: usize = 133056;
 
-/// Uncle weight factor: uncles receive 90% of their difficulty.
-pub const UNCLE_WEIGHT_FACTOR: f64 = 0.9;
+/// Scale factor applied to all difficulty contributions.
+/// Allows integer representation of 90%/10% uncle/nephew weighting.
+pub(crate) const DIFFICULTY_SCALE: u128 = 10;
 
-/// Nephew bonus factor: nephews receive 10% of each uncle's difficulty as bonus.
-pub(crate) const NEPHEW_BONUS_FACTOR: f64 = 0.1;
+/// Scaled uncle weight: uncle contributes 9/10 of its difficulty.
+pub(crate) const UNCLE_SCALED_WEIGHT: u128 = 9;
+
+/// Scaled nephew bonus: nephew receives 1/10 of each uncle's difficulty.
+pub(crate) const NEPHEW_SCALED_BONUS: u128 = 1;
 
 /// Maximum depth to search for the fork point before falling back to
 /// full invalidation. Limits the cost of `find_fork_height` to at most
@@ -62,12 +66,12 @@ struct ConfirmedEntry {
     /// Internal key mapping the miner address in AddressKeys.
     internal_key: usize,
     /// Difficulty of the share
-    difficulty: f64,
+    difficulty: u128,
     /// Uncle entries, if any, referenced by the share
     uncle_entries: Vec<UncleEntry>,
-    /// Total weighted difficulty this entry contributes to the aggregate.
-    /// Equals difficulty + nephew_bonus (from uncles) + sum of uncle weighted difficulties.
-    total_weighted_difficulty: f64,
+    /// Total scaled weighted difficulty this entry contributes to the aggregate.
+    /// Equals difficulty * DIFFICULTY_SCALE + nephew_bonus + uncle_weighted_sum.
+    total_weighted_difficulty: u128,
 }
 
 /// A cached uncle entry with only the fields needed for payout.
@@ -75,7 +79,7 @@ struct UncleEntry {
     /// Internal key mapping the miner address in AddressKeys.
     internal_key: usize,
     /// Base difficulty of the uncle share before weighting.
-    difficulty: f64,
+    difficulty: u128,
 }
 
 /// Incremental PPLNS window cache.
@@ -96,21 +100,24 @@ pub struct PplnsWindow {
     cached_tip_blockhash: Option<BlockHash>,
     /// The height of the highest confirmed share in the cache.
     cached_top_height: Option<u32>,
-    /// Sum of all confirmed entries' difficulties in the window.
-    total_accumulated_difficulty: f64,
+    /// Sum of all confirmed entries' scaled weighted difficulties in the window.
+    total_accumulated_difficulty: u128,
     /// Address internal key mapping
     address_keys: AddressKeys,
+    /// Bitcoin network used for computing integer difficulty from Target.
+    network: bitcoin::Network,
 }
 
-impl Default for PplnsWindow {
+impl PplnsWindow {
     /// Create an empty PplnsWindow with preallocated capacity.
-    fn default() -> Self {
+    pub fn new(network: bitcoin::Network) -> Self {
         Self {
             confirmed_entries: VecDeque::with_capacity(INITIAL_ENTRIES_CAPACITY),
             cached_tip_blockhash: None,
             cached_top_height: None,
-            total_accumulated_difficulty: 0.0,
+            total_accumulated_difficulty: 0,
             address_keys: AddressKeys::default(),
+            network,
         }
     }
 }
@@ -134,17 +141,18 @@ impl PplnsWindow {
     /// overflow are removed.
     pub fn get_distribution(
         &mut self,
-        total_difficulty: f64,
+        total_difficulty: u128,
         start_hash: Option<BlockHash>,
-    ) -> HashMap<Address, f64> {
+    ) -> HashMap<Address, u128> {
+        let scaled_threshold = total_difficulty.saturating_mul(DIFFICULTY_SCALE);
         let start_index = self.find_start_index(start_hash);
-        let mut difficulty_by_key = vec![0.0f64; self.address_keys.len()];
-        let mut accumulated_difficulty: f64 = 0.0;
+        let mut difficulty_by_key = vec![0u128; self.address_keys.len()];
+        let mut accumulated_difficulty: u128 = 0;
 
         let threshold_index = self.accumulate_difficulty(
             &mut difficulty_by_key,
             &mut accumulated_difficulty,
-            total_difficulty,
+            scaled_threshold,
             start_index,
         );
 
@@ -173,24 +181,25 @@ impl PplnsWindow {
     /// the total entry count if the threshold was never reached.
     fn accumulate_difficulty(
         &self,
-        difficulty_by_key: &mut [f64],
-        accumulated_difficulty: &mut f64,
-        total_difficulty: f64,
+        difficulty_by_key: &mut [u128],
+        accumulated_difficulty: &mut u128,
+        scaled_threshold: u128,
         start_index: usize,
     ) -> usize {
         for (offset, entry) in self.confirmed_entries.iter().skip(start_index).enumerate() {
-            let mut nephew_bonus: f64 = 0.0;
+            let mut nephew_bonus: u128 = 0;
 
             for uncle_entry in &entry.uncle_entries {
                 difficulty_by_key[uncle_entry.internal_key] +=
-                    uncle_entry.difficulty * UNCLE_WEIGHT_FACTOR;
-                nephew_bonus += uncle_entry.difficulty * NEPHEW_BONUS_FACTOR;
+                    uncle_entry.difficulty * UNCLE_SCALED_WEIGHT;
+                nephew_bonus += uncle_entry.difficulty * NEPHEW_SCALED_BONUS;
             }
 
-            difficulty_by_key[entry.internal_key] += entry.difficulty + nephew_bonus;
+            difficulty_by_key[entry.internal_key] +=
+                entry.difficulty * DIFFICULTY_SCALE + nephew_bonus;
             *accumulated_difficulty += entry.total_weighted_difficulty;
 
-            if accumulated_difficulty.floor() >= total_difficulty.floor() {
+            if *accumulated_difficulty >= scaled_threshold {
                 return start_index + offset + 1;
             }
         }
@@ -212,19 +221,19 @@ impl PplnsWindow {
 
     /// Remove address keys that have zero difficulty and are not in
     /// the overflow region.
-    fn remove_stale_keys(&mut self, difficulty_by_key: &[f64], overflow_flags: &[bool]) {
+    fn remove_stale_keys(&mut self, difficulty_by_key: &[u128], overflow_flags: &[bool]) {
         for index in 0..difficulty_by_key.len() {
-            if difficulty_by_key[index] == 0.0 && !overflow_flags[index] {
+            if difficulty_by_key[index] == 0 && !overflow_flags[index] {
                 self.address_keys.remove(index);
             }
         }
     }
 
-    /// Convert the Vec-based difficulty accumulation into a HashMap<Address, f64>.
-    fn collect_distribution(&self, difficulty_by_key: &[f64]) -> HashMap<Address, f64> {
+    /// Convert the Vec-based difficulty accumulation into a HashMap<Address, u128>.
+    fn collect_distribution(&self, difficulty_by_key: &[u128]) -> HashMap<Address, u128> {
         let mut result = HashMap::with_capacity(difficulty_by_key.len());
         for (index, difficulty) in difficulty_by_key.iter().enumerate() {
-            if *difficulty > f64::EPSILON {
+            if *difficulty > 0 {
                 if let Some(address) = self.address_keys.value_for(index) {
                     result.insert(address.clone(), *difficulty);
                 }
@@ -328,7 +337,7 @@ impl PplnsWindow {
     /// Clear all cached state, forcing a full reload on next update.
     fn invalidate(&mut self) {
         self.confirmed_entries.clear();
-        self.total_accumulated_difficulty = 0.0;
+        self.total_accumulated_difficulty = 0;
         self.cached_tip_blockhash = None;
         self.cached_top_height = None;
     }
@@ -403,7 +412,7 @@ impl PplnsWindow {
             header,
         } in confirmed_headers.into_iter().rev()
         {
-            let difficulty = header.get_difficulty();
+            let difficulty = header.get_difficulty_u128(self.network);
             let uncle_entries = resolve_uncle_entries(&header.uncles, &uncle_lookup);
             let entry = self.build_confirmed_entry(
                 blockhash,
@@ -426,7 +435,9 @@ impl PplnsWindow {
 
     /// Remove a confirmed entry's weighted difficulty from the running total.
     fn remove_from_running_total(&mut self, entry: &ConfirmedEntry) {
-        self.total_accumulated_difficulty -= entry.total_weighted_difficulty;
+        self.total_accumulated_difficulty = self
+            .total_accumulated_difficulty
+            .saturating_sub(entry.total_weighted_difficulty);
     }
 
     /// Remove confirmed entries to only maintain
@@ -448,18 +459,19 @@ impl PplnsWindow {
         blockhash: BlockHash,
         height: u32,
         miner_address: Address,
-        difficulty: f64,
+        difficulty: u128,
         uncle_entries: Vec<UncleEntry>,
     ) -> ConfirmedEntry {
         let internal_key = self.address_keys.key_for(miner_address);
 
-        let mut nephew_bonus: f64 = 0.0;
-        let mut uncle_weighted_sum: f64 = 0.0;
+        let mut nephew_bonus: u128 = 0;
+        let mut uncle_weighted_sum: u128 = 0;
         for uncle_entry in &uncle_entries {
-            uncle_weighted_sum += uncle_entry.difficulty * UNCLE_WEIGHT_FACTOR;
-            nephew_bonus += uncle_entry.difficulty * NEPHEW_BONUS_FACTOR;
+            uncle_weighted_sum += uncle_entry.difficulty * UNCLE_SCALED_WEIGHT;
+            nephew_bonus += uncle_entry.difficulty * NEPHEW_SCALED_BONUS;
         }
-        let total_weighted_difficulty = difficulty + nephew_bonus + uncle_weighted_sum;
+        let total_weighted_difficulty =
+            difficulty * DIFFICULTY_SCALE + nephew_bonus + uncle_weighted_sum;
 
         ConfirmedEntry {
             blockhash,
@@ -472,7 +484,7 @@ impl PplnsWindow {
     }
 
     /// Build an UncleEntry, resolving the miner address to an internal key.
-    fn build_uncle_entry(&mut self, miner_address: Address, difficulty: f64) -> UncleEntry {
+    fn build_uncle_entry(&mut self, miner_address: Address, difficulty: u128) -> UncleEntry {
         let internal_key = self.address_keys.key_for(miner_address);
         UncleEntry {
             internal_key,
@@ -493,7 +505,7 @@ impl PplnsWindow {
         let uncle_headers = chain_store_handle.get_share_headers(uncle_hashes)?;
         let mut uncle_lookup = HashMap::with_capacity(uncle_headers.len());
         for (blockhash, header) in uncle_headers {
-            let difficulty = header.get_difficulty();
+            let difficulty = header.get_difficulty_u128(self.network);
             let uncle_entry = self.build_uncle_entry(header.miner_address, difficulty);
             uncle_lookup.insert(blockhash, uncle_entry);
         }
@@ -549,7 +561,7 @@ impl PplnsWindow {
     /// newest-to-oldest. Uncle data is provided as (miner_address_string, difficulty).
     pub fn populate_for_benchmark(
         &mut self,
-        confirmed_shares: Vec<(BlockHash, String, f64, Vec<(String, f64)>)>,
+        confirmed_shares: Vec<(BlockHash, String, u128, Vec<(String, u128)>)>,
     ) {
         self.invalidate();
         self.confirmed_entries.reserve(confirmed_shares.len());
@@ -603,6 +615,9 @@ mod tests {
     use bitcoin::Work;
     use bitcoin::hashes::Hash;
 
+    /// Network used for test difficulty calculations.
+    const TEST_NETWORK: bitcoin::Network = bitcoin::Network::Signet;
+
     /// Create a ConfirmedEntry from a ShareHeader with no uncles.
     fn entry_from_header(
         window: &mut PplnsWindow,
@@ -613,7 +628,7 @@ mod tests {
             header.block_hash(),
             height,
             header.miner_address.clone(),
-            header.get_difficulty(),
+            header.get_difficulty_u128(TEST_NETWORK),
             Vec::new(),
         )
     }
@@ -629,14 +644,17 @@ mod tests {
             header.block_hash(),
             height,
             header.miner_address.clone(),
-            header.get_difficulty(),
+            header.get_difficulty_u128(TEST_NETWORK),
             uncle_entries,
         )
     }
 
     /// Create an UncleEntry from a ShareHeader for test setup.
     fn uncle_entry_from_header(window: &mut PplnsWindow, header: &ShareHeader) -> UncleEntry {
-        window.build_uncle_entry(header.miner_address.clone(), header.get_difficulty())
+        window.build_uncle_entry(
+            header.miner_address.clone(),
+            header.get_difficulty_u128(TEST_NETWORK),
+        )
     }
 
     /// Create a BlockMetadata with the given height and Confirmed status.
@@ -700,7 +718,7 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         let updated = window.update(&mock).unwrap();
 
         assert!(updated);
@@ -709,11 +727,11 @@ mod tests {
         assert_eq!(window.cached_tip_blockhash, Some(tip_hash));
         assert_eq!(window.cached_top_height, Some(4));
 
-        // All 5 entries have same difficulty (no uncles), total should be 5 * difficulty
-        let difficulty = headers[0].header.get_difficulty();
-        let expected_total = 5.0 * difficulty;
-        assert!(
-            (window.total_accumulated_difficulty - expected_total).abs() < 0.001,
+        // All 5 entries have same difficulty (no uncles), total should be 5 * difficulty * DIFFICULTY_SCALE
+        let difficulty = headers[0].header.get_difficulty_u128(TEST_NETWORK);
+        let expected_total = 5 * difficulty * DIFFICULTY_SCALE;
+        assert_eq!(
+            window.total_accumulated_difficulty, expected_total,
             "expected total_accumulated_difficulty {expected_total}, got {}",
             window.total_accumulated_difficulty
         );
@@ -738,7 +756,7 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         window.update(&mock).unwrap();
         assert_eq!(window.confirmed_entries.len(), 5);
 
@@ -794,7 +812,7 @@ mod tests {
             .expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         window.update(&mock1).unwrap();
         assert_eq!(window.confirmed_entries.len(), 3);
         // Deque should be [height2, height1, height0]
@@ -908,7 +926,7 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         window.update(&mock).unwrap();
 
         // Second update with same tip
@@ -934,7 +952,7 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         window.update(&mock).unwrap();
         assert_eq!(window.confirmed_entries.len(), 5);
 
@@ -971,9 +989,9 @@ mod tests {
         let header_b = build_test_header(&header_a.block_hash().to_string(), PUBKEY_2G, 2);
         let header_c = build_test_header(&header_b.block_hash().to_string(), PUBKEY_3G, 2);
 
-        let difficulty = header_a.get_difficulty();
+        let difficulty = header_a.get_difficulty_u128(TEST_NETWORK);
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         // Newest at front: c, b, a
         let entry_c = entry_from_header(&mut window, &header_c, 2);
         let entry_b = entry_from_header(&mut window, &header_b, 1);
@@ -989,9 +1007,9 @@ mod tests {
         window.evict_overflow();
         assert_eq!(window.confirmed_entries.len(), 3);
 
-        let expected_total = 3.0 * difficulty;
-        assert!(
-            (window.total_accumulated_difficulty - expected_total).abs() < 0.001,
+        let expected_total = 3 * difficulty * DIFFICULTY_SCALE;
+        assert_eq!(
+            window.total_accumulated_difficulty, expected_total,
             "expected total_accumulated_difficulty {expected_total}, got {}",
             window.total_accumulated_difficulty
         );
@@ -1005,7 +1023,7 @@ mod tests {
         let header_b = build_test_header(&header_a.block_hash().to_string(), PUBKEY_2G, 2);
         let hash_b = header_b.block_hash();
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         // Fill beyond max: push max + 2 entries, first two are our named ones
         let entry_b = entry_from_header(&mut window, &header_b, 1);
         window.confirmed_entries.push_back(entry_b);
@@ -1021,7 +1039,7 @@ mod tests {
                 BlockHash::all_zeros(),
                 index as u32 + 2,
                 padding_address.clone(),
-                1.0,
+                1u128,
                 Vec::new(),
             );
             window.confirmed_entries.push_back(entry);
@@ -1043,10 +1061,10 @@ mod tests {
         let genesis_hash = BlockHash::all_zeros();
         let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
-        let difficulty1 = header1.get_difficulty();
-        let difficulty2 = header2.get_difficulty();
+        let difficulty1 = header1.get_difficulty_u128(TEST_NETWORK);
+        let difficulty2 = header2.get_difficulty_u128(TEST_NETWORK);
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         let entry2 = entry_from_header(&mut window, &header2, 1);
         let entry1 = entry_from_header(&mut window, &header1, 0);
         window.add_to_running_total(&entry2);
@@ -1054,16 +1072,22 @@ mod tests {
         window.add_to_running_total(&entry1);
         window.confirmed_entries.push_back(entry1);
 
-        let result = window.get_distribution(f64::MAX, None);
+        let result = window.get_distribution(u128::MAX, None);
 
         assert_eq!(result.len(), 2);
-        assert!((result[&header1.miner_address] - difficulty1).abs() < 0.001);
-        assert!((result[&header2.miner_address] - difficulty2).abs() < 0.001);
+        assert_eq!(
+            result[&header1.miner_address],
+            difficulty1 * DIFFICULTY_SCALE
+        );
+        assert_eq!(
+            result[&header2.miner_address],
+            difficulty2 * DIFFICULTY_SCALE
+        );
 
-        // No uncles, so total_weighted == difficulty for each entry
-        let expected_total = difficulty1 + difficulty2;
-        assert!(
-            (window.total_accumulated_difficulty - expected_total).abs() < 0.001,
+        // No uncles, so total_weighted == difficulty * DIFFICULTY_SCALE for each entry
+        let expected_total = (difficulty1 + difficulty2) * DIFFICULTY_SCALE;
+        assert_eq!(
+            window.total_accumulated_difficulty, expected_total,
             "expected total_accumulated_difficulty {expected_total}, got {}",
             window.total_accumulated_difficulty
         );
@@ -1075,11 +1099,11 @@ mod tests {
         let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
         let header3 = build_test_header(&header2.block_hash().to_string(), PUBKEY_3G, 2);
-        let difficulty1 = header1.get_difficulty();
-        let difficulty2 = header2.get_difficulty();
+        let difficulty1 = header1.get_difficulty_u128(TEST_NETWORK);
+        let difficulty2 = header2.get_difficulty_u128(TEST_NETWORK);
 
         // Entries are newest-to-oldest: header3 (index 0), header2 (index 1), header1 (index 2)
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         let entry3 = entry_from_header(&mut window, &header3, 2);
         let entry2 = entry_from_header(&mut window, &header2, 1);
         let entry1 = entry_from_header(&mut window, &header1, 0);
@@ -1091,16 +1115,25 @@ mod tests {
         window.confirmed_entries.push_back(entry1);
 
         // Starting from header2 should skip header3, include header2 and header1
-        let result = window.get_distribution(f64::MAX, Some(header2.block_hash()));
+        let result = window.get_distribution(u128::MAX, Some(header2.block_hash()));
         assert_eq!(result.len(), 2);
-        assert!((result[&header2.miner_address] - difficulty2).abs() < 0.001);
-        assert!((result[&header1.miner_address] - difficulty1).abs() < 0.001);
+        assert_eq!(
+            result[&header2.miner_address],
+            difficulty2 * DIFFICULTY_SCALE
+        );
+        assert_eq!(
+            result[&header1.miner_address],
+            difficulty1 * DIFFICULTY_SCALE
+        );
         assert!(!result.contains_key(&header3.miner_address));
 
         // Starting from the oldest entry should only include that entry
-        let result = window.get_distribution(f64::MAX, Some(header1.block_hash()));
+        let result = window.get_distribution(u128::MAX, Some(header1.block_hash()));
         assert_eq!(result.len(), 1);
-        assert!((result[&header1.miner_address] - difficulty1).abs() < 0.001);
+        assert_eq!(
+            result[&header1.miner_address],
+            difficulty1 * DIFFICULTY_SCALE
+        );
     }
 
     #[test]
@@ -1108,10 +1141,10 @@ mod tests {
         let genesis_hash = BlockHash::all_zeros();
         let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
-        let difficulty1 = header1.get_difficulty();
-        let difficulty2 = header2.get_difficulty();
+        let difficulty1 = header1.get_difficulty_u128(TEST_NETWORK);
+        let difficulty2 = header2.get_difficulty_u128(TEST_NETWORK);
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         let entry2 = entry_from_header(&mut window, &header2, 1);
         let entry1 = entry_from_header(&mut window, &header1, 0);
         window.add_to_running_total(&entry2);
@@ -1121,10 +1154,16 @@ mod tests {
 
         // A hash not in the window should fall back to starting from the top
         let unknown_hash = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 3).block_hash();
-        let result = window.get_distribution(f64::MAX, Some(unknown_hash));
+        let result = window.get_distribution(u128::MAX, Some(unknown_hash));
         assert_eq!(result.len(), 2);
-        assert!((result[&header1.miner_address] - difficulty1).abs() < 0.001);
-        assert!((result[&header2.miner_address] - difficulty2).abs() < 0.001);
+        assert_eq!(
+            result[&header1.miner_address],
+            difficulty1 * DIFFICULTY_SCALE
+        );
+        assert_eq!(
+            result[&header2.miner_address],
+            difficulty2 * DIFFICULTY_SCALE
+        );
     }
 
     #[test]
@@ -1134,36 +1173,37 @@ mod tests {
         // Uncle header
         let uncle_header = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 2);
         let uncle_hash = uncle_header.block_hash();
-        let uncle_difficulty = uncle_header.get_difficulty();
+        let uncle_difficulty = uncle_header.get_difficulty_u128(TEST_NETWORK);
 
         // Nephew that references the uncle
         let nephew_header =
             build_test_header_with_uncles(&genesis_hash.to_string(), PUBKEY_G, 2, vec![uncle_hash]);
-        let nephew_difficulty = nephew_header.get_difficulty();
+        let nephew_difficulty = nephew_header.get_difficulty_u128(TEST_NETWORK);
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         let uncle_entry = uncle_entry_from_header(&mut window, &uncle_header);
         let nephew_entry =
             entry_from_header_with_uncles(&mut window, &nephew_header, 0, vec![uncle_entry]);
         window.add_to_running_total(&nephew_entry);
         window.confirmed_entries.push_back(nephew_entry);
 
-        let result = window.get_distribution(f64::MAX, None);
+        let result = window.get_distribution(u128::MAX, None);
 
-        // Uncle gets 90% of its difficulty
-        let expected_uncle_weight = uncle_difficulty * UNCLE_WEIGHT_FACTOR;
-        assert!((result[&uncle_header.miner_address] - expected_uncle_weight).abs() < 0.001);
+        // Uncle gets UNCLE_SCALED_WEIGHT (9) times its difficulty
+        let expected_uncle_weight = uncle_difficulty * UNCLE_SCALED_WEIGHT;
+        assert_eq!(result[&uncle_header.miner_address], expected_uncle_weight);
 
-        // Nephew gets base difficulty + 10% of uncle's difficulty
-        let expected_nephew_weight = nephew_difficulty + uncle_difficulty * NEPHEW_BONUS_FACTOR;
-        assert!((result[&nephew_header.miner_address] - expected_nephew_weight).abs() < 0.001);
+        // Nephew gets base difficulty * DIFFICULTY_SCALE + uncle_difficulty * NEPHEW_SCALED_BONUS
+        let expected_nephew_weight =
+            nephew_difficulty * DIFFICULTY_SCALE + uncle_difficulty * NEPHEW_SCALED_BONUS;
+        assert_eq!(result[&nephew_header.miner_address], expected_nephew_weight);
 
-        // total_accumulated_difficulty includes nephew base + uncle weighted + nephew bonus
-        let expected_total = nephew_difficulty
-            + uncle_difficulty * UNCLE_WEIGHT_FACTOR
-            + uncle_difficulty * NEPHEW_BONUS_FACTOR;
-        assert!(
-            (window.total_accumulated_difficulty - expected_total).abs() < 0.001,
+        // total_accumulated_difficulty includes nephew base scaled + uncle weighted + nephew bonus
+        let expected_total = nephew_difficulty * DIFFICULTY_SCALE
+            + uncle_difficulty * UNCLE_SCALED_WEIGHT
+            + uncle_difficulty * NEPHEW_SCALED_BONUS;
+        assert_eq!(
+            window.total_accumulated_difficulty, expected_total,
             "expected total_accumulated_difficulty {expected_total}, got {}",
             window.total_accumulated_difficulty
         );
@@ -1179,7 +1219,7 @@ mod tests {
         mock.expect_get_block_metadata()
             .returning(move |_| Ok(metadata_no_height()));
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         let updated = window.update(&mock).unwrap();
 
         assert!(!updated);
@@ -1201,7 +1241,7 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         window.update(&mock).unwrap();
         assert_eq!(window.cached_top_height, Some(4));
 
@@ -1266,7 +1306,7 @@ mod tests {
             vec![uncle_hash],
         );
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         let uncle_entry_1 = uncle_entry_from_header(&mut window, &uncle_header);
         let entry_nephew1 =
             entry_from_header_with_uncles(&mut window, &nephew1, 1, vec![uncle_entry_1]);
@@ -1309,7 +1349,7 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         window.update(&mock).unwrap();
         assert_eq!(window.confirmed_entries.len(), 5);
 
@@ -1404,16 +1444,16 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         window.update(&mock).unwrap();
 
-        let difficulty = headers_a[0].header.get_difficulty();
+        let difficulty = headers_a[0].header.get_difficulty_u128(TEST_NETWORK);
         let miner_g = &headers_a[0].header.miner_address;
 
         // All 3 shares are by PUBKEY_G
-        let dist = window.get_distribution(f64::MAX, None);
+        let dist = window.get_distribution(u128::MAX, None);
         assert_eq!(dist.len(), 1);
-        assert!((dist[miner_g] - 3.0 * difficulty).abs() < 0.001);
+        assert_eq!(dist[miner_g], 3 * difficulty * DIFFICULTY_SCALE);
 
         // Reorg: replace height 2 with a share by PUBKEY_2G
         let preserved_hash_at_1 = headers_a[1].blockhash; // height 1
@@ -1459,22 +1499,24 @@ mod tests {
         let miner_2g = &fork_header.miner_address;
 
         // Now: 2 shares by PUBKEY_G (heights 0-1) + 1 share by PUBKEY_2G (height 2)
-        let dist = window.get_distribution(f64::MAX, None);
+        let dist = window.get_distribution(u128::MAX, None);
         assert_eq!(dist.len(), 2);
-        assert!(
-            (dist[miner_g] - 2.0 * difficulty).abs() < 0.001,
-            "PUBKEY_G should have 2x difficulty, got {}",
+        assert_eq!(
+            dist[miner_g],
+            2 * difficulty * DIFFICULTY_SCALE,
+            "PUBKEY_G should have 2x difficulty scaled, got {}",
             dist[miner_g]
         );
-        assert!(
-            (dist[miner_2g] - difficulty).abs() < 0.001,
-            "PUBKEY_2G should have 1x difficulty, got {}",
+        assert_eq!(
+            dist[miner_2g],
+            difficulty * DIFFICULTY_SCALE,
+            "PUBKEY_2G should have 1x difficulty scaled, got {}",
             dist[miner_2g]
         );
 
-        let expected_total = 3.0 * difficulty;
-        assert!(
-            (window.total_accumulated_difficulty - expected_total).abs() < 0.001,
+        let expected_total = 3 * difficulty * DIFFICULTY_SCALE;
+        assert_eq!(
+            window.total_accumulated_difficulty, expected_total,
             "total should be {expected_total}, got {}",
             window.total_accumulated_difficulty
         );
@@ -1494,7 +1536,7 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         window.update(&mock).unwrap();
 
         // Deque is newest-to-oldest: [height4, height3, height2, height1, height0]
@@ -1513,7 +1555,7 @@ mod tests {
         let header_a = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let header_b = build_test_header(&header_a.block_hash().to_string(), PUBKEY_2G, 2);
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         // entry_b built first -> gets key 0, entry_a built second -> gets key 1
         let entry_b = entry_from_header(&mut window, &header_b, 1);
         let entry_a = entry_from_header(&mut window, &header_a, 0);
@@ -1532,7 +1574,7 @@ mod tests {
         window.confirmed_entries.pop_back();
 
         // get_distribution should remove miner A's stale key
-        let result = window.get_distribution(f64::MAX, None);
+        let result = window.get_distribution(u128::MAX, None);
         assert_eq!(result.len(), 1);
         assert!(result.contains_key(&header_b.miner_address));
 
@@ -1554,9 +1596,9 @@ mod tests {
         let header_a = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let header_b = build_test_header(&header_a.block_hash().to_string(), PUBKEY_2G, 2);
         let header_c = build_test_header(&header_b.block_hash().to_string(), PUBKEY_3G, 2);
-        let single_difficulty = header_a.get_difficulty();
+        let single_difficulty = header_a.get_difficulty_u128(TEST_NETWORK);
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         let entry_c = entry_from_header(&mut window, &header_c, 2);
         let entry_b = entry_from_header(&mut window, &header_b, 1);
         let entry_a = entry_from_header(&mut window, &header_a, 0);
@@ -1600,7 +1642,7 @@ mod tests {
         let header_a = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let header_b = build_test_header(&header_a.block_hash().to_string(), PUBKEY_2G, 2);
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         // entry_b built first -> gets key 0, entry_a built second -> gets key 1
         let entry_b = entry_from_header(&mut window, &header_b, 1);
         let entry_a = entry_from_header(&mut window, &header_a, 0);
@@ -1614,7 +1656,7 @@ mod tests {
 
         // Evict miner A, then trigger cleanup
         window.confirmed_entries.pop_back();
-        window.get_distribution(f64::MAX, None);
+        window.get_distribution(u128::MAX, None);
 
         assert!(
             window.address_keys.value_for(miner_a_key).is_none(),
@@ -1660,9 +1702,9 @@ mod tests {
 
         // A second entry at height 1 by a different miner (this hits the threshold)
         let header_top = build_test_header(&nephew_header.block_hash().to_string(), PUBKEY_2G, 2);
-        let single_difficulty = header_top.get_difficulty();
+        let single_difficulty = header_top.get_difficulty_u128(TEST_NETWORK);
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         // Uncle built first -> PUBKEY_3G gets key 0
         let uncle_entry = uncle_entry_from_header(&mut window, &uncle_header);
         let uncle_miner_key = uncle_entry.internal_key;
@@ -1708,7 +1750,7 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut window = PplnsWindow::default();
+        let mut window = PplnsWindow::new(TEST_NETWORK);
         window.update(&mock).unwrap();
         assert_eq!(window.confirmed_entries.len(), chain_len);
 

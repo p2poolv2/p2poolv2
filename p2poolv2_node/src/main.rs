@@ -184,7 +184,7 @@ async fn main() -> ExitCode {
     let cloned_stratum_config = stratum_config.clone();
     tokio::spawn(async move {
         info!("Starting Stratum notifier...");
-        let payout = Box::new(Payout::new());
+        let payout = Box::new(Payout::new(cloned_stratum_config.network));
         start_notify(
             notify_rx,
             template_tx,
