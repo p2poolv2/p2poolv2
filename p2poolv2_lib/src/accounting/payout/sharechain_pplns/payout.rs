@@ -57,7 +57,7 @@ impl PayoutDistribution for Payout {
         &mut self,
         distribution: &mut Vec<OutputPair>,
         chain_store_handle: &ChainStoreHandle,
-        total_difficulty: f64,
+        total_difficulty: u128,
         _total_amount: bitcoin::Amount,
         remaining_total_amount: Amount,
         bootstrap_address: Address,
@@ -66,7 +66,7 @@ impl PayoutDistribution for Payout {
             return Ok(());
         }
 
-        if total_difficulty <= 0.0 {
+        if total_difficulty == 0 {
             distribution.push(OutputPair {
                 address: bootstrap_address,
                 amount: remaining_total_amount,
@@ -76,7 +76,14 @@ impl PayoutDistribution for Payout {
 
         self.pplns_window.update(chain_store_handle)?;
 
-        let address_difficulty_map = self.pplns_window.get_distribution(total_difficulty, None);
+        let address_difficulty_f64 = self
+            .pplns_window
+            .get_distribution(total_difficulty as f64, None);
+        let address_difficulty_map: std::collections::HashMap<bitcoin::Address, u128> =
+            address_difficulty_f64
+                .into_iter()
+                .map(|(address, difficulty)| (address, difficulty as u128))
+                .collect();
 
         if address_difficulty_map.is_empty() {
             distribution.push(OutputPair {
@@ -136,7 +143,7 @@ mod tests {
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
-            .get_output_distribution(&mock, 1000.0, total_amount, &config)
+            .get_output_distribution(&mock, 1000, total_amount, &config)
             .unwrap();
 
         assert_eq!(result.len(), 1);
@@ -174,7 +181,7 @@ mod tests {
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
-            .get_output_distribution(&mock, f64::MAX, total_amount, &config)
+            .get_output_distribution(&mock, u128::MAX, total_amount, &config)
             .unwrap();
 
         assert_eq!(result.len(), 1);
@@ -223,7 +230,7 @@ mod tests {
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
-            .get_output_distribution(&mock, f64::MAX, total_amount, &config)
+            .get_output_distribution(&mock, u128::MAX, total_amount, &config)
             .unwrap();
 
         assert_eq!(result.len(), 2);
@@ -283,24 +290,24 @@ mod tests {
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
-            .get_output_distribution(&mock, f64::MAX, total_amount, &config)
+            .get_output_distribution(&mock, u128::MAX, total_amount, &config)
             .unwrap();
 
-        // Uncle gets 90% of its difficulty, nephew gets base + 10% of uncle's difficulty
-        let expected_uncle_weight = uncle_difficulty * UNCLE_WEIGHT_FACTOR;
-        let expected_nephew_weight = nephew_difficulty + uncle_difficulty * NEPHEW_BONUS_FACTOR;
+        // Uncle gets 90% of its difficulty, nephew gets base + 10% of uncle's difficulty.
+        // Weights are computed as f64 by get_distribution then cast to u128.
+        let expected_uncle_weight = (uncle_difficulty * UNCLE_WEIGHT_FACTOR) as u128;
+        let expected_nephew_weight =
+            (nephew_difficulty + uncle_difficulty * NEPHEW_BONUS_FACTOR) as u128;
         let total_weight = expected_uncle_weight + expected_nephew_weight;
 
         let total_distributed: Amount = result.iter().map(|pair| pair.amount).sum();
         assert_eq!(total_distributed, total_amount);
 
+        let total_sats = total_amount.to_sat() as u128;
         for pair in &result {
             let address_str = pair.address.to_string();
             if address_str == nephew_miner {
-                let expected_sats = (total_amount.to_sat() as f64 * expected_nephew_weight
-                    / total_weight)
-                    .round() as u64;
-                // Allow 1 sat rounding tolerance
+                let expected_sats = (total_sats * expected_nephew_weight / total_weight) as u64;
                 let diff = (pair.amount.to_sat() as i64 - expected_sats as i64).unsigned_abs();
                 assert!(
                     diff <= 1,
@@ -308,9 +315,7 @@ mod tests {
                     actual = pair.amount.to_sat()
                 );
             } else if address_str == uncle_miner {
-                let expected_sats = (total_amount.to_sat() as f64 * expected_uncle_weight
-                    / total_weight)
-                    .round() as u64;
+                let expected_sats = (total_sats * expected_uncle_weight / total_weight) as u64;
                 let diff = (pair.amount.to_sat() as i64 - expected_sats as i64).unsigned_abs();
                 assert!(
                     diff <= 1,
@@ -367,15 +372,15 @@ mod tests {
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
-            .get_output_distribution(&mock, f64::MAX, total_amount, &config)
+            .get_output_distribution(&mock, u128::MAX, total_amount, &config)
             .unwrap();
 
         // Nephew gets base + 10% of uncle1 + 10% of uncle2
-        let expected_nephew_weight = nephew_difficulty
+        let expected_nephew_weight = (nephew_difficulty
             + uncle1_difficulty * NEPHEW_BONUS_FACTOR
-            + uncle2_difficulty * NEPHEW_BONUS_FACTOR;
-        let expected_uncle1_weight = uncle1_difficulty * UNCLE_WEIGHT_FACTOR;
-        let expected_uncle2_weight = uncle2_difficulty * UNCLE_WEIGHT_FACTOR;
+            + uncle2_difficulty * NEPHEW_BONUS_FACTOR) as u128;
+        let expected_uncle1_weight = (uncle1_difficulty * UNCLE_WEIGHT_FACTOR) as u128;
+        let expected_uncle2_weight = (uncle2_difficulty * UNCLE_WEIGHT_FACTOR) as u128;
         let total_weight = expected_nephew_weight + expected_uncle1_weight + expected_uncle2_weight;
 
         let total_distributed: Amount = result.iter().map(|pair| pair.amount).sum();
@@ -383,10 +388,10 @@ mod tests {
 
         // Verify weights are reasonable
         assert!(
-            expected_nephew_weight > nephew_difficulty,
+            expected_nephew_weight > nephew_difficulty as u128,
             "Nephew should have bonus"
         );
-        assert!(total_weight > 0.0, "Total weight should be positive");
+        assert!(total_weight > 0, "Total weight should be positive");
     }
 
     #[test]
@@ -401,7 +406,7 @@ mod tests {
         let tip_hash = header3.block_hash();
 
         // Difficulty per share (from bits)
-        let single_share_difficulty = header1.get_difficulty();
+        let single_share_difficulty = header1.get_difficulty() as u128;
 
         // Newest-to-oldest order
         let confirmed_headers = vec![
@@ -464,7 +469,7 @@ mod tests {
         let miner3 = header3.miner_address.to_string();
         let tip_hash = header3.block_hash();
 
-        let single_share_difficulty = header1.get_difficulty();
+        let single_share_difficulty = header1.get_difficulty() as u128;
 
         // Newest-to-oldest order
         let confirmed_headers = vec![
@@ -506,7 +511,7 @@ mod tests {
         // Set total_difficulty to two shares' worth -- should include
         // only the two newest shares (header3 and header2)
         let result = payout
-            .get_output_distribution(&mock, single_share_difficulty * 2.0, total_amount, &config)
+            .get_output_distribution(&mock, single_share_difficulty * 2, total_amount, &config)
             .unwrap();
 
         assert_eq!(result.len(), 2);
@@ -576,7 +581,7 @@ mod tests {
         let total_amount = Amount::from_sat(100_000_000);
 
         let result = payout
-            .get_output_distribution(&mock, f64::MAX, total_amount, &config)
+            .get_output_distribution(&mock, u128::MAX, total_amount, &config)
             .unwrap();
 
         // Should have 3 addresses: miner A, miner B (uncle), miner C (nephew)
