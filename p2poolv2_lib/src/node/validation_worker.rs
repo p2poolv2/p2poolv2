@@ -25,6 +25,7 @@
 //! After successful validation, schedules stored children and nephews for
 //! validation by sending `ValidateBlock` events back through the channel.
 
+use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 use crate::node::SwarmSend;
 use crate::node::messages::Message;
 use crate::node::organise_worker::{OrganiseEvent, OrganiseSender};
@@ -43,7 +44,7 @@ use crate::utils::cpu::available_cpus;
 use bitcoin::BlockHash;
 use libp2p::request_response::ResponseChannel;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::sync::{Semaphore, mpsc};
 use tracing::{error, info};
 
@@ -100,6 +101,7 @@ pub struct ValidationWorker {
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     semaphore: Arc<Semaphore>,
+    pplns_window: Arc<RwLock<PplnsWindow>>,
 }
 
 impl ValidationWorker {
@@ -110,6 +112,7 @@ impl ValidationWorker {
         chain_store_handle: ChainStoreHandle,
         organise_tx: OrganiseSender,
         swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
+        pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Self {
         Self {
             validation_rx,
@@ -118,6 +121,7 @@ impl ValidationWorker {
             organise_tx,
             swarm_tx,
             semaphore: Arc::new(Semaphore::new(available_cpus())),
+            pplns_window,
         }
     }
 
@@ -158,6 +162,7 @@ impl ValidationWorker {
                     let swarm_tx = self.swarm_tx.clone();
                     let validation_tx = self.validation_tx.clone();
                     let validator = Arc::clone(&share_validator);
+                    let pplns_window = Arc::clone(&self.pplns_window);
 
                     tokio::spawn(async move {
                         let _permit = permit;
@@ -168,6 +173,7 @@ impl ValidationWorker {
                             organise_tx,
                             swarm_tx,
                             validation_tx,
+                            pplns_window,
                         )
                         .await;
                     });
@@ -194,6 +200,7 @@ async fn validate_and_emit(
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     validation_tx: ValidationSender,
+    _pplns_window: Arc<RwLock<PplnsWindow>>,
 ) {
     let share_block = match chain_store_handle.get_share(&block_hash) {
         Some(share_block) => share_block,
@@ -322,6 +329,7 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
+            Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -373,6 +381,7 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
+            Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -419,6 +428,7 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
+            Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -489,6 +499,7 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
+            Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -579,6 +590,7 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
+            Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -682,6 +694,7 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
+            Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
         );
 
         let worker_handle = tokio::spawn(worker.run());

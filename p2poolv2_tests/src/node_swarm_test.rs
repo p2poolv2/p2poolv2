@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use p2poolv2_lib::accounting::payout::sharechain_pplns::PplnsWindow;
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -23,7 +24,7 @@ use p2poolv2_lib::store::writer::{StoreHandle, StoreWriter, write_channel};
 use p2poolv2_lib::stratum::emission::Emission;
 use p2poolv2_lib::stratum::work::notify::NotifyCmd;
 use p2poolv2_lib::{node::actor::NodeHandle, shares::share_block::ShareBlock};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use std::time::Duration;
 use tempfile::tempdir;
@@ -125,6 +126,7 @@ async fn test_three_nodes_connectivity() {
         metrics1,
         monitoring_tx1,
         notify_tx1,
+        Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
     )
     .await
     .expect("Failed to create node 1");
@@ -138,6 +140,7 @@ async fn test_three_nodes_connectivity() {
         metrics2,
         monitoring_tx2,
         notify_tx2,
+        Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
     )
     .await
     .expect("Failed to create node 2");
@@ -151,6 +154,7 @@ async fn test_three_nodes_connectivity() {
         metrics3,
         monitoring_tx3,
         notify_tx3,
+        Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
     )
     .await
     .expect("Failed to create node 3");
@@ -339,6 +343,7 @@ async fn test_three_nodes_share_sync() {
         metrics1,
         monitoring_tx1,
         notify_tx1,
+        Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
     )
     .await
     .expect("Failed to create node 1");
@@ -354,6 +359,7 @@ async fn test_three_nodes_share_sync() {
         metrics2,
         monitoring_tx2,
         notify_tx2,
+        Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
     )
     .await
     .expect("Failed to create node 2");
@@ -366,6 +372,7 @@ async fn test_three_nodes_share_sync() {
         metrics3,
         monitoring_tx3,
         notify_tx3,
+        Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
     )
     .await
     .expect("Failed to create node 3");

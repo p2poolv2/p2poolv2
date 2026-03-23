@@ -106,7 +106,7 @@ fn bench_get_distribution(criterion: &mut Criterion) {
 
     criterion.bench_function("get_distribution_full_window", |bencher| {
         bencher.iter(|| {
-            black_box(window.get_distribution(u128::MAX, None));
+            black_box(window.get_distribution(u128::MAX));
         });
     });
 }

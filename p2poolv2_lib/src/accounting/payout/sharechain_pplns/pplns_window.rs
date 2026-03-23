@@ -128,24 +128,48 @@ impl PplnsWindow {
         self.confirmed_entries.is_empty()
     }
 
-    /// Compute the payout distribution by walking confirmed entries.
+    /// Read-only payout distribution starting from a given blockhash.
     ///
-    /// When start_hash is None, iteration begins at the newest entry.
-    /// When start_hash is Some, iteration begins at the entry whose
-    /// blockhash matches, skipping newer entries.
-    ///
-    /// Iterates in two passes. The first pass accumulates weighted
-    /// difficulty per address until the threshold is met. The second
-    /// pass marks overflow entries so their address keys are retained.
-    /// Finally, stale address keys with zero difficulty that did not
-    /// overflow are removed.
-    pub fn get_distribution(
-        &mut self,
+    /// Iteration begins at the entry whose blockhash matches
+    /// start_hash, skipping newer entries. Does not remove stale
+    /// address keys, so it only requires `&self`. Suitable for
+    /// callers that hold a read lock on a shared PplnsWindow, like
+    /// the validation worker.
+    pub fn get_distribution_from_start_hash(
+        &self,
         total_difficulty: u128,
-        start_hash: Option<BlockHash>,
+        start_hash: BlockHash,
     ) -> HashMap<Address, u128> {
-        let scaled_threshold = total_difficulty.saturating_mul(DIFFICULTY_SCALE);
         let start_index = self.find_start_index(start_hash);
+        let (difficulty_by_key, _threshold_index) =
+            self.walk_entries(total_difficulty, start_index);
+        self.collect_distribution(&difficulty_by_key)
+    }
+
+    /// Get payout distribution from the tip and clean up stale
+    /// address keys.
+    ///
+    /// Walk entries up to index where we meet
+    /// total_difficulty. Continue from there to mark overflow
+    /// entries.  Remove any address keys that are not in overflow and
+    /// don't contribute any difficulty.
+    ///
+    /// Finally collect difficulties by addresses in a hashmap and
+    /// return that.
+    pub fn get_distribution(&mut self, total_difficulty: u128) -> HashMap<Address, u128> {
+        let (difficulty_by_key, threshold_index) = self.walk_entries(total_difficulty, 0);
+
+        let overflow_flags = self.mark_overflow_entries(threshold_index);
+        self.remove_stale_keys(&difficulty_by_key, &overflow_flags);
+
+        self.collect_distribution(&difficulty_by_key)
+    }
+
+    /// Accumulate difficulty by walking confirmed entries from
+    /// start_index and return the per-key difficulty vector along
+    /// with the threshold index.
+    fn walk_entries(&self, total_difficulty: u128, start_index: usize) -> (Vec<u128>, usize) {
+        let scaled_threshold = total_difficulty.saturating_mul(DIFFICULTY_SCALE);
         let mut difficulty_by_key = vec![0u128; self.address_keys.len()];
         let mut accumulated_difficulty: u128 = 0;
 
@@ -156,22 +180,15 @@ impl PplnsWindow {
             start_index,
         );
 
-        let overflow_flags = self.mark_overflow_entries(threshold_index);
-
-        self.remove_stale_keys(&difficulty_by_key, &overflow_flags);
-
-        self.collect_distribution(&difficulty_by_key)
+        (difficulty_by_key, threshold_index)
     }
 
-    /// Find the index at which to start accumulating difficulty.
-    /// Returns 0 when start_hash is None or the hash is not found.
-    fn find_start_index(&self, start_hash: Option<BlockHash>) -> usize {
-        let Some(hash) = start_hash else {
-            return 0;
-        };
+    /// Find the index of the entry matching the given blockhash.
+    /// Returns 0 when the hash is not found.
+    fn find_start_index(&self, start_hash: BlockHash) -> usize {
         self.confirmed_entries
             .iter()
-            .position(|entry| entry.blockhash == hash)
+            .position(|entry| entry.blockhash == start_hash)
             .unwrap_or(0)
     }
 
@@ -1086,7 +1103,7 @@ mod tests {
         window.add_to_running_total(&entry1);
         window.confirmed_entries.push_back(entry1);
 
-        let result = window.get_distribution(u128::MAX, None);
+        let result = window.get_distribution(u128::MAX);
 
         assert_eq!(result.len(), 2);
         assert_eq!(
@@ -1129,7 +1146,7 @@ mod tests {
         window.confirmed_entries.push_back(entry1);
 
         // Starting from header2 should skip header3, include header2 and header1
-        let result = window.get_distribution(u128::MAX, Some(header2.block_hash()));
+        let result = window.get_distribution_from_start_hash(u128::MAX, header2.block_hash());
         assert_eq!(result.len(), 2);
         assert_eq!(
             result[&header2.miner_address],
@@ -1142,7 +1159,7 @@ mod tests {
         assert!(!result.contains_key(&header3.miner_address));
 
         // Starting from the oldest entry should only include that entry
-        let result = window.get_distribution(u128::MAX, Some(header1.block_hash()));
+        let result = window.get_distribution_from_start_hash(u128::MAX, header1.block_hash());
         assert_eq!(result.len(), 1);
         assert_eq!(
             result[&header1.miner_address],
@@ -1168,7 +1185,7 @@ mod tests {
 
         // A hash not in the window should fall back to starting from the top
         let unknown_hash = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 3).block_hash();
-        let result = window.get_distribution(u128::MAX, Some(unknown_hash));
+        let result = window.get_distribution_from_start_hash(u128::MAX, unknown_hash);
         assert_eq!(result.len(), 2);
         assert_eq!(
             result[&header1.miner_address],
@@ -1201,7 +1218,7 @@ mod tests {
         window.add_to_running_total(&nephew_entry);
         window.confirmed_entries.push_back(nephew_entry);
 
-        let result = window.get_distribution(u128::MAX, None);
+        let result = window.get_distribution(u128::MAX);
 
         // Uncle gets UNCLE_SCALED_WEIGHT (9) times its difficulty
         let expected_uncle_weight = uncle_difficulty * UNCLE_SCALED_WEIGHT;
@@ -1465,7 +1482,7 @@ mod tests {
         let miner_g = &headers_a[0].header.miner_address;
 
         // All 3 shares are by PUBKEY_G
-        let dist = window.get_distribution(u128::MAX, None);
+        let dist = window.get_distribution(u128::MAX);
         assert_eq!(dist.len(), 1);
         assert_eq!(dist[miner_g], 3 * difficulty * DIFFICULTY_SCALE);
 
@@ -1513,7 +1530,7 @@ mod tests {
         let miner_2g = &fork_header.miner_address;
 
         // Now: 2 shares by PUBKEY_G (heights 0-1) + 1 share by PUBKEY_2G (height 2)
-        let dist = window.get_distribution(u128::MAX, None);
+        let dist = window.get_distribution(u128::MAX);
         assert_eq!(dist.len(), 2);
         assert_eq!(
             dist[miner_g],
@@ -1588,7 +1605,7 @@ mod tests {
         window.confirmed_entries.pop_back();
 
         // get_distribution should remove miner A's stale key
-        let result = window.get_distribution(u128::MAX, None);
+        let result = window.get_distribution(u128::MAX);
         assert_eq!(result.len(), 1);
         assert!(result.contains_key(&header_b.miner_address));
 
@@ -1627,7 +1644,7 @@ mod tests {
 
         // Set threshold so only the newest entry (C) is included,
         // B and A overflow past the threshold
-        let result = window.get_distribution(single_difficulty, None);
+        let result = window.get_distribution(single_difficulty);
 
         // Only C should be in distribution
         assert_eq!(result.len(), 1);
@@ -1670,7 +1687,7 @@ mod tests {
 
         // Evict miner A, then trigger cleanup
         window.confirmed_entries.pop_back();
-        window.get_distribution(u128::MAX, None);
+        window.get_distribution(u128::MAX);
 
         assert!(
             window.address_keys.value_for(miner_a_key).is_none(),
@@ -1733,7 +1750,7 @@ mod tests {
 
         // Threshold = single difficulty, so only entry_top is included;
         // entry_nephew and its uncle are in overflow
-        let result = window.get_distribution(single_difficulty, None);
+        let result = window.get_distribution(single_difficulty);
 
         assert_eq!(result.len(), 1);
         assert!(result.contains_key(&header_top.miner_address));
