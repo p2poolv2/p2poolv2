@@ -25,12 +25,12 @@ use std::sync::{Arc, RwLock};
 use tracing::debug;
 use writer::StoreError;
 
-pub mod background_tasks;
 pub mod block_tx_metadata;
 pub mod column_families;
 pub mod dag_store;
 pub mod organise;
 mod pplns_shares;
+pub mod prune_shares;
 pub mod share_store;
 pub mod stored_user;
 pub mod transaction_store;
