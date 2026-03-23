@@ -55,7 +55,7 @@ impl Payout {
     /// Return a shared reference to the underlying PplnsWindow.
     ///
     /// Used to pass the same window to the validation worker so it
-    /// can call compute_distribution under a read lock.
+    /// can call get_distribution_from_start_hash under a read lock.
     pub fn shared_pplns_window(&self) -> Arc<RwLock<PplnsWindow>> {
         Arc::clone(&self.pplns_window)
     }
@@ -84,10 +84,11 @@ impl PayoutDistribution for Payout {
             return Ok(());
         }
 
+        // expect will stop start_notify task in main
         let mut window = self
             .pplns_window
             .write()
-            .map_err(|error| format!("PplnsWindow write lock poisoned: {error}"))?;
+            .expect("PplnsWindow lock poisoned");
         window.update(chain_store_handle)?;
 
         let address_difficulty_map = window.get_distribution(total_difficulty);
