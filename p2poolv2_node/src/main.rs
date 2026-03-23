@@ -108,7 +108,12 @@ async fn main() -> ExitCode {
     // throughput doesn't scale linearly with threads. We still with a
     // single thread, if we need to start another thread as scale
     // increases, we can deal with that then.
-    tokio::task::spawn_blocking(move || store_writer.run());
+    let exit_sender_store = exit_sender.clone();
+    tokio::task::spawn_blocking(move || {
+        store_writer.run();
+        tracing::error!("Store writer stopped unexpectedly");
+        let _ = exit_sender_store.send(ShutdownReason::Error);
+    });
 
     // Create StoreHandle and ChainStoreHandle for new components
     let store_handle = StoreHandle::new(store.clone(), write_tx);
@@ -184,6 +189,7 @@ async fn main() -> ExitCode {
     let cloned_stratum_config = stratum_config.clone();
     let payout = Payout::new(cloned_stratum_config.network);
     let shared_pplns_window = payout.shared_pplns_window();
+    let exit_sender_notify = exit_sender.clone();
     tokio::spawn(async move {
         info!("Starting Stratum notifier...");
         start_notify(
@@ -194,6 +200,8 @@ async fn main() -> ExitCode {
             Box::new(payout),
         )
         .await;
+        error!("Notifier stopped unexpectedly");
+        let _ = exit_sender_notify.send(ShutdownReason::Error);
     });
 
     let (emissions_tx, emissions_rx) =
