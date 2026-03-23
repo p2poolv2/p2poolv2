@@ -29,12 +29,14 @@ pub const SECONDS_PER_DAY: u64 = 86400;
 
 /// Spawn a background task that periodically prunes old PPLNS shares.
 ///
-/// Sends ShutdownReason::Error via exit_sender if pruning fails.
+/// Sends ShutdownReason::Error via exit_sender if pruning fails,
+/// unless shutdown was already initiated by another component.
 pub fn start_background_tasks(
     store: Arc<Store>,
     frequency: Duration,
     pplns_ttl: Duration,
     exit_sender: watch::Sender<ShutdownReason>,
+    exit_receiver: watch::Receiver<ShutdownReason>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(frequency);
@@ -42,8 +44,10 @@ pub fn start_background_tasks(
             interval.tick().await;
             trace!("Running background cleanup tasks");
             if let Err(cleanup_error) = store.prune_shares(pplns_ttl) {
-                error!("Background cleanup failed: {cleanup_error}");
-                let _ = exit_sender.send(ShutdownReason::Error);
+                if *exit_receiver.borrow() == ShutdownReason::None {
+                    error!("Background cleanup failed: {cleanup_error}");
+                    let _ = exit_sender.send(ShutdownReason::Error);
+                }
                 return;
             }
         }
@@ -81,13 +85,15 @@ mod tests {
         );
         store.add_pplns_share(old_share).unwrap();
 
-        let (exit_sender, exit_receiver) = watch::channel(ShutdownReason::None);
+        let (exit_sender, _exit_receiver) = watch::channel(ShutdownReason::None);
+        let test_receiver = exit_sender.subscribe();
 
         let handle = start_background_tasks(
             store.clone(),
             Duration::from_millis(100),
             Duration::from_secs(1800),
-            exit_sender,
+            exit_sender.clone(),
+            exit_sender.subscribe(),
         );
 
         // Wait for at least one cleanup cycle
@@ -98,7 +104,7 @@ mod tests {
         assert_eq!(remaining_shares.len(), 0);
 
         // No shutdown should have been sent
-        assert!(!exit_receiver.has_changed().unwrap());
+        assert!(!test_receiver.has_changed().unwrap());
 
         handle.abort();
     }
