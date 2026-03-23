@@ -36,7 +36,7 @@ const TOTAL_CONFIRMED_SHARES: usize = 133056;
 const UNCLE_INTERVAL: usize = 10;
 
 /// Base difficulty for benchmark shares.
-const BASE_DIFFICULTY: f64 = 1024.0;
+const BASE_DIFFICULTY: u128 = 1024;
 
 /// Miner pubkey strings used to derive distinct addresses.
 const MINER_PUBKEYS: [&str; 5] = [PUBKEY_G, PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G];
@@ -72,19 +72,19 @@ fn build_benchmark_window(share_count: usize) -> PplnsWindow {
     let miner_addresses = build_miner_addresses();
     let miner_count = miner_addresses.len();
 
-    let mut confirmed_shares: Vec<(BlockHash, String, f64, Vec<(String, f64)>)> =
+    let mut confirmed_shares: Vec<(BlockHash, String, u128, Vec<(String, u128)>)> =
         Vec::with_capacity(share_count);
 
     let mut uncle_counter: usize = 0;
 
     for share_index in 0..share_count {
         let miner_address = miner_addresses[share_index % miner_count].clone();
-        let difficulty = BASE_DIFFICULTY + (share_index as f64) * 0.01;
+        let difficulty = BASE_DIFFICULTY + share_index as u128;
         let blockhash = blockhash_from_index(share_index);
 
         let uncle_data = if share_index % UNCLE_INTERVAL == 0 {
             let uncle_miner = miner_addresses[(uncle_counter + 2) % miner_count].clone();
-            let uncle_difficulty = BASE_DIFFICULTY * 0.8;
+            let uncle_difficulty = BASE_DIFFICULTY * 8 / 10;
             uncle_counter += 1;
             vec![(uncle_miner, uncle_difficulty)]
         } else {
@@ -96,7 +96,7 @@ fn build_benchmark_window(share_count: usize) -> PplnsWindow {
 
     eprintln!("  populated {} confirmed entries", confirmed_shares.len());
 
-    let mut window = PplnsWindow::default();
+    let mut window = PplnsWindow::new(bitcoin::Network::Signet);
     window.populate_for_benchmark(confirmed_shares);
     window
 }
@@ -106,7 +106,7 @@ fn bench_get_distribution(criterion: &mut Criterion) {
 
     criterion.bench_function("get_distribution_full_window", |bencher| {
         bencher.iter(|| {
-            black_box(window.get_distribution(f64::MAX, None));
+            black_box(window.get_distribution(u128::MAX, None));
         });
     });
 }

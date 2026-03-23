@@ -63,12 +63,12 @@ impl ShareHeader {
         Target::from_compact(self.bits).to_work()
     }
 
-    /// Get the share chain difficulty as f64 from the bits field.
+    /// Get the share chain difficulty as u128 from the bits field.
     ///
-    /// Difficulty is the ratio of the maximum target to the share's target,
-    /// representing how hard this share was to find.
-    pub(crate) fn get_difficulty(&self) -> f64 {
-        Target::from_compact(self.bits).difficulty_float()
+    /// Uses the network's max attainable target to compute the integer
+    /// difficulty ratio (max_target / target).
+    pub(crate) fn get_difficulty(&self, network: bitcoin::Network) -> u128 {
+        Target::from_compact(self.bits).difficulty(network)
     }
 
     /// Build a ShareHeader from a commitment and a bitcoin header

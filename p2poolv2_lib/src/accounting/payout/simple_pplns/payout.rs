@@ -40,7 +40,7 @@ impl PayoutDistribution for Payout {
         &mut self,
         distribution: &mut Vec<OutputPair>,
         chain_store_handle: &ChainStoreHandle,
-        total_difficulty: f64,
+        total_difficulty: u128,
         total_amount: bitcoin::Amount,
         remaining_total_amount: Amount,
         bootstrap_address: Address,
@@ -93,10 +93,10 @@ impl Payout {
     fn accumulate_difficulty_by_address(
         &self,
         store: &ChainStoreHandle,
-        total_difficulty: f64,
-    ) -> Result<HashMap<Address, f64>, Box<dyn Error + Send + Sync>> {
-        let mut address_difficulty: HashMap<Address, f64> = HashMap::new();
-        let mut accumulated_difficulty = 0f64;
+        total_difficulty: u128,
+    ) -> Result<HashMap<Address, u128>, Box<dyn Error + Send + Sync>> {
+        let mut address_difficulty: HashMap<Address, u128> = HashMap::new();
+        let mut accumulated_difficulty: u128 = 0;
 
         // Start from current time and work backwards
         let current_time = SystemTime::now()
@@ -120,7 +120,7 @@ impl Payout {
             if has_more_shares {
                 for share in batch_shares.into_iter() {
                     if accumulated_difficulty < total_difficulty {
-                        accumulated_difficulty += share.difficulty as f64;
+                        accumulated_difficulty += share.difficulty as u128;
                         if let Some(btcaddress) = share.btcaddress {
                             let address = btcaddress
                                 .parse::<bitcoin::Address<_>>()
@@ -128,8 +128,8 @@ impl Payout {
                                     format!("Invalid bitcoin address '{btcaddress}': {e}")
                                 })?
                                 .assume_checked();
-                            *address_difficulty.entry(address).or_insert(0.0) +=
-                                share.difficulty as f64;
+                            *address_difficulty.entry(address).or_insert(0) +=
+                                share.difficulty as u128;
                         }
                     }
                 }
@@ -225,19 +225,19 @@ mod tests {
             .return_const(shares);
 
         let result = payout
-            .accumulate_difficulty_by_address(&chain_store_handle, 1000.0)
+            .accumulate_difficulty_by_address(&chain_store_handle, 1000)
             .unwrap();
 
         // All 4 addresses should be present
         assert_eq!(result.len(), 4);
-        assert_eq!(result.get(&make_test_address(1)), Some(&400.0));
-        assert_eq!(result.get(&make_test_address(2)), Some(&300.0));
-        assert_eq!(result.get(&make_test_address(3)), Some(&200.0));
-        assert_eq!(result.get(&make_test_address(4)), Some(&100.0));
+        assert_eq!(result.get(&make_test_address(1)), Some(&400));
+        assert_eq!(result.get(&make_test_address(2)), Some(&300));
+        assert_eq!(result.get(&make_test_address(3)), Some(&200));
+        assert_eq!(result.get(&make_test_address(4)), Some(&100));
 
         // Verify total difficulty
-        let total: f64 = result.values().sum();
-        assert_eq!(total, 1000.0);
+        let total: u128 = result.values().sum();
+        assert_eq!(total, 1000);
     }
 
     #[tokio::test]
@@ -300,18 +300,18 @@ mod tests {
             .return_const(shares);
 
         let result = payout
-            .accumulate_difficulty_by_address(&chain_store_handle, 750.0)
+            .accumulate_difficulty_by_address(&chain_store_handle, 750)
             .unwrap();
 
         // addr4 (100 difficulty) should not be included since cutoff reached at 900
         assert_eq!(result.len(), 3);
-        assert_eq!(result.get(&make_test_address(1)), Some(&400.0));
-        assert_eq!(result.get(&make_test_address(2)), Some(&300.0));
-        assert_eq!(result.get(&make_test_address(3)), Some(&200.0));
+        assert_eq!(result.get(&make_test_address(1)), Some(&400));
+        assert_eq!(result.get(&make_test_address(2)), Some(&300));
+        assert_eq!(result.get(&make_test_address(3)), Some(&200));
         assert!(result.get(&make_test_address(4)).is_none());
 
-        let total: f64 = result.values().sum();
-        assert_eq!(total, 900.0);
+        let total: u128 = result.values().sum();
+        assert_eq!(total, 900);
     }
 
     #[tokio::test]
@@ -362,16 +362,16 @@ mod tests {
             .return_const(vec![]);
 
         let result = payout
-            .accumulate_difficulty_by_address(&chain_store_handle, 500.0)
+            .accumulate_difficulty_by_address(&chain_store_handle, 500)
             .unwrap();
 
         // All available shares included even though total (300) < target (500)
         assert_eq!(result.len(), 2);
-        assert_eq!(result.get(&make_test_address(1)), Some(&100.0));
-        assert_eq!(result.get(&make_test_address(2)), Some(&200.0));
+        assert_eq!(result.get(&make_test_address(1)), Some(&100));
+        assert_eq!(result.get(&make_test_address(2)), Some(&200));
 
-        let total: f64 = result.values().sum();
-        assert_eq!(total, 300.0);
+        let total: u128 = result.values().sum();
+        assert_eq!(total, 300);
     }
 
     #[tokio::test]
@@ -384,7 +384,7 @@ mod tests {
             .return_const(vec![]);
 
         let result = payout
-            .accumulate_difficulty_by_address(&chain_store_handle, 1000.0)
+            .accumulate_difficulty_by_address(&chain_store_handle, 1000)
             .unwrap();
 
         assert!(result.is_empty());
@@ -416,12 +416,12 @@ mod tests {
             .return_const(shares);
 
         let result = payout
-            .accumulate_difficulty_by_address(&chain_store_handle, 1000.0)
+            .accumulate_difficulty_by_address(&chain_store_handle, 1000)
             .unwrap();
 
         // Single share included even though it exceeds target
         assert_eq!(result.len(), 1);
-        assert_eq!(result.get(&make_test_address(1)), Some(&1500.0));
+        assert_eq!(result.get(&make_test_address(1)), Some(&1500));
     }
 
     #[tokio::test]
@@ -483,13 +483,13 @@ mod tests {
             .return_const(vec![]);
 
         let result = payout
-            .accumulate_difficulty_by_address(&chain_store_handle, 1000.0)
+            .accumulate_difficulty_by_address(&chain_store_handle, 1000)
             .unwrap();
 
         // address 1 shares aggregated: 100 + 300 = 400
         assert_eq!(result.len(), 2);
-        assert_eq!(result.get(&make_test_address(1)), Some(&400.0));
-        assert_eq!(result.get(&make_test_address(2)), Some(&200.0));
+        assert_eq!(result.get(&make_test_address(1)), Some(&400));
+        assert_eq!(result.get(&make_test_address(2)), Some(&200));
     }
 
     #[tokio::test]
@@ -567,7 +567,7 @@ mod tests {
             .return_const(batch_two);
 
         let result = payout
-            .accumulate_difficulty_by_address(&chain_store_handle, 600.0)
+            .accumulate_difficulty_by_address(&chain_store_handle, 600)
             .unwrap();
 
         // All shares from both batches should be included since batch_one (300)
@@ -576,12 +576,12 @@ mod tests {
         // address 2: 200 (batch 1)
         // address 3: 250 (batch 2)
         assert_eq!(result.len(), 3);
-        assert_eq!(result.get(&make_test_address(1)), Some(&250.0));
-        assert_eq!(result.get(&make_test_address(2)), Some(&200.0));
-        assert_eq!(result.get(&make_test_address(3)), Some(&250.0));
+        assert_eq!(result.get(&make_test_address(1)), Some(&250));
+        assert_eq!(result.get(&make_test_address(2)), Some(&200));
+        assert_eq!(result.get(&make_test_address(3)), Some(&250));
 
-        let total: f64 = result.values().sum();
-        assert_eq!(total, 700.0);
+        let total: u128 = result.values().sum();
+        assert_eq!(total, 700);
     }
 
     #[tokio::test]
@@ -620,7 +620,7 @@ mod tests {
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
             .unwrap();
 
         assert_eq!(result.len(), 1);
@@ -673,7 +673,7 @@ mod tests {
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
             .unwrap();
 
         assert_eq!(result.len(), 2);
@@ -753,7 +753,7 @@ mod tests {
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
             .unwrap();
 
         // Should have 2 unique addresses
@@ -783,7 +783,7 @@ mod tests {
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
             .unwrap();
 
         assert_eq!(result.len(), 1);
@@ -838,7 +838,7 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
             .unwrap();
 
         // Should have 3 outputs: donation + 2 miners
@@ -926,7 +926,7 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
             .unwrap();
 
         // Should have 3 outputs: fee + 2 miners
@@ -1020,7 +1020,7 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
             .unwrap();
 
         // Should have 4 outputs: donation + fee + 2 miners
@@ -1096,7 +1096,7 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
             .unwrap();
 
         // When no shares, all funds should go to bootstrap address (not donation)
@@ -1152,7 +1152,7 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
             .unwrap();
 
         // Should have only 2 outputs: just the 2 miners (no donation output)
@@ -1237,7 +1237,7 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
             .unwrap();
 
         // Should have only 2 outputs: just the 2 miners (no fee output)
@@ -1302,7 +1302,7 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000.0, total_amount, &stratum_config)
+            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
             .unwrap();
 
         // Should have only 1 output: donation gets 100%
