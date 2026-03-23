@@ -41,7 +41,7 @@ pub trait PayoutDistribution {
         &mut self,
         distribution: &mut Vec<OutputPair>,
         chain_store_handle: &ChainStoreHandle,
-        total_difficulty: f64,
+        total_difficulty: u128,
         total_amount: bitcoin::Amount,
         remaining_total_amount: Amount,
         bootstrap_address: Address,
@@ -59,7 +59,7 @@ pub trait PayoutDistribution {
     fn get_output_distribution(
         &mut self,
         chain_store_handle: &ChainStoreHandle,
-        total_difficulty: f64,
+        total_difficulty: u128,
         total_amount: bitcoin::Amount,
         config: &StratumConfig<crate::config::Parsed>,
     ) -> Result<Vec<OutputPair>, Box<dyn Error + Send + Sync>> {
@@ -123,33 +123,34 @@ fn include_address_and_cut(
 /// Entries are sorted by address string to ensure the remainder from
 /// rounding is always assigned to the same deterministic address.
 pub(crate) fn append_proportional_distribution(
-    address_difficulty_map: &HashMap<Address, f64>,
+    address_difficulty_map: &HashMap<Address, u128>,
     total_amount: bitcoin::Amount,
     distribution: &mut Vec<OutputPair>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let total_difficulty: f64 = address_difficulty_map.values().sum();
-    if !total_difficulty.is_finite() || total_difficulty <= 0.0 {
-        return Err(format!(
-            "Invalid total difficulty ({total_difficulty}) when computing proportional payout"
-        )
-        .into());
+    let total_difficulty: u128 = address_difficulty_map.values().sum();
+    if total_difficulty == 0 {
+        return Err(
+            "Invalid total difficulty (0) when computing proportional payout"
+                .to_string()
+                .into(),
+        );
     }
 
-    let mut sorted_entries: Vec<(&Address, &f64)> = address_difficulty_map.iter().collect();
+    let mut sorted_entries: Vec<(&Address, &u128)> = address_difficulty_map.iter().collect();
     sorted_entries.sort_by(|(address_a, _), (address_b, _)| {
         address_a.to_string().cmp(&address_b.to_string())
     });
 
     let mut distributed_amount = bitcoin::Amount::ZERO;
     let entry_count = sorted_entries.len();
+    let total_sats = total_amount.to_sat() as u128;
 
     for (index, (address, difficulty)) in sorted_entries.into_iter().enumerate() {
         let amount = if index == entry_count - 1 {
             // Last address gets remainder to handle rounding
             total_amount - distributed_amount
         } else {
-            let proportion = *difficulty / total_difficulty;
-            let amount_sats = (total_amount.to_sat() as f64 * proportion).round() as u64;
+            let amount_sats = (total_sats * *difficulty / total_difficulty) as u64;
             bitcoin::Amount::from_sat(amount_sats)
         };
 
@@ -172,8 +173,8 @@ mod tests {
         let mut address_difficulty_map = HashMap::new();
         let address_a = parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
         let address_b = parse_address_from_string("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4");
-        address_difficulty_map.insert(address_a.clone(), 600.0);
-        address_difficulty_map.insert(address_b.clone(), 400.0);
+        address_difficulty_map.insert(address_a.clone(), 600);
+        address_difficulty_map.insert(address_b.clone(), 400);
 
         let total_amount = bitcoin::Amount::from_sat(100_000_000); // 1.0 BTC
         let mut result = Vec::new();
@@ -199,9 +200,9 @@ mod tests {
 
         // 3 addresses splitting 1 sat that cannot divide evenly
         let mut address_difficulty_map = HashMap::new();
-        address_difficulty_map.insert(address_a.clone(), 1.0);
-        address_difficulty_map.insert(address_b.clone(), 1.0);
-        address_difficulty_map.insert(address_c.clone(), 1.0);
+        address_difficulty_map.insert(address_a.clone(), 1);
+        address_difficulty_map.insert(address_b.clone(), 1);
+        address_difficulty_map.insert(address_c.clone(), 1);
 
         // 100 sats / 3 = 33 + 33 + 34 (1 sat remainder)
         let total_amount = bitcoin::Amount::from_sat(100);

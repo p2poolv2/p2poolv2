@@ -75,8 +75,9 @@ fn build_output_distribution(
     let compact_target = bitcoin::pow::CompactTarget::from_unprefixed_hex(&template.bits).unwrap();
     let required_target = bitcoin::Target::from_compact(compact_target);
 
-    let total_difficulty =
-        required_target.difficulty_float() * context.config.difficulty_multiplier;
+    let total_difficulty = required_target
+        .difficulty(context.config.network)
+        .saturating_mul(context.config.difficulty_multiplier as u128);
 
     match context.payout.get_output_distribution(
         &context.chain_store_handle,
