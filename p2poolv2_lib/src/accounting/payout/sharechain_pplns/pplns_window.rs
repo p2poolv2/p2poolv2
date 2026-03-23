@@ -35,7 +35,8 @@ use tracing::info;
 
 /// Maximum number of confirmed shares in the PPLNS window.
 /// At 6 shares per minute over 2 weeks: 6 * 60 * 24 * 14 = 120,960.
-pub(crate) const MAX_PPLNS_WINDOW_SHARES: usize = 6 * 60 * 24 * 14;
+/// Provide a 10% buffer 120,960 * 1.1 = 133056
+pub(crate) const MAX_PPLNS_WINDOW_SHARES: usize = 133056;
 
 /// Uncle weight factor: uncles receive 90% of their difficulty.
 pub const UNCLE_WEIGHT_FACTOR: f64 = 0.9;
