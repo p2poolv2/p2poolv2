@@ -94,13 +94,11 @@ fn apply_version_mask(
 /// Then we check if the header's difficulty meets the target specified in the block template.
 ///
 /// Returns ValidationResult if validation was error free, else the error.
-pub fn validate_submission_difficulty(
+pub fn validate_bitcoin_difficulty(
     job: &JobDetails,
     submission: &SimpleRequest<'_>,
     enonce1_hex: &str,
     version_mask: i32,
-    _session_difficulty: u64,
-    _network: bitcoin::Network,
 ) -> Result<ValidationResult, Error> {
     let compact_target = bitcoin::CompactTarget::from_unprefixed_hex(&job.blocktemplate.bits)
         .map_err(|_| Error::InvalidParams("Failed to parse compact target".into()))?;

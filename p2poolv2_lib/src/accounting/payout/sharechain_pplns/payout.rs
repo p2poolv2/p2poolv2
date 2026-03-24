@@ -88,7 +88,7 @@ impl PayoutDistribution for Payout {
         let mut window = self
             .pplns_window
             .write()
-            .expect("PplnsWindow lock poisoned");
+            .expect("PPLNS window lock poisoned on write");
         window.update(chain_store_handle)?;
 
         let address_difficulty_map = window.get_distribution(total_difficulty);
