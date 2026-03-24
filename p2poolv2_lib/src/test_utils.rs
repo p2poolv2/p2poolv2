@@ -218,6 +218,10 @@ pub fn create_test_commitment() -> ShareCommitment {
         bitcoin_merkle_root: Some(TxMerkleNode::all_zeros()),
         bits: CompactTarget::from_consensus(0x1b4188f5),
         time: 1700000000,
+        donation_address: None,
+        donation: None,
+        fee_address: None,
+        fee: None,
     }
 }
 
@@ -334,6 +338,10 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
         bitcoin_merkle_root: commitment_merkle_root,
         bits: CompactTarget::from_consensus(0x1b4188f5),
         time: 1700000000u32,
+        donation_address: None,
+        donation: None,
+        fee_address: None,
+        fee: None,
     };
     let commitment_hash = share_commitment.hash();
 
@@ -379,6 +387,10 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
         bitcoin_header,
         time: 1700000000u32,
         bits: CompactTarget::from_consensus(0x1b4188f5),
+        donation_address: None,
+        donation: None,
+        fee_address: None,
+        fee: None,
     };
 
     ShareBlock {
@@ -562,6 +574,10 @@ fn test_share_block(
                 bitcoin_merkle_root: None,
                 bits: share_bits,
                 time: share_time,
+                donation_address: None,
+                donation: None,
+                fee_address: None,
+                fee: None,
             };
 
             let bitcoin_coinbase = build_coinbase_transaction(
@@ -608,6 +624,10 @@ fn test_share_block(
         bitcoin_header,
         time: share_time,
         bits: share_bits,
+        donation_address: None,
+        donation: None,
+        fee_address: None,
+        fee: None,
     };
 
     ShareBlock {
@@ -703,6 +723,10 @@ impl TestShareHeaderBuilder {
             },
             time: 1700000000u32,
             bits: CompactTarget::from_consensus(0x1b4188f5),
+            donation_address: None,
+            donation: None,
+            fee_address: None,
+            fee: None,
         }
     }
 }

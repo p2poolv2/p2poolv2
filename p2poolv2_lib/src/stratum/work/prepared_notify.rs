@@ -56,6 +56,14 @@ pub struct PreparedNotifyParams {
     bits: CompactTarget,
     /// Commitment timestamp (for building ShareCommitment struct)
     time: u32,
+    /// Donation address for developers
+    donation_address: Option<Address>,
+    /// Donation in basis points
+    donation: Option<u16>,
+    /// Fee address for the pool operator
+    fee_address: Option<Address>,
+    /// Fee in basis points
+    fee: Option<u16>,
     /// Shared block template
     template: Arc<BlockTemplate>,
     /// Coinbase1 hex before the commitment hash
@@ -137,119 +145,202 @@ fn build_json_template(
     (json, job_id_offset, commitment_hash_offset)
 }
 
-/// Prepare a notify template with pre-computed shared fields.
+/// Builder for constructing PreparedNotifyParams with pre-computed shared fields.
 ///
 /// By serializing notify params once, we avoid needing to serialize
 /// for each stratum client. Instead, we pick up the prepared notify
 /// params and use the miner address to build share commitment, thus
 /// the coinbase1 for each individual client.
-///
-/// Builds the coinbase transaction with a dummy commitment hash,
-/// splits it, and constructs the pre-serialized JSON.
-///
-/// The commitment prefix and suffix are pre-encoded for fast
-/// per-miner hash computation.
-pub(crate) fn prepare_notify_params(
-    template: &Arc<BlockTemplate>,
+pub(crate) struct PreparedNotifyParamsBuilder {
+    template: Arc<BlockTemplate>,
     output_distribution: Vec<OutputPair>,
-    pool_signature: &[u8],
+    pool_signature: Vec<u8>,
+    clean_jobs: bool,
     prev_share_blockhash: BlockHash,
     uncles: Vec<BlockHash>,
     merkle_root: Option<TxMerkleNode>,
     bits: CompactTarget,
     time: u32,
-    clean_jobs: bool,
-) -> Result<PreparedNotifyParams, WorkError> {
-    // Build a coinbase with a distinctive dummy commitment hash to locate
-    // where the hash appears in the hex-encoded coinbase1 string.
-    // We use 0xab repeated 32 times -- hex "abab...ab" (64 chars) --
-    // which cannot appear naturally in hex-encoded transaction data.
-    let dummy_hash_bytes = [0xab_u8; 32];
-    let dummy_commitment_hash = hashes::sha256::Hash::from_byte_array(dummy_hash_bytes);
-    let dummy_hash_hex = hex::encode(dummy_hash_bytes);
+    donation_address: Option<Address>,
+    donation: Option<u16>,
+    fee_address: Option<Address>,
+    fee: Option<u16>,
+}
 
-    let coinbase = build_coinbase_transaction(
-        Version::TWO,
-        output_distribution.as_slice(),
-        template.height as i64,
-        parse_flags(template.coinbaseaux.get("flags").cloned()),
-        template.default_witness_commitment.clone(),
-        pool_signature,
-        Some(dummy_commitment_hash),
-    )?;
+impl PreparedNotifyParamsBuilder {
+    /// Create a new builder with required parameters.
+    pub fn new(
+        template: Arc<BlockTemplate>,
+        output_distribution: Vec<OutputPair>,
+        pool_signature: &[u8],
+        clean_jobs: bool,
+    ) -> Self {
+        Self {
+            template,
+            output_distribution,
+            pool_signature: pool_signature.to_vec(),
+            clean_jobs,
+            prev_share_blockhash: BlockHash::all_zeros(),
+            uncles: Vec::new(),
+            merkle_root: None,
+            bits: CompactTarget::from_consensus(0),
+            time: 0,
+            donation_address: None,
+            donation: None,
+            fee_address: None,
+            fee: None,
+        }
+    }
 
-    let (coinbase1_full, coinbase2) = split_coinbase(&coinbase)?;
+    pub fn prev_share_blockhash(mut self, prev_share_blockhash: BlockHash) -> Self {
+        self.prev_share_blockhash = prev_share_blockhash;
+        self
+    }
 
-    // Simple string search for the dummy hash in the hex-encoded coinbase1
-    let commitment_hash_position =
-        coinbase1_full
-            .find(&dummy_hash_hex)
-            .ok_or_else(|| WorkError {
-                message: "Could not locate commitment hash placeholder in coinbase1".to_string(),
+    pub fn uncles(mut self, uncles: Vec<BlockHash>) -> Self {
+        self.uncles = uncles;
+        self
+    }
+
+    pub fn merkle_root(mut self, merkle_root: Option<TxMerkleNode>) -> Self {
+        self.merkle_root = merkle_root;
+        self
+    }
+
+    pub fn bits(mut self, bits: CompactTarget) -> Self {
+        self.bits = bits;
+        self
+    }
+
+    pub fn time(mut self, time: u32) -> Self {
+        self.time = time;
+        self
+    }
+
+    pub fn donation_address(mut self, donation_address: Option<Address>) -> Self {
+        self.donation_address = donation_address;
+        self
+    }
+
+    pub fn donation(mut self, donation: Option<u16>) -> Self {
+        self.donation = donation;
+        self
+    }
+
+    pub fn fee_address(mut self, fee_address: Option<Address>) -> Self {
+        self.fee_address = fee_address;
+        self
+    }
+
+    pub fn fee(mut self, fee: Option<u16>) -> Self {
+        self.fee = fee;
+        self
+    }
+
+    /// Build the PreparedNotifyParams by constructing the coinbase transaction
+    /// with a dummy commitment hash, splitting it, and constructing the
+    /// pre-serialized JSON with placeholders for per-miner fields.
+    pub fn build(self) -> Result<PreparedNotifyParams, WorkError> {
+        // Build a coinbase with a distinctive dummy commitment hash to locate
+        // where the hash appears in the hex-encoded coinbase1 string.
+        // We use 0xab repeated 32 times -- hex "abab...ab" (64 chars) --
+        // which cannot appear naturally in hex-encoded transaction data.
+        let dummy_hash_bytes = [0xab_u8; 32];
+        let dummy_commitment_hash = hashes::sha256::Hash::from_byte_array(dummy_hash_bytes);
+        let dummy_hash_hex = hex::encode(dummy_hash_bytes);
+
+        let coinbase = build_coinbase_transaction(
+            Version::TWO,
+            self.output_distribution.as_slice(),
+            self.template.height as i64,
+            parse_flags(self.template.coinbaseaux.get("flags").cloned()),
+            self.template.default_witness_commitment.clone(),
+            &self.pool_signature,
+            Some(dummy_commitment_hash),
+        )?;
+
+        let (coinbase1_full, coinbase2) = split_coinbase(&coinbase)?;
+
+        // Simple string search for the dummy hash in the hex-encoded coinbase1
+        let commitment_hash_position =
+            coinbase1_full
+                .find(&dummy_hash_hex)
+                .ok_or_else(|| WorkError {
+                    message: "Could not locate commitment hash placeholder in coinbase1"
+                        .to_string(),
+                })?;
+
+        let coinbase1_before_hash = coinbase1_full[..commitment_hash_position].to_string();
+        let coinbase1_after_hash = coinbase1_full[commitment_hash_position + 64..].to_string();
+
+        // Pre-compute merkle branches
+        let merkle_branches: Vec<String> = build_merkle_branches_for_template(&self.template)
+            .iter()
+            .map(|branch| to_be_hex(&branch.to_string()))
+            .collect();
+
+        let prevhash_byte_swapped = reverse_four_byte_chunks(&self.template.previousblockhash)
+            .map_err(|error| WorkError {
+                message: format!("Failed to reverse previous block hash: {error}"),
             })?;
 
-    let coinbase1_before_hash = coinbase1_full[..commitment_hash_position].to_string();
-    let coinbase1_after_hash = coinbase1_full[commitment_hash_position + 64..].to_string();
+        let version_hex = hex::encode(self.template.version.to_be_bytes());
+        let ntime_hex = hex::encode(self.template.curtime.to_be_bytes());
 
-    // Pre-compute merkle branches
-    let merkle_branches: Vec<String> = build_merkle_branches_for_template(template)
-        .iter()
-        .map(|branch| to_be_hex(&branch.to_string()))
-        .collect();
+        // Build the JSON template by concatenation
+        let (json_template, job_id_offset, commitment_hash_offset) = build_json_template(
+            &coinbase1_before_hash,
+            &coinbase1_after_hash,
+            &coinbase2,
+            &prevhash_byte_swapped,
+            &merkle_branches,
+            &version_hex,
+            &self.template.bits,
+            &ntime_hex,
+            self.clean_jobs,
+        );
 
-    let prevhash_byte_swapped =
-        reverse_four_byte_chunks(&template.previousblockhash).map_err(|error| WorkError {
-            message: format!("Failed to reverse previous block hash: {error}"),
-        })?;
+        // Pre-serialize commitment prefix for fast per-miner hashing.
+        // ShareCommitment::consensus_encode encodes all fields except miner_address,
+        // which is exactly the shared prefix we need. We build a dummy commitment
+        // (address is ignored by consensus_encode) to get the prefix bytes.
+        let commitment_without_address = ShareCommitment {
+            prev_share_blockhash: self.prev_share_blockhash,
+            uncles: self.uncles.clone(),
+            miner_address: self.output_distribution[0].address.clone(),
+            bitcoin_merkle_root: self.merkle_root,
+            bits: self.bits,
+            time: self.time,
+            donation_address: self.donation_address.clone(),
+            donation: self.donation,
+            fee_address: self.fee_address.clone(),
+            fee: self.fee,
+        };
+        let mut commitment_prefix = Vec::with_capacity(128);
+        commitment_without_address
+            .consensus_encode(&mut commitment_prefix)
+            .expect("encoding commitment prefix should never fail");
 
-    let version_hex = hex::encode(template.version.to_be_bytes());
-    let ntime_hex = hex::encode(template.curtime.to_be_bytes());
-
-    // Build the JSON template by concatenation
-    let (json_template, job_id_offset, commitment_hash_offset) = build_json_template(
-        &coinbase1_before_hash,
-        &coinbase1_after_hash,
-        &coinbase2,
-        &prevhash_byte_swapped,
-        &merkle_branches,
-        &version_hex,
-        &template.bits,
-        &ntime_hex,
-        clean_jobs,
-    );
-
-    // Pre-serialize commitment prefix for fast per-miner hashing.
-    // ShareCommitment::consensus_encode encodes all fields except miner_address,
-    // which is exactly the shared prefix we need. We build a dummy commitment
-    // (address is ignored by consensus_encode) to get the prefix bytes.
-    let commitment_without_address = ShareCommitment {
-        prev_share_blockhash,
-        uncles: uncles.clone(),
-        miner_address: output_distribution[0].address.clone(),
-        bitcoin_merkle_root: merkle_root,
-        bits,
-        time,
-    };
-    let mut commitment_prefix = Vec::with_capacity(128);
-    commitment_without_address
-        .consensus_encode(&mut commitment_prefix)
-        .expect("encoding commitment prefix should never fail");
-
-    Ok(PreparedNotifyParams {
-        json_template,
-        job_id_offset,
-        commitment_hash_offset,
-        commitment_prefix,
-        prev_share_blockhash,
-        uncles,
-        merkle_root,
-        bits,
-        time,
-        template: Arc::clone(template),
-        coinbase1_before_hash,
-        coinbase1_after_hash,
-        coinbase2,
-    })
+        Ok(PreparedNotifyParams {
+            json_template,
+            job_id_offset,
+            commitment_hash_offset,
+            commitment_prefix,
+            prev_share_blockhash: self.prev_share_blockhash,
+            uncles: self.uncles,
+            merkle_root: self.merkle_root,
+            bits: self.bits,
+            time: self.time,
+            donation_address: self.donation_address,
+            donation: self.donation,
+            fee_address: self.fee_address,
+            fee: self.fee,
+            template: self.template,
+            coinbase1_before_hash,
+            coinbase1_after_hash,
+            coinbase2,
+        })
+    }
 }
 
 /// Compute the hex-encoded commitment hash for a miner address.
@@ -319,6 +410,10 @@ pub(crate) fn build_notify_from_prepared(
         bitcoin_merkle_root: prepared.merkle_root,
         bits: prepared.bits,
         time: prepared.time,
+        donation_address: prepared.donation_address.clone(),
+        donation: prepared.donation,
+        fee_address: prepared.fee_address.clone(),
+        fee: prepared.fee,
     });
 
     // Insert job into tracker
@@ -372,28 +467,24 @@ mod tests {
         }]
     }
 
+    fn test_notify_params_builder(
+        template: Arc<BlockTemplate>,
+        clean_jobs: bool,
+    ) -> PreparedNotifyParamsBuilder {
+        let output_distribution = test_output_distribution(&template);
+        let merkle_root = template.get_merkle_root_without_coinbase();
+        PreparedNotifyParamsBuilder::new(template, output_distribution, b"test_pool", clean_jobs)
+            .merkle_root(merkle_root)
+            .bits(CompactTarget::from_consensus(0x1d00ffff))
+            .time(1700000000u32)
+    }
+
     #[test]
     fn test_prepare_notify_params_produces_valid_json() {
         let template = Arc::new(test_template());
-        let output_distribution = test_output_distribution(&template);
-        let prev_share_blockhash = BlockHash::all_zeros();
-        let uncles = Vec::new();
-        let merkle_root = template.get_merkle_root_without_coinbase();
-        let bits = CompactTarget::from_consensus(0x1d00ffff);
-        let time = 1700000000u32;
-
-        let prepared = prepare_notify_params(
-            &template,
-            output_distribution,
-            b"test_pool",
-            prev_share_blockhash,
-            uncles,
-            merkle_root,
-            bits,
-            time,
-            false,
-        )
-        .expect("prepare_notify_params should succeed");
+        let prepared = test_notify_params_builder(template, false)
+            .build()
+            .expect("build should succeed");
 
         // Verify the JSON is parseable
         let parsed: serde_json::Value =
@@ -410,27 +501,12 @@ mod tests {
     #[tokio::test]
     async fn test_build_notify_from_prepared_produces_valid_notify() {
         let template = Arc::new(test_template());
-        let output_distribution = test_output_distribution(&template);
         let address = test_address();
-        let prev_share_blockhash = BlockHash::all_zeros();
-        let uncles = Vec::new();
-        let merkle_root = template.get_merkle_root_without_coinbase();
-        let bits = CompactTarget::from_consensus(0x1d00ffff);
-        let time = 1700000000u32;
         let tracker_handle = start_tracker_actor();
 
-        let prepared = prepare_notify_params(
-            &template,
-            output_distribution,
-            b"test_pool",
-            prev_share_blockhash,
-            uncles,
-            merkle_root,
-            bits,
-            time,
-            false,
-        )
-        .expect("prepare_notify_params should succeed");
+        let prepared = test_notify_params_builder(template, false)
+            .build()
+            .expect("build should succeed");
 
         let notify_json = build_notify_from_prepared(&prepared, Some(&address), &tracker_handle)
             .expect("build_notify_from_prepared should succeed");
@@ -460,27 +536,15 @@ mod tests {
     #[tokio::test]
     async fn test_commitment_hash_matches_struct_hash() {
         let template = Arc::new(test_template());
-        let output_distribution = test_output_distribution(&template);
         let address = test_address();
-        let prev_share_blockhash = BlockHash::all_zeros();
-        let uncles = Vec::new();
         let merkle_root = template.get_merkle_root_without_coinbase();
         let bits = CompactTarget::from_consensus(0x1d00ffff);
         let time = 1700000000u32;
         let tracker_handle = start_tracker_actor();
 
-        let prepared = prepare_notify_params(
-            &template,
-            output_distribution,
-            b"test_pool",
-            prev_share_blockhash,
-            uncles.clone(),
-            merkle_root,
-            bits,
-            time,
-            false,
-        )
-        .expect("prepare_notify_params should succeed");
+        let prepared = test_notify_params_builder(template, false)
+            .build()
+            .expect("build should succeed");
 
         let notify_json = build_notify_from_prepared(&prepared, Some(&address), &tracker_handle)
             .expect("build_notify_from_prepared should succeed");
@@ -494,12 +558,16 @@ mod tests {
 
         // Build the same commitment directly and compare hashes
         let direct_commitment = ShareCommitment {
-            prev_share_blockhash,
-            uncles,
+            prev_share_blockhash: BlockHash::all_zeros(),
+            uncles: Vec::new(),
             miner_address: address,
             bitcoin_merkle_root: merkle_root,
             bits,
             time,
+            donation_address: None,
+            donation: None,
+            fee_address: None,
+            fee: None,
         };
 
         assert_eq!(commitment.hash(), direct_commitment.hash());
@@ -508,26 +576,11 @@ mod tests {
     #[tokio::test]
     async fn test_different_addresses_produce_different_hashes() {
         let template = Arc::new(test_template());
-        let output_distribution = test_output_distribution(&template);
-        let prev_share_blockhash = BlockHash::all_zeros();
-        let uncles = Vec::new();
-        let merkle_root = template.get_merkle_root_without_coinbase();
-        let bits = CompactTarget::from_consensus(0x1d00ffff);
-        let time = 1700000000u32;
         let tracker_handle = start_tracker_actor();
 
-        let prepared = prepare_notify_params(
-            &template,
-            output_distribution,
-            b"test_pool",
-            prev_share_blockhash,
-            uncles,
-            merkle_root,
-            bits,
-            time,
-            false,
-        )
-        .expect("prepare_notify_params should succeed");
+        let prepared = test_notify_params_builder(template, false)
+            .build()
+            .expect("build should succeed");
 
         let address1 = test_address();
         let other_pubkey: CompressedPublicKey =
@@ -548,25 +601,9 @@ mod tests {
     #[test]
     fn test_placeholder_offsets_produce_correct_overwrite() {
         let template = Arc::new(test_template());
-        let output_distribution = test_output_distribution(&template);
-        let prev_share_blockhash = BlockHash::all_zeros();
-        let uncles = Vec::new();
-        let merkle_root = template.get_merkle_root_without_coinbase();
-        let bits = CompactTarget::from_consensus(0x1d00ffff);
-        let time = 1700000000u32;
-
-        let prepared = prepare_notify_params(
-            &template,
-            output_distribution,
-            b"test_pool",
-            prev_share_blockhash,
-            uncles,
-            merkle_root,
-            bits,
-            time,
-            true,
-        )
-        .expect("prepare_notify_params should succeed");
+        let prepared = test_notify_params_builder(template, true)
+            .build()
+            .expect("build should succeed");
 
         // Manually overwrite placeholders and verify JSON remains valid
         let mut json = prepared.json_template.clone();
@@ -595,26 +632,11 @@ mod tests {
     #[tokio::test]
     async fn test_build_notify_from_prepared_with_none_address() {
         let template = Arc::new(test_template());
-        let output_distribution = test_output_distribution(&template);
-        let prev_share_blockhash = BlockHash::all_zeros();
-        let uncles = Vec::new();
-        let merkle_root = template.get_merkle_root_without_coinbase();
-        let bits = CompactTarget::from_consensus(0x1d00ffff);
-        let time = 1700000000u32;
         let tracker_handle = start_tracker_actor();
 
-        let prepared = prepare_notify_params(
-            &template,
-            output_distribution,
-            b"test_pool",
-            prev_share_blockhash,
-            uncles,
-            merkle_root,
-            bits,
-            time,
-            false,
-        )
-        .expect("prepare_notify_params should succeed");
+        let prepared = test_notify_params_builder(template, false)
+            .build()
+            .expect("build should succeed");
 
         let notify_json = build_notify_from_prepared(&prepared, None, &tracker_handle)
             .expect("build_notify_from_prepared with None address should succeed");

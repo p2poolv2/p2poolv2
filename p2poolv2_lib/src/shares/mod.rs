@@ -47,3 +47,31 @@ pub(crate) mod address_serde {
             .map_err(serde::de::Error::custom)
     }
 }
+
+/// Serde helpers for `Option<bitcoin::Address>` fields.
+pub(crate) mod option_address_serde {
+    use bitcoin::Address;
+
+    pub fn serialize<S: serde::Serializer>(
+        address: &Option<Address>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match address {
+            Some(addr) => serializer.serialize_some(&addr.to_string()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Address>, D::Error> {
+        let opt: Option<String> = serde::Deserialize::deserialize(deserializer)?;
+        match opt {
+            Some(addr_str) => addr_str
+                .parse::<Address<_>>()
+                .map(|a| Some(a.assume_checked()))
+                .map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
+}
