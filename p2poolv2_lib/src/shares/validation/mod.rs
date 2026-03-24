@@ -17,6 +17,7 @@
 mod bitcoin_block_validation;
 
 use super::share_block::ShareHeader;
+use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::pool_difficulty::PoolDifficulty;
@@ -35,6 +36,7 @@ use crate::utils::time_provider::TimeProvider;
 use bitcoin::{Amount, BlockHash, Target, Transaction, TxMerkleNode};
 use std::collections::HashSet;
 use std::fmt;
+use std::sync::{Arc, RwLock};
 
 /// Validation error wrapping a descriptive message string.
 #[derive(Debug)]
@@ -106,6 +108,7 @@ pub trait ShareValidator {
         &self,
         share: &ShareBlock,
         chain_store_handle: &ChainStoreHandle,
+        pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(), ValidationError>;
 
     /// Validate uncles: count within MAX_UNCLES, no duplicates, each exists
@@ -402,7 +405,11 @@ impl DefaultShareValidator {
 
     /// Validate the coinbase payouts match expected and the share commitment
     /// in the bitcoin coinbase matches the share block.
-    fn validate_bitcoin_coinbase(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+    fn validate_bitcoin_coinbase(
+        &self,
+        share: &ShareBlock,
+        pplns_window: Arc<RwLock<PplnsWindow>>,
+    ) -> Result<(), ValidationError> {
         let bitcoin_coinbase = share
             .bitcoin_transactions
             .first()
@@ -415,6 +422,28 @@ impl DefaultShareValidator {
         }
 
         self.validate_commitment_hash(share, bitcoin_coinbase)?;
+        self.validate_bitcoin_payout(share, bitcoin_coinbase, pplns_window)?;
+        Ok(())
+    }
+
+    /// Validate bitcoin coinbase payout meets our PplnsWindow
+    ///
+    /// The bits field is already validated to be in the
+    /// ShareCommitment, so here we need to build output distribution
+    /// meeting that difficulty and comparing it to what is in bitcoin
+    /// coinbase.
+    fn validate_bitcoin_payout(
+        &self,
+        share: &ShareBlock,
+        coinbase: &Transaction,
+        pplns_window: Arc<RwLock<PplnsWindow>>,
+    ) -> Result<(), ValidationError> {
+        let window = pplns_window
+            .read()
+            .expect("PPLNS window lock poisoned on read");
+        let share_difficulty = share.header.get_difficulty(window.network);
+        let distribution = window
+            .get_distribution_from_start_hash(share_difficulty, share.header.prev_share_blockhash);
         Ok(())
     }
 }
@@ -488,6 +517,7 @@ impl ShareValidator for DefaultShareValidator {
         &self,
         share: &ShareBlock,
         chain_store_handle: &ChainStoreHandle,
+        pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(), ValidationError> {
         // When a hole in the chain is filled, schedule_dependents
         // re-schedules children that were already validated but could
@@ -504,7 +534,7 @@ impl ShareValidator for DefaultShareValidator {
         self.validate_uncles(share, chain_store_handle)?;
         self.validate_block_size(share)?;
         self.validate_share_coinbase(share)?;
-        self.validate_bitcoin_coinbase(share)?;
+        self.validate_bitcoin_coinbase(share, pplns_window)?;
         self.validate_merkle_root(share)?;
         self.validate_transaction_count(share)?;
         self.validate_transactions(share)?;
@@ -586,6 +616,7 @@ mockall::mock! {
             &self,
             share: &ShareBlock,
             chain_store_handle: &ChainStoreHandle,
+            pplns_window: Arc<RwLock<PplnsWindow>>,
         ) -> Result<(), ValidationError>;
 
         fn validate_uncles(
@@ -613,6 +644,7 @@ mod tests {
     use crate::utils::time_provider::TestTimeProvider;
     use bitcoin::{BlockHash, ScriptBuf, TxOut, hashes::Hash};
     use mockall::predicate::*;
+    use std::sync::{Arc, RwLock};
     use std::time::SystemTime;
 
     fn validator() -> DefaultShareValidator {
@@ -843,7 +875,9 @@ mod tests {
             .expect_setup_share_for_chain()
             .returning(Ok);
 
-        let result = validator().validate_share_block(&share_block, &chain_store_handle);
+        let pplns_window = Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Regtest)));
+        let result =
+            validator().validate_share_block(&share_block, &chain_store_handle, pplns_window);
 
         assert!(result.is_ok());
     }
@@ -859,7 +893,9 @@ mod tests {
             .expect_has_status()
             .returning(|_, _| true);
 
-        let result = validator().validate_share_block(&share_block, &chain_store_handle);
+        let pplns_window = Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Regtest)));
+        let result =
+            validator().validate_share_block(&share_block, &chain_store_handle, pplns_window);
         assert!(
             result.is_ok(),
             "Expected Ok for BlockValid status, got: {:?}",

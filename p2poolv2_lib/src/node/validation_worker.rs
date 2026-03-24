@@ -200,7 +200,7 @@ async fn validate_and_emit(
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     validation_tx: ValidationSender,
-    _pplns_window: Arc<RwLock<PplnsWindow>>,
+    pplns_window: Arc<RwLock<PplnsWindow>>,
 ) {
     let share_block = match chain_store_handle.get_share(&block_hash) {
         Some(share_block) => share_block,
@@ -211,7 +211,7 @@ async fn validate_and_emit(
     };
 
     if let Err(validation_error) =
-        share_validator.validate_share_block(&share_block, &chain_store_handle)
+        share_validator.validate_share_block(&share_block, &chain_store_handle, pplns_window)
     {
         error!("Share block {block_hash} validation failed: {validation_error}");
         return;

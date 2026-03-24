@@ -105,7 +105,7 @@ pub struct PplnsWindow {
     /// Address internal key mapping
     address_keys: AddressKeys,
     /// Bitcoin network used for computing integer difficulty from Target.
-    network: bitcoin::Network,
+    pub(crate) network: bitcoin::Network,
 }
 
 impl PplnsWindow {

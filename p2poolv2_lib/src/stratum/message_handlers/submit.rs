@@ -22,7 +22,7 @@ use crate::stratum::messages::{Message, Response, SetDifficultyNotification, Sim
 use crate::stratum::server::StratumContext;
 use crate::stratum::session::Session;
 use crate::stratum::work::block_template::BlockTemplate;
-use crate::stratum::work::difficulty::validate::validate_submission_difficulty;
+use crate::stratum::work::difficulty::validate::validate_bitcoin_difficulty;
 use crate::stratum::work::tracker::JobId;
 use bitcoin::block::Header;
 use bitcoin::blockdata::block::Block;
@@ -73,28 +73,24 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         }
     };
 
+    let current_difficulty = session.difficulty_adjuster.get_current_difficulty();
+
     // version mask from the session - we ignore different version mask sent in a submit message
     let version_mask = session.version_mask;
 
     // Validate the difficulty of the submitted share
-    let validation_result = match validate_submission_difficulty(
-        &job,
-        &message,
-        &session.enonce1_hex,
-        version_mask,
-        session.difficulty_adjuster.get_current_difficulty(),
-        stratum_context.network,
-    ) {
-        Ok(result) => result,
-        Err(e) => {
-            debug!("Share validation failed: {}", e);
-            // return error to asic client if our server is failing to run validation. They will know something is wrong.
-            return Ok(vec![Message::Response(Response::new_ok(
-                message.id,
-                json!(false),
-            ))]);
-        }
-    };
+    let validation_result =
+        match validate_bitcoin_difficulty(&job, &message, &session.enonce1_hex, version_mask) {
+            Ok(result) => result,
+            Err(e) => {
+                debug!("Share validation failed: {}", e);
+                // return error to asic client if our server is failing to run validation. They will know something is wrong.
+                return Ok(vec![Message::Response(Response::new_ok(
+                    message.id,
+                    json!(false),
+                ))]);
+            }
+        };
 
     let is_new_share = stratum_context
         .tracker_handle
@@ -128,7 +124,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         .as_secs();
     let stratum_share = SimplePplnsShare::new(
         session.user_id.unwrap(),
-        session.difficulty_adjuster.get_current_difficulty(),
+        current_difficulty,
         session.btcaddress.clone().unwrap_or_default(),
         session.workername.clone().unwrap_or_default(),
         timestamp,
