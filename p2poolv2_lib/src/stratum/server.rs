@@ -1339,9 +1339,8 @@ mod stratum_server_tests {
     fn create_test_prepared_notify() -> Arc<PreparedNotifyParams> {
         use crate::accounting::OutputPair;
         use crate::stratum::work::block_template::BlockTemplate;
-        use crate::stratum::work::prepared_notify::prepare_notify_params;
-        use bitcoin::hashes::Hash;
-        use bitcoin::{BlockHash, CompactTarget, CompressedPublicKey, Network};
+        use crate::stratum::work::prepared_notify::PreparedNotifyParamsBuilder;
+        use bitcoin::{CompactTarget, CompressedPublicKey, Network};
 
         let data =
             include_str!("../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json");
@@ -1360,18 +1359,13 @@ mod stratum_server_tests {
         }];
 
         let merkle_root = template.get_merkle_root_without_coinbase();
-        let prepared = prepare_notify_params(
-            &template,
-            output_distribution,
-            b"test_pool",
-            BlockHash::all_zeros(),
-            Vec::new(),
-            merkle_root,
-            CompactTarget::from_consensus(0x1d00ffff),
-            1700000000u32,
-            false,
-        )
-        .expect("prepare_notify_params should succeed");
+        let prepared =
+            PreparedNotifyParamsBuilder::new(template, output_distribution, b"test_pool", false)
+                .merkle_root(merkle_root)
+                .bits(CompactTarget::from_consensus(0x1d00ffff))
+                .time(1700000000u32)
+                .build()
+                .expect("PreparedNotifyParamsBuilder::build should succeed");
 
         Arc::new(prepared)
     }

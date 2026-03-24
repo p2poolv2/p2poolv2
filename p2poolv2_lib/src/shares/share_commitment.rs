@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::address_serde;
+use super::option_address_serde;
 use super::share_block::ShareHeader;
 use crate::pool_difficulty::PoolDifficulty;
 #[cfg(test)]
@@ -61,6 +62,16 @@ pub struct ShareCommitment {
     pub bits: CompactTarget,
     /// Timestamp for the share, as set by the miner
     pub time: u32,
+    /// Donation address for developers
+    #[serde(serialize_with = "option_address_serde::serialize")]
+    pub donation_address: Option<Address>,
+    /// Donation in basis points
+    pub donation: Option<u16>,
+    /// Fee address for the pool operator
+    #[serde(serialize_with = "option_address_serde::serialize")]
+    pub fee_address: Option<Address>,
+    /// Fee in basis points
+    pub fee: Option<u16>,
 }
 
 impl ShareCommitment {
@@ -102,14 +113,37 @@ impl ShareCommitment {
             bitcoin_merkle_root: merkle_root,
             bits: header.bits,
             time: header.time,
+            donation_address: header.donation_address.clone(),
+            donation: header.donation,
+            fee_address: header.fee_address.clone(),
+            fee: header.fee,
         }
     }
+}
+
+/// Encode an optional address as a bool flag followed by the address string when present.
+fn encode_optional_address<W: Write + ?Sized>(
+    address: &Option<Address>,
+    writer: &mut W,
+) -> Result<usize, bitcoin::io::Error> {
+    let mut len = 0;
+    match address {
+        Some(addr) => {
+            len += true.consensus_encode(writer)?;
+            len += addr.to_string().consensus_encode(writer)?;
+        }
+        None => {
+            len += false.consensus_encode(writer)?;
+        }
+    }
+    Ok(len)
 }
 
 impl Encodable for ShareCommitment {
     /// Consensus-encode the shared fields of the commitment (excluding miner_address).
     ///
-    /// Field order: prev_share_blockhash, uncles, merkle_root, bits, time.
+    /// Field order: prev_share_blockhash, uncles, merkle_root, bits, time,
+    /// donation_address, donation, fee_address, fee.
     ///
     /// The miner_address is intentionally excluded so that the encoded bytes
     /// can be reused as a prefix across miners. Each miner only needs to
@@ -133,6 +167,11 @@ impl Encodable for ShareCommitment {
         len += self.bits.consensus_encode(w)?;
         len += self.time.consensus_encode(w)?;
 
+        len += encode_optional_address(&self.donation_address, w)?;
+        len += self.donation.unwrap_or(0).consensus_encode(w)?;
+        len += encode_optional_address(&self.fee_address, w)?;
+        len += self.fee.unwrap_or(0).consensus_encode(w)?;
+
         Ok(len)
     }
 }
@@ -147,6 +186,10 @@ pub(crate) fn build_share_commitment(
     template: &Arc<BlockTemplate>,
     btcaddress: Option<Address>,
     pool_difficulty: &PoolDifficulty,
+    donation_address: Option<Address>,
+    donation: Option<u16>,
+    fee_address: Option<Address>,
+    fee: Option<u16>,
 ) -> Result<Option<ShareCommitment>, Box<dyn Error + Send + Sync>> {
     let (tip, uncles) = chain_store_handle.get_chain_tip_and_uncles()?;
 
@@ -165,6 +208,10 @@ pub(crate) fn build_share_commitment(
             bitcoin_merkle_root: merkle_root,
             bits: target,
             time,
+            donation_address,
+            donation,
+            fee_address,
+            fee,
         })),
         None => Ok(None),
     }
@@ -344,6 +391,10 @@ mod tests {
             &template,
             Some(btcaddress.clone()),
             &pool_difficulty,
+            None,
+            None,
+            None,
+            None,
         );
 
         assert!(result.is_ok());
@@ -406,6 +457,10 @@ mod tests {
             &template,
             Some(btcaddress),
             &pool_difficulty,
+            None,
+            None,
+            None,
+            None,
         );
 
         assert!(result.is_ok());
@@ -446,6 +501,10 @@ mod tests {
             &template,
             Some(btcaddress),
             &pool_difficulty,
+            None,
+            None,
+            None,
+            None,
         );
 
         assert!(result.is_err());
@@ -483,7 +542,16 @@ mod tests {
             .expect_get_tip_height_and_time()
             .returning(|| Ok((0, TEST_TIP_TIME)));
 
-        let result = build_share_commitment(&chain_store_handle, &template, None, &pool_difficulty);
+        let result = build_share_commitment(
+            &chain_store_handle,
+            &template,
+            None,
+            &pool_difficulty,
+            None,
+            None,
+            None,
+            None,
+        );
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -588,6 +656,91 @@ mod tests {
 
         let (header, bitcoin_transactions) =
             header_and_bitcoin_transactions_from_commitment(commitment);
+
+        let reconstructed = ShareCommitment::from_share_header(&header, &bitcoin_transactions[1..]);
+
+        assert_eq!(reconstructed.hash(), expected_hash);
+    }
+
+    #[test]
+    fn test_hash_changes_with_donation_address() {
+        let commitment1 = create_test_commitment();
+        let mut commitment2 = create_test_commitment();
+
+        let donation_pubkey = "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
+            .parse::<CompressedPublicKey>()
+            .unwrap();
+        commitment2.donation_address = Some(Address::p2wpkh(&donation_pubkey, Network::Signet));
+        commitment2.donation = Some(100);
+
+        assert_ne!(commitment1.hash(), commitment2.hash());
+    }
+
+    #[test]
+    fn test_hash_changes_with_fee_address() {
+        let commitment1 = create_test_commitment();
+        let mut commitment2 = create_test_commitment();
+
+        let fee_pubkey = "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
+            .parse::<CompressedPublicKey>()
+            .unwrap();
+        commitment2.fee_address = Some(Address::p2wpkh(&fee_pubkey, Network::Signet));
+        commitment2.fee = Some(50);
+
+        assert_ne!(commitment1.hash(), commitment2.hash());
+    }
+
+    #[test]
+    fn test_hash_changes_with_different_donation_basis_points() {
+        let donation_pubkey = "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
+            .parse::<CompressedPublicKey>()
+            .unwrap();
+        let donation_address = Address::p2wpkh(&donation_pubkey, Network::Signet);
+
+        let mut commitment1 = create_test_commitment();
+        commitment1.donation_address = Some(donation_address.clone());
+        commitment1.donation = Some(100);
+
+        let mut commitment2 = create_test_commitment();
+        commitment2.donation_address = Some(donation_address);
+        commitment2.donation = Some(200);
+
+        assert_ne!(commitment1.hash(), commitment2.hash());
+    }
+
+    #[test]
+    fn test_from_share_header_copies_donation_and_fee_fields() {
+        let json_content =
+            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
+        let template: BlockTemplate =
+            serde_json::from_str(json_content).expect("Failed to parse template JSON");
+
+        let donation_pubkey = "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
+            .parse::<CompressedPublicKey>()
+            .unwrap();
+        let donation_address = Address::p2wpkh(&donation_pubkey, Network::Signet);
+
+        let fee_pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
+            .parse::<CompressedPublicKey>()
+            .unwrap();
+        let fee_address = Address::p2wpkh(&fee_pubkey, Network::Signet);
+
+        let mut commitment = create_test_commitment();
+        commitment.bitcoin_merkle_root = template.get_merkle_root_without_coinbase();
+        commitment.donation_address = Some(donation_address.clone());
+        commitment.donation = Some(150);
+        commitment.fee_address = Some(fee_address.clone());
+        commitment.fee = Some(75);
+
+        let expected_hash = commitment.hash();
+
+        let (header, bitcoin_transactions) =
+            header_and_bitcoin_transactions_from_commitment(commitment);
+
+        assert_eq!(header.donation_address, Some(donation_address));
+        assert_eq!(header.donation, Some(150));
+        assert_eq!(header.fee_address, Some(fee_address));
+        assert_eq!(header.fee, Some(75));
 
         let reconstructed = ShareCommitment::from_share_header(&header, &bitcoin_transactions[1..]);
 

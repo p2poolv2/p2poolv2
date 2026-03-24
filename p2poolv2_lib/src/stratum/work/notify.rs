@@ -31,7 +31,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::stratum::messages::{Notify, NotifyParams};
 use crate::stratum::util::reverse_four_byte_chunks;
 use crate::stratum::util::to_be_hex;
-use crate::stratum::work::prepared_notify::{PreparedNotifyParams, prepare_notify_params};
+use crate::stratum::work::prepared_notify::{PreparedNotifyParams, PreparedNotifyParamsBuilder};
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::Version;
@@ -167,17 +167,22 @@ fn build_prepared_notify(
     let merkle_root = template.get_merkle_root_without_coinbase();
     let time = SystemTimeProvider.seconds_since_epoch() as u32;
 
-    prepare_notify_params(
-        template,
+    PreparedNotifyParamsBuilder::new(
+        Arc::clone(template),
         output_distribution,
         &context.pool_signature,
-        tip,
-        uncles.into_iter().collect(),
-        merkle_root,
-        target,
-        time,
         clean_jobs,
     )
+    .prev_share_blockhash(tip)
+    .uncles(uncles.into_iter().collect())
+    .merkle_root(merkle_root)
+    .bits(target)
+    .time(time)
+    .donation_address(context.config.donation_address().cloned())
+    .donation(context.config.donation)
+    .fee_address(context.config.fee_address().cloned())
+    .fee(context.config.fee)
+    .build()
 }
 
 /// NotifyCmd is used to send a new block template to the notifier.

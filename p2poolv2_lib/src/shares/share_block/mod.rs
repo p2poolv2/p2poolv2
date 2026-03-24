@@ -34,10 +34,8 @@ use std::error::Error;
 
 /// Header for the share chain block.
 ///
-/// Exludes bitcoin compact block and share chain transactions.
+/// Excludes bitcoin compact block and share chain transactions.
 /// Includes the bitcoin block hash for the bitcoin compact block instead.
-///
-/// TODO(pool2win): Add the donation and fee details used to build the coinbase.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct ShareHeader {
     /// The hash of the prev share block, will be None for genesis block
@@ -55,6 +53,53 @@ pub struct ShareHeader {
     pub bits: CompactTarget,
     /// Timestamp for the share, as set by the miner
     pub time: u32,
+    /// Donation address for developers
+    #[serde(default, with = "crate::shares::option_address_serde")]
+    pub donation_address: Option<Address>,
+    /// Donation in basis points
+    #[serde(default)]
+    pub donation: Option<u16>,
+    /// Fee address for the pool operator
+    #[serde(default, with = "crate::shares::option_address_serde")]
+    pub fee_address: Option<Address>,
+    /// Fee in basis points
+    #[serde(default)]
+    pub fee: Option<u16>,
+}
+
+/// Encode an optional address as a bool flag followed by the address string when present.
+fn encode_optional_address_string<W: bitcoin::io::Write + ?Sized>(
+    address: &Option<Address>,
+    writer: &mut W,
+) -> Result<usize, bitcoin::io::Error> {
+    let mut len = 0;
+    match address {
+        Some(addr) => {
+            len += true.consensus_encode(writer)?;
+            len += addr.to_string().consensus_encode(writer)?;
+        }
+        None => {
+            len += false.consensus_encode(writer)?;
+        }
+    }
+    Ok(len)
+}
+
+/// Decode an optional address from a bool flag followed by the address string.
+fn decode_optional_address<R: bitcoin::io::Read + ?Sized>(
+    reader: &mut R,
+) -> Result<Option<Address>, bitcoin::consensus::encode::Error> {
+    let has_address = bool::consensus_decode(reader)?;
+    if has_address {
+        let addr_str = String::consensus_decode(reader)?;
+        let address = addr_str
+            .parse::<Address<_>>()
+            .map_err(|_| bitcoin::consensus::encode::Error::ParseFailed("invalid bitcoin address"))?
+            .assume_checked();
+        Ok(Some(address))
+    } else {
+        Ok(None)
+    }
 }
 
 impl ShareHeader {
@@ -89,6 +134,10 @@ impl ShareHeader {
             bitcoin_header,
             bits: commitment.bits,
             time: commitment.time,
+            donation_address: commitment.donation_address,
+            donation: commitment.donation,
+            fee_address: commitment.fee_address,
+            fee: commitment.fee,
         }
     }
 
@@ -119,6 +168,17 @@ impl ShareHeader {
             .consensus_encode(&mut serialized_without_bitcoin_header)?;
         self.time
             .consensus_encode(&mut serialized_without_bitcoin_header)?;
+        encode_optional_address_string(
+            &self.donation_address,
+            &mut serialized_without_bitcoin_header,
+        )?;
+        self.donation
+            .unwrap_or(0)
+            .consensus_encode(&mut serialized_without_bitcoin_header)?;
+        encode_optional_address_string(&self.fee_address, &mut serialized_without_bitcoin_header)?;
+        self.fee
+            .unwrap_or(0)
+            .consensus_encode(&mut serialized_without_bitcoin_header)?;
 
         Ok(bitcoin::hashes::sha256::Hash::hash(
             &serialized_without_bitcoin_header,
@@ -141,6 +201,10 @@ impl Encodable for ShareHeader {
         len += self.bitcoin_header.consensus_encode(w)?;
         len += self.bits.consensus_encode(w)?;
         len += self.time.consensus_encode(w)?;
+        len += encode_optional_address_string(&self.donation_address, w)?;
+        len += self.donation.unwrap_or(0).consensus_encode(w)?;
+        len += encode_optional_address_string(&self.fee_address, w)?;
+        len += self.fee.unwrap_or(0).consensus_encode(w)?;
         Ok(len)
     }
 }
@@ -157,14 +221,32 @@ impl Decodable for ShareHeader {
             .parse::<Address<_>>()
             .map_err(|_| bitcoin::consensus::encode::Error::ParseFailed("invalid bitcoin address"))?
             .assume_checked();
+        let merkle_root = TxMerkleNode::consensus_decode(r)?;
+        let bitcoin_header = Header::consensus_decode(r)?;
+        let bits = CompactTarget::consensus_decode(r)?;
+        let time = u32::consensus_decode(r)?;
+        let donation_address = decode_optional_address(r)?;
+        let donation_raw = u16::consensus_decode(r)?;
+        let donation = if donation_raw > 0 {
+            Some(donation_raw)
+        } else {
+            None
+        };
+        let fee_address = decode_optional_address(r)?;
+        let fee_raw = u16::consensus_decode(r)?;
+        let fee = if fee_raw > 0 { Some(fee_raw) } else { None };
         Ok(ShareHeader {
             prev_share_blockhash,
             uncles,
             miner_address: btcaddress,
-            merkle_root: TxMerkleNode::consensus_decode(r)?,
-            bitcoin_header: Header::consensus_decode(r)?,
-            bits: CompactTarget::consensus_decode(r)?,
-            time: u32::consensus_decode(r)?,
+            merkle_root,
+            bitcoin_header,
+            bits,
+            time,
+            donation_address,
+            donation,
+            fee_address,
+            fee,
         })
     }
 }
@@ -220,6 +302,10 @@ impl ShareBlock {
             merkle_root,
             time: 1700000000u32,
             bits: CompactTarget::from_consensus(0x1b4188f5),
+            donation_address: None,
+            donation: None,
+            fee_address: None,
+            fee: None,
         };
         Ok(Self {
             header,
@@ -282,6 +368,10 @@ impl ShareBlock {
             merkle_root,
             time: 1700000000u32,
             bits: CompactTarget::from_consensus(0x1b4188f5),
+            donation_address: None,
+            donation: None,
+            fee_address: None,
+            fee: None,
         };
         Self {
             header,
@@ -531,6 +621,10 @@ mod tests {
             bitcoin_merkle_root: None,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             time: 1700000000,
+            donation_address: None,
+            donation: None,
+            fee_address: None,
+            fee: None,
         };
 
         let cloned = commitment.clone();
