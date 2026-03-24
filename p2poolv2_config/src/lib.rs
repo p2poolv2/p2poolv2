@@ -121,6 +121,19 @@ impl StratumConfig<Raw> {
             });
         }
 
+        if self.donation_address.is_some() != self.donation.is_some() {
+            return Err(ConfigError {
+                message: "donation_address and donation must both be set or both be unset"
+                    .to_string(),
+            });
+        }
+
+        if self.fee_address.is_some() != self.fee.is_some() {
+            return Err(ConfigError {
+                message: "fee_address and fee must both be set or both be unset".to_string(),
+            });
+        }
+
         let bootstrap_address_parsed = parse_address(&self.bootstrap_address, self.network)?;
 
         let donation_address_parsed = self
@@ -675,5 +688,87 @@ mod tests {
         let mut config_with_sig = StratumConfig::<Raw>::new_for_test_default();
         config_with_sig.pool_signature = Some("MyPool/1.0 and some more bytes....".to_string());
         assert_err!(config_with_sig.parse());
+    }
+
+    #[test]
+    fn test_parse_fails_donation_address_without_amount() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.donation_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        config.donation = None;
+        let result = config.parse();
+        assert_err!(&result);
+        assert!(
+            result
+                .unwrap_err()
+                .message
+                .contains("donation_address and donation")
+        );
+    }
+
+    #[test]
+    fn test_parse_fails_donation_amount_without_address() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.donation_address = None;
+        config.donation = Some(50);
+        let result = config.parse();
+        assert_err!(&result);
+        assert!(
+            result
+                .unwrap_err()
+                .message
+                .contains("donation_address and donation")
+        );
+    }
+
+    #[test]
+    fn test_parse_fails_fee_address_without_amount() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.fee_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        config.fee = None;
+        let result = config.parse();
+        assert_err!(&result);
+        assert!(result.unwrap_err().message.contains("fee_address and fee"));
+    }
+
+    #[test]
+    fn test_parse_fails_fee_amount_without_address() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.fee_address = None;
+        config.fee = Some(200);
+        let result = config.parse();
+        assert_err!(&result);
+        assert!(result.unwrap_err().message.contains("fee_address and fee"));
+    }
+
+    #[test]
+    fn test_parse_succeeds_with_both_donation_fields() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.donation_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        config.donation = Some(50);
+        let parsed = config.parse().unwrap();
+        assert!(parsed.donation_address_parsed.is_some());
+        assert_eq!(parsed.donation, Some(50));
+    }
+
+    #[test]
+    fn test_parse_succeeds_with_both_fee_fields() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.fee_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        config.fee = Some(200);
+        let parsed = config.parse().unwrap();
+        assert!(parsed.fee_address_parsed.is_some());
+        assert_eq!(parsed.fee, Some(200));
+    }
+
+    #[test]
+    fn test_parse_succeeds_with_neither_donation_nor_fee() {
+        let config = StratumConfig::<Raw>::new_for_test_default();
+        assert!(config.donation_address.is_none());
+        assert!(config.donation.is_none());
+        assert!(config.fee_address.is_none());
+        assert!(config.fee.is_none());
+        let parsed = config.parse().unwrap();
+        assert!(parsed.donation_address_parsed.is_none());
+        assert!(parsed.fee_address_parsed.is_none());
     }
 }
