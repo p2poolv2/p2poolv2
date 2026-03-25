@@ -77,15 +77,15 @@ pub const TXS_COUNT_LIMIT: u32 = 100;
 /// Initial block subsidy in satoshis (50 BTC).
 const INITIAL_SUBSIDY_SATS: u64 = 5_000_000_000;
 /// Number of blocks between each halving.
-const HALVING_INTERVAL: i64 = 210_000;
+const HALVING_INTERVAL: u64 = 210_000;
 /// Maximum number of halvings before subsidy reaches zero.
-const MAX_HALVINGS: i64 = 64;
+const MAX_HALVINGS: u64 = 64;
 
 /// Compute the block subsidy for a given block height.
 ///
 /// Uses Bitcoin's halving schedule: 50 BTC initially, halving every
 /// 210,000 blocks, reaching zero after 64 halvings.
-fn compute_block_subsidy(height: i64) -> Amount {
+fn compute_block_subsidy(height: u64) -> Amount {
     let halvings = height / HALVING_INTERVAL;
     if halvings >= MAX_HALVINGS {
         return Amount::ZERO;
