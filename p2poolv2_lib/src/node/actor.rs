@@ -241,6 +241,7 @@ impl NodeActor {
 
         // Clone validation_tx for the worker before moving it into Node::new
         let validation_tx_for_worker = validation_tx.clone();
+        let difficulty_multiplier = config.stratum.difficulty_multiplier as u128;
 
         let node = Node::new(
             config,
@@ -267,6 +268,7 @@ impl NodeActor {
             organise_tx.clone(),
             node.swarm_tx.clone(),
             pplns_window,
+            difficulty_multiplier,
         );
         let validation_handle = tokio::spawn(validation_worker.run());
 

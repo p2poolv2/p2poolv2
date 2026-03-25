@@ -102,6 +102,7 @@ pub struct ValidationWorker {
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     semaphore: Arc<Semaphore>,
     pplns_window: Arc<RwLock<PplnsWindow>>,
+    difficulty_multiplier: u128,
 }
 
 impl ValidationWorker {
@@ -113,6 +114,7 @@ impl ValidationWorker {
         organise_tx: OrganiseSender,
         swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
         pplns_window: Arc<RwLock<PplnsWindow>>,
+        difficulty_multiplier: u128,
     ) -> Self {
         Self {
             validation_rx,
@@ -122,6 +124,7 @@ impl ValidationWorker {
             swarm_tx,
             semaphore: Arc::new(Semaphore::new(available_cpus())),
             pplns_window,
+            difficulty_multiplier,
         }
     }
 
@@ -143,7 +146,10 @@ impl ValidationWorker {
                 message: format!("Failed to build pool difficulty: {error}"),
             }
         })?;
-        let share_validator = Arc::new(DefaultShareValidator::new(pool_difficulty));
+        let share_validator = Arc::new(DefaultShareValidator::new(
+            pool_difficulty,
+            self.difficulty_multiplier,
+        ));
 
         while let Some(event) = self.validation_rx.recv().await {
             match event {
@@ -330,6 +336,7 @@ mod tests {
             organise_tx,
             swarm_tx,
             Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
+            1,
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -382,6 +389,7 @@ mod tests {
             organise_tx,
             swarm_tx,
             Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
+            1,
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -429,6 +437,7 @@ mod tests {
             organise_tx,
             swarm_tx,
             Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
+            1,
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -500,6 +509,7 @@ mod tests {
             organise_tx,
             swarm_tx,
             Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
+            1,
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -591,6 +601,7 @@ mod tests {
             organise_tx,
             swarm_tx,
             Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
+            1,
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -695,6 +706,7 @@ mod tests {
             organise_tx,
             swarm_tx,
             Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
+            1,
         );
 
         let worker_handle = tokio::spawn(worker.run());
