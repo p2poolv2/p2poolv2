@@ -15,10 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::block_template::BlockTemplate;
-use super::coinbase::{build_coinbase_transaction, split_coinbase};
 use super::error::WorkError;
-use super::gbt::build_merkle_branches_for_template;
-use super::tracker::JobId;
 use crate::accounting::OutputPair;
 use crate::accounting::payout::payout_distribution::PayoutDistribution;
 use crate::config::StratumConfig;
@@ -28,13 +25,8 @@ use crate::pool_difficulty;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::stratum::messages::{Notify, NotifyParams};
-use crate::stratum::util::reverse_four_byte_chunks;
-use crate::stratum::util::to_be_hex;
 use crate::stratum::work::prepared_notify::{PreparedNotifyParams, PreparedNotifyParamsBuilder};
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
-use bitcoin::script::PushBytesBuf;
-use bitcoin::transaction::Version;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error};
@@ -48,17 +40,6 @@ pub(crate) struct NotifyContext {
     pub pool_signature: Vec<u8>,
     pub pool_difficulty: pool_difficulty::PoolDifficulty,
     pub payout: Box<dyn PayoutDistribution + Send>,
-}
-
-/// Extract flags from template coinbaseaux and convert to PushBytesBuf
-/// If flags are empty, use a single byte with value 0
-#[allow(dead_code)]
-fn parse_flags(flags: Option<String>) -> PushBytesBuf {
-    match flags {
-        Some(flags) if flags.is_empty() => PushBytesBuf::from(&[0u8]),
-        Some(flags) => PushBytesBuf::try_from(hex::decode(flags).unwrap()).unwrap(),
-        None => PushBytesBuf::from(&[0u8]),
-    }
 }
 
 /// Build the output distribution for the coinbase transaction using
@@ -91,51 +72,6 @@ fn build_output_distribution(
             Vec::new()
         }
     }
-}
-
-pub fn build_notify(
-    template: &BlockTemplate,
-    output_distribution: Vec<OutputPair>,
-    job_id: JobId,
-    clean_jobs: bool,
-    pool_signature: &[u8],
-    commitment_hash: Option<bitcoin::hashes::sha256::Hash>,
-) -> Result<Notify, WorkError> {
-    let coinbase = build_coinbase_transaction(
-        Version::TWO,
-        output_distribution.as_slice(),
-        template.height as i64,
-        parse_flags(template.coinbaseaux.get("flags").cloned()),
-        template.default_witness_commitment.clone(),
-        pool_signature,
-        commitment_hash,
-    )?;
-
-    let (coinbase1, coinbase2) = split_coinbase(&coinbase)?;
-
-    let merkle_branches = build_merkle_branches_for_template(template)
-        .iter()
-        .map(|branch| to_be_hex(&branch.to_string()))
-        .collect::<Vec<_>>();
-
-    let prevhash_byte_swapped =
-        reverse_four_byte_chunks(&template.previousblockhash).map_err(|e| WorkError {
-            message: format!("Failed to reverse previous block hash: {e}"),
-        })?;
-
-    let params = NotifyParams {
-        job_id: format!("{job_id:016x}"),
-        prevhash: prevhash_byte_swapped,
-        coinbase1,
-        coinbase2,
-        merkle_branches,
-        version: hex::encode(template.version.to_be_bytes()),
-        nbits: template.bits.clone(),
-        ntime: hex::encode(template.curtime.to_be_bytes()),
-        clean_jobs,
-    };
-
-    Ok(Notify::new_notify(params))
 }
 
 /// Build a PreparedNotifyParams from a template using the notify context.
@@ -297,10 +233,13 @@ pub async fn start_notify(
 mod tests {
     use super::*;
     use crate::accounting::payout::payout_distribution::MockPayoutDistribution;
+    use crate::stratum::messages::Notify;
     use crate::stratum::work::block_template::{BlockTemplate, TemplateTransaction};
     use crate::stratum::work::coinbase::extract_outputs_from_coinbase2;
-    use crate::stratum::work::prepared_notify::build_notify_from_prepared;
-    use crate::stratum::work::tracker::start_tracker_actor;
+    use crate::stratum::work::prepared_notify::{
+        PreparedNotifyParamsBuilder, build_notify_from_prepared,
+    };
+    use crate::stratum::work::tracker::{JobId, start_tracker_actor};
     use crate::test_utils::genesis_for_tests;
     use bitcoin::CompressedPublicKey;
     use bitcoin::{Address, Amount, Network, ScriptBuf, TxOut};
@@ -322,21 +261,8 @@ mod tests {
         let data = include_str!(
             "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json"
         );
-        let gbt_json: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
-
-        let data = include_str!(
-            "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/notify.json"
-        );
-        let _notify_json: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
-
-        // Parse BlockTemplate from GBT
         let template: BlockTemplate =
-            serde_json::from_value(gbt_json.clone()).expect("Failed to parse BlockTemplate");
-
-        let job_id = JobId(1);
-
-        let chain_store_handle = ChainStoreHandle::default();
-        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+            serde_json::from_str(data).expect("Failed to parse BlockTemplate");
 
         let test_distribution = vec![OutputPair {
             address: "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
@@ -346,26 +272,26 @@ mod tests {
             amount: Amount::from_sat(template.coinbasevalue),
         }];
 
-        let mock_payout = mock_payout_with_distribution(test_distribution);
+        let merkle_root = template.get_merkle_root_without_coinbase();
+        let prepared =
+            PreparedNotifyParamsBuilder::new(Arc::new(template), test_distribution, &[], false)
+                .merkle_root(merkle_root)
+                .bits(bitcoin::CompactTarget::from_consensus(0x1d00ffff))
+                .time(1700000000u32)
+                .build()
+                .expect("Failed to build prepared notify");
 
-        let mut context = NotifyContext {
-            chain_store_handle,
-            config: stratum_config,
-            pool_signature: Vec::new(),
-            pool_difficulty: pool_difficulty::PoolDifficulty::new(
-                genesis_for_tests().header.bits,
-                genesis_for_tests().header.time,
-                0,
-            ),
-            payout: Box::new(mock_payout),
-        };
-
-        let output_distribution = build_output_distribution(&template, &mut context);
-        // Build Notify
-        let notify = build_notify(&template, output_distribution, job_id, false, &[], None)
+        let address = "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
+            .parse::<bitcoin::Address<_>>()
+            .unwrap()
+            .assume_checked();
+        let tracker_handle = start_tracker_actor();
+        let notify_json = build_notify_from_prepared(&prepared, Some(&address), &tracker_handle)
             .expect("Failed to build notify");
 
-        // Compare all fields except job_id (random) coinbase which also have current time component
+        let notify: Notify = serde_json::from_str(&notify_json).expect("Invalid notify JSON");
+
+        // Compare all fields except job_id (random) and coinbase which has current time component
         assert_eq!(notify.params.version, "20000000");
         assert_eq!(notify.params.nbits, "207fffff");
         assert_eq!(notify.params.ntime, "68300262"); // we use curtime from gbt
@@ -379,21 +305,6 @@ mod tests {
             notify.params.merkle_branches,
             vec!["fecdf8cf1147587b0b3a262b16a955849053c6dfe0239718559f6a3d3ed20523".to_string()]
         );
-    }
-
-    #[test]
-    fn test_parse_flags() {
-        // Test with empty string
-        let flags = parse_flags(Some(String::from("")));
-        assert_eq!(flags.as_bytes(), &[0u8]);
-
-        // Test with None
-        let flags = parse_flags(None);
-        assert_eq!(flags.as_bytes(), &[0u8]);
-
-        // Test with valid hex string
-        let flags = parse_flags(Some(String::from("deadbeef")));
-        assert_eq!(flags.as_bytes(), &[0xde, 0xad, 0xbe, 0xef]);
     }
 
     #[tokio::test]
@@ -569,7 +480,7 @@ mod tests {
         assert_eq!(stored_commitment.prev_share_blockhash, genesis.block_hash());
     }
 
-    /// This test build_notify, parse then verify
+    /// Build notify via prepared path, parse coinbase2, and verify extracted outputs match.
     #[tokio::test]
     async fn test_build_notify_and_extract_outputs_integration() {
         let template = BlockTemplate {
@@ -608,7 +519,6 @@ mod tests {
             weightlimit: 0,
         };
 
-        // We use OutputPair from accounting, but need to convert to TxOut for the check
         let original_output_pairs = vec![
             OutputPair {
                 address: bitcoin::Address::from_str("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr")
@@ -624,29 +534,34 @@ mod tests {
             },
         ];
 
-        let job_id = JobId(123);
         let pool_signature = b"test_sig";
+        let merkle_root = template.get_merkle_root_without_coinbase();
+        let witness_commitment = template.default_witness_commitment.clone();
 
-        // Generate the real `coinbase2`
-        let notify = build_notify(
-            &template,
+        let prepared = PreparedNotifyParamsBuilder::new(
+            Arc::new(template),
             original_output_pairs.clone(),
-            job_id,
-            true,
             pool_signature,
-            None, // No commitment hash
+            true,
         )
-        .unwrap();
+        .merkle_root(merkle_root)
+        .bits(bitcoin::CompactTarget::from_consensus(0x1d00ffff))
+        .time(1700000000u32)
+        .build()
+        .expect("Failed to build prepared notify");
 
+        let address = original_output_pairs[0].address.clone();
+        let tracker_handle = start_tracker_actor();
+        let notify_json = build_notify_from_prepared(&prepared, Some(&address), &tracker_handle)
+            .expect("Failed to build notify");
+
+        let notify: Notify = serde_json::from_str(&notify_json).expect("Invalid notify JSON");
         let coinbase2_hex = &notify.params.coinbase2;
 
-        // Run the parser
+        // Extract outputs from coinbase2 and verify they match the original
         let extracted_txouts =
             extract_outputs_from_coinbase2(coinbase2_hex, pool_signature.len()).unwrap();
 
-        // Verify: Check if the extracted data matches the original
-
-        // We must check against the *real* outputs, which includes the witness
         let expected_txout_1 = TxOut {
             value: original_output_pairs[0].amount,
             script_pubkey: original_output_pairs[0].address.script_pubkey(),
@@ -656,8 +571,7 @@ mod tests {
             script_pubkey: original_output_pairs[1].address.script_pubkey(),
         };
 
-        let witness_script =
-            ScriptBuf::from(hex::decode(template.default_witness_commitment.unwrap()).unwrap());
+        let witness_script = ScriptBuf::from(hex::decode(witness_commitment.unwrap()).unwrap());
         let expected_txout_3 = TxOut {
             value: Amount::ZERO,
             script_pubkey: witness_script,
