@@ -128,6 +128,11 @@ impl PplnsWindow {
         self.confirmed_entries.is_empty()
     }
 
+    /// Return the bitcoin network this window was created for.
+    pub fn network(&self) -> bitcoin::Network {
+        self.network
+    }
+
     /// Read-only payout distribution starting from a given blockhash.
     ///
     /// Iteration begins at the entry whose blockhash matches
@@ -631,6 +636,19 @@ impl PplnsWindow {
         }
         self.cached_top_height = Some(total_count.saturating_sub(1));
         eprintln!("  populated {} in window", self.confirmed_entries.len());
+    }
+}
+
+#[cfg(test)]
+mockall::mock! {
+    pub PplnsWindow {
+        pub fn new(network: bitcoin::Network) -> Self;
+        pub fn network(&self) -> bitcoin::Network;
+        pub fn get_distribution_from_start_hash(
+            &self,
+            total_difficulty: u128,
+            start_hash: BlockHash,
+        ) -> HashMap<Address, u128>;
     }
 }
 

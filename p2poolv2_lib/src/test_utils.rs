@@ -584,7 +584,7 @@ fn test_share_block(
                 bitcoin::transaction::Version::TWO,
                 &[OutputPair {
                     address: btcaddress.clone(),
-                    amount: bitcoin::Amount::ONE_BTC,
+                    amount: bitcoin::Amount::from_sat(5_000_000_000),
                 }],
                 1,
                 PushBytesBuf::from(&[0u8]),
