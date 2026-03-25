@@ -25,6 +25,10 @@
 //! After successful validation, schedules stored children and nephews for
 //! validation by sending `ValidateBlock` events back through the channel.
 
+#[cfg(test)]
+#[mockall_double::double]
+use crate::accounting::payout::sharechain_pplns::PplnsWindow;
+#[cfg(not(test))]
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 use crate::node::SwarmSend;
 use crate::node::messages::Message;
@@ -282,6 +286,7 @@ mod tests {
     use crate::node::organise_worker;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
     use crate::test_utils::TestShareBlockBuilder;
+    use std::collections::HashMap;
     use std::time::Duration;
 
     /// Add mock expectations needed for validate_share_block (has_status)
@@ -335,7 +340,16 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
+            {
+                let mut mock_window = PplnsWindow::default();
+                mock_window
+                    .expect_network()
+                    .return_const(bitcoin::Network::Signet);
+                mock_window
+                    .expect_get_distribution_from_start_hash()
+                    .returning(|_, _| HashMap::new());
+                Arc::new(RwLock::new(mock_window))
+            },
             1,
         );
 
@@ -388,7 +402,16 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
+            {
+                let mut mock_window = PplnsWindow::default();
+                mock_window
+                    .expect_network()
+                    .return_const(bitcoin::Network::Signet);
+                mock_window
+                    .expect_get_distribution_from_start_hash()
+                    .returning(|_, _| HashMap::new());
+                Arc::new(RwLock::new(mock_window))
+            },
             1,
         );
 
@@ -416,6 +439,15 @@ mod tests {
             .expect()
             .returning(|_| Ok(PoolDifficulty::default()));
 
+        let _pplns_new_ctx = PplnsWindow::new_context();
+        _pplns_new_ctx.expect().returning(|_network| {
+            let mut mock = PplnsWindow::default();
+            mock.expect_network().return_const(bitcoin::Network::Signet);
+            mock.expect_get_distribution_from_start_hash()
+                .returning(|_, _| HashMap::new());
+            mock
+        });
+
         let (validation_tx, validation_rx) = create_validation_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
 
@@ -436,7 +468,16 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
+            {
+                let mut mock_window = PplnsWindow::default();
+                mock_window
+                    .expect_network()
+                    .return_const(bitcoin::Network::Signet);
+                mock_window
+                    .expect_get_distribution_from_start_hash()
+                    .returning(|_, _| HashMap::new());
+                Arc::new(RwLock::new(mock_window))
+            },
             1,
         );
 
@@ -470,6 +511,15 @@ mod tests {
         _pool_difficulty_build_ctx
             .expect()
             .returning(|_| Ok(PoolDifficulty::default()));
+
+        let _pplns_new_ctx = PplnsWindow::new_context();
+        _pplns_new_ctx.expect().returning(|_network| {
+            let mut mock = PplnsWindow::default();
+            mock.expect_network().return_const(bitcoin::Network::Signet);
+            mock.expect_get_distribution_from_start_hash()
+                .returning(|_, _| HashMap::new());
+            mock
+        });
 
         let (validation_tx, validation_rx) = create_validation_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
@@ -508,7 +558,16 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
+            {
+                let mut mock_window = PplnsWindow::default();
+                mock_window
+                    .expect_network()
+                    .return_const(bitcoin::Network::Signet);
+                mock_window
+                    .expect_get_distribution_from_start_hash()
+                    .returning(|_, _| HashMap::new());
+                Arc::new(RwLock::new(mock_window))
+            },
             1,
         );
 
@@ -542,6 +601,15 @@ mod tests {
         _pool_difficulty_build_ctx
             .expect()
             .returning(|_| Ok(PoolDifficulty::default()));
+
+        let _pplns_new_ctx = PplnsWindow::new_context();
+        _pplns_new_ctx.expect().returning(|_network| {
+            let mut mock = PplnsWindow::default();
+            mock.expect_network().return_const(bitcoin::Network::Signet);
+            mock.expect_get_distribution_from_start_hash()
+                .returning(|_, _| HashMap::new());
+            mock
+        });
 
         let (validation_tx, validation_rx) = create_validation_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
@@ -600,7 +668,16 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
+            {
+                let mut mock_window = PplnsWindow::default();
+                mock_window
+                    .expect_network()
+                    .return_const(bitcoin::Network::Signet);
+                mock_window
+                    .expect_get_distribution_from_start_hash()
+                    .returning(|_, _| HashMap::new());
+                Arc::new(RwLock::new(mock_window))
+            },
             1,
         );
 
@@ -639,6 +716,15 @@ mod tests {
         _pool_difficulty_build_ctx
             .expect()
             .returning(|_| Ok(PoolDifficulty::default()));
+
+        let _pplns_new_ctx = PplnsWindow::new_context();
+        _pplns_new_ctx.expect().returning(|_network| {
+            let mut mock = PplnsWindow::default();
+            mock.expect_network().return_const(bitcoin::Network::Signet);
+            mock.expect_get_distribution_from_start_hash()
+                .returning(|_, _| HashMap::new());
+            mock
+        });
 
         let (validation_tx, validation_rx) = create_validation_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
@@ -705,7 +791,16 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
+            {
+                let mut mock_window = PplnsWindow::default();
+                mock_window
+                    .expect_network()
+                    .return_const(bitcoin::Network::Signet);
+                mock_window
+                    .expect_get_distribution_from_start_hash()
+                    .returning(|_, _| HashMap::new());
+                Arc::new(RwLock::new(mock_window))
+            },
             1,
         );
 

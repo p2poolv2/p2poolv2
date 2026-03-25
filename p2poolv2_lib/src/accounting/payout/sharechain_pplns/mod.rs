@@ -25,4 +25,6 @@ pub mod payout;
 pub mod pplns_window;
 
 pub use payout::Payout;
+#[cfg(test)]
+pub use pplns_window::MockPplnsWindow;
 pub use pplns_window::PplnsWindow;

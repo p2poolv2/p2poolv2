@@ -14,6 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+#[cfg(test)]
+#[mockall_double::double]
+use crate::accounting::payout::sharechain_pplns::PplnsWindow;
+#[cfg(not(test))]
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::accounting::stats::metrics::MetricsHandle;

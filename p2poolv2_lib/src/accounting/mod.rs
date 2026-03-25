@@ -19,7 +19,7 @@ pub mod payout;
 pub mod stats;
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputPair {
     pub address: bitcoin::Address,
     pub amount: bitcoin::Amount,
