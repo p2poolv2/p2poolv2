@@ -233,7 +233,9 @@ pub fn extract_outputs_from_coinbase2(
 /// encoded via `push_int`. For heights > 16 this produces a
 /// `PushBytes` instruction decoded with `read_scriptint`. For heights
 /// 0-16 the builder emits a single opcode (OP_0 or OP_1..OP_16).
-pub fn extract_height_from_coinbase(coinbase: &Transaction) -> Result<i64, WorkError> {
+///
+/// Returns an error if the decoded height is negative.
+pub fn extract_height_from_coinbase(coinbase: &Transaction) -> Result<u64, WorkError> {
     let input = coinbase.input.first().ok_or_else(|| WorkError {
         message: "Bitcoin coinbase has no inputs".to_string(),
     })?;
@@ -252,9 +254,15 @@ pub fn extract_height_from_coinbase(coinbase: &Transaction) -> Result<i64, WorkE
     match height_instruction {
         Instruction::PushBytes(bytes) => {
             let raw = bytes.as_bytes();
-            bitcoin::script::read_scriptint(raw).map_err(|error| WorkError {
+            let height = bitcoin::script::read_scriptint(raw).map_err(|error| WorkError {
                 message: format!("Invalid block height scriptint: {error}"),
-            })
+            })?;
+            if height < 0 {
+                return Err(WorkError {
+                    message: format!("Block height must not be negative: {height}"),
+                });
+            }
+            Ok(height as u64)
         }
         Instruction::Op(opcode) => {
             let byte = opcode.to_u8();
@@ -263,7 +271,7 @@ pub fn extract_height_from_coinbase(coinbase: &Transaction) -> Result<i64, WorkE
             } else if byte >= opcodes::all::OP_PUSHNUM_1.to_u8()
                 && byte <= opcodes::all::OP_PUSHNUM_16.to_u8()
             {
-                Ok((byte - opcodes::all::OP_PUSHNUM_1.to_u8() + 1) as i64)
+                Ok(u64::from(byte - opcodes::all::OP_PUSHNUM_1.to_u8() + 1))
             } else {
                 Err(WorkError {
                     message: format!("Unexpected opcode in block height position: {opcode}"),
@@ -862,7 +870,7 @@ mod tests {
         .unwrap();
 
         let extracted_height = extract_height_from_coinbase(&coinbase).unwrap();
-        assert_eq!(extracted_height, height);
+        assert_eq!(extracted_height, height as u64);
     }
 
     #[test]
@@ -888,7 +896,7 @@ mod tests {
         .unwrap();
 
         let extracted_height = extract_height_from_coinbase(&coinbase).unwrap();
-        assert_eq!(extracted_height, height);
+        assert_eq!(extracted_height, height as u64);
     }
 
     #[test]
@@ -914,7 +922,7 @@ mod tests {
         .unwrap();
 
         let extracted_height = extract_height_from_coinbase(&coinbase).unwrap();
-        assert_eq!(extracted_height, height);
+        assert_eq!(extracted_height, height as u64);
     }
 
     #[test]
@@ -929,5 +937,28 @@ mod tests {
         let result = extract_height_from_coinbase(&coinbase);
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("no inputs"));
+    }
+
+    #[test]
+    fn test_extract_height_from_coinbase_negative_height() {
+        let script_sig = Builder::new().push_int(-100).into_script();
+        let coinbase = Transaction {
+            version: Version(2),
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: bitcoin::OutPoint {
+                    txid: bitcoin::hashes::sha256d::Hash::all_zeros().into(),
+                    vout: u32::MAX,
+                },
+                script_sig,
+                sequence: Sequence::MAX,
+                witness: Vec::<Vec<u8>>::new().into(),
+            }],
+            output: vec![],
+        };
+
+        let result = extract_height_from_coinbase(&coinbase);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("must not be negative"));
     }
 }
