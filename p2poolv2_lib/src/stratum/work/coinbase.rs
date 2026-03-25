@@ -227,6 +227,47 @@ pub fn extract_outputs_from_coinbase2(
 /// Extract the commitment hash from a bitcoin coinbase transaction's scriptSig.
 ///
 /// The coinbase scriptSig layout is: push(height), push(commitment_hash_32bytes), ...
+/// Extract the block height from the coinbase scriptSig (BIP34).
+///
+/// The first instruction in the coinbase scriptSig is the block height
+/// encoded as a little-endian integer via `push_int`.
+pub fn extract_height_from_coinbase(coinbase: &Transaction) -> Result<i64, WorkError> {
+    let input = coinbase.input.first().ok_or_else(|| WorkError {
+        message: "Bitcoin coinbase has no inputs".to_string(),
+    })?;
+
+    let mut instructions = input.script_sig.instructions();
+
+    let height_instruction = instructions
+        .next()
+        .ok_or_else(|| WorkError {
+            message: "Bitcoin coinbase scriptSig is empty".to_string(),
+        })?
+        .map_err(|error| WorkError {
+            message: format!("Invalid bitcoin coinbase scriptSig: {error}"),
+        })?;
+
+    match height_instruction {
+        Instruction::PushBytes(bytes) => {
+            let raw = bytes.as_bytes();
+            if raw.is_empty() || raw.len() > 8 {
+                return Err(WorkError {
+                    message: format!(
+                        "Invalid block height encoding: expected 1-8 bytes, got {}",
+                        raw.len()
+                    ),
+                });
+            }
+            let mut padded = [0u8; 8];
+            padded[..raw.len()].copy_from_slice(raw);
+            Ok(i64::from_le_bytes(padded))
+        }
+        _ => Err(WorkError {
+            message: "Bitcoin coinbase scriptSig first instruction is not a push".to_string(),
+        }),
+    }
+}
+
 /// Skips the first instruction (block height) and reads the second instruction
 /// which should be a 32-byte push containing the commitment hash.
 pub fn extract_commitment_hash_from_coinbase(
@@ -789,6 +830,72 @@ mod tests {
         };
 
         let result = extract_commitment_hash_from_coinbase(&coinbase);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("no inputs"));
+    }
+
+    #[test]
+    fn test_extract_height_from_coinbase() {
+        let addr = parse_address(
+            "1HpRF3JgafxaqjhMEjLNbevpRVvAp15t3A",
+            bitcoin::Network::Bitcoin,
+        )
+        .unwrap();
+        let height = 506;
+        let coinbase = build_coinbase_transaction(
+            Version(2),
+            &[OutputPair {
+                address: addr,
+                amount: Amount::from_str("50 BTC").unwrap(),
+            }],
+            height,
+            PushBytesBuf::from(&[0u8]),
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+
+        let extracted_height = extract_height_from_coinbase(&coinbase).unwrap();
+        assert_eq!(extracted_height, height);
+    }
+
+    #[test]
+    fn test_extract_height_from_coinbase_large_height() {
+        let addr = parse_address(
+            "1HpRF3JgafxaqjhMEjLNbevpRVvAp15t3A",
+            bitcoin::Network::Bitcoin,
+        )
+        .unwrap();
+        let height = 840_000;
+        let coinbase = build_coinbase_transaction(
+            Version(2),
+            &[OutputPair {
+                address: addr,
+                amount: Amount::from_str("3.125 BTC").unwrap(),
+            }],
+            height,
+            PushBytesBuf::from(&[0u8]),
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+
+        let extracted_height = extract_height_from_coinbase(&coinbase).unwrap();
+        assert_eq!(extracted_height, height);
+    }
+
+    #[test]
+    fn test_extract_height_from_coinbase_no_inputs() {
+        let coinbase = Transaction {
+            version: Version(2),
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+
+        let result = extract_height_from_coinbase(&coinbase);
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("no inputs"));
     }
