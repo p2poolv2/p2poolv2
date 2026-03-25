@@ -24,7 +24,7 @@ use bitcoin::hashes::{self, Hash, sha256d};
 use bitcoin::network::Network;
 use bitcoin::script::{Instruction, PushBytesBuf};
 use bitcoin::transaction::{Sequence, Transaction, TxIn, TxOut, Version};
-use bitcoin::{Address, Amount};
+use bitcoin::{Address, Amount, opcodes};
 use hashes::sha256;
 use hex::FromHex;
 
@@ -230,7 +230,9 @@ pub fn extract_outputs_from_coinbase2(
 /// Extract the block height from the coinbase scriptSig (BIP34).
 ///
 /// The first instruction in the coinbase scriptSig is the block height
-/// encoded as a little-endian integer via `push_int`.
+/// encoded via `push_int`. For heights > 16 this produces a
+/// `PushBytes` instruction decoded with `read_scriptint`. For heights
+/// 0-16 the builder emits a single opcode (OP_0 or OP_1..OP_16).
 pub fn extract_height_from_coinbase(coinbase: &Transaction) -> Result<i64, WorkError> {
     let input = coinbase.input.first().ok_or_else(|| WorkError {
         message: "Bitcoin coinbase has no inputs".to_string(),
@@ -250,21 +252,24 @@ pub fn extract_height_from_coinbase(coinbase: &Transaction) -> Result<i64, WorkE
     match height_instruction {
         Instruction::PushBytes(bytes) => {
             let raw = bytes.as_bytes();
-            if raw.is_empty() || raw.len() > 8 {
-                return Err(WorkError {
-                    message: format!(
-                        "Invalid block height encoding: expected 1-8 bytes, got {}",
-                        raw.len()
-                    ),
-                });
-            }
-            let mut padded = [0u8; 8];
-            padded[..raw.len()].copy_from_slice(raw);
-            Ok(i64::from_le_bytes(padded))
+            bitcoin::script::read_scriptint(raw).map_err(|error| WorkError {
+                message: format!("Invalid block height scriptint: {error}"),
+            })
         }
-        _ => Err(WorkError {
-            message: "Bitcoin coinbase scriptSig first instruction is not a push".to_string(),
-        }),
+        Instruction::Op(opcode) => {
+            let byte = opcode.to_u8();
+            if byte == opcodes::OP_0.to_u8() {
+                Ok(0)
+            } else if byte >= opcodes::all::OP_PUSHNUM_1.to_u8()
+                && byte <= opcodes::all::OP_PUSHNUM_16.to_u8()
+            {
+                Ok((byte - opcodes::all::OP_PUSHNUM_1.to_u8() + 1) as i64)
+            } else {
+                Err(WorkError {
+                    message: format!("Unexpected opcode in block height position: {opcode}"),
+                })
+            }
+        }
     }
 }
 
@@ -868,6 +873,32 @@ mod tests {
         )
         .unwrap();
         let height = 840_000;
+        let coinbase = build_coinbase_transaction(
+            Version(2),
+            &[OutputPair {
+                address: addr,
+                amount: Amount::from_str("3.125 BTC").unwrap(),
+            }],
+            height,
+            PushBytesBuf::from(&[0u8]),
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+
+        let extracted_height = extract_height_from_coinbase(&coinbase).unwrap();
+        assert_eq!(extracted_height, height);
+    }
+
+    #[test]
+    fn test_extract_height_from_coinbase_sub_16_height() {
+        let addr = parse_address(
+            "1HpRF3JgafxaqjhMEjLNbevpRVvAp15t3A",
+            bitcoin::Network::Bitcoin,
+        )
+        .unwrap();
+        let height = 10;
         let coinbase = build_coinbase_transaction(
             Version(2),
             &[OutputPair {
