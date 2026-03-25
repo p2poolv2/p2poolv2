@@ -253,7 +253,7 @@ impl PreparedNotifyParamsBuilder {
             Version::TWO,
             self.output_distribution.as_slice(),
             self.template.height as i64,
-            parse_flags(self.template.coinbaseaux.get("flags").cloned()),
+            parse_flags(self.template.coinbaseaux.get("flags").cloned())?,
             self.template.default_witness_commitment.clone(),
             &self.pool_signature,
             Some(dummy_commitment_hash),
@@ -429,12 +429,19 @@ pub(crate) fn build_notify_from_prepared(
 }
 
 /// Extract flags from template coinbaseaux and convert to PushBytesBuf.
-/// If flags are empty, use a single byte with value 0.
-fn parse_flags(flags: Option<String>) -> PushBytesBuf {
+/// If flags are empty or absent, use a single byte with value 0.
+fn parse_flags(flags: Option<String>) -> Result<PushBytesBuf, WorkError> {
     match flags {
-        Some(flags) if flags.is_empty() => PushBytesBuf::from(&[0u8]),
-        Some(flags) => PushBytesBuf::try_from(hex::decode(flags).unwrap()).unwrap(),
-        None => PushBytesBuf::from(&[0u8]),
+        Some(flags) if flags.is_empty() => Ok(PushBytesBuf::from(&[0u8])),
+        Some(flags) => {
+            let decoded = hex::decode(&flags).map_err(|error| WorkError {
+                message: format!("Invalid hex in coinbaseaux flags '{flags}': {error}"),
+            })?;
+            PushBytesBuf::try_from(decoded).map_err(|error| WorkError {
+                message: format!("Coinbaseaux flags too large: {error}"),
+            })
+        }
+        None => Ok(PushBytesBuf::from(&[0u8])),
     }
 }
 
@@ -675,16 +682,25 @@ mod tests {
 
     #[test]
     fn test_parse_flags() {
-        // Test with empty string
-        let flags = parse_flags(Some(String::from("")));
+        let flags = parse_flags(Some(String::from(""))).unwrap();
         assert_eq!(flags.as_bytes(), &[0u8]);
 
-        // Test with None
-        let flags = parse_flags(None);
+        let flags = parse_flags(None).unwrap();
         assert_eq!(flags.as_bytes(), &[0u8]);
 
-        // Test with valid hex string
-        let flags = parse_flags(Some(String::from("deadbeef")));
+        let flags = parse_flags(Some(String::from("deadbeef"))).unwrap();
         assert_eq!(flags.as_bytes(), &[0xde, 0xad, 0xbe, 0xef]);
+    }
+
+    #[test]
+    fn test_parse_flags_invalid_hex_returns_error() {
+        let result = parse_flags(Some(String::from("not_valid_hex")));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .message
+                .contains("Invalid hex in coinbaseaux flags")
+        );
     }
 }
