@@ -152,15 +152,18 @@ pub trait ShareValidator {
 /// avoiding repeated builds on each validation call.
 pub struct DefaultShareValidator {
     pool_difficulty: PoolDifficulty,
+    /// Multiplier applied to bitcoin difficulty when walking the PPLNS window.
+    difficulty_multiplier: u128,
 }
 
 impl DefaultShareValidator {
-    /// Create a new DefaultShareValidator with the given pool difficulty.
-    ///
-    /// Callers should build the `PoolDifficulty` from the chain store
-    /// (via `PoolDifficulty::build`) and pass it here.
-    pub fn new(pool_difficulty: PoolDifficulty) -> Self {
-        Self { pool_difficulty }
+    /// Create a new DefaultShareValidator with the given pool difficulty
+    /// and difficulty multiplier for PPLNS window walks.
+    pub fn new(pool_difficulty: PoolDifficulty, difficulty_multiplier: u128) -> Self {
+        Self {
+            pool_difficulty,
+            difficulty_multiplier,
+        }
     }
 
     /// Validate that the total size of share transactions does not exceed BLOCK_TXS_SIZE_LIMIT.
@@ -667,11 +670,11 @@ mod tests {
     use std::time::SystemTime;
 
     fn validator() -> DefaultShareValidator {
-        DefaultShareValidator::new(PoolDifficulty::default())
+        DefaultShareValidator::new(PoolDifficulty::default(), 1)
     }
 
     fn validator_with(pool_difficulty: PoolDifficulty) -> DefaultShareValidator {
-        DefaultShareValidator::new(pool_difficulty)
+        DefaultShareValidator::new(pool_difficulty, 1)
     }
 
     #[tokio::test]
