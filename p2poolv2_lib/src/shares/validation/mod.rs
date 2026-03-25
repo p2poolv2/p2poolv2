@@ -476,7 +476,10 @@ impl DefaultShareValidator {
         let total_difficulty = bitcoin_difficulty.saturating_mul(self.difficulty_multiplier);
 
         let address_difficulty_map = window
-            .get_distribution_from_start_hash(total_difficulty, share.header.prev_share_blockhash);
+            .get_distribution_from_start_hash(total_difficulty, share.header.prev_share_blockhash)
+            .ok_or_else(|| {
+                ValidationError::new("prev_share_blockhash not found in PPLNS window")
+            })?;
 
         let total_amount = Self::compute_total_payout_amount(coinbase_transaction)?;
         Self::validate_total_against_subsidy(coinbase_transaction, total_amount)?;
@@ -1047,7 +1050,7 @@ mod tests {
                 .return_const(bitcoin::Network::Regtest);
             mock_window
                 .expect_get_distribution_from_start_hash()
-                .returning(|_, _| HashMap::new());
+                .returning(|_, _| Some(HashMap::new()));
             Arc::new(RwLock::new(mock_window))
         };
         let result =
@@ -1074,7 +1077,7 @@ mod tests {
                 .return_const(bitcoin::Network::Regtest);
             mock_window
                 .expect_get_distribution_from_start_hash()
-                .returning(|_, _| HashMap::new());
+                .returning(|_, _| Some(HashMap::new()));
             Arc::new(RwLock::new(mock_window))
         };
         let result =
@@ -2121,7 +2124,7 @@ mod tests {
                 let mut distribution = HashMap::with_capacity(2);
                 distribution.insert(addr_a_clone.clone(), 600u128);
                 distribution.insert(addr_b_clone.clone(), 400u128);
-                distribution
+                Some(distribution)
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
@@ -2187,7 +2190,7 @@ mod tests {
                 let mut distribution = HashMap::with_capacity(2);
                 distribution.insert(addr_a_clone.clone(), 600u128);
                 distribution.insert(addr_b_clone.clone(), 400u128);
-                distribution
+                Some(distribution)
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
@@ -2238,7 +2241,7 @@ mod tests {
             .return_const(bitcoin::Network::Signet);
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(|_, _| HashMap::new());
+            .returning(|_, _| Some(HashMap::new()));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         let result = validator().validate_bitcoin_payout(
@@ -2250,6 +2253,57 @@ mod tests {
             result.is_ok(),
             "Empty window should skip payout check, got: {}",
             result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn test_validate_bitcoin_payout_fails_when_prev_share_blockhash_not_in_window() {
+        use bitcoin::script::PushBytesBuf;
+
+        let address_a = crate::test_utils::parse_address_from_string(
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+        );
+
+        let coinbase_tx = coinbase::build_coinbase_transaction(
+            Version(2),
+            &[OutputPair {
+                address: address_a,
+                amount: Amount::from_sat(312_500_000),
+            }],
+            840_000,
+            PushBytesBuf::from(&[0u8]),
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+
+        let mut share_block = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share_block.bitcoin_transactions = vec![coinbase_tx];
+
+        let mut mock_window = PplnsWindow::default();
+        mock_window
+            .expect_network()
+            .return_const(bitcoin::Network::Signet);
+        mock_window
+            .expect_get_distribution_from_start_hash()
+            .returning(|_, _| None);
+        let pplns_window = Arc::new(RwLock::new(mock_window));
+
+        let error = validator()
+            .validate_bitcoin_payout(
+                &share_block,
+                &share_block.bitcoin_transactions[0],
+                pplns_window,
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("prev_share_blockhash not found in PPLNS window"),
+            "Expected PPLNS window miss error, got: {error}"
         );
     }
 
@@ -2287,7 +2341,7 @@ mod tests {
             .return_const(bitcoin::Network::Signet);
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(|_, _| HashMap::new());
+            .returning(|_, _| Some(HashMap::new()));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         let error = validator()
@@ -2444,7 +2498,7 @@ mod tests {
                 distribution.insert(miner_a_clone.clone(), 500u128);
                 distribution.insert(miner_b_clone.clone(), 300u128);
                 distribution.insert(miner_c_clone.clone(), 200u128);
-                distribution
+                Some(distribution)
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 

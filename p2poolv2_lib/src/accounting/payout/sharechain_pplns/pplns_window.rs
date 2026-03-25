@@ -140,15 +140,17 @@ impl PplnsWindow {
     /// address keys, so it only requires `&self`. Suitable for
     /// callers that hold a read lock on a shared PplnsWindow, like
     /// the validation worker.
+    ///
+    /// Returns `None` when start_hash is not found in the window.
     pub fn get_distribution_from_start_hash(
         &self,
         total_difficulty: u128,
         start_hash: BlockHash,
-    ) -> HashMap<Address, u128> {
-        let start_index = self.find_start_index(start_hash);
+    ) -> Option<HashMap<Address, u128>> {
+        let start_index = self.find_start_index(start_hash)?;
         let (difficulty_by_key, _threshold_index) =
             self.walk_entries(total_difficulty, start_index);
-        self.collect_distribution(&difficulty_by_key)
+        Some(self.collect_distribution(&difficulty_by_key))
     }
 
     /// Get payout distribution from the tip and clean up stale
@@ -189,12 +191,11 @@ impl PplnsWindow {
     }
 
     /// Find the index of the entry matching the given blockhash.
-    /// Returns 0 when the hash is not found.
-    fn find_start_index(&self, start_hash: BlockHash) -> usize {
+    /// Returns `None` when the hash is not found in the window.
+    fn find_start_index(&self, start_hash: BlockHash) -> Option<usize> {
         self.confirmed_entries
             .iter()
             .position(|entry| entry.blockhash == start_hash)
-            .unwrap_or(0)
     }
 
     /// Walk entries starting at start_index, accumulating difficulty
@@ -648,7 +649,7 @@ mockall::mock! {
             &self,
             total_difficulty: u128,
             start_hash: BlockHash,
-        ) -> HashMap<Address, u128>;
+        ) -> Option<HashMap<Address, u128>>;
     }
 }
 
@@ -1164,7 +1165,9 @@ mod tests {
         window.confirmed_entries.push_back(entry1);
 
         // Starting from header2 should skip header3, include header2 and header1
-        let result = window.get_distribution_from_start_hash(u128::MAX, header2.block_hash());
+        let result = window
+            .get_distribution_from_start_hash(u128::MAX, header2.block_hash())
+            .expect("header2 should be in window");
         assert_eq!(result.len(), 2);
         assert_eq!(
             result[&header2.miner_address],
@@ -1177,7 +1180,9 @@ mod tests {
         assert!(!result.contains_key(&header3.miner_address));
 
         // Starting from the oldest entry should only include that entry
-        let result = window.get_distribution_from_start_hash(u128::MAX, header1.block_hash());
+        let result = window
+            .get_distribution_from_start_hash(u128::MAX, header1.block_hash())
+            .expect("header1 should be in window");
         assert_eq!(result.len(), 1);
         assert_eq!(
             result[&header1.miner_address],
@@ -1186,12 +1191,10 @@ mod tests {
     }
 
     #[test]
-    fn test_get_distribution_with_unknown_start_hash_falls_back_to_top() {
+    fn test_get_distribution_with_unknown_start_hash_returns_none() {
         let genesis_hash = BlockHash::all_zeros();
         let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
-        let difficulty1 = header1.get_difficulty(TEST_NETWORK);
-        let difficulty2 = header2.get_difficulty(TEST_NETWORK);
 
         let mut window = PplnsWindow::new(TEST_NETWORK);
         let entry2 = entry_from_header(&mut window, &header2, 1);
@@ -1201,18 +1204,10 @@ mod tests {
         window.add_to_running_total(&entry1);
         window.confirmed_entries.push_back(entry1);
 
-        // A hash not in the window should fall back to starting from the top
+        // A hash not in the window should return None
         let unknown_hash = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 3).block_hash();
         let result = window.get_distribution_from_start_hash(u128::MAX, unknown_hash);
-        assert_eq!(result.len(), 2);
-        assert_eq!(
-            result[&header1.miner_address],
-            difficulty1 * DIFFICULTY_SCALE
-        );
-        assert_eq!(
-            result[&header2.miner_address],
-            difficulty2 * DIFFICULTY_SCALE
-        );
+        assert!(result.is_none());
     }
 
     #[test]
