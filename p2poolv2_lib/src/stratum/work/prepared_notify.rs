@@ -672,4 +672,19 @@ mod tests {
             "share_commitment should be None for solo mode"
         );
     }
+
+    #[test]
+    fn test_parse_flags() {
+        // Test with empty string
+        let flags = parse_flags(Some(String::from("")));
+        assert_eq!(flags.as_bytes(), &[0u8]);
+
+        // Test with None
+        let flags = parse_flags(None);
+        assert_eq!(flags.as_bytes(), &[0u8]);
+
+        // Test with valid hex string
+        let flags = parse_flags(Some(String::from("deadbeef")));
+        assert_eq!(flags.as_bytes(), &[0xde, 0xad, 0xbe, 0xef]);
+    }
 }
