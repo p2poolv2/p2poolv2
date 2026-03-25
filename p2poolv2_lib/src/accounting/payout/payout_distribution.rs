@@ -91,7 +91,7 @@ pub trait PayoutDistribution {
 }
 
 /// Appends new output pair to distribution and returns remaining amount
-fn include_address_and_cut(
+pub(crate) fn include_address_and_cut(
     distribution: &mut Vec<OutputPair>,
     total_amount: bitcoin::Amount,
     address: &Option<Address>,
