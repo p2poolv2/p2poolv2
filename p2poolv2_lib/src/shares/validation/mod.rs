@@ -66,6 +66,25 @@ pub const BLOCK_TXS_SIZE_LIMIT: u32 = 200 * 1024;
 /// Maximum number of transactions allowed in a share block
 pub const TXS_COUNT_LIMIT: u32 = 100;
 
+/// Initial block subsidy in satoshis (50 BTC).
+const INITIAL_SUBSIDY_SATS: u64 = 5_000_000_000;
+/// Number of blocks between each halving.
+const HALVING_INTERVAL: i64 = 210_000;
+/// Maximum number of halvings before subsidy reaches zero.
+const MAX_HALVINGS: i64 = 64;
+
+/// Compute the block subsidy for a given block height.
+///
+/// Uses Bitcoin's halving schedule: 50 BTC initially, halving every
+/// 210,000 blocks, reaching zero after 64 halvings.
+fn compute_block_subsidy(height: i64) -> Amount {
+    let halvings = height / HALVING_INTERVAL;
+    if halvings >= MAX_HALVINGS {
+        return Amount::ZERO;
+    }
+    Amount::from_sat(INITIAL_SUBSIDY_SATS >> halvings)
+}
+
 /// Trait for share validation operations.
 ///
 /// Provides methods to validate share headers, share blocks, uncles,
@@ -1493,5 +1512,37 @@ mod tests {
                 .contains("Failed to look up spent outputs"),
             "Expected UTXO lookup failure, got: {error}"
         );
+    }
+
+    #[test]
+    fn test_compute_block_subsidy_genesis() {
+        let subsidy = compute_block_subsidy(0);
+        assert_eq!(subsidy, Amount::from_sat(5_000_000_000));
+    }
+
+    #[test]
+    fn test_compute_block_subsidy_first_halving() {
+        let subsidy = compute_block_subsidy(210_000);
+        assert_eq!(subsidy, Amount::from_sat(2_500_000_000));
+    }
+
+    #[test]
+    fn test_compute_block_subsidy_fourth_halving() {
+        let subsidy = compute_block_subsidy(840_000);
+        assert_eq!(subsidy, Amount::from_sat(312_500_000));
+    }
+
+    #[test]
+    fn test_compute_block_subsidy_before_final_halving() {
+        // Halving 32 is the last one that produces a non-zero subsidy
+        // 5_000_000_000 >> 32 = 1 (rounded down from integer division)
+        let subsidy = compute_block_subsidy(32 * 210_000);
+        assert_eq!(subsidy, Amount::from_sat(1));
+    }
+
+    #[test]
+    fn test_compute_block_subsidy_after_all_halvings() {
+        let subsidy = compute_block_subsidy(64 * 210_000);
+        assert_eq!(subsidy, Amount::ZERO);
     }
 }
