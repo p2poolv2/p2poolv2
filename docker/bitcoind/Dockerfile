@@ -72,7 +72,7 @@ COPY signet/bitcoin-signet.conf /etc/bitcoin/
 COPY testnet4/bitcoin-testnet4.conf /etc/bitcoin/
 COPY bcli /usr/local/bin/
 
-HEALTHCHECK --interval=1s --timeout=1s --start-period=3s --retries=10 \
+HEALTHCHECK --interval=5s --timeout=1s --start-period=3s --retries=3 \
     CMD ["ash", "-c", "nc -z 127.0.0.1 ${BTC_P2P_PORT:-38333}"]
 
 ENTRYPOINT ["bitcoind"]
