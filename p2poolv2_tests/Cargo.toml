@@ -42,4 +42,3 @@ reqwest = { workspace = true, features = ["json", "blocking"] }
 bitcoindrpc = { workspace = true, features = ["test-utils"] }
 chrono.workspace = true
 test-log = { version = "0.2.17", features = ["trace"] }
-tracing-subscriber = { workspace = true }
