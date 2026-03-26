@@ -21,6 +21,7 @@ pub mod gen_auth;
 pub mod peers_info;
 pub mod pplns_shares;
 pub mod share;
+pub mod share_headers;
 pub mod shares;
 
 use crate::commands;
@@ -88,6 +89,15 @@ pub enum Commands {
         #[arg(short, long, default_value = "false")]
         full: bool,
     },
+    /// Dump raw share headers as JSON for a confirmed height range
+    ShareHeaders {
+        /// Height to get headers up to, inclusive. Default is chain tip.
+        #[arg(short, long)]
+        to: Option<u32>,
+        /// Number of headers going back from --to. Default 10.
+        #[arg(short, long, default_value = "10")]
+        num: u32,
+    },
     /// Show connected peers by querying the running node's API
     PeersInfo,
     /// Generate API authentication credentials (salt, password, HMAC)
@@ -114,7 +124,8 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
             | Commands::PplnsShares { .. }
             | Commands::Shares { .. }
             | Commands::Candidates { .. }
-            | Commands::Share { .. },
+            | Commands::Share { .. }
+            | Commands::ShareHeaders { .. },
         ) => {
             let config_path = cli
                 .config
@@ -145,6 +156,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                 }
                 Some(Commands::Share { hash, height, full }) => {
                     commands::share::execute(&config.api, hash.clone(), *height, *full).await?;
+                }
+                Some(Commands::ShareHeaders { to, num }) => {
+                    commands::share_headers::execute(&config.api, *to, *num).await?;
                 }
                 _ => unreachable!(),
             }
