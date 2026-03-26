@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::store::writer::StoreError;
+use tracing::debug;
 
 use super::{Height, Store};
 
@@ -37,6 +38,11 @@ impl Store {
         let Ok(top_candidate) = self.get_top_candidate() else {
             return Ok(Some(top_confirmed.height));
         };
+
+        debug!(
+            "Organise block with top_confirmed {:?}, top_candidate {:?}",
+            top_confirmed, top_candidate
+        );
 
         let candidates = self.get_candidates(top_confirmed.height + 1, top_candidate.height)?;
 

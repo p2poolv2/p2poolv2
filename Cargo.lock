@@ -3357,9 +3357,11 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "test-log",
  "tokio",
  "tokio-test",
  "tracing",
+ "tracing-subscriber",
  "zmq",
 ]
 
