@@ -430,118 +430,135 @@ impl Store {
         Ok(uncles)
     }
 
-    /// Query confirmed shares from to_height down to from_height.
-    ///
-    /// Uses the confirmed chain range query to fetch all blockhashes in one call,
-    /// then resolves each share's header and uncle details.
-    /// Looks up full uncle details for a list of uncle blockhashes.
+    /// Batch fetches uncle headers and metadata using multi_get_cf.
     ///
     /// Silently skips any uncle whose header is not found in the store.
     pub fn get_uncle_infos(&self, uncle_hashes: &[BlockHash]) -> Vec<UncleInfo> {
-        uncle_hashes
-            .iter()
-            .filter_map(|uncle_hash| {
-                let uncle_header = self.get_share_header(uncle_hash).ok().flatten()?;
+        if uncle_hashes.is_empty() {
+            return Vec::new();
+        }
 
-                let uncle_height = self
-                    .get_block_metadata(uncle_hash)
-                    .ok()
-                    .and_then(|metadata| metadata.expected_height);
+        let headers = self.get_share_headers(uncle_hashes).unwrap_or_default();
+        let metadata_pairs = self.get_block_metadata_batch(uncle_hashes);
+        let metadata_map: HashMap<BlockHash, _> = metadata_pairs
+            .into_iter()
+            .filter_map(|(hash, metadata)| Some((hash, metadata.expected_height?)))
+            .collect();
 
-                Some(UncleInfo {
-                    blockhash: *uncle_hash,
-                    prev_blockhash: uncle_header.prev_share_blockhash,
-                    miner_address: uncle_header.miner_address.to_string(),
-                    timestamp: uncle_header.time,
-                    height: uncle_height,
-                })
+        headers
+            .into_iter()
+            .map(|(blockhash, header)| UncleInfo {
+                blockhash,
+                prev_blockhash: header.prev_share_blockhash,
+                miner_address: header.miner_address.to_string(),
+                timestamp: header.time,
+                height: metadata_map.get(&blockhash).copied(),
             })
             .collect()
     }
 
-    /// Returns shares ordered from highest height to lowest.
+    /// Batch fetches share headers for a chain, returning a map keyed by blockhash.
+    ///
+    /// Returns an error if any blockhash in the chain has no matching header.
+    fn fetch_header_map(
+        &self,
+        chain: &[(u32, BlockHash)],
+    ) -> Result<HashMap<BlockHash, ShareHeader>, StoreError> {
+        let blockhashes: Vec<BlockHash> = chain.iter().map(|(_, hash)| *hash).collect();
+        let found_headers = self.get_share_headers(&blockhashes)?;
+
+        if found_headers.len() != chain.len() {
+            return Err(StoreError::NotFound("Some share headers not found".into()));
+        }
+
+        Ok(HashMap::from_iter(found_headers))
+    }
+
+    /// Builds ShareInfo entries from a chain and its header map.
+    ///
+    /// Collects all uncle hashes across headers, batch resolves them,
+    /// and returns entries ordered from highest height to lowest.
+    fn assemble_share_infos(
+        &self,
+        chain: &[(u32, BlockHash)],
+        header_map: &HashMap<BlockHash, ShareHeader>,
+    ) -> Vec<ShareInfo> {
+        let all_uncle_hashes: Vec<BlockHash> = header_map
+            .values()
+            .flat_map(|header| header.uncles.iter())
+            .copied()
+            .collect();
+        let mut uncle_map: HashMap<BlockHash, UncleInfo> = self
+            .get_uncle_infos(&all_uncle_hashes)
+            .into_iter()
+            .map(|info| (info.blockhash, info))
+            .collect();
+
+        let mut shares = Vec::with_capacity(chain.len());
+        for (height, blockhash) in chain.iter().rev() {
+            let header = header_map.get(blockhash).unwrap();
+            let uncles: Vec<UncleInfo> = header
+                .uncles
+                .iter()
+                .filter_map(|uncle_hash| uncle_map.remove(uncle_hash))
+                .collect();
+
+            shares.push(ShareInfo {
+                blockhash: *blockhash,
+                prev_blockhash: header.prev_share_blockhash,
+                height: *height,
+                miner_address: header.miner_address.to_string(),
+                timestamp: header.time,
+                bits: header.bits,
+                uncles,
+            });
+        }
+
+        shares
+    }
+
+    /// Batch fetches confirmed share headers and returns ShareInfo entries
+    /// ordered from highest height to lowest.
     pub fn query_shares(
         &self,
         from_height: u32,
         to_height: u32,
     ) -> Result<Vec<ShareInfo>, StoreError> {
         let confirmed_chain = self.get_confirmed(from_height, to_height)?;
-
-        let mut shares = Vec::with_capacity(confirmed_chain.len());
-
-        for (height, blockhash) in confirmed_chain.iter().rev() {
-            let share_header = self.get_share_header(blockhash)?.ok_or_else(|| {
-                StoreError::NotFound(format!("Share header not found for {blockhash}"))
-            })?;
-
-            let uncle_infos = self.get_uncle_infos(&share_header.uncles);
-
-            shares.push(ShareInfo {
-                blockhash: *blockhash,
-                prev_blockhash: share_header.prev_share_blockhash,
-                height: *height,
-                miner_address: share_header.miner_address.to_string(),
-                timestamp: share_header.time,
-                bits: share_header.bits,
-                uncles: uncle_infos,
-            });
-        }
-
-        Ok(shares)
+        let header_map = self.fetch_header_map(&confirmed_chain)?;
+        Ok(self.assemble_share_infos(&confirmed_chain, &header_map))
     }
 
-    /// Returns raw share headers ordered from lowest height to highest.
+    /// Batch fetches confirmed share headers ordered from lowest height to highest.
     pub fn query_share_headers(
         &self,
         from_height: u32,
         to_height: u32,
     ) -> Result<Vec<ShareHeader>, StoreError> {
         let confirmed_chain = self.get_confirmed(from_height, to_height)?;
-        let mut headers = Vec::with_capacity(confirmed_chain.len());
+        let blockhashes: Vec<BlockHash> = confirmed_chain.iter().map(|(_, hash)| *hash).collect();
+        let found_headers = self.get_share_headers(&blockhashes)?;
 
-        for (_height, blockhash) in &confirmed_chain {
-            let share_header = self.get_share_header(blockhash)?.ok_or_else(|| {
-                StoreError::NotFound(format!("Share header not found for {blockhash}"))
-            })?;
-            headers.push(share_header);
+        if found_headers.len() != confirmed_chain.len() {
+            return Err(StoreError::NotFound("Some share headers not found".into()));
         }
 
-        Ok(headers)
+        Ok(found_headers
+            .into_iter()
+            .map(|(_, header)| header)
+            .collect())
     }
 
-    /// Query candidate shares from to_height down to from_height.
-    ///
-    /// Uses the candidate chain range query to fetch all blockhashes in one call,
-    /// then resolves each share's header and uncle details.
-    /// Returns shares ordered from highest height to lowest.
+    /// Batch fetches candidate share headers and returns ShareInfo entries
+    /// ordered from highest height to lowest.
     pub fn query_candidates(
         &self,
         from_height: u32,
         to_height: u32,
     ) -> Result<Vec<ShareInfo>, StoreError> {
         let candidate_chain = self.get_candidates(from_height, to_height)?;
-
-        let mut shares = Vec::with_capacity(candidate_chain.len());
-
-        for (height, blockhash) in candidate_chain.iter().rev() {
-            let share_header = self.get_share_header(blockhash)?.ok_or_else(|| {
-                StoreError::NotFound(format!("Share header not found for {blockhash}"))
-            })?;
-
-            let uncle_infos = self.get_uncle_infos(&share_header.uncles);
-
-            shares.push(ShareInfo {
-                blockhash: *blockhash,
-                prev_blockhash: share_header.prev_share_blockhash,
-                height: *height,
-                miner_address: share_header.miner_address.to_string(),
-                timestamp: share_header.time,
-                bits: share_header.bits,
-                uncles: uncle_infos,
-            });
-        }
-
-        Ok(shares)
+        let header_map = self.fetch_header_map(&candidate_chain)?;
+        Ok(self.assemble_share_infos(&candidate_chain, &header_map))
     }
 }
 

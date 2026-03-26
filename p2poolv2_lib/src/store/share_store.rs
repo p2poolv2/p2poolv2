@@ -295,6 +295,31 @@ impl Store {
         }
     }
 
+    /// Batch fetch block metadata for multiple blockhashes using multi_get_cf.
+    ///
+    /// Returns (BlockHash, BlockMetadata) pairs, silently skipping any
+    /// blockhashes whose metadata is not found or fails to deserialize.
+    pub(crate) fn get_block_metadata_batch(
+        &self,
+        blockhashes: &[BlockHash],
+    ) -> Vec<(BlockHash, BlockMetadata)> {
+        let block_metadata_cf = self.db.cf_handle(&ColumnFamily::BlockMetadata).unwrap();
+        let keys: Vec<_> = blockhashes
+            .iter()
+            .map(|hash| (&block_metadata_cf, consensus::serialize(hash)))
+            .collect();
+        let results = self.db.multi_get_cf(keys);
+        let mut metadata_results = Vec::with_capacity(blockhashes.len());
+        for (blockhash, result) in blockhashes.iter().zip(results.into_iter()) {
+            if let Ok(Some(data)) = result {
+                if let Ok(metadata) = encode::deserialize::<BlockMetadata>(&data) {
+                    metadata_results.push((*blockhash, metadata));
+                }
+            }
+        }
+        metadata_results
+    }
+
     /// Check which blockhashes from the provided list are missing from the store.
     ///
     /// Uses share_header_exists, so "missing" means we have never seen this header.
