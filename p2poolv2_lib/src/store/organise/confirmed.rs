@@ -97,7 +97,9 @@ impl Store {
         let fork_branch = self
             .get_branch_to_chain(tip_hash, |h| self.is_confirmed(h))?
             .ok_or_else(|| {
-                StoreError::NotFound("Fork point to reorg confirmed chain not found.".into())
+                StoreError::NotFound(
+                    format!("Fork point for {tip_hash} to reorg confirmed chain not found.").into(),
+                )
             })?;
         let fork_point = fork_branch.front().ok_or_else(|| {
             StoreError::NotFound("Empty branch returned from get_branch_to_chain.".into())

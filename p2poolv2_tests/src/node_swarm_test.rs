@@ -31,7 +31,7 @@ use tempfile::tempdir;
 
 use crate::common;
 
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn test_three_nodes_connectivity() {
     // Create three different configurations as strings
 
@@ -211,8 +211,7 @@ fn load_share_sync_headers() -> Vec<ShareHeader> {
 /// Node 1 is seeded with 5 real share headers (from store.db fixture) before
 /// nodes 2 and 3 start. Nodes 2 and 3 dial into node 1 and should sync all
 /// shares via the header-sync and block-fetch protocol.
-#[tokio::test]
-#[ignore] // Requires upgrading fixtures with new validation rules in place
+#[test_log::test(tokio::test)]
 async fn test_three_nodes_share_sync() {
     let fixture_headers = load_share_sync_headers();
     let share_count = (fixture_headers.len() - 1) as u32;
@@ -378,7 +377,7 @@ async fn test_three_nodes_share_sync() {
     .expect("Failed to create node 3");
 
     // Poll until both nodes reach the expected tip height
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let mut synced = false;
     while tokio::time::Instant::now() < deadline {
         let height2 = chain_store_handle2_poll.get_tip_height().unwrap();
