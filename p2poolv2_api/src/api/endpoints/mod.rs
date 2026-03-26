@@ -17,6 +17,7 @@
 pub mod candidates;
 pub mod chain_info;
 pub mod share;
+pub mod share_headers;
 pub mod shares;
 
 /// Maximum number of candidates and shares that can be requested in a single query.

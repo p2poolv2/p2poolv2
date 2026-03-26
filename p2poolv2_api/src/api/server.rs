@@ -84,6 +84,10 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
         .route("/shares", get(endpoints::shares::shares))
         .route("/candidates", get(endpoints::candidates::candidates))
         .route("/share", get(endpoints::share::share))
+        .route(
+            "/share_headers",
+            get(endpoints::share_headers::share_headers),
+        )
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth_middleware,

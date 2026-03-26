@@ -490,6 +490,25 @@ impl Store {
         Ok(shares)
     }
 
+    /// Returns raw share headers ordered from lowest height to highest.
+    pub fn query_share_headers(
+        &self,
+        from_height: u32,
+        to_height: u32,
+    ) -> Result<Vec<ShareHeader>, StoreError> {
+        let confirmed_chain = self.get_confirmed(from_height, to_height)?;
+        let mut headers = Vec::with_capacity(confirmed_chain.len());
+
+        for (_height, blockhash) in &confirmed_chain {
+            let share_header = self.get_share_header(blockhash)?.ok_or_else(|| {
+                StoreError::NotFound(format!("Share header not found for {blockhash}"))
+            })?;
+            headers.push(share_header);
+        }
+
+        Ok(headers)
+    }
+
     /// Query candidate shares from to_height down to from_height.
     ///
     /// Uses the candidate chain range query to fetch all blockhashes in one call,
