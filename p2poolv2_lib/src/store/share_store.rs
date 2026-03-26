@@ -650,6 +650,83 @@ mod tests {
     }
 
     #[test]
+    fn test_get_block_metadata_batch_returns_stored_metadata() {
+        use crate::store::block_tx_metadata::{BlockMetadata, Status};
+        use bitcoin::Work;
+
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block_a = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let block_b = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+        let hash_a = block_a.block_hash();
+        let hash_b = block_b.block_hash();
+
+        let metadata_a = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: Work::from_le_bytes([1u8; 32]),
+            status: Status::Candidate,
+        };
+        let metadata_b = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: Work::from_le_bytes([2u8; 32]),
+            status: Status::Confirmed,
+        };
+
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(&hash_a, &metadata_a, &mut batch)
+            .unwrap();
+        store
+            .update_block_metadata(&hash_b, &metadata_b, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let results = store.get_block_metadata_batch(&[hash_a, hash_b]);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0], (hash_a, metadata_a));
+        assert_eq!(results[1], (hash_b, metadata_b));
+    }
+
+    #[test]
+    fn test_get_block_metadata_batch_skips_missing_blockhashes() {
+        use crate::store::block_tx_metadata::{BlockMetadata, Status};
+        use bitcoin::Work;
+
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let stored_hash = block.block_hash();
+        let missing_hash = BlockHash::all_zeros();
+
+        let metadata = BlockMetadata {
+            expected_height: Some(5),
+            chain_work: Work::from_le_bytes([3u8; 32]),
+            status: Status::HeaderValid,
+        };
+
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(&stored_hash, &metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let results = store.get_block_metadata_batch(&[missing_hash, stored_hash]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], (stored_hash, metadata));
+    }
+
+    #[test]
+    fn test_get_block_metadata_batch_returns_empty_for_empty_input() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let results = store.get_block_metadata_batch(&[]);
+        assert!(results.is_empty());
+    }
+
+    #[test]
     fn test_add_share_block_skips_duplicate() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
