@@ -255,9 +255,10 @@ impl Decodable for ShareHeader {
 ///
 /// This captures the share chain header and the list of transactions
 /// for the share chain, as well as bitcoin compact block.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct ShareBlock {
     /// Header for the block
+    #[serde(flatten)]
     pub header: ShareHeader,
     /// Share chain transactions - including the coinbase for the share.
     pub transactions: Vec<ShareTransaction>,
