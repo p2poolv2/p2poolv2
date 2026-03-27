@@ -16,7 +16,7 @@
 
 use bitcoin::Transaction;
 use bitcoin::consensus::{Decodable, Encodable};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 
 /// A transaction on the share chain.
@@ -26,7 +26,7 @@ use std::ops::{Deref, DerefMut};
 ///
 /// Deref and encoding traits are implemented to support easier access
 /// to Transaction methods and serde
-#[derive(Clone, PartialEq, Eq, Debug, Serialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ShareTransaction(pub Transaction);
 
