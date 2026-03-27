@@ -19,9 +19,11 @@ use crate::api::error::ApiError;
 use crate::api::{auth::auth_middleware, websocket::websocket_handler};
 use axum::{
     Extension, Json, Router,
-    extract::{FromRef, Query, State},
-    middleware::{self},
+    extract::{FromRef, Query, Request, State},
+    http::StatusCode,
+    middleware::{self, Next},
     response::Html,
+    response::Response,
     routing::get,
 };
 use chrono::DateTime;
@@ -36,7 +38,7 @@ use p2poolv2_lib::{
 use serde::Deserialize;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
-use tracing::info;
+use tracing::{info, trace};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -75,6 +77,28 @@ pub struct PplnsQuery {
 /// Build the axum router with REST routes (protected by auth middleware)
 /// and the WebSocket route (which handles its own auth via query param).
 fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
+    async fn log_req(req: Request, next: Next) -> Result<Response, StatusCode> {
+        let method = req.method().clone();
+        let uri = req.uri().clone();
+
+        // GET: /test
+        trace!("{}: {}", method, uri);
+        let dur = std::time::Instant::now();
+
+        let res = next.run(req).await;
+
+        // GET: /test 200 1ms
+        trace!(
+            "{}: {} {} {}ms",
+            method,
+            uri,
+            res.status(),
+            dur.elapsed().as_millis()
+        );
+
+        Ok(res)
+    }
+
     let authenticated_routes = Router::new()
         .route("/health", get(health_check))
         .route("/metrics", get(metrics))
@@ -105,6 +129,7 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
 
     authenticated_routes
         .merge(unauthenticated_routes)
+        .layer(middleware::from_fn(log_req))
         .layer(Extension(app_config))
         .with_state(app_state)
 }
