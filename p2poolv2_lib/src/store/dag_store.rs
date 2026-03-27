@@ -549,6 +549,28 @@ impl Store {
             .collect())
     }
 
+    /// Batch fetches confirmed share blocks ordered from lowest height to highest.
+    pub fn query_share_blocks(
+        &self,
+        from_height: u32,
+        to_height: u32,
+    ) -> Result<Vec<ShareBlock>, StoreError> {
+        let confirmed_chain = self.get_confirmed(from_height, to_height)?;
+        let blockhashes: Vec<BlockHash> = confirmed_chain.iter().map(|(_, hash)| *hash).collect();
+        let found_shares = self.get_shares(&blockhashes)?;
+
+        let share_blocks: Vec<ShareBlock> = confirmed_chain
+            .iter()
+            .filter_map(|(_, hash)| found_shares.get(hash).cloned())
+            .collect();
+
+        if share_blocks.len() != confirmed_chain.len() {
+            return Err(StoreError::NotFound("Some share blocks not found".into()));
+        }
+
+        Ok(share_blocks)
+    }
+
     /// Batch fetches candidate share headers and returns ShareInfo entries
     /// ordered from highest height to lowest.
     pub fn query_candidates(
@@ -2500,5 +2522,95 @@ mod tests {
 
         let json = serde_json::to_string(&uncle).unwrap();
         assert!(json.contains("\"height\":null"));
+    }
+
+    #[test]
+    fn test_query_share_blocks_returns_blocks_in_order() {
+        use crate::store::block_tx_metadata::{BlockMetadata, Status};
+
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share0 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let share1 = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+        let share2 = TestShareBlockBuilder::new().nonce(0xe9695793).build();
+
+        let shares = [&share0, &share1, &share2];
+        for (height, share) in shares.iter().enumerate() {
+            let mut batch = Store::get_write_batch();
+            store.add_share_block(share, true, &mut batch).unwrap();
+            let mut metadata = BlockMetadata {
+                expected_height: Some(height as u32),
+                chain_work: share.header.get_work(),
+                status: Status::HeaderValid,
+            };
+            store
+                .update_block_metadata(&share.block_hash(), &metadata, &mut batch)
+                .unwrap();
+            store
+                .append_to_confirmed(
+                    &share.block_hash(),
+                    height as u32,
+                    &mut metadata,
+                    &mut batch,
+                )
+                .unwrap();
+            store.commit_batch(batch).unwrap();
+        }
+
+        let result = store.query_share_blocks(0, 2).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].block_hash(), share0.block_hash());
+        assert_eq!(result[1].block_hash(), share1.block_hash());
+        assert_eq!(result[2].block_hash(), share2.block_hash());
+    }
+
+    #[test]
+    fn test_query_share_blocks_returns_subset() {
+        use crate::store::block_tx_metadata::{BlockMetadata, Status};
+
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let share0 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let share1 = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+        let share2 = TestShareBlockBuilder::new().nonce(0xe9695793).build();
+
+        let shares = [&share0, &share1, &share2];
+        for (height, share) in shares.iter().enumerate() {
+            let mut batch = Store::get_write_batch();
+            store.add_share_block(share, true, &mut batch).unwrap();
+            let mut metadata = BlockMetadata {
+                expected_height: Some(height as u32),
+                chain_work: share.header.get_work(),
+                status: Status::HeaderValid,
+            };
+            store
+                .update_block_metadata(&share.block_hash(), &metadata, &mut batch)
+                .unwrap();
+            store
+                .append_to_confirmed(
+                    &share.block_hash(),
+                    height as u32,
+                    &mut metadata,
+                    &mut batch,
+                )
+                .unwrap();
+            store.commit_batch(batch).unwrap();
+        }
+
+        let result = store.query_share_blocks(1, 2).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].block_hash(), share1.block_hash());
+        assert_eq!(result[1].block_hash(), share2.block_hash());
+    }
+
+    #[test]
+    fn test_query_share_blocks_no_confirmed_shares() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let result = store.query_share_blocks(0, 0).unwrap();
+        assert!(result.is_empty());
     }
 }

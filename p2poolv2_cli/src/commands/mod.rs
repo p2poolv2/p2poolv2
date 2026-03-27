@@ -58,7 +58,7 @@ pub enum Commands {
         #[arg(short, long)]
         end_time: Option<u64>,
     },
-    /// Display confirmed shares and their uncles for a height range
+    /// Display confirmed share headers for a height range
     Shares {
         /// Height to get shares up to, inclusive. Default is chain tip.
         #[arg(short, long)]
@@ -66,6 +66,12 @@ pub enum Commands {
         /// Number of shares to display going back from --to. Default 10.
         #[arg(short, long, default_value = "10")]
         num: u32,
+        /// Include share block transactions in the output
+        #[arg(short, long, default_value = "false")]
+        share_block_transactions: bool,
+        /// Include bitcoin transactions in the output
+        #[arg(short, long, default_value = "false")]
+        bitcoin_transactions: bool,
     },
     /// Display candidate shares and their uncles for a height range
     Candidates {
@@ -148,8 +154,20 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                     commands::pplns_shares::execute(&config.api, *limit, *start_time, *end_time)
                         .await?;
                 }
-                Some(Commands::Shares { to, num }) => {
-                    commands::shares::execute(&config.api, *to, *num).await?;
+                Some(Commands::Shares {
+                    to,
+                    num,
+                    share_block_transactions,
+                    bitcoin_transactions,
+                }) => {
+                    commands::shares::execute(
+                        &config.api,
+                        *to,
+                        *num,
+                        *share_block_transactions,
+                        *bitcoin_transactions,
+                    )
+                    .await?;
                 }
                 Some(Commands::Candidates { to, num }) => {
                     commands::candidates::execute(&config.api, *to, *num).await?;
