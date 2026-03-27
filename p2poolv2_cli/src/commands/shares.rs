@@ -18,17 +18,25 @@ use crate::commands::api_client::ApiClient;
 use p2poolv2_lib::config::ApiConfig;
 use std::error::Error;
 
-/// Execute the shares command by querying the running node's API.
+/// Execute the shares command by querying the running node's share_headers API.
 pub async fn execute(
     api_config: &ApiConfig,
     to: Option<u32>,
     num: u32,
+    share_block_transactions: bool,
+    bitcoin_transactions: bool,
 ) -> Result<(), Box<dyn Error>> {
     let api_client = ApiClient::new(api_config);
 
-    let mut path = format!("/shares?num={num}");
+    let mut path = format!("/share_headers?num={num}");
     if let Some(to_height) = to {
         path.push_str(&format!("&to={to_height}"));
+    }
+    if share_block_transactions {
+        path.push_str("&share_block_transactions=true");
+    }
+    if bitcoin_transactions {
+        path.push_str("&bitcoin_transactions=true");
     }
 
     let response: serde_json::Value = api_client.get_json(&path).await?;
@@ -55,10 +63,10 @@ mod tests {
     #[tokio::test]
     async fn test_execute_with_default_params() {
         let mock_server = MockServer::start().await;
-        let body = r#"{"from_height":0,"to_height":10,"shares":[]}"#;
+        let body = r#"{"from_height":0,"to_height":10,"headers":[]}"#;
 
         Mock::given(method("GET"))
-            .and(path("/shares"))
+            .and(path("/share_headers"))
             .and(query_param("num", "10"))
             .respond_with(ResponseTemplate::new(200).set_body_raw(body, "application/json"))
             .expect(1)
@@ -66,17 +74,17 @@ mod tests {
             .await;
 
         let api_config = make_api_config(mock_server.address().port());
-        let result = execute(&api_config, None, 10).await;
+        let result = execute(&api_config, None, 10, false, false).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_execute_with_to_param() {
         let mock_server = MockServer::start().await;
-        let body = r#"{"from_height":0,"to_height":5,"shares":[]}"#;
+        let body = r#"{"from_height":0,"to_height":5,"headers":[]}"#;
 
         Mock::given(method("GET"))
-            .and(path("/shares"))
+            .and(path("/share_headers"))
             .and(query_param("num", "5"))
             .and(query_param("to", "100"))
             .respond_with(ResponseTemplate::new(200).set_body_raw(body, "application/json"))
@@ -85,14 +93,52 @@ mod tests {
             .await;
 
         let api_config = make_api_config(mock_server.address().port());
-        let result = execute(&api_config, Some(100), 5).await;
+        let result = execute(&api_config, Some(100), 5, false, false).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_share_block_transactions() {
+        let mock_server = MockServer::start().await;
+        let body = r#"{"from_height":0,"to_height":10,"headers":[]}"#;
+
+        Mock::given(method("GET"))
+            .and(path("/share_headers"))
+            .and(query_param("num", "10"))
+            .and(query_param("share_block_transactions", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(body, "application/json"))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let api_config = make_api_config(mock_server.address().port());
+        let result = execute(&api_config, None, 10, true, false).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_execute_with_bitcoin_transactions() {
+        let mock_server = MockServer::start().await;
+        let body = r#"{"from_height":0,"to_height":10,"headers":[]}"#;
+
+        Mock::given(method("GET"))
+            .and(path("/share_headers"))
+            .and(query_param("num", "10"))
+            .and(query_param("bitcoin_transactions", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(body, "application/json"))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let api_config = make_api_config(mock_server.address().port());
+        let result = execute(&api_config, None, 10, false, true).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_execute_returns_error_when_server_unreachable() {
         let api_config = make_api_config(19995);
-        let result = execute(&api_config, None, 10).await;
+        let result = execute(&api_config, None, 10, false, false).await;
         assert!(result.is_err());
     }
 }

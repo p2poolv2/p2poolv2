@@ -21,7 +21,9 @@ use axum::{
     Json,
     extract::{Query, State},
 };
+use bitcoin::Transaction;
 use p2poolv2_lib::shares::share_block::ShareHeader;
+use p2poolv2_lib::shares::share_block::share_transaction::ShareTransaction;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -32,6 +34,21 @@ pub struct ShareHeadersQuery {
     pub to: Option<u32>,
     /// Number of headers going back from `to`. Defaults to 10.
     pub num: Option<u32>,
+    /// Include share block transactions in the response.
+    pub share_block_transactions: Option<bool>,
+    /// Include bitcoin transactions in the response.
+    pub bitcoin_transactions: Option<bool>,
+}
+
+/// A share header entry with optional transaction data.
+#[derive(Serialize)]
+pub struct ShareHeaderEntry {
+    #[serde(flatten)]
+    pub header: ShareHeader,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transactions: Option<Vec<ShareTransaction>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bitcoin_transactions: Option<Vec<Transaction>>,
 }
 
 /// JSON response for the /share_headers endpoint.
@@ -39,7 +56,7 @@ pub struct ShareHeadersQuery {
 pub struct ShareHeadersResponse {
     pub from_height: u32,
     pub to_height: u32,
-    pub headers: Vec<ShareHeader>,
+    pub headers: Vec<ShareHeaderEntry>,
 }
 
 /// Returns raw share headers for a confirmed height range, ordered ascending.
@@ -74,12 +91,50 @@ pub(crate) async fn share_headers(
 
     let from_height = to_height.saturating_sub(num.saturating_sub(1));
 
+    let include_share_txs = query.share_block_transactions.unwrap_or(false);
+    let include_bitcoin_txs = query.bitcoin_transactions.unwrap_or(false);
+
     let store = chain_store_handle.store_handle().store();
-    let headers = store
-        .query_share_headers(from_height, to_height)
-        .map_err(|error| {
-            ApiError::ServerError(format!("Failed to query share headers: {error}"))
-        })?;
+
+    let headers = if include_share_txs || include_bitcoin_txs {
+        let share_blocks = store
+            .query_share_blocks(from_height, to_height)
+            .map_err(|error| {
+                ApiError::ServerError(format!("Failed to query share blocks: {error}"))
+            })?;
+
+        share_blocks
+            .into_iter()
+            .map(|share_block| ShareHeaderEntry {
+                header: share_block.header,
+                transactions: if include_share_txs {
+                    Some(share_block.transactions)
+                } else {
+                    None
+                },
+                bitcoin_transactions: if include_bitcoin_txs {
+                    Some(share_block.bitcoin_transactions)
+                } else {
+                    None
+                },
+            })
+            .collect()
+    } else {
+        let raw_headers = store
+            .query_share_headers(from_height, to_height)
+            .map_err(|error| {
+                ApiError::ServerError(format!("Failed to query share headers: {error}"))
+            })?;
+
+        raw_headers
+            .into_iter()
+            .map(|header| ShareHeaderEntry {
+                header,
+                transactions: None,
+                bitcoin_transactions: None,
+            })
+            .collect()
+    };
 
     Ok(Json(ShareHeadersResponse {
         from_height,
@@ -131,6 +186,8 @@ mod tests {
         let query = Query(ShareHeadersQuery {
             to: None,
             num: Some(0),
+            share_block_transactions: None,
+            bitcoin_transactions: None,
         });
 
         let result = share_headers(State(state), query).await;
@@ -145,6 +202,8 @@ mod tests {
         let query = Query(ShareHeadersQuery {
             to: None,
             num: Some(1001),
+            share_block_transactions: None,
+            bitcoin_transactions: None,
         });
 
         let result = share_headers(State(state), query).await;
@@ -166,6 +225,8 @@ mod tests {
         let query = Query(ShareHeadersQuery {
             to: Some(0),
             num: Some(1),
+            share_block_transactions: None,
+            bitcoin_transactions: None,
         });
 
         let result = share_headers(State(state), query).await;
@@ -175,6 +236,8 @@ mod tests {
         assert_eq!(response.from_height, 0);
         assert_eq!(response.to_height, 0);
         assert_eq!(response.headers.len(), 1);
-        assert_eq!(response.headers[0], genesis.header);
+        assert_eq!(response.headers[0].header, genesis.header);
+        assert!(response.headers[0].transactions.is_none());
+        assert!(response.headers[0].bitcoin_transactions.is_none());
     }
 }
