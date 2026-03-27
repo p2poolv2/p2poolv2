@@ -15,25 +15,29 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod p2p_service;
+pub mod peer_state;
 
 use crate::config::NetworkConfig;
 use crate::middleware::inactivity::InactivityLayer;
 use crate::node::SwarmSend;
 use crate::service::p2p_service::{P2PService, RequestContext};
+use crate::shares::validation::ShareValidator;
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
+use std::fmt::Debug;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tower::{ServiceBuilder, limit::RateLimitLayer, util::BoxService};
 
 // Build the full service stack
-pub fn build_service<C, T>(
+pub fn build_service<C, T, SV>(
     config: NetworkConfig,
     swarm_tx: Sender<SwarmSend<C>>,
-) -> BoxService<RequestContext<C, T>, (), Box<dyn Error + Send + Sync>>
+) -> BoxService<RequestContext<C, T, SV>, (), Box<dyn Error + Send + Sync>>
 where
-    C: Send + Sync + 'static,
-    T: TimeProvider + Send + Sync + 'static,
+    C: Send + Sync + Debug + 'static,
+    T: TimeProvider + Send + Sync + Debug + 'static,
+    SV: ShareValidator + Send + Sync + Debug + 'static,
 {
     let base_service = P2PService::new(swarm_tx.clone());
 
@@ -58,15 +62,16 @@ mod tests {
     use super::*;
     use crate::config::NetworkConfig;
     use crate::node::SwarmSend;
+    use crate::node::actor::NodeHandle;
     use crate::node::messages::Message;
     use crate::node::request_response_handler::block_fetcher;
     use crate::node::validation_worker;
     use crate::service::p2p_service::{P2PService, RequestContext};
+    use crate::service::peer_state::PeerState;
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::validation::MockDefaultShareValidator;
     use crate::utils::time_provider::TestTimeProvider;
-    use libp2p::PeerId;
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::Arc;
@@ -92,7 +97,7 @@ mod tests {
     // This struct simulates a service that always fails on poll_ready()
     struct AlwaysFailReadyService;
 
-    impl<C, T> tower::Service<RequestContext<C, T>> for AlwaysFailReadyService {
+    impl<C, T, SV: Debug> tower::Service<RequestContext<C, T, SV>> for AlwaysFailReadyService {
         type Response = ();
         type Error = Box<dyn std::error::Error + Send + Sync>;
         type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
@@ -101,7 +106,7 @@ mod tests {
             Poll::Ready(Err("simulated readiness failure".into()))
         }
 
-        fn call(&mut self, _req: RequestContext<C, T>) -> Self::Future {
+        fn call(&mut self, _req: RequestContext<C, T, SV>) -> Self::Future {
             Box::pin(async { Ok(()) }) // Won't be called in this test
         }
     }
@@ -175,7 +180,7 @@ mod tests {
         // Inline RequestContext construction
         let (block_fetcher_handle, validation_tx) = fetcher_validation_handles_for_tests();
         let ctx1 = RequestContext {
-            peer: PeerId::random(),
+            peer: PeerState::random().into(),
             request: Message::NotFound(()),
             chain_store_handle: chain_store_handle.clone(),
             response_channel: response_channel_tx,
@@ -184,10 +189,11 @@ mod tests {
             block_fetcher_handle: block_fetcher_handle.clone(),
             validation_tx: validation_tx.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let ctx2 = RequestContext {
-            peer: PeerId::random(),
+            peer: PeerState::random().into(),
             request: Message::NotFound(()),
             chain_store_handle: chain_store_handle.clone(),
             response_channel: response_channel_tx1,
@@ -196,10 +202,11 @@ mod tests {
             block_fetcher_handle: block_fetcher_handle.clone(),
             validation_tx: validation_tx.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let ctx3 = RequestContext {
-            peer: PeerId::random(),
+            peer: PeerState::random().into(),
             request: Message::NotFound(()),
             chain_store_handle: chain_store_handle.clone(),
             response_channel: response_channel_tx2,
@@ -208,6 +215,7 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         // First request should succeed
@@ -216,6 +224,7 @@ mod tests {
                 p2p_service::RequestContext<
                     tokio::sync::oneshot::Sender<Message>,
                     TestTimeProvider,
+                    MockDefaultShareValidator,
                 >,
             >>::ready(&mut service)
             .await
@@ -230,6 +239,7 @@ mod tests {
                 p2p_service::RequestContext<
                     tokio::sync::oneshot::Sender<Message>,
                     TestTimeProvider,
+                    MockDefaultShareValidator,
                 >,
             >>::ready(&mut service)
             .await
@@ -244,6 +254,7 @@ mod tests {
                 p2p_service::RequestContext<
                     tokio::sync::oneshot::Sender<Message>,
                     TestTimeProvider,
+                    MockDefaultShareValidator,
                 >,
             >>::ready(&mut service)
             .await
@@ -259,6 +270,7 @@ mod tests {
                 p2p_service::RequestContext<
                     tokio::sync::oneshot::Sender<Message>,
                     TestTimeProvider,
+                    MockDefaultShareValidator,
                 >,
             >>::ready(&mut service)
             .await
@@ -287,10 +299,10 @@ mod tests {
             .service(AlwaysFailReadyService);
 
         // Build a request context
-        let peer_id = PeerId::random();
+        let peer_state = PeerState::random();
         let (block_fetcher_handle, validation_tx) = fetcher_validation_handles_for_tests();
         let ctx = RequestContext {
-            peer: peer_id,
+            peer: Arc::new(peer_state),
             request: Message::NotFound(()),
             chain_store_handle: chain_store_handle.clone(),
             response_channel: response_channel_tx,
@@ -299,24 +311,29 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         // Try service.ready(), and on failure, trigger disconnect manually
 
         if <RateLimit<AlwaysFailReadyService> as ServiceExt<
-            RequestContext<tokio::sync::oneshot::Sender<Message>, TestTimeProvider>,
+            RequestContext<
+                tokio::sync::oneshot::Sender<Message>,
+                TestTimeProvider,
+                MockDefaultShareValidator,
+            >,
         >>::ready(&mut service)
         .await
         .is_err()
         {
-            let _ = swarm_tx.send(SwarmSend::Disconnect(ctx.peer)).await;
+            let _ = swarm_tx.send(SwarmSend::Disconnect(ctx.peer.id)).await;
         }
 
         // Verify that a Disconnect command was sent
         let received = swarm_rx.try_recv().expect("Expected a SwarmSend message");
         if let SwarmSend::Disconnect(received_peer) = received {
             assert_eq!(
-                received_peer, peer_id,
+                received_peer, ctx.peer.id,
                 "Expected Disconnect for the correct peer"
             );
         } else {
@@ -364,10 +381,10 @@ mod tests {
             dial_timeout_secs: 30,
         };
 
-        let peer_id = PeerId::random();
+        let peer = Arc::new(PeerState::random());
         let (block_fetcher_handle, validation_tx) = fetcher_validation_handles_for_tests();
         let ctx = RequestContext {
-            peer: peer_id,
+            peer: peer.clone(),
             request: Message::NotFound(()),
             chain_store_handle: chain_store_handle.clone(),
             response_channel: response_channel_tx.clone(),
@@ -376,10 +393,11 @@ mod tests {
             block_fetcher_handle: block_fetcher_handle.clone(),
             validation_tx: validation_tx.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let ctx1 = RequestContext {
-            peer: peer_id,
+            peer,
             request: Message::NotFound(()),
             chain_store_handle: chain_store_handle.clone(),
             response_channel: response_channel_tx.clone(),
@@ -388,10 +406,11 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let mut service =
-            build_service::<Sender<Message>, _>(network_config.clone(), swarm_tx.clone());
+            build_service::<Sender<Message>, _, _>(network_config.clone(), swarm_tx.clone());
 
         // First request should succeed immediately
         assert!(
@@ -458,10 +477,10 @@ mod tests {
             dial_timeout_secs: 30,
         };
 
-        let peer_id = PeerId::random();
+        let peer = Arc::new(PeerState::random());
         let (block_fetcher_handle, validation_tx) = fetcher_validation_handles_for_tests();
         let ctx = RequestContext {
-            peer: peer_id,
+            peer: peer.clone(),
             request: Message::NotFound(()),
             chain_store_handle: chain_store_handle.clone(),
             response_channel: response_channel_tx,
@@ -470,10 +489,11 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            node_handle: NodeHandle::default(),
         };
 
         let mut service =
-            build_service::<Sender<Message>, _>(network_config.clone(), swarm_tx.clone());
+            build_service::<Sender<Message>, _, _>(network_config.clone(), swarm_tx.clone());
 
         // First request succeeds
         assert!(
@@ -491,14 +511,14 @@ mod tests {
 
         if result.is_err() {
             // Simulate a disconnect due to timeout
-            let _ = swarm_tx.send(SwarmSend::Disconnect(peer_id)).await;
+            let _ = swarm_tx.send(SwarmSend::Disconnect(peer.id)).await;
         }
 
         // Check that a disconnect was sent
         let received = swarm_rx.try_recv().expect("Expected a SwarmSend message");
         if let SwarmSend::Disconnect(received_peer) = received {
             assert_eq!(
-                received_peer, peer_id,
+                received_peer, peer.id,
                 "Expected Disconnect for the correct peer"
             );
         } else {

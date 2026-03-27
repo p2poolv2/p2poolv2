@@ -49,6 +49,7 @@ p2poolv2_config = { path = "../p2poolv2_config" }
 chrono = { workspace = true }
 dashmap = { workspace = true }
 uint = { workspace = true }
+parking_lot = "0.12.5"
 
 [dev-dependencies]
 bitcoindrpc = { path = "../bitcoindrpc", features = ["test-utils"] }

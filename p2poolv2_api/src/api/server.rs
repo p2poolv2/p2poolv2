@@ -227,16 +227,16 @@ use p2poolv2_lib::monitoring_events::{PeerResponse, PeerStatus};
 
 /// Returns the list of currently connected peers.
 async fn peers(State(state): State<Arc<AppState>>) -> Result<Json<Vec<PeerResponse>>, ApiError> {
-    let peer_ids = state
+    let peer_states = state
         .node_handle
         .get_peers()
         .await
         .map_err(|error| ApiError::ServerError(format!("Failed to get peers: {error}")))?;
 
-    let peers: Vec<PeerResponse> = peer_ids
+    let peers: Vec<PeerResponse> = peer_states
         .into_iter()
-        .map(|peer_id| PeerResponse {
-            peer_id: peer_id.to_string(),
+        .map(|peer_state| PeerResponse {
+            peer_id: peer_state.id.to_string(),
             status: PeerStatus::Connected,
         })
         .collect();
