@@ -18,7 +18,6 @@ use p2poolv2_lib::accounting::payout::sharechain_pplns::PplnsWindow;
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
-use p2poolv2_lib::shares::share_block::ShareHeader;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::writer::{StoreHandle, StoreWriter, write_channel};
 use p2poolv2_lib::stratum::emission::Emission;
@@ -194,16 +193,16 @@ async fn test_three_nodes_connectivity() {
         .expect("Failed to shutdown node 3");
 }
 
-/// Load share headers from the share_sync fixture file.
+/// Load share blocks from the share_sync fixture file.
 ///
-/// Returns a vector of ShareHeader ordered by chain height (genesis first).
-fn load_share_sync_headers() -> Vec<ShareHeader> {
+/// Returns a vector of ShareBlock ordered by chain height (genesis first).
+fn load_share_sync_blocks() -> Vec<ShareBlock> {
     let json_string = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("test_data/share_sync/share_headers.json"),
+            .join("test_data/share_sync/share_blocks.json"),
     )
-    .expect("Failed to read share_sync fixture");
-    serde_json::from_str(&json_string).expect("Failed to parse share_sync fixture")
+    .expect("Failed to read share_blocks fixture");
+    serde_json::from_str(&json_string).expect("Failed to parse share_blocks fixture")
 }
 
 /// Test that shares seeded on one node sync to two other nodes via p2p.
@@ -214,8 +213,8 @@ fn load_share_sync_headers() -> Vec<ShareHeader> {
 #[test_log::test(tokio::test)]
 #[ignore = "Ignored while fixing fixtures and validation"]
 async fn test_three_nodes_share_sync() {
-    let fixture_headers = load_share_sync_headers();
-    let share_count = (fixture_headers.len() - 1) as u32;
+    let fixture_blocks = load_share_sync_blocks();
+    let share_count = (fixture_blocks.len() - 1) as u32;
     // Configure three nodes on unique ports with higher rate limit for fast sync
     let config1 = common::default_test_config()
         .with_listen_address("/ip4/127.0.0.1/tcp/6894".to_string())
@@ -249,30 +248,20 @@ async fn test_three_nodes_share_sync() {
     let chain_store_handle1 = ChainStoreHandle::new(store_handle1, config1.stratum.network);
 
     // Load genesis from fixture and seed into store 1
-    let genesis_header = fixture_headers[0].clone();
-    let genesis = ShareBlock {
-        header: genesis_header,
-        transactions: Vec::new(),
-        bitcoin_transactions: Vec::new(),
-    };
+    let genesis = fixture_blocks[0].clone();
     chain_store_handle1
         .init_or_setup_genesis(genesis.clone())
         .await
         .unwrap();
 
     // Seed non-genesis shares from fixture into store 1
-    for header in &fixture_headers[1..] {
-        let share = ShareBlock {
-            header: header.clone(),
-            transactions: Vec::new(),
-            bitcoin_transactions: Vec::new(),
-        };
+    for share_block in &fixture_blocks[1..] {
         chain_store_handle1
-            .add_share_block(share.clone(), true)
+            .add_share_block(share_block.clone(), true)
             .await
             .unwrap();
         chain_store_handle1
-            .organise_header(share.header.clone())
+            .organise_header(share_block.header.clone())
             .await
             .unwrap();
         chain_store_handle1.organise_block().await.unwrap();
