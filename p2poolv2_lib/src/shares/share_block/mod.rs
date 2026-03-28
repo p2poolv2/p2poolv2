@@ -262,8 +262,9 @@ pub struct ShareBlock {
     pub header: ShareHeader,
     /// Share chain transactions - including the coinbase for the share.
     pub transactions: Vec<ShareTransaction>,
-    /// Bitcoin transactions, making for a full share block.
-    /// Optimisations for storage and communication are left elsewhere as they are two different optimisations.
+    /// Bitcoin transactions, making for a full share block. These are
+    /// only useful when building a block to submitting to
+    /// bitcoin. These are not stored, or used in share validation.
     pub bitcoin_transactions: Vec<Transaction>,
 }
 

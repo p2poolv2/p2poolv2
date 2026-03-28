@@ -21,7 +21,6 @@ use axum::{
     Json,
     extract::{Query, State},
 };
-use bitcoin::Transaction;
 use p2poolv2_lib::shares::share_block::ShareHeader;
 use p2poolv2_lib::shares::share_block::share_transaction::ShareTransaction;
 use serde::{Deserialize, Serialize};
@@ -36,8 +35,6 @@ pub struct ShareHeadersQuery {
     pub num: Option<u32>,
     /// Include share block transactions in the response.
     pub share_block_transactions: Option<bool>,
-    /// Include bitcoin transactions in the response.
-    pub bitcoin_transactions: Option<bool>,
 }
 
 /// A share header entry with optional transaction data.
@@ -47,8 +44,6 @@ pub struct ShareHeaderEntry {
     pub header: ShareHeader,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transactions: Option<Vec<ShareTransaction>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bitcoin_transactions: Option<Vec<Transaction>>,
 }
 
 /// JSON response for the /share_headers endpoint.
@@ -92,11 +87,10 @@ pub(crate) async fn share_headers(
     let from_height = to_height.saturating_sub(num.saturating_sub(1));
 
     let include_share_txs = query.share_block_transactions.unwrap_or(false);
-    let include_bitcoin_txs = query.bitcoin_transactions.unwrap_or(false);
 
     let store = chain_store_handle.store_handle().store();
 
-    let headers = if include_share_txs || include_bitcoin_txs {
+    let headers = if include_share_txs {
         let share_blocks = store
             .query_share_blocks(from_height, to_height)
             .map_err(|error| {
@@ -107,16 +101,7 @@ pub(crate) async fn share_headers(
             .into_iter()
             .map(|share_block| ShareHeaderEntry {
                 header: share_block.header,
-                transactions: if include_share_txs {
-                    Some(share_block.transactions)
-                } else {
-                    None
-                },
-                bitcoin_transactions: if include_bitcoin_txs {
-                    Some(share_block.bitcoin_transactions)
-                } else {
-                    None
-                },
+                transactions: Some(share_block.transactions),
             })
             .collect()
     } else {
@@ -131,7 +116,6 @@ pub(crate) async fn share_headers(
             .map(|header| ShareHeaderEntry {
                 header,
                 transactions: None,
-                bitcoin_transactions: None,
             })
             .collect()
     };
@@ -187,7 +171,6 @@ mod tests {
             to: None,
             num: Some(0),
             share_block_transactions: None,
-            bitcoin_transactions: None,
         });
 
         let result = share_headers(State(state), query).await;
@@ -203,7 +186,6 @@ mod tests {
             to: None,
             num: Some(1001),
             share_block_transactions: None,
-            bitcoin_transactions: None,
         });
 
         let result = share_headers(State(state), query).await;
@@ -226,7 +208,6 @@ mod tests {
             to: Some(0),
             num: Some(1),
             share_block_transactions: None,
-            bitcoin_transactions: None,
         });
 
         let result = share_headers(State(state), query).await;
@@ -238,6 +219,5 @@ mod tests {
         assert_eq!(response.headers.len(), 1);
         assert_eq!(response.headers[0].header, genesis.header);
         assert!(response.headers[0].transactions.is_none());
-        assert!(response.headers[0].bitcoin_transactions.is_none());
     }
 }
