@@ -165,15 +165,15 @@ mod tests {
 
         let query = Query(CandidatesQuery {
             to: None,
-            num: Some(1000),
+            num: Some(100),
         });
 
         let result = candidates(State(state), query).await;
         // Will return NotFound since genesis doesn't create candidate entries,
-        // but the important thing is it doesn't reject num=1000 as BadRequest
+        // but the important thing is it doesn't reject num=100 as BadRequest
         match result {
             Ok(_) => {} // passed validation
-            Err(ApiError::BadRequest(_)) => panic!("num=1000 should not be rejected as BadRequest"),
+            Err(ApiError::BadRequest(_)) => panic!("num=100 should not be rejected as BadRequest"),
             Err(_) => {} // NotFound or ServerError is fine, means validation passed
         }
     }

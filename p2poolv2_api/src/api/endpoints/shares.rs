@@ -163,7 +163,7 @@ mod tests {
 
         let query = Query(SharesQuery {
             to: None,
-            num: Some(1000),
+            num: Some(100),
         });
 
         let result = shares(State(state), query).await;
