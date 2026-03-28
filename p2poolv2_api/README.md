@@ -36,6 +36,7 @@ token suitable for the config file.
 - [GET /shares](#get-shares) -- Confirmed shares by height range
 - [GET /candidates](#get-candidates) -- Candidate shares by height range
 - [GET /share](#get-share) -- Look up a share by hash or height
+- [GET /share_headers](#get-share_headers) -- Raw share headers by height range
 - [GET /peers](#get-peers) -- Connected peers
 - [GET /pplns_shares](#get-pplns_shares) -- PPLNS accounting data
 - [WebSocket /ws](#websocket-ws) -- Real-time event subscriptions
@@ -82,7 +83,7 @@ Returns confirmed shares and their uncles blockhashes for a height range.
 | Parameter | Type     | Default    | Description                                       |
 |-----------|----------|------------|---------------------------------------------------|
 | `to`      | `number` | chain tip  | Height to query up to (inclusive)                  |
-| `num`     | `number` | 10         | Number of shares going back from `to` (max 1000)  |
+| `num`     | `number` | 10         | Number of shares going back from `to` (max 100)   |
 
 **Response fields:**
 
@@ -131,6 +132,33 @@ Look up a single share by blockhash or by height.
 | `bitcoin_header`            | `object`        | Embedded Bitcoin block header             |
 | `bitcoin_transaction_count` | `number`        | Number of Bitcoin transactions            |
 | `transactions`              | `array\|null`   | Transaction IDs (only when `full=true`)   |
+
+### GET /share_headers
+
+Returns raw share headers for a confirmed height range, ordered
+ascending by height. Unlike `/shares`, this returns the raw
+`ShareHeader` structure and can optionally include share block
+transactions.
+
+**Query parameters:**
+
+| Parameter                  | Type      | Default    | Description                                           |
+|----------------------------|-----------|------------|-------------------------------------------------------|
+| `to`                       | `number`  | chain tip  | Height to query up to (inclusive)                      |
+| `num`                      | `number`  | 10         | Number of headers going back from `to` (max 100)      |
+| `share_block_transactions` | `boolean` | false      | Include share block transactions in the response       |
+
+**Response fields:**
+
+| Field         | Type     | Description                           |
+|---------------|----------|---------------------------------------|
+| `from_height` | `number` | Start of the returned range           |
+| `to_height`   | `number` | End of the returned range             |
+| `headers`     | `array`  | List of share header entry objects    |
+
+Each header entry contains the flattened `ShareHeader` fields and an
+optional `transactions` array (present only when
+`share_block_transactions=true`).
 
 ### GET /peers
 
@@ -247,20 +275,21 @@ determine the API address and credentials.
 
 Available CLI commands:
 
-| Command        | API Endpoint    | Description                              |
-|----------------|-----------------|------------------------------------------|
-| `info`         | `/chain_info`   | Display chain state information          |
-| `shares`       | `/shares`       | List confirmed shares in a height range  |
-| `candidates`   | `/candidates`   | List candidate shares in a height range  |
-| `share`        | `/share`        | Look up a share by hash or height        |
-| `pplns-shares` | `/pplns_shares` | Get PPLNS accounting shares              |
-| `peers-info`   | `/peers`        | Show connected peers                     |
-| `gen-auth`     | (local)         | Generate API auth credentials            |
+| Command         | API Endpoint      | Description                                     |
+|-----------------|-------------------|-------------------------------------------------|
+| `info`          | `/chain_info`     | Display chain state information                 |
+| `shares`        | `/share_headers`  | Dump share headers (optionally with transactions)|
+| `candidates`    | `/candidates`     | List candidate shares in a height range         |
+| `share`         | `/share`          | Look up a share by hash or height               |
+| `pplns-shares`  | `/pplns_shares`   | Get PPLNS accounting shares                     |
+| `peers-info`    | `/peers`          | Show connected peers                            |
+| `gen-auth`      | (local)           | Generate API auth credentials                   |
 
 Example usage:
 
 ```sh
 p2poolv2_cli --config config.toml info
 p2poolv2_cli --config config.toml shares --num 20
+p2poolv2_cli --config config.toml shares --num 5 --share-block-transactions
 p2poolv2_cli --config config.toml share --height 42
 ```
