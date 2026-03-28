@@ -13,13 +13,14 @@ categories.workspace = true
 rust-version.workspace = true
 
 [features]
-test-utils = []
+test-utils = ["bitcoindrpc/test-utils", "dep:serde_json"]
 
 [dependencies]
 bitcoin = { workspace = true }
 bitcoindrpc = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
 temp-env = "0.3.6"
