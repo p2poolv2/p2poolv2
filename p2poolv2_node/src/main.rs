@@ -98,7 +98,7 @@ async fn main() -> ExitCode {
 
     let sig_handle = setup_signal_handler(exit_sender.clone());
 
-    let genesis = ShareBlock::build_genesis_for_network(config.stratum.network);
+    let genesis = ShareBlock::build_genesis_for_network(config.stratum.network).unwrap();
     let store = Arc::new(Store::new(config.store.path.clone(), false).unwrap());
 
     // Create StoreWriter for serialized database writes (runs on dedicated blocking thread)

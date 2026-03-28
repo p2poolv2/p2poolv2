@@ -62,9 +62,9 @@ async fn test_three_nodes_connectivity() {
     let store_handle1 = StoreHandle::new(store1, write_tx1);
     let chain_store_handle1 = ChainStoreHandle::new(store_handle1, config1.stratum.network);
     chain_store_handle1
-        .init_or_setup_genesis(ShareBlock::build_genesis_for_network(
-            config1.stratum.network,
-        ))
+        .init_or_setup_genesis(
+            ShareBlock::build_genesis_for_network(config1.stratum.network).unwrap(),
+        )
         .await
         .unwrap();
 
@@ -77,9 +77,9 @@ async fn test_three_nodes_connectivity() {
     let store_handle2 = StoreHandle::new(store2, write_tx2);
     let chain_store_handle2 = ChainStoreHandle::new(store_handle2, config2.stratum.network);
     chain_store_handle2
-        .init_or_setup_genesis(ShareBlock::build_genesis_for_network(
-            config2.stratum.network,
-        ))
+        .init_or_setup_genesis(
+            ShareBlock::build_genesis_for_network(config2.stratum.network).unwrap(),
+        )
         .await
         .unwrap();
 
@@ -92,9 +92,9 @@ async fn test_three_nodes_connectivity() {
     let store_handle3 = StoreHandle::new(store3, write_tx3);
     let chain_store_handle3 = ChainStoreHandle::new(store_handle3, config3.stratum.network);
     chain_store_handle3
-        .init_or_setup_genesis(ShareBlock::build_genesis_for_network(
-            config3.stratum.network,
-        ))
+        .init_or_setup_genesis(
+            ShareBlock::build_genesis_for_network(config3.stratum.network).unwrap(),
+        )
         .await
         .unwrap();
 

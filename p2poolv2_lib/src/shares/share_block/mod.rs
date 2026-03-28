@@ -22,10 +22,11 @@ use crate::shares::genesis;
 use crate::shares::share_commitment::ShareCommitment;
 use bitcoin::{
     Address, Block, BlockHash, CompactTarget, CompressedPublicKey, Target, Transaction,
-    TxMerkleNode, Txid, VarInt, bip152,
+    TxMerkleNode, Txid, VarInt,
     block::Header,
     consensus::{Decodable, Encodable},
     hashes::Hash,
+    merkle_tree::calculate_root,
 };
 use core::mem;
 use serde::{Deserialize, Serialize};
@@ -65,6 +66,10 @@ pub struct ShareHeader {
     /// Fee in basis points
     #[serde(default)]
     pub fee: Option<u16>,
+    /// Total bitcoin coinbase value
+    pub coinbase_value: u64,
+    /// Bitcoin merkle root from the template transactions
+    pub template_merkle_root: Option<TxMerkleNode>,
 }
 
 /// Encode an optional address as a bool flag followed by the address string when present.
@@ -138,6 +143,8 @@ impl ShareHeader {
             donation: commitment.donation,
             fee_address: commitment.fee_address,
             fee: commitment.fee,
+            template_merkle_root: commitment.template_merkle_root,
+            coinbase_value: commitment.coinbase_value,
         }
     }
 
@@ -205,6 +212,14 @@ impl Encodable for ShareHeader {
         len += self.donation.unwrap_or(0).consensus_encode(w)?;
         len += encode_optional_address_string(&self.fee_address, w)?;
         len += self.fee.unwrap_or(0).consensus_encode(w)?;
+        match self.template_merkle_root {
+            Some(root) => {
+                len += true.consensus_encode(w)?;
+                len += root.consensus_encode(w)?;
+            }
+            None => len += false.consensus_encode(w)?,
+        }
+        len += self.coinbase_value.consensus_encode(w)?;
         Ok(len)
     }
 }
@@ -235,6 +250,15 @@ impl Decodable for ShareHeader {
         let fee_address = decode_optional_address(r)?;
         let fee_raw = u16::consensus_decode(r)?;
         let fee = if fee_raw > 0 { Some(fee_raw) } else { None };
+
+        let template_merkle_root = if bool::consensus_decode(r)? {
+            Some(TxMerkleNode::consensus_decode(r)?)
+        } else {
+            None
+        };
+
+        let coinbase_value = u64::consensus_decode(r)?;
+
         Ok(ShareHeader {
             prev_share_blockhash,
             uncles,
@@ -247,6 +271,8 @@ impl Decodable for ShareHeader {
             donation,
             fee_address,
             fee,
+            template_merkle_root,
+            coinbase_value,
         })
     }
 }
@@ -288,6 +314,11 @@ impl ShareBlock {
         transactions: Vec<ShareTransaction>,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let coinbase = transactions::coinbase::create_coinbase_transaction(&btcaddress);
+        let coinbase_value = coinbase
+            .output
+            .iter()
+            .fold(0, |memo, out| memo + out.value.to_sat());
+
         let mut all_transactions = vec![ShareTransaction(coinbase)];
         all_transactions.extend(transactions);
         let merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
@@ -295,6 +326,10 @@ impl ShareBlock {
         )
         .unwrap()
         .into();
+
+        let template_txids = bitcoin_block.txdata[1..].iter().map(|tx| tx.compute_txid());
+        let template_merkle_root: Option<TxMerkleNode> =
+            calculate_root(template_txids).map(|txid| txid.into());
 
         let header = ShareHeader {
             prev_share_blockhash,
@@ -308,6 +343,8 @@ impl ShareBlock {
             donation: None,
             fee_address: None,
             fee: None,
+            template_merkle_root,
+            coinbase_value,
         };
         Ok(Self {
             header,
@@ -324,7 +361,9 @@ impl ShareBlock {
     /// Build a genesis share block for a given network
     /// The bitcoin blockhash is hardcoded, so are the coinbase, nonce2, nonce, ntime, diff
     /// The workinfoid and clientid are 0 for genesis block on all networks
-    pub fn build_genesis_for_network(network: bitcoin::Network) -> Self {
+    pub fn build_genesis_for_network(
+        network: bitcoin::Network,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         assert!(
             network == bitcoin::Network::Signet
                 || network == bitcoin::Network::Testnet4
@@ -340,33 +379,46 @@ impl ShareBlock {
     ///
     /// Uses network to create coinbase transaction for miner that
     /// mined genesis block. This is a NUMPS miner pubkey.
-    fn build_genesis(genesis_data: &genesis::GenesisData, network: bitcoin::Network) -> Self {
+    fn build_genesis(
+        genesis_data: &genesis::GenesisData,
+        network: bitcoin::Network,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let public_key = genesis_data
             .public_key
             .parse::<CompressedPublicKey>()
             .unwrap();
         let btcaddress = Address::p2wpkh(&public_key, network);
-        let coinbase_tx = transactions::coinbase::create_coinbase_transaction(&btcaddress);
-        let transactions = vec![ShareTransaction(coinbase_tx)];
+        let coinbase = transactions::coinbase::create_coinbase_transaction(&btcaddress);
+        let coinbase_value = coinbase
+            .output
+            .iter()
+            .fold(0, |memo, out| memo + out.value.to_sat());
+
+        let transactions = vec![ShareTransaction(coinbase)];
         let merkle_root: TxMerkleNode =
             bitcoin::merkle_tree::calculate_root(transactions.iter().map(|tx| tx.compute_txid()))
                 .unwrap()
                 .into();
+
         let block_hex = hex::decode(genesis_data.bitcoin_block_hex).unwrap();
         // panic here, as if the genesis block is bad, we bail at the start of the process
-        let compact_block: bip152::HeaderAndShortIds =
-            match bitcoin::consensus::deserialize(&block_hex) {
-                Ok(block) => block,
-                Err(e) => {
-                    println!("Failed to deserialize genesis block: {e}");
-                    panic!("Invalid genesis block data");
-                }
-            };
+        let bitcoin_block: bitcoin::Block = match bitcoin::consensus::deserialize(&block_hex) {
+            Ok(block) => block,
+            Err(e) => {
+                println!("Failed to deserialize genesis block: {e}");
+                panic!("Invalid genesis block data");
+            }
+        };
+
+        let template_txids = bitcoin_block.txdata[1..].iter().map(|tx| tx.compute_txid());
+        let template_merkle_root: Option<TxMerkleNode> =
+            calculate_root(template_txids).map(|txid| txid.into());
+
         let header = ShareHeader {
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: vec![],
             miner_address: btcaddress,
-            bitcoin_header: compact_block.header,
+            bitcoin_header: bitcoin_block.header,
             merkle_root,
             time: 1700000000u32,
             bits: CompactTarget::from_consensus(0x1b4188f5),
@@ -374,14 +426,14 @@ impl ShareBlock {
             donation: None,
             fee_address: None,
             fee: None,
+            template_merkle_root,
+            coinbase_value,
         };
-        Self {
+        Ok(Self {
             header,
             transactions,
-            // TODO: Initial plan was to rehydrate Block from Headerandshortids and use Block::txdata,
-            // Instead we need to only place short ids here. Still a todo!
             bitcoin_transactions: vec![],
-        }
+        })
     }
 }
 
@@ -487,7 +539,7 @@ mod tests {
 
     #[test]
     fn test_build_genesis_share_header() {
-        let share = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet);
+        let share = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet).unwrap();
 
         assert!(share.header.uncles.is_empty());
         // Verify the genesis address is derived from the known pubkey
@@ -620,13 +672,14 @@ mod tests {
             .unwrap(),
             uncles: vec![],
             miner_address: btcaddress,
-            bitcoin_merkle_root: None,
+            template_merkle_root: None,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             time: 1700000000,
             donation_address: None,
             donation: None,
             fee_address: None,
             fee: None,
+            coinbase_value: 100_000_000,
         };
 
         let cloned = commitment.clone();

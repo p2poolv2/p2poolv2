@@ -415,13 +415,13 @@ impl DefaultShareValidator {
                 ValidationError::new(format!("Failed to extract commitment hash: {error}"))
             })?;
 
-        let bitcoin_template_transactions = if share.bitcoin_transactions.len() > 1 {
+        let template_transactions = if share.bitcoin_transactions.len() > 1 {
             &share.bitcoin_transactions[1..]
         } else {
             &[]
         };
         let expected_commitment =
-            ShareCommitment::from_share_header(&share.header, bitcoin_template_transactions);
+            ShareCommitment::from_share_header(&share.header, template_transactions);
         let expected_hash = expected_commitment.hash();
 
         if extracted_hash != expected_hash {
