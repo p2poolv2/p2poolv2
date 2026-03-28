@@ -43,6 +43,10 @@ pub struct SharesResponse {
 }
 
 /// Returns confirmed shares and their uncles for a height range.
+///
+/// The response includes height and blockhash, to be used by block
+/// explorers. The share_headers endpoint instead returns raw share
+/// headers and optional transactions.
 pub(crate) async fn shares(
     State(state): State<Arc<AppState>>,
     Query(query): Query<SharesQuery>,

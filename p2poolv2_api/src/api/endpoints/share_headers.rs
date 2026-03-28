@@ -56,6 +56,11 @@ pub struct ShareHeadersResponse {
 }
 
 /// Returns raw share headers for a confirmed height range, ordered ascending.
+///
+/// This returns raw share headers and optional transactions.
+///
+/// The /shares response in contrast, includes height and blockhash,
+/// to be used by block explorers.
 pub(crate) async fn share_headers(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ShareHeadersQuery>,
@@ -226,5 +231,35 @@ mod tests {
         assert_eq!(response.headers.len(), 1);
         assert_eq!(response.headers[0].header, genesis.header);
         assert!(response.headers[0].transactions.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_share_headers_with_share_block_transactions() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let genesis = genesis_for_tests();
+        state
+            .chain_store_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        let query = Query(ShareHeadersQuery {
+            to: Some(0),
+            num: Some(1),
+            share_block_transactions: Some(true),
+        });
+
+        let result = share_headers(State(state), query).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap().0;
+        assert_eq!(response.from_height, 0);
+        assert_eq!(response.to_height, 0);
+        assert_eq!(response.headers.len(), 1);
+        assert_eq!(response.headers[0].header, genesis.header);
+        let transactions = response.headers[0].transactions.as_ref().unwrap();
+        assert_eq!(*transactions, genesis.transactions);
     }
 }

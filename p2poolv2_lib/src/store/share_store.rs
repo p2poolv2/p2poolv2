@@ -160,12 +160,10 @@ impl Store {
             .into_iter()
             .map(ShareTransaction)
             .collect();
-        let bitcoin_transactions =
-            self.get_txs_for_blockhash(blockhash, ColumnFamily::BitcoinTxids);
         Some(ShareBlock {
             header,
             transactions,
-            bitcoin_transactions,
+            bitcoin_transactions: vec![],
         })
     }
 
