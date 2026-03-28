@@ -57,7 +57,7 @@ pub async fn handle_stratum_share(
 
         let mut bitcoin_transactions =
             Vec::with_capacity(emission.blocktemplate.transactions.len() + 1);
-        bitcoin_transactions.push(emission.coinbase);
+        bitcoin_transactions.push(emission.coinbase.clone());
         bitcoin_transactions.extend(emission.blocktemplate.decode_transactions());
 
         // For now, send the entire template txdata, we will do tx

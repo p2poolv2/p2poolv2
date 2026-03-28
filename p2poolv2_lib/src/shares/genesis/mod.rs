@@ -71,12 +71,12 @@ mod tests {
     fn test_signet_genesis_data() {
         let genesis = genesis_data(bitcoin::Network::Signet).unwrap();
 
-        let compact_block = bitcoin::consensus::deserialize::<bitcoin::bip152::HeaderAndShortIds>(
+        let block = bitcoin::consensus::deserialize::<bitcoin::Block>(
             hex::decode(genesis.bitcoin_block_hex).unwrap().as_slice(),
         );
 
-        assert!(compact_block.is_ok());
-        let header = compact_block.unwrap().header;
+        assert!(block.is_ok());
+        let header = block.unwrap().header;
         assert_eq!(header.prev_blockhash, bitcoin::hashes::Hash::all_zeros());
         assert_eq!(header.version, bitcoin::block::Version::ONE);
     }

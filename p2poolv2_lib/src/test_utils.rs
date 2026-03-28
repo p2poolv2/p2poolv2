@@ -215,13 +215,14 @@ pub fn create_test_commitment() -> ShareCommitment {
         .unwrap(),
         uncles: vec![],
         miner_address: btcaddress,
-        bitcoin_merkle_root: Some(TxMerkleNode::all_zeros()),
+        template_merkle_root: Some(TxMerkleNode::all_zeros()),
         bits: CompactTarget::from_consensus(0x1b4188f5),
         time: 1700000000,
         donation_address: None,
         donation: None,
         fee_address: None,
         fee: None,
+        coinbase_value: 100_000_000,
     }
 }
 
@@ -325,7 +326,7 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
         .collect();
 
     // Compute the commitment merkle root from template transactions
-    let commitment_merkle_root: Option<TxMerkleNode> = bitcoin::merkle_tree::calculate_root(
+    let template_merkle_root: Option<TxMerkleNode> = bitcoin::merkle_tree::calculate_root(
         template_transactions.iter().map(|tx| tx.compute_txid()),
     )
     .map(|txid| txid.into());
@@ -335,13 +336,14 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
         prev_share_blockhash: BlockHash::all_zeros(),
         uncles: vec![],
         miner_address: btcaddress.clone(),
-        bitcoin_merkle_root: commitment_merkle_root,
+        template_merkle_root,
         bits: CompactTarget::from_consensus(0x1b4188f5),
         time: 1700000000u32,
         donation_address: None,
         donation: None,
         fee_address: None,
         fee: None,
+        coinbase_value: 100_000_000,
     };
     let commitment_hash = share_commitment.hash();
 
@@ -364,7 +366,7 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
     bitcoin_transactions.push(bitcoin_coinbase);
     bitcoin_transactions.extend(template_transactions);
 
-    let bitcoin_merkle_root = bitcoin::merkle_tree::calculate_root(
+    let merkle_root = bitcoin::merkle_tree::calculate_root(
         bitcoin_transactions.iter().map(|tx| tx.compute_txid()),
     )
     .unwrap()
@@ -373,7 +375,7 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
     let bitcoin_header = Header {
         version: bitcoin::block::Version::from_consensus(template.version),
         prev_blockhash: BlockHash::from_str(&template.previousblockhash).unwrap(),
-        merkle_root: bitcoin_merkle_root,
+        merkle_root,
         time: u32::from_str_radix(submit.params[3].as_ref().unwrap(), 16).unwrap(),
         bits: CompactTarget::from_unprefixed_hex(&template.bits).unwrap(),
         nonce: u32::from_str_radix(submit.params[4].as_ref().unwrap(), 16).unwrap(),
@@ -391,6 +393,8 @@ pub fn build_block_from_work_components(path: &str) -> ShareBlock {
         donation: None,
         fee_address: None,
         fee: None,
+        coinbase_value: 100_000_000,
+        template_merkle_root,
     };
 
     ShareBlock {
@@ -571,13 +575,14 @@ fn test_share_block(
                 prev_share_blockhash: prev_blockhash,
                 uncles: uncles.clone(),
                 miner_address: btcaddress.clone(),
-                bitcoin_merkle_root: None,
+                template_merkle_root: None,
                 bits: share_bits,
                 time: share_time,
                 donation_address: None,
                 donation: None,
                 fee_address: None,
                 fee: None,
+                coinbase_value: 5_000_000_000,
             };
 
             let bitcoin_coinbase = build_coinbase_transaction(
@@ -594,7 +599,7 @@ fn test_share_block(
             )
             .expect("Failed to build bitcoin coinbase for test");
 
-            let bitcoin_merkle_root = bitcoin::merkle_tree::calculate_root(
+            let template_merkle_root = bitcoin::merkle_tree::calculate_root(
                 [bitcoin_coinbase.clone()]
                     .iter()
                     .map(|tx| tx.compute_txid()),
@@ -606,7 +611,7 @@ fn test_share_block(
                 Header {
                     version: bitcoin::block::Version::TWO,
                     prev_blockhash: BlockHash::all_zeros(),
-                    merkle_root: bitcoin_merkle_root,
+                    merkle_root: template_merkle_root,
                     time: 0x01e0377ae,
                     bits: share_bits,
                     nonce: nonce.unwrap_or(0xe9695791),
@@ -615,6 +620,10 @@ fn test_share_block(
             )
         }
     };
+
+    let template_txids = bitcoin_transactions[1..].iter().map(|tx| tx.compute_txid());
+    let template_merkle_root =
+        bitcoin::merkle_tree::calculate_root(template_txids).map(|txid| txid.into());
 
     let header = ShareHeader {
         prev_share_blockhash: prev_blockhash,
@@ -628,6 +637,8 @@ fn test_share_block(
         donation: None,
         fee_address: None,
         fee: None,
+        coinbase_value: 5_000_000_000,
+        template_merkle_root,
     };
 
     ShareBlock {
@@ -727,6 +738,8 @@ impl TestShareHeaderBuilder {
             donation: None,
             fee_address: None,
             fee: None,
+            coinbase_value: 100_000_000,
+            template_merkle_root: None,
         }
     }
 }

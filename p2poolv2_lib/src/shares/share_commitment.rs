@@ -57,7 +57,7 @@ pub struct ShareCommitment {
     #[serde(serialize_with = "address_serde::serialize")]
     pub miner_address: Address,
     /// Bitcoin transactions merkle root excluding the coinbase.
-    pub bitcoin_merkle_root: Option<TxMerkleNode>,
+    pub template_merkle_root: Option<TxMerkleNode>,
     /// Share chain difficult as compact target
     pub bits: CompactTarget,
     /// Timestamp for the share, as set by the miner
@@ -72,6 +72,8 @@ pub struct ShareCommitment {
     pub fee_address: Option<Address>,
     /// Fee in basis points
     pub fee: Option<u16>,
+    /// Total bitcoin coinbase value
+    pub coinbase_value: u64,
 }
 
 impl ShareCommitment {
@@ -94,15 +96,10 @@ impl ShareCommitment {
     ///
     /// The template transactions are the non-coinbase bitcoin transactions
     /// (bitcoin_transactions[1..] from the ShareBlock). Their merkle root is
-    /// computed and stored as the commitment's bitcoin_merkle_root field.
-    pub fn from_share_header(
-        header: &ShareHeader,
-        bitcoin_template_transactions: &[Transaction],
-    ) -> Self {
-        let merkle_root: Option<TxMerkleNode> = bitcoin::merkle_tree::calculate_root(
-            bitcoin_template_transactions
-                .iter()
-                .map(|tx| tx.compute_txid()),
+    /// computed and stored as the commitment's template_merkle_root field.
+    pub fn from_share_header(header: &ShareHeader, template_transactions: &[Transaction]) -> Self {
+        let template_merkle_root: Option<TxMerkleNode> = bitcoin::merkle_tree::calculate_root(
+            template_transactions.iter().map(|tx| tx.compute_txid()),
         )
         .map(|txid| txid.into());
 
@@ -110,13 +107,14 @@ impl ShareCommitment {
             prev_share_blockhash: header.prev_share_blockhash,
             uncles: header.uncles.clone(),
             miner_address: header.miner_address.clone(),
-            bitcoin_merkle_root: merkle_root,
+            template_merkle_root,
             bits: header.bits,
             time: header.time,
             donation_address: header.donation_address.clone(),
             donation: header.donation,
             fee_address: header.fee_address.clone(),
             fee: header.fee,
+            coinbase_value: header.coinbase_value,
         }
     }
 }
@@ -154,7 +152,7 @@ impl Encodable for ShareCommitment {
         len += self.prev_share_blockhash.consensus_encode(w)?;
         len += self.uncles.consensus_encode(w)?;
 
-        match &self.bitcoin_merkle_root {
+        match &self.template_merkle_root {
             Some(root) => {
                 len += true.consensus_encode(w)?;
                 len += root.consensus_encode(w)?;
@@ -205,13 +203,14 @@ pub(crate) fn build_share_commitment(
             prev_share_blockhash: tip,
             uncles: uncles.into_iter().collect(),
             miner_address: address,
-            bitcoin_merkle_root: merkle_root,
+            template_merkle_root: merkle_root,
             bits: target,
             time,
             donation_address,
             donation,
             fee_address,
             fee,
+            coinbase_value: template.coinbasevalue,
         })),
         None => Ok(None),
     }
@@ -311,7 +310,7 @@ mod tests {
         assert_ne!(commitment1.hash(), commitment3.hash());
 
         let mut commitment4 = create_test_commitment();
-        commitment4.bitcoin_merkle_root = None;
+        commitment4.template_merkle_root = None;
         assert_ne!(commitment1.hash(), commitment4.hash());
     }
 
@@ -328,7 +327,7 @@ mod tests {
     #[test]
     fn test_serialization_with_none_merkle_root() {
         let mut commitment = create_test_commitment();
-        commitment.bitcoin_merkle_root = None;
+        commitment.template_merkle_root = None;
 
         let mut serialized = Vec::new();
         commitment.consensus_encode(&mut serialized).unwrap();
@@ -412,7 +411,7 @@ mod tests {
         // Time should be current, so just verify it's set
         assert!(commitment.time > 0);
         // Merkle root should be None for template with no transactions
-        assert_eq!(commitment.bitcoin_merkle_root, None);
+        assert_eq!(commitment.template_merkle_root, None);
     }
 
     #[test]
@@ -582,7 +581,7 @@ mod tests {
             .collect();
         bitcoin_transactions.insert(0, coinbase);
 
-        let bitcoin_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
+        let template_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
             bitcoin_transactions.iter().map(|tx| tx.compute_txid()),
         )
         .unwrap()
@@ -591,7 +590,7 @@ mod tests {
         let bitcoin_header = bitcoin::block::Header {
             version: bitcoin::block::Version::from_consensus(template.version),
             prev_blockhash: BlockHash::from_str(&template.previousblockhash).unwrap(),
-            merkle_root: bitcoin_merkle_root,
+            merkle_root: template_merkle_root,
             time: 1700000000,
             bits: CompactTarget::from_unprefixed_hex(&template.bits).unwrap(),
             nonce: 0,
@@ -638,7 +637,7 @@ mod tests {
         )
         .map(|txid| txid.into());
 
-        assert_eq!(reconstructed.bitcoin_merkle_root, expected_merkle_root);
+        assert_eq!(reconstructed.template_merkle_root, expected_merkle_root);
     }
 
     #[test]
@@ -651,7 +650,7 @@ mod tests {
             serde_json::from_str(json_content).expect("Failed to parse template JSON");
 
         let mut commitment = create_test_commitment();
-        commitment.bitcoin_merkle_root = template.get_merkle_root_without_coinbase();
+        commitment.template_merkle_root = template.get_merkle_root_without_coinbase();
         let expected_hash = commitment.hash();
 
         let (header, bitcoin_transactions) =
@@ -726,7 +725,7 @@ mod tests {
         let fee_address = Address::p2wpkh(&fee_pubkey, Network::Signet);
 
         let mut commitment = create_test_commitment();
-        commitment.bitcoin_merkle_root = template.get_merkle_root_without_coinbase();
+        commitment.template_merkle_root = template.get_merkle_root_without_coinbase();
         commitment.donation_address = Some(donation_address.clone());
         commitment.donation = Some(150);
         commitment.fee_address = Some(fee_address.clone());

@@ -13,6 +13,8 @@
     "miner_address": "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
     "prev_share_blockhash": "0000000000000000000000000000000000000000000000000000000000000000",
     "time": 1700000000,
+    "coinbase_value": 100000000,
+    "template_merkle_root": null,
     "uncles": [
       "04e52dfa91be47dd5389b085e37d55f647ee2524c07a4467057e91c2f024692c",
       "d0b88bbe5e9c10b9305abe560bb5e3215447bc16af48b3596f860e3e75d1ebcf",
@@ -33,6 +35,8 @@
     "miner_address": "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
     "prev_share_blockhash": "0000000000000000000000000000000000000000000000000000000000000000",
     "time": 1700000000,
+    "coinbase_value": 100000000,
+    "template_merkle_root": null,
     "uncles": []
   },
   "too_many_uncles_header": {
@@ -49,6 +53,8 @@
     "miner_address": "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
     "prev_share_blockhash": "0000000000000000000000000000000000000000000000000000000000000000",
     "time": 1700000000,
+    "coinbase_value": 100000000,
+    "template_merkle_root": null,
     "uncles": [
       "04e52dfa91be47dd5389b085e37d55f647ee2524c07a4467057e91c2f024692c",
       "d0b88bbe5e9c10b9305abe560bb5e3215447bc16af48b3596f860e3e75d1ebcf",
@@ -70,6 +76,8 @@
     "miner_address": "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
     "prev_share_blockhash": "0000000000000000000000000000000000000000000000000000000000000000",
     "time": 1700000000,
+    "coinbase_value": 100000000,
+    "template_merkle_root": null,
     "uncles": []
   }
 }

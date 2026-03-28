@@ -308,13 +308,14 @@ impl PreparedNotifyParamsBuilder {
             prev_share_blockhash: self.prev_share_blockhash,
             uncles: self.uncles.clone(),
             miner_address: self.output_distribution[0].address.clone(),
-            bitcoin_merkle_root: self.merkle_root,
+            template_merkle_root: self.merkle_root,
             bits: self.bits,
             time: self.time,
             donation_address: self.donation_address.clone(),
             donation: self.donation,
             fee_address: self.fee_address.clone(),
             fee: self.fee,
+            coinbase_value: self.template.coinbasevalue,
         };
         let mut commitment_prefix = Vec::with_capacity(128);
         commitment_without_address
@@ -407,13 +408,14 @@ pub(crate) fn build_notify_from_prepared(
         prev_share_blockhash: prepared.prev_share_blockhash,
         uncles: prepared.uncles.clone(),
         miner_address: address.clone(),
-        bitcoin_merkle_root: prepared.merkle_root,
+        template_merkle_root: prepared.merkle_root,
         bits: prepared.bits,
         time: prepared.time,
         donation_address: prepared.donation_address.clone(),
         donation: prepared.donation,
         fee_address: prepared.fee_address.clone(),
         fee: prepared.fee,
+        coinbase_value: prepared.template.coinbasevalue,
     });
 
     // Insert job into tracker
@@ -548,6 +550,7 @@ mod tests {
         let bits = CompactTarget::from_consensus(0x1d00ffff);
         let time = 1700000000u32;
         let tracker_handle = start_tracker_actor();
+        let coinbase_value = template.coinbasevalue;
 
         let prepared = test_notify_params_builder(template, false)
             .build()
@@ -568,13 +571,14 @@ mod tests {
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: Vec::new(),
             miner_address: address,
-            bitcoin_merkle_root: merkle_root,
+            template_merkle_root: merkle_root,
             bits,
             time,
             donation_address: None,
             donation: None,
             fee_address: None,
             fee: None,
+            coinbase_value,
         };
 
         assert_eq!(commitment.hash(), direct_commitment.hash());
