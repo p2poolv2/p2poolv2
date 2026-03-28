@@ -557,11 +557,11 @@ impl Store {
     ) -> Result<Vec<ShareBlock>, StoreError> {
         let confirmed_chain = self.get_confirmed(from_height, to_height)?;
         let blockhashes: Vec<BlockHash> = confirmed_chain.iter().map(|(_, hash)| *hash).collect();
-        let found_shares = self.get_shares(&blockhashes)?;
+        let mut found_shares = self.get_shares(&blockhashes)?;
 
         let share_blocks: Vec<ShareBlock> = confirmed_chain
             .iter()
-            .filter_map(|(_, hash)| found_shares.get(hash).cloned())
+            .filter_map(|(_, hash)| found_shares.remove(hash))
             .collect();
 
         if share_blocks.len() != confirmed_chain.len() {
