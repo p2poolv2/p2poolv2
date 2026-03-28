@@ -39,6 +39,7 @@ Display confirmed shares for a height range.
 p2poolv2_cli shares                 # last 10 shares up to chain tip
 p2poolv2_cli shares --num 20        # last 20 shares
 p2poolv2_cli shares --to 500 --num 5  # 5 shares ending at height 500
+p2poolv2_cli shares --num 5 --share-block-transactions  # include transactions
 ```
 
 ### candidates
