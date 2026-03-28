@@ -69,9 +69,6 @@ pub enum Commands {
         /// Include share block transactions in the output
         #[arg(short, long, default_value = "false")]
         share_block_transactions: bool,
-        /// Include bitcoin transactions in the output
-        #[arg(short, long, default_value = "false")]
-        bitcoin_transactions: bool,
     },
     /// Display candidate shares and their uncles for a height range
     Candidates {
@@ -158,16 +155,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                     to,
                     num,
                     share_block_transactions,
-                    bitcoin_transactions,
                 }) => {
-                    commands::shares::execute(
-                        &config.api,
-                        *to,
-                        *num,
-                        *share_block_transactions,
-                        *bitcoin_transactions,
-                    )
-                    .await?;
+                    commands::shares::execute(&config.api, *to, *num, *share_block_transactions)
+                        .await?;
                 }
                 Some(Commands::Candidates { to, num }) => {
                     commands::candidates::execute(&config.api, *to, *num).await?;
