@@ -405,8 +405,8 @@ impl ShareBlock {
         let bitcoin_block: bitcoin::Block = match bitcoin::consensus::deserialize(&block_hex) {
             Ok(block) => block,
             Err(e) => {
-                println!("Failed to deserialize genesis block: {e}");
-                panic!("Invalid genesis block data");
+                tracing::info!("Failed to deserialize genesis block: {e}");
+                return Err("Invalid genesis block data".into());
             }
         };
 
