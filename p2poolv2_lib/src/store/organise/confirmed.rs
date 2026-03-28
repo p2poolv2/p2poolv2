@@ -249,7 +249,6 @@ impl Store {
 
         // Only add if this is the first entry or height is exactly one more than current top
         // Or if it is the first confirmation
-        debug!("Current top {current_top}, height {height}");
         if height.saturating_sub(current_top) != 1 && !(height == 0 && current_top == 0) {
             return Err(StoreError::Database("Incorrect confirmation".into()));
         }
