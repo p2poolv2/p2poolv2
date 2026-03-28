@@ -65,7 +65,7 @@ impl Store {
 
         self.add_txids_to_blocks_index(&blockhash, &txids, batch)?;
 
-        // TODO: Remove stop storing bitcoin txids to store
+        // TODO: Stop storing bitcoin txids to store
         let bitcoin_txids = Txids(
             share
                 .bitcoin_transactions
