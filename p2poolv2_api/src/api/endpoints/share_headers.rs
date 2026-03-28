@@ -23,6 +23,7 @@ use axum::{
 };
 use p2poolv2_lib::shares::share_block::ShareHeader;
 use p2poolv2_lib::shares::share_block::share_transaction::ShareTransaction;
+use p2poolv2_lib::store::writer::StoreError;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -93,8 +94,11 @@ pub(crate) async fn share_headers(
     let headers = if include_share_txs {
         let share_blocks = store
             .query_share_blocks(from_height, to_height)
-            .map_err(|error| {
-                ApiError::ServerError(format!("Failed to query share blocks: {error}"))
+            .map_err(|error| match &error {
+                StoreError::NotFound(_) => {
+                    ApiError::NotFound(format!("Share blocks not found: {error}"))
+                }
+                _ => ApiError::ServerError(format!("Failed to query share blocks: {error}")),
             })?;
 
         share_blocks
@@ -107,8 +111,11 @@ pub(crate) async fn share_headers(
     } else {
         let raw_headers = store
             .query_share_headers(from_height, to_height)
-            .map_err(|error| {
-                ApiError::ServerError(format!("Failed to query share headers: {error}"))
+            .map_err(|error| match &error {
+                StoreError::NotFound(_) => {
+                    ApiError::NotFound(format!("Share headers not found: {error}"))
+                }
+                _ => ApiError::ServerError(format!("Failed to query share headers: {error}")),
             })?;
 
         raw_headers
