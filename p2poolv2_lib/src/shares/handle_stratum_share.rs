@@ -34,8 +34,16 @@ pub async fn handle_stratum_share(
     emission: Emission,
     chain_store_handle: &ChainStoreHandle,
 ) -> Result<Option<ShareBlock>, Box<dyn Error + Send + Sync>> {
+    let Emission {
+        pplns,
+        header,
+        coinbase,
+        blocktemplate,
+        share_commitment,
+    } = emission;
+
     // Send share to peers only in p2p mode, i.e. if the pool is run with a miner address that results in a commitment
-    if let Some(share_commitment) = emission.share_commitment {
+    if let Some(share_commitment) = share_commitment {
         let share_coinbase = create_coinbase_transaction(&share_commitment.miner_address);
 
         // TODO: Get share chain transactions and use them here.
@@ -49,16 +57,12 @@ pub async fn handle_stratum_share(
             None => return Err("No coinbase found".into()),
         };
 
-        let share_header = ShareHeader::from_commitment_and_header(
-            share_commitment,
-            emission.header,
-            merkle_root.into(),
-        );
+        let share_header =
+            ShareHeader::from_commitment_and_header(share_commitment, header, merkle_root.into());
 
-        let mut bitcoin_transactions =
-            Vec::with_capacity(emission.blocktemplate.transactions.len() + 1);
-        bitcoin_transactions.push(emission.coinbase.clone());
-        bitcoin_transactions.extend(emission.blocktemplate.decode_transactions());
+        let mut bitcoin_transactions = Vec::with_capacity(blocktemplate.transactions.len() + 1);
+        bitcoin_transactions.push(coinbase);
+        bitcoin_transactions.extend(blocktemplate.decode_transactions());
 
         // For now, send the entire template txdata, we will do tx
         // deltas or compact block optimisation later on
@@ -84,7 +88,7 @@ pub async fn handle_stratum_share(
     } else {
         // Store PPLNS share for accounting
         chain_store_handle
-            .add_pplns_share(emission.pplns)
+            .add_pplns_share(pplns)
             .await
             .map_err(|e| format!("Failed to add PPLNS share: {e}"))?;
 
