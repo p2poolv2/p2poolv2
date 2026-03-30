@@ -21,7 +21,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
 use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
-use crate::shares::transactions::coinbase::{self, create_coinbase_transaction};
+use crate::shares::transactions::coinbase::create_coinbase_transaction;
 use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::emission::Emission;
 use bitcoin::merkle_tree;

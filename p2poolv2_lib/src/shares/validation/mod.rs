@@ -470,8 +470,7 @@ impl<T: TimeProvider> DefaultShareValidator<T> {
 
     /// Build the expected payout outputs from share header donation/fee and PPLNS distribution.
     ///
-    /// When the PPLNS window is empty (bootstrap phase), returns None
-    /// since the miner uses a bootstrap address we cannot verify.
+    /// When the PPLNS window is empty (bootstrap phase), returns an error.
     fn build_expected_outputs(
         share_header: &ShareHeader,
         address_difficulty_map: &HashMap<Address, u128>,
