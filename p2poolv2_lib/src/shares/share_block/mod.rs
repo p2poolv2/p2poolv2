@@ -18,8 +18,10 @@ pub mod share_transaction;
 pub mod short_ids;
 
 use super::transactions;
+use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
 use crate::shares::genesis;
 use crate::shares::share_commitment::ShareCommitment;
+use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::work::coinbase::extract_height_from_coinbase;
 use bitcoin::{
     Address, BlockHash, CompactTarget, CompressedPublicKey, Target, Transaction, TxMerkleNode,
@@ -71,12 +73,12 @@ pub struct ShareHeader {
     pub coinbase_value: u64,
     /// Bitcoin merkle root from the template transactions - from blocktemplate
     pub template_merkle_root: Option<TxMerkleNode>,
-    /// coinbaseaux flags - from blocktemplate, only the "flag" key
+    /// coinbaseaux flags as decoded bytes - from blocktemplate, only the "flag" key
     #[serde(default)]
-    pub coinbaseaux_flags: Option<String>,
-    /// witness commitment - from blocktemplate
+    pub coinbaseaux_flags: Option<CoinbaseAuxFlags>,
+    /// BIP141 witness commitment - from blocktemplate
     #[serde(default)]
-    pub witness_commitment: Option<String>,
+    pub witness_commitment: Option<WitnessCommitment>,
     /// Next bitcoin block height - from blocktemplate
     #[serde(default)]
     pub bitcoin_height: u64,
@@ -140,8 +142,8 @@ impl ShareHeader {
         commitment: ShareCommitment,
         bitcoin_header: Header,
         share_chain_merkle_root: TxMerkleNode,
-        coinbaseaux_flags: Option<String>,
-        witness_commitment: Option<String>,
+        coinbaseaux_flags: Option<CoinbaseAuxFlags>,
+        witness_commitment: Option<WitnessCommitment>,
         height: u64,
     ) -> Self {
         Self {
@@ -254,12 +256,12 @@ impl Decodable for ShareHeader {
 
         let coinbase_value = u64::consensus_decode(r)?;
         let coinbaseaux_flags = if bool::consensus_decode(r)? {
-            Some(String::consensus_decode(r)?)
+            Some(CoinbaseAuxFlags::consensus_decode(r)?)
         } else {
             None
         };
         let witness_commitment = if bool::consensus_decode(r)? {
-            Some(String::consensus_decode(r)?)
+            Some(WitnessCommitment::consensus_decode(r)?)
         } else {
             None
         };

@@ -21,6 +21,7 @@ use super::gbt::build_merkle_branches_for_template;
 use super::tracker::JobTracker;
 use crate::accounting::OutputPair;
 use crate::shares::share_commitment::ShareCommitment;
+use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::util::{reverse_four_byte_chunks, to_be_hex};
 use crate::utils::time_provider::SystemTimeProvider;
 use bitcoin::consensus::Encodable;
@@ -250,13 +251,22 @@ impl PreparedNotifyParamsBuilder {
         let dummy_hash_hex = hex::encode(dummy_hash_bytes);
 
         let coinbaseaux = parse_flags(self.template.coinbaseaux.get("flags").cloned())?;
+        let witness_commitment = self
+            .template
+            .default_witness_commitment
+            .as_deref()
+            .map(WitnessCommitment::from_hex)
+            .transpose()
+            .map_err(|error| WorkError {
+                message: format!("Invalid witness commitment: {error}"),
+            })?;
 
         let coinbase = build_coinbase_transaction(
             Version::TWO,
             self.output_distribution.as_slice(),
             self.template.height as i64,
             coinbaseaux,
-            self.template.default_witness_commitment.clone(),
+            witness_commitment.as_ref(),
             &self.pool_signature,
             Some(dummy_commitment_hash),
             &SystemTimeProvider,

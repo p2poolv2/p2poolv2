@@ -19,8 +19,10 @@
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
 use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
 use crate::shares::transactions::coinbase::{self, create_coinbase_transaction};
+use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::emission::Emission;
 use bitcoin::merkle_tree;
 use std::error::Error;
@@ -61,8 +63,15 @@ pub async fn handle_stratum_share(
             share_commitment,
             header,
             merkle_root.into(),
-            blocktemplate.coinbaseaux.get("flags").cloned(),
-            blocktemplate.default_witness_commitment.clone(),
+            blocktemplate
+                .coinbaseaux
+                .get("flags")
+                .and_then(|flags| hex::decode(flags).ok())
+                .map(|bytes| CoinbaseAuxFlags::new(&bytes)),
+            blocktemplate
+                .default_witness_commitment
+                .as_deref()
+                .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok()),
             blocktemplate.height as u64,
         );
 

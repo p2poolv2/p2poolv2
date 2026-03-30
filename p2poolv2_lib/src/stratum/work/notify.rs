@@ -485,7 +485,7 @@ mod tests {
     async fn test_build_notify_and_extract_outputs_integration() {
         let template = BlockTemplate {
             default_witness_commitment: Some(
-                "6a24aa21a9ed010000000000000000000000000000000000000000000000000000000000"
+                "6a24aa21a9ed0100000000000000000000000000000000000000000000000000000000000000"
                     .to_string(),
             ),
             height: 100,

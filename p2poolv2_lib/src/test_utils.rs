@@ -312,7 +312,9 @@ pub fn build_block_from_work_components<T: TimeProvider + ?Sized>(
     time_provider: &T,
 ) -> ShareBlock {
     use crate::accounting::OutputPair;
+    use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
     use crate::shares::share_commitment::ShareCommitment;
+    use crate::shares::witness_commitment::WitnessCommitment;
     use crate::stratum::work::coinbase::build_coinbase_transaction;
     use bitcoin::TxMerkleNode;
     use bitcoin::script::PushBytesBuf;
@@ -367,7 +369,11 @@ pub fn build_block_from_work_components<T: TimeProvider + ?Sized>(
         }],
         template.height as i64,
         PushBytesBuf::from(&[0u8]),
-        template.default_witness_commitment.clone(),
+        template
+            .default_witness_commitment
+            .as_deref()
+            .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok())
+            .as_ref(),
         b"P2Poolv2",
         Some(commitment_hash),
         time_provider,
@@ -407,8 +413,15 @@ pub fn build_block_from_work_components<T: TimeProvider + ?Sized>(
         fee: None,
         coinbase_value: template.coinbasevalue,
         template_merkle_root,
-        coinbaseaux_flags: template.coinbaseaux.get("flags").cloned(),
-        witness_commitment: template.default_witness_commitment,
+        coinbaseaux_flags: template
+            .coinbaseaux
+            .get("flags")
+            .and_then(|flags| hex::decode(flags).ok())
+            .map(|bytes| CoinbaseAuxFlags::new(&bytes)),
+        witness_commitment: template
+            .default_witness_commitment
+            .as_deref()
+            .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok()),
         bitcoin_height: template.height as u64,
     };
 

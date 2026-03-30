@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod chain;
+pub(crate) mod coinbaseaux_flags;
 pub(crate) mod compact_block;
 pub mod genesis;
 pub mod handle_stratum_share;
@@ -22,6 +23,7 @@ pub mod share_block;
 pub mod share_commitment;
 pub mod transactions;
 pub mod validation;
+pub(crate) mod witness_commitment;
 
 /// Serde helpers for `bitcoin::Address` fields.
 ///

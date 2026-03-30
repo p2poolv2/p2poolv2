@@ -214,6 +214,8 @@ pub(crate) fn build_share_commitment(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
+    use crate::shares::witness_commitment::WitnessCommitment;
     use crate::store::writer::StoreError;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::test_utils::test_coinbase_transaction;
@@ -595,8 +597,15 @@ mod tests {
             commitment,
             bitcoin_header,
             share_merkle_root,
-            template.coinbaseaux.get("flags").cloned(),
-            template.default_witness_commitment,
+            template
+                .coinbaseaux
+                .get("flags")
+                .and_then(|flags| hex::decode(flags).ok())
+                .map(|bytes| CoinbaseAuxFlags::new(&bytes)),
+            template
+                .default_witness_commitment
+                .as_deref()
+                .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok()),
             template.height as u64,
         );
 

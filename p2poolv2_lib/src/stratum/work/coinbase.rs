@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::OutputPair;
+use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::session::{EXTRANONCE1_SIZE, EXTRANONCE2_SIZE};
 use crate::stratum::work::error::WorkError;
 use crate::utils::time_provider::TimeProvider;
@@ -71,21 +72,17 @@ fn build_outputs(output_data: &[OutputPair]) -> Vec<TxOut> {
 
 /// Append the default witness commitment to the outputs if one is provided.
 #[allow(dead_code)]
+/// Append a BIP141 witness commitment output if present.
 fn append_default_witness_commitment(
     outputs: &mut Vec<TxOut>,
-    default_witness_commitment: Option<String>,
-) -> Result<(), WorkError> {
-    if let Some(default_witness_commitment) = default_witness_commitment {
-        let commitment_bytes = hex::decode(&default_witness_commitment).map_err(|e| WorkError {
-            message: format!("Invalid witness commitment hex: {e}"),
-        })?;
-        let commitment = ScriptBuf::from(commitment_bytes);
+    default_witness_commitment: Option<&WitnessCommitment>,
+) {
+    if let Some(commitment) = default_witness_commitment {
         outputs.push(TxOut {
             value: Amount::ZERO,
-            script_pubkey: commitment,
+            script_pubkey: commitment.to_script_buf(),
         });
     }
-    Ok(())
 }
 
 /// Build a coinbase from the provided address, network and height.
@@ -113,7 +110,7 @@ pub(crate) fn build_coinbase_transaction<T: TimeProvider + ?Sized>(
     output_data: &[OutputPair],
     height: i64,
     aux_flags: PushBytesBuf,
-    default_witness_commitment: Option<String>,
+    default_witness_commitment: Option<&WitnessCommitment>,
     pool_signature: &[u8],
     commitment_hash: Option<sha256::Hash>,
     time_provider: &T,
@@ -144,7 +141,7 @@ pub(crate) fn build_coinbase_transaction<T: TimeProvider + ?Sized>(
         .into_script();
 
     let mut outputs = build_outputs(output_data);
-    append_default_witness_commitment(&mut outputs, default_witness_commitment)?;
+    append_default_witness_commitment(&mut outputs, default_witness_commitment);
 
     let coinbase_tx = Transaction {
         version,
@@ -331,6 +328,7 @@ pub fn extract_commitment_hash_from_coinbase(
 #[cfg(test)]
 mod tests {
     use crate::shares::share_commitment::ShareCommitment;
+    use crate::shares::witness_commitment::WitnessCommitment;
     use crate::utils::time_provider::SystemTimeProvider;
     use bitcoin::hex::DisplayHex;
     use std::str::FromStr;
@@ -340,6 +338,13 @@ mod tests {
         stratum::work::block_template::BlockTemplate,
         test_utils::{create_test_commitment, genesis_for_tests},
     };
+
+    fn witness_commitment_from_template(template: &BlockTemplate) -> Option<WitnessCommitment> {
+        template
+            .default_witness_commitment
+            .as_deref()
+            .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok())
+    }
 
     #[test]
     fn test_parse_address_valid_mainnet() {
@@ -516,7 +521,7 @@ mod tests {
             ],
             template.height as i64,
             PushBytesBuf::from(&[0u8]),
-            template.default_witness_commitment.clone(),
+            witness_commitment_from_template(&template).as_ref(),
             b"P2Poolv2",
             None,
             &SystemTimeProvider,
@@ -619,7 +624,7 @@ mod tests {
             ],
             template.height as i64,
             PushBytesBuf::from(&[0u8]),
-            template.default_witness_commitment.clone(),
+            witness_commitment_from_template(&template).as_ref(),
             b"P2Poolv2",
             Some(share_commitment.hash()),
             &SystemTimeProvider,
@@ -716,7 +721,7 @@ mod tests {
             &output_pairs,
             template.height as i64,
             PushBytesBuf::from(&[0u8]),
-            template.default_witness_commitment.clone(),
+            witness_commitment_from_template(&template).as_ref(),
             pool_sig,
             None,
             &SystemTimeProvider,

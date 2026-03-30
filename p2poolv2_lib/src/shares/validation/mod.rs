@@ -39,9 +39,9 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::{ShareBlock, ShareTransaction};
 use crate::shares::share_commitment::ShareCommitment;
 use crate::store::block_tx_metadata::Status;
-use crate::stratum::work::block_template::parse_flags;
 use crate::stratum::work::coinbase::build_coinbase_transaction;
 use crate::utils::time_provider::TimeProvider;
+use bitcoin::script::PushBytesBuf;
 use bitcoin::{Address, Amount, BlockHash, Target, TxMerkleNode, transaction::Version};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -433,15 +433,17 @@ impl<T: TimeProvider> DefaultShareValidator<T> {
             Self::build_expected_outputs(&share.header, &address_difficulty_map, coinbase_value)?;
         let expected_commitment_hash = ShareCommitment::from_share_header(&share.header).hash();
 
-        let flags = parse_flags(share.header.coinbaseaux_flags.clone())
-            .map_err(|e| ValidationError(format!("coinbaseaux flags can't be parsed: {e}")))?;
+        let flags = match &share.header.coinbaseaux_flags {
+            Some(aux_flags) => aux_flags.to_push_bytes_buf(),
+            None => PushBytesBuf::from(&[0u8]),
+        };
         let pool_signature = "P2Poolv2".as_bytes();
         let reconstructed_coinbase = build_coinbase_transaction(
             Version::TWO,
             &expected_outputs,
             share.header.bitcoin_height as i64,
             flags,
-            share.header.witness_commitment.clone(),
+            share.header.witness_commitment.as_ref(),
             pool_signature,
             Some(expected_commitment_hash),
             &self.time_provider,
