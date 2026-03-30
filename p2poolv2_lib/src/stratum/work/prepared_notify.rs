@@ -269,7 +269,7 @@ impl PreparedNotifyParamsBuilder {
             witness_commitment.as_ref(),
             &self.pool_signature,
             Some(dummy_commitment_hash),
-            &SystemTimeProvider,
+            0u128,
         )?;
 
         let (coinbase1_full, coinbase2) = split_coinbase(&coinbase)?;

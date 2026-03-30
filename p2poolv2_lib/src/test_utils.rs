@@ -307,10 +307,7 @@ pub fn load_valid_stratum_work_components(
 }
 
 #[cfg(test)]
-pub fn build_block_from_work_components<T: TimeProvider + ?Sized>(
-    path: &str,
-    time_provider: &T,
-) -> ShareBlock {
+pub fn build_block_from_work_components(path: &str, nsecs: u128) -> ShareBlock {
     use crate::accounting::OutputPair;
     use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
     use crate::shares::share_commitment::ShareCommitment;
@@ -376,7 +373,7 @@ pub fn build_block_from_work_components<T: TimeProvider + ?Sized>(
             .as_ref(),
         b"P2Poolv2",
         Some(commitment_hash),
-        time_provider,
+        nsecs,
     )
     .expect("Failed to build bitcoin coinbase for test");
 
@@ -625,7 +622,7 @@ fn test_share_block(
                 None,
                 b"P2Poolv2",
                 Some(commitment.hash()),
-                &SystemTimeProvider,
+                0u128,
             )
             .expect("Failed to build bitcoin coinbase for test");
 

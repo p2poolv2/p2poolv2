@@ -104,7 +104,7 @@ fn append_default_witness_commitment(
 /// 04 eba96d2d - enonce1 from tv_nsec ??
 /// 0c - 12, the length of the two nonces put together
 #[allow(dead_code)]
-pub(crate) fn build_coinbase_transaction<T: TimeProvider + ?Sized>(
+pub(crate) fn build_coinbase_transaction(
     version: Version,
     output_data: &[OutputPair],
     height: i64,
@@ -112,29 +112,28 @@ pub(crate) fn build_coinbase_transaction<T: TimeProvider + ?Sized>(
     default_witness_commitment: Option<&WitnessCommitment>,
     pool_signature: &[u8],
     commitment_hash: Option<sha256::Hash>,
-    time_provider: &T,
+    nsecs: u128,
 ) -> Result<Transaction, WorkError> {
     if output_data.is_empty() {
         return Err(WorkError {
             message: "Empty output distribution".to_string(),
         });
     }
-    // Use timestamp for providing randomness to distribute search space along with enonce1 that will be used by the miners.
-    let nsecs = get_timestamp_bytes(time_provider);
 
     let mut signature_buf = PushBytesBuf::with_capacity(pool_signature.len());
     signature_buf.extend_from_slice(pool_signature).unwrap();
 
-    let mut coinbase_builder = Builder::new().push_int(height);
+    let coinbase_script_prefix = Builder::new()
+        .push_int(height)
+        .push_slice(aux_flags)
+        .push_slice(EXTRANONCE_SEPARATOR);
+
+    let mut coinbase_builder = coinbase_script_prefix;
     if let Some(hash) = commitment_hash {
         coinbase_builder = coinbase_builder.push_slice(hash.as_byte_array());
     };
     let coinbase_script = coinbase_builder
-        // ckpool pushes just bytes. The spec recommends using PUSH opcodes, so we do that.
-        // resuling in us geting 0x0100 instead of ck's 0x00 for flags in the serialized script.
-        .push_slice(aux_flags)
         .push_slice(nsecs.to_le_bytes())
-        .push_slice(EXTRANONCE_SEPARATOR)
         .push_slice(signature_buf)
         .into_script();
 
@@ -188,22 +187,30 @@ pub fn split_coinbase(coinbase: &Transaction) -> Result<(String, String), WorkEr
 /// Based on `build_coinbase_transaction` and `split_coinbase`, `coinbase2`
 /// has the following structure:
 ///
-///  `script_sig_part_2` (pushed pool signature: `[len_byte] + [data]`)
+///  `commitment_hash` (optional: `[0x20] + [32 bytes]`)
+///  `nsecs` (`[0x10] + [16 bytes]`)
+///  `pool_signature` (`[len_byte] + [data]`)
 ///  `sequence` (4 bytes)
 ///  `output_count` (CompactSize)
 ///  `outputs` (serialized `Vec<TxOut>`)
 ///  `lock_time` (4 bytes)
 ///
 /// This function parses this structure to return the `Vec<TxOut>`.
+///
+/// coinbase2 layout: [commitment_hash?][nsecs][pool_sig][sequence][outputs][locktime]
+/// The commitment_hash_len is 33 when present (1 opcode + 32 bytes), 0 when absent.
 pub fn extract_outputs_from_coinbase2(
     coinbase2_hex: &str,
+    commitment_hash_len: usize,
     pool_signature_len: usize,
 ) -> Result<Vec<TxOut>, WorkError> {
     let coinbase2_bytes = Vec::from_hex(coinbase2_hex).map_err(|_| WorkError {
         message: "Error parsing coinbase hex".into(),
     })?;
 
-    let script_sig_part2_len = 1 + pool_signature_len;
+    let nsecs_push_len = 1 + 16; // opcode + 16 bytes for u128
+    let pool_sig_push_len = 1 + pool_signature_len;
+    let script_sig_part2_len = commitment_hash_len + nsecs_push_len + pool_sig_push_len;
     let output_data_start_index = script_sig_part2_len + SEQUENCE_LENGTH;
 
     // Bounds check: need at least start_index + LOCKTIME_LENGTH bytes
@@ -290,17 +297,20 @@ pub fn extract_commitment_hash_from_coinbase(
 
     let mut instructions = input.script_sig.instructions();
 
-    // Skip block height (first instruction)
-    instructions
-        .next()
-        .ok_or_else(|| WorkError {
-            message: "Bitcoin coinbase scriptSig is empty".to_string(),
-        })?
-        .map_err(|error| WorkError {
-            message: format!("Invalid bitcoin coinbase scriptSig: {error}"),
-        })?;
+    // Script layout: [height][aux_flags][EXTRANONCE_SEPARATOR][commitment_hash][nsecs][pool_sig]
+    // Skip height, aux_flags, and EXTRANONCE_SEPARATOR (first 3 instructions)
+    for _ in 0..3 {
+        instructions
+            .next()
+            .ok_or_else(|| WorkError {
+                message: "Bitcoin coinbase scriptSig too short".to_string(),
+            })?
+            .map_err(|error| WorkError {
+                message: format!("Invalid bitcoin coinbase scriptSig: {error}"),
+            })?;
+    }
 
-    // Second instruction should be the 32-byte commitment hash
+    // Fourth instruction should be the 32-byte commitment hash
     let commitment_instruction = instructions
         .next()
         .ok_or_else(|| WorkError {
@@ -396,7 +406,7 @@ mod tests {
             None,
             &[],
             None,
-            &SystemTimeProvider,
+            get_timestamp_bytes(&SystemTimeProvider),
         )
         .unwrap();
 
@@ -451,7 +461,7 @@ mod tests {
             None,
             &[],
             None,
-            &SystemTimeProvider,
+            get_timestamp_bytes(&SystemTimeProvider),
         )
         .unwrap();
 
@@ -519,7 +529,7 @@ mod tests {
                 .as_ref(),
             b"P2Poolv2",
             None,
-            &SystemTimeProvider,
+            get_timestamp_bytes(&SystemTimeProvider),
         )
         .unwrap();
 
@@ -551,15 +561,16 @@ mod tests {
             template.default_witness_commitment
         );
 
-        // Check the coinbase input script to make sure we got the expected string
+        // Check the coinbase input script layout:
+        // [height][flags][EXTRANONCE_SEPARATOR][nsecs][pool_sig]
         assert_eq!(coinbase.input[0].script_sig.len(), 44);
         let script_bytes = coinbase.input[0].script_sig.as_bytes();
         assert_eq!(script_bytes[0], 2);
         assert_eq!(script_bytes[1..3].as_hex().to_string(), "fa01"); // Height 506 in little-endian
         assert_eq!(script_bytes[3..5].as_hex().to_string(), "0100"); // Flags (empty in this case)
-        assert_eq!(script_bytes[5..6].as_hex().to_string(), "10"); // Timestamp length (16 bytes for u128 nanos)
-        assert_eq!(script_bytes[22..23].as_hex().to_string(), "0c"); // Extranonce separator length
-        assert_eq!(script_bytes[23..35], EXTRANONCE_SEPARATOR); // Extranonce separator
+        assert_eq!(script_bytes[5..6].as_hex().to_string(), "0c"); // Extranonce separator length (12 bytes)
+        assert_eq!(script_bytes[6..18], EXTRANONCE_SEPARATOR); // Extranonce separator
+        assert_eq!(script_bytes[18..19].as_hex().to_string(), "10"); // Timestamp length (16 bytes for u128 nanos)
         assert_eq!(script_bytes[35], 8u8); // Pool signature length
         assert_eq!(
             &script_bytes[36..44],
@@ -625,7 +636,7 @@ mod tests {
                 .as_ref(),
             b"P2Poolv2",
             Some(share_commitment.hash()),
-            &SystemTimeProvider,
+            get_timestamp_bytes(&SystemTimeProvider),
         )
         .unwrap();
 
@@ -657,22 +668,24 @@ mod tests {
             template.default_witness_commitment
         );
 
-        // Check the coinbase input script to make sure we got the expected string
+        // Check the coinbase input script layout:
+        // [height][flags][EXTRANONCE_SEPARATOR][commitment_hash][nsecs][pool_sig]
         assert_eq!(coinbase.input[0].script_sig.len(), 77);
         let script_bytes = coinbase.input[0].script_sig.as_bytes();
         assert_eq!(script_bytes[0], 2);
         assert_eq!(script_bytes[1..3].as_hex().to_string(), "fa01"); // Height 506 in little-endian
+        assert_eq!(script_bytes[3..5].as_hex().to_string(), "0100"); // Flags (empty in this case)
+        assert_eq!(script_bytes[5..6].as_hex().to_string(), "0c"); // Extranonce separator length (12 bytes)
+        assert_eq!(script_bytes[6..18], EXTRANONCE_SEPARATOR); // Extranonce separator
+        assert_eq!(script_bytes[18..19].as_hex().to_string(), "20"); // Commitment hash length (32 bytes)
         assert_eq!(
-            script_bytes[4..36].as_hex().to_string(),
+            script_bytes[19..51].as_hex().to_string(),
             share_commitment_cloned
                 .hash()
                 .as_byte_array()
                 .to_lower_hex_string()
-        ); // Share commitment
-        assert_eq!(script_bytes[36..38].as_hex().to_string(), "0100"); // Flags (empty in this case)
-        assert_eq!(script_bytes[38..39].as_hex().to_string(), "10"); // Timestamp length (16 bytes for u128 nanos)
-        assert_eq!(script_bytes[55..56].as_hex().to_string(), "0c"); // Extranonce separator length
-        assert_eq!(script_bytes[56..68], EXTRANONCE_SEPARATOR); // Extranonce separator
+        ); // Share commitment hash
+        assert_eq!(script_bytes[51..52].as_hex().to_string(), "10"); // Timestamp length (16 bytes for u128 nanos)
         assert_eq!(script_bytes[68], 8u8); // Pool signature length
         assert_eq!(
             &script_bytes[69..77],
@@ -725,7 +738,7 @@ mod tests {
                 .as_ref(),
             pool_sig,
             None,
-            &SystemTimeProvider,
+            get_timestamp_bytes(&SystemTimeProvider),
         )
         .unwrap();
 
@@ -736,7 +749,7 @@ mod tests {
 
         //  Parse
         let extracted_outputs =
-            extract_outputs_from_coinbase2(&coinbase2_hex, pool_sig.len()).unwrap();
+            extract_outputs_from_coinbase2(&coinbase2_hex, 0, pool_sig.len()).unwrap();
 
         //  Verify
         assert_eq!(extracted_outputs, expected_outputs);
@@ -754,26 +767,28 @@ mod tests {
     #[test]
     fn test_extract_outputs_from_coinbase2_bounds_checking() {
         // Test empty input
-        let result = extract_outputs_from_coinbase2("", 8);
+        let result = extract_outputs_from_coinbase2("", 0, 8);
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("too short"));
 
         // Test input that's too short for the expected structure
-        // With pool_signature_len=8, min_len = 1 + 8 + 4 + 4 = 17 bytes = 34 hex chars
+        // With commitment_hash_len=0, pool_signature_len=8:
+        // min_len = 0 + 17(nsecs) + 9(pool_sig) + 4(seq) + 4(locktime) = 34 bytes = 68 hex chars
         let short_hex = "00112233445566778899aabbccddeeff"; // 16 bytes = 32 hex chars
-        let result = extract_outputs_from_coinbase2(short_hex, 8);
+        let result = extract_outputs_from_coinbase2(short_hex, 0, 8);
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("too short"));
 
         // Test exactly at minimum length (should fail on deserialize, not bounds)
-        let min_hex = "00112233445566778899aabbccddeeff00"; // 17 bytes = 34 hex chars
-        let result = extract_outputs_from_coinbase2(min_hex, 8);
+        // Need 34 bytes minimum: 68 hex chars
+        let min_hex = hex::encode([0u8; 34]);
+        let result = extract_outputs_from_coinbase2(&min_hex, 0, 8);
         assert!(result.is_err());
         // This should fail on deserialize, not bounds check
         assert!(result.unwrap_err().message.contains("Bad outputs"));
 
         // Test invalid hex
-        let result = extract_outputs_from_coinbase2("not_valid_hex!", 8);
+        let result = extract_outputs_from_coinbase2("not_valid_hex!", 0, 8);
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("parsing coinbase hex"));
     }
@@ -809,7 +824,7 @@ mod tests {
             None,
             b"P2Poolv2",
             Some(expected_hash),
-            &SystemTimeProvider,
+            get_timestamp_bytes(&SystemTimeProvider),
         )
         .unwrap();
 
@@ -836,7 +851,7 @@ mod tests {
             None,
             b"P2Poolv2",
             None,
-            &SystemTimeProvider,
+            get_timestamp_bytes(&SystemTimeProvider),
         )
         .unwrap();
 
@@ -883,7 +898,7 @@ mod tests {
             None,
             &[],
             None,
-            &SystemTimeProvider,
+            get_timestamp_bytes(&SystemTimeProvider),
         )
         .unwrap();
 
@@ -910,7 +925,7 @@ mod tests {
             None,
             &[],
             None,
-            &SystemTimeProvider,
+            get_timestamp_bytes(&SystemTimeProvider),
         )
         .unwrap();
 
@@ -937,7 +952,7 @@ mod tests {
             None,
             &[],
             None,
-            &SystemTimeProvider,
+            get_timestamp_bytes(&SystemTimeProvider),
         )
         .unwrap();
 

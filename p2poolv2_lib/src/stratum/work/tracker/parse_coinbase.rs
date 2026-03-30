@@ -30,7 +30,16 @@ pub fn get_distribution(
         None => return None,
     };
 
-    match extract_outputs_from_coinbase2(&job_details.coinbase2, pool_signature_length) {
+    let commitment_hash_len = if job_details.share_commitment.is_some() {
+        33
+    } else {
+        0
+    };
+    match extract_outputs_from_coinbase2(
+        &job_details.coinbase2,
+        commitment_hash_len,
+        pool_signature_length,
+    ) {
         Ok(outputs) => {
             let total_value = job_details.blocktemplate.coinbasevalue;
             let mut exposition = String::new();

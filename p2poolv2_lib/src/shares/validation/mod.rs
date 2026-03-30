@@ -446,7 +446,7 @@ impl<T: TimeProvider> DefaultShareValidator<T> {
             share.header.witness_commitment.as_ref(),
             pool_signature,
             Some(expected_commitment_hash),
-            &self.time_provider,
+            0u128, // TODO: use share.header.coinbase_nsecs once ready
         )
         .map_err(|error| ValidationError(format!("Error building coinbase {error}")))?;
 
@@ -921,7 +921,7 @@ mod tests {
         );
         let share_block = build_block_from_work_components(
             "../p2poolv2_tests/test_data/validation/stratum/b/",
-            &fixed_time,
+            0u128,
         );
 
         // Set up mock expectations
@@ -1739,7 +1739,7 @@ mod tests {
             None,
             b"P2Poolv2",
             Some(commitment_hash),
-            &fixed_time,
+            0u128,
         )
         .unwrap();
 
@@ -1815,7 +1815,7 @@ mod tests {
             None,
             b"P2Poolv2",
             Some(commitment_hash),
-            &fixed_time,
+            0u128,
         )
         .unwrap();
 
@@ -1897,7 +1897,7 @@ mod tests {
             None,
             &[],
             None,
-            &SystemTimeProvider,
+            0u128,
         )
         .unwrap();
 
@@ -1960,7 +1960,7 @@ mod tests {
             None,
             b"P2Poolv2",
             Some(commitment_hash),
-            &fixed_time,
+            0u128,
         )
         .unwrap();
 
@@ -2079,7 +2079,7 @@ mod tests {
             None,
             b"P2Poolv2",
             Some(commitment_hash),
-            &fixed_time,
+            0u128,
         )
         .unwrap();
 

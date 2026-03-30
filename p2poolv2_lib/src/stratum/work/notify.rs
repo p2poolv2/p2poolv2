@@ -560,7 +560,7 @@ mod tests {
 
         // Extract outputs from coinbase2 and verify they match the original
         let extracted_txouts =
-            extract_outputs_from_coinbase2(coinbase2_hex, pool_signature.len()).unwrap();
+            extract_outputs_from_coinbase2(coinbase2_hex, 33, pool_signature.len()).unwrap();
 
         let expected_txout_1 = TxOut {
             value: original_output_pairs[0].amount,
