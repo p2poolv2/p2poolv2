@@ -20,7 +20,7 @@ use crate::stratum::session::{EXTRANONCE1_SIZE, EXTRANONCE2_SIZE};
 use crate::stratum::work::error::WorkError;
 use crate::utils::time_provider::TimeProvider;
 use bitcoin::absolute::LockTime;
-use bitcoin::blockdata::script::{Builder, ScriptBuf};
+use bitcoin::blockdata::script::Builder;
 use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::hashes::{self, Hash, sha256d};
 use bitcoin::network::Network;
@@ -339,13 +339,6 @@ mod tests {
         test_utils::{create_test_commitment, genesis_for_tests},
     };
 
-    fn witness_commitment_from_template(template: &BlockTemplate) -> Option<WitnessCommitment> {
-        template
-            .default_witness_commitment
-            .as_deref()
-            .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok())
-    }
-
     #[test]
     fn test_parse_address_valid_mainnet() {
         let addr = "1HpRF3JgafxaqjhMEjLNbevpRVvAp15t3A";
@@ -521,7 +514,11 @@ mod tests {
             ],
             template.height as i64,
             PushBytesBuf::from(&[0u8]),
-            witness_commitment_from_template(&template).as_ref(),
+            template
+                .default_witness_commitment
+                .as_deref()
+                .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok())
+                .as_ref(),
             b"P2Poolv2",
             None,
             &SystemTimeProvider,
@@ -624,7 +621,11 @@ mod tests {
             ],
             template.height as i64,
             PushBytesBuf::from(&[0u8]),
-            witness_commitment_from_template(&template).as_ref(),
+            template
+                .default_witness_commitment
+                .as_deref()
+                .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok())
+                .as_ref(),
             b"P2Poolv2",
             Some(share_commitment.hash()),
             &SystemTimeProvider,
@@ -721,7 +722,11 @@ mod tests {
             &output_pairs,
             template.height as i64,
             PushBytesBuf::from(&[0u8]),
-            witness_commitment_from_template(&template).as_ref(),
+            template
+                .default_witness_commitment
+                .as_deref()
+                .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok())
+                .as_ref(),
             pool_sig,
             None,
             &SystemTimeProvider,

@@ -34,7 +34,7 @@ use bitcoin::{
 use core::mem;
 use serde::{Deserialize, Serialize};
 pub use share_transaction::ShareTransaction;
-use std::{collections::HashMap, error::Error};
+use std::error::Error;
 
 /// Header for the share chain block.
 ///
