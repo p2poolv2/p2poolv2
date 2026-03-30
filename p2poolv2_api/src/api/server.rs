@@ -463,8 +463,12 @@ mod tests {
             },
         ];
 
-        // Manually Construct `coinbase2` Hex
+        // Manually construct coinbase2 hex matching the new scriptSig layout:
+        // [nsecs_push][pool_sig_push][sequence][outputs][locktime]
+        // No commitment hash push since share_commitment is None.
         let mut coinbase2_bytes = Vec::new();
+        coinbase2_bytes.push(0x10); // push 16 bytes for nsecs
+        coinbase2_bytes.extend_from_slice(&[0u8; 16]); // dummy nsecs
         coinbase2_bytes.push(pool_signature.len() as u8);
         coinbase2_bytes.extend_from_slice(pool_signature);
         coinbase2_bytes.extend_from_slice(&[0xff, 0xff, 0xff, 0xff]); // Sequence

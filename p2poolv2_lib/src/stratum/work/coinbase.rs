@@ -50,7 +50,7 @@ pub fn parse_address(address: &str, network: Network) -> Result<Address, WorkErr
 
 /// Get timestamp from provider, in seconds and nanoseconds.
 #[allow(dead_code)]
-fn get_timestamp_bytes<T: TimeProvider + ?Sized>(time_provider: &T) -> u128 {
+pub(crate) fn get_timestamp_bytes<T: TimeProvider + ?Sized>(time_provider: &T) -> u128 {
     time_provider
         .now()
         .duration_since(std::time::UNIX_EPOCH)

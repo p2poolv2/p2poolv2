@@ -107,8 +107,16 @@ mod tests {
         }
     }
 
+    /// Build a test coinbase2 hex string matching the new scriptSig layout.
+    ///
+    /// coinbase2: [nsecs_push][pool_sig_push][sequence][outputs][locktime]
+    /// No commitment hash push since test jobs use share_commitment = None.
     fn create_valid_coinbase2(pool_sig: &[u8], outputs: &[TxOut]) -> String {
         let mut coinbase2_bytes = Vec::new();
+        // nsecs push: 0x10 opcode + 16 zero bytes
+        coinbase2_bytes.push(0x10);
+        coinbase2_bytes.extend_from_slice(&[0u8; 16]);
+        // pool_sig push
         coinbase2_bytes.push(pool_sig.len() as u8);
         coinbase2_bytes.extend_from_slice(pool_sig);
         coinbase2_bytes.extend_from_slice(&[0xff, 0xff, 0xff, 0xff]); // Sequence

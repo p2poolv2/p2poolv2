@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::block_template::{BlockTemplate, parse_flags};
-use super::coinbase::{build_coinbase_transaction, split_coinbase};
+use super::coinbase::{build_coinbase_transaction, get_timestamp_bytes, split_coinbase};
 use super::error::WorkError;
 use super::gbt::build_merkle_branches_for_template;
 use super::tracker::JobTracker;
@@ -32,19 +32,23 @@ use std::sync::Arc;
 
 /// Pre-serialized notify message with placeholders for per-miner fields.
 ///
-/// Contains the fully built JSON notify string with fixed-size placeholders
-/// for job_id (16 hex chars) and commitment_hash (64 hex chars in coinbase1).
+/// coinbase1 is static (same for all miners): [height][aux_flags][EXTRANONCE_SEPARATOR]
+/// coinbase2 is built per-miner: [commitment_hash][nsecs][pool_sig][sequence][outputs][locktime]
+///
+/// The JSON template has fixed-size placeholders for job_id and the full coinbase2.
 /// Also contains pre-serialized commitment binary prefix -- all fields except
-/// miner_address -- so that per-miner hashing only needs to append the
+/// miner_bitcoin_address -- so that per-miner hashing only needs to append the
 /// address bytes.
 pub struct PreparedNotifyParams {
-    /// Pre-serialized JSON notify string with placeholder job_id and commitment hash
+    /// Pre-serialized JSON notify string with placeholder job_id and coinbase2
     json_template: String,
     /// Byte offset of the 16-char job_id placeholder in json_template
     job_id_offset: usize,
-    /// Byte offset of the 64-char commitment hash placeholder in json_template
-    commitment_hash_offset: usize,
-    /// Pre-serialized commitment binary: all fields except miner_address.
+    /// Byte offset of the coinbase2 placeholder in json_template
+    coinbase2_offset: usize,
+    /// Length of the coinbase2 placeholder in json_template
+    coinbase2_placeholder_len: usize,
+    /// Pre-serialized commitment binary: all fields except miner_bitcoin_address.
     /// Miner address is appended per-miner to compute the commitment hash.
     commitment_prefix: Vec<u8>,
     /// Previous share block hash (for building ShareCommitment struct)
@@ -67,12 +71,11 @@ pub struct PreparedNotifyParams {
     fee: Option<u16>,
     /// Shared block template
     template: Arc<BlockTemplate>,
-    /// Coinbase1 hex before the commitment hash
-    coinbase1_before_hash: String,
-    /// Coinbase1 hex after the commitment hash
-    coinbase1_after_hash: String,
-    /// Coinbase2 hex (identical for all miners)
-    coinbase2: String,
+    /// Static coinbase1 hex (identical for all miners)
+    coinbase1: String,
+    /// Coinbase2 suffix hex: [pool_sig][sequence][outputs][locktime]
+    /// Per-miner coinbase2 = commitment_hash_script + nsecs_script + coinbase2_suffix
+    coinbase2_suffix: String,
 }
 
 /// Serialize the merkle branches array as a JSON array string.
@@ -93,25 +96,21 @@ fn serialize_merkle_branches_json(branches: &[String]) -> String {
 
 /// Build the pre-serialized JSON notify string by concatenation.
 ///
-/// Returns the JSON string and the byte offsets of the job_id and
-/// commitment_hash placeholders.
+/// coinbase1 is static. coinbase2 gets a placeholder that is replaced per-miner.
+/// Returns the JSON string, the byte offset of the job_id placeholder,
+/// the byte offset of the coinbase2 placeholder, and the placeholder length.
 fn build_json_template(
-    coinbase1_before_hash: &str,
-    coinbase1_after_hash: &str,
-    coinbase2: &str,
+    coinbase1: &str,
+    coinbase2_placeholder: &str,
     prevhash_byte_swapped: &str,
     merkle_branches: &[String],
     version_hex: &str,
     nbits: &str,
     ntime_hex: &str,
     clean_jobs: bool,
-) -> (String, usize, usize) {
-    // Estimate capacity: typical notify JSON is 500-1500 bytes
-    let estimated_capacity = 256
-        + coinbase1_before_hash.len()
-        + coinbase1_after_hash.len()
-        + coinbase2.len()
-        + merkle_branches.len() * 68;
+) -> (String, usize, usize, usize) {
+    let estimated_capacity =
+        256 + coinbase1.len() + coinbase2_placeholder.len() + merkle_branches.len() * 68;
     let mut json = String::with_capacity(estimated_capacity);
 
     json.push_str(r#"{"method":"mining.notify","params":[""#);
@@ -120,13 +119,11 @@ fn build_json_template(
     json.push_str(r#"",""#);
     json.push_str(prevhash_byte_swapped);
     json.push_str(r#"",""#);
-    json.push_str(coinbase1_before_hash);
-    let commitment_hash_offset = json.len();
-    // 64-char placeholder for commitment hash (32 bytes hex-encoded)
-    json.push_str("0000000000000000000000000000000000000000000000000000000000000000");
-    json.push_str(coinbase1_after_hash);
+    json.push_str(coinbase1);
     json.push_str(r#"",""#);
-    json.push_str(coinbase2);
+    let coinbase2_offset = json.len();
+    let coinbase2_placeholder_len = coinbase2_placeholder.len();
+    json.push_str(coinbase2_placeholder);
     json.push_str(r#"","#);
     json.push_str(&serialize_merkle_branches_json(merkle_branches));
     json.push_str(r#",""#);
@@ -143,7 +140,12 @@ fn build_json_template(
     }
     json.push_str("]}");
 
-    (json, job_id_offset, commitment_hash_offset)
+    (
+        json,
+        job_id_offset,
+        coinbase2_offset,
+        coinbase2_placeholder_len,
+    )
 }
 
 /// Builder for constructing PreparedNotifyParams with pre-computed shared fields.
@@ -240,16 +242,12 @@ impl PreparedNotifyParamsBuilder {
 
     /// Build the PreparedNotifyParams by constructing the coinbase transaction
     /// with a dummy commitment hash, splitting it, and constructing the
-    /// pre-serialized JSON with placeholders for per-miner fields.
+    /// Build the PreparedNotifyParams by constructing the coinbase transaction,
+    /// splitting it, and constructing the pre-serialized JSON template.
+    ///
+    /// coinbase1 is static (same for all miners). coinbase2 is split into a
+    /// per-miner prefix (commitment_hash + nsecs) and a static suffix.
     pub fn build(self) -> Result<PreparedNotifyParams, WorkError> {
-        // Build a coinbase with a distinctive dummy commitment hash to locate
-        // where the hash appears in the hex-encoded coinbase1 string.
-        // We use 0xab repeated 32 times -- hex "abab...ab" (64 chars) --
-        // which cannot appear naturally in hex-encoded transaction data.
-        let dummy_hash_bytes = [0xab_u8; 32];
-        let dummy_commitment_hash = hashes::sha256::Hash::from_byte_array(dummy_hash_bytes);
-        let dummy_hash_hex = hex::encode(dummy_hash_bytes);
-
         let coinbaseaux = parse_flags(self.template.coinbaseaux.get("flags").cloned())?;
         let witness_commitment = self
             .template
@@ -260,6 +258,11 @@ impl PreparedNotifyParamsBuilder {
             .map_err(|error| WorkError {
                 message: format!("Invalid witness commitment: {error}"),
             })?;
+
+        // Build coinbase with dummy commitment hash and dummy nsecs.
+        // After split_coinbase, coinbase1 is fully static and coinbase2 starts
+        // with [commitment_hash_push][nsecs_push][pool_sig_push]...
+        let dummy_commitment_hash = hashes::sha256::Hash::from_byte_array([0xab_u8; 32]);
 
         let coinbase = build_coinbase_transaction(
             Version::TWO,
@@ -272,19 +275,12 @@ impl PreparedNotifyParamsBuilder {
             0u128,
         )?;
 
-        let (coinbase1_full, coinbase2) = split_coinbase(&coinbase)?;
+        let (coinbase1, coinbase2_full) = split_coinbase(&coinbase)?;
 
-        // Simple string search for the dummy hash in the hex-encoded coinbase1
-        let commitment_hash_position =
-            coinbase1_full
-                .find(&dummy_hash_hex)
-                .ok_or_else(|| WorkError {
-                    message: "Could not locate commitment hash placeholder in coinbase1"
-                        .to_string(),
-                })?;
-
-        let coinbase1_before_hash = coinbase1_full[..commitment_hash_position].to_string();
-        let coinbase1_after_hash = coinbase1_full[commitment_hash_position + 64..].to_string();
+        // Strip the commitment_hash push (33 bytes = 66 hex) and nsecs push
+        // (17 bytes = 34 hex) from the front of coinbase2 to get the static suffix.
+        let per_miner_prefix_hex_len = 66 + 34;
+        let coinbase2_suffix = coinbase2_full[per_miner_prefix_hex_len..].to_string();
 
         // Pre-compute merkle branches
         let merkle_branches: Vec<String> = build_merkle_branches_for_template(&self.template)
@@ -300,23 +296,25 @@ impl PreparedNotifyParamsBuilder {
         let version_hex = hex::encode(self.template.version.to_be_bytes());
         let ntime_hex = hex::encode(self.template.curtime.to_be_bytes());
 
-        // Build the JSON template by concatenation
-        let (json_template, job_id_offset, commitment_hash_offset) = build_json_template(
-            &coinbase1_before_hash,
-            &coinbase1_after_hash,
-            &coinbase2,
-            &prevhash_byte_swapped,
-            &merkle_branches,
-            &version_hex,
-            &self.template.bits,
-            &ntime_hex,
-            self.clean_jobs,
-        );
+        // Use a zero-filled placeholder for coinbase2 in the JSON template.
+        // It will be replaced per-miner with the actual coinbase2.
+        let coinbase2_placeholder = "0".repeat(coinbase2_full.len());
+
+        let (json_template, job_id_offset, coinbase2_offset, coinbase2_placeholder_len) =
+            build_json_template(
+                &coinbase1,
+                &coinbase2_placeholder,
+                &prevhash_byte_swapped,
+                &merkle_branches,
+                &version_hex,
+                &self.template.bits,
+                &ntime_hex,
+                self.clean_jobs,
+            );
 
         // Pre-serialize commitment prefix for fast per-miner hashing.
-        // ShareCommitment::consensus_encode encodes all fields except miner_bitcoin_address,
-        // which is exactly the shared prefix we need. We build a dummy commitment
-        // (address is ignored by consensus_encode) to get the prefix bytes.
+        // ShareCommitment::consensus_encode encodes all fields except
+        // miner_bitcoin_address, which is exactly the shared prefix we need.
         let commitment_without_address = ShareCommitment {
             prev_share_blockhash: self.prev_share_blockhash,
             uncles: self.uncles.clone(),
@@ -338,7 +336,8 @@ impl PreparedNotifyParamsBuilder {
         Ok(PreparedNotifyParams {
             json_template,
             job_id_offset,
-            commitment_hash_offset,
+            coinbase2_offset,
+            coinbase2_placeholder_len,
             commitment_prefix,
             prev_share_blockhash: self.prev_share_blockhash,
             uncles: self.uncles,
@@ -350,9 +349,8 @@ impl PreparedNotifyParamsBuilder {
             fee_address: self.fee_address,
             fee: self.fee,
             template: self.template,
-            coinbase1_before_hash,
-            coinbase1_after_hash,
-            coinbase2,
+            coinbase1,
+            coinbase2_suffix,
         })
     }
 }
@@ -382,10 +380,29 @@ fn get_commitment_hex(
     Ok(hex::encode(commitment_hash.as_byte_array()))
 }
 
+/// Build a per-miner coinbase2 hex from commitment hash, fresh timestamp,
+/// and the static suffix.
+fn build_per_miner_coinbase2(
+    commitment_hash_hex: &str,
+    nsecs: u128,
+    coinbase2_suffix: &str,
+) -> String {
+    // commitment_hash push: 0x20 opcode + 32 bytes hash = 66 hex chars
+    // nsecs push: 0x10 opcode + 16 bytes LE = 34 hex chars
+    let nsecs_bytes = nsecs.to_le_bytes();
+    let mut coinbase2 = String::with_capacity(66 + 34 + coinbase2_suffix.len());
+    coinbase2.push_str("20");
+    coinbase2.push_str(commitment_hash_hex);
+    coinbase2.push_str("10");
+    coinbase2.push_str(&hex::encode(nsecs_bytes));
+    coinbase2.push_str(coinbase2_suffix);
+    coinbase2
+}
+
 /// Build a per-miner notify message from the prepared template.
 ///
-/// Computes the miner-specific commitment hash, overwrites the placeholders
-/// in the pre-built JSON, and inserts the job into the tracker.
+/// Computes the miner-specific commitment hash, assembles per-miner coinbase2,
+/// overwrites placeholders in the pre-built JSON, and inserts the job into the tracker.
 /// When miner_address is None (solo mode), a commitment hash is still
 /// computed from the prefix alone.
 pub(crate) fn build_notify_from_prepared(
@@ -394,6 +411,11 @@ pub(crate) fn build_notify_from_prepared(
     tracker_handle: &JobTracker,
 ) -> Result<String, WorkError> {
     let commitment_hash_hex = get_commitment_hex(&prepared.commitment_prefix, miner_address)?;
+    let nsecs = get_timestamp_bytes(&SystemTimeProvider);
+
+    // Build per-miner coinbase2
+    let coinbase2 =
+        build_per_miner_coinbase2(&commitment_hash_hex, nsecs, &prepared.coinbase2_suffix);
 
     // Get next job_id
     let job_id = tracker_handle.get_next_job_id();
@@ -406,14 +428,8 @@ pub(crate) fn build_notify_from_prepared(
         &job_id_hex,
     );
     notify_json.replace_range(
-        prepared.commitment_hash_offset..prepared.commitment_hash_offset + 64,
-        &commitment_hash_hex,
-    );
-
-    // Build coinbase1 with the actual commitment hash
-    let coinbase1 = format!(
-        "{}{}{}",
-        prepared.coinbase1_before_hash, commitment_hash_hex, prepared.coinbase1_after_hash
+        prepared.coinbase2_offset..prepared.coinbase2_offset + prepared.coinbase2_placeholder_len,
+        &coinbase2,
     );
 
     // Build ShareCommitment only when a miner address is available
@@ -434,8 +450,8 @@ pub(crate) fn build_notify_from_prepared(
     // Insert job into tracker
     tracker_handle.insert_job(
         Arc::clone(&prepared.template),
-        coinbase1,
-        prepared.coinbase2.clone(),
+        prepared.coinbase1.clone(),
+        coinbase2,
         share_commitment,
         job_id,
     );
@@ -500,7 +516,10 @@ mod tests {
 
         // Verify offsets are within bounds
         assert!(prepared.job_id_offset + 16 <= prepared.json_template.len());
-        assert!(prepared.commitment_hash_offset + 64 <= prepared.json_template.len());
+        assert!(
+            prepared.coinbase2_offset + prepared.coinbase2_placeholder_len
+                <= prepared.json_template.len()
+        );
     }
 
     #[tokio::test]
@@ -601,7 +620,7 @@ mod tests {
         let notify2 =
             build_notify_from_prepared(&prepared, Some(&address2), &tracker_handle).unwrap();
 
-        // Different addresses must produce different notify JSON (different coinbase1 content)
+        // Different addresses must produce different notify JSON (different coinbase2 content)
         assert_ne!(notify1, notify2);
     }
 
@@ -615,23 +634,25 @@ mod tests {
         // Manually overwrite placeholders and verify JSON remains valid
         let mut json = prepared.json_template.clone();
         let test_job_id = "abcdef0123456789";
-        let test_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        // Build a test coinbase2 of the correct length
+        let test_coinbase2 = "f".repeat(prepared.coinbase2_placeholder_len);
         json.replace_range(
             prepared.job_id_offset..prepared.job_id_offset + 16,
             test_job_id,
         );
         json.replace_range(
-            prepared.commitment_hash_offset..prepared.commitment_hash_offset + 64,
-            test_hash,
+            prepared.coinbase2_offset
+                ..prepared.coinbase2_offset + prepared.coinbase2_placeholder_len,
+            &test_coinbase2,
         );
 
         let parsed: serde_json::Value =
             serde_json::from_str(&json).expect("Overwritten JSON should still be valid");
         let params = parsed["params"].as_array().unwrap();
         assert_eq!(params[0].as_str().unwrap(), test_job_id);
-        // The commitment hash should appear within coinbase1
-        let coinbase1 = params[2].as_str().unwrap();
-        assert!(coinbase1.contains(test_hash));
+        // coinbase2 should be the test value
+        let coinbase2 = params[3].as_str().unwrap();
+        assert_eq!(coinbase2, test_coinbase2);
         // clean_jobs should be true
         assert!(params[8].as_bool().unwrap());
     }
@@ -658,15 +679,13 @@ mod tests {
         let job_id_str = params[0].as_str().unwrap();
         assert_ne!(job_id_str, "0000000000000000");
 
-        // Verify commitment hash was computed and placed in coinbase1.
-        // The original placeholder is 64 hex zeros at commitment_hash_offset
-        // in the JSON; after replace_range the coinbase1 field should contain
-        // the hash of the commitment prefix (no address appended).
-        let coinbase1 = params[2].as_str().unwrap();
+        // Verify commitment hash was computed and placed in coinbase2.
+        // The per-miner coinbase2 starts with [commitment_hash_push][nsecs_push]...
+        let coinbase2 = params[3].as_str().unwrap();
         let expected_hash = get_commitment_hex(&prepared.commitment_prefix, None).unwrap();
         assert!(
-            coinbase1.contains(&expected_hash),
-            "coinbase1 should contain the commitment hash for None address"
+            coinbase2.contains(&expected_hash),
+            "coinbase2 should contain the commitment hash for None address"
         );
 
         // Verify job was inserted in tracker with no share_commitment
