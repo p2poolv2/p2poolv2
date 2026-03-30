@@ -314,7 +314,7 @@ impl PreparedNotifyParamsBuilder {
         );
 
         // Pre-serialize commitment prefix for fast per-miner hashing.
-        // ShareCommitment::consensus_encode encodes all fields except miner_address,
+        // ShareCommitment::consensus_encode encodes all fields except miner_bitcoin_address,
         // which is exactly the shared prefix we need. We build a dummy commitment
         // (address is ignored by consensus_encode) to get the prefix bytes.
         let commitment_without_address = ShareCommitment {

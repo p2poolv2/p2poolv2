@@ -133,12 +133,12 @@ fn encode_optional_address<W: Write + ?Sized>(
 }
 
 impl Encodable for ShareCommitment {
-    /// Consensus-encode the shared fields of the commitment (excluding miner_address).
+    /// Consensus-encode the shared fields of the commitment (excluding miner_bitcoin_address).
     ///
     /// Field order: prev_share_blockhash, uncles, merkle_root, bits, time,
     /// donation_address, donation, fee_address, fee.
     ///
-    /// The miner_address is intentionally excluded so that the encoded bytes
+    /// The miner_bitcoin_address is intentionally excluded so that the encoded bytes
     /// can be reused as a prefix across miners. Each miner only needs to
     /// append their address script_pubkey. The hash() method appends the
     /// script_pubkey before hashing.

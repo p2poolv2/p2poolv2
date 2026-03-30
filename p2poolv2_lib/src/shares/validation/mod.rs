@@ -448,7 +448,7 @@ impl<T: TimeProvider> DefaultShareValidator<T> {
             Some(expected_commitment_hash),
             &self.time_provider,
         )
-        .map_err(|e| ValidationError(format!("Error building coinbase {e}")))?;
+        .map_err(|error| ValidationError(format!("Error building coinbase {error}")))?;
 
         let reconstructed_coinbase_txid = reconstructed_coinbase.compute_txid();
         let recomputed_root: TxMerkleNode = match share.header.template_merkle_root {

@@ -50,12 +50,12 @@ pub fn parse_address(address: &str, network: Network) -> Result<Address, WorkErr
 
 /// Get timestamp from provider, in seconds and nanoseconds.
 #[allow(dead_code)]
-fn get_timestamp_bytes<T: TimeProvider + ?Sized>(time_provider: &T) -> (u32, u32) {
-    let timestamp = time_provider
+fn get_timestamp_bytes<T: TimeProvider + ?Sized>(time_provider: &T) -> u128 {
+    time_provider
         .now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap();
-    (timestamp.as_secs() as u32, timestamp.subsec_nanos())
+        .unwrap()
+        .as_nanos()
 }
 
 /// Build outputs for the transaction from the provided address and value and pairs.
@@ -70,7 +70,6 @@ fn build_outputs(output_data: &[OutputPair]) -> Vec<TxOut> {
         .collect()
 }
 
-/// Append the default witness commitment to the outputs if one is provided.
 #[allow(dead_code)]
 /// Append a BIP141 witness commitment output if present.
 fn append_default_witness_commitment(
@@ -121,7 +120,7 @@ pub(crate) fn build_coinbase_transaction<T: TimeProvider + ?Sized>(
         });
     }
     // Use timestamp for providing randomness to distribute search space along with enonce1 that will be used by the miners.
-    let (secs, nsecs) = get_timestamp_bytes(time_provider);
+    let nsecs = get_timestamp_bytes(time_provider);
 
     let mut signature_buf = PushBytesBuf::with_capacity(pool_signature.len());
     signature_buf.extend_from_slice(pool_signature).unwrap();
@@ -134,7 +133,6 @@ pub(crate) fn build_coinbase_transaction<T: TimeProvider + ?Sized>(
         // ckpool pushes just bytes. The spec recommends using PUSH opcodes, so we do that.
         // resuling in us geting 0x0100 instead of ck's 0x00 for flags in the serialized script.
         .push_slice(aux_flags)
-        .push_slice(secs.to_le_bytes())
         .push_slice(nsecs.to_le_bytes())
         .push_slice(EXTRANONCE_SEPARATOR)
         .push_slice(signature_buf)
@@ -554,18 +552,17 @@ mod tests {
         );
 
         // Check the coinbase input script to make sure we got the expected string
-        assert_eq!(coinbase.input[0].script_sig.len(), 37);
+        assert_eq!(coinbase.input[0].script_sig.len(), 44);
         let script_bytes = coinbase.input[0].script_sig.as_bytes();
         assert_eq!(script_bytes[0], 2);
         assert_eq!(script_bytes[1..3].as_hex().to_string(), "fa01"); // Height 506 in little-endian
         assert_eq!(script_bytes[3..5].as_hex().to_string(), "0100"); // Flags (empty in this case)
-        assert_eq!(script_bytes[5..6].as_hex().to_string(), "04"); // Timestamp length
-        assert_eq!(script_bytes[10..11].as_hex().to_string(), "04"); // Nanosecond timestamp length, don't check value as it changes with time
-        assert_eq!(script_bytes[15..16].as_hex().to_string(), "0c"); // extranonce length, don't check value as it changes with time
-        assert_eq!(script_bytes[16..28], EXTRANONCE_SEPARATOR); // Extranonce separator
-        assert_eq!(script_bytes[28], 8u8); // Pool signature length
+        assert_eq!(script_bytes[5..6].as_hex().to_string(), "10"); // Timestamp length (16 bytes for u128 nanos)
+        assert_eq!(script_bytes[22..23].as_hex().to_string(), "0c"); // Extranonce separator length
+        assert_eq!(script_bytes[23..35], EXTRANONCE_SEPARATOR); // Extranonce separator
+        assert_eq!(script_bytes[35], 8u8); // Pool signature length
         assert_eq!(
-            &script_bytes[29..37],
+            &script_bytes[36..44],
             b"P2Poolv2", // Check the pool signature
         );
     }
@@ -661,7 +658,7 @@ mod tests {
         );
 
         // Check the coinbase input script to make sure we got the expected string
-        assert_eq!(coinbase.input[0].script_sig.len(), 70);
+        assert_eq!(coinbase.input[0].script_sig.len(), 77);
         let script_bytes = coinbase.input[0].script_sig.as_bytes();
         assert_eq!(script_bytes[0], 2);
         assert_eq!(script_bytes[1..3].as_hex().to_string(), "fa01"); // Height 506 in little-endian
@@ -673,13 +670,12 @@ mod tests {
                 .to_lower_hex_string()
         ); // Share commitment
         assert_eq!(script_bytes[36..38].as_hex().to_string(), "0100"); // Flags (empty in this case)
-        assert_eq!(script_bytes[38..39].as_hex().to_string(), "04"); // Timestamp length
-        assert_eq!(script_bytes[43..44].as_hex().to_string(), "04"); // Nanosecond timestamp length, don't check value as it changes with time
-        assert_eq!(script_bytes[48..49].as_hex().to_string(), "0c"); // extranonce length, don't check value as it changes with time
-        assert_eq!(script_bytes[49..61], EXTRANONCE_SEPARATOR); // Extranonce separator
-        assert_eq!(script_bytes[61], 8u8); // Pool signature length
+        assert_eq!(script_bytes[38..39].as_hex().to_string(), "10"); // Timestamp length (16 bytes for u128 nanos)
+        assert_eq!(script_bytes[55..56].as_hex().to_string(), "0c"); // Extranonce separator length
+        assert_eq!(script_bytes[56..68], EXTRANONCE_SEPARATOR); // Extranonce separator
+        assert_eq!(script_bytes[68], 8u8); // Pool signature length
         assert_eq!(
-            &script_bytes[62..70],
+            &script_bytes[69..77],
             b"P2Poolv2", // Check the pool signature
         );
     }
