@@ -1,6 +1,9 @@
 set unstable := true
 
-export P2POOL_CONFIG := env("P2POOL_CONFIG", "." / "config.toml")
+dev_config := "." / "config-dev.toml"
+default_config := "." / "config.toml"
+target_config := if path_exists(dev_config) == "true" { dev_config } else { default_config }
+export P2POOL_CONFIG := env("P2POOL_CONFIG", target_config)
 
 # Set default log level if not provided through environment
 
@@ -9,6 +12,17 @@ export RUST_BACKTRACE := env("RUST_BACKTRACE", "1")
 
 _default:
     @{{ just_executable() }} --list
+
+# Sets up the development environment with all needed files
+@setup-dev:
+    #!/usr/bin/env sh
+    set -euo pipefail
+
+    [ -f docker/.env ] || cp -v docker/.env.sample docker/.env
+    [ -f config-dev.toml ] || cp -v config.sample.toml config-dev.toml
+
+    echo 'Edit the ./config-dev.toml file for your specific needs'
+    echo 'You can easily run a local cluster with `just compose`'
 
 # Run tests for entire workspace or a specific package
 test package="":
@@ -43,26 +57,8 @@ build package="":
 build-release:
     cargo build --workspace --release
 
-# Creates the p2pool docker image
-dockerize:
-    docker build -t p2poolv2 -f ./docker/Dockerfile.p2pool .
-
-# Run using the docker image
-docker-run EXTRA="": dockerize
-    docker run \
-        --rm \
-        -it \
-        -v $PWD/docker/data:/p2poolv2/data \
-        -v $PWD/docker/config/:/p2poolv2/config \
-        --add-host=host.docker.internal:host-gateway \
-        {{ EXTRA }} \
-        p2poolv2
-
-# Explore the container image
-docker-explore: (docker-run "--entrypoint bash")
-
 # For log level use RUST_LOG=<<level>> just run
-run config="config.toml":
+run config=target_config:
     cargo run -p p2poolv2_node -- --config={{ config }}
 
 # Run cargo flamegraph for detecting bottlenecks
@@ -70,13 +66,6 @@ run config="config.toml":
 # You will need perf installed as well as flamegraph installed
 perf config="config.toml":
     CARGO_PROFILE_RELEASE_DEBUG=true CARGO_PROFILE_RELEASE_STRIP=false RUSTFLAGS="-C force-frame-pointers=yes" cargo flamegraph --no-buildid-cache -p p2poolv2_node -- --config={{ config }}
-
-alias dash := dashboard
-
-# Run prometheus and grafana
-[working-directory('docker')]
-dashboard:
-    docker compose -f prometheus-docker-compose.yml up -d --force-recreate --build
 
 # Check the entire workspace
 check:
@@ -106,3 +95,50 @@ bench-flamegraph package="p2poolv2_lib" name="pplns_window" function="get_addres
 # fix common warnings
 fix:
     cargo fix
+
+# Builds and opens local docs for all deps
+doc:
+    cargo doc --open --all
+
+# Creates the p2pool docker image
+[group("docker")]
+dockerize:
+    docker build -t p2poolv2 -f ./docker/p2poolv2/Dockerfile .
+
+# Run using the docker image
+[group("docker")]
+docker-run EXTRA="": dockerize
+    docker run \
+        --rm \
+        -it \
+        -v $PWD/docker/data:/p2poolv2/data \
+        -v $PWD/docker/config/:/p2poolv2/config \
+        -v $P2POOL_CONFIG:/p2poolv2/config.toml:ro \
+        -e P2POOL_CONFIG=/p2poolv2/config.toml \
+        --add-host=host.docker.internal:host-gateway \
+        {{ EXTRA }} \
+        p2poolv2
+
+# Explore the container image
+[group("docker")]
+container-explore: (docker-run "--entrypoint bash")
+
+# Starts a service specified in docker container
+[group("docker")]
+[working-directory("docker")]
+compose *services="all":
+    docker compose --env-file .env up -d --build --force-recreate {{ if services == "all" { "" } else { services } }}
+
+# Start a shell in a docker compose service
+[group("docker")]
+[working-directory("docker")]
+compose-shell service="p2poolv2" index="0" program="bash":
+    docker compose exec --index {{ index }} {{ service }} {{ program }}
+
+alias dash := dashboard
+
+# Run prometheus and grafana
+[group("docker")]
+[working-directory('docker')]
+dashboard:
+    docker compose -f docker-compose.metrics.yml up -d --force-recreate --build

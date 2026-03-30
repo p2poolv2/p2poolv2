@@ -6,35 +6,34 @@ RUN apt-get update && \
     apt-get install -y \
     build-essential \
     clang \
-    pkg-config \
-    libzmq3-dev \
-    git \
     cmake \
-    libzstd-dev \
-    libsnappy-dev \
+    git \
     libbz2-dev \
     liblz4-dev \
-    zlib1g-dev \
-    libssl-dev
+    libsnappy-dev \
+    libssl-dev \
+    libzmq3-dev \
+    libzstd-dev \
+    pkg-config \
+    zlib1g-dev
 
 # Create and set working directory
-RUN mkdir -p /p2pool
-WORKDIR /p2pool
+RUN mkdir -p /p2poolv2
+WORKDIR /p2poolv2
 
 # Copies just the essential files to be able to fetch
 COPY --parents ./**/Cargo.toml .
 COPY --parents ./**/lib.rs .
 COPY --parents ./**/main.rs .
+COPY --parents ./**/benches/*.rs .
 COPY ./Cargo.lock .
 COPY ./rust-toolchain.toml .
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/usr/local/rustup \
-    --mount=type=cache,target=/p2pool/target \
+    --mount=type=cache,target=/p2poolv2/target \
     cargo fetch --locked
-
-COPY config.toml .
 
 COPY --parents bitcoindrpc/ .
 COPY --parents p2poolv2_cli/ .
@@ -48,28 +47,34 @@ ENV RUST_LOG=info
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/usr/local/rustup \
-    --mount=type=cache,target=/p2pool/target \
-    cargo install -j $(nproc) --locked --offline --path ./p2poolv2_node && \
-    cargo install -j $(nproc) --locked --offline --path ./p2poolv2_cli
+    --mount=type=cache,target=/p2poolv2/target \
+    cargo install --locked --offline --path ./p2poolv2_node && \
+    cargo install --locked --offline --path ./p2poolv2_cli
 
 FROM debian:bullseye-slim AS runner
 
+RUN apt-get update && apt-get install -y --no-install-recommends curl
+
 WORKDIR /p2poolv2
-VOLUME /p2poolv2/data \
-    /p2poolv2/config \
-    /p2poolv2/logs
+VOLUME /p2poolv2
 
 # stratum, api, p2p
 EXPOSE 3333 \
     46884 \
     6884
 
-ENV RUST_BACKTRACE=1 \
+# Set sane container defaults
+ENV RUST_BACKTRACE=full \
     RUST_LOG=debug \
     P2POOL_LOGGING_CONSOLE=1 \
     P2POOL_CONFIG=/p2poolv2/config/config.toml
 
 COPY --from=builder /usr/local/cargo/bin/p2poolv2 /usr/local/bin/p2poolv2
 COPY --from=builder /usr/local/cargo/bin/p2poolv2_cli /usr/local/bin/p2poolv2_cli
+
+# TODO: add non-root user
+
+HEALTHCHECK --interval=5s --timeout=1s --start-period=1s --retries=3 \
+    CMD ["curl", "-sf", "http://127.0.0.1:46884/health"]
 
 ENTRYPOINT ["/usr/local/bin/p2poolv2"]
