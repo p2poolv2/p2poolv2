@@ -39,9 +39,10 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::{ShareBlock, ShareTransaction};
 use crate::shares::share_commitment::ShareCommitment;
 use crate::store::block_tx_metadata::Status;
-use crate::stratum::work::coinbase;
+use crate::stratum::work::block_template::parse_flags;
+use crate::stratum::work::coinbase::build_coinbase_transaction;
 use crate::utils::time_provider::TimeProvider;
-use bitcoin::{Address, Amount, BlockHash, Target, Transaction, TxMerkleNode};
+use bitcoin::{Address, Amount, BlockHash, Target, TxMerkleNode, transaction::Version};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, RwLock};
@@ -73,25 +74,6 @@ pub const MAX_TIME_DIFF: u64 = 60;
 pub const BLOCK_TXS_SIZE_LIMIT: u32 = 200 * 1024;
 /// Maximum number of transactions allowed in a share block
 pub const TXS_COUNT_LIMIT: u32 = 100;
-
-/// Initial block subsidy in satoshis (50 BTC).
-const INITIAL_SUBSIDY_SATS: u64 = 5_000_000_000;
-/// Number of blocks between each halving.
-const HALVING_INTERVAL: u64 = 210_000;
-/// Maximum number of halvings before subsidy reaches zero.
-const MAX_HALVINGS: u64 = 64;
-
-/// Compute the block subsidy for a given block height.
-///
-/// Uses Bitcoin's halving schedule: 50 BTC initially, halving every
-/// 210,000 blocks, reaching zero after 64 halvings.
-fn compute_block_subsidy(height: u64) -> Amount {
-    let halvings = height / HALVING_INTERVAL;
-    if halvings >= MAX_HALVINGS {
-        return Amount::ZERO;
-    }
-    Amount::from_sat(INITIAL_SUBSIDY_SATS >> halvings)
-}
 
 /// Trait for share validation operations.
 ///
@@ -158,19 +140,26 @@ pub trait ShareValidator {
 ///
 /// Stores a `PoolDifficulty` instance initialized at construction time,
 /// avoiding repeated builds on each validation call.
-pub struct DefaultShareValidator {
+pub struct DefaultShareValidator<T: TimeProvider> {
     pool_difficulty: PoolDifficulty,
     /// Multiplier applied to bitcoin difficulty when walking the PPLNS window.
     difficulty_multiplier: u128,
+    /// Time provider for deterministic coinbase reconstruction.
+    time_provider: T,
 }
 
-impl DefaultShareValidator {
-    /// Create a new DefaultShareValidator with the given pool difficulty
-    /// and difficulty multiplier for PPLNS window walks.
-    pub fn new(pool_difficulty: PoolDifficulty, difficulty_multiplier: u128) -> Self {
+impl<T: TimeProvider> DefaultShareValidator<T> {
+    /// Create a new DefaultShareValidator with the given pool difficulty,
+    /// difficulty multiplier for PPLNS window walks, and time provider.
+    pub fn new(
+        pool_difficulty: PoolDifficulty,
+        difficulty_multiplier: u128,
+        time_provider: T,
+    ) -> Self {
         Self {
             pool_difficulty,
             difficulty_multiplier,
+            time_provider,
         }
     }
 
@@ -364,7 +353,7 @@ impl DefaultShareValidator {
         Ok(())
     }
 
-    /// Validate the share coinbase pays 1 BTC to the miner address in the header.
+    /// Validate the share coinbase creates an output with 1 share unit  to the miner address in the header.
     fn validate_share_coinbase(&self, share: &ShareBlock) -> Result<(), ValidationError> {
         let coinbase = share
             .transactions
@@ -393,41 +382,11 @@ impl DefaultShareValidator {
             )));
         }
 
-        let expected_script = share.header.miner_address.script_pubkey();
+        let expected_script = share.header.miner_bitcoin_address.script_pubkey();
         if output.script_pubkey != expected_script {
             return Err(ValidationError::new(
                 "Share coinbase output does not pay to the miner address in header",
             ));
-        }
-
-        Ok(())
-    }
-
-    /// Validate the commitment hash in the bitcoin coinbase scriptSig matches
-    /// the expected commitment reconstructed from the share header.
-    fn validate_commitment_hash(
-        &self,
-        share: &ShareBlock,
-        bitcoin_coinbase: &Transaction,
-    ) -> Result<(), ValidationError> {
-        let extracted_hash = coinbase::extract_commitment_hash_from_coinbase(bitcoin_coinbase)
-            .map_err(|error| {
-                ValidationError::new(format!("Failed to extract commitment hash: {error}"))
-            })?;
-
-        let template_transactions = if share.bitcoin_transactions.len() > 1 {
-            &share.bitcoin_transactions[1..]
-        } else {
-            &[]
-        };
-        let expected_commitment =
-            ShareCommitment::from_share_header(&share.header, template_transactions);
-        let expected_hash = expected_commitment.hash();
-
-        if extracted_hash != expected_hash {
-            return Err(ValidationError::new(format!(
-                "Commitment hash mismatch: coinbase has {extracted_hash} but share computes to {expected_hash}"
-            )));
         }
 
         Ok(())
@@ -440,19 +399,7 @@ impl DefaultShareValidator {
         share: &ShareBlock,
         pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(), ValidationError> {
-        let bitcoin_coinbase = share
-            .bitcoin_transactions
-            .first()
-            .ok_or_else(|| ValidationError::new("Share block has no bitcoin transactions"))?;
-
-        if !bitcoin_coinbase.is_coinbase() {
-            return Err(ValidationError::new(
-                "First transaction of bitcoin block is not a coinbase",
-            ));
-        }
-
-        self.validate_commitment_hash(share, bitcoin_coinbase)?;
-        self.validate_bitcoin_payout(share, bitcoin_coinbase, pplns_window)?;
+        self.validate_bitcoin_payout(share, pplns_window)?;
         Ok(())
     }
 
@@ -465,7 +412,6 @@ impl DefaultShareValidator {
     fn validate_bitcoin_payout(
         &self,
         share: &ShareBlock,
-        coinbase_transaction: &Transaction,
         pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(), ValidationError> {
         let window = pplns_window
@@ -481,51 +427,43 @@ impl DefaultShareValidator {
                 ValidationError::new("prev_share_blockhash not found in PPLNS window")
             })?;
 
-        let total_amount = Self::compute_total_payout_amount(coinbase_transaction)?;
-        Self::validate_total_against_subsidy(coinbase_transaction, total_amount)?;
+        let coinbase_value = share.header.coinbase_value;
 
         let expected_outputs =
-            Self::build_expected_outputs(&share.header, &address_difficulty_map, total_amount)?;
-        match expected_outputs {
-            Some(outputs) => Self::compare_outputs(&outputs, coinbase_transaction),
-            None => Ok(()),
-        }
-    }
+            Self::build_expected_outputs(&share.header, &address_difficulty_map, coinbase_value)?;
+        let expected_commitment_hash = ShareCommitment::from_share_header(&share.header).hash();
 
-    /// Sum non-OP_RETURN coinbase outputs to get the total payout amount.
-    fn compute_total_payout_amount(
-        coinbase_transaction: &Transaction,
-    ) -> Result<Amount, ValidationError> {
-        let total = coinbase_transaction
-            .output
-            .iter()
-            .filter(|output| !output.script_pubkey.is_op_return())
-            .try_fold(Amount::ZERO, |accumulated, output| {
-                accumulated.checked_add(output.value)
-            })
-            .ok_or_else(|| ValidationError::new("Coinbase payout total overflows"))?;
-        if total == Amount::ZERO {
-            return Err(ValidationError::new("Coinbase has no payout outputs"));
-        }
-        Ok(total)
-    }
+        let flags = parse_flags(share.header.coinbaseaux_flags.clone())
+            .map_err(|e| ValidationError(format!("coinbaseaux flags can't be parsed: {e}")))?;
+        let pool_signature = "P2Poolv2".as_bytes();
+        let reconstructed_coinbase = build_coinbase_transaction(
+            Version::TWO,
+            &expected_outputs,
+            share.header.bitcoin_height as i64,
+            flags,
+            share.header.witness_commitment.clone(),
+            pool_signature,
+            Some(expected_commitment_hash),
+            &self.time_provider,
+        )
+        .map_err(|e| ValidationError(format!("Error building coinbase {e}")))?;
 
-    /// Validate that coinbase total is at least the block subsidy for the encoded height.
-    fn validate_total_against_subsidy(
-        coinbase_transaction: &Transaction,
-        total_amount: Amount,
-    ) -> Result<(), ValidationError> {
-        let height =
-            coinbase::extract_height_from_coinbase(coinbase_transaction).map_err(|error| {
-                ValidationError::new(format!("Failed to extract block height: {error}"))
-            })?;
-        let subsidy = compute_block_subsidy(height);
-        if total_amount < subsidy {
-            return Err(ValidationError::new(format!(
-                "Coinbase total {total_amount} is less than block subsidy {subsidy} at height {height}"
-            )));
+        let reconstructed_coinbase_txid = reconstructed_coinbase.compute_txid();
+        let recomputed_root: TxMerkleNode = match share.header.template_merkle_root {
+            Some(root) => bitcoin::merkle_tree::calculate_root(
+                [reconstructed_coinbase_txid.into(), root].into_iter(),
+            )
+            .ok_or_else(|| ValidationError::new("Failed to compute merkle root"))?,
+            None => reconstructed_coinbase_txid.into(),
+        };
+
+        if recomputed_root != share.header.bitcoin_header.merkle_root {
+            Err(ValidationError(
+                "Coinbase and template merkle root don't match merkle root".into(),
+            ))
+        } else {
+            Ok(())
         }
-        Ok(())
     }
 
     /// Build the expected payout outputs from share header donation/fee and PPLNS distribution.
@@ -535,17 +473,17 @@ impl DefaultShareValidator {
     fn build_expected_outputs(
         share_header: &ShareHeader,
         address_difficulty_map: &HashMap<Address, u128>,
-        total_amount: Amount,
-    ) -> Result<Option<Vec<OutputPair>>, ValidationError> {
+        coinbase_value: u64,
+    ) -> Result<Vec<OutputPair>, ValidationError> {
         if address_difficulty_map.is_empty() {
-            return Ok(None);
+            return Err(ValidationError("Can't build output from empty distribution. There should be at least one payout address".into()));
         }
 
         let mut distribution = Vec::with_capacity(address_difficulty_map.len() + 2);
 
         let remaining_after_donation = include_address_and_cut(
             &mut distribution,
-            total_amount,
+            Amount::from_sat(coinbase_value),
             &share_header.donation_address,
             share_header.donation,
         );
@@ -565,55 +503,11 @@ impl DefaultShareValidator {
             ValidationError::new(format!("Failed to compute payout distribution: {error}"))
         })?;
 
-        Ok(Some(distribution))
-    }
-
-    /// Compare expected output pairs against actual coinbase outputs.
-    ///
-    /// Filters out OP_RETURN outputs (witness commitments) from the coinbase,
-    /// then checks that the count and each (script_pubkey, value) pair match.
-    fn compare_outputs(
-        expected_outputs: &[OutputPair],
-        coinbase_transaction: &Transaction,
-    ) -> Result<(), ValidationError> {
-        let actual_payout_outputs: Vec<_> = coinbase_transaction
-            .output
-            .iter()
-            .filter(|output| !output.script_pubkey.is_op_return())
-            .collect();
-
-        if expected_outputs.len() != actual_payout_outputs.len() {
-            return Err(ValidationError::new(format!(
-                "Expected {} payout outputs but coinbase has {}",
-                expected_outputs.len(),
-                actual_payout_outputs.len()
-            )));
-        }
-
-        for (index, (expected, actual)) in expected_outputs
-            .iter()
-            .zip(actual_payout_outputs.iter())
-            .enumerate()
-        {
-            let expected_script = expected.address.script_pubkey();
-            if actual.script_pubkey != expected_script {
-                return Err(ValidationError::new(format!(
-                    "Payout output {index}: script mismatch"
-                )));
-            }
-            if actual.value != expected.amount {
-                return Err(ValidationError::new(format!(
-                    "Payout output {index}: expected {} but got {}",
-                    expected.amount, actual.value
-                )));
-            }
-        }
-
-        Ok(())
+        Ok(distribution)
     }
 }
 
-impl ShareValidator for DefaultShareValidator {
+impl<T: TimeProvider> ShareValidator for DefaultShareValidator<T> {
     fn validate_share_header(
         &self,
         share_header: &ShareHeader,
@@ -804,10 +698,9 @@ mod tests {
     use crate::shares::share_block::ShareTransaction;
     use crate::test_utils::{
         TestShareBlockBuilder, build_block_from_work_components, genesis_for_tests,
-        load_share_headers_test_data, setup_pool_difficulty_mocks,
+        load_share_headers_test_data, make_test_address, setup_pool_difficulty_mocks,
     };
-    use crate::utils::time_provider::TestTimeProvider;
-    use bitcoin::script::PushBytesBuf;
+    use crate::utils::time_provider::{SystemTimeProvider, TestTimeProvider};
     use bitcoin::transaction::Version;
     use bitcoin::{BlockHash, ScriptBuf, TxOut, hashes::Hash};
     use mockall::predicate::*;
@@ -815,12 +708,14 @@ mod tests {
     use std::sync::{Arc, RwLock};
     use std::time::SystemTime;
 
-    fn validator() -> DefaultShareValidator {
-        DefaultShareValidator::new(PoolDifficulty::default(), 1)
+    fn validator() -> DefaultShareValidator<SystemTimeProvider> {
+        DefaultShareValidator::new(PoolDifficulty::default(), 1, SystemTimeProvider)
     }
 
-    fn validator_with(pool_difficulty: PoolDifficulty) -> DefaultShareValidator {
-        DefaultShareValidator::new(pool_difficulty, 1)
+    fn validator_with(
+        pool_difficulty: PoolDifficulty,
+    ) -> DefaultShareValidator<SystemTimeProvider> {
+        DefaultShareValidator::new(pool_difficulty, 1, SystemTimeProvider)
     }
 
     #[tokio::test]
@@ -1016,12 +911,17 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[test_log::test(tokio::test)]
     async fn test_validate_share() {
         let mut chain_store_handle = ChainStoreHandle::default();
 
-        let share_block =
-            build_block_from_work_components("../p2poolv2_tests/test_data/validation/stratum/b/");
+        let fixed_time = TestTimeProvider::new(
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+        );
+        let share_block = build_block_from_work_components(
+            "../p2poolv2_tests/test_data/validation/stratum/b/",
+            &fixed_time,
+        );
 
         // Set up mock expectations
         chain_store_handle
@@ -1050,13 +950,14 @@ mod tests {
                 .return_const(bitcoin::Network::Regtest);
             mock_window
                 .expect_get_distribution_from_start_hash()
-                .returning(|_, _| Some(HashMap::new()));
+                .returning(|_, _| Some(HashMap::from([(make_test_address(1), 100)])));
             Arc::new(RwLock::new(mock_window))
         };
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1, fixed_time);
         let result =
-            validator().validate_share_block(&share_block, &chain_store_handle, pplns_window);
+            validator.validate_share_block(&share_block, &chain_store_handle, pplns_window);
 
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
     }
 
     #[test]
@@ -1682,95 +1583,24 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_total_payout_amount() {
-        let address = crate::test_utils::parse_address_from_string(
-            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
-        );
-        let coinbase_tx = coinbase::build_coinbase_transaction(
-            Version(2),
-            &[OutputPair {
-                address,
-                amount: Amount::from_sat(5_000_000_000),
-            }],
-            840_000,
-            PushBytesBuf::from(&[0u8]),
-            None,
-            &[],
-            None,
-        )
-        .unwrap();
-        let total = DefaultShareValidator::compute_total_payout_amount(&coinbase_tx).unwrap();
-        assert_eq!(total, Amount::from_sat(5_000_000_000));
-    }
-
-    #[test]
-    fn test_validate_total_against_subsidy_passes() {
-        let address = crate::test_utils::parse_address_from_string(
-            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
-        );
-        let coinbase_tx = coinbase::build_coinbase_transaction(
-            Version(2),
-            &[OutputPair {
-                address,
-                amount: Amount::from_sat(5_000_000_000),
-            }],
-            840_000,
-            PushBytesBuf::from(&[0u8]),
-            None,
-            &[],
-            None,
-        )
-        .unwrap();
-        let result = DefaultShareValidator::validate_total_against_subsidy(
-            &coinbase_tx,
-            Amount::from_sat(5_000_000_000),
-        );
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_validate_total_against_subsidy_fails_below_subsidy() {
-        let address = crate::test_utils::parse_address_from_string(
-            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
-        );
-        let coinbase_tx = coinbase::build_coinbase_transaction(
-            Version(2),
-            &[OutputPair {
-                address,
-                amount: Amount::from_sat(100_000_000),
-            }],
-            840_000,
-            PushBytesBuf::from(&[0u8]),
-            None,
-            &[],
-            None,
-        )
-        .unwrap();
-        let error = DefaultShareValidator::validate_total_against_subsidy(
-            &coinbase_tx,
-            Amount::from_sat(100_000_000),
-        )
-        .unwrap_err();
-        assert!(
-            error.to_string().contains("less than block subsidy"),
-            "Expected subsidy error, got: {error}"
-        );
-    }
-
-    #[test]
-    fn test_build_expected_outputs_empty_distribution_returns_none() {
+    fn test_build_expected_outputs_empty_distribution_returns_error() {
         let header = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build()
             .header;
         let empty_map = HashMap::new();
-        let result = DefaultShareValidator::build_expected_outputs(
+        let result = DefaultShareValidator::<SystemTimeProvider>::build_expected_outputs(
             &header,
             &empty_map,
-            Amount::from_sat(5_000_000_000),
-        )
-        .unwrap();
-        assert!(result.is_none());
+            5_000_000_000,
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("empty distribution"),
+        );
     }
 
     #[test]
@@ -1791,15 +1621,17 @@ mod tests {
         difficulty_map.insert(address_a.clone(), 600u128);
         difficulty_map.insert(address_b.clone(), 400u128);
 
-        let total_amount = Amount::from_sat(1_000_000_000);
-        let outputs =
-            DefaultShareValidator::build_expected_outputs(&header, &difficulty_map, total_amount)
-                .unwrap()
-                .expect("Should return Some for non-empty distribution");
+        let total_amount = 1_000_000_000;
+        let outputs = DefaultShareValidator::<SystemTimeProvider>::build_expected_outputs(
+            &header,
+            &difficulty_map,
+            total_amount,
+        )
+        .unwrap();
 
         assert_eq!(outputs.len(), 2);
         let total_distributed: Amount = outputs.iter().map(|output| output.amount).sum();
-        assert_eq!(total_distributed, total_amount);
+        assert_eq!(total_distributed, Amount::from_sat(total_amount));
 
         assert!(outputs.contains(&OutputPair {
             address: address_a,
@@ -1836,11 +1668,13 @@ mod tests {
         let mut difficulty_map = HashMap::new();
         difficulty_map.insert(address_a.clone(), 1000u128);
 
-        let total = Amount::from_sat(10_000_000_000);
-        let outputs =
-            DefaultShareValidator::build_expected_outputs(&header, &difficulty_map, total)
-                .unwrap()
-                .expect("Should return Some for non-empty distribution");
+        let total = 10_000_000_000;
+        let outputs = DefaultShareValidator::<SystemTimeProvider>::build_expected_outputs(
+            &header,
+            &difficulty_map,
+            total,
+        )
+        .unwrap();
 
         // 3 outputs: donation, fee, miner
         assert_eq!(outputs.len(), 3);
@@ -1858,223 +1692,17 @@ mod tests {
         assert_eq!(outputs[2].amount, Amount::from_sat(9_310_000_000));
 
         let total_distributed: Amount = outputs.iter().map(|output| output.amount).sum();
-        assert_eq!(total_distributed, total);
-    }
-
-    #[test]
-    fn test_compare_outputs_matching() {
-        let address_a = crate::test_utils::parse_address_from_string(
-            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
-        );
-        let address_b = crate::test_utils::parse_address_from_string(
-            "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
-        );
-        let expected = vec![
-            OutputPair {
-                address: address_a.clone(),
-                amount: Amount::from_sat(600_000_000),
-            },
-            OutputPair {
-                address: address_b.clone(),
-                amount: Amount::from_sat(400_000_000),
-            },
-        ];
-
-        let coinbase_tx = coinbase::build_coinbase_transaction(
-            Version(2),
-            &[
-                OutputPair {
-                    address: address_a,
-                    amount: Amount::from_sat(600_000_000),
-                },
-                OutputPair {
-                    address: address_b,
-                    amount: Amount::from_sat(400_000_000),
-                },
-            ],
-            840_000,
-            PushBytesBuf::from(&[0u8]),
-            None,
-            &[],
-            None,
-        )
-        .unwrap();
-
-        let result = DefaultShareValidator::compare_outputs(&expected, &coinbase_tx);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_compare_outputs_count_mismatch() {
-        let address_a = crate::test_utils::parse_address_from_string(
-            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
-        );
-        let address_b = crate::test_utils::parse_address_from_string(
-            "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
-        );
-        let expected = vec![
-            OutputPair {
-                address: address_a.clone(),
-                amount: Amount::from_sat(600_000_000),
-            },
-            OutputPair {
-                address: address_b,
-                amount: Amount::from_sat(400_000_000),
-            },
-        ];
-
-        let coinbase_tx = coinbase::build_coinbase_transaction(
-            Version(2),
-            &[OutputPair {
-                address: address_a,
-                amount: Amount::from_sat(1_000_000_000),
-            }],
-            840_000,
-            PushBytesBuf::from(&[0u8]),
-            None,
-            &[],
-            None,
-        )
-        .unwrap();
-
-        let error = DefaultShareValidator::compare_outputs(&expected, &coinbase_tx).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("Expected 2 payout outputs but coinbase has 1"),
-            "Got: {error}"
-        );
-    }
-
-    #[test]
-    fn test_compare_outputs_value_mismatch() {
-        let address_a = crate::test_utils::parse_address_from_string(
-            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
-        );
-        let expected = vec![OutputPair {
-            address: address_a.clone(),
-            amount: Amount::from_sat(600_000_000),
-        }];
-
-        let coinbase_tx = coinbase::build_coinbase_transaction(
-            Version(2),
-            &[OutputPair {
-                address: address_a,
-                amount: Amount::from_sat(500_000_000),
-            }],
-            840_000,
-            PushBytesBuf::from(&[0u8]),
-            None,
-            &[],
-            None,
-        )
-        .unwrap();
-
-        let error = DefaultShareValidator::compare_outputs(&expected, &coinbase_tx).unwrap_err();
-        assert!(error.to_string().contains("expected"), "Got: {error}");
-    }
-
-    #[test]
-    fn test_compare_outputs_script_mismatch() {
-        let address_a = crate::test_utils::parse_address_from_string(
-            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
-        );
-        let address_b = crate::test_utils::parse_address_from_string(
-            "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
-        );
-        let expected = vec![OutputPair {
-            address: address_a,
-            amount: Amount::from_sat(1_000_000_000),
-        }];
-
-        let coinbase_tx = coinbase::build_coinbase_transaction(
-            Version(2),
-            &[OutputPair {
-                address: address_b,
-                amount: Amount::from_sat(1_000_000_000),
-            }],
-            840_000,
-            PushBytesBuf::from(&[0u8]),
-            None,
-            &[],
-            None,
-        )
-        .unwrap();
-
-        let error = DefaultShareValidator::compare_outputs(&expected, &coinbase_tx).unwrap_err();
-        assert!(
-            error.to_string().contains("script mismatch"),
-            "Got: {error}"
-        );
-    }
-
-    #[test]
-    fn test_compare_outputs_skips_witness_commitment() {
-        let address_a = crate::test_utils::parse_address_from_string(
-            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
-        );
-        let witness_commitment =
-            "6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9";
-        let expected = vec![OutputPair {
-            address: address_a.clone(),
-            amount: Amount::from_sat(3_125_000_000),
-        }];
-
-        let coinbase_tx = coinbase::build_coinbase_transaction(
-            Version(2),
-            &[OutputPair {
-                address: address_a,
-                amount: Amount::from_sat(3_125_000_000),
-            }],
-            840_000,
-            PushBytesBuf::from(&[0u8]),
-            Some(witness_commitment.to_string()),
-            &[],
-            None,
-        )
-        .unwrap();
-
-        // Coinbase has 2 outputs (payout + OP_RETURN), but compare should skip OP_RETURN
-        assert_eq!(coinbase_tx.output.len(), 2);
-        let result = DefaultShareValidator::compare_outputs(&expected, &coinbase_tx);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_compute_block_subsidy_genesis() {
-        let subsidy = compute_block_subsidy(0);
-        assert_eq!(subsidy, Amount::from_sat(5_000_000_000));
-    }
-
-    #[test]
-    fn test_compute_block_subsidy_first_halving() {
-        let subsidy = compute_block_subsidy(210_000);
-        assert_eq!(subsidy, Amount::from_sat(2_500_000_000));
-    }
-
-    #[test]
-    fn test_compute_block_subsidy_fourth_halving() {
-        let subsidy = compute_block_subsidy(840_000);
-        assert_eq!(subsidy, Amount::from_sat(312_500_000));
-    }
-
-    #[test]
-    fn test_compute_block_subsidy_before_final_halving() {
-        // Halving 32 is the last one that produces a non-zero subsidy
-        // 5_000_000_000 >> 32 = 1 (rounded down from integer division)
-        let subsidy = compute_block_subsidy(32 * 210_000);
-        assert_eq!(subsidy, Amount::from_sat(1));
-    }
-
-    #[test]
-    fn test_compute_block_subsidy_after_all_halvings() {
-        let subsidy = compute_block_subsidy(64 * 210_000);
-        assert_eq!(subsidy, Amount::ZERO);
+        assert_eq!(total_distributed, Amount::from_sat(total));
     }
 
     #[test]
     fn test_validate_bitcoin_payout_with_matching_distribution() {
+        use crate::shares::share_commitment::ShareCommitment;
         use bitcoin::script::PushBytesBuf;
+
+        let fixed_time = TestTimeProvider::new(
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+        );
 
         let address_a = crate::test_utils::parse_address_from_string(
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
@@ -2083,9 +1711,18 @@ mod tests {
             "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
         );
 
-        // Build coinbase with 60%/40% split of 3.125 BTC at height 840000
-        let coinbase_tx = coinbase::build_coinbase_transaction(
-            Version(2),
+        // Build share block first to get header fields for commitment
+        let mut share_block = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share_block.header.coinbase_value = 312_500_000;
+        share_block.header.bitcoin_height = 840_000;
+
+        let commitment_hash = ShareCommitment::from_share_header(&share_block.header).hash();
+
+        // Build coinbase matching how the validator reconstructs it
+        let coinbase_tx = build_coinbase_transaction(
+            Version::TWO,
             &[
                 OutputPair {
                     address: address_a.clone(),
@@ -2096,19 +1733,16 @@ mod tests {
                     amount: Amount::from_sat(125_000_000),
                 },
             ],
-            840_000,
+            share_block.header.bitcoin_height as i64,
             PushBytesBuf::from(&[0u8]),
             None,
-            &[],
-            None,
+            b"P2Poolv2",
+            Some(commitment_hash),
+            &fixed_time,
         )
         .unwrap();
 
-        // Build share block using TestShareBlockBuilder to get valid structure,
-        // then replace bitcoin_transactions with our custom coinbase
-        let mut share_block = TestShareBlockBuilder::new()
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .build();
+        share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
         share_block.bitcoin_transactions = vec![coinbase_tx];
 
         // Mock PplnsWindow returning matching 60/40 distribution
@@ -2128,11 +1762,8 @@ mod tests {
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let result = validator().validate_bitcoin_payout(
-            &share_block,
-            &share_block.bitcoin_transactions[0],
-            pplns_window,
-        );
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1, fixed_time);
+        let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
         assert!(
             result.is_ok(),
             "Expected valid payout, got: {}",
@@ -2142,7 +1773,12 @@ mod tests {
 
     #[test]
     fn test_validate_bitcoin_payout_with_wrong_amounts() {
+        use crate::shares::share_commitment::ShareCommitment;
         use bitcoin::script::PushBytesBuf;
+
+        let fixed_time = TestTimeProvider::new(
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+        );
 
         let address_a = crate::test_utils::parse_address_from_string(
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
@@ -2151,9 +1787,18 @@ mod tests {
             "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
         );
 
+        // Build share block first to get header fields for commitment
+        let mut share_block = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share_block.header.coinbase_value = 312_500_000;
+        share_block.header.bitcoin_height = 840_000;
+
+        let commitment_hash = ShareCommitment::from_share_header(&share_block.header).hash();
+
         // Build coinbase with 50/50 split (wrong for 60/40 distribution)
-        let coinbase_tx = coinbase::build_coinbase_transaction(
-            Version(2),
+        let coinbase_tx = build_coinbase_transaction(
+            Version::TWO,
             &[
                 OutputPair {
                     address: address_a.clone(),
@@ -2164,17 +1809,16 @@ mod tests {
                     amount: Amount::from_sat(156_250_000),
                 },
             ],
-            840_000,
+            share_block.header.bitcoin_height as i64,
             PushBytesBuf::from(&[0u8]),
             None,
-            &[],
-            None,
+            b"P2Poolv2",
+            Some(commitment_hash),
+            &fixed_time,
         )
         .unwrap();
 
-        let mut share_block = TestShareBlockBuilder::new()
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .build();
+        share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
         share_block.bitcoin_transactions = vec![coinbase_tx];
 
         // Mock PplnsWindow returning 60/40 distribution
@@ -2194,47 +1838,27 @@ mod tests {
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let error = validator()
-            .validate_bitcoin_payout(
-                &share_block,
-                &share_block.bitcoin_transactions[0],
-                pplns_window,
-            )
+        // The reconstructed coinbase will have different outputs (60/40),
+        // producing a different merkle root than the 50/50 coinbase
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1, fixed_time);
+        let error = validator
+            .validate_bitcoin_payout(&share_block, pplns_window)
             .unwrap_err();
         assert!(
-            error.to_string().contains("expected"),
-            "Expected value mismatch error, got: {error}"
+            error.to_string().contains("merkle root"),
+            "Expected merkle root mismatch error, got: {error}"
         );
     }
 
     #[test]
-    fn test_validate_bitcoin_payout_empty_window_skips_distribution_check() {
-        use bitcoin::script::PushBytesBuf;
-
-        let address_a = crate::test_utils::parse_address_from_string(
-            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
-        );
-
-        let coinbase_tx = coinbase::build_coinbase_transaction(
-            Version(2),
-            &[OutputPair {
-                address: address_a,
-                amount: Amount::from_sat(312_500_000),
-            }],
-            840_000,
-            PushBytesBuf::from(&[0u8]),
-            None,
-            &[],
-            None,
-        )
-        .unwrap();
-
+    fn test_validate_bitcoin_payout_empty_window_returns_error() {
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share_block.bitcoin_transactions = vec![coinbase_tx];
+        share_block.header.coinbase_value = 312_500_000;
+        share_block.header.bitcoin_height = 840_000;
 
-        // Mock PplnsWindow returning empty distribution (bootstrap phase)
+        // Mock PplnsWindow returning empty distribution
         let mut mock_window = PplnsWindow::default();
         mock_window
             .expect_network()
@@ -2244,15 +1868,12 @@ mod tests {
             .returning(|_, _| Some(HashMap::new()));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let result = validator().validate_bitcoin_payout(
-            &share_block,
-            &share_block.bitcoin_transactions[0],
-            pplns_window,
-        );
+        let error = validator()
+            .validate_bitcoin_payout(&share_block, pplns_window)
+            .unwrap_err();
         assert!(
-            result.is_ok(),
-            "Empty window should skip payout check, got: {}",
-            result.unwrap_err()
+            error.to_string().contains("empty distribution"),
+            "Expected empty distribution error, got: {error}"
         );
     }
 
@@ -2264,7 +1885,7 @@ mod tests {
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
         );
 
-        let coinbase_tx = coinbase::build_coinbase_transaction(
+        let coinbase_tx = build_coinbase_transaction(
             Version(2),
             &[OutputPair {
                 address: address_a,
@@ -2275,6 +1896,7 @@ mod tests {
             None,
             &[],
             None,
+            &SystemTimeProvider,
         )
         .unwrap();
 
@@ -2293,11 +1915,7 @@ mod tests {
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         let error = validator()
-            .validate_bitcoin_payout(
-                &share_block,
-                &share_block.bitcoin_transactions[0],
-                pplns_window,
-            )
+            .validate_bitcoin_payout(&share_block, pplns_window)
             .unwrap_err();
         assert!(
             error
@@ -2308,61 +1926,75 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_bitcoin_payout_below_subsidy_fails() {
+    fn test_validate_bitcoin_payout_with_wrong_coinbase_value_fails() {
+        use crate::shares::share_commitment::ShareCommitment;
         use bitcoin::script::PushBytesBuf;
+
+        let fixed_time = TestTimeProvider::new(
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+        );
 
         let address_a = crate::test_utils::parse_address_from_string(
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
         );
 
-        // Coinbase with 1 sat at height 840000 (subsidy is 3.125 BTC)
-        let coinbase_tx = coinbase::build_coinbase_transaction(
-            Version(2),
-            &[OutputPair {
-                address: address_a,
-                amount: Amount::from_sat(1),
-            }],
-            840_000,
-            PushBytesBuf::from(&[0u8]),
-            None,
-            &[],
-            None,
-        )
-        .unwrap();
-
+        // Build share block with coinbase_value=1 sat
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
+        share_block.header.coinbase_value = 1;
+        share_block.header.bitcoin_height = 840_000;
+
+        let commitment_hash = ShareCommitment::from_share_header(&share_block.header).hash();
+
+        // Build coinbase with 1 sat matching the header
+        let coinbase_tx = build_coinbase_transaction(
+            Version::TWO,
+            &[OutputPair {
+                address: address_a.clone(),
+                amount: Amount::from_sat(1),
+            }],
+            share_block.header.bitcoin_height as i64,
+            PushBytesBuf::from(&[0u8]),
+            None,
+            b"P2Poolv2",
+            Some(commitment_hash),
+            &fixed_time,
+        )
+        .unwrap();
+
+        share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
         share_block.bitcoin_transactions = vec![coinbase_tx];
 
         let mut mock_window = PplnsWindow::default();
         mock_window
             .expect_network()
             .return_const(bitcoin::Network::Signet);
+        let addr_a_clone = address_a.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(|_, _| Some(HashMap::new()));
+            .returning(move |_, _| Some(HashMap::from([(addr_a_clone.clone(), 100u128)])));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let error = validator()
-            .validate_bitcoin_payout(
-                &share_block,
-                &share_block.bitcoin_transactions[0],
-                pplns_window,
-            )
-            .unwrap_err();
+        // The reconstructed coinbase will also have 1 sat to address_a,
+        // so merkle roots should match and validation should pass
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1, fixed_time);
+        let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
         assert!(
-            error.to_string().contains("less than block subsidy"),
-            "Expected subsidy error, got: {error}"
+            result.is_ok(),
+            "Expected valid payout, got: {}",
+            result.unwrap_err()
         );
     }
 
     #[test]
     fn test_validate_bitcoin_payout_with_transactions_donation_and_fees() {
-        use bitcoin::absolute::LockTime;
-        use bitcoin::hashes::sha256d;
+        use crate::shares::share_commitment::ShareCommitment;
         use bitcoin::script::PushBytesBuf;
-        use bitcoin::transaction::{Sequence, TxIn};
+
+        let fixed_time = TestTimeProvider::new(
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+        );
 
         let miner_a = crate::test_utils::parse_address_from_string(
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
@@ -2403,9 +2035,22 @@ mod tests {
         let miner_a_amount = remaining * 500 / 1000;
         let miner_b_amount = remaining - miner_c_amount - miner_a_amount;
 
+        // Build share block header with donation/fee fields
+        let mut share_block = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share_block.header.donation_address = Some(donation_address.clone());
+        share_block.header.donation = Some(donation_bp);
+        share_block.header.fee_address = Some(fee_address.clone());
+        share_block.header.fee = Some(fee_bp);
+        share_block.header.coinbase_value = total_coinbase_sats;
+        share_block.header.bitcoin_height = 840_000;
+
+        let commitment_hash = ShareCommitment::from_share_header(&share_block.header).hash();
+
         // Build coinbase: donation, fee, then 3 miners in sorted address order
-        let coinbase_tx = coinbase::build_coinbase_transaction(
-            Version(2),
+        let coinbase_tx = build_coinbase_transaction(
+            Version::TWO,
             &[
                 OutputPair {
                     address: donation_address.clone(),
@@ -2428,60 +2073,17 @@ mod tests {
                     amount: Amount::from_sat(miner_b_amount),
                 },
             ],
-            840_000,
+            share_block.header.bitcoin_height as i64,
             PushBytesBuf::from(&[0u8]),
             None,
-            &[],
-            None,
+            b"P2Poolv2",
+            Some(commitment_hash),
+            &fixed_time,
         )
         .unwrap();
 
-        // Build two regular bitcoin transactions (spending dummy inputs)
-        let regular_tx_1 = Transaction {
-            version: Version(2),
-            lock_time: LockTime::ZERO,
-            input: vec![TxIn {
-                previous_output: bitcoin::OutPoint {
-                    txid: sha256d::Hash::all_zeros().into(),
-                    vout: 0,
-                },
-                script_sig: ScriptBuf::new(),
-                sequence: Sequence::MAX,
-                witness: bitcoin::Witness::new(),
-            }],
-            output: vec![TxOut {
-                value: Amount::from_sat(950_000),
-                script_pubkey: miner_a.script_pubkey(),
-            }],
-        };
-
-        let regular_tx_2 = Transaction {
-            version: Version(2),
-            lock_time: LockTime::ZERO,
-            input: vec![TxIn {
-                previous_output: bitcoin::OutPoint {
-                    txid: sha256d::Hash::all_zeros().into(),
-                    vout: 1,
-                },
-                script_sig: ScriptBuf::new(),
-                sequence: Sequence::MAX,
-                witness: bitcoin::Witness::new(),
-            }],
-            output: vec![TxOut {
-                value: Amount::from_sat(450_000),
-                script_pubkey: miner_b.script_pubkey(),
-            }],
-        };
-
-        // Share block with coinbase + 2 regular transactions
-        let mut share_block = TestShareBlockBuilder::new()
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .build();
-        share_block.header.donation_address = Some(donation_address.clone());
-        share_block.header.donation = Some(donation_bp);
-        share_block.header.fee_address = Some(fee_address.clone());
-        share_block.header.fee = Some(fee_bp);
-        share_block.bitcoin_transactions = vec![coinbase_tx, regular_tx_1, regular_tx_2];
+        share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
+        share_block.bitcoin_transactions = vec![coinbase_tx];
 
         // Mock PplnsWindow returning 3 miners with difficulties 500, 300, 200
         let mut mock_window = PplnsWindow::default();
@@ -2502,18 +2104,15 @@ mod tests {
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let result = validator().validate_bitcoin_payout(
-            &share_block,
-            &share_block.bitcoin_transactions[0],
-            pplns_window,
-        );
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1, fixed_time);
+        let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
         assert!(
             result.is_ok(),
-            "Expected valid payout with 3 miners, donation, fee and 3 txs, got: {}",
+            "Expected valid payout with 3 miners, donation, fee, got: {}",
             result.unwrap_err()
         );
 
-        // Verify the amounts sum correctly, for our sanity
+        // Verify the amounts sum correctly
         assert_eq!(donation_amount, 15_630_000);
         assert_eq!(fee_amount, 5_939_400);
         assert_eq!(miner_c_amount, 58_206_120);

@@ -28,7 +28,7 @@ use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::Hash;
 use bitcoin::io::Write;
-use bitcoin::{Address, BlockHash, CompactTarget, Transaction, TxMerkleNode, hashes};
+use bitcoin::{Address, BlockHash, CompactTarget, TxMerkleNode, hashes};
 use serde::Serialize;
 use std::error::Error;
 use std::sync::Arc;
@@ -55,7 +55,7 @@ pub struct ShareCommitment {
     pub uncles: Vec<BlockHash>,
     /// Bitcoin address identifying the miner mining the share
     #[serde(serialize_with = "address_serde::serialize")]
-    pub miner_address: Address,
+    pub miner_bitcoin_address: Address,
     /// Bitcoin transactions merkle root excluding the coinbase.
     pub template_merkle_root: Option<TxMerkleNode>,
     /// Share chain difficult as compact target
@@ -85,7 +85,7 @@ impl ShareCommitment {
         let mut serialized = Vec::new();
         self.consensus_encode(&mut serialized)
             .expect("encoding commitment should never fail");
-        self.miner_address
+        self.miner_bitcoin_address
             .script_pubkey()
             .consensus_encode(&mut serialized)
             .expect("encoding address script_pubkey should never fail");
@@ -101,7 +101,7 @@ impl ShareCommitment {
         Self {
             prev_share_blockhash: header.prev_share_blockhash,
             uncles: header.uncles.clone(),
-            miner_address: header.miner_address.clone(),
+            miner_bitcoin_address: header.miner_bitcoin_address.clone(),
             template_merkle_root: header.template_merkle_root,
             bits: header.bits,
             time: header.time,
@@ -197,7 +197,7 @@ pub(crate) fn build_share_commitment(
         Some(address) => Ok(Some(ShareCommitment {
             prev_share_blockhash: tip,
             uncles: uncles.into_iter().collect(),
-            miner_address: address,
+            miner_bitcoin_address: address,
             template_merkle_root: merkle_root,
             bits: target,
             time,
@@ -270,7 +270,7 @@ mod tests {
         let other_pubkey = "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
             .parse::<CompressedPublicKey>()
             .unwrap();
-        commitment2.miner_address = Address::p2wpkh(&other_pubkey, Network::Signet);
+        commitment2.miner_bitcoin_address = Address::p2wpkh(&other_pubkey, Network::Signet);
 
         let hash1 = commitment1.hash();
         let hash2 = commitment2.hash();
@@ -401,7 +401,7 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(commitment.uncles.len(), 0);
-        assert_eq!(commitment.miner_address, btcaddress);
+        assert_eq!(commitment.miner_bitcoin_address, btcaddress);
         assert_eq!(commitment.bits, CompactTarget::from_consensus(0x1b4188f5));
         // Time should be current, so just verify it's set
         assert!(commitment.time > 0);
@@ -556,7 +556,7 @@ mod tests {
     fn header_and_bitcoin_transactions_from_commitment(
         commitment: ShareCommitment,
     ) -> (ShareHeader, Vec<bitcoin::Transaction>) {
-        let coinbase = test_coinbase_transaction();
+        let coinbase = test_coinbase_transaction(1);
 
         let share_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
             [coinbase.clone()].iter().map(|tx| tx.compute_txid()),
@@ -591,8 +591,14 @@ mod tests {
             nonce: 0,
         };
 
-        let header =
-            ShareHeader::from_commitment_and_header(commitment, bitcoin_header, share_merkle_root);
+        let header = ShareHeader::from_commitment_and_header(
+            commitment,
+            bitcoin_header,
+            share_merkle_root,
+            template.coinbaseaux.get("flags").cloned(),
+            template.default_witness_commitment,
+            template.height as u64,
+        );
 
         (header, bitcoin_transactions)
     }
@@ -602,18 +608,18 @@ mod tests {
         let commitment = create_test_commitment();
         let expected_prev = commitment.prev_share_blockhash;
         let expected_uncles = commitment.uncles.clone();
-        let expected_address = commitment.miner_address.clone();
+        let expected_address = commitment.miner_bitcoin_address.clone();
         let expected_bits = commitment.bits;
         let expected_time = commitment.time;
 
-        let (header, bitcoin_transactions) =
+        let (header, _bitcoin_transactions) =
             header_and_bitcoin_transactions_from_commitment(commitment);
 
         let reconstructed = ShareCommitment::from_share_header(&header);
 
         assert_eq!(reconstructed.prev_share_blockhash, expected_prev);
         assert_eq!(reconstructed.uncles, expected_uncles);
-        assert_eq!(reconstructed.miner_address, expected_address);
+        assert_eq!(reconstructed.miner_bitcoin_address, expected_address);
         assert_eq!(reconstructed.bits, expected_bits);
         assert_eq!(reconstructed.time, expected_time);
     }

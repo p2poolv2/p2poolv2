@@ -476,7 +476,7 @@ mod tests {
         // Verify share_commitment is properly set in tracker
         assert!(details.share_commitment.is_some());
         let stored_commitment = details.share_commitment.unwrap();
-        assert_eq!(stored_commitment.miner_address, btcaddress);
+        assert_eq!(stored_commitment.miner_bitcoin_address, btcaddress);
         assert_eq!(stored_commitment.prev_share_blockhash, genesis.block_hash());
     }
 

@@ -45,6 +45,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::validation::{DefaultShareValidator, ShareValidator};
 use crate::utils::cpu::available_cpus;
+use crate::utils::time_provider::SystemTimeProvider;
 use bitcoin::BlockHash;
 use libp2p::request_response::ResponseChannel;
 use std::fmt;
@@ -153,6 +154,7 @@ impl ValidationWorker {
         let share_validator = Arc::new(DefaultShareValidator::new(
             pool_difficulty,
             self.difficulty_multiplier,
+            SystemTimeProvider,
         ));
 
         while let Some(event) = self.validation_rx.recv().await {
@@ -205,7 +207,7 @@ impl ValidationWorker {
 /// with `BlockValid` status.
 async fn validate_and_emit(
     block_hash: BlockHash,
-    share_validator: Arc<DefaultShareValidator>,
+    share_validator: Arc<DefaultShareValidator<SystemTimeProvider>>,
     chain_store_handle: ChainStoreHandle,
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
@@ -294,11 +296,10 @@ mod tests {
     /// mock clone that will handle a successful validation path with no
     /// children or nephews.
     fn setup_validation_expectations(mock_clone: &mut MockChainStoreHandle) {
-        // validate_share_block calls has_status to check for BlockValid
-        mock_clone.expect_has_status().returning(|_, _| false);
-
-        // validate_uncles checks uncle existence and confirmed status
-        mock_clone.expect_share_block_exists().returning(|_| true);
+        // Return BlockValid so validate_share_block short-circuits with
+        // Ok(()) -- these tests exercise the worker pipeline, not
+        // detailed share validation.
+        mock_clone.expect_has_status().returning(|_, _| true);
 
         // schedule_dependents checks children and nephews
         mock_clone
@@ -629,7 +630,7 @@ mod tests {
             .expect_get_share()
             .returning(move |_| Some(parent_clone.clone()));
 
-        parent_mock.expect_has_status().returning(|_, _| false);
+        parent_mock.expect_has_status().returning(|_, _| true);
         // schedule_dependents: parent has one child
         parent_mock
             .expect_get_children_blockhashes()
@@ -743,7 +744,7 @@ mod tests {
         uncle_mock
             .expect_get_share()
             .returning(move |_| Some(uncle_clone.clone()));
-        uncle_mock.expect_has_status().returning(|_, _| false);
+        uncle_mock.expect_has_status().returning(|_, _| true);
         // schedule_dependents: no children, one nephew
         uncle_mock
             .expect_get_children_blockhashes()

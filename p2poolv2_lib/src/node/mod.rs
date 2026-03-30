@@ -43,6 +43,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::shares::validation::{DefaultShareValidator, ShareValidator};
+use crate::utils::time_provider::SystemTimeProvider;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use bitcoin::BlockHash;
 use libp2p::PeerId;
@@ -205,6 +206,7 @@ impl Node {
             Arc::new(DefaultShareValidator::new(
                 pool_difficulty,
                 config.stratum.difficulty_multiplier as u128,
+                SystemTimeProvider,
             ));
         let request_response_handler = RequestResponseHandler::new(
             config.network.clone(),

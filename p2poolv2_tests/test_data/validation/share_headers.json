@@ -10,7 +10,7 @@
     },
     "bits": 545259519,
     "merkle_root": "b326580867237a89c3228d98a34fc4d408ab00938721242a1197e75d71281ae7",
-    "miner_address": "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+    "miner_bitcoin_address": "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
     "prev_share_blockhash": "0000000000000000000000000000000000000000000000000000000000000000",
     "time": 1700000000,
     "coinbase_value": 100000000,
@@ -19,7 +19,8 @@
       "04e52dfa91be47dd5389b085e37d55f647ee2524c07a4467057e91c2f024692c",
       "d0b88bbe5e9c10b9305abe560bb5e3215447bc16af48b3596f860e3e75d1ebcf",
       "4c4142e9beb152e399b8a154ac940d64af72f50636bfc55460c07108af41f6fe"
-    ]
+    ],
+    "bitcoin_height": 1
   },
   "tight_target_header": {
     "bitcoin_header": {
@@ -32,12 +33,13 @@
     },
     "bits": 16842752,
     "merkle_root": "b326580867237a89c3228d98a34fc4d408ab00938721242a1197e75d71281ae7",
-    "miner_address": "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+    "miner_bitcoin_address": "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
     "prev_share_blockhash": "0000000000000000000000000000000000000000000000000000000000000000",
     "time": 1700000000,
     "coinbase_value": 100000000,
     "template_merkle_root": null,
-    "uncles": []
+    "uncles": [],
+    "bitcoin_height": 1
   },
   "too_many_uncles_header": {
     "bitcoin_header": {
@@ -50,7 +52,7 @@
     },
     "bits": 503543726,
     "merkle_root": "b326580867237a89c3228d98a34fc4d408ab00938721242a1197e75d71281ae7",
-    "miner_address": "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+    "miner_bitcoin_address": "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
     "prev_share_blockhash": "0000000000000000000000000000000000000000000000000000000000000000",
     "time": 1700000000,
     "coinbase_value": 100000000,
@@ -60,7 +62,8 @@
       "d0b88bbe5e9c10b9305abe560bb5e3215447bc16af48b3596f860e3e75d1ebcf",
       "4c4142e9beb152e399b8a154ac940d64af72f50636bfc55460c07108af41f6fe",
       "55626ad38c4e1993e93bc97b070db3820abb8d75e1a2912bb29f5e5089cde953"
-    ]
+    ],
+    "bitcoin_height": 1
   },
   "valid_header": {
     "bitcoin_header": {
@@ -73,11 +76,12 @@
     },
     "bits": 545259519,
     "merkle_root": "b326580867237a89c3228d98a34fc4d408ab00938721242a1197e75d71281ae7",
-    "miner_address": "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+    "miner_bitcoin_address": "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
     "prev_share_blockhash": "0000000000000000000000000000000000000000000000000000000000000000",
     "time": 1700000000,
     "coinbase_value": 100000000,
     "template_merkle_root": null,
-    "uncles": []
+    "uncles": [],
+    "bitcoin_height": 1
   }
 }

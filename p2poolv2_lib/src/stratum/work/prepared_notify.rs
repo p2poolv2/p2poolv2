@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use super::block_template::BlockTemplate;
+use super::block_template::{BlockTemplate, parse_flags};
 use super::coinbase::{build_coinbase_transaction, split_coinbase};
 use super::error::WorkError;
 use super::gbt::build_merkle_branches_for_template;
@@ -22,9 +22,9 @@ use super::tracker::JobTracker;
 use crate::accounting::OutputPair;
 use crate::shares::share_commitment::ShareCommitment;
 use crate::stratum::util::{reverse_four_byte_chunks, to_be_hex};
+use crate::utils::time_provider::SystemTimeProvider;
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::{self, Hash};
-use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::Version;
 use bitcoin::{Address, BlockHash, CompactTarget, TxMerkleNode};
 use std::sync::Arc;
@@ -249,14 +249,17 @@ impl PreparedNotifyParamsBuilder {
         let dummy_commitment_hash = hashes::sha256::Hash::from_byte_array(dummy_hash_bytes);
         let dummy_hash_hex = hex::encode(dummy_hash_bytes);
 
+        let coinbaseaux = parse_flags(self.template.coinbaseaux.get("flags").cloned())?;
+
         let coinbase = build_coinbase_transaction(
             Version::TWO,
             self.output_distribution.as_slice(),
             self.template.height as i64,
-            parse_flags(self.template.coinbaseaux.get("flags").cloned())?,
+            coinbaseaux,
             self.template.default_witness_commitment.clone(),
             &self.pool_signature,
             Some(dummy_commitment_hash),
+            &SystemTimeProvider,
         )?;
 
         let (coinbase1_full, coinbase2) = split_coinbase(&coinbase)?;
@@ -307,7 +310,7 @@ impl PreparedNotifyParamsBuilder {
         let commitment_without_address = ShareCommitment {
             prev_share_blockhash: self.prev_share_blockhash,
             uncles: self.uncles.clone(),
-            miner_address: self.output_distribution[0].address.clone(),
+            miner_bitcoin_address: self.output_distribution[0].address.clone(),
             template_merkle_root: self.merkle_root,
             bits: self.bits,
             time: self.time,
@@ -407,7 +410,7 @@ pub(crate) fn build_notify_from_prepared(
     let share_commitment = miner_address.map(|address| ShareCommitment {
         prev_share_blockhash: prepared.prev_share_blockhash,
         uncles: prepared.uncles.clone(),
-        miner_address: address.clone(),
+        miner_bitcoin_address: address.clone(),
         template_merkle_root: prepared.merkle_root,
         bits: prepared.bits,
         time: prepared.time,
@@ -428,23 +431,6 @@ pub(crate) fn build_notify_from_prepared(
     );
 
     Ok(notify_json)
-}
-
-/// Extract flags from template coinbaseaux and convert to PushBytesBuf.
-/// If flags are empty or absent, use a single byte with value 0.
-fn parse_flags(flags: Option<String>) -> Result<PushBytesBuf, WorkError> {
-    match flags {
-        Some(flags) if flags.is_empty() => Ok(PushBytesBuf::from(&[0u8])),
-        Some(flags) => {
-            let decoded = hex::decode(&flags).map_err(|error| WorkError {
-                message: format!("Invalid hex in coinbaseaux flags '{flags}': {error}"),
-            })?;
-            PushBytesBuf::try_from(decoded).map_err(|error| WorkError {
-                message: format!("Coinbaseaux flags too large: {error}"),
-            })
-        }
-        None => Ok(PushBytesBuf::from(&[0u8])),
-    }
 }
 
 #[cfg(test)]
@@ -538,7 +524,7 @@ mod tests {
         // Verify commitment was stored with correct miner address
         let details = job_details.unwrap();
         let commitment = details.share_commitment.as_ref().unwrap();
-        assert_eq!(commitment.miner_address, address);
+        assert_eq!(commitment.miner_bitcoin_address, address);
         assert_eq!(commitment.prev_share_blockhash, BlockHash::all_zeros());
     }
 
@@ -570,7 +556,7 @@ mod tests {
         let direct_commitment = ShareCommitment {
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: Vec::new(),
-            miner_address: address,
+            miner_bitcoin_address: address,
             template_merkle_root: merkle_root,
             bits,
             time,
@@ -681,30 +667,6 @@ mod tests {
         assert!(
             details.share_commitment.is_none(),
             "share_commitment should be None for solo mode"
-        );
-    }
-
-    #[test]
-    fn test_parse_flags() {
-        let flags = parse_flags(Some(String::from(""))).unwrap();
-        assert_eq!(flags.as_bytes(), &[0u8]);
-
-        let flags = parse_flags(None).unwrap();
-        assert_eq!(flags.as_bytes(), &[0u8]);
-
-        let flags = parse_flags(Some(String::from("deadbeef"))).unwrap();
-        assert_eq!(flags.as_bytes(), &[0xde, 0xad, 0xbe, 0xef]);
-    }
-
-    #[test]
-    fn test_parse_flags_invalid_hex_returns_error() {
-        let result = parse_flags(Some(String::from("not_valid_hex")));
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .message
-                .contains("Invalid hex in coinbaseaux flags")
         );
     }
 }

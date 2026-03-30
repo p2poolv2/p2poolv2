@@ -549,7 +549,7 @@ mod tests {
         let (block_fetcher_handle, validation_tx) = test_handles();
 
         // Create a test transaction
-        let transaction = crate::test_utils::test_coinbase_transaction();
+        let transaction = crate::test_utils::test_coinbase_transaction(1);
 
         let ctx = RequestContext {
             peer: peer_id,

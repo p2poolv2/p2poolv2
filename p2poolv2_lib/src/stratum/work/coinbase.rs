@@ -17,6 +17,7 @@
 use crate::accounting::OutputPair;
 use crate::stratum::session::{EXTRANONCE1_SIZE, EXTRANONCE2_SIZE};
 use crate::stratum::work::error::WorkError;
+use crate::utils::time_provider::TimeProvider;
 use bitcoin::absolute::LockTime;
 use bitcoin::blockdata::script::{Builder, ScriptBuf};
 use bitcoin::consensus::{deserialize, serialize};
@@ -46,10 +47,11 @@ pub fn parse_address(address: &str, network: Network) -> Result<Address, WorkErr
     p2poolv2_config::parse_address(address, network).map_err(WorkError::from)
 }
 
-/// Get current timestamp, in seconds and nanoseconds.
+/// Get timestamp from provider, in seconds and nanoseconds.
 #[allow(dead_code)]
-fn get_current_timestamp_bytes() -> (u32, u32) {
-    let timestamp = std::time::SystemTime::now()
+fn get_timestamp_bytes<T: TimeProvider + ?Sized>(time_provider: &T) -> (u32, u32) {
+    let timestamp = time_provider
+        .now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap();
     (timestamp.as_secs() as u32, timestamp.subsec_nanos())
@@ -106,7 +108,7 @@ fn append_default_witness_commitment(
 /// 04 eba96d2d - enonce1 from tv_nsec ??
 /// 0c - 12, the length of the two nonces put together
 #[allow(dead_code)]
-pub(crate) fn build_coinbase_transaction(
+pub(crate) fn build_coinbase_transaction<T: TimeProvider + ?Sized>(
     version: Version,
     output_data: &[OutputPair],
     height: i64,
@@ -114,6 +116,7 @@ pub(crate) fn build_coinbase_transaction(
     default_witness_commitment: Option<String>,
     pool_signature: &[u8],
     commitment_hash: Option<sha256::Hash>,
+    time_provider: &T,
 ) -> Result<Transaction, WorkError> {
     if output_data.is_empty() {
         return Err(WorkError {
@@ -121,7 +124,7 @@ pub(crate) fn build_coinbase_transaction(
         });
     }
     // Use timestamp for providing randomness to distribute search space along with enonce1 that will be used by the miners.
-    let (secs, nsecs) = get_current_timestamp_bytes();
+    let (secs, nsecs) = get_timestamp_bytes(time_provider);
 
     let mut signature_buf = PushBytesBuf::with_capacity(pool_signature.len());
     signature_buf.extend_from_slice(pool_signature).unwrap();
@@ -328,6 +331,7 @@ pub fn extract_commitment_hash_from_coinbase(
 #[cfg(test)]
 mod tests {
     use crate::shares::share_commitment::ShareCommitment;
+    use crate::utils::time_provider::SystemTimeProvider;
     use bitcoin::hex::DisplayHex;
     use std::str::FromStr;
 
@@ -396,6 +400,7 @@ mod tests {
             None,
             &[],
             None,
+            &SystemTimeProvider,
         )
         .unwrap();
 
@@ -450,6 +455,7 @@ mod tests {
             None,
             &[],
             None,
+            &SystemTimeProvider,
         )
         .unwrap();
 
@@ -513,6 +519,7 @@ mod tests {
             template.default_witness_commitment.clone(),
             b"P2Poolv2",
             None,
+            &SystemTimeProvider,
         )
         .unwrap();
 
@@ -615,6 +622,7 @@ mod tests {
             template.default_witness_commitment.clone(),
             b"P2Poolv2",
             Some(share_commitment.hash()),
+            &SystemTimeProvider,
         )
         .unwrap();
 
@@ -711,6 +719,7 @@ mod tests {
             template.default_witness_commitment.clone(),
             pool_sig,
             None,
+            &SystemTimeProvider,
         )
         .unwrap();
 
@@ -794,6 +803,7 @@ mod tests {
             None,
             b"P2Poolv2",
             Some(expected_hash),
+            &SystemTimeProvider,
         )
         .unwrap();
 
@@ -820,6 +830,7 @@ mod tests {
             None,
             b"P2Poolv2",
             None,
+            &SystemTimeProvider,
         )
         .unwrap();
 
@@ -866,6 +877,7 @@ mod tests {
             None,
             &[],
             None,
+            &SystemTimeProvider,
         )
         .unwrap();
 
@@ -892,6 +904,7 @@ mod tests {
             None,
             &[],
             None,
+            &SystemTimeProvider,
         )
         .unwrap();
 
@@ -918,6 +931,7 @@ mod tests {
             None,
             &[],
             None,
+            &SystemTimeProvider,
         )
         .unwrap();
 

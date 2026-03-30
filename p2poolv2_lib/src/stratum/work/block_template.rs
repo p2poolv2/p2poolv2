@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::stratum::work::error::WorkError;
+use bitcoin::script::PushBytesBuf;
 use bitcoin::{TxMerkleNode, merkle_tree};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -94,10 +96,51 @@ impl BlockTemplate {
     }
 }
 
+/// Extract flags from template coinbaseaux and convert to PushBytesBuf.
+/// If flags are empty or absent, use a single byte with value 0.
+pub(crate) fn parse_flags(flags: Option<String>) -> Result<PushBytesBuf, WorkError> {
+    match flags {
+        Some(flags) if flags.is_empty() => Ok(PushBytesBuf::from(&[0u8])),
+        Some(flags) => {
+            let decoded = hex::decode(&flags).map_err(|error| WorkError {
+                message: format!("Invalid hex in coinbaseaux flags '{flags}': {error}"),
+            })?;
+            PushBytesBuf::try_from(decoded).map_err(|error| WorkError {
+                message: format!("Coinbaseaux flags too large: {error}"),
+            })
+        }
+        None => Ok(PushBytesBuf::from(&[0u8])),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use bitcoin::hashes::Hash;
+
+    #[test]
+    fn test_parse_flags() {
+        let flags = parse_flags(Some(String::from(""))).unwrap();
+        assert_eq!(flags.as_bytes(), &[0u8]);
+
+        let flags = parse_flags(None).unwrap();
+        assert_eq!(flags.as_bytes(), &[0u8]);
+
+        let flags = parse_flags(Some(String::from("deadbeef"))).unwrap();
+        assert_eq!(flags.as_bytes(), &[0xde, 0xad, 0xbe, 0xef]);
+    }
+
+    #[test]
+    fn test_parse_flags_invalid_hex_returns_error() {
+        let result = parse_flags(Some(String::from("not_valid_hex")));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .message
+                .contains("Invalid hex in coinbaseaux flags")
+        );
+    }
 
     #[test]
     fn test_template_transaction_conversion() {

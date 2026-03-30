@@ -191,7 +191,7 @@ impl OrganiseWorker {
             blockhash: share_block.block_hash(),
             prev_blockhash: share_block.header.prev_share_blockhash,
             height,
-            miner_address: share_block.header.miner_address.to_string(),
+            miner_address: share_block.header.miner_bitcoin_address.to_string(),
             timestamp: share_block.header.time,
             bits: share_block.header.bits,
             uncles: uncle_infos,

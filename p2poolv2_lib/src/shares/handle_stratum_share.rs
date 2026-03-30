@@ -20,7 +20,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
-use crate::shares::transactions::coinbase::create_coinbase_transaction;
+use crate::shares::transactions::coinbase::{self, create_coinbase_transaction};
 use crate::stratum::emission::Emission;
 use bitcoin::merkle_tree;
 use std::error::Error;
@@ -44,7 +44,7 @@ pub async fn handle_stratum_share(
 
     // Send share to peers only in p2p mode, i.e. if the pool is run with a miner address that results in a commitment
     if let Some(share_commitment) = share_commitment {
-        let share_coinbase = create_coinbase_transaction(&share_commitment.miner_address);
+        let share_coinbase = create_coinbase_transaction(&share_commitment.miner_bitcoin_address);
 
         // TODO: Get share chain transactions and use them here.
         let share_transactions = vec![ShareTransaction(share_coinbase)];
@@ -57,8 +57,14 @@ pub async fn handle_stratum_share(
             None => return Err("No coinbase found".into()),
         };
 
-        let share_header =
-            ShareHeader::from_commitment_and_header(share_commitment, header, merkle_root.into());
+        let share_header = ShareHeader::from_commitment_and_header(
+            share_commitment,
+            header,
+            merkle_root.into(),
+            blocktemplate.coinbaseaux.get("flags").cloned(),
+            blocktemplate.default_witness_commitment.clone(),
+            blocktemplate.height as u64,
+        );
 
         let mut bitcoin_transactions = Vec::with_capacity(blocktemplate.transactions.len() + 1);
         bitcoin_transactions.push(coinbase);
@@ -301,8 +307,8 @@ mod tests {
         );
         assert_eq!(share_block.header.uncles, expected_commitment.uncles);
         assert_eq!(
-            share_block.header.miner_address,
-            expected_commitment.miner_address
+            share_block.header.miner_bitcoin_address,
+            expected_commitment.miner_bitcoin_address
         );
         assert_eq!(share_block.header.bits, expected_commitment.bits);
         assert_eq!(share_block.header.time, expected_commitment.time);
