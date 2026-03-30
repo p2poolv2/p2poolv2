@@ -437,7 +437,7 @@ impl<T: TimeProvider> DefaultShareValidator<T> {
             Some(aux_flags) => aux_flags.to_push_bytes_buf(),
             None => PushBytesBuf::from(&[0u8]),
         };
-        let pool_signature = "P2Poolv2".as_bytes();
+        let pool_signature = b"P2Poolv2";
         let reconstructed_coinbase = build_coinbase_transaction(
             Version::TWO,
             &expected_outputs,
