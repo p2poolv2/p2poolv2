@@ -42,6 +42,7 @@ pub async fn handle_stratum_share(
         coinbase,
         blocktemplate,
         share_commitment,
+        coinbase_nsecs,
     } = emission;
 
     // Send share to peers only in p2p mode, i.e. if the pool is run with a miner address that results in a commitment
@@ -73,6 +74,7 @@ pub async fn handle_stratum_share(
                 .as_deref()
                 .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok()),
             blocktemplate.height as u64,
+            coinbase_nsecs,
         );
 
         let mut bitcoin_transactions = Vec::with_capacity(blocktemplate.transactions.len() + 1);
@@ -117,7 +119,7 @@ mod tests {
     use crate::accounting::payout::simple_pplns::SimplePplnsShare;
     use crate::store::writer::StoreError;
     use crate::stratum::work::block_template::BlockTemplate;
-    use crate::test_utils::create_test_commitment;
+    use crate::test_utils::{TEST_COINBASE_NSECS, create_test_commitment};
     use bitcoin::block::Header;
     use bitcoin::hashes::Hash;
     use bitcoin::{BlockHash, CompactTarget};
@@ -188,6 +190,7 @@ mod tests {
             coinbase,
             blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: None,
+            coinbase_nsecs: TEST_COINBASE_NSECS,
         }
     }
 
@@ -229,6 +232,7 @@ mod tests {
             coinbase,
             blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: Some(commitment),
+            coinbase_nsecs: TEST_COINBASE_NSECS,
         }
     }
 
@@ -399,6 +403,7 @@ mod tests {
             coinbase,
             blocktemplate: Arc::new(blocktemplate),
             share_commitment: Some(commitment),
+            coinbase_nsecs: TEST_COINBASE_NSECS,
         };
 
         let result = handle_stratum_share(emission, &mock_chain_store).await;

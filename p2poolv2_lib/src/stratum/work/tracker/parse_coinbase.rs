@@ -77,6 +77,7 @@ mod tests {
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::stratum::work::coinbase::parse_address;
     use crate::stratum::work::tracker::start_tracker_actor;
+    use crate::test_utils::TEST_COINBASE_NSECS;
     use bitcoin::{Amount, Network, TxOut};
     use std::collections::HashMap;
     use std::str::FromStr;
@@ -148,6 +149,7 @@ mod tests {
             "".to_string(),
             coinbase2,
             None,
+            TEST_COINBASE_NSECS,
             job_id,
         );
 
@@ -186,6 +188,7 @@ mod tests {
             "".to_string(),
             "deadbeef".to_string(), // Invalid coinbase2
             None,
+            TEST_COINBASE_NSECS,
             job_id,
         );
 
@@ -228,6 +231,7 @@ mod tests {
             "".to_string(),
             coinbase2,
             None,
+            TEST_COINBASE_NSECS,
             job_id,
         );
 
@@ -278,6 +282,7 @@ mod tests {
             "".to_string(),
             coinbase2,
             None,
+            TEST_COINBASE_NSECS,
             job_id,
         );
 

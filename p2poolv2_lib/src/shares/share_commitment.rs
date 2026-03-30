@@ -607,6 +607,7 @@ mod tests {
                 .as_deref()
                 .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok()),
             template.height as u64,
+            0,
         );
 
         (header, bitcoin_transactions)

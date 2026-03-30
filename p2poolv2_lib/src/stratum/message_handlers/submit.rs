@@ -141,6 +141,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
             coinbase: validation_result.coinbase,
             blocktemplate: job.blocktemplate.clone(),
             share_commitment: job.share_commitment.clone(),
+            coinbase_nsecs: job.coinbase_nsecs,
         })
         .await
         .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;
@@ -242,7 +243,8 @@ mod handle_submit_tests {
     use crate::stratum::session::Session;
     use crate::stratum::work::tracker::start_tracker_actor;
     use crate::test_utils::{
-        create_test_commitment, load_valid_stratum_work_components, setup_test_chain_store_handle,
+        TEST_COINBASE_NSECS, create_test_commitment, load_valid_stratum_work_components,
+        setup_test_chain_store_handle,
     };
     use bitcoin::BlockHash;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
@@ -284,6 +286,7 @@ mod handle_submit_tests {
             notify.params.coinbase1.to_string(),
             notify.params.coinbase2.to_string(),
             Some(create_test_commitment()),
+            TEST_COINBASE_NSECS,
             job_id,
         );
 
@@ -366,6 +369,7 @@ mod handle_submit_tests {
             notify.params.coinbase1.to_string(),
             notify.params.coinbase2.to_string(),
             Some(create_test_commitment()),
+            TEST_COINBASE_NSECS,
             job_id,
         );
 
@@ -453,6 +457,7 @@ mod handle_submit_tests {
             notify.params.coinbase1.to_string(),
             notify.params.coinbase2.to_string(),
             Some(create_test_commitment()),
+            TEST_COINBASE_NSECS,
             job_id,
         );
 
@@ -536,6 +541,7 @@ mod handle_submit_tests {
             notify.params.coinbase1.to_string(),
             notify.params.coinbase2.to_string(),
             Some(create_test_commitment()),
+            TEST_COINBASE_NSECS,
             job_id,
         );
 
@@ -664,6 +670,7 @@ mod handle_submit_tests {
             notify.params.coinbase1.to_string(),
             notify.params.coinbase2.to_string(),
             Some(create_test_commitment()),
+            TEST_COINBASE_NSECS,
             job_id,
         );
 
@@ -747,6 +754,7 @@ mod handle_submit_tests {
             notify.params.coinbase1.to_string(),
             notify.params.coinbase2.to_string(),
             Some(create_test_commitment()),
+            TEST_COINBASE_NSECS,
             job_id,
         );
 
@@ -850,6 +858,7 @@ mod handle_submit_tests {
             notify.params.coinbase1.to_string(),
             notify.params.coinbase2.to_string(),
             Some(create_test_commitment()),
+            TEST_COINBASE_NSECS,
             job_id,
         );
 

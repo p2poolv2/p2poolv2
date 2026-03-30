@@ -171,6 +171,10 @@ pub const TEST_ANCHOR_TIME: u32 = 1_700_000_000;
 #[cfg(any(test, feature = "test-utils"))]
 pub const TEST_TIP_TIME: u32 = TEST_ANCHOR_TIME + 20;
 
+/// Realistic coinbase timestamp for tests: Jan 1 2020 00:00:00 UTC in nanoseconds
+#[cfg(any(test, feature = "test-utils"))]
+pub const TEST_COINBASE_NSECS: u128 = 1_577_836_800_000_000_000;
+
 /// Build a PoolDifficulty anchored on-schedule so that
 /// calculate_target(TEST_TIP_TIME, 1) returns the anchor target (0x1b4188f5).
 #[cfg(any(test, feature = "test-utils"))]
@@ -420,6 +424,7 @@ pub fn build_block_from_work_components(path: &str, nsecs: u128) -> ShareBlock {
             .as_deref()
             .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok()),
         bitcoin_height: template.height as u64,
+        coinbase_nsecs: TEST_COINBASE_NSECS,
     };
 
     ShareBlock {
@@ -622,7 +627,7 @@ fn test_share_block(
                 None,
                 b"P2Poolv2",
                 Some(commitment.hash()),
-                0u128,
+                TEST_COINBASE_NSECS,
             )
             .expect("Failed to build bitcoin coinbase for test");
 
@@ -669,6 +674,7 @@ fn test_share_block(
         coinbaseaux_flags: None,
         witness_commitment: None,
         bitcoin_height: 1,
+        coinbase_nsecs: TEST_COINBASE_NSECS,
     };
 
     ShareBlock {
@@ -770,6 +776,7 @@ impl TestShareHeaderBuilder {
             coinbaseaux_flags: None,
             witness_commitment: None,
             bitcoin_height: 1,
+            coinbase_nsecs: TEST_COINBASE_NSECS,
         }
     }
 }

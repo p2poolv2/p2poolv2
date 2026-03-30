@@ -453,6 +453,7 @@ pub(crate) fn build_notify_from_prepared(
         prepared.coinbase1.clone(),
         coinbase2,
         share_commitment,
+        nsecs,
         job_id,
     );
 

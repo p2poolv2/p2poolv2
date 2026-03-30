@@ -29,6 +29,8 @@ pub struct Emission {
     pub coinbase: bitcoin::Transaction,
     pub blocktemplate: Arc<BlockTemplate>,
     pub share_commitment: Option<ShareCommitment>,
+    /// Nanosecond timestamp embedded in the coinbase scriptSig.
+    pub coinbase_nsecs: u128,
 }
 
 pub type EmissionSender = mpsc::Sender<Emission>;

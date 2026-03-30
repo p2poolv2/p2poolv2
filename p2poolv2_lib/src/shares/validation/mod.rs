@@ -446,7 +446,7 @@ impl<T: TimeProvider> DefaultShareValidator<T> {
             share.header.witness_commitment.as_ref(),
             pool_signature,
             Some(expected_commitment_hash),
-            0u128, // TODO: use share.header.coinbase_nsecs once ready
+            share.header.coinbase_nsecs,
         )
         .map_err(|error| ValidationError(format!("Error building coinbase {error}")))?;
 
@@ -698,8 +698,9 @@ mod tests {
     use super::*;
     use crate::shares::share_block::ShareTransaction;
     use crate::test_utils::{
-        TestShareBlockBuilder, build_block_from_work_components, genesis_for_tests,
-        load_share_headers_test_data, make_test_address, setup_pool_difficulty_mocks,
+        TEST_COINBASE_NSECS, TestShareBlockBuilder, build_block_from_work_components,
+        genesis_for_tests, load_share_headers_test_data, make_test_address,
+        setup_pool_difficulty_mocks,
     };
     use crate::utils::time_provider::{SystemTimeProvider, TestTimeProvider};
     use bitcoin::transaction::Version;
@@ -921,7 +922,7 @@ mod tests {
         );
         let share_block = build_block_from_work_components(
             "../p2poolv2_tests/test_data/validation/stratum/b/",
-            0u128,
+            TEST_COINBASE_NSECS,
         );
 
         // Set up mock expectations
@@ -1739,7 +1740,7 @@ mod tests {
             None,
             b"P2Poolv2",
             Some(commitment_hash),
-            0u128,
+            TEST_COINBASE_NSECS,
         )
         .unwrap();
 
@@ -1815,7 +1816,7 @@ mod tests {
             None,
             b"P2Poolv2",
             Some(commitment_hash),
-            0u128,
+            TEST_COINBASE_NSECS,
         )
         .unwrap();
 
@@ -1897,7 +1898,7 @@ mod tests {
             None,
             &[],
             None,
-            0u128,
+            TEST_COINBASE_NSECS,
         )
         .unwrap();
 
@@ -1960,7 +1961,7 @@ mod tests {
             None,
             b"P2Poolv2",
             Some(commitment_hash),
-            0u128,
+            TEST_COINBASE_NSECS,
         )
         .unwrap();
 
@@ -2079,7 +2080,7 @@ mod tests {
             None,
             b"P2Poolv2",
             Some(commitment_hash),
-            0u128,
+            TEST_COINBASE_NSECS,
         )
         .unwrap();
 
