@@ -354,7 +354,8 @@ impl<T: TimeProvider> DefaultShareValidator<T> {
         Ok(())
     }
 
-    /// Validate the share coinbase creates an output with 1 share unit  to the miner address in the header.
+    /// Validate the share coinbase creates an output with 1 share
+    /// unit to the miner address in the header.
     fn validate_share_coinbase(&self, share: &ShareBlock) -> Result<(), ValidationError> {
         let coinbase = share
             .transactions

@@ -197,6 +197,21 @@ pub fn split_coinbase(coinbase: &Transaction) -> Result<(String, String), WorkEr
 ///
 /// This function parses this structure to return the `Vec<TxOut>`.
 ///
+/// Detect whether a coinbase2 hex string starts with a commitment hash push.
+///
+/// Returns 33 (1 opcode byte + 32 data bytes) when the first byte is 0x20
+/// (a 32-byte push), or 0 when the first byte is 0x10 (the nsecs 16-byte push).
+/// This avoids relying on `share_commitment.is_some()`, which can be None in
+/// solo mode even though the coinbase2 bytes still contain a commitment hash.
+pub fn detect_commitment_hash_len_from_coinbase2(coinbase2_hex: &str) -> usize {
+    // First byte in the hex is at positions 0..2
+    if coinbase2_hex.len() >= 2 && &coinbase2_hex[0..2] == "20" {
+        33
+    } else {
+        0
+    }
+}
+
 /// coinbase2 layout: [commitment_hash?][nsecs][pool_sig][sequence][outputs][locktime]
 /// The commitment_hash_len is 33 when present (1 opcode + 32 bytes), 0 when absent.
 pub fn extract_outputs_from_coinbase2(

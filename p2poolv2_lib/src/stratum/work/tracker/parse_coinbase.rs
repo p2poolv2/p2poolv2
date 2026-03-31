@@ -14,7 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::stratum::work::{coinbase::extract_outputs_from_coinbase2, tracker::JobTracker};
+use crate::stratum::work::coinbase::{
+    detect_commitment_hash_len_from_coinbase2, extract_outputs_from_coinbase2,
+};
+use crate::stratum::work::tracker::JobTracker;
 use bitcoin::Amount;
 use std::sync::Arc;
 
@@ -25,16 +28,9 @@ pub fn get_distribution(
     network: bitcoin::network::Network,
 ) -> Option<String> {
     let job_id = tracker.get_latest_job_id();
-    let job_details = match tracker.get_job(job_id) {
-        Some(job_details) => job_details,
-        None => return None,
-    };
+    let job_details = tracker.get_job(job_id)?;
 
-    let commitment_hash_len = if job_details.share_commitment.is_some() {
-        33
-    } else {
-        0
-    };
+    let commitment_hash_len = detect_commitment_hash_len_from_coinbase2(&job_details.coinbase2);
     match extract_outputs_from_coinbase2(
         &job_details.coinbase2,
         commitment_hash_len,
