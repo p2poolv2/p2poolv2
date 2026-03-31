@@ -448,7 +448,7 @@ impl PplnsWindow {
             let entry = self.build_confirmed_entry(
                 blockhash,
                 height,
-                header.miner_address,
+                header.miner_bitcoin_address,
                 difficulty,
                 uncle_entries,
             );
@@ -543,7 +543,7 @@ impl PplnsWindow {
         let mut uncle_lookup = HashMap::with_capacity(uncle_headers.len());
         for (blockhash, header) in uncle_headers {
             let difficulty = header.get_difficulty(self.network);
-            let uncle_entry = self.build_uncle_entry(header.miner_address, difficulty);
+            let uncle_entry = self.build_uncle_entry(header.miner_bitcoin_address, difficulty);
             uncle_lookup.insert(blockhash, uncle_entry);
         }
         Ok(uncle_lookup)
@@ -677,7 +677,7 @@ mod tests {
         window.build_confirmed_entry(
             header.block_hash(),
             height,
-            header.miner_address.clone(),
+            header.miner_bitcoin_address.clone(),
             header.get_difficulty(TEST_NETWORK),
             Vec::new(),
         )
@@ -693,7 +693,7 @@ mod tests {
         window.build_confirmed_entry(
             header.block_hash(),
             height,
-            header.miner_address.clone(),
+            header.miner_bitcoin_address.clone(),
             header.get_difficulty(TEST_NETWORK),
             uncle_entries,
         )
@@ -702,7 +702,7 @@ mod tests {
     /// Create an UncleEntry from a ShareHeader for test setup.
     fn uncle_entry_from_header(window: &mut PplnsWindow, header: &ShareHeader) -> UncleEntry {
         window.build_uncle_entry(
-            header.miner_address.clone(),
+            header.miner_bitcoin_address.clone(),
             header.get_difficulty(TEST_NETWORK),
         )
     }
@@ -1083,7 +1083,7 @@ mod tests {
         // Pad to exceed MAX_PPLNS_WINDOW_SHARES
         let max_shares = MAX_PPLNS_WINDOW_SHARES as usize;
         let padding_needed = max_shares; // total will be max + 2
-        let padding_address = header_a.miner_address.clone();
+        let padding_address = header_a.miner_bitcoin_address.clone();
         for index in 0..padding_needed {
             let entry = window.build_confirmed_entry(
                 BlockHash::all_zeros(),
@@ -1126,11 +1126,11 @@ mod tests {
 
         assert_eq!(result.len(), 2);
         assert_eq!(
-            result[&header1.miner_address],
+            result[&header1.miner_bitcoin_address],
             difficulty1 * DIFFICULTY_SCALE
         );
         assert_eq!(
-            result[&header2.miner_address],
+            result[&header2.miner_bitcoin_address],
             difficulty2 * DIFFICULTY_SCALE
         );
 
@@ -1170,14 +1170,14 @@ mod tests {
             .expect("header2 should be in window");
         assert_eq!(result.len(), 2);
         assert_eq!(
-            result[&header2.miner_address],
+            result[&header2.miner_bitcoin_address],
             difficulty2 * DIFFICULTY_SCALE
         );
         assert_eq!(
-            result[&header1.miner_address],
+            result[&header1.miner_bitcoin_address],
             difficulty1 * DIFFICULTY_SCALE
         );
-        assert!(!result.contains_key(&header3.miner_address));
+        assert!(!result.contains_key(&header3.miner_bitcoin_address));
 
         // Starting from the oldest entry should only include that entry
         let result = window
@@ -1185,7 +1185,7 @@ mod tests {
             .expect("header1 should be in window");
         assert_eq!(result.len(), 1);
         assert_eq!(
-            result[&header1.miner_address],
+            result[&header1.miner_bitcoin_address],
             difficulty1 * DIFFICULTY_SCALE
         );
     }
@@ -1235,12 +1235,18 @@ mod tests {
 
         // Uncle gets UNCLE_SCALED_WEIGHT (9) times its difficulty
         let expected_uncle_weight = uncle_difficulty * UNCLE_SCALED_WEIGHT;
-        assert_eq!(result[&uncle_header.miner_address], expected_uncle_weight);
+        assert_eq!(
+            result[&uncle_header.miner_bitcoin_address],
+            expected_uncle_weight
+        );
 
         // Nephew gets base difficulty * DIFFICULTY_SCALE + uncle_difficulty * NEPHEW_SCALED_BONUS
         let expected_nephew_weight =
             nephew_difficulty * DIFFICULTY_SCALE + uncle_difficulty * NEPHEW_SCALED_BONUS;
-        assert_eq!(result[&nephew_header.miner_address], expected_nephew_weight);
+        assert_eq!(
+            result[&nephew_header.miner_bitcoin_address],
+            expected_nephew_weight
+        );
 
         // total_accumulated_difficulty includes nephew base scaled + uncle weighted + nephew bonus
         let expected_total = nephew_difficulty * DIFFICULTY_SCALE
@@ -1492,7 +1498,7 @@ mod tests {
         window.update(&mock).unwrap();
 
         let difficulty = headers_a[0].header.get_difficulty(TEST_NETWORK);
-        let miner_g = &headers_a[0].header.miner_address;
+        let miner_g = &headers_a[0].header.miner_bitcoin_address;
 
         // All 3 shares are by PUBKEY_G
         let dist = window.get_distribution(u128::MAX);
@@ -1540,7 +1546,7 @@ mod tests {
 
         window.update(&mock2).unwrap();
 
-        let miner_2g = &fork_header.miner_address;
+        let miner_2g = &fork_header.miner_bitcoin_address;
 
         // Now: 2 shares by PUBKEY_G (heights 0-1) + 1 share by PUBKEY_2G (height 2)
         let dist = window.get_distribution(u128::MAX);
@@ -1620,7 +1626,7 @@ mod tests {
         // get_distribution should remove miner A's stale key
         let result = window.get_distribution(u128::MAX);
         assert_eq!(result.len(), 1);
-        assert!(result.contains_key(&header_b.miner_address));
+        assert!(result.contains_key(&header_b.miner_bitcoin_address));
 
         assert!(
             window.address_keys.value_for(miner_a_key).is_none(),
@@ -1661,7 +1667,7 @@ mod tests {
 
         // Only C should be in distribution
         assert_eq!(result.len(), 1);
-        assert!(result.contains_key(&header_c.miner_address));
+        assert!(result.contains_key(&header_c.miner_bitcoin_address));
 
         // All three keys should still exist because B and A are in overflow
         assert!(
@@ -1721,7 +1727,7 @@ mod tests {
         );
         assert_eq!(
             window.address_keys.value_for(miner_c_key),
-            Some(&header_c.miner_address),
+            Some(&header_c.miner_bitcoin_address),
             "freed slot should now hold the new miner address"
         );
         // Total slots should still be 2, not grown to 3
@@ -1766,7 +1772,7 @@ mod tests {
         let result = window.get_distribution(single_difficulty);
 
         assert_eq!(result.len(), 1);
-        assert!(result.contains_key(&header_top.miner_address));
+        assert!(result.contains_key(&header_top.miner_bitcoin_address));
 
         // Uncle miner's key should be preserved because it is in overflow
         assert!(

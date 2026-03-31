@@ -54,6 +54,10 @@ pub struct JobDetails {
     pub coinbase2: String,
     pub generation_timestamp: u64,
     pub share_commitment: Option<ShareCommitment>,
+    /// Nanosecond timestamp embedded in the coinbase scriptSig for this job.
+    pub coinbase_nsecs: u128,
+    /// Merkle branches for the template transactions (excluding coinbase).
+    pub template_merkle_branches: Vec<bitcoin::TxMerkleNode>,
 }
 
 /// Lock-free job tracker using DashMap for concurrent access.
@@ -86,6 +90,8 @@ impl JobTracker {
         coinbase1: String,
         coinbase2: String,
         share_commitment: Option<ShareCommitment>,
+        coinbase_nsecs: u128,
+        template_merkle_branches: Vec<bitcoin::TxMerkleNode>,
         job_id: JobId,
     ) -> JobId {
         self.job_details.insert(
@@ -99,6 +105,8 @@ impl JobTracker {
                     .unwrap_or_default()
                     .as_secs(),
                 share_commitment,
+                coinbase_nsecs,
+                template_merkle_branches,
             },
         );
         self.job_shares.insert(job_id, DashSet::new());
@@ -184,7 +192,7 @@ pub fn start_tracker_actor() -> Arc<JobTracker> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::create_test_commitment;
+    use crate::test_utils::{TEST_COINBASE_NSECS, create_test_commitment};
 
     #[test]
     fn test_job_id_generation() {
@@ -240,6 +248,8 @@ mod tests {
             "cb1".to_string(),
             "cb2".to_string(),
             Some(create_test_commitment()),
+            TEST_COINBASE_NSECS,
+            vec![],
             JobId(1),
         );
 
@@ -284,6 +294,8 @@ mod tests {
             "old_cb1".to_string(),
             "old_cb2".to_string(),
             Some(create_test_commitment()),
+            TEST_COINBASE_NSECS,
+            vec![],
             old_job_id,
         );
 
@@ -303,6 +315,8 @@ mod tests {
             "new_cb1".to_string(),
             "new_cb2".to_string(),
             None,
+            TEST_COINBASE_NSECS,
+            vec![],
             new_job_id,
         );
 
@@ -327,6 +341,8 @@ mod tests {
             "actor_cb1".to_string(),
             "actor_cb2".to_string(),
             None,
+            TEST_COINBASE_NSECS,
+            vec![],
             JobId(3),
         );
 
@@ -355,6 +371,8 @@ mod tests {
             "cb1".to_string(),
             "cb2".to_string(),
             None,
+            TEST_COINBASE_NSECS,
+            vec![],
             job_id,
         );
 

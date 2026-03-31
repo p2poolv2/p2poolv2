@@ -25,7 +25,6 @@ use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::dag_store::{ShareDag, UncleInfo};
 use crate::store::writer::{StoreError, StoreHandle};
-use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, Work};
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, info};

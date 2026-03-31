@@ -100,7 +100,6 @@ fn build_prepared_notify(
     let target = context
         .pool_difficulty
         .calculate_target(parent_time, tip_height);
-    let merkle_root = template.get_merkle_root_without_coinbase();
     let time = SystemTimeProvider.seconds_since_epoch() as u32;
 
     PreparedNotifyParamsBuilder::new(
@@ -111,7 +110,6 @@ fn build_prepared_notify(
     )
     .prev_share_blockhash(tip)
     .uncles(uncles.into_iter().collect())
-    .merkle_root(merkle_root)
     .bits(target)
     .time(time)
     .donation_address(context.config.donation_address().cloned())
@@ -272,10 +270,8 @@ mod tests {
             amount: Amount::from_sat(template.coinbasevalue),
         }];
 
-        let merkle_root = template.get_merkle_root_without_coinbase();
         let prepared =
             PreparedNotifyParamsBuilder::new(Arc::new(template), test_distribution, &[], false)
-                .merkle_root(merkle_root)
                 .bits(bitcoin::CompactTarget::from_consensus(0x1d00ffff))
                 .time(1700000000u32)
                 .build()
@@ -476,7 +472,7 @@ mod tests {
         // Verify share_commitment is properly set in tracker
         assert!(details.share_commitment.is_some());
         let stored_commitment = details.share_commitment.unwrap();
-        assert_eq!(stored_commitment.miner_address, btcaddress);
+        assert_eq!(stored_commitment.miner_bitcoin_address, btcaddress);
         assert_eq!(stored_commitment.prev_share_blockhash, genesis.block_hash());
     }
 
@@ -485,7 +481,7 @@ mod tests {
     async fn test_build_notify_and_extract_outputs_integration() {
         let template = BlockTemplate {
             default_witness_commitment: Some(
-                "6a24aa21a9ed010000000000000000000000000000000000000000000000000000000000"
+                "6a24aa21a9ed0100000000000000000000000000000000000000000000000000000000000000"
                     .to_string(),
             ),
             height: 100,
@@ -535,7 +531,6 @@ mod tests {
         ];
 
         let pool_signature = b"test_sig";
-        let merkle_root = template.get_merkle_root_without_coinbase();
         let witness_commitment = template.default_witness_commitment.clone();
 
         let prepared = PreparedNotifyParamsBuilder::new(
@@ -544,7 +539,6 @@ mod tests {
             pool_signature,
             true,
         )
-        .merkle_root(merkle_root)
         .bits(bitcoin::CompactTarget::from_consensus(0x1d00ffff))
         .time(1700000000u32)
         .build()
@@ -560,7 +554,7 @@ mod tests {
 
         // Extract outputs from coinbase2 and verify they match the original
         let extracted_txouts =
-            extract_outputs_from_coinbase2(coinbase2_hex, pool_signature.len()).unwrap();
+            extract_outputs_from_coinbase2(coinbase2_hex, 33, pool_signature.len()).unwrap();
 
         let expected_txout_1 = TxOut {
             value: original_output_pairs[0].amount,

@@ -14,7 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::stratum::work::{coinbase::extract_outputs_from_coinbase2, tracker::JobTracker};
+use crate::stratum::work::coinbase::{
+    detect_commitment_hash_len_from_coinbase2, extract_outputs_from_coinbase2,
+};
+use crate::stratum::work::tracker::JobTracker;
 use bitcoin::Amount;
 use std::sync::Arc;
 
@@ -25,12 +28,14 @@ pub fn get_distribution(
     network: bitcoin::network::Network,
 ) -> Option<String> {
     let job_id = tracker.get_latest_job_id();
-    let job_details = match tracker.get_job(job_id) {
-        Some(job_details) => job_details,
-        None => return None,
-    };
+    let job_details = tracker.get_job(job_id)?;
 
-    match extract_outputs_from_coinbase2(&job_details.coinbase2, pool_signature_length) {
+    let commitment_hash_len = detect_commitment_hash_len_from_coinbase2(&job_details.coinbase2);
+    match extract_outputs_from_coinbase2(
+        &job_details.coinbase2,
+        commitment_hash_len,
+        pool_signature_length,
+    ) {
         Ok(outputs) => {
             let total_value = job_details.blocktemplate.coinbasevalue;
             let mut exposition = String::new();
@@ -68,6 +73,7 @@ mod tests {
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::stratum::work::coinbase::parse_address;
     use crate::stratum::work::tracker::start_tracker_actor;
+    use crate::test_utils::TEST_COINBASE_NSECS;
     use bitcoin::{Amount, Network, TxOut};
     use std::collections::HashMap;
     use std::str::FromStr;
@@ -98,8 +104,16 @@ mod tests {
         }
     }
 
+    /// Build a test coinbase2 hex string matching the new scriptSig layout.
+    ///
+    /// coinbase2: [nsecs_push][pool_sig_push][sequence][outputs][locktime]
+    /// No commitment hash push since test jobs use share_commitment = None.
     fn create_valid_coinbase2(pool_sig: &[u8], outputs: &[TxOut]) -> String {
         let mut coinbase2_bytes = Vec::new();
+        // nsecs push: 0x10 opcode + 16 zero bytes
+        coinbase2_bytes.push(0x10);
+        coinbase2_bytes.extend_from_slice(&[0u8; 16]);
+        // pool_sig push
         coinbase2_bytes.push(pool_sig.len() as u8);
         coinbase2_bytes.extend_from_slice(pool_sig);
         coinbase2_bytes.extend_from_slice(&[0xff, 0xff, 0xff, 0xff]); // Sequence
@@ -131,6 +145,8 @@ mod tests {
             "".to_string(),
             coinbase2,
             None,
+            TEST_COINBASE_NSECS,
+            vec![],
             job_id,
         );
 
@@ -169,6 +185,8 @@ mod tests {
             "".to_string(),
             "deadbeef".to_string(), // Invalid coinbase2
             None,
+            TEST_COINBASE_NSECS,
+            vec![],
             job_id,
         );
 
@@ -211,6 +229,8 @@ mod tests {
             "".to_string(),
             coinbase2,
             None,
+            TEST_COINBASE_NSECS,
+            vec![],
             job_id,
         );
 
@@ -261,6 +281,8 @@ mod tests {
             "".to_string(),
             coinbase2,
             None,
+            TEST_COINBASE_NSECS,
+            vec![],
             job_id,
         );
 

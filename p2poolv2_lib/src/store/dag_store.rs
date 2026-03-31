@@ -450,7 +450,7 @@ impl Store {
             .map(|(blockhash, header)| UncleInfo {
                 blockhash,
                 prev_blockhash: header.prev_share_blockhash,
-                miner_address: header.miner_address.to_string(),
+                miner_address: header.miner_bitcoin_address.to_string(),
                 timestamp: header.time,
                 height: metadata_map.get(&blockhash).copied(),
             })
@@ -507,7 +507,7 @@ impl Store {
                 blockhash: *blockhash,
                 prev_blockhash: header.prev_share_blockhash,
                 height: *height,
-                miner_address: header.miner_address.to_string(),
+                miner_address: header.miner_bitcoin_address.to_string(),
                 timestamp: header.time,
                 bits: header.bits,
                 uncles,

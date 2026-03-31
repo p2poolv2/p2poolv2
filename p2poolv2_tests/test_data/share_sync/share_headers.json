@@ -15,11 +15,12 @@
     "fee": null,
     "fee_address": null,
     "merkle_root": "1e20665fc5924aec5b8fdbb8264f1ff7a4395546b42167e2590fcf78e1ca5d9d",
-    "miner_address": "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f",
+    "miner_bitcoin_address": "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f",
     "prev_share_blockhash": "0000000000000000000000000000000000000000000000000000000000000000",
     "template_merkle_root": null,
     "time": 1700000000,
-    "uncles": []
+    "uncles": [],
+    "bitcoin_height": 1
   },
   {
     "bitcoin_header": {
@@ -37,11 +38,12 @@
     "fee": null,
     "fee_address": null,
     "merkle_root": "14ea54b7d9f8967329f204ce12d74e75f57bc4610fd07af87d4838b35fe1f0a4",
-    "miner_address": "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
+    "miner_bitcoin_address": "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
     "prev_share_blockhash": "ca46c4b52be7cde5a82886813520a5aed8c1937d467d2f04a12fecc3a064e014",
     "template_merkle_root": null,
     "time": 1774719446,
-    "uncles": []
+    "uncles": [],
+    "bitcoin_height": 1
   },
   {
     "bitcoin_header": {
@@ -59,11 +61,12 @@
     "fee": null,
     "fee_address": null,
     "merkle_root": "14ea54b7d9f8967329f204ce12d74e75f57bc4610fd07af87d4838b35fe1f0a4",
-    "miner_address": "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
+    "miner_bitcoin_address": "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
     "prev_share_blockhash": "c8d13eee9d0a17cec748f786640c7b8aa71f52b7edbf9f55c7d94778862ba9ec",
     "template_merkle_root": null,
     "time": 1774719453,
-    "uncles": []
+    "uncles": [],
+    "bitcoin_height": 1
   },
   {
     "bitcoin_header": {
@@ -81,11 +84,12 @@
     "fee": null,
     "fee_address": null,
     "merkle_root": "14ea54b7d9f8967329f204ce12d74e75f57bc4610fd07af87d4838b35fe1f0a4",
-    "miner_address": "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
+    "miner_bitcoin_address": "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
     "prev_share_blockhash": "4340db009890f5329554c79e157f337337400273f80a76701695093304d3cc28",
     "template_merkle_root": null,
     "time": 1774719458,
-    "uncles": []
+    "uncles": [],
+    "bitcoin_height": 1
   },
   {
     "bitcoin_header": {
@@ -103,10 +107,11 @@
     "fee": null,
     "fee_address": null,
     "merkle_root": "14ea54b7d9f8967329f204ce12d74e75f57bc4610fd07af87d4838b35fe1f0a4",
-    "miner_address": "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
+    "miner_bitcoin_address": "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
     "prev_share_blockhash": "e226b2ac37fdf4ecc5b9e5874962d63478ce8307330c15c8eb1483f1479496b7",
     "template_merkle_root": null,
     "time": 1774719463,
-    "uncles": []
+    "uncles": [],
+    "bitcoin_height": 1
   }
 ]

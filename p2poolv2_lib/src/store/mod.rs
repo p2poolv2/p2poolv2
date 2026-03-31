@@ -143,6 +143,11 @@ impl Store {
         let header_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::Header, RocksDbOptions::default());
 
+        let template_merkle_branches_cf = ColumnFamilyDescriptor::new(
+            ColumnFamily::TemplateMerkleBranches,
+            RocksDbOptions::default(),
+        );
+
         let cfs = vec![
             block_metadata_cf_descriptor,
             block_txids_cf,
@@ -160,6 +165,7 @@ impl Store {
             metadata_cf,
             spends_index_cf,
             header_cf,
+            template_merkle_branches_cf,
         ];
 
         // for the db too, we use default options for now

@@ -187,7 +187,9 @@ mod tests {
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::share_block::Txids;
     use crate::shares::validation::MockDefaultShareValidator;
-    use crate::test_utils::{TestShareBlockBuilder, valid_share_block_from_fixture};
+    use crate::test_utils::{
+        TestShareBlockBuilder, test_coinbase_transaction, valid_share_block_from_fixture,
+    };
     use crate::utils::time_provider::TestTimeProvider;
     use bitcoin::BlockHash;
     use bitcoin::hashes::Hash as _;
@@ -549,7 +551,7 @@ mod tests {
         let (block_fetcher_handle, validation_tx) = test_handles();
 
         // Create a test transaction
-        let transaction = crate::test_utils::test_coinbase_transaction();
+        let transaction = test_coinbase_transaction(1);
 
         let ctx = RequestContext {
             peer: peer_id,

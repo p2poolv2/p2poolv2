@@ -162,7 +162,7 @@ mod tests {
     fn test_single_share_no_uncles() {
         let genesis_hash = BlockHash::all_zeros();
         let header = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
-        let miner_address = header.miner_address.to_string();
+        let miner_address = header.miner_bitcoin_address.to_string();
         let tip_hash = header.block_hash();
 
         let confirmed_headers = vec![ConfirmedHeaderResult {
@@ -202,8 +202,8 @@ mod tests {
         let genesis_hash = BlockHash::all_zeros();
         let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
-        let miner1 = header1.miner_address.to_string();
-        let miner2 = header2.miner_address.to_string();
+        let miner1 = header1.miner_bitcoin_address.to_string();
+        let miner2 = header2.miner_bitcoin_address.to_string();
         let tip_hash = header2.block_hash();
 
         // Newest-to-oldest order
@@ -264,13 +264,13 @@ mod tests {
         let uncle_header = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 2);
         let uncle_hash = uncle_header.block_hash();
         let uncle_difficulty = uncle_header.get_difficulty(bitcoin::Network::Signet);
-        let uncle_miner = uncle_header.miner_address.to_string();
+        let uncle_miner = uncle_header.miner_bitcoin_address.to_string();
 
         // Nephew: confirmed share that references the uncle
         let nephew_header =
             build_test_header_with_uncles(&genesis_hash.to_string(), PUBKEY_G, 2, vec![uncle_hash]);
         let nephew_difficulty = nephew_header.get_difficulty(bitcoin::Network::Signet);
-        let nephew_miner = nephew_header.miner_address.to_string();
+        let nephew_miner = nephew_header.miner_bitcoin_address.to_string();
         let tip_hash = nephew_header.block_hash();
 
         let confirmed_headers = vec![ConfirmedHeaderResult {
@@ -409,7 +409,7 @@ mod tests {
         let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
         let header3 = build_test_header(&header2.block_hash().to_string(), PUBKEY_3G, 2);
-        let miner3 = header3.miner_address.to_string();
+        let miner3 = header3.miner_bitcoin_address.to_string();
         let tip_hash = header3.block_hash();
 
         // Difficulty per share (from bits)
@@ -472,8 +472,8 @@ mod tests {
         let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
         let header3 = build_test_header(&header2.block_hash().to_string(), PUBKEY_3G, 2);
-        let miner2 = header2.miner_address.to_string();
-        let miner3 = header3.miner_address.to_string();
+        let miner2 = header2.miner_bitcoin_address.to_string();
+        let miner3 = header3.miner_bitcoin_address.to_string();
         let tip_hash = header3.block_hash();
 
         let single_share_difficulty = header1.get_difficulty(bitcoin::Network::Signet);
@@ -537,12 +537,12 @@ mod tests {
 
         // Miner A: confirmed share at height 0
         let header_a = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
-        let miner_a = header_a.miner_address.to_string();
+        let miner_a = header_a.miner_bitcoin_address.to_string();
 
         // Uncle by miner B, referenced by miner C's share
         let uncle_header = build_test_header(&genesis_hash.to_string(), PUBKEY_2G, 2);
         let uncle_hash = uncle_header.block_hash();
-        let miner_b = uncle_header.miner_address.to_string();
+        let miner_b = uncle_header.miner_bitcoin_address.to_string();
 
         // Miner C: confirmed share at height 1 that references uncle
         let header_c = build_test_header_with_uncles(
@@ -551,7 +551,7 @@ mod tests {
             2,
             vec![uncle_hash],
         );
-        let miner_c = header_c.miner_address.to_string();
+        let miner_c = header_c.miner_bitcoin_address.to_string();
         let tip_hash = header_c.block_hash();
 
         // Newest-to-oldest order

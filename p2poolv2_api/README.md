@@ -130,7 +130,7 @@ Look up a single share by blockhash or by height.
 | `bits`                      | `string`        | Compact target (hex)                      |
 | `time`                      | `string`        | Human-readable timestamp                  |
 | `bitcoin_header`            | `object`        | Embedded Bitcoin block header             |
-| `bitcoin_transaction_count` | `number`        | Number of Bitcoin transactions            |
+| `template_merkle_branches_count` | `number`   | Depth of the template merkle branch path  |
 | `transactions`              | `array\|null`   | Transaction IDs (only when `full=true`)   |
 
 ### GET /share_headers

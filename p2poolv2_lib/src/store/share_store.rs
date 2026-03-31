@@ -16,8 +16,11 @@
 
 use super::block_tx_metadata::BlockMetadata;
 use super::{ColumnFamily, Store, writer::StoreError};
-use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction, Txids};
+use crate::shares::share_block::{
+    MerkleBranches, ShareBlock, ShareHeader, ShareTransaction, Txids,
+};
 use bitcoin::BlockHash;
+use bitcoin::TxMerkleNode;
 use bitcoin::consensus::{self, Encodable, encode};
 use std::collections::HashMap;
 use tracing::debug;
@@ -26,9 +29,10 @@ impl Store {
     /// Add a share to the store.
     ///
     /// Returns early if the block already exists (duplicate guard).
-    /// Stores the header in the Header CF and transaction indexes in
-    /// BlockTxids/BitcoinTxids CFs. Full share chain transactions are
-    /// stored separately. All writes are done in a single atomic batch.
+    /// Stores the header in the Header CF, transaction indexes in
+    /// BlockTxids CF, and template merkle branches in
+    /// TemplateMerkleBranches CF. All writes are done in a single
+    /// atomic batch.
     pub fn add_share_block(
         &self,
         share: &ShareBlock,
@@ -65,22 +69,9 @@ impl Store {
 
         self.add_txids_to_blocks_index(&blockhash, &txids, batch)?;
 
-        // TODO: Stop storing bitcoin txids to store
-        let bitcoin_txids = Txids(
-            share
-                .bitcoin_transactions
-                .iter()
-                .map(|tx| tx.compute_txid())
-                .collect(),
-        );
-        // Store block -> bitcoin txids index
-        self.add_block_to_txids_index(
-            &blockhash,
-            &bitcoin_txids,
-            batch,
-            b"_bitcoin_txids",
-            ColumnFamily::BitcoinTxids,
-        )?;
+        // Store template merkle branches for validation
+        let branches = MerkleBranches(share.template_merkle_branches.clone());
+        self.add_template_merkle_branches(&blockhash, &branches, batch)?;
 
         // Update block index for parent
         self.update_block_index(&share.header.prev_share_blockhash, &blockhash, batch)?;
@@ -107,6 +98,51 @@ impl Store {
         header.consensus_encode(&mut encoded_header)?;
         batch.put_cf::<&[u8], Vec<u8>>(&header_cf, blockhash.as_ref(), encoded_header);
         Ok(())
+    }
+
+    /// Store template merkle branches for a share block.
+    ///
+    /// Key is the consensus-serialized blockhash, value is the
+    /// consensus-encoded MerkleBranches.
+    fn add_template_merkle_branches(
+        &self,
+        blockhash: &BlockHash,
+        branches: &MerkleBranches,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), StoreError> {
+        let column_family = self
+            .db
+            .cf_handle(&ColumnFamily::TemplateMerkleBranches)
+            .unwrap();
+        let key = consensus::serialize(blockhash);
+        let mut value = Vec::new();
+        branches.consensus_encode(&mut value)?;
+        batch.put_cf::<&[u8], Vec<u8>>(&column_family, &key, value);
+        Ok(())
+    }
+
+    /// Retrieve template merkle branches for a share block.
+    ///
+    /// Returns an empty vector if no branches are stored (e.g. for
+    /// shares stored before this feature was added). Returns a
+    /// StoreError if stored data fails to deserialize.
+    pub fn get_template_merkle_branches(
+        &self,
+        blockhash: &BlockHash,
+    ) -> Result<Vec<TxMerkleNode>, StoreError> {
+        let column_family = self
+            .db
+            .cf_handle(&ColumnFamily::TemplateMerkleBranches)
+            .unwrap();
+        let key = consensus::serialize(blockhash);
+        match self.db.get_cf::<&[u8]>(&column_family, &key) {
+            Ok(Some(data)) => {
+                let branches = encode::deserialize::<MerkleBranches>(&data)?;
+                Ok(branches.0)
+            }
+            Ok(None) => Ok(Vec::new()),
+            Err(error) => Err(StoreError::Database(error.to_string())),
+        }
     }
 
     /// Check whether a share header exists in the Header column family.
@@ -157,14 +193,16 @@ impl Store {
             return None;
         }
         let transactions: Vec<ShareTransaction> = self
-            .get_txs_for_blockhash(blockhash, ColumnFamily::BlockTxids)
+            .get_txs_for_blockhash(blockhash)
             .into_iter()
             .map(ShareTransaction)
             .collect();
+        let template_merkle_branches = self.get_template_merkle_branches(blockhash).ok()?;
         Some(ShareBlock {
             header,
             transactions,
             bitcoin_transactions: vec![],
+            template_merkle_branches,
         })
     }
 
@@ -367,7 +405,10 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::block_tx_metadata::{BlockMetadata, Status};
     use crate::test_utils::TestShareBlockBuilder;
+    use bitcoin::TxMerkleNode;
+    use bitcoin::Work;
     use bitcoin::hashes::Hash;
     use tempfile::tempdir;
 
@@ -650,9 +691,6 @@ mod tests {
 
     #[test]
     fn test_get_block_metadata_batch_returns_stored_metadata() {
-        use crate::store::block_tx_metadata::{BlockMetadata, Status};
-        use bitcoin::Work;
-
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -689,9 +727,6 @@ mod tests {
 
     #[test]
     fn test_get_block_metadata_batch_skips_missing_blockhashes() {
-        use crate::store::block_tx_metadata::{BlockMetadata, Status};
-        use bitcoin::Work;
-
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -748,5 +783,38 @@ mod tests {
         // We verify by checking the block is still retrievable and unchanged
         store.commit_batch(batch).unwrap();
         assert!(store.get_share(&blockhash).is_some());
+    }
+
+    #[test]
+    fn test_template_merkle_branches_round_trip() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let mut block = TestShareBlockBuilder::new().build();
+        let branch_a = TxMerkleNode::from_byte_array([0xaa; 32]);
+        let branch_b = TxMerkleNode::from_byte_array([0xbb; 32]);
+        let branch_c = TxMerkleNode::from_byte_array([0xcc; 32]);
+        block.template_merkle_branches = vec![branch_a, branch_b, branch_c];
+
+        let blockhash = block.block_hash();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&block, true, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share = store.get_share(&blockhash).unwrap();
+        assert_eq!(share.template_merkle_branches.len(), 3);
+        assert_eq!(share.template_merkle_branches[0], branch_a);
+        assert_eq!(share.template_merkle_branches[1], branch_b);
+        assert_eq!(share.template_merkle_branches[2], branch_c);
+    }
+
+    #[test]
+    fn test_get_template_merkle_branches_returns_empty_for_missing() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let missing_hash = BlockHash::all_zeros();
+        let branches = store.get_template_merkle_branches(&missing_hash).unwrap();
+        assert!(branches.is_empty());
     }
 }

@@ -19,8 +19,10 @@
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
 use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
 use crate::shares::transactions::coinbase::create_coinbase_transaction;
+use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::emission::Emission;
 use bitcoin::merkle_tree;
 use std::error::Error;
@@ -40,11 +42,13 @@ pub async fn handle_stratum_share(
         coinbase,
         blocktemplate,
         share_commitment,
+        coinbase_nsecs,
+        template_merkle_branches,
     } = emission;
 
     // Send share to peers only in p2p mode, i.e. if the pool is run with a miner address that results in a commitment
     if let Some(share_commitment) = share_commitment {
-        let share_coinbase = create_coinbase_transaction(&share_commitment.miner_address);
+        let share_coinbase = create_coinbase_transaction(&share_commitment.miner_bitcoin_address);
 
         // TODO: Get share chain transactions and use them here.
         let share_transactions = vec![ShareTransaction(share_coinbase)];
@@ -57,19 +61,32 @@ pub async fn handle_stratum_share(
             None => return Err("No coinbase found".into()),
         };
 
-        let share_header =
-            ShareHeader::from_commitment_and_header(share_commitment, header, merkle_root.into());
+        let share_header = ShareHeader::from_commitment_and_header(
+            share_commitment,
+            header,
+            merkle_root.into(),
+            blocktemplate
+                .coinbaseaux
+                .get("flags")
+                .and_then(|flags| hex::decode(flags).ok())
+                .map(|bytes| CoinbaseAuxFlags::new(&bytes)),
+            blocktemplate
+                .default_witness_commitment
+                .as_deref()
+                .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok()),
+            blocktemplate.height as u64,
+            coinbase_nsecs,
+        );
 
         let mut bitcoin_transactions = Vec::with_capacity(blocktemplate.transactions.len() + 1);
         bitcoin_transactions.push(coinbase);
         bitcoin_transactions.extend(blocktemplate.decode_transactions());
 
-        // For now, send the entire template txdata, we will do tx
-        // deltas or compact block optimisation later on
         let share_block = ShareBlock {
             header: share_header,
             transactions: share_transactions,
             bitcoin_transactions,
+            template_merkle_branches,
         };
 
         debug!(
@@ -102,7 +119,7 @@ mod tests {
     use crate::accounting::payout::simple_pplns::SimplePplnsShare;
     use crate::store::writer::StoreError;
     use crate::stratum::work::block_template::BlockTemplate;
-    use crate::test_utils::create_test_commitment;
+    use crate::test_utils::{TEST_COINBASE_NSECS, create_test_commitment};
     use bitcoin::block::Header;
     use bitcoin::hashes::Hash;
     use bitcoin::{BlockHash, CompactTarget};
@@ -173,6 +190,8 @@ mod tests {
             coinbase,
             blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: None,
+            coinbase_nsecs: TEST_COINBASE_NSECS,
+            template_merkle_branches: vec![],
         }
     }
 
@@ -214,6 +233,8 @@ mod tests {
             coinbase,
             blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: Some(commitment),
+            coinbase_nsecs: TEST_COINBASE_NSECS,
+            template_merkle_branches: vec![],
         }
     }
 
@@ -301,8 +322,8 @@ mod tests {
         );
         assert_eq!(share_block.header.uncles, expected_commitment.uncles);
         assert_eq!(
-            share_block.header.miner_address,
-            expected_commitment.miner_address
+            share_block.header.miner_bitcoin_address,
+            expected_commitment.miner_bitcoin_address
         );
         assert_eq!(share_block.header.bits, expected_commitment.bits);
         assert_eq!(share_block.header.time, expected_commitment.time);
@@ -384,6 +405,11 @@ mod tests {
             coinbase,
             blocktemplate: Arc::new(blocktemplate),
             share_commitment: Some(commitment),
+            coinbase_nsecs: TEST_COINBASE_NSECS,
+            template_merkle_branches: vec![
+                bitcoin::TxMerkleNode::all_zeros(),
+                bitcoin::TxMerkleNode::all_zeros(),
+            ],
         };
 
         let result = handle_stratum_share(emission, &mock_chain_store).await;
@@ -393,6 +419,9 @@ mod tests {
 
         // Verify bitcoin transactions are included (1 coinbase + 2 from template)
         assert_eq!(share_block.bitcoin_transactions.len(), 3);
+
+        // Verify merkle branches are passed through from Emission to ShareBlock
+        assert_eq!(share_block.template_merkle_branches.len(), 2);
     }
 
     #[tokio::test]

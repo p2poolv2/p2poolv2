@@ -319,22 +319,13 @@ impl Store {
         Ok(())
     }
 
-    /// Get all transaction IDs for a given block hash
-    /// Returns a vector of transaction IDs that were included in the block
-    pub fn get_txids_for_blockhash(
-        &self,
-        blockhash: &BlockHash,
-        column_family: ColumnFamily,
-    ) -> Txids {
+    /// Get all transaction IDs for a given block hash from the
+    /// BlockTxids column family.
+    pub fn get_txids_for_blockhash(&self, blockhash: &BlockHash) -> Txids {
         let mut blockhash_bytes = consensus::serialize(blockhash);
-        let suffix_bytes: &[u8] = if column_family == ColumnFamily::BlockTxids {
-            b"_txids"
-        } else {
-            b"_bitcoin_txids"
-        };
-        blockhash_bytes.extend_from_slice(suffix_bytes);
+        blockhash_bytes.extend_from_slice(b"_txids");
 
-        let block_txids_cf = self.db.cf_handle(&column_family).unwrap();
+        let block_txids_cf = self.db.cf_handle(&ColumnFamily::BlockTxids).unwrap();
         match self
             .db
             .get_cf::<&[u8]>(&block_txids_cf, blockhash_bytes.as_ref())
@@ -363,14 +354,11 @@ impl Store {
         }
     }
 
-    /// Get transactions for a blockhash
-    /// First look up the txids from the blockhash_txids index, then get the transactions from the txids
-    pub fn get_txs_for_blockhash(
-        &self,
-        blockhash: &BlockHash,
-        column_family: ColumnFamily,
-    ) -> Vec<Transaction> {
-        let txids = self.get_txids_for_blockhash(blockhash, column_family);
+    /// Get transactions for a blockhash from the BlockTxids column
+    /// family. Looks up the txids index, then reconstructs each
+    /// transaction from the Tx/Inputs/Outputs CFs.
+    pub fn get_txs_for_blockhash(&self, blockhash: &BlockHash) -> Vec<Transaction> {
+        let txids = self.get_txids_for_blockhash(blockhash);
         txids.0.iter().flat_map(|txid| self.get_tx(txid)).collect()
     }
 
@@ -431,25 +419,12 @@ impl Store {
         Ok(transaction)
     }
 
-    /// Get transactions by blockhash index for Bitcoin transactions
-    pub(crate) fn get_bitcoin_txs_by_blockhash_index(
-        &self,
-        blockhash: &BlockHash,
-    ) -> Result<Vec<Transaction>, StoreError> {
-        let txids = self.get_txids_for_blockhash(blockhash, ColumnFamily::BitcoinTxids);
-        let mut txs = Vec::new();
-        for txid in txids.0 {
-            txs.push(self.get_tx(&txid)?);
-        }
-        Ok(txs)
-    }
-
     /// Get transactions by blockhash index for sharechain transactions
     pub(crate) fn get_sharechain_txs_by_blockhash_index(
         &self,
         blockhash: &BlockHash,
     ) -> Result<Vec<ShareTransaction>, StoreError> {
-        let txids = self.get_txids_for_blockhash(blockhash, ColumnFamily::BlockTxids);
+        let txids = self.get_txids_for_blockhash(blockhash);
         let mut txs = Vec::with_capacity(txids.0.len());
         for txid in txids.0 {
             txs.push(ShareTransaction(self.get_tx(&txid)?));
@@ -620,7 +595,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // Verify block -> txids index (forward lookup)
-        let txids = store.get_txids_for_blockhash(&blockhash, ColumnFamily::BlockTxids);
+        let txids = store.get_txids_for_blockhash(&blockhash);
         assert_eq!(txids.0.len(), block.transactions.len());
 
         // Verify txid -> block index (reverse lookup via add_txids_to_blocks_index)

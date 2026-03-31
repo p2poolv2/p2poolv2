@@ -147,24 +147,10 @@ impl Payout {
 
 #[cfg(test)]
 mod tests {
-    use crate::accounting::payout::simple_pplns::SimplePplnsShare;
-    use p2poolv2_config::StratumConfig;
-
-    use crate::test_utils::{PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_G};
-
     use super::*;
-
-    fn make_test_address(index: usize) -> Address {
-        let pubkey_hex = match index {
-            1 => PUBKEY_G,
-            2 => PUBKEY_2G,
-            3 => PUBKEY_3G,
-            4 => PUBKEY_4G,
-            _ => panic!("index must be 1-4"),
-        };
-        let pubkey: bitcoin::CompressedPublicKey = pubkey_hex.parse().unwrap();
-        Address::p2wpkh(&pubkey, bitcoin::Network::Regtest)
-    }
+    use crate::accounting::payout::simple_pplns::SimplePplnsShare;
+    use crate::test_utils::make_test_address;
+    use p2poolv2_config::StratumConfig;
 
     #[tokio::test]
     async fn test_accumulate_difficulty_exact_match() {

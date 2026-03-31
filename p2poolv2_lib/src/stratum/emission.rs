@@ -29,6 +29,10 @@ pub struct Emission {
     pub coinbase: bitcoin::Transaction,
     pub blocktemplate: Arc<BlockTemplate>,
     pub share_commitment: Option<ShareCommitment>,
+    /// Nanosecond timestamp embedded in the coinbase scriptSig.
+    pub coinbase_nsecs: u128,
+    /// Merkle branches for the template transactions (excluding coinbase).
+    pub template_merkle_branches: Vec<bitcoin::TxMerkleNode>,
 }
 
 pub type EmissionSender = mpsc::Sender<Emission>;

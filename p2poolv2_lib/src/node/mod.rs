@@ -201,10 +201,18 @@ impl Node {
 
         let pool_difficulty = PoolDifficulty::build(&chain_store_handle)
             .expect("Failed to build pool difficulty from chain store");
+        let pool_signature = config
+            .stratum
+            .pool_signature
+            .as_deref()
+            .unwrap_or("")
+            .as_bytes()
+            .to_vec();
         let share_validator: Arc<dyn ShareValidator + Send + Sync> =
             Arc::new(DefaultShareValidator::new(
                 pool_difficulty,
                 config.stratum.difficulty_multiplier as u128,
+                pool_signature,
             ));
         let request_response_handler = RequestResponseHandler::new(
             config.network.clone(),

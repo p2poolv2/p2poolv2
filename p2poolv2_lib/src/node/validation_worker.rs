@@ -107,6 +107,7 @@ pub struct ValidationWorker {
     semaphore: Arc<Semaphore>,
     pplns_window: Arc<RwLock<PplnsWindow>>,
     difficulty_multiplier: u128,
+    pool_signature: Vec<u8>,
 }
 
 impl ValidationWorker {
@@ -119,6 +120,7 @@ impl ValidationWorker {
         swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
         pplns_window: Arc<RwLock<PplnsWindow>>,
         difficulty_multiplier: u128,
+        pool_signature: Vec<u8>,
     ) -> Self {
         Self {
             validation_rx,
@@ -129,6 +131,7 @@ impl ValidationWorker {
             semaphore: Arc::new(Semaphore::new(available_cpus())),
             pplns_window,
             difficulty_multiplier,
+            pool_signature,
         }
     }
 
@@ -153,6 +156,7 @@ impl ValidationWorker {
         let share_validator = Arc::new(DefaultShareValidator::new(
             pool_difficulty,
             self.difficulty_multiplier,
+            self.pool_signature.clone(),
         ));
 
         while let Some(event) = self.validation_rx.recv().await {
@@ -294,11 +298,10 @@ mod tests {
     /// mock clone that will handle a successful validation path with no
     /// children or nephews.
     fn setup_validation_expectations(mock_clone: &mut MockChainStoreHandle) {
-        // validate_share_block calls has_status to check for BlockValid
-        mock_clone.expect_has_status().returning(|_, _| false);
-
-        // validate_uncles checks uncle existence and confirmed status
-        mock_clone.expect_share_block_exists().returning(|_| true);
+        // Return BlockValid so validate_share_block short-circuits with
+        // Ok(()) -- these tests exercise the worker pipeline, not
+        // detailed share validation.
+        mock_clone.expect_has_status().returning(|_, _| true);
 
         // schedule_dependents checks children and nephews
         mock_clone
@@ -351,6 +354,7 @@ mod tests {
                 Arc::new(RwLock::new(mock_window))
             },
             1,
+            b"P2Poolv2".to_vec(),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -413,6 +417,7 @@ mod tests {
                 Arc::new(RwLock::new(mock_window))
             },
             1,
+            b"P2Poolv2".to_vec(),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -479,6 +484,7 @@ mod tests {
                 Arc::new(RwLock::new(mock_window))
             },
             1,
+            b"P2Poolv2".to_vec(),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -569,6 +575,7 @@ mod tests {
                 Arc::new(RwLock::new(mock_window))
             },
             1,
+            b"P2Poolv2".to_vec(),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -629,7 +636,7 @@ mod tests {
             .expect_get_share()
             .returning(move |_| Some(parent_clone.clone()));
 
-        parent_mock.expect_has_status().returning(|_, _| false);
+        parent_mock.expect_has_status().returning(|_, _| true);
         // schedule_dependents: parent has one child
         parent_mock
             .expect_get_children_blockhashes()
@@ -679,6 +686,7 @@ mod tests {
                 Arc::new(RwLock::new(mock_window))
             },
             1,
+            b"P2Poolv2".to_vec(),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -743,7 +751,7 @@ mod tests {
         uncle_mock
             .expect_get_share()
             .returning(move |_| Some(uncle_clone.clone()));
-        uncle_mock.expect_has_status().returning(|_, _| false);
+        uncle_mock.expect_has_status().returning(|_, _| true);
         // schedule_dependents: no children, one nephew
         uncle_mock
             .expect_get_children_blockhashes()
@@ -802,6 +810,7 @@ mod tests {
                 Arc::new(RwLock::new(mock_window))
             },
             1,
+            b"P2Poolv2".to_vec(),
         );
 
         let worker_handle = tokio::spawn(worker.run());
