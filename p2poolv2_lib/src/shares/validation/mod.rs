@@ -40,6 +40,7 @@ use crate::shares::share_block::{ShareBlock, ShareTransaction};
 use crate::shares::share_commitment::ShareCommitment;
 use crate::store::block_tx_metadata::Status;
 use crate::stratum::work::coinbase::build_coinbase_transaction;
+use crate::stratum::work::gbt::compute_merkle_root_from_branches;
 use crate::utils::time_provider::TimeProvider;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::{Address, Amount, BlockHash, Target, TxMerkleNode, transaction::Version};
@@ -451,21 +452,10 @@ impl<T: TimeProvider> DefaultShareValidator<T> {
         .map_err(|error| ValidationError(format!("Error building coinbase {error}")))?;
 
         let reconstructed_coinbase_txid = reconstructed_coinbase.compute_txid();
-        // TODO: Rewrite validation to use template_merkle_branches from ShareBlock
-        // instead of the removed template_merkle_root from ShareHeader.
-        // For now, use template_merkle_branches to recompute the root.
-        let recomputed_root: TxMerkleNode = if share.template_merkle_branches.is_empty() {
-            reconstructed_coinbase_txid.into()
-        } else {
-            let mut current: TxMerkleNode = reconstructed_coinbase_txid.into();
-            for sibling in &share.template_merkle_branches {
-                current = bitcoin::merkle_tree::calculate_root(
-                    [current, *sibling].into_iter(),
-                )
-                .ok_or_else(|| ValidationError::new("Failed to compute merkle root"))?;
-            }
-            current
-        };
+        let recomputed_root = compute_merkle_root_from_branches(
+            reconstructed_coinbase_txid,
+            &share.template_merkle_branches,
+        );
 
         if recomputed_root != share.header.bitcoin_header.merkle_root {
             Err(ValidationError(
@@ -2131,6 +2121,138 @@ mod tests {
         assert_eq!(
             donation_amount + fee_amount + miner_c_amount + miner_a_amount + miner_b_amount,
             total_coinbase_sats
+        );
+    }
+
+    #[test]
+    fn test_validate_bitcoin_payout_with_template_transactions() {
+        use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
+        use crate::shares::share_commitment::ShareCommitment;
+        use crate::shares::witness_commitment::WitnessCommitment;
+        use crate::stratum::work::block_template::BlockTemplate;
+        use crate::stratum::work::gbt::build_merkle_branches_for_template;
+        use bitcoin::script::PushBytesBuf;
+
+        let fixed_time = TestTimeProvider::new(
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+        );
+
+        let template: BlockTemplate = serde_json::from_str(include_str!(
+            "../../../../p2poolv2_tests/test_data/validation/stratum/gbt_with_transactions.json"
+        ))
+        .expect("Failed to parse template JSON");
+
+        let address_a = make_test_address(1);
+
+        let mut share_block = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share_block.header.coinbase_value = template.coinbasevalue;
+        share_block.header.bitcoin_height = template.height as u64;
+        share_block.header.coinbaseaux_flags = template
+            .coinbaseaux
+            .get("flags")
+            .and_then(|flags| hex::decode(flags).ok())
+            .map(|bytes| CoinbaseAuxFlags::new(&bytes));
+        share_block.header.witness_commitment = template
+            .default_witness_commitment
+            .as_deref()
+            .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok());
+
+        let commitment_hash = ShareCommitment::from_share_header(&share_block.header).hash();
+
+        let coinbase_tx = build_coinbase_transaction(
+            Version::TWO,
+            &[OutputPair {
+                address: address_a.clone(),
+                amount: Amount::from_sat(template.coinbasevalue),
+            }],
+            template.height as i64,
+            share_block
+                .header
+                .coinbaseaux_flags
+                .as_ref()
+                .map(|flags| flags.to_push_bytes_buf())
+                .unwrap_or_else(|| PushBytesBuf::from(&[0u8])),
+            share_block.header.witness_commitment.as_ref(),
+            b"P2Poolv2",
+            Some(commitment_hash),
+            TEST_COINBASE_NSECS,
+        )
+        .unwrap();
+
+        // Build full bitcoin transaction list: coinbase + template transactions
+        let template_transactions: Vec<bitcoin::Transaction> = template
+            .transactions
+            .iter()
+            .map(bitcoin::Transaction::from)
+            .collect();
+        let mut all_bitcoin_txids = vec![coinbase_tx.compute_txid()];
+        all_bitcoin_txids.extend(template_transactions.iter().map(|tx| tx.compute_txid()));
+
+        // Compute the full merkle root from all txids
+        let full_merkle_root: TxMerkleNode =
+            bitcoin::merkle_tree::calculate_root(all_bitcoin_txids.into_iter())
+                .unwrap()
+                .into();
+        share_block.header.bitcoin_header.merkle_root = full_merkle_root;
+
+        // Set merkle branches from template transactions
+        share_block.template_merkle_branches = build_merkle_branches_for_template(&template)
+            .into_iter()
+            .map(TxMerkleNode::from_raw_hash)
+            .collect();
+
+        let mut bitcoin_transactions = Vec::with_capacity(template_transactions.len() + 1);
+        bitcoin_transactions.push(coinbase_tx);
+        bitcoin_transactions.extend(template_transactions);
+        share_block.bitcoin_transactions = bitcoin_transactions;
+
+        // Mock PplnsWindow returning 100% to address_a
+        let mut mock_window = PplnsWindow::default();
+        mock_window
+            .expect_network()
+            .return_const(bitcoin::Network::Signet);
+        let addr_a_clone = address_a.clone();
+        mock_window
+            .expect_get_distribution_from_start_hash()
+            .returning(move |_, _| Some(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+        let pplns_window = Arc::new(RwLock::new(mock_window));
+
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1, fixed_time);
+        let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
+        assert!(
+            result.is_ok(),
+            "Expected valid payout with 4 template transactions, got: {}",
+            result.unwrap_err()
+        );
+
+        // Verify we actually tested with non-empty merkle branches
+        assert_eq!(
+            share_block.template_merkle_branches.len(),
+            3,
+            "Expected 3 merkle branches for 4 template transactions"
+        );
+
+        // Validation should still pass with empty bitcoin_transactions,
+        // proving the validator uses merkle branches, not the raw transactions.
+        share_block.bitcoin_transactions = vec![];
+
+        let mut mock_window = PplnsWindow::default();
+        mock_window
+            .expect_network()
+            .return_const(bitcoin::Network::Signet);
+        let addr_a_clone = address_a.clone();
+        mock_window
+            .expect_get_distribution_from_start_hash()
+            .returning(move |_, _| Some(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+        let pplns_window = Arc::new(RwLock::new(mock_window));
+
+        let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
+        assert!(
+            result.is_ok(),
+            "Validation should pass without bitcoin_transactions, got: {}",
+            result.unwrap_err()
         );
     }
 }

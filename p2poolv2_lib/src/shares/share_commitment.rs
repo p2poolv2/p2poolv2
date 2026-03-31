@@ -288,7 +288,6 @@ mod tests {
         let mut commitment3 = create_test_commitment();
         commitment3.uncles.push(BlockHash::all_zeros());
         assert_ne!(commitment1.hash(), commitment3.hash());
-
     }
 
     #[test]

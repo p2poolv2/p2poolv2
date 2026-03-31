@@ -316,6 +316,7 @@ pub fn build_block_from_work_components(path: &str, nsecs: u128) -> ShareBlock {
     use crate::shares::share_commitment::ShareCommitment;
     use crate::shares::witness_commitment::WitnessCommitment;
     use crate::stratum::work::coinbase::build_coinbase_transaction;
+    use crate::stratum::work::gbt::build_merkle_branches_for_template;
     use bitcoin::TxMerkleNode;
     use bitcoin::script::PushBytesBuf;
 
@@ -418,11 +419,16 @@ pub fn build_block_from_work_components(path: &str, nsecs: u128) -> ShareBlock {
         coinbase_nsecs: TEST_COINBASE_NSECS,
     };
 
+    let template_merkle_branches = build_merkle_branches_for_template(&template)
+        .into_iter()
+        .map(TxMerkleNode::from_raw_hash)
+        .collect();
+
     ShareBlock {
         header: share_header,
         transactions: vec![ShareTransaction(share_coinbase)],
         bitcoin_transactions,
-        template_merkle_branches: vec![],
+        template_merkle_branches,
     }
 }
 

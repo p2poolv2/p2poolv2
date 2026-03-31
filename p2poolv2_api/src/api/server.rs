@@ -485,6 +485,7 @@ mod tests {
             coinbase2_hex,
             None,
             p2poolv2_lib::test_utils::TEST_COINBASE_NSECS,
+            vec![],
             job_id,
         );
 

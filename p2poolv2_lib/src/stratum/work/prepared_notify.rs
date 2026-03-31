@@ -74,6 +74,9 @@ pub struct PreparedNotifyParams {
     /// Coinbase2 suffix hex: [pool_sig][sequence][outputs][locktime]
     /// Per-miner coinbase2 = commitment_hash_script + nsecs_script + coinbase2_suffix
     coinbase2_suffix: String,
+    /// Merkle branches for the template transactions (excluding coinbase).
+    /// Passed through to JobDetails so validators can verify the bitcoin merkle root.
+    merkle_branches: Vec<bitcoin::TxMerkleNode>,
 }
 
 /// Serialize the merkle branches array as a JSON array string.
@@ -274,7 +277,8 @@ impl PreparedNotifyParamsBuilder {
         let coinbase2_suffix = coinbase2_full[per_miner_prefix_hex_len..].to_string();
 
         // Pre-compute merkle branches
-        let merkle_branches: Vec<String> = build_merkle_branches_for_template(&self.template)
+        let merkle_branches_raw = build_merkle_branches_for_template(&self.template);
+        let merkle_branches_hex: Vec<String> = merkle_branches_raw
             .iter()
             .map(|branch| to_be_hex(&branch.to_string()))
             .collect();
@@ -296,7 +300,7 @@ impl PreparedNotifyParamsBuilder {
                 &coinbase1,
                 &coinbase2_placeholder,
                 &prevhash_byte_swapped,
-                &merkle_branches,
+                &merkle_branches_hex,
                 &version_hex,
                 &self.template.bits,
                 &ntime_hex,
@@ -340,6 +344,10 @@ impl PreparedNotifyParamsBuilder {
             template: self.template,
             coinbase1,
             coinbase2_suffix,
+            merkle_branches: merkle_branches_raw
+                .into_iter()
+                .map(bitcoin::TxMerkleNode::from_raw_hash)
+                .collect(),
         })
     }
 }
@@ -442,6 +450,7 @@ pub(crate) fn build_notify_from_prepared(
         coinbase2,
         share_commitment,
         nsecs,
+        prepared.merkle_branches.clone(),
         job_id,
     );
 

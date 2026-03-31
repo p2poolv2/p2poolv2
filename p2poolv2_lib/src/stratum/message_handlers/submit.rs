@@ -142,6 +142,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
             blocktemplate: job.blocktemplate.clone(),
             share_commitment: job.share_commitment.clone(),
             coinbase_nsecs: job.coinbase_nsecs,
+            template_merkle_branches: job.template_merkle_branches.clone(),
         })
         .await
         .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;
@@ -287,6 +288,7 @@ mod handle_submit_tests {
             notify.params.coinbase2.to_string(),
             Some(create_test_commitment()),
             TEST_COINBASE_NSECS,
+            vec![],
             job_id,
         );
 
@@ -370,6 +372,7 @@ mod handle_submit_tests {
             notify.params.coinbase2.to_string(),
             Some(create_test_commitment()),
             TEST_COINBASE_NSECS,
+            vec![],
             job_id,
         );
 
@@ -458,6 +461,7 @@ mod handle_submit_tests {
             notify.params.coinbase2.to_string(),
             Some(create_test_commitment()),
             TEST_COINBASE_NSECS,
+            vec![],
             job_id,
         );
 
@@ -542,6 +546,7 @@ mod handle_submit_tests {
             notify.params.coinbase2.to_string(),
             Some(create_test_commitment()),
             TEST_COINBASE_NSECS,
+            vec![],
             job_id,
         );
 
@@ -671,6 +676,7 @@ mod handle_submit_tests {
             notify.params.coinbase2.to_string(),
             Some(create_test_commitment()),
             TEST_COINBASE_NSECS,
+            vec![],
             job_id,
         );
 
@@ -755,6 +761,7 @@ mod handle_submit_tests {
             notify.params.coinbase2.to_string(),
             Some(create_test_commitment()),
             TEST_COINBASE_NSECS,
+            vec![],
             job_id,
         );
 
@@ -859,6 +866,7 @@ mod handle_submit_tests {
             notify.params.coinbase2.to_string(),
             Some(create_test_commitment()),
             TEST_COINBASE_NSECS,
+            vec![],
             job_id,
         );
 

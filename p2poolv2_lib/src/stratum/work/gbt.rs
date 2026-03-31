@@ -38,6 +38,27 @@ pub fn build_merkle_branches_for_template(template: &BlockTemplate) -> Vec<sha25
     compute_merkle_branches(txids)
 }
 
+/// Compute the bitcoin merkle root by walking the merkle branches from the
+/// coinbase txid upward. Each branch is the right sibling at that tree level.
+///
+/// This is different from rust-bitcoin's calculate_root, which treats the
+/// vector as leaves of tree
+///
+/// Returns the coinbase txid directly when branches is empty (coinbase-only block).
+pub fn compute_merkle_root_from_branches(
+    coinbase_txid: bitcoin::Txid,
+    branches: &[bitcoin::TxMerkleNode],
+) -> bitcoin::TxMerkleNode {
+    let mut current = bitcoin::TxMerkleNode::from_raw_hash(coinbase_txid.into());
+    for branch in branches {
+        let mut combined = Vec::with_capacity(64);
+        combined.extend_from_slice(current.as_raw_hash().as_byte_array());
+        combined.extend_from_slice(branch.as_raw_hash().as_byte_array());
+        current = bitcoin::TxMerkleNode::from_raw_hash(sha256d::Hash::hash(&combined));
+    }
+    current
+}
+
 /// Compute merkle branch from coinbase transaction and BlockTemplate's transactions
 #[allow(dead_code)]
 fn compute_merkle_branches(input_txids: Vec<sha256d::Hash>) -> Vec<sha256d::Hash> {
@@ -364,6 +385,44 @@ mod gbt_load_tests {
             sha256d::Hash::from_slice(&v3).unwrap(),
         ];
         assert_eq!(branches, expected);
+    }
+
+    #[test]
+    fn test_merkle_branches_round_trip_with_four_txns() {
+        let data = include_str!(
+            "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/four-txns/gbt.json"
+        );
+        let template: BlockTemplate = serde_json::from_str(data).expect("Invalid JSON");
+
+        let coinbase_txid: bitcoin::Txid =
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .parse()
+                .unwrap();
+
+        let branches = build_merkle_branches_for_template(&template);
+        assert_eq!(branches.len(), 3);
+
+        let branch_nodes: Vec<bitcoin::TxMerkleNode> = branches
+            .iter()
+            .map(|hash| bitcoin::TxMerkleNode::from_raw_hash(*hash))
+            .collect();
+
+        let root_from_branches = compute_merkle_root_from_branches(coinbase_txid, &branch_nodes);
+
+        // Compute expected root by building the full tree with all txids
+        let mut all_txids: Vec<bitcoin::Txid> = vec![coinbase_txid];
+        all_txids.extend(
+            template
+                .transactions
+                .iter()
+                .map(|tx| tx.txid.parse::<bitcoin::Txid>().unwrap()),
+        );
+        let expected_root: bitcoin::TxMerkleNode =
+            bitcoin::merkle_tree::calculate_root(all_txids.into_iter())
+                .unwrap()
+                .into();
+
+        assert_eq!(root_from_branches, expected_root);
     }
 }
 

@@ -150,6 +150,7 @@ mod tests {
             coinbase2,
             None,
             TEST_COINBASE_NSECS,
+            vec![],
             job_id,
         );
 
@@ -189,6 +190,7 @@ mod tests {
             "deadbeef".to_string(), // Invalid coinbase2
             None,
             TEST_COINBASE_NSECS,
+            vec![],
             job_id,
         );
 
@@ -232,6 +234,7 @@ mod tests {
             coinbase2,
             None,
             TEST_COINBASE_NSECS,
+            vec![],
             job_id,
         );
 
@@ -283,6 +286,7 @@ mod tests {
             coinbase2,
             None,
             TEST_COINBASE_NSECS,
+            vec![],
             job_id,
         );
 

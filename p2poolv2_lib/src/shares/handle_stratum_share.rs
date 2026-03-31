@@ -43,6 +43,7 @@ pub async fn handle_stratum_share(
         blocktemplate,
         share_commitment,
         coinbase_nsecs,
+        template_merkle_branches,
     } = emission;
 
     // Send share to peers only in p2p mode, i.e. if the pool is run with a miner address that results in a commitment
@@ -85,7 +86,7 @@ pub async fn handle_stratum_share(
             header: share_header,
             transactions: share_transactions,
             bitcoin_transactions,
-            template_merkle_branches: vec![],
+            template_merkle_branches,
         };
 
         debug!(
@@ -190,6 +191,7 @@ mod tests {
             blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: None,
             coinbase_nsecs: TEST_COINBASE_NSECS,
+            template_merkle_branches: vec![],
         }
     }
 
@@ -232,6 +234,7 @@ mod tests {
             blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: Some(commitment),
             coinbase_nsecs: TEST_COINBASE_NSECS,
+            template_merkle_branches: vec![],
         }
     }
 
@@ -403,6 +406,7 @@ mod tests {
             blocktemplate: Arc::new(blocktemplate),
             share_commitment: Some(commitment),
             coinbase_nsecs: TEST_COINBASE_NSECS,
+            template_merkle_branches: vec![],
         };
 
         let result = handle_stratum_share(emission, &mock_chain_store).await;
