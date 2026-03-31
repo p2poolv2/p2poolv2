@@ -406,7 +406,10 @@ mod tests {
             blocktemplate: Arc::new(blocktemplate),
             share_commitment: Some(commitment),
             coinbase_nsecs: TEST_COINBASE_NSECS,
-            template_merkle_branches: vec![],
+            template_merkle_branches: vec![
+                bitcoin::TxMerkleNode::all_zeros(),
+                bitcoin::TxMerkleNode::all_zeros(),
+            ],
         };
 
         let result = handle_stratum_share(emission, &mock_chain_store).await;
@@ -416,6 +419,9 @@ mod tests {
 
         // Verify bitcoin transactions are included (1 coinbase + 2 from template)
         assert_eq!(share_block.bitcoin_transactions.len(), 3);
+
+        // Verify merkle branches are passed through from Emission to ShareBlock
+        assert_eq!(share_block.template_merkle_branches.len(), 2);
     }
 
     #[tokio::test]

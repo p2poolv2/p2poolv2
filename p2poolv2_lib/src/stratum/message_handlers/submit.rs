@@ -282,13 +282,17 @@ mod handle_submit_tests {
 
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
+        let test_merkle_branches = vec![
+            bitcoin::TxMerkleNode::all_zeros(),
+            bitcoin::TxMerkleNode::all_zeros(),
+        ];
         let _ = tracker_handle.insert_job(
             Arc::new(template),
             notify.params.coinbase1.to_string(),
             notify.params.coinbase2.to_string(),
             Some(create_test_commitment()),
             TEST_COINBASE_NSECS,
-            vec![],
+            test_merkle_branches,
             job_id,
         );
 
@@ -338,6 +342,9 @@ mod handle_submit_tests {
             commitment.miner_bitcoin_address,
             create_test_commitment().miner_bitcoin_address
         );
+
+        // Verify merkle branches are passed through from JobDetails to Emission
+        assert_eq!(share.template_merkle_branches.len(), 2);
 
         // Verify that the block is submitted to the mock server
         mock_server.verify().await;

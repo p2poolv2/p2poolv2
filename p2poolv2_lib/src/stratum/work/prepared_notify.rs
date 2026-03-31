@@ -551,6 +551,13 @@ mod tests {
         let commitment = details.share_commitment.as_ref().unwrap();
         assert_eq!(commitment.miner_bitcoin_address, address);
         assert_eq!(commitment.prev_share_blockhash, BlockHash::all_zeros());
+
+        // Verify merkle branches were stored in job details (1 branch for 1-txn template)
+        assert_eq!(
+            details.template_merkle_branches.len(),
+            1,
+            "Expected 1 merkle branch for 1-txn template"
+        );
     }
 
     #[tokio::test]
