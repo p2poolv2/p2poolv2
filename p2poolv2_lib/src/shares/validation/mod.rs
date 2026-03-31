@@ -145,15 +145,23 @@ pub struct DefaultShareValidator {
     pool_difficulty: PoolDifficulty,
     /// Multiplier applied to bitcoin difficulty when walking the PPLNS window.
     difficulty_multiplier: u128,
+    /// Pool signature included in the coinbase transaction.
+    pool_signature: Vec<u8>,
 }
 
 impl DefaultShareValidator {
-    /// Create a new DefaultShareValidator with the given pool difficulty
-    /// and difficulty multiplier for PPLNS window walks.
-    pub fn new(pool_difficulty: PoolDifficulty, difficulty_multiplier: u128) -> Self {
+    /// Create a new DefaultShareValidator with the given pool difficulty,
+    /// difficulty multiplier for PPLNS window walks, and pool signature
+    /// for coinbase reconstruction.
+    pub fn new(
+        pool_difficulty: PoolDifficulty,
+        difficulty_multiplier: u128,
+        pool_signature: Vec<u8>,
+    ) -> Self {
         Self {
             pool_difficulty,
             difficulty_multiplier,
+            pool_signature,
         }
     }
 
@@ -432,7 +440,7 @@ impl DefaultShareValidator {
             Some(aux_flags) => aux_flags.to_push_bytes_buf(),
             None => PushBytesBuf::from(&[0u8]),
         };
-        let pool_signature = b"P2Poolv2";
+        let pool_signature = &self.pool_signature;
         let reconstructed_coinbase = build_coinbase_transaction(
             Version::TWO,
             &expected_outputs,
@@ -703,11 +711,11 @@ mod tests {
     use std::time::SystemTime;
 
     fn validator() -> DefaultShareValidator {
-        DefaultShareValidator::new(PoolDifficulty::default(), 1)
+        DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec())
     }
 
     fn validator_with(pool_difficulty: PoolDifficulty) -> DefaultShareValidator {
-        DefaultShareValidator::new(pool_difficulty, 1)
+        DefaultShareValidator::new(pool_difficulty, 1, b"P2Poolv2".to_vec())
     }
 
     #[tokio::test]
@@ -942,7 +950,8 @@ mod tests {
                 .returning(|_, _| Some(HashMap::from([(make_test_address(1), 100)])));
             Arc::new(RwLock::new(mock_window))
         };
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
+        let validator =
+            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
         let result =
             validator.validate_share_block(&share_block, &chain_store_handle, pplns_window);
 
@@ -1737,7 +1746,8 @@ mod tests {
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
+        let validator =
+            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
         let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
         assert!(
             result.is_ok(),
@@ -1811,7 +1821,8 @@ mod tests {
 
         // The reconstructed coinbase will have different outputs (60/40),
         // producing a different merkle root than the 50/50 coinbase
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
+        let validator =
+            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
         let error = validator
             .validate_bitcoin_payout(&share_block, pplns_window)
             .unwrap_err();
@@ -1945,7 +1956,8 @@ mod tests {
 
         // The reconstructed coinbase will also have 1 sat to address_a,
         // so merkle roots should match and validation should pass
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
+        let validator =
+            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
         let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
         assert!(
             result.is_ok(),
@@ -2067,7 +2079,8 @@ mod tests {
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
+        let validator =
+            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
         let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
         assert!(
             result.is_ok(),
@@ -2178,7 +2191,8 @@ mod tests {
             .returning(move |_, _| Some(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
+        let validator =
+            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
         let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
         assert!(
             result.is_ok(),

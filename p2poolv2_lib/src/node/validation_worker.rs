@@ -107,6 +107,7 @@ pub struct ValidationWorker {
     semaphore: Arc<Semaphore>,
     pplns_window: Arc<RwLock<PplnsWindow>>,
     difficulty_multiplier: u128,
+    pool_signature: Vec<u8>,
 }
 
 impl ValidationWorker {
@@ -119,6 +120,7 @@ impl ValidationWorker {
         swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
         pplns_window: Arc<RwLock<PplnsWindow>>,
         difficulty_multiplier: u128,
+        pool_signature: Vec<u8>,
     ) -> Self {
         Self {
             validation_rx,
@@ -129,6 +131,7 @@ impl ValidationWorker {
             semaphore: Arc::new(Semaphore::new(available_cpus())),
             pplns_window,
             difficulty_multiplier,
+            pool_signature,
         }
     }
 
@@ -153,6 +156,7 @@ impl ValidationWorker {
         let share_validator = Arc::new(DefaultShareValidator::new(
             pool_difficulty,
             self.difficulty_multiplier,
+            self.pool_signature.clone(),
         ));
 
         while let Some(event) = self.validation_rx.recv().await {
@@ -350,6 +354,7 @@ mod tests {
                 Arc::new(RwLock::new(mock_window))
             },
             1,
+            b"P2Poolv2".to_vec(),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -412,6 +417,7 @@ mod tests {
                 Arc::new(RwLock::new(mock_window))
             },
             1,
+            b"P2Poolv2".to_vec(),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -478,6 +484,7 @@ mod tests {
                 Arc::new(RwLock::new(mock_window))
             },
             1,
+            b"P2Poolv2".to_vec(),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -568,6 +575,7 @@ mod tests {
                 Arc::new(RwLock::new(mock_window))
             },
             1,
+            b"P2Poolv2".to_vec(),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -678,6 +686,7 @@ mod tests {
                 Arc::new(RwLock::new(mock_window))
             },
             1,
+            b"P2Poolv2".to_vec(),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -801,6 +810,7 @@ mod tests {
                 Arc::new(RwLock::new(mock_window))
             },
             1,
+            b"P2Poolv2".to_vec(),
         );
 
         let worker_handle = tokio::spawn(worker.run());
