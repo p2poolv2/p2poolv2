@@ -24,6 +24,7 @@ pub async fn execute(
     to: Option<u32>,
     num: u32,
     share_block_transactions: bool,
+    template_merkle_branches: bool,
 ) -> Result<(), Box<dyn Error>> {
     let api_client = ApiClient::new(api_config);
 
@@ -33,6 +34,9 @@ pub async fn execute(
     }
     if share_block_transactions {
         path.push_str("&share_block_transactions=true");
+    }
+    if template_merkle_branches {
+        path.push_str("&template_merkle_branches=true");
     }
 
     let response: serde_json::Value = api_client.get_json(&path).await?;
@@ -70,7 +74,7 @@ mod tests {
             .await;
 
         let api_config = make_api_config(mock_server.address().port());
-        let result = execute(&api_config, None, 10, false).await;
+        let result = execute(&api_config, None, 10, false, false).await;
         assert!(result.is_ok());
     }
 
@@ -89,7 +93,7 @@ mod tests {
             .await;
 
         let api_config = make_api_config(mock_server.address().port());
-        let result = execute(&api_config, Some(100), 5, false).await;
+        let result = execute(&api_config, Some(100), 5, false, false).await;
         assert!(result.is_ok());
     }
 
@@ -108,14 +112,14 @@ mod tests {
             .await;
 
         let api_config = make_api_config(mock_server.address().port());
-        let result = execute(&api_config, None, 10, true).await;
+        let result = execute(&api_config, None, 10, true, false).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_execute_returns_error_when_server_unreachable() {
         let api_config = make_api_config(19995);
-        let result = execute(&api_config, None, 10, false).await;
+        let result = execute(&api_config, None, 10, false, false).await;
         assert!(result.is_err());
     }
 }
