@@ -30,7 +30,7 @@ pub struct Emission {
     pub blocktemplate: Arc<BlockTemplate>,
     pub share_commitment: Option<ShareCommitment>,
     /// Nanosecond timestamp embedded in the coinbase scriptSig.
-    pub coinbase_nsecs: u128,
+    pub coinbase_nsecs: u64,
     /// Merkle branches for the template transactions (excluding coinbase).
     pub template_merkle_branches: Vec<bitcoin::TxMerkleNode>,
 }

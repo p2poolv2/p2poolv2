@@ -187,7 +187,7 @@ pub const TEST_TIP_TIME: u32 = TEST_ANCHOR_TIME + 20;
 
 /// Realistic coinbase timestamp for tests: Jan 1 2020 00:00:00 UTC in nanoseconds
 #[cfg(any(test, feature = "test-utils"))]
-pub const TEST_COINBASE_NSECS: u128 = 1_577_836_800_000_000_000;
+pub const TEST_COINBASE_NSECS: u64 = 1_577_836_800_000_000_000;
 
 /// Build a PoolDifficulty anchored on-schedule so that
 /// calculate_target(TEST_TIP_TIME, 1) returns the anchor target (0x1b4188f5).
@@ -320,7 +320,7 @@ pub fn load_valid_stratum_work_components(
 }
 
 #[cfg(test)]
-pub fn build_block_from_work_components(path: &str, nsecs: u128) -> ShareBlock {
+pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
     let (template, _notify, submit, _authorize) = load_valid_stratum_work_components(path);
 
     let share_coinbase = test_coinbase_transaction(1);

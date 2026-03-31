@@ -110,9 +110,9 @@ mod tests {
     /// No commitment hash push since test jobs use share_commitment = None.
     fn create_valid_coinbase2(pool_sig: &[u8], outputs: &[TxOut]) -> String {
         let mut coinbase2_bytes = Vec::new();
-        // nsecs push: 0x10 opcode + 16 zero bytes
-        coinbase2_bytes.push(0x10);
-        coinbase2_bytes.extend_from_slice(&[0u8; 16]);
+        // nsecs push: 0x08 opcode + 8 zero bytes
+        coinbase2_bytes.push(0x08);
+        coinbase2_bytes.extend_from_slice(&[0u8; 8]);
         // pool_sig push
         coinbase2_bytes.push(pool_sig.len() as u8);
         coinbase2_bytes.extend_from_slice(pool_sig);

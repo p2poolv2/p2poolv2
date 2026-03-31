@@ -266,14 +266,14 @@ impl PreparedNotifyParamsBuilder {
             witness_commitment.as_ref(),
             &self.pool_signature,
             Some(dummy_commitment_hash),
-            0u128,
+            0u64,
         )?;
 
         let (coinbase1, coinbase2_full) = split_coinbase(&coinbase)?;
 
         // Strip the commitment_hash push (33 bytes = 66 hex) and nsecs push
-        // (17 bytes = 34 hex) from the front of coinbase2 to get the static suffix.
-        let per_miner_prefix_hex_len = 66 + 34;
+        // (9 bytes = 18 hex) from the front of coinbase2 to get the static suffix.
+        let per_miner_prefix_hex_len = 66 + 18;
         let coinbase2_suffix = coinbase2_full[per_miner_prefix_hex_len..].to_string();
 
         // Pre-compute merkle branches
@@ -381,16 +381,16 @@ fn get_commitment_hex(
 /// and the static suffix.
 fn build_per_miner_coinbase2(
     commitment_hash_hex: &str,
-    nsecs: u128,
+    nsecs: u64,
     coinbase2_suffix: &str,
 ) -> String {
     // commitment_hash push: 0x20 opcode + 32 bytes hash = 66 hex chars
-    // nsecs push: 0x10 opcode + 16 bytes LE = 34 hex chars
+    // nsecs push: 0x08 opcode + 8 bytes LE = 18 hex chars
     let nsecs_bytes = nsecs.to_le_bytes();
-    let mut coinbase2 = String::with_capacity(66 + 34 + coinbase2_suffix.len());
+    let mut coinbase2 = String::with_capacity(66 + 18 + coinbase2_suffix.len());
     coinbase2.push_str("20");
     coinbase2.push_str(commitment_hash_hex);
-    coinbase2.push_str("10");
+    coinbase2.push_str("08");
     coinbase2.push_str(&hex::encode(nsecs_bytes));
     coinbase2.push_str(coinbase2_suffix);
     coinbase2
