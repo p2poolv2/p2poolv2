@@ -1358,10 +1358,8 @@ mod stratum_server_tests {
             amount: bitcoin::Amount::from_sat(template.coinbasevalue),
         }];
 
-        let merkle_root = template.get_merkle_root_without_coinbase();
         let prepared =
             PreparedNotifyParamsBuilder::new(template, output_distribution, b"test_pool", false)
-                .merkle_root(merkle_root)
                 .bits(CompactTarget::from_consensus(0x1d00ffff))
                 .time(1700000000u32)
                 .build()

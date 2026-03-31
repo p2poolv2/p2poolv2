@@ -100,7 +100,6 @@ fn build_prepared_notify(
     let target = context
         .pool_difficulty
         .calculate_target(parent_time, tip_height);
-    let merkle_root = template.get_merkle_root_without_coinbase();
     let time = SystemTimeProvider.seconds_since_epoch() as u32;
 
     PreparedNotifyParamsBuilder::new(
@@ -111,7 +110,6 @@ fn build_prepared_notify(
     )
     .prev_share_blockhash(tip)
     .uncles(uncles.into_iter().collect())
-    .merkle_root(merkle_root)
     .bits(target)
     .time(time)
     .donation_address(context.config.donation_address().cloned())
@@ -272,10 +270,8 @@ mod tests {
             amount: Amount::from_sat(template.coinbasevalue),
         }];
 
-        let merkle_root = template.get_merkle_root_without_coinbase();
         let prepared =
             PreparedNotifyParamsBuilder::new(Arc::new(template), test_distribution, &[], false)
-                .merkle_root(merkle_root)
                 .bits(bitcoin::CompactTarget::from_consensus(0x1d00ffff))
                 .time(1700000000u32)
                 .build()
@@ -535,7 +531,6 @@ mod tests {
         ];
 
         let pool_signature = b"test_sig";
-        let merkle_root = template.get_merkle_root_without_coinbase();
         let witness_commitment = template.default_witness_commitment.clone();
 
         let prepared = PreparedNotifyParamsBuilder::new(
@@ -544,7 +539,6 @@ mod tests {
             pool_signature,
             true,
         )
-        .merkle_root(merkle_root)
         .bits(bitcoin::CompactTarget::from_consensus(0x1d00ffff))
         .time(1700000000u32)
         .build()

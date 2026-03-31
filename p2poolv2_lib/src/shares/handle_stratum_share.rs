@@ -60,10 +60,12 @@ pub async fn handle_stratum_share(
             None => return Err("No coinbase found".into()),
         };
 
+        let template_merkle_root = blocktemplate.get_merkle_root_without_coinbase();
         let share_header = ShareHeader::from_commitment_and_header(
             share_commitment,
             header,
             merkle_root.into(),
+            template_merkle_root,
             blocktemplate
                 .coinbaseaux
                 .get("flags")

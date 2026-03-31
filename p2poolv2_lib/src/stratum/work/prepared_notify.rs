@@ -27,7 +27,7 @@ use crate::utils::time_provider::SystemTimeProvider;
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::{self, Hash};
 use bitcoin::transaction::Version;
-use bitcoin::{Address, BlockHash, CompactTarget, TxMerkleNode};
+use bitcoin::{Address, BlockHash, CompactTarget};
 use std::sync::Arc;
 
 /// Pre-serialized notify message with placeholders for per-miner fields.
@@ -55,8 +55,6 @@ pub struct PreparedNotifyParams {
     prev_share_blockhash: BlockHash,
     /// Uncle block hashes (for building ShareCommitment struct)
     uncles: Vec<BlockHash>,
-    /// Transaction merkle root (for building ShareCommitment struct)
-    merkle_root: Option<TxMerkleNode>,
     /// Share chain difficulty target (for building ShareCommitment struct)
     bits: CompactTarget,
     /// Commitment timestamp (for building ShareCommitment struct)
@@ -161,7 +159,6 @@ pub(crate) struct PreparedNotifyParamsBuilder {
     clean_jobs: bool,
     prev_share_blockhash: BlockHash,
     uncles: Vec<BlockHash>,
-    merkle_root: Option<TxMerkleNode>,
     bits: CompactTarget,
     time: u32,
     donation_address: Option<Address>,
@@ -185,7 +182,6 @@ impl PreparedNotifyParamsBuilder {
             clean_jobs,
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: Vec::new(),
-            merkle_root: None,
             bits: CompactTarget::from_consensus(0),
             time: 0,
             donation_address: None,
@@ -202,11 +198,6 @@ impl PreparedNotifyParamsBuilder {
 
     pub fn uncles(mut self, uncles: Vec<BlockHash>) -> Self {
         self.uncles = uncles;
-        self
-    }
-
-    pub fn merkle_root(mut self, merkle_root: Option<TxMerkleNode>) -> Self {
-        self.merkle_root = merkle_root;
         self
     }
 
@@ -319,7 +310,6 @@ impl PreparedNotifyParamsBuilder {
             prev_share_blockhash: self.prev_share_blockhash,
             uncles: self.uncles.clone(),
             miner_bitcoin_address: self.output_distribution[0].address.clone(),
-            template_merkle_root: self.merkle_root,
             bits: self.bits,
             time: self.time,
             donation_address: self.donation_address.clone(),
@@ -341,7 +331,6 @@ impl PreparedNotifyParamsBuilder {
             commitment_prefix,
             prev_share_blockhash: self.prev_share_blockhash,
             uncles: self.uncles,
-            merkle_root: self.merkle_root,
             bits: self.bits,
             time: self.time,
             donation_address: self.donation_address,
@@ -437,7 +426,6 @@ pub(crate) fn build_notify_from_prepared(
         prev_share_blockhash: prepared.prev_share_blockhash,
         uncles: prepared.uncles.clone(),
         miner_bitcoin_address: address.clone(),
-        template_merkle_root: prepared.merkle_root,
         bits: prepared.bits,
         time: prepared.time,
         donation_address: prepared.donation_address.clone(),
@@ -494,9 +482,7 @@ mod tests {
         clean_jobs: bool,
     ) -> PreparedNotifyParamsBuilder {
         let output_distribution = test_output_distribution(&template);
-        let merkle_root = template.get_merkle_root_without_coinbase();
         PreparedNotifyParamsBuilder::new(template, output_distribution, b"test_pool", clean_jobs)
-            .merkle_root(merkle_root)
             .bits(CompactTarget::from_consensus(0x1d00ffff))
             .time(1700000000u32)
     }
@@ -562,7 +548,6 @@ mod tests {
     async fn test_commitment_hash_matches_struct_hash() {
         let template = Arc::new(test_template());
         let address = test_address();
-        let merkle_root = template.get_merkle_root_without_coinbase();
         let bits = CompactTarget::from_consensus(0x1d00ffff);
         let time = 1700000000u32;
         let tracker_handle = start_tracker_actor();
@@ -587,7 +572,6 @@ mod tests {
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: Vec::new(),
             miner_bitcoin_address: address,
-            template_merkle_root: merkle_root,
             bits,
             time,
             donation_address: None,
