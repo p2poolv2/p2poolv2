@@ -23,7 +23,6 @@ use axum::{
 use bitcoin::BlockHash;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::store::block_tx_metadata::Status;
-use p2poolv2_lib::store::column_families::ColumnFamily;
 use p2poolv2_lib::store::dag_store::MAX_UNCLES_DEPTH;
 use p2poolv2_lib::store::writer::StoreError;
 use p2poolv2_lib::utils::time_provider::format_timestamp;
@@ -67,7 +66,7 @@ pub struct ShareLookupOutput {
     pub bits: String,
     pub time: String,
     pub bitcoin_header: BitcoinHeaderOutput,
-    pub bitcoin_transaction_count: usize,
+    pub template_merkle_branches_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transactions: Option<Vec<String>>,
 }
@@ -126,8 +125,10 @@ fn build_share_output(
         nonce: bitcoin_header.nonce,
     };
 
-    let bitcoin_txids = store.get_txids_for_blockhash(blockhash, ColumnFamily::BitcoinTxids);
-    let bitcoin_transaction_count = bitcoin_txids.0.len();
+    let template_merkle_branches_count = store
+        .get_template_merkle_branches(blockhash)
+        .unwrap_or_default()
+        .len();
 
     let transaction_ids = if full {
         let share_block = chain_store_handle.get_share(blockhash).ok_or_else(|| {
@@ -160,7 +161,7 @@ fn build_share_output(
         bits: format!("{:#x}", share_header.bits.to_consensus()),
         time: format_timestamp(share_header.time as u64),
         bitcoin_header: bitcoin_header_output,
-        bitcoin_transaction_count,
+        template_merkle_branches_count,
         transactions: transaction_ids,
     })
 }

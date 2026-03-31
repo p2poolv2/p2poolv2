@@ -193,7 +193,7 @@ impl Store {
             return None;
         }
         let transactions: Vec<ShareTransaction> = self
-            .get_txs_for_blockhash(blockhash, ColumnFamily::BlockTxids)
+            .get_txs_for_blockhash(blockhash)
             .into_iter()
             .map(ShareTransaction)
             .collect();
@@ -786,5 +786,41 @@ mod tests {
         // We verify by checking the block is still retrievable and unchanged
         store.commit_batch(batch).unwrap();
         assert!(store.get_share(&blockhash).is_some());
+    }
+
+    #[test]
+    fn test_template_merkle_branches_round_trip() {
+        use bitcoin::TxMerkleNode;
+        use bitcoin::hashes::Hash;
+
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let mut block = TestShareBlockBuilder::new().build();
+        let branch_a = TxMerkleNode::from_byte_array([0xaa; 32]);
+        let branch_b = TxMerkleNode::from_byte_array([0xbb; 32]);
+        let branch_c = TxMerkleNode::from_byte_array([0xcc; 32]);
+        block.template_merkle_branches = vec![branch_a, branch_b, branch_c];
+
+        let blockhash = block.block_hash();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&block, true, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share = store.get_share(&blockhash).unwrap();
+        assert_eq!(share.template_merkle_branches.len(), 3);
+        assert_eq!(share.template_merkle_branches[0], branch_a);
+        assert_eq!(share.template_merkle_branches[1], branch_b);
+        assert_eq!(share.template_merkle_branches[2], branch_c);
+    }
+
+    #[test]
+    fn test_get_template_merkle_branches_returns_empty_for_missing() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let missing_hash = BlockHash::all_zeros();
+        let branches = store.get_template_merkle_branches(&missing_hash).unwrap();
+        assert!(branches.is_empty());
     }
 }
