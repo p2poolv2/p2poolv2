@@ -574,7 +574,6 @@ mod tests {
             commitment,
             bitcoin_header,
             share_merkle_root,
-            template.get_merkle_root_without_coinbase(),
             template
                 .coinbaseaux
                 .get("flags")

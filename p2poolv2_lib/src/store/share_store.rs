@@ -165,6 +165,7 @@ impl Store {
             header,
             transactions,
             bitcoin_transactions: vec![],
+            template_merkle_branches: vec![],
         })
     }
 

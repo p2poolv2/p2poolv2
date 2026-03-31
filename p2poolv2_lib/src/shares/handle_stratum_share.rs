@@ -60,12 +60,10 @@ pub async fn handle_stratum_share(
             None => return Err("No coinbase found".into()),
         };
 
-        let template_merkle_root = blocktemplate.get_merkle_root_without_coinbase();
         let share_header = ShareHeader::from_commitment_and_header(
             share_commitment,
             header,
             merkle_root.into(),
-            template_merkle_root,
             blocktemplate
                 .coinbaseaux
                 .get("flags")
@@ -83,12 +81,11 @@ pub async fn handle_stratum_share(
         bitcoin_transactions.push(coinbase);
         bitcoin_transactions.extend(blocktemplate.decode_transactions());
 
-        // For now, send the entire template txdata, we will do tx
-        // deltas or compact block optimisation later on
         let share_block = ShareBlock {
             header: share_header,
             transactions: share_transactions,
             bitcoin_transactions,
+            template_merkle_branches: vec![],
         };
 
         debug!(

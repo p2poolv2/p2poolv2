@@ -451,12 +451,20 @@ impl<T: TimeProvider> DefaultShareValidator<T> {
         .map_err(|error| ValidationError(format!("Error building coinbase {error}")))?;
 
         let reconstructed_coinbase_txid = reconstructed_coinbase.compute_txid();
-        let recomputed_root: TxMerkleNode = match share.header.template_merkle_root {
-            Some(root) => bitcoin::merkle_tree::calculate_root(
-                [reconstructed_coinbase_txid.into(), root].into_iter(),
-            )
-            .ok_or_else(|| ValidationError::new("Failed to compute merkle root"))?,
-            None => reconstructed_coinbase_txid.into(),
+        // TODO: Rewrite validation to use template_merkle_branches from ShareBlock
+        // instead of the removed template_merkle_root from ShareHeader.
+        // For now, use template_merkle_branches to recompute the root.
+        let recomputed_root: TxMerkleNode = if share.template_merkle_branches.is_empty() {
+            reconstructed_coinbase_txid.into()
+        } else {
+            let mut current: TxMerkleNode = reconstructed_coinbase_txid.into();
+            for sibling in &share.template_merkle_branches {
+                current = bitcoin::merkle_tree::calculate_root(
+                    [current, *sibling].into_iter(),
+                )
+                .ok_or_else(|| ValidationError::new("Failed to compute merkle root"))?;
+            }
+            current
         };
 
         if recomputed_root != share.header.bitcoin_header.merkle_root {

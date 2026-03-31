@@ -338,12 +338,6 @@ pub fn build_block_from_work_components(path: &str, nsecs: u128) -> ShareBlock {
         .map(bitcoin::Transaction::from)
         .collect();
 
-    // Compute the commitment merkle root from template transactions
-    let template_merkle_root: Option<TxMerkleNode> = bitcoin::merkle_tree::calculate_root(
-        template_transactions.iter().map(|tx| tx.compute_txid()),
-    )
-    .map(|txid| txid.into());
-
     // Build the share commitment and compute its hash
     let share_commitment = ShareCommitment {
         prev_share_blockhash: BlockHash::all_zeros(),
@@ -411,7 +405,6 @@ pub fn build_block_from_work_components(path: &str, nsecs: u128) -> ShareBlock {
         fee_address: None,
         fee: None,
         coinbase_value: template.coinbasevalue,
-        template_merkle_root,
         coinbaseaux_flags: template
             .coinbaseaux
             .get("flags")
@@ -429,6 +422,7 @@ pub fn build_block_from_work_components(path: &str, nsecs: u128) -> ShareBlock {
         header: share_header,
         transactions: vec![ShareTransaction(share_coinbase)],
         bitcoin_transactions,
+        template_merkle_branches: vec![],
     }
 }
 
@@ -547,6 +541,7 @@ pub fn empty_share_block_from_header(header: ShareHeader) -> ShareBlock {
         header,
         transactions: Vec::new(),
         bitcoin_transactions: Vec::new(),
+        template_merkle_branches: vec![],
     }
 }
 
@@ -559,6 +554,7 @@ pub fn valid_share_block_from_fixture() -> ShareBlock {
         header,
         transactions: Vec::new(),
         bitcoin_transactions: Vec::new(),
+        template_merkle_branches: vec![],
     }
 }
 
@@ -650,10 +646,6 @@ fn test_share_block(
         }
     };
 
-    let template_txids = bitcoin_transactions[1..].iter().map(|tx| tx.compute_txid());
-    let template_merkle_root =
-        bitcoin::merkle_tree::calculate_root(template_txids).map(|txid| txid.into());
-
     let header = ShareHeader {
         prev_share_blockhash: prev_blockhash,
         uncles,
@@ -667,7 +659,6 @@ fn test_share_block(
         fee_address: None,
         fee: None,
         coinbase_value: 5_000_000_000,
-        template_merkle_root,
         coinbaseaux_flags: None,
         witness_commitment: None,
         bitcoin_height: 1,
@@ -678,6 +669,7 @@ fn test_share_block(
         header,
         transactions,
         bitcoin_transactions,
+        template_merkle_branches: vec![],
     }
 }
 
@@ -769,7 +761,6 @@ impl TestShareHeaderBuilder {
             fee_address: None,
             fee: None,
             coinbase_value: 100_000_000,
-            template_merkle_root: None,
             coinbaseaux_flags: None,
             witness_commitment: None,
             bitcoin_height: 1,

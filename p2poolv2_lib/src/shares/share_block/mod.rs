@@ -29,7 +29,6 @@ use bitcoin::{
     block::Header,
     consensus::{Decodable, Encodable},
     hashes::Hash,
-    merkle_tree::calculate_root,
 };
 use core::mem;
 use serde::{Deserialize, Serialize};
@@ -71,8 +70,6 @@ pub struct ShareHeader {
     pub fee: Option<u16>,
     /// Total bitcoin coinbase value - from blocktemplate
     pub coinbase_value: u64,
-    /// Bitcoin merkle root from the template transactions - from blocktemplate
-    pub template_merkle_root: Option<TxMerkleNode>,
     /// coinbaseaux flags as decoded bytes - from blocktemplate, only the "flag" key
     #[serde(default)]
     pub coinbaseaux_flags: Option<CoinbaseAuxFlags>,
@@ -145,7 +142,6 @@ impl ShareHeader {
         commitment: ShareCommitment,
         bitcoin_header: Header,
         share_chain_merkle_root: TxMerkleNode,
-        template_merkle_root: Option<TxMerkleNode>,
         coinbaseaux_flags: Option<CoinbaseAuxFlags>,
         witness_commitment: Option<WitnessCommitment>,
         height: u64,
@@ -164,7 +160,6 @@ impl ShareHeader {
             fee_address: commitment.fee_address,
             fee: commitment.fee,
             coinbase_value: commitment.coinbase_value,
-            template_merkle_root,
             coinbaseaux_flags,
             witness_commitment,
             bitcoin_height: height,
@@ -200,13 +195,6 @@ impl Encodable for ShareHeader {
         len += self.donation.unwrap_or(0).consensus_encode(w)?;
         len += encode_optional_address_string(&self.fee_address, w)?;
         len += self.fee.unwrap_or(0).consensus_encode(w)?;
-        match self.template_merkle_root {
-            Some(root) => {
-                len += true.consensus_encode(w)?;
-                len += root.consensus_encode(w)?;
-            }
-            None => len += false.consensus_encode(w)?,
-        }
         len += self.coinbase_value.consensus_encode(w)?;
         match &self.coinbaseaux_flags {
             Some(flags) => {
@@ -256,12 +244,6 @@ impl Decodable for ShareHeader {
         let fee_raw = u16::consensus_decode(r)?;
         let fee = if fee_raw > 0 { Some(fee_raw) } else { None };
 
-        let template_merkle_root = if bool::consensus_decode(r)? {
-            Some(TxMerkleNode::consensus_decode(r)?)
-        } else {
-            None
-        };
-
         let coinbase_value = u64::consensus_decode(r)?;
         let coinbaseaux_flags = if bool::consensus_decode(r)? {
             Some(CoinbaseAuxFlags::consensus_decode(r)?)
@@ -290,7 +272,6 @@ impl Decodable for ShareHeader {
             donation,
             fee_address,
             fee,
-            template_merkle_root,
             coinbase_value,
             coinbaseaux_flags,
             witness_commitment,
@@ -315,6 +296,11 @@ pub struct ShareBlock {
     /// only useful when building a block to submitting to
     /// bitcoin. These are not stored, or used in share validation.
     pub bitcoin_transactions: Vec<Transaction>,
+    /// Merkle path (branches) from coinbase position to the bitcoin
+    /// merkle root. Used by validators to verify the bitcoin header's
+    /// merkle_root matches the reconstructed coinbase.
+    #[serde(default)]
+    pub template_merkle_branches: Vec<TxMerkleNode>,
 }
 
 impl ShareBlock {
@@ -380,10 +366,6 @@ impl ShareBlock {
             }
         };
 
-        let template_txids = bitcoin_block.txdata[1..].iter().map(|tx| tx.compute_txid());
-        let template_merkle_root: Option<TxMerkleNode> =
-            calculate_root(template_txids).map(|txid| txid.into());
-
         let bitcoin_height = extract_height_from_coinbase(&bitcoin_block.txdata[0])?;
 
         let header = ShareHeader {
@@ -398,7 +380,6 @@ impl ShareBlock {
             donation: None,
             fee_address: None,
             fee: None,
-            template_merkle_root,
             coinbase_value,
             coinbaseaux_flags: None,
             witness_commitment: None,
@@ -409,6 +390,7 @@ impl ShareBlock {
             header,
             transactions,
             bitcoin_transactions: vec![],
+            template_merkle_branches: vec![],
         })
     }
 }
@@ -432,6 +414,11 @@ impl Encodable for ShareBlock {
             len += tx.consensus_encode(w)?;
         }
         len += self.bitcoin_transactions.consensus_encode(w)?;
+        // Encode template merkle path
+        len += VarInt(self.template_merkle_branches.len() as u64).consensus_encode(w)?;
+        for node in &self.template_merkle_branches {
+            len += node.consensus_encode(w)?;
+        }
         Ok(len)
     }
 }
@@ -453,10 +440,19 @@ impl Decodable for ShareBlock {
             transactions.push(ShareTransaction::consensus_decode(r)?);
         }
         let bitcoin_transactions = Vec::<Transaction>::consensus_decode(r)?;
+        // Decode template merkle path
+        let path_count = VarInt::consensus_decode(r)?.0 as usize;
+        let max_path_capacity = 32; // merkle path depth is at most ~30 for any realistic block
+        let mut template_merkle_branches =
+            Vec::with_capacity(core::cmp::min(path_count, max_path_capacity));
+        for _ in 0..path_count {
+            template_merkle_branches.push(TxMerkleNode::consensus_decode(r)?);
+        }
         Ok(ShareBlock {
             header,
             transactions,
             bitcoin_transactions,
+            template_merkle_branches,
         })
     }
 }
@@ -618,7 +614,6 @@ mod tests {
             commitment,
             bitcoin_header,
             bitcoin_header.merkle_root,
-            None,
             None,
             None,
             1,
