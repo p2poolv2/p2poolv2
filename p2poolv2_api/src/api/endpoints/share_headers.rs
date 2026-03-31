@@ -21,6 +21,7 @@ use axum::{
     Json,
     extract::{Query, State},
 };
+use bitcoin::TxMerkleNode;
 use p2poolv2_lib::shares::share_block::ShareHeader;
 use p2poolv2_lib::shares::share_block::share_transaction::ShareTransaction;
 use p2poolv2_lib::store::writer::StoreError;
@@ -36,15 +37,19 @@ pub struct ShareHeadersQuery {
     pub num: Option<u32>,
     /// Include share block transactions in the response.
     pub share_block_transactions: Option<bool>,
+    /// Include template merkle branches in the response.
+    pub template_merkle_branches: Option<bool>,
 }
 
-/// A share header entry with optional transaction data.
+/// A share header entry with optional transaction and merkle branch data.
 #[derive(Serialize)]
 pub struct ShareHeaderEntry {
     #[serde(flatten)]
     pub header: ShareHeader,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transactions: Option<Vec<ShareTransaction>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template_merkle_branches: Option<Vec<TxMerkleNode>>,
 }
 
 /// JSON response for the /share_headers endpoint.
@@ -93,10 +98,12 @@ pub(crate) async fn share_headers(
     let from_height = to_height.saturating_sub(num.saturating_sub(1));
 
     let include_share_txs = query.share_block_transactions.unwrap_or(false);
+    let include_merkle_branches = query.template_merkle_branches.unwrap_or(false);
+    let need_full_blocks = include_share_txs || include_merkle_branches;
 
     let store = chain_store_handle.store_handle().store();
 
-    let headers = if include_share_txs {
+    let headers = if need_full_blocks {
         let share_blocks = store
             .query_share_blocks(from_height, to_height)
             .map_err(|error| match &error {
@@ -110,7 +117,16 @@ pub(crate) async fn share_headers(
             .into_iter()
             .map(|share_block| ShareHeaderEntry {
                 header: share_block.header,
-                transactions: Some(share_block.transactions),
+                transactions: if include_share_txs {
+                    Some(share_block.transactions)
+                } else {
+                    None
+                },
+                template_merkle_branches: if include_merkle_branches {
+                    Some(share_block.template_merkle_branches)
+                } else {
+                    None
+                },
             })
             .collect()
     } else {
@@ -128,6 +144,7 @@ pub(crate) async fn share_headers(
             .map(|header| ShareHeaderEntry {
                 header,
                 transactions: None,
+                template_merkle_branches: None,
             })
             .collect()
     };
@@ -183,6 +200,7 @@ mod tests {
             to: None,
             num: Some(0),
             share_block_transactions: None,
+            template_merkle_branches: None,
         });
 
         let result = share_headers(State(state), query).await;
@@ -198,6 +216,7 @@ mod tests {
             to: None,
             num: Some(1001),
             share_block_transactions: None,
+            template_merkle_branches: None,
         });
 
         let result = share_headers(State(state), query).await;
@@ -220,6 +239,7 @@ mod tests {
             to: Some(0),
             num: Some(1),
             share_block_transactions: None,
+            template_merkle_branches: None,
         });
 
         let result = share_headers(State(state), query).await;
@@ -249,6 +269,7 @@ mod tests {
             to: Some(0),
             num: Some(1),
             share_block_transactions: Some(true),
+            template_merkle_branches: None,
         });
 
         let result = share_headers(State(state), query).await;

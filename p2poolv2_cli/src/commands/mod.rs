@@ -68,6 +68,9 @@ pub enum Commands {
         /// Include share block transactions in the output
         #[arg(short, long, default_value = "false")]
         share_block_transactions: bool,
+        /// Include template merkle branches in the output
+        #[arg(short = 'm', long, default_value = "false")]
+        template_merkle_branches: bool,
     },
     /// Display candidate shares and their uncles for a height range
     Candidates {
@@ -144,9 +147,16 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                     to,
                     num,
                     share_block_transactions,
+                    template_merkle_branches,
                 }) => {
-                    commands::shares::execute(&config.api, *to, *num, *share_block_transactions)
-                        .await?;
+                    commands::shares::execute(
+                        &config.api,
+                        *to,
+                        *num,
+                        *share_block_transactions,
+                        *template_merkle_branches,
+                    )
+                    .await?;
                 }
                 Some(Commands::Candidates { to, num }) => {
                     commands::candidates::execute(&config.api, *to, *num).await?;
