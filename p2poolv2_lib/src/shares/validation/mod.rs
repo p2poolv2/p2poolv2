@@ -141,26 +141,19 @@ pub trait ShareValidator {
 ///
 /// Stores a `PoolDifficulty` instance initialized at construction time,
 /// avoiding repeated builds on each validation call.
-pub struct DefaultShareValidator<T: TimeProvider> {
+pub struct DefaultShareValidator {
     pool_difficulty: PoolDifficulty,
     /// Multiplier applied to bitcoin difficulty when walking the PPLNS window.
     difficulty_multiplier: u128,
-    /// Time provider for deterministic coinbase reconstruction.
-    time_provider: T,
 }
 
-impl<T: TimeProvider> DefaultShareValidator<T> {
-    /// Create a new DefaultShareValidator with the given pool difficulty,
-    /// difficulty multiplier for PPLNS window walks, and time provider.
-    pub fn new(
-        pool_difficulty: PoolDifficulty,
-        difficulty_multiplier: u128,
-        time_provider: T,
-    ) -> Self {
+impl DefaultShareValidator {
+    /// Create a new DefaultShareValidator with the given pool difficulty
+    /// and difficulty multiplier for PPLNS window walks.
+    pub fn new(pool_difficulty: PoolDifficulty, difficulty_multiplier: u128) -> Self {
         Self {
             pool_difficulty,
             difficulty_multiplier,
-            time_provider,
         }
     }
 
@@ -507,7 +500,7 @@ impl<T: TimeProvider> DefaultShareValidator<T> {
     }
 }
 
-impl<T: TimeProvider> ShareValidator for DefaultShareValidator<T> {
+impl ShareValidator for DefaultShareValidator {
     fn validate_share_header(
         &self,
         share_header: &ShareHeader,
@@ -701,7 +694,7 @@ mod tests {
         genesis_for_tests, load_share_headers_test_data, make_test_address,
         setup_pool_difficulty_mocks,
     };
-    use crate::utils::time_provider::{SystemTimeProvider, TestTimeProvider};
+    use crate::utils::time_provider::TestTimeProvider;
     use bitcoin::transaction::Version;
     use bitcoin::{BlockHash, ScriptBuf, TxOut, hashes::Hash};
     use mockall::predicate::*;
@@ -709,14 +702,12 @@ mod tests {
     use std::sync::{Arc, RwLock};
     use std::time::SystemTime;
 
-    fn validator() -> DefaultShareValidator<SystemTimeProvider> {
-        DefaultShareValidator::new(PoolDifficulty::default(), 1, SystemTimeProvider)
+    fn validator() -> DefaultShareValidator {
+        DefaultShareValidator::new(PoolDifficulty::default(), 1)
     }
 
-    fn validator_with(
-        pool_difficulty: PoolDifficulty,
-    ) -> DefaultShareValidator<SystemTimeProvider> {
-        DefaultShareValidator::new(pool_difficulty, 1, SystemTimeProvider)
+    fn validator_with(pool_difficulty: PoolDifficulty) -> DefaultShareValidator {
+        DefaultShareValidator::new(pool_difficulty, 1)
     }
 
     #[tokio::test]
@@ -916,9 +907,6 @@ mod tests {
     async fn test_validate_share() {
         let mut chain_store_handle = ChainStoreHandle::default();
 
-        let fixed_time = TestTimeProvider::new(
-            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
-        );
         let share_block = build_block_from_work_components(
             "../p2poolv2_tests/test_data/validation/stratum/b/",
             TEST_COINBASE_NSECS,
@@ -954,7 +942,7 @@ mod tests {
                 .returning(|_, _| Some(HashMap::from([(make_test_address(1), 100)])));
             Arc::new(RwLock::new(mock_window))
         };
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1, fixed_time);
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
         let result =
             validator.validate_share_block(&share_block, &chain_store_handle, pplns_window);
 
@@ -1590,11 +1578,8 @@ mod tests {
             .build()
             .header;
         let empty_map = HashMap::new();
-        let result = DefaultShareValidator::<SystemTimeProvider>::build_expected_outputs(
-            &header,
-            &empty_map,
-            5_000_000_000,
-        );
+        let result =
+            DefaultShareValidator::build_expected_outputs(&header, &empty_map, 5_000_000_000);
         assert!(result.is_err());
         assert!(
             result
@@ -1623,12 +1608,9 @@ mod tests {
         difficulty_map.insert(address_b.clone(), 400u128);
 
         let total_amount = 1_000_000_000;
-        let outputs = DefaultShareValidator::<SystemTimeProvider>::build_expected_outputs(
-            &header,
-            &difficulty_map,
-            total_amount,
-        )
-        .unwrap();
+        let outputs =
+            DefaultShareValidator::build_expected_outputs(&header, &difficulty_map, total_amount)
+                .unwrap();
 
         assert_eq!(outputs.len(), 2);
         let total_distributed: Amount = outputs.iter().map(|output| output.amount).sum();
@@ -1670,12 +1652,8 @@ mod tests {
         difficulty_map.insert(address_a.clone(), 1000u128);
 
         let total = 10_000_000_000;
-        let outputs = DefaultShareValidator::<SystemTimeProvider>::build_expected_outputs(
-            &header,
-            &difficulty_map,
-            total,
-        )
-        .unwrap();
+        let outputs =
+            DefaultShareValidator::build_expected_outputs(&header, &difficulty_map, total).unwrap();
 
         // 3 outputs: donation, fee, miner
         assert_eq!(outputs.len(), 3);
@@ -1700,10 +1678,6 @@ mod tests {
     fn test_validate_bitcoin_payout_with_matching_distribution() {
         use crate::shares::share_commitment::ShareCommitment;
         use bitcoin::script::PushBytesBuf;
-
-        let fixed_time = TestTimeProvider::new(
-            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
-        );
 
         let address_a = crate::test_utils::parse_address_from_string(
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
@@ -1763,7 +1737,7 @@ mod tests {
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1, fixed_time);
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
         let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
         assert!(
             result.is_ok(),
@@ -1776,10 +1750,6 @@ mod tests {
     fn test_validate_bitcoin_payout_with_wrong_amounts() {
         use crate::shares::share_commitment::ShareCommitment;
         use bitcoin::script::PushBytesBuf;
-
-        let fixed_time = TestTimeProvider::new(
-            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
-        );
 
         let address_a = crate::test_utils::parse_address_from_string(
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
@@ -1841,7 +1811,7 @@ mod tests {
 
         // The reconstructed coinbase will have different outputs (60/40),
         // producing a different merkle root than the 50/50 coinbase
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1, fixed_time);
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
         let error = validator
             .validate_bitcoin_payout(&share_block, pplns_window)
             .unwrap_err();
@@ -1931,10 +1901,6 @@ mod tests {
         use crate::shares::share_commitment::ShareCommitment;
         use bitcoin::script::PushBytesBuf;
 
-        let fixed_time = TestTimeProvider::new(
-            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
-        );
-
         let address_a = crate::test_utils::parse_address_from_string(
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
         );
@@ -1979,7 +1945,7 @@ mod tests {
 
         // The reconstructed coinbase will also have 1 sat to address_a,
         // so merkle roots should match and validation should pass
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1, fixed_time);
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
         let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
         assert!(
             result.is_ok(),
@@ -1992,10 +1958,6 @@ mod tests {
     fn test_validate_bitcoin_payout_with_transactions_donation_and_fees() {
         use crate::shares::share_commitment::ShareCommitment;
         use bitcoin::script::PushBytesBuf;
-
-        let fixed_time = TestTimeProvider::new(
-            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
-        );
 
         let miner_a = crate::test_utils::parse_address_from_string(
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
@@ -2105,7 +2067,7 @@ mod tests {
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1, fixed_time);
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
         let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
         assert!(
             result.is_ok(),
@@ -2133,10 +2095,6 @@ mod tests {
         use crate::stratum::work::block_template::BlockTemplate;
         use crate::stratum::work::gbt::build_merkle_branches_for_template;
         use bitcoin::script::PushBytesBuf;
-
-        let fixed_time = TestTimeProvider::new(
-            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
-        );
 
         let template: BlockTemplate = serde_json::from_str(include_str!(
             "../../../../p2poolv2_tests/test_data/validation/stratum/gbt_with_transactions.json"
@@ -2220,7 +2178,7 @@ mod tests {
             .returning(move |_, _| Some(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1, fixed_time);
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
         let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
         assert!(
             result.is_ok(),

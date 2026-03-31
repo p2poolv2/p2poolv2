@@ -45,7 +45,6 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::validation::{DefaultShareValidator, ShareValidator};
 use crate::utils::cpu::available_cpus;
-use crate::utils::time_provider::SystemTimeProvider;
 use bitcoin::BlockHash;
 use libp2p::request_response::ResponseChannel;
 use std::fmt;
@@ -154,7 +153,6 @@ impl ValidationWorker {
         let share_validator = Arc::new(DefaultShareValidator::new(
             pool_difficulty,
             self.difficulty_multiplier,
-            SystemTimeProvider,
         ));
 
         while let Some(event) = self.validation_rx.recv().await {
@@ -207,7 +205,7 @@ impl ValidationWorker {
 /// with `BlockValid` status.
 async fn validate_and_emit(
     block_hash: BlockHash,
-    share_validator: Arc<DefaultShareValidator<SystemTimeProvider>>,
+    share_validator: Arc<DefaultShareValidator>,
     chain_store_handle: ChainStoreHandle,
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
