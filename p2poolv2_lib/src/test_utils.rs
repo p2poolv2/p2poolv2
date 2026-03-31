@@ -60,8 +60,6 @@ use crate::stratum::messages::SimpleRequest;
 #[cfg(test)]
 use crate::stratum::work::block_template::BlockTemplate;
 #[cfg(test)]
-use crate::utils::time_provider::TimeProvider;
-#[cfg(test)]
 use bitcoin::TxMerkleNode;
 
 /// Well-known secp256k1 compressed public keys (multiples of the generator G).
@@ -584,7 +582,6 @@ fn test_share_block(
     use crate::accounting::OutputPair;
     use crate::shares::share_commitment::ShareCommitment;
     use crate::stratum::work::coinbase::build_coinbase_transaction;
-    use crate::utils::time_provider::SystemTimeProvider;
     use bitcoin::script::PushBytesBuf;
 
     let share_merkle_root =
