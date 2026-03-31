@@ -82,7 +82,7 @@ pub struct ShareHeader {
     pub bitcoin_height: u64,
     /// Nanosecond timestamp embedded in the coinbase scriptSig
     #[serde(default)]
-    pub coinbase_nsecs: u128,
+    pub coinbase_nsecs: u64,
 }
 
 /// Encode an optional address as a bool flag followed by the address string when present.
@@ -146,7 +146,7 @@ impl ShareHeader {
         coinbaseaux_flags: Option<CoinbaseAuxFlags>,
         witness_commitment: Option<WitnessCommitment>,
         height: u64,
-        coinbase_nsecs: u128,
+        coinbase_nsecs: u64,
     ) -> Self {
         Self {
             prev_share_blockhash: commitment.prev_share_blockhash,
@@ -212,8 +212,7 @@ impl Encodable for ShareHeader {
             None => len += false.consensus_encode(w)?,
         }
         len += self.bitcoin_height.consensus_encode(w)?;
-        w.write_all(&self.coinbase_nsecs.to_le_bytes())?;
-        len += 16;
+        len += self.coinbase_nsecs.consensus_encode(w)?;
         Ok(len)
     }
 }
@@ -257,9 +256,7 @@ impl Decodable for ShareHeader {
             None
         };
         let bitcoin_height = u64::consensus_decode(r)?;
-        let mut nsecs_bytes = [0u8; 16];
-        r.read_exact(&mut nsecs_bytes)?;
-        let coinbase_nsecs = u128::from_le_bytes(nsecs_bytes);
+        let coinbase_nsecs = u64::consensus_decode(r)?;
 
         Ok(ShareHeader {
             prev_share_blockhash,
@@ -296,6 +293,7 @@ pub struct ShareBlock {
     /// Bitcoin transactions, making for a full share block. These are
     /// only useful when building a block to submitting to
     /// bitcoin. These are not stored, or used in share validation.
+    #[serde(skip)]
     pub bitcoin_transactions: Vec<Transaction>,
     /// Merkle path (branches) from coinbase position to the bitcoin
     /// merkle root. Used by validators to verify the bitcoin header's

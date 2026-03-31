@@ -50,12 +50,12 @@ pub fn parse_address(address: &str, network: Network) -> Result<Address, WorkErr
 
 /// Get timestamp from provider, in seconds and nanoseconds.
 #[allow(dead_code)]
-pub(crate) fn get_timestamp_bytes<T: TimeProvider + ?Sized>(time_provider: &T) -> u128 {
+pub(crate) fn get_timestamp_bytes<T: TimeProvider + ?Sized>(time_provider: &T) -> u64 {
     time_provider
         .now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_nanos()
+        .as_nanos() as u64
 }
 
 /// Build outputs for the transaction from the provided address and value and pairs.
@@ -110,7 +110,7 @@ pub(crate) fn build_coinbase_transaction(
     default_witness_commitment: Option<&WitnessCommitment>,
     pool_signature: &[u8],
     commitment_hash: Option<sha256::Hash>,
-    nsecs: u128,
+    nsecs: u64,
 ) -> Result<Transaction, WorkError> {
     if output_data.is_empty() {
         return Err(WorkError {
@@ -186,7 +186,7 @@ pub fn split_coinbase(coinbase: &Transaction) -> Result<(String, String), WorkEr
 /// has the following structure:
 ///
 ///  `commitment_hash` (optional: `[0x20] + [32 bytes]`)
-///  `nsecs` (`[0x10] + [16 bytes]`)
+///  `nsecs` (`[0x08] + [8 bytes]`)
 ///  `pool_signature` (`[len_byte] + [data]`)
 ///  `sequence` (4 bytes)
 ///  `output_count` (CompactSize)
@@ -198,7 +198,7 @@ pub fn split_coinbase(coinbase: &Transaction) -> Result<(String, String), WorkEr
 /// Detect whether a coinbase2 hex string starts with a commitment hash push.
 ///
 /// Returns 33 (1 opcode byte + 32 data bytes) when the first byte is 0x20
-/// (a 32-byte push), or 0 when the first byte is 0x10 (the nsecs 16-byte push).
+/// (a 32-byte push), or 0 when the first byte is 0x08 (the nsecs 8-byte push).
 /// This avoids relying on `share_commitment.is_some()`, which can be None in
 /// solo mode even though the coinbase2 bytes still contain a commitment hash.
 pub fn detect_commitment_hash_len_from_coinbase2(coinbase2_hex: &str) -> usize {
@@ -221,7 +221,7 @@ pub fn extract_outputs_from_coinbase2(
         message: "Error parsing coinbase hex".into(),
     })?;
 
-    let nsecs_push_len = 1 + 16; // opcode + 16 bytes for u128
+    let nsecs_push_len = 1 + 8; // opcode + 8 bytes for u64
     let pool_sig_push_len = 1 + pool_signature_len;
     let script_sig_part2_len = commitment_hash_len + nsecs_push_len + pool_sig_push_len;
     let output_data_start_index = script_sig_part2_len + SEQUENCE_LENGTH;
@@ -579,17 +579,17 @@ mod tests {
 
         // Check the coinbase input script layout:
         // [height][flags][EXTRANONCE_SEPARATOR][nsecs][pool_sig]
-        assert_eq!(coinbase.input[0].script_sig.len(), 44);
+        assert_eq!(coinbase.input[0].script_sig.len(), 36);
         let script_bytes = coinbase.input[0].script_sig.as_bytes();
         assert_eq!(script_bytes[0], 2);
         assert_eq!(script_bytes[1..3].as_hex().to_string(), "fa01"); // Height 506 in little-endian
         assert_eq!(script_bytes[3..5].as_hex().to_string(), "0100"); // Flags (empty in this case)
         assert_eq!(script_bytes[5..6].as_hex().to_string(), "0c"); // Extranonce separator length (12 bytes)
         assert_eq!(script_bytes[6..18], EXTRANONCE_SEPARATOR); // Extranonce separator
-        assert_eq!(script_bytes[18..19].as_hex().to_string(), "10"); // Timestamp length (16 bytes for u128 nanos)
-        assert_eq!(script_bytes[35], 8u8); // Pool signature length
+        assert_eq!(script_bytes[18..19].as_hex().to_string(), "08"); // Timestamp length (8 bytes for u64 nanos)
+        assert_eq!(script_bytes[27], 8u8); // Pool signature length
         assert_eq!(
-            &script_bytes[36..44],
+            &script_bytes[28..36],
             b"P2Poolv2", // Check the pool signature
         );
     }
@@ -685,7 +685,7 @@ mod tests {
 
         // Check the coinbase input script layout:
         // [height][flags][EXTRANONCE_SEPARATOR][commitment_hash][nsecs][pool_sig]
-        assert_eq!(coinbase.input[0].script_sig.len(), 77);
+        assert_eq!(coinbase.input[0].script_sig.len(), 69);
         let script_bytes = coinbase.input[0].script_sig.as_bytes();
         assert_eq!(script_bytes[0], 2);
         assert_eq!(script_bytes[1..3].as_hex().to_string(), "fa01"); // Height 506 in little-endian
@@ -700,10 +700,10 @@ mod tests {
                 .as_byte_array()
                 .to_lower_hex_string()
         ); // Share commitment hash
-        assert_eq!(script_bytes[51..52].as_hex().to_string(), "10"); // Timestamp length (16 bytes for u128 nanos)
-        assert_eq!(script_bytes[68], 8u8); // Pool signature length
+        assert_eq!(script_bytes[51..52].as_hex().to_string(), "08"); // Timestamp length (8 bytes for u64 nanos)
+        assert_eq!(script_bytes[60], 8u8); // Pool signature length
         assert_eq!(
-            &script_bytes[69..77],
+            &script_bytes[61..69],
             b"P2Poolv2", // Check the pool signature
         );
     }

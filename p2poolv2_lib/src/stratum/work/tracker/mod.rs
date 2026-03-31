@@ -55,7 +55,7 @@ pub struct JobDetails {
     pub generation_timestamp: u64,
     pub share_commitment: Option<ShareCommitment>,
     /// Nanosecond timestamp embedded in the coinbase scriptSig for this job.
-    pub coinbase_nsecs: u128,
+    pub coinbase_nsecs: u64,
     /// Merkle branches for the template transactions (excluding coinbase).
     pub template_merkle_branches: Vec<bitcoin::TxMerkleNode>,
 }
@@ -90,7 +90,7 @@ impl JobTracker {
         coinbase1: String,
         coinbase2: String,
         share_commitment: Option<ShareCommitment>,
-        coinbase_nsecs: u128,
+        coinbase_nsecs: u64,
         template_merkle_branches: Vec<bitcoin::TxMerkleNode>,
         job_id: JobId,
     ) -> JobId {
