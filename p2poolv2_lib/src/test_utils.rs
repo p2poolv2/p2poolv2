@@ -43,14 +43,22 @@ use bitcoin::{
 use std::str::FromStr;
 
 // Imports only needed for internal tests
+#[cfg(any(test, feature = "test-utils"))]
+use crate::accounting::OutputPair;
 #[cfg(test)]
 use crate::pool_difficulty::MockPoolDifficulty;
 #[cfg(test)]
 use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
 #[cfg(test)]
+use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
+#[cfg(any(test, feature = "test-utils"))]
 use crate::shares::share_commitment::ShareCommitment;
+#[cfg(any(test, feature = "test-utils"))]
+use crate::shares::witness_commitment::WitnessCommitment;
 #[cfg(test)]
 use crate::store::block_tx_metadata::{BlockMetadata, Status};
+#[cfg(test)]
+use crate::stratum;
 #[cfg(test)]
 use crate::stratum::messages::Notify;
 #[cfg(test)]
@@ -59,8 +67,16 @@ use crate::stratum::messages::Response;
 use crate::stratum::messages::SimpleRequest;
 #[cfg(test)]
 use crate::stratum::work::block_template::BlockTemplate;
+#[cfg(any(test, feature = "test-utils"))]
+use crate::stratum::work::coinbase::build_coinbase_transaction;
+#[cfg(test)]
+use crate::stratum::work::gbt::build_merkle_branches_for_template;
 #[cfg(test)]
 use bitcoin::TxMerkleNode;
+#[cfg(any(test, feature = "test-utils"))]
+use bitcoin::script::PushBytesBuf;
+#[cfg(test)]
+use rand::{Rng, thread_rng};
 
 /// Well-known secp256k1 compressed public keys (multiples of the generator G).
 /// Use these when constructing test share blocks that need distinct, valid miner keys.
@@ -251,8 +267,6 @@ pub fn create_test_commitment() -> ShareCommitment {
 #[cfg(test)]
 /// Generate a random hex string of specified length (defaults to 64 characters)
 pub fn random_hex_string(length: usize, leading_zeroes: usize) -> String {
-    use rand::{Rng, thread_rng};
-
     let mut rng = thread_rng();
     let mut bytes = [0u8; 32];
     rng.fill(&mut bytes[..length / 2]);
@@ -268,8 +282,6 @@ pub fn random_hex_string(length: usize, leading_zeroes: usize) -> String {
 pub fn load_valid_stratum_work_components(
     path: &str,
 ) -> (BlockTemplate, Notify, SimpleRequest, Response<'static>) {
-    use crate::stratum::{self, messages::SimpleRequest};
-
     let notify_file = std::fs::File::open(format!("{path}/notify.json")).unwrap();
     let notify: Notify = serde_json::from_reader(notify_file).unwrap();
 
@@ -309,15 +321,6 @@ pub fn load_valid_stratum_work_components(
 
 #[cfg(test)]
 pub fn build_block_from_work_components(path: &str, nsecs: u128) -> ShareBlock {
-    use crate::accounting::OutputPair;
-    use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
-    use crate::shares::share_commitment::ShareCommitment;
-    use crate::shares::witness_commitment::WitnessCommitment;
-    use crate::stratum::work::coinbase::build_coinbase_transaction;
-    use crate::stratum::work::gbt::build_merkle_branches_for_template;
-    use bitcoin::TxMerkleNode;
-    use bitcoin::script::PushBytesBuf;
-
     let (template, _notify, submit, _authorize) = load_valid_stratum_work_components(path);
 
     let share_coinbase = test_coinbase_transaction(1);
@@ -579,11 +582,6 @@ fn test_share_block(
     bits: Option<CompactTarget>,
     time: Option<u32>,
 ) -> ShareBlock {
-    use crate::accounting::OutputPair;
-    use crate::shares::share_commitment::ShareCommitment;
-    use crate::stratum::work::coinbase::build_coinbase_transaction;
-    use bitcoin::script::PushBytesBuf;
-
     let share_merkle_root =
         bitcoin::merkle_tree::calculate_root(transactions.iter().map(|tx| tx.compute_txid()))
             .unwrap()

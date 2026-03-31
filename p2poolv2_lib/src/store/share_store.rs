@@ -405,7 +405,10 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::block_tx_metadata::{BlockMetadata, Status};
     use crate::test_utils::TestShareBlockBuilder;
+    use bitcoin::TxMerkleNode;
+    use bitcoin::Work;
     use bitcoin::hashes::Hash;
     use tempfile::tempdir;
 
@@ -688,9 +691,6 @@ mod tests {
 
     #[test]
     fn test_get_block_metadata_batch_returns_stored_metadata() {
-        use crate::store::block_tx_metadata::{BlockMetadata, Status};
-        use bitcoin::Work;
-
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -727,9 +727,6 @@ mod tests {
 
     #[test]
     fn test_get_block_metadata_batch_skips_missing_blockhashes() {
-        use crate::store::block_tx_metadata::{BlockMetadata, Status};
-        use bitcoin::Work;
-
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -790,9 +787,6 @@ mod tests {
 
     #[test]
     fn test_template_merkle_branches_round_trip() {
-        use bitcoin::TxMerkleNode;
-        use bitcoin::hashes::Hash;
-
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 

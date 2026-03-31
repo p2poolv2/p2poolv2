@@ -395,8 +395,8 @@ impl DefaultShareValidator {
         Ok(())
     }
 
-    /// Validate the coinbase payouts match expected and the share commitment
-    /// in the bitcoin coinbase matches the share block.
+    /// Validate the bitcoin coinbase by reconstructing it from the share header
+    /// fields and verifying the merkle root matches the bitcoin header.
     fn validate_bitcoin_coinbase(
         &self,
         share: &ShareBlock,
@@ -406,12 +406,13 @@ impl DefaultShareValidator {
         Ok(())
     }
 
-    /// Validate bitcoin coinbase payout meets our PplnsWindow.
+    /// Validate the bitcoin coinbase against the PPLNS window distribution.
     ///
     /// Computes the expected distribution from the PPLNS window using
-    /// bitcoin header difficulty * difficulty_multiplier, then verifies
-    /// that the coinbase outputs match the expected donation, fee, and
-    /// proportional PPLNS outputs.
+    /// bitcoin header difficulty * difficulty_multiplier, reconstructs
+    /// the expected coinbase transaction, and verifies that the merkle
+    /// root computed from the reconstructed coinbase and the template
+    /// merkle branches matches the bitcoin header's merkle root.
     fn validate_bitcoin_payout(
         &self,
         share: &ShareBlock,
@@ -696,13 +697,19 @@ mockall::mock! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
     use crate::shares::share_block::ShareTransaction;
+    use crate::shares::share_commitment::ShareCommitment;
+    use crate::shares::witness_commitment::WitnessCommitment;
+    use crate::stratum::work::block_template::BlockTemplate;
+    use crate::stratum::work::gbt::build_merkle_branches_for_template;
     use crate::test_utils::{
         TEST_COINBASE_NSECS, TestShareBlockBuilder, build_block_from_work_components,
         genesis_for_tests, load_share_headers_test_data, make_test_address,
         setup_pool_difficulty_mocks,
     };
     use crate::utils::time_provider::TestTimeProvider;
+    use bitcoin::script::PushBytesBuf;
     use bitcoin::transaction::Version;
     use bitcoin::{BlockHash, ScriptBuf, TxOut, hashes::Hash};
     use mockall::predicate::*;
@@ -1685,9 +1692,6 @@ mod tests {
 
     #[test]
     fn test_validate_bitcoin_payout_with_matching_distribution() {
-        use crate::shares::share_commitment::ShareCommitment;
-        use bitcoin::script::PushBytesBuf;
-
         let address_a = crate::test_utils::parse_address_from_string(
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
         );
@@ -1758,9 +1762,6 @@ mod tests {
 
     #[test]
     fn test_validate_bitcoin_payout_with_wrong_amounts() {
-        use crate::shares::share_commitment::ShareCommitment;
-        use bitcoin::script::PushBytesBuf;
-
         let address_a = crate::test_utils::parse_address_from_string(
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
         );
@@ -1861,8 +1862,6 @@ mod tests {
 
     #[test]
     fn test_validate_bitcoin_payout_fails_when_prev_share_blockhash_not_in_window() {
-        use bitcoin::script::PushBytesBuf;
-
         let address_a = crate::test_utils::parse_address_from_string(
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
         );
@@ -1909,9 +1908,6 @@ mod tests {
 
     #[test]
     fn test_validate_bitcoin_payout_with_wrong_coinbase_value_fails() {
-        use crate::shares::share_commitment::ShareCommitment;
-        use bitcoin::script::PushBytesBuf;
-
         let address_a = crate::test_utils::parse_address_from_string(
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
         );
@@ -1968,9 +1964,6 @@ mod tests {
 
     #[test]
     fn test_validate_bitcoin_payout_with_transactions_donation_and_fees() {
-        use crate::shares::share_commitment::ShareCommitment;
-        use bitcoin::script::PushBytesBuf;
-
         let miner_a = crate::test_utils::parse_address_from_string(
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
         );
@@ -2102,13 +2095,6 @@ mod tests {
 
     #[test]
     fn test_validate_bitcoin_payout_with_template_transactions() {
-        use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
-        use crate::shares::share_commitment::ShareCommitment;
-        use crate::shares::witness_commitment::WitnessCommitment;
-        use crate::stratum::work::block_template::BlockTemplate;
-        use crate::stratum::work::gbt::build_merkle_branches_for_template;
-        use bitcoin::script::PushBytesBuf;
-
         let template: BlockTemplate = serde_json::from_str(include_str!(
             "../../../../p2poolv2_tests/test_data/validation/stratum/gbt_with_transactions.json"
         ))
