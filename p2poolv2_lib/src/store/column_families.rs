@@ -33,6 +33,7 @@ pub enum ColumnFamily {
     Metadata,
     SpendsIndex,
     Header,
+    TemplateMerkleBranches,
 }
 
 impl ColumnFamily {
@@ -54,6 +55,7 @@ impl ColumnFamily {
             ColumnFamily::Metadata => "metadata",
             ColumnFamily::SpendsIndex => "spends_index",
             ColumnFamily::Header => "header",
+            ColumnFamily::TemplateMerkleBranches => "template_merkle_branches",
         }
     }
 }

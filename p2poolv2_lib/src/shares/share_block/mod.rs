@@ -505,6 +505,47 @@ impl Decodable for Txids {
     }
 }
 
+/// A newtype for a vector of merkle branch nodes.
+/// Provides Encodable/Decodable for storing in RocksDB.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MerkleBranches(pub Vec<TxMerkleNode>);
+
+impl Encodable for MerkleBranches {
+    #[inline]
+    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+        &self,
+        w: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        let mut len = 0;
+        len += VarInt(self.0.len() as u64).consensus_encode(w)?;
+        for node in self.0.iter() {
+            len += node.consensus_encode(w)?;
+        }
+        Ok(len)
+    }
+}
+
+impl Decodable for MerkleBranches {
+    #[inline]
+    fn consensus_decode_from_finite_reader<R: bitcoin::io::Read + ?Sized>(
+        r: &mut R,
+    ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        let count = VarInt::consensus_decode_from_finite_reader(r)?.0 as usize;
+        // Merkle path depth is at most ~30 for any realistic block
+        let max_capacity = 32;
+        if count > max_capacity {
+            return Err(bitcoin::consensus::encode::Error::ParseFailed(
+                "template merkle branches too long",
+            ));
+        }
+        let mut branches = Vec::with_capacity(count);
+        for _ in 0..count {
+            branches.push(TxMerkleNode::consensus_decode_from_finite_reader(r)?);
+        }
+        Ok(MerkleBranches(branches))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
