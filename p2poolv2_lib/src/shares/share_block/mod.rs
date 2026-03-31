@@ -23,6 +23,7 @@ use crate::shares::genesis;
 use crate::shares::share_commitment::ShareCommitment;
 use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::work::coinbase::extract_height_from_coinbase;
+use bitcoin::consensus::encode::Error::ParseFailed;
 use bitcoin::{
     Address, BlockHash, CompactTarget, CompressedPublicKey, Target, Transaction, TxMerkleNode,
     Txid, VarInt,
@@ -111,7 +112,7 @@ fn decode_optional_address<R: bitcoin::io::Read + ?Sized>(
         let addr_str = String::consensus_decode(reader)?;
         let address = addr_str
             .parse::<Address<_>>()
-            .map_err(|_| bitcoin::consensus::encode::Error::ParseFailed("invalid bitcoin address"))?
+            .map_err(|_| ParseFailed("invalid bitcoin address"))?
             .assume_checked();
         Ok(Some(address))
     } else {
@@ -227,7 +228,7 @@ impl Decodable for ShareHeader {
         let addr_str = String::consensus_decode(r)?;
         let btcaddress = addr_str
             .parse::<Address<_>>()
-            .map_err(|_| bitcoin::consensus::encode::Error::ParseFailed("invalid bitcoin address"))?
+            .map_err(|_| ParseFailed("invalid bitcoin address"))?
             .assume_checked();
         let merkle_root = TxMerkleNode::consensus_decode(r)?;
         let bitcoin_header = Header::consensus_decode(r)?;
@@ -443,8 +444,10 @@ impl Decodable for ShareBlock {
         // Decode template merkle path
         let path_count = VarInt::consensus_decode(r)?.0 as usize;
         let max_path_capacity = 32; // merkle path depth is at most ~30 for any realistic block
-        let mut template_merkle_branches =
-            Vec::with_capacity(core::cmp::min(path_count, max_path_capacity));
+        if path_count > max_path_capacity {
+            return Err(ParseFailed("template merkle path too long"));
+        }
+        let mut template_merkle_branches = Vec::with_capacity(path_count);
         for _ in 0..path_count {
             template_merkle_branches.push(TxMerkleNode::consensus_decode(r)?);
         }
