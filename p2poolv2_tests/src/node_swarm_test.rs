@@ -211,7 +211,6 @@ fn load_share_sync_blocks() -> Vec<ShareBlock> {
 /// nodes 2 and 3 start. Nodes 2 and 3 dial into node 1 and should sync all
 /// shares via the header-sync and block-fetch protocol.
 #[test_log::test(tokio::test)]
-#[ignore = "Ignored while fixing fixtures and validation"]
 async fn test_three_nodes_share_sync() {
     let fixture_blocks = load_share_sync_blocks();
     let share_count = (fixture_blocks.len() - 1) as u32;
