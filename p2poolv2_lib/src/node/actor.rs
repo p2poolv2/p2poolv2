@@ -276,7 +276,6 @@ impl NodeActor {
         // Spawn validation worker
         let validation_worker = ValidationWorker::new(
             validation_rx,
-            validation_tx_for_worker,
             chain_store_handle.clone(),
             organise_tx.clone(),
             node.swarm_tx.clone(),

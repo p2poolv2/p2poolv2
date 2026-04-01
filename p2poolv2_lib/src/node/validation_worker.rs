@@ -95,12 +95,10 @@ impl std::error::Error for ValidationWorkerError {}
 /// emits `OrganiseEvent::Block` for confirmed promotion and
 /// `SwarmSend::Inv` for inventory relay to peers.
 ///
-/// After successful validation, sends `ValidateBlock` events for
-/// stored children and nephews back through the validation channel
-/// so the chain advances when a hole is filled.
+/// After successful validation, the organise worker handles PPLNS
+/// updates and dependent scheduling.
 pub struct ValidationWorker {
     validation_rx: ValidationReceiver,
-    validation_tx: ValidationSender,
     chain_store_handle: ChainStoreHandle,
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
@@ -114,7 +112,6 @@ impl ValidationWorker {
     /// Creates a new validation worker.
     pub fn new(
         validation_rx: ValidationReceiver,
-        validation_tx: ValidationSender,
         chain_store_handle: ChainStoreHandle,
         organise_tx: OrganiseSender,
         swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
@@ -124,7 +121,6 @@ impl ValidationWorker {
     ) -> Self {
         Self {
             validation_rx,
-            validation_tx,
             chain_store_handle,
             organise_tx,
             swarm_tx,
@@ -136,12 +132,6 @@ impl ValidationWorker {
     }
 
     /// Runs the validation worker until the channel closes.
-    ///
-    /// Note: Because the worker holds a `ValidationSender` (used by
-    /// `schedule_dependents` to re-enqueue children/nephews), the
-    /// channel only closes once both the external sender AND this
-    /// worker are dropped. In practice the node shuts down the worker
-    /// by cancelling its task.
     ///
     /// Returns `Ok(())` on clean shutdown (channel closed).
     /// Returns `Err(ValidationWorkerError)` on fatal failure.
@@ -174,7 +164,6 @@ impl ValidationWorker {
                     let chain_store_handle = self.chain_store_handle.clone();
                     let organise_tx = self.organise_tx.clone();
                     let swarm_tx = self.swarm_tx.clone();
-                    let validation_tx = self.validation_tx.clone();
                     let validator = Arc::clone(&share_validator);
                     let pplns_window = Arc::clone(&self.pplns_window);
 
@@ -186,7 +175,6 @@ impl ValidationWorker {
                             chain_store_handle,
                             organise_tx,
                             swarm_tx,
-                            validation_tx,
                             pplns_window,
                         )
                         .await;
@@ -200,9 +188,7 @@ impl ValidationWorker {
 }
 
 /// Read a share block from the store, validate it, and emit events
-/// on success. After organising, schedule stored children and nephews
-/// for validation by sending `ValidateBlock` events back through
-/// the validation channel.
+/// on success.
 ///
 /// Duplicate validation of already-confirmed blocks is handled by
 /// `validate_share_block` which returns Ok immediately for blocks
@@ -213,7 +199,6 @@ async fn validate_and_emit(
     chain_store_handle: ChainStoreHandle,
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
-    validation_tx: ValidationSender,
     pplns_window: Arc<RwLock<PplnsWindow>>,
 ) {
     let share_block = match chain_store_handle.get_share(&block_hash) {
@@ -242,46 +227,6 @@ async fn validate_and_emit(
     if let Err(send_error) = swarm_tx.send(SwarmSend::Inv(block_hash)).await {
         error!("Failed to send inv relay for validated block {block_hash}: {send_error}");
     }
-
-    // Schedule stored children and nephews for validation so the
-    // chain advances when a missing block arrives and is validated.
-    schedule_dependents(&block_hash, &chain_store_handle, &validation_tx).await;
-}
-
-/// Collect stored children and nephews and send `ValidateBlock` events
-/// for each through the validation channel.
-async fn schedule_dependents(
-    block_hash: &BlockHash,
-    chain_store_handle: &ChainStoreHandle,
-    validation_tx: &ValidationSender,
-) {
-    let mut dependent_hashes = Vec::with_capacity(4);
-
-    if let Ok(Some(children)) = chain_store_handle.get_children_blockhashes(block_hash) {
-        for child_hash in children {
-            if chain_store_handle.share_block_exists(&child_hash) {
-                dependent_hashes.push(child_hash);
-            }
-        }
-    }
-
-    if let Some(nephews) = chain_store_handle.get_nephews(block_hash) {
-        for nephew_hash in nephews {
-            if chain_store_handle.share_block_exists(&nephew_hash) {
-                dependent_hashes.push(nephew_hash);
-            }
-        }
-    }
-
-    for dependent_hash in dependent_hashes {
-        info!("Scheduling dependent {dependent_hash} for validation after {block_hash}");
-        if let Err(send_error) = validation_tx
-            .send(ValidationEvent::ValidateBlock(dependent_hash))
-            .await
-        {
-            error!("Failed to schedule dependent {dependent_hash} for validation: {send_error}");
-        }
-    }
 }
 
 #[cfg(test)]
@@ -292,23 +237,6 @@ mod tests {
     use crate::test_utils::TestShareBlockBuilder;
     use std::collections::HashMap;
     use std::time::Duration;
-
-    /// Add mock expectations needed for validate_share_block (has_status)
-    /// and schedule_dependents (get_children_blockhashes, get_nephews) on a
-    /// mock clone that will handle a successful validation path with no
-    /// children or nephews.
-    fn setup_validation_expectations(mock_clone: &mut MockChainStoreHandle) {
-        // Return BlockValid so validate_share_block short-circuits with
-        // Ok(()) -- these tests exercise the worker pipeline, not
-        // detailed share validation.
-        mock_clone.expect_has_status().returning(|_, _| true);
-
-        // schedule_dependents checks children and nephews
-        mock_clone
-            .expect_get_children_blockhashes()
-            .returning(|_| Ok(None));
-        mock_clone.expect_get_nephews().returning(|_| None);
-    }
 
     #[tokio::test]
     async fn test_validation_worker_validates_and_sends_organise_event() {
@@ -329,7 +257,7 @@ mod tests {
         mock_clone
             .expect_get_share()
             .returning(move |_| Some(share_block_clone.clone()));
-        setup_validation_expectations(&mut mock_clone);
+        mock_clone.expect_has_status().returning(|_, _| true);
         mock_chain_handle
             .expect_clone()
             .return_once(move || mock_clone);
@@ -339,7 +267,6 @@ mod tests {
 
         let worker = ValidationWorker::new(
             validation_rx,
-            validation_tx.clone(),
             mock_chain_handle,
             organise_tx,
             swarm_tx,
@@ -392,7 +319,7 @@ mod tests {
         mock_clone
             .expect_get_share()
             .returning(move |_| Some(share_block_clone.clone()));
-        setup_validation_expectations(&mut mock_clone);
+        mock_clone.expect_has_status().returning(|_, _| true);
         mock_chain_handle
             .expect_clone()
             .return_once(move || mock_clone);
@@ -402,7 +329,6 @@ mod tests {
 
         let worker = ValidationWorker::new(
             validation_rx,
-            validation_tx.clone(),
             mock_chain_handle,
             organise_tx,
             swarm_tx,
@@ -469,7 +395,6 @@ mod tests {
 
         let worker = ValidationWorker::new(
             validation_rx,
-            validation_tx.clone(),
             mock_chain_handle,
             organise_tx,
             swarm_tx,
@@ -560,7 +485,6 @@ mod tests {
 
         let worker = ValidationWorker::new(
             validation_rx,
-            validation_tx.clone(),
             mock_chain_handle,
             organise_tx,
             swarm_tx,
@@ -598,246 +522,6 @@ mod tests {
             swarm_result.is_err(),
             "No SwarmSend expected for invalid block"
         );
-
-        worker_handle.abort();
-    }
-
-    #[tokio::test]
-    async fn test_validation_worker_schedules_children() {
-        let _pool_difficulty_build_ctx = PoolDifficulty::build_context();
-        _pool_difficulty_build_ctx
-            .expect()
-            .returning(|_| Ok(PoolDifficulty::default()));
-
-        let _pplns_new_ctx = PplnsWindow::new_context();
-        _pplns_new_ctx.expect().returning(|_network| {
-            let mut mock = PplnsWindow::default();
-            mock.expect_network().return_const(bitcoin::Network::Signet);
-            mock.expect_get_distribution_from_start_hash()
-                .returning(|_, _| Some(HashMap::new()));
-            mock
-        });
-
-        let (validation_tx, validation_rx) = create_validation_channel();
-        let mut mock_chain_handle = MockChainStoreHandle::new();
-
-        let parent_block = TestShareBlockBuilder::new().build();
-        let parent_hash = parent_block.block_hash();
-        let parent_clone = parent_block.clone();
-
-        let child_block = TestShareBlockBuilder::new()
-            .prev_share_blockhash(parent_hash.to_string())
-            .build();
-        let child_hash = child_block.block_hash();
-
-        // Parent validation task: cloned from the worker's handle.
-        let mut parent_mock = MockChainStoreHandle::new();
-        parent_mock
-            .expect_get_share()
-            .returning(move |_| Some(parent_clone.clone()));
-
-        parent_mock.expect_has_status().returning(|_, _| true);
-        // schedule_dependents: parent has one child
-        parent_mock
-            .expect_get_children_blockhashes()
-            .returning(move |_| Ok(Some(vec![child_hash])));
-        parent_mock.expect_share_block_exists().returning(|_| true);
-        parent_mock.expect_get_nephews().returning(|_| None);
-
-        // Child validation task: also cloned from the worker's handle
-        // (arrives via the validation channel, not spawned directly).
-        let child_clone = child_block.clone();
-        let mut child_mock = MockChainStoreHandle::new();
-        child_mock
-            .expect_get_share()
-            .returning(move |_| Some(child_clone.clone()));
-        setup_validation_expectations(&mut child_mock);
-
-        // Worker clones its handle once per spawned task.
-        let mut clone_seq = mockall::Sequence::new();
-        mock_chain_handle
-            .expect_clone()
-            .times(1)
-            .in_sequence(&mut clone_seq)
-            .return_once(move || parent_mock);
-        mock_chain_handle
-            .expect_clone()
-            .times(1)
-            .in_sequence(&mut clone_seq)
-            .return_once(move || child_mock);
-
-        let (organise_tx, mut organise_rx) = organise_worker::create_organise_channel();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
-
-        let worker = ValidationWorker::new(
-            validation_rx,
-            validation_tx.clone(),
-            mock_chain_handle,
-            organise_tx,
-            swarm_tx,
-            {
-                let mut mock_window = PplnsWindow::default();
-                mock_window
-                    .expect_network()
-                    .return_const(bitcoin::Network::Signet);
-                mock_window
-                    .expect_get_distribution_from_start_hash()
-                    .returning(|_, _| Some(HashMap::new()));
-                Arc::new(RwLock::new(mock_window))
-            },
-            1,
-            b"P2Poolv2".to_vec(),
-        );
-
-        let worker_handle = tokio::spawn(worker.run());
-
-        validation_tx
-            .send(ValidationEvent::ValidateBlock(parent_hash))
-            .await
-            .unwrap();
-
-        // First organise event from parent validation.
-        let first_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv())
-            .await
-            .expect("Timed out waiting for parent OrganiseEvent");
-        assert!(
-            matches!(first_event, Some(OrganiseEvent::Block(_))),
-            "Expected OrganiseEvent::Block for parent"
-        );
-
-        // Second organise event from the child validation (scheduled via channel).
-        let second_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv())
-            .await
-            .expect("Timed out waiting for child OrganiseEvent");
-        if let Some(OrganiseEvent::Block(received_block)) = second_event {
-            assert_eq!(received_block.block_hash(), child_hash);
-        } else {
-            panic!("Expected OrganiseEvent::Block for child");
-        }
-
-        worker_handle.abort();
-    }
-
-    #[tokio::test]
-    async fn test_validation_worker_schedules_nephews() {
-        let _pool_difficulty_build_ctx = PoolDifficulty::build_context();
-        _pool_difficulty_build_ctx
-            .expect()
-            .returning(|_| Ok(PoolDifficulty::default()));
-
-        let _pplns_new_ctx = PplnsWindow::new_context();
-        _pplns_new_ctx.expect().returning(|_network| {
-            let mut mock = PplnsWindow::default();
-            mock.expect_network().return_const(bitcoin::Network::Signet);
-            mock.expect_get_distribution_from_start_hash()
-                .returning(|_, _| Some(HashMap::new()));
-            mock
-        });
-
-        let (validation_tx, validation_rx) = create_validation_channel();
-        let mut mock_chain_handle = MockChainStoreHandle::new();
-
-        let uncle_block = TestShareBlockBuilder::new().build();
-        let uncle_hash = uncle_block.block_hash();
-        let uncle_clone = uncle_block.clone();
-
-        let nephew_block = TestShareBlockBuilder::new()
-            .uncles(vec![uncle_hash])
-            .build();
-        let nephew_hash = nephew_block.block_hash();
-
-        // Uncle validation task: cloned from the worker's handle.
-        let mut uncle_mock = MockChainStoreHandle::new();
-        uncle_mock
-            .expect_get_share()
-            .returning(move |_| Some(uncle_clone.clone()));
-        uncle_mock.expect_has_status().returning(|_, _| true);
-        // schedule_dependents: no children, one nephew
-        uncle_mock
-            .expect_get_children_blockhashes()
-            .returning(|_| Ok(None));
-        uncle_mock
-            .expect_get_nephews()
-            .returning(move |_| Some(vec![nephew_hash]));
-        uncle_mock.expect_share_block_exists().returning(|_| true);
-
-        // Nephew validation task: also cloned from the worker's handle
-        // (arrives via the validation channel, not spawned directly).
-        let nephew_clone = nephew_block.clone();
-        let uncle_for_nephew = uncle_block.clone();
-        let mut nephew_mock = MockChainStoreHandle::new();
-        let nephew_for_inner = nephew_clone.clone();
-        let nephew_hash_inner = nephew_for_inner.block_hash();
-        nephew_mock
-            .expect_get_share()
-            .withf(move |hash| *hash == nephew_hash_inner)
-            .returning(move |_| Some(nephew_for_inner.clone()));
-        nephew_mock
-            .expect_get_share()
-            .returning(move |_| Some(uncle_for_nephew.clone()));
-        setup_validation_expectations(&mut nephew_mock);
-
-        // Worker clones its handle once per spawned task.
-        let mut clone_seq = mockall::Sequence::new();
-        mock_chain_handle
-            .expect_clone()
-            .times(1)
-            .in_sequence(&mut clone_seq)
-            .return_once(move || uncle_mock);
-        mock_chain_handle
-            .expect_clone()
-            .times(1)
-            .in_sequence(&mut clone_seq)
-            .return_once(move || nephew_mock);
-
-        let (organise_tx, mut organise_rx) = organise_worker::create_organise_channel();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
-
-        let worker = ValidationWorker::new(
-            validation_rx,
-            validation_tx.clone(),
-            mock_chain_handle,
-            organise_tx,
-            swarm_tx,
-            {
-                let mut mock_window = PplnsWindow::default();
-                mock_window
-                    .expect_network()
-                    .return_const(bitcoin::Network::Signet);
-                mock_window
-                    .expect_get_distribution_from_start_hash()
-                    .returning(|_, _| Some(HashMap::new()));
-                Arc::new(RwLock::new(mock_window))
-            },
-            1,
-            b"P2Poolv2".to_vec(),
-        );
-
-        let worker_handle = tokio::spawn(worker.run());
-
-        validation_tx
-            .send(ValidationEvent::ValidateBlock(uncle_hash))
-            .await
-            .unwrap();
-
-        // First organise event from uncle validation.
-        let first_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv())
-            .await
-            .expect("Timed out waiting for uncle OrganiseEvent");
-        assert!(
-            matches!(first_event, Some(OrganiseEvent::Block(_))),
-            "Expected OrganiseEvent::Block for uncle"
-        );
-
-        // Second organise event from the nephew validation (scheduled via channel).
-        let second_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv())
-            .await
-            .expect("Timed out waiting for nephew OrganiseEvent");
-        if let Some(OrganiseEvent::Block(received_block)) = second_event {
-            assert_eq!(received_block.block_hash(), nephew_hash);
-        } else {
-            panic!("Expected OrganiseEvent::Block for nephew");
-        }
 
         worker_handle.abort();
     }
