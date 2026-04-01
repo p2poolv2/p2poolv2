@@ -294,6 +294,8 @@ mockall::mock! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::hashes::Hash;
+    use crate::shares::share_block::ShareBlock;
 
     // =======================================================================
     // U512 / Target conversion tests
@@ -717,5 +719,61 @@ mod tests {
 
         let anchor_error = PoolDifficultyError::AnchorNotFound("missing".to_string());
         assert_eq!(format!("{anchor_error}"), "Anchor block not found: missing");
+    }
+
+    /// Verify the share_sync fixture forms a valid chain:
+    /// - Genesis has all-zeros prev_share_blockhash
+    /// - Each block's prev_share_blockhash matches the previous block's hash
+    /// - Each non-genesis block's bits match the ASERT-calculated target
+    /// - Each non-genesis block's bitcoin header hash meets the share target
+    #[test]
+    fn test_share_sync_fixture_chain_validity() {
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../p2poolv2_tests/test_data/share_sync/share_blocks.json");
+        let json_string =
+            std::fs::read_to_string(&fixture_path).expect("Failed to read share_blocks fixture");
+        let blocks: Vec<ShareBlock> =
+            serde_json::from_str(&json_string).expect("Failed to parse share_blocks fixture");
+
+        assert!(
+            blocks.len() >= 2,
+            "Fixture must have at least genesis + one share"
+        );
+
+        let genesis = &blocks[0];
+        assert_eq!(
+            genesis.header.prev_share_blockhash,
+            bitcoin::BlockHash::all_zeros(),
+            "Genesis must have all-zeros prev_share_blockhash"
+        );
+
+        let pool_difficulty = PoolDifficulty::new(genesis.header.bits, genesis.header.time, 0);
+
+        let mut prev_hash = genesis.block_hash();
+        for (index, block) in blocks.iter().enumerate().skip(1) {
+            assert_eq!(
+                block.header.prev_share_blockhash, prev_hash,
+                "Block {index} prev_share_blockhash does not match parent hash"
+            );
+
+            let parent = &blocks[index - 1];
+            let parent_height = (index - 1) as u32;
+            let expected_target = pool_difficulty.calculate_target(parent.header.time, parent_height);
+            assert_eq!(
+                block.header.bits, expected_target,
+                "Block {index} bits {:#010x} does not match ASERT target {:#010x}",
+                block.header.bits.to_consensus(),
+                expected_target.to_consensus()
+            );
+
+            let target = Target::from_compact(expected_target);
+            let bitcoin_block_hash = block.header.bitcoin_header.block_hash();
+            assert!(
+                target.is_met_by(bitcoin_block_hash),
+                "Block {index} bitcoin hash {bitcoin_block_hash} does not meet share target {target}"
+            );
+
+            prev_hash = block.block_hash();
+        }
     }
 }

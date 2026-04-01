@@ -30,6 +30,8 @@ pub struct GenesisData {
     pub public_key: &'static str,
     /// The bitcoin block in hex for the share
     pub bitcoin_block_hex: &'static str,
+    /// Bitcoin header height
+    pub bitcoin_height: u64,
 }
 
 const SIGNET_GENESIS_DATA: GenesisData = GenesisData {
@@ -37,12 +39,14 @@ const SIGNET_GENESIS_DATA: GenesisData = GenesisData {
     // for bitcoin blockhash 00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6
     // bitcoin_header_hex: "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a008f4d5fae77031e8ad22203",
     bitcoin_block_hex: include!("signet.rs"),
+    bitcoin_height: 0,
 };
 
 const TESTNET4_GENESIS_DATA: GenesisData = GenesisData {
     public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
     // for bitcoin blockhash 000000003fba69400bbc385acd52b07dbe7779ea5f8995dd4aadf4a86b74cc55
     bitcoin_block_hex: "",
+    bitcoin_height: 0,
 };
 
 // Using the following JSON data for the genesis block
@@ -51,6 +55,7 @@ const MAINNET_GENESIS_DATA: GenesisData = GenesisData {
     // for header hash 00000000000adb0f8eff963322f447aed003a1861009009b7bcab355bbc8e54d. Mining on previousblockhash 000000000000000000011c80ec9a34567d2c612781b2d7b98c30f689e13c7ad1 height 920526
     // header in hex "00a06f239cf5fe7a514fd6f9e64d77cd2345cf225ee3fe9b75bf00000000000000000000923435bf0a5f91886f7f94ade677752a526dec905eef07d181893faf15113a75b039fb6821eb01173c0137da"
     bitcoin_block_hex: include!("main.rs"),
+    bitcoin_height: 920527,
 };
 
 /// Get the genesis data for a given network
