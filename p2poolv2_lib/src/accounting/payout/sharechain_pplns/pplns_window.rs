@@ -645,6 +645,10 @@ mockall::mock! {
     pub PplnsWindow {
         pub fn new(network: bitcoin::Network) -> Self;
         pub fn network(&self) -> bitcoin::Network;
+        pub fn update(
+            &mut self,
+            chain_store_handle: &ChainStoreHandle,
+        ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>>;
         pub fn get_distribution_from_start_hash(
             &self,
             total_difficulty: u128,
