@@ -365,8 +365,6 @@ impl ShareBlock {
             }
         };
 
-        let bitcoin_height = extract_height_from_coinbase(&bitcoin_block.txdata[0])?;
-
         let header = ShareHeader {
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: vec![],
@@ -382,7 +380,7 @@ impl ShareBlock {
             coinbase_value,
             coinbaseaux_flags: None,
             witness_commitment: None,
-            bitcoin_height,
+            bitcoin_height: genesis_data.bitcoin_height,
             coinbase_nsecs: 0,
         };
         Ok(Self {
