@@ -50,7 +50,7 @@ use tokio::sync::{Semaphore, mpsc};
 use tracing::{error, info};
 
 /// Channel capacity for blocks pending validation.
-const VALIDATION_CHANNEL_CAPACITY: usize = 256;
+const VALIDATION_CHANNEL_CAPACITY: usize = 8192;
 
 /// Events for the validation worker.
 pub enum ValidationEvent {

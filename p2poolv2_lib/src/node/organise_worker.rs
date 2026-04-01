@@ -48,7 +48,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 /// Channel capacity for shares pending organisation.
-const ORGANISE_CHANNEL_CAPACITY: usize = 256;
+const ORGANISE_CHANNEL_CAPACITY: usize = 8192;
 
 /// Events for the organise worker.
 pub enum OrganiseEvent {
@@ -160,7 +160,7 @@ impl OrganiseWorker {
                     {
                         Ok(Some(height)) => {
                             self.update_pplns_window();
-                            self.schedule_dependents(&blockhash).await;
+                            self.schedule_dependents(&blockhash);
 
                             if let Ok(Some(candidate_tip_height)) =
                                 self.chain_store_handle.get_candidate_tip_height()
@@ -210,7 +210,7 @@ impl OrganiseWorker {
     ///
     /// Called after promote_block and PPLNS update so that dependents
     /// validate against the freshly updated window.
-    async fn schedule_dependents(&self, block_hash: &BlockHash) {
+    fn schedule_dependents(&self, block_hash: &BlockHash) {
         let mut dependent_hashes = Vec::with_capacity(4);
 
         if let Ok(Some(children)) = self.chain_store_handle.get_children_blockhashes(block_hash) {
@@ -231,14 +231,19 @@ impl OrganiseWorker {
 
         for dependent_hash in dependent_hashes {
             info!("Scheduling dependent {dependent_hash} for validation after {block_hash}");
-            if let Err(send_error) = self
+            match self
                 .validation_tx
-                .send(ValidationEvent::ValidateBlock(dependent_hash))
-                .await
+                .try_send(ValidationEvent::ValidateBlock(dependent_hash))
             {
-                error!(
-                    "Failed to schedule dependent {dependent_hash} for validation: {send_error}"
-                );
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    error!(
+                        "Validation channel full, dropping schedule for dependent {dependent_hash}"
+                    );
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    error!("Validation channel closed, cannot schedule dependent {dependent_hash}");
+                }
             }
         }
     }
