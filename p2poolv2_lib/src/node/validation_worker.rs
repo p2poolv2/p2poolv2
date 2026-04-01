@@ -21,9 +21,6 @@
 //! `shares::validation::validate_share_block`, and on success emits
 //! `OrganiseEvent::Block` and `SwarmSend::Inv` events. Runs in a dedicated
 //! tokio task, decoupled from the P2P message handler hot path.
-//!
-//! After successful validation, schedules stored children and nephews for
-//! validation by sending `ValidateBlock` events back through the channel.
 
 #[cfg(test)]
 #[mockall_double::double]
