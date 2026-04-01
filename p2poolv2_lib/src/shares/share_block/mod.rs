@@ -19,6 +19,7 @@ pub mod short_ids;
 
 use super::transactions;
 use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
+use crate::shares::extranonce::Extranonce;
 use crate::shares::genesis;
 use crate::shares::share_commitment::ShareCommitment;
 use crate::shares::witness_commitment::WitnessCommitment;
@@ -720,6 +721,99 @@ mod tests {
         {
             assert_eq!(orig_tx.compute_txid(), decoded_tx.compute_txid());
             assert_eq!(orig_tx.0, decoded_tx.0);
+        }
+    }
+
+    #[test]
+    fn test_fixture_coinbase_reconstruction_matches_bitcoin_merkle_root() {
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../p2poolv2_tests/test_data/share_sync/share_blocks.json");
+        let json_string =
+            std::fs::read_to_string(&fixture_path).expect("Failed to read share_blocks fixture");
+        let blocks: Vec<ShareBlock> =
+            serde_json::from_str(&json_string).expect("Failed to parse share_blocks fixture");
+
+        let pool_signature = b"P2Poolv2";
+
+        // Build PPLNS distribution with the same algo as pplns window does
+        for (index, block) in blocks.iter().enumerate().skip(1) {
+            let header = &block.header;
+            let target_difficulty = header.bitcoin_header.difficulty(bitcoin::Network::Signet);
+
+            // Walk prior shares newest-to-oldest collecting the PPLNS window
+            let mut address_difficulty_map: HashMap<bitcoin::Address, u128> =
+                HashMap::with_capacity(4);
+            let mut accumulated_difficulty: u128 = 0;
+            for prior_index in (0..index).rev() {
+                let prior_header = &blocks[prior_index].header;
+                let prior_difficulty = prior_header
+                    .bitcoin_header
+                    .difficulty(bitcoin::Network::Signet);
+                *address_difficulty_map
+                    .entry(prior_header.miner_bitcoin_address.clone())
+                    .or_insert(0) += prior_difficulty;
+                accumulated_difficulty = accumulated_difficulty.saturating_add(prior_difficulty);
+                if accumulated_difficulty >= target_difficulty {
+                    break;
+                }
+            }
+
+            // Build outputs the same way the validator does
+            let mut outputs = Vec::with_capacity(address_difficulty_map.len() + 2);
+            let remaining_after_donation = include_address_and_cut(
+                &mut outputs,
+                bitcoin::Amount::from_sat(header.coinbase_value),
+                &header.donation_address,
+                header.donation,
+            );
+            let remaining_after_fees = include_address_and_cut(
+                &mut outputs,
+                remaining_after_donation,
+                &header.fee_address,
+                header.fee,
+            );
+            append_proportional_distribution(
+                &address_difficulty_map,
+                remaining_after_fees,
+                &mut outputs,
+            )
+            .unwrap_or_else(|error| {
+                panic!("Block {index}: failed to compute distribution: {error}")
+            });
+
+            let commitment_hash = ShareCommitment::from_share_header(header).hash();
+
+            let flags = match &header.coinbaseaux_flags {
+                Some(aux_flags) => aux_flags.to_push_bytes_buf(),
+                None => PushBytesBuf::from(&[0u8]),
+            };
+
+            let reconstructed_coinbase = build_coinbase_transaction(
+                Version::TWO,
+                &outputs,
+                header.bitcoin_height as i64,
+                flags,
+                header.witness_commitment.as_ref(),
+                pool_signature,
+                Some(commitment_hash),
+                header.coinbase_nsecs,
+                Some(header.extranonce.as_bytes()),
+            )
+            .unwrap_or_else(|error| panic!("Block {index}: failed to build coinbase: {error}"));
+
+            let reconstructed_txid = reconstructed_coinbase.compute_txid();
+
+            // With empty template_merkle_branches, the root equals the txid
+            let recomputed_root = compute_merkle_root_from_branches(
+                reconstructed_txid,
+                &block.template_merkle_branches,
+            );
+
+            assert_eq!(
+                recomputed_root, header.bitcoin_header.merkle_root,
+                "Block {index}: reconstructed merkle root {} does not match bitcoin header merkle root {}",
+                recomputed_root, header.bitcoin_header.merkle_root
+            );
         }
     }
 }

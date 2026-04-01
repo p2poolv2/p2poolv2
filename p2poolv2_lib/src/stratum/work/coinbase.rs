@@ -167,7 +167,6 @@ pub(crate) fn build_coinbase_transaction(
     Ok(coinbase_tx)
 }
 
-
 /// Splits the coinbase transaction into two parts: coinbase1 and coinbase2, separated by our
 /// extranonce2 separator.
 #[allow(dead_code)]
