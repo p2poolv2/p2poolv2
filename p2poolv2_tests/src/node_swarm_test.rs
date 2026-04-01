@@ -216,21 +216,26 @@ async fn test_three_nodes_share_sync() {
     let fixture_blocks = load_share_sync_blocks();
     let share_count = (fixture_blocks.len() - 1) as u32;
     // Configure three nodes on unique ports with higher rate limit for fast sync
+    // Pool signature must match the cluster config that generated the fixture blocks
+    let pool_signature = Some("P2Poolv2".to_string());
     let config1 = common::default_test_config()
         .with_listen_address("/ip4/127.0.0.1/tcp/6894".to_string())
         .with_store_path("test_sync_chain_1.db".to_string())
         .with_max_requests_per_second(100)
+        .with_pool_signature(pool_signature.clone())
         .with_api_port(3010);
     let config2 = common::default_test_config()
         .with_listen_address("/ip4/127.0.0.1/tcp/6895".to_string())
         .with_store_path("test_sync_chain_2.db".to_string())
         .with_max_requests_per_second(100)
+        .with_pool_signature(pool_signature.clone())
         .with_api_port(3011)
         .with_dial_peers(vec!["/ip4/127.0.0.1/tcp/6894".to_string()]);
     let config3 = common::default_test_config()
         .with_listen_address("/ip4/127.0.0.1/tcp/6896".to_string())
         .with_store_path("test_sync_chain_3.db".to_string())
         .with_max_requests_per_second(100)
+        .with_pool_signature(pool_signature)
         .with_api_port(3012)
         .with_dial_peers(vec!["/ip4/127.0.0.1/tcp/6894".to_string()]);
 
