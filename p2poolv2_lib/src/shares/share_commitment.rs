@@ -173,7 +173,9 @@ pub(crate) fn build_share_commitment(
 
     let (tip_height, parent_time) = chain_store_handle.get_tip_height_and_time()?;
     // tip_height is the parent height; ASERT internally adds 1 to height_delta
-    let target = pool_difficulty.calculate_target(parent_time, tip_height);
+    let bitcoin_bits = bitcoin::CompactTarget::from_unprefixed_hex(&template.bits)
+        .map_err(|error| format!("Failed to parse bitcoin bits from block template: {error}"))?;
+    let target = pool_difficulty.calculate_target_clamped(parent_time, tip_height, bitcoin_bits);
 
     let time = SystemTimeProvider.seconds_since_epoch() as u32;
 
@@ -382,7 +384,11 @@ mod tests {
         );
         assert_eq!(commitment.uncles.len(), 0);
         assert_eq!(commitment.miner_bitcoin_address, btcaddress);
-        assert_eq!(commitment.bits, CompactTarget::from_consensus(0x1b4188f5));
+        // Pool ASERT target (0x1b4188f5) is harder than bitcoin target from
+        // the template (0x1e0fffff), so the clamp returns bitcoin difficulty.
+        let expected_bitcoin_bits =
+            bitcoin::CompactTarget::from_unprefixed_hex(&template.bits).unwrap();
+        assert_eq!(commitment.bits, expected_bitcoin_bits);
         // Time should be current, so just verify it's set
         assert!(commitment.time > 0);
     }

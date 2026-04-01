@@ -550,9 +550,10 @@ impl ShareValidator for DefaultShareValidator {
 
         let parent_time = parent_header.time;
 
-        let calculated_target = self
-            .pool_difficulty
-            .calculate_target(parent_time, parent_height);
+        let bitcoin_bits = share_header.bitcoin_header.bits;
+        let calculated_target =
+            self.pool_difficulty
+                .calculate_target_clamped(parent_time, parent_height, bitcoin_bits);
         let target = Target::from_compact(calculated_target);
         let bitcoin_block_hash = share_header.bitcoin_header.block_hash();
 

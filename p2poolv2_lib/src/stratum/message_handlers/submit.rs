@@ -114,6 +114,23 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         submit_block(&block, stratum_context.bitcoinrpc_config).await;
     }
 
+    // In p2poolv2 mode, reject shares that do not meet the pool difficulty target.
+    // The share commitment carries the ASERT-computed pool target (bits).
+    if let Some(commitment) = &job.share_commitment {
+        let pool_target = bitcoin::Target::from_compact(commitment.bits);
+        if !pool_target.is_met_by(validation_result.header.block_hash()) {
+            debug!(
+                "Share does not meet pool difficulty: hash {} target {}",
+                validation_result.header.block_hash(),
+                pool_target
+            );
+            return Ok(vec![Message::Response(Response::new_ok(
+                message.id,
+                json!(false),
+            ))]);
+        }
+    }
+
     // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet
     let truediff = get_true_difficulty(&validation_result.header.block_hash());
     debug!("True difficulty: {}", truediff);
