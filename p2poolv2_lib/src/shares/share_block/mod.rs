@@ -83,6 +83,9 @@ pub struct ShareHeader {
     /// Nanosecond timestamp embedded in the coinbase scriptSig
     #[serde(default)]
     pub coinbase_nsecs: u64,
+    /// Combined extranonce (enonce1 || enonce2) from the stratum submission
+    #[serde(default)]
+    pub extranonce: Extranonce,
 }
 
 /// Encode an optional address as a bool flag followed by the address string when present.
@@ -147,6 +150,7 @@ impl ShareHeader {
         witness_commitment: Option<WitnessCommitment>,
         height: u64,
         coinbase_nsecs: u64,
+        extranonce: Extranonce,
     ) -> Self {
         Self {
             prev_share_blockhash: commitment.prev_share_blockhash,
@@ -165,6 +169,7 @@ impl ShareHeader {
             witness_commitment,
             bitcoin_height: height,
             coinbase_nsecs,
+            extranonce,
         }
     }
 
@@ -213,6 +218,7 @@ impl Encodable for ShareHeader {
         }
         len += self.bitcoin_height.consensus_encode(w)?;
         len += self.coinbase_nsecs.consensus_encode(w)?;
+        len += self.extranonce.consensus_encode(w)?;
         Ok(len)
     }
 }
@@ -257,6 +263,7 @@ impl Decodable for ShareHeader {
         };
         let bitcoin_height = u64::consensus_decode(r)?;
         let coinbase_nsecs = u64::consensus_decode(r)?;
+        let extranonce = Extranonce::consensus_decode(r)?;
 
         Ok(ShareHeader {
             prev_share_blockhash,
@@ -275,6 +282,7 @@ impl Decodable for ShareHeader {
             witness_commitment,
             bitcoin_height,
             coinbase_nsecs,
+            extranonce,
         })
     }
 }
@@ -382,6 +390,7 @@ impl ShareBlock {
             witness_commitment: None,
             bitcoin_height: genesis_data.bitcoin_height,
             coinbase_nsecs: 0,
+            extranonce: Extranonce::default(),
         };
         Ok(Self {
             header,
@@ -545,8 +554,20 @@ impl Decodable for MerkleBranches {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accounting::OutputPair;
+    use crate::accounting::payout::payout_distribution::{
+        append_proportional_distribution, include_address_and_cut,
+    };
+    use crate::shares::share_commitment::ShareCommitment;
+    use crate::stratum::work::coinbase::{
+        build_coinbase_transaction, replace_extranonce_separator,
+    };
+    use crate::stratum::work::gbt::compute_merkle_root_from_branches;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::consensus::{deserialize, serialize};
+    use bitcoin::script::PushBytesBuf;
+    use bitcoin::transaction::Version;
+    use std::collections::HashMap;
     use std::str::FromStr;
 
     #[test]
@@ -658,6 +679,7 @@ mod tests {
             None,
             1,
             0,
+            Extranonce::default(),
         );
 
         assert_eq!(header.prev_share_blockhash, cloned.prev_share_blockhash);
