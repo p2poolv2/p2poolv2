@@ -258,6 +258,33 @@ impl PoolDifficulty {
         )
     }
 
+    /// Calculate the pool target clamped so it is never harder than bitcoin difficulty.
+    ///
+    /// On a fresh network or after a bitcoin difficulty drop, the ASERT algorithm
+    /// can produce a target smaller (harder) than the current bitcoin target. Since
+    /// no bitcoin block hash can be smaller than the bitcoin target, such a pool
+    /// target would be impossible to satisfy. This method returns the ASERT target
+    /// unless it is harder than `bitcoin_bits`, in which case it returns
+    /// `bitcoin_bits` as the floor.
+    pub fn calculate_target_clamped(
+        &self,
+        block_parent_time: u32,
+        block_parent_height: u32,
+        bitcoin_bits: CompactTarget,
+    ) -> CompactTarget {
+        let asert_target = self.calculate_target(block_parent_time, block_parent_height);
+        let bitcoin_target = Target::from_compact(bitcoin_bits);
+        let pool_target = Target::from_compact(asert_target);
+
+        // A smaller Target value means harder difficulty. If the pool target is
+        // harder than bitcoin, clamp to bitcoin difficulty.
+        if pool_target < bitcoin_target {
+            bitcoin_bits
+        } else {
+            asert_target
+        }
+    }
+
     /// Calculate the target and return it as a consensus u32.
     ///
     /// Convenience wrapper for compatibility with `ChainStoreHandle::get_current_target()`.
@@ -279,6 +306,7 @@ mockall::mock! {
         pub fn new(anchor_target: CompactTarget, anchor_parent_time: u32, anchor_height: u32) -> Self;
         pub fn build(chain_store_handle: &ChainStoreHandle) -> Result<Self, PoolDifficultyError>;
         pub fn calculate_target(&self, block_parent_time: u32, block_parent_height: u32) -> CompactTarget;
+        pub fn calculate_target_clamped(&self, block_parent_time: u32, block_parent_height: u32, bitcoin_bits: CompactTarget) -> CompactTarget;
         pub fn calculate_target_consensus(&self, block_parent_time: u32, block_parent_height: u32) -> u32;
     }
 
@@ -294,8 +322,8 @@ mockall::mock! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::hashes::Hash;
     use crate::shares::share_block::ShareBlock;
+    use bitcoin::hashes::Hash;
 
     // =======================================================================
     // U512 / Target conversion tests
@@ -710,6 +738,56 @@ mod tests {
     }
 
     #[test]
+    fn test_calculate_target_clamped_returns_asert_when_easier_than_bitcoin() {
+        // Pool target is easier (larger) than bitcoin target -- no clamping needed
+        let anchor = CompactTarget::from_consensus(0x1b4188f5);
+        let pool_diff = PoolDifficulty::new(anchor, 1700000000, 0);
+        // Bitcoin difficulty is much harder (smaller target)
+        let bitcoin_bits = CompactTarget::from_consensus(0x170f2e48);
+
+        let result = pool_diff.calculate_target_clamped(1700000000, 0, bitcoin_bits);
+        let unclamped = pool_diff.calculate_target(1700000000, 0);
+
+        assert_eq!(
+            result.to_consensus(),
+            unclamped.to_consensus(),
+            "Should return ASERT target when pool target is easier than bitcoin"
+        );
+    }
+
+    #[test]
+    fn test_calculate_target_clamped_returns_bitcoin_when_pool_is_harder() {
+        // Use a very hard anchor target that is harder than bitcoin
+        let hard_anchor = CompactTarget::from_consensus(0x170f2e48);
+        let pool_diff = PoolDifficulty::new(hard_anchor, 1700000000, 0);
+        // Bitcoin difficulty is easier (signet-like)
+        let bitcoin_bits = CompactTarget::from_consensus(0x1b4188f5);
+
+        let result = pool_diff.calculate_target_clamped(1700000000, 0, bitcoin_bits);
+
+        assert_eq!(
+            result.to_consensus(),
+            bitcoin_bits.to_consensus(),
+            "Should clamp to bitcoin difficulty when pool target is harder"
+        );
+    }
+
+    #[test]
+    fn test_calculate_target_clamped_equal_targets() {
+        let anchor = CompactTarget::from_consensus(0x1b4188f5);
+        let pool_diff = PoolDifficulty::new(anchor, 1700000000, 0);
+        let bitcoin_bits = pool_diff.calculate_target(1700000000, 0);
+
+        let result = pool_diff.calculate_target_clamped(1700000000, 0, bitcoin_bits);
+
+        assert_eq!(
+            result.to_consensus(),
+            bitcoin_bits.to_consensus(),
+            "Should return ASERT target when both targets are equal"
+        );
+    }
+
+    #[test]
     fn test_pool_difficulty_error_display() {
         let update_error = PoolDifficultyError::UpdateError("test error".to_string());
         assert_eq!(
@@ -758,9 +836,15 @@ mod tests {
 
             let parent = &blocks[index - 1];
             let parent_height = (index - 1) as u32;
-            let expected_target = pool_difficulty.calculate_target(parent.header.time, parent_height);
+            let bitcoin_bits = block.header.bitcoin_header.bits;
+            let expected_target = pool_difficulty.calculate_target_clamped(
+                parent.header.time,
+                parent_height,
+                bitcoin_bits,
+            );
             assert_eq!(
-                block.header.bits, expected_target,
+                block.header.bits,
+                expected_target,
                 "Block {index} bits {:#010x} does not match ASERT target {:#010x}",
                 block.header.bits.to_consensus(),
                 expected_target.to_consensus()

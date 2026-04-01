@@ -97,9 +97,14 @@ fn build_prepared_notify(
         .map_err(|error| WorkError {
             message: format!("Failed to get tip height: {error}"),
         })?;
-    let target = context
-        .pool_difficulty
-        .calculate_target(parent_time, tip_height);
+    let bitcoin_bits =
+        bitcoin::CompactTarget::from_unprefixed_hex(&template.bits).map_err(|_| WorkError {
+            message: "Failed to parse bitcoin bits from block template".to_string(),
+        })?;
+    let target =
+        context
+            .pool_difficulty
+            .calculate_target_clamped(parent_time, tip_height, bitcoin_bits);
     let time = SystemTimeProvider.seconds_since_epoch() as u32;
 
     PreparedNotifyParamsBuilder::new(

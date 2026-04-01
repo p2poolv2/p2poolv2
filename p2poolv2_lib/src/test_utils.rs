@@ -214,8 +214,6 @@ pub fn setup_pool_difficulty_mocks(
     parent_hash: BlockHash,
     target_bits: u32,
 ) {
-    let parent_share = genesis_for_tests();
-    let parent_time = parent_share.header.time;
     chain_store_handle
         .expect_get_share_header()
         .with(mockall::predicate::eq(parent_hash))
@@ -233,12 +231,8 @@ pub fn setup_pool_difficulty_mocks(
         });
 
     pool_difficulty
-        .expect_calculate_target()
-        .with(
-            mockall::predicate::eq(parent_time),
-            mockall::predicate::eq(0),
-        )
-        .returning(move |_, _| CompactTarget::from_consensus(target_bits));
+        .expect_calculate_target_clamped()
+        .returning(move |_, _, _| CompactTarget::from_consensus(target_bits));
 }
 
 #[cfg(test)]
@@ -254,7 +248,10 @@ pub fn create_test_commitment() -> ShareCommitment {
         .unwrap(),
         uncles: vec![],
         miner_bitcoin_address: btcaddress,
-        bits: CompactTarget::from_consensus(0x1b4188f5),
+        // Use signet-easy target so test bitcoin headers can meet pool difficulty.
+        // In production, calculate_target_clamped ensures pool target is never
+        // harder than bitcoin difficulty.
+        bits: CompactTarget::from_consensus(0x1e0377ae),
         time: 1700000000,
         donation_address: None,
         donation: None,
