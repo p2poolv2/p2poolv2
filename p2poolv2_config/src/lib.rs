@@ -486,6 +486,11 @@ impl Config {
         self
     }
 
+    pub fn with_pool_signature(mut self, pool_signature: Option<String>) -> Self {
+        self.stratum.pool_signature = pool_signature;
+        self
+    }
+
     pub fn with_bitcoinrpc_url(mut self, bitcoin_url: String) -> Self {
         self.bitcoinrpc.url = bitcoin_url;
         self

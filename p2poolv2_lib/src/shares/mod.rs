@@ -17,6 +17,7 @@
 pub mod chain;
 pub(crate) mod coinbaseaux_flags;
 pub(crate) mod compact_block;
+pub(crate) mod extranonce;
 pub mod genesis;
 pub mod handle_stratum_share;
 pub mod share_block;
