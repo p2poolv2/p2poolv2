@@ -127,6 +127,10 @@ impl OrganiseWorker {
     /// Returns `Err(OrganiseError)` on fatal failure (store writer dead).
     pub async fn run(mut self) -> Result<(), OrganiseError> {
         info!("Organise worker started");
+
+        // Make sure pplns window is warmed up with current chain state in store
+        self.update_pplns_window();
+
         while let Some(event) = self.organise_rx.recv().await {
             match event {
                 OrganiseEvent::Header(header) => {
