@@ -41,7 +41,7 @@ The share processing pipeline is designed to:
     |          |               +----------+----------------+
     |          |                          |
     |          | validation_tx            | validation_tx
-    |          | (mpsc, cap 256)          | (mpsc, cap 256)
+    |          | (mpsc, cap 8192)         | (mpsc, cap 8192)
     |          v                          v
     |   +------------------------------------------+
     |   | ValidationWorker (tokio task)            |
@@ -155,7 +155,7 @@ to confirmed), operating independently.
 
 ### OrganiseWorker (`node/organise_worker.rs`)
 - Runs in dedicated tokio task, spawned by NodeActor
-- Receives `OrganiseEvent` via bounded mpsc channel (capacity 256)
+- Receives `OrganiseEvent` via bounded mpsc channel (capacity 8192)
 - Matches on event type:
   - `Header(header)`: calls `ChainStoreHandle::organise_header(header)`
   - `Block(share_block)`: calls `ChainStoreHandle::organise_block()`
@@ -188,10 +188,10 @@ to confirmed), operating independently.
 | Channel | Type | Capacity | Purpose |
 |---------|------|----------|---------|
 | emissions_rx | tokio mpsc | 100 | Stratum server -> EmissionWorker |
-| validation_tx/rx | tokio mpsc | 256 | Share handlers -> ValidationWorker |
-| organise_tx/rx | tokio mpsc | 256 | ValidationWorker/EmissionWorker -> OrganiseWorker |
+| validation_tx/rx | tokio mpsc | 8192 | Share handlers -> ValidationWorker |
+| organise_tx/rx | tokio mpsc | 8192 | ValidationWorker/EmissionWorker -> OrganiseWorker |
 | swarm_tx/rx | tokio mpsc | 100 | ValidationWorker/EmissionWorker -> NodeActor |
-| block_fetcher_tx/rx | tokio mpsc | 256 | Share handlers -> BlockFetcher |
+| block_fetcher_tx/rx | tokio mpsc | 8192 | Share handlers -> BlockFetcher |
 | write_tx/rx | std::sync mpsc | unbounded | StoreHandle -> StoreWriter (serialized writes) |
 
 ## BlockHeight Column Family Key Schema
@@ -259,7 +259,7 @@ Within a single `WriteBatch`, reads from the DB return pre-batch (committed) sta
 
 ### ValidationWorker (`node/validation_worker.rs`)
 - Runs in dedicated tokio task, spawned by NodeActor
-- Receives `ValidationEvent::ValidateBlock(BlockHash)` via bounded mpsc channel (capacity 256)
+- Receives `ValidationEvent::ValidateBlock(BlockHash)` via bounded mpsc channel (capacity 8192)
 - Spawns capped concurrent validation tasks (semaphore sized to available CPUs)
 - Each task:
   1. Reads the share block from the chain store

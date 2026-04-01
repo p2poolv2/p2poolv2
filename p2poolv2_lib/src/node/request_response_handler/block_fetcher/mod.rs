@@ -48,7 +48,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const TICK_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Channel capacity for block fetcher events.
-const BLOCK_FETCHER_CHANNEL_CAPACITY: usize = 256;
+const BLOCK_FETCHER_CHANNEL_CAPACITY: usize = 8192;
 
 /// Events sent to the block fetcher from p2p message handlers.
 pub enum BlockFetcherEvent {
