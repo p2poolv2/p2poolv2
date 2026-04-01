@@ -200,6 +200,7 @@ pub(crate) fn build_share_commitment(
 mod tests {
     use super::*;
     use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
+    use crate::shares::extranonce::Extranonce;
     use crate::shares::witness_commitment::WitnessCommitment;
     use crate::store::writer::StoreError;
     use crate::stratum::work::block_template::BlockTemplate;
@@ -590,6 +591,7 @@ mod tests {
                 .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok()),
             template.height as u64,
             0,
+            Extranonce::default(),
         );
 
         (header, bitcoin_transactions)

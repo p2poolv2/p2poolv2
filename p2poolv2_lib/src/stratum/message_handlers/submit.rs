@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
+use crate::shares::extranonce::Extranonce;
 use crate::stratum::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::stratum::emission::Emission;
 use crate::stratum::error::Error;
@@ -150,6 +151,10 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         message.params[4].as_ref().unwrap().to_string(),
     );
 
+    let enonce2_hex = message.params[2].as_ref().unwrap();
+    let extranonce = Extranonce::from_enonce_hex(&session.enonce1_hex, enonce2_hex)
+        .map_err(|error| Error::SubmitFailure(format!("Failed to build extranonce: {error}")))?;
+
     stratum_context
         .emissions_tx
         .send(Emission {
@@ -160,6 +165,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
             share_commitment: job.share_commitment.clone(),
             coinbase_nsecs: job.coinbase_nsecs,
             template_merkle_branches: job.template_merkle_branches.clone(),
+            extranonce,
         })
         .await
         .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;

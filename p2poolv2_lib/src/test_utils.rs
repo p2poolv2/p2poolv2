@@ -30,6 +30,8 @@ use tempfile::{TempDir, tempdir};
 #[cfg(any(test, feature = "test-utils"))]
 use crate::pool_difficulty::PoolDifficulty;
 #[cfg(any(test, feature = "test-utils"))]
+use crate::shares::extranonce::Extranonce;
+#[cfg(any(test, feature = "test-utils"))]
 use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
 #[cfg(any(test, feature = "test-utils"))]
 use crate::shares::transactions::coinbase::create_coinbase_transaction;
@@ -369,6 +371,7 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
         b"P2Poolv2",
         Some(commitment_hash),
         nsecs,
+        Some(Extranonce::default().as_bytes()),
     )
     .expect("Failed to build bitcoin coinbase for test");
 
@@ -415,6 +418,7 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
             .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok()),
         bitcoin_height: template.height as u64,
         coinbase_nsecs: TEST_COINBASE_NSECS,
+        extranonce: Extranonce::default(),
     };
 
     let template_merkle_branches = build_merkle_branches_for_template(&template)
@@ -619,6 +623,7 @@ fn test_share_block(
                 b"P2Poolv2",
                 Some(commitment.hash()),
                 TEST_COINBASE_NSECS,
+                None,
             )
             .expect("Failed to build bitcoin coinbase for test");
 
@@ -661,6 +666,7 @@ fn test_share_block(
         witness_commitment: None,
         bitcoin_height: 1,
         coinbase_nsecs: TEST_COINBASE_NSECS,
+        extranonce: Extranonce::default(),
     };
 
     ShareBlock {
@@ -763,6 +769,7 @@ impl TestShareHeaderBuilder {
             witness_commitment: None,
             bitcoin_height: 1,
             coinbase_nsecs: TEST_COINBASE_NSECS,
+            extranonce: Extranonce::default(),
         }
     }
 }

@@ -451,6 +451,7 @@ impl DefaultShareValidator {
             pool_signature,
             Some(expected_commitment_hash),
             share.header.coinbase_nsecs,
+            Some(share.header.extranonce.as_bytes()),
         )
         .map_err(|error| ValidationError(format!("Error building coinbase {error}")))?;
 
@@ -699,6 +700,7 @@ mockall::mock! {
 mod tests {
     use super::*;
     use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
+    use crate::shares::extranonce::Extranonce;
     use crate::shares::share_block::ShareTransaction;
     use crate::shares::share_commitment::ShareCommitment;
     use crate::shares::witness_commitment::WitnessCommitment;
@@ -1728,6 +1730,7 @@ mod tests {
             b"P2Poolv2",
             Some(commitment_hash),
             TEST_COINBASE_NSECS,
+            Some(Extranonce::default().as_bytes()),
         )
         .unwrap();
 
@@ -1798,6 +1801,7 @@ mod tests {
             b"P2Poolv2",
             Some(commitment_hash),
             TEST_COINBASE_NSECS,
+            Some(Extranonce::default().as_bytes()),
         )
         .unwrap();
 
@@ -1879,6 +1883,7 @@ mod tests {
             &[],
             None,
             TEST_COINBASE_NSECS,
+            Some(Extranonce::default().as_bytes()),
         )
         .unwrap();
 
@@ -1935,6 +1940,7 @@ mod tests {
             b"P2Poolv2",
             Some(commitment_hash),
             TEST_COINBASE_NSECS,
+            Some(Extranonce::default().as_bytes()),
         )
         .unwrap();
 
@@ -2048,6 +2054,7 @@ mod tests {
             b"P2Poolv2",
             Some(commitment_hash),
             TEST_COINBASE_NSECS,
+            Some(Extranonce::default().as_bytes()),
         )
         .unwrap();
 
@@ -2137,6 +2144,7 @@ mod tests {
             b"P2Poolv2",
             Some(commitment_hash),
             TEST_COINBASE_NSECS,
+            Some(Extranonce::default().as_bytes()),
         )
         .unwrap();
 

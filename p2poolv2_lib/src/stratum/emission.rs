@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
+use crate::shares::extranonce::Extranonce;
 use crate::shares::share_commitment::ShareCommitment;
 use crate::stratum::work::block_template::BlockTemplate;
 use bitcoin::block::Header;
@@ -33,6 +34,8 @@ pub struct Emission {
     pub coinbase_nsecs: u64,
     /// Merkle branches for the template transactions (excluding coinbase).
     pub template_merkle_branches: Vec<bitcoin::TxMerkleNode>,
+    /// Combined extranonce (enonce1 || enonce2) from the stratum submission.
+    pub extranonce: Extranonce,
 }
 
 pub type EmissionSender = mpsc::Sender<Emission>;

@@ -44,6 +44,7 @@ pub async fn handle_stratum_share(
         share_commitment,
         coinbase_nsecs,
         template_merkle_branches,
+        extranonce,
     } = emission;
 
     // Send share to peers only in p2p mode, i.e. if the pool is run with a miner address that results in a commitment
@@ -76,6 +77,7 @@ pub async fn handle_stratum_share(
                 .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok()),
             blocktemplate.height as u64,
             coinbase_nsecs,
+            extranonce,
         );
 
         let mut bitcoin_transactions = Vec::with_capacity(blocktemplate.transactions.len() + 1);
@@ -117,6 +119,7 @@ pub async fn handle_stratum_share(
 mod tests {
     use super::*;
     use crate::accounting::payout::simple_pplns::SimplePplnsShare;
+    use crate::shares::extranonce::Extranonce;
     use crate::store::writer::StoreError;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::test_utils::{TEST_COINBASE_NSECS, create_test_commitment};
@@ -192,6 +195,7 @@ mod tests {
             share_commitment: None,
             coinbase_nsecs: TEST_COINBASE_NSECS,
             template_merkle_branches: vec![],
+            extranonce: Extranonce::default(),
         }
     }
 
@@ -235,6 +239,7 @@ mod tests {
             share_commitment: Some(commitment),
             coinbase_nsecs: TEST_COINBASE_NSECS,
             template_merkle_branches: vec![],
+            extranonce: Extranonce::default(),
         }
     }
 
@@ -410,6 +415,7 @@ mod tests {
                 bitcoin::TxMerkleNode::all_zeros(),
                 bitcoin::TxMerkleNode::all_zeros(),
             ],
+            extranonce: Extranonce::default(),
         };
 
         let result = handle_stratum_share(emission, &mock_chain_store).await;

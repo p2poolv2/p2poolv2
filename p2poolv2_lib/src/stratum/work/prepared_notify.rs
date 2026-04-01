@@ -267,6 +267,7 @@ impl PreparedNotifyParamsBuilder {
             &self.pool_signature,
             Some(dummy_commitment_hash),
             0u64,
+            None,
         )?;
 
         let (coinbase1, coinbase2_full) = split_coinbase(&coinbase)?;

@@ -559,9 +559,7 @@ mod tests {
         append_proportional_distribution, include_address_and_cut,
     };
     use crate::shares::share_commitment::ShareCommitment;
-    use crate::stratum::work::coinbase::{
-        build_coinbase_transaction, replace_extranonce_separator,
-    };
+    use crate::stratum::work::coinbase::build_coinbase_transaction;
     use crate::stratum::work::gbt::compute_merkle_root_from_branches;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::consensus::{deserialize, serialize};
