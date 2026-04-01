@@ -30,8 +30,7 @@ use bitcoin::{Address, Amount, opcodes};
 use hashes::sha256;
 use hex::FromHex;
 
-#[allow(dead_code)]
-const EXTRANONCE_SEPARATOR: [u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE] =
+pub(crate) const EXTRANONCE_SEPARATOR: [u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE] =
     [1u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE];
 
 /// Length of the sequence bytes in coinbase
@@ -102,6 +101,11 @@ fn append_default_witness_commitment(
 /// 04 eba96d2d - enonce1 from tv_nsec ??
 /// 0c - 12, the length of the two nonces put together
 #[allow(dead_code)]
+/// Build a coinbase transaction for the share chain.
+///
+/// When `extranonce` is provided, it replaces the placeholder separator
+/// in the scriptSig. When `None`, the separator placeholder is left in
+/// place (used by the stratum server before split_coinbase).
 pub(crate) fn build_coinbase_transaction(
     version: Version,
     output_data: &[OutputPair],
@@ -111,6 +115,7 @@ pub(crate) fn build_coinbase_transaction(
     pool_signature: &[u8],
     commitment_hash: Option<sha256::Hash>,
     nsecs: u64,
+    extranonce: Option<&[u8]>,
 ) -> Result<Transaction, WorkError> {
     if output_data.is_empty() {
         return Err(WorkError {
@@ -118,13 +123,20 @@ pub(crate) fn build_coinbase_transaction(
         });
     }
 
+    let extranonce_bytes = match extranonce {
+        Some(bytes) => bytes,
+        None => &EXTRANONCE_SEPARATOR,
+    };
+    let mut extranonce_buf = PushBytesBuf::with_capacity(extranonce_bytes.len());
+    extranonce_buf.extend_from_slice(extranonce_bytes).unwrap();
+
     let mut signature_buf = PushBytesBuf::with_capacity(pool_signature.len());
     signature_buf.extend_from_slice(pool_signature).unwrap();
 
     let coinbase_script_prefix = Builder::new()
         .push_int(height)
         .push_slice(aux_flags)
-        .push_slice(EXTRANONCE_SEPARATOR);
+        .push_slice(extranonce_buf);
 
     let mut coinbase_builder = coinbase_script_prefix;
     if let Some(hash) = commitment_hash {
@@ -154,6 +166,7 @@ pub(crate) fn build_coinbase_transaction(
     };
     Ok(coinbase_tx)
 }
+
 
 /// Splits the coinbase transaction into two parts: coinbase1 and coinbase2, separated by our
 /// extranonce2 separator.
@@ -423,6 +436,7 @@ mod tests {
             &[],
             None,
             get_timestamp_bytes(&SystemTimeProvider),
+            None,
         )
         .unwrap();
 
@@ -478,6 +492,7 @@ mod tests {
             &[],
             None,
             get_timestamp_bytes(&SystemTimeProvider),
+            None,
         )
         .unwrap();
 
@@ -546,6 +561,7 @@ mod tests {
             b"P2Poolv2",
             None,
             get_timestamp_bytes(&SystemTimeProvider),
+            None,
         )
         .unwrap();
 
@@ -652,6 +668,7 @@ mod tests {
             b"P2Poolv2",
             Some(share_commitment.hash()),
             get_timestamp_bytes(&SystemTimeProvider),
+            None,
         )
         .unwrap();
 
@@ -754,6 +771,7 @@ mod tests {
             pool_sig,
             None,
             get_timestamp_bytes(&SystemTimeProvider),
+            None,
         )
         .unwrap();
 
@@ -839,6 +857,7 @@ mod tests {
             b"P2Poolv2",
             Some(expected_hash),
             get_timestamp_bytes(&SystemTimeProvider),
+            None,
         )
         .unwrap();
 
@@ -866,6 +885,7 @@ mod tests {
             b"P2Poolv2",
             None,
             get_timestamp_bytes(&SystemTimeProvider),
+            None,
         )
         .unwrap();
 
@@ -913,6 +933,7 @@ mod tests {
             &[],
             None,
             get_timestamp_bytes(&SystemTimeProvider),
+            None,
         )
         .unwrap();
 
@@ -940,6 +961,7 @@ mod tests {
             &[],
             None,
             get_timestamp_bytes(&SystemTimeProvider),
+            None,
         )
         .unwrap();
 
@@ -967,6 +989,7 @@ mod tests {
             &[],
             None,
             get_timestamp_bytes(&SystemTimeProvider),
+            None,
         )
         .unwrap();
 
