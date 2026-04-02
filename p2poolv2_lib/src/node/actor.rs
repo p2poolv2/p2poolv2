@@ -318,6 +318,11 @@ impl NodeActor {
         );
         tokio::spawn(emission_worker.run());
 
+        let mut reconnect_interval =
+            tokio::time::interval(crate::node::peer_reconnector::PeerReconnector::check_interval());
+        // Skip the immediate first tick so we don't reconnect while initial dials are in progress
+        reconnect_interval.tick().await;
+
         loop {
             tokio::select! {
                 buf = self.node.swarm_rx.recv() => {
@@ -505,6 +510,9 @@ impl NodeActor {
                             return;
                         }
                     }
+                }
+                _ = reconnect_interval.tick(), if self.node.peer_reconnector.has_peers() => {
+                    self.node.attempt_reconnections();
                 }
             }
         }

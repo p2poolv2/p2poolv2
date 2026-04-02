@@ -17,6 +17,7 @@
 pub mod behaviour;
 pub mod emission_worker;
 pub mod organise_worker;
+pub mod peer_reconnector;
 pub mod request_response_handler;
 pub mod validation_worker;
 pub use crate::config::Config;
@@ -105,6 +106,9 @@ struct Node {
     request_response_handler: RequestResponseHandler<ResponseChannel<Message>>,
     config: Config,
     monitoring_event_sender: MonitoringEventSender,
+    peer_reconnector: peer_reconnector::PeerReconnector,
+    /// Tracks Multiaddrs of currently connected outbound peers for reconnection logic
+    connected_dial_addresses: Vec<Multiaddr>,
 }
 
 impl Node {
@@ -223,6 +227,8 @@ impl Node {
             share_validator,
         );
 
+        let peer_reconnector = peer_reconnector::PeerReconnector::new(&config.network.dial_peers);
+
         Ok(Self {
             swarm,
             swarm_tx,
@@ -231,6 +237,8 @@ impl Node {
             request_response_handler,
             config,
             monitoring_event_sender,
+            peer_reconnector,
+            connected_dial_addresses: Vec::new(),
         })
     }
 
@@ -256,6 +264,24 @@ impl Node {
             self.send_to_peer(&peer_id, message.clone())?;
         }
         Ok(())
+    }
+
+    /// Attempt to reconnect to any configured dial_peers that are not currently connected.
+    fn attempt_reconnections(&mut self) {
+        let addresses = self
+            .peer_reconnector
+            .addresses_to_reconnect(&self.connected_dial_addresses);
+        for address in addresses {
+            match self.swarm.dial(address.clone()) {
+                Ok(_) => {
+                    info!("Reconnecting to {address}");
+                }
+                Err(error) => {
+                    error!("Failed to redial {address}: {error}");
+                    self.peer_reconnector.record_dial_failure(&address);
+                }
+            }
+        }
     }
 
     /// Send a message to a specific peer
@@ -297,8 +323,12 @@ impl Node {
             SwarmEvent::ConnectionEstablished {
                 peer_id, endpoint, ..
             } => {
-                match endpoint {
-                    libp2p::core::ConnectedPoint::Dialer { .. } => {
+                match &endpoint {
+                    libp2p::core::ConnectedPoint::Dialer { address, .. } => {
+                        self.peer_reconnector.record_dial_success(address);
+                        if !self.connected_dial_addresses.contains(address) {
+                            self.connected_dial_addresses.push(address.clone());
+                        }
                         if let Err(e) = send_getheaders(
                             peer_id,
                             self.chain_store_handle.clone(),
@@ -326,8 +356,13 @@ impl Node {
                     }));
                 Ok(())
             }
-            SwarmEvent::ConnectionClosed { peer_id, .. } => {
+            SwarmEvent::ConnectionClosed {
+                peer_id, endpoint, ..
+            } => {
                 info!("Disconnected from peer: {peer_id}");
+                if let libp2p::core::ConnectedPoint::Dialer { ref address, .. } = endpoint {
+                    self.connected_dial_addresses.retain(|addr| addr != address);
+                }
                 self.swarm.behaviour_mut().remove_peer(&peer_id);
                 self.request_response_handler
                     .remove_peer_knowledge(&peer_id);
