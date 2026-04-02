@@ -51,7 +51,7 @@ const PPLNS_WINDOW: usize = 2160; // 6 shares per minute * 60 * 6 hours.
 ///
 /// Read operations are synchronous (may briefly block tokio threads),
 /// while writes are serialized through the store writer.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ChainStoreHandle {
     store_handle: StoreHandle,
     network: bitcoin::Network,
@@ -642,6 +642,7 @@ impl ChainStoreHandle {
 // Use with #[mockall_double::double] to swap real type for mock in tests
 #[cfg(test)]
 mockall::mock! {
+    #[derive(Debug)]
     pub ChainStoreHandle {
         pub fn is_candidate(&self, blockhash: &BlockHash) -> bool;
         pub fn get_block_metadata(&self, hash: &BlockHash) -> Result<BlockMetadata, StoreError>;

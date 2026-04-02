@@ -141,6 +141,7 @@ pub trait ShareValidator {
 ///
 /// Stores a `PoolDifficulty` instance initialized at construction time,
 /// avoiding repeated builds on each validation call.
+#[derive(Debug)]
 pub struct DefaultShareValidator {
     pool_difficulty: PoolDifficulty,
     /// Multiplier applied to bitcoin difficulty when walking the PPLNS window.
@@ -659,6 +660,7 @@ impl ShareValidator for DefaultShareValidator {
 // Use with #[mockall_double::double] to swap real type for mock in tests.
 #[cfg(test)]
 mockall::mock! {
+    #[derive(Debug)]
     pub DefaultShareValidator {
     }
 

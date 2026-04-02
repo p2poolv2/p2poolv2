@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use std::error::Error;
+use std::fmt::Debug;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -24,21 +25,27 @@ use tokio::sync::mpsc;
 use tower::Service;
 
 use crate::node::SwarmSend;
+use crate::node::actor::NodeHandle;
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::handle_request;
 use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
 use crate::node::validation_worker::ValidationSender;
+use crate::service::peer_state::PeerState;
+#[cfg(not(test))]
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-#[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::validation::ShareValidator;
 use crate::utils::time_provider::TimeProvider;
 
 /// Request context wrapping all inputs for the service call.
-pub struct RequestContext<C, T> {
-    pub peer: libp2p::PeerId,
+#[derive(Debug)]
+pub struct RequestContext<C, T, SV>
+where
+    SV: Debug,
+{
+    pub peer: Arc<PeerState>,
     pub request: Message,
     pub chain_store_handle: ChainStoreHandle,
     pub response_channel: C,
@@ -46,7 +53,23 @@ pub struct RequestContext<C, T> {
     pub time_provider: T,
     pub block_fetcher_handle: BlockFetcherHandle,
     pub validation_tx: ValidationSender,
-    pub share_validator: Arc<dyn ShareValidator + Send + Sync>,
+    pub share_validator: Arc<SV>,
+    pub node_handle: NodeHandle,
+}
+
+/// Response context wrapping all inputs for the service call.
+pub struct ResponseContext<C, SV>
+where
+    SV: Debug,
+{
+    pub peer: Arc<PeerState>,
+    pub response: Message,
+    pub chain_store_handle: ChainStoreHandle,
+    pub swarm_tx: mpsc::Sender<SwarmSend<C>>,
+    pub block_fetcher_handle: BlockFetcherHandle,
+    pub validation_tx: ValidationSender,
+    pub share_validator: Arc<SV>,
+    pub node_handle: NodeHandle,
 }
 
 /// The Tower service that processes inbound P2P requests.
@@ -59,8 +82,11 @@ impl P2PService {
     }
 }
 
-impl<C: 'static + Send + Sync, T: TimeProvider + Send + Sync + 'static>
-    Service<RequestContext<C, T>> for P2PService
+impl<C, T, SV> Service<RequestContext<C, T, SV>> for P2PService
+where
+    C: 'static + Send + Sync + Debug,
+    T: TimeProvider + Send + Sync + Debug + 'static,
+    SV: ShareValidator + Send + Sync + Debug + 'static,
 {
     type Response = ();
     type Error = Box<dyn Error + Send + Sync>;
@@ -70,7 +96,7 @@ impl<C: 'static + Send + Sync, T: TimeProvider + Send + Sync + 'static>
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: RequestContext<C, T>) -> Self::Future {
+    fn call(&mut self, req: RequestContext<C, T, SV>) -> Self::Future {
         Box::pin(async move {
             handle_request(req).await.map_err(|e| {
                 tracing::error!("Service failed to process request: {}", e);
