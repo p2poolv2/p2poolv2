@@ -16,6 +16,7 @@
 
 use std::error::Error;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use futures::Future;
@@ -34,7 +35,6 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::validation::ShareValidator;
 use crate::utils::time_provider::TimeProvider;
-use std::sync::Arc;
 
 /// Request context wrapping all inputs for the service call.
 pub struct RequestContext<C, T> {
@@ -51,25 +51,22 @@ pub struct RequestContext<C, T> {
 
 /// The Tower service that processes inbound P2P requests.
 #[derive(Clone)]
-pub struct P2PService<C> {
-    pub swarm_tx: mpsc::Sender<SwarmSend<C>>,
-}
+pub struct P2PService;
 
-impl<C> P2PService<C> {
-    pub fn new(swarm_tx: mpsc::Sender<SwarmSend<C>>) -> Self {
-        Self { swarm_tx }
+impl P2PService {
+    pub fn new() -> Self {
+        Self
     }
 }
 
 impl<C: 'static + Send + Sync, T: TimeProvider + Send + Sync + 'static>
-    Service<RequestContext<C, T>> for P2PService<C>
+    Service<RequestContext<C, T>> for P2PService
 {
     type Response = ();
     type Error = Box<dyn Error + Send + Sync>;
     type Future = Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send>>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // Always ready
         Poll::Ready(Ok(()))
     }
 

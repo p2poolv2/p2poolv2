@@ -17,36 +17,26 @@
 pub mod p2p_service;
 
 use crate::config::NetworkConfig;
-use crate::middleware::inactivity::InactivityLayer;
-use crate::node::SwarmSend;
 use crate::service::p2p_service::{P2PService, RequestContext};
 use crate::utils::time_provider::TimeProvider;
 use std::error::Error;
 use std::time::Duration;
-use tokio::sync::mpsc::Sender;
 use tower::{ServiceBuilder, limit::RateLimitLayer, util::BoxService};
 
-// Build the full service stack
+/// Build the full service stack with rate limiting.
 pub fn build_service<C, T>(
     config: NetworkConfig,
-    swarm_tx: Sender<SwarmSend<C>>,
 ) -> BoxService<RequestContext<C, T>, (), Box<dyn Error + Send + Sync>>
 where
     C: Send + Sync + 'static,
     T: TimeProvider + Send + Sync + 'static,
 {
-    let base_service = P2PService::new(swarm_tx.clone());
+    let base_service = P2PService::new();
 
-    let timeout_duration = config.peer_inactivity_timeout_secs.map(Duration::from_secs);
-
-    let inactivity_layer = InactivityLayer::new(timeout_duration, swarm_tx);
-
-    let builder = ServiceBuilder::new()
-        .layer(RateLimitLayer::new(
-            config.max_requests_per_second,
-            Duration::from_secs(1),
-        ))
-        .layer(inactivity_layer);
+    let builder = ServiceBuilder::new().layer(RateLimitLayer::new(
+        config.max_requests_per_second,
+        Duration::from_secs(1),
+    ));
 
     let service = builder.service(base_service);
 
@@ -170,7 +160,7 @@ mod tests {
         // Configure Tower RateLimitLayer: 2 requests per second
         let mut service = ServiceBuilder::new()
             .layer(RateLimitLayer::new(2, Duration::from_secs(1)))
-            .service(P2PService::new(swarm_tx.clone()));
+            .service(P2PService::new());
 
         // Inline RequestContext construction
         let (block_fetcher_handle, validation_tx) = fetcher_validation_handles_for_tests();
@@ -212,7 +202,7 @@ mod tests {
 
         // First request should succeed
         assert!(
-            <RateLimit<P2PService<tokio::sync::oneshot::Sender<Message>>> as tower::ServiceExt<
+            <RateLimit<P2PService> as tower::ServiceExt<
                 p2p_service::RequestContext<
                     tokio::sync::oneshot::Sender<Message>,
                     TestTimeProvider,
@@ -226,7 +216,7 @@ mod tests {
 
         // Second request should succeed
         assert!(
-            <RateLimit<P2PService<tokio::sync::oneshot::Sender<Message>>> as tower::ServiceExt<
+            <RateLimit<P2PService> as tower::ServiceExt<
                 p2p_service::RequestContext<
                     tokio::sync::oneshot::Sender<Message>,
                     TestTimeProvider,
@@ -240,7 +230,7 @@ mod tests {
 
         // Third request should be rate limited (not ready)
         assert!(
-            <RateLimit<P2PService<tokio::sync::oneshot::Sender<Message>>> as tower::ServiceExt<
+            <RateLimit<P2PService> as tower::ServiceExt<
                 p2p_service::RequestContext<
                     tokio::sync::oneshot::Sender<Message>,
                     TestTimeProvider,
@@ -255,7 +245,7 @@ mod tests {
 
         // Should be ready again
         assert!(
-            <RateLimit<P2PService<tokio::sync::oneshot::Sender<Message>>> as tower::ServiceExt<
+            <RateLimit<P2PService> as tower::ServiceExt<
                 p2p_service::RequestContext<
                     tokio::sync::oneshot::Sender<Message>,
                     TestTimeProvider,
@@ -360,7 +350,6 @@ mod tests {
             max_transaction_per_second: 0,
             rate_limit_window_secs: 1,
             max_requests_per_second: 1,
-            peer_inactivity_timeout_secs: Some(30),
             dial_timeout_secs: 30,
         };
 
@@ -390,8 +379,7 @@ mod tests {
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
-        let mut service =
-            build_service::<Sender<Message>, _>(network_config.clone(), swarm_tx.clone());
+        let mut service = build_service::<Sender<Message>, _>(network_config.clone());
 
         // First request should succeed immediately
         assert!(
@@ -454,7 +442,6 @@ mod tests {
             max_transaction_per_second: 0,
             rate_limit_window_secs: 1,
             max_requests_per_second: 1,
-            peer_inactivity_timeout_secs: Some(30),
             dial_timeout_secs: 30,
         };
 
@@ -472,8 +459,7 @@ mod tests {
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
-        let mut service =
-            build_service::<Sender<Message>, _>(network_config.clone(), swarm_tx.clone());
+        let mut service = build_service::<Sender<Message>, _>(network_config.clone());
 
         // First request succeeds
         assert!(
