@@ -306,6 +306,7 @@ async fn test_three_nodes_share_sync() {
         .unwrap();
 
     // Clone chain store handles for polling after node creation
+    let chain_store_handle1_poll = chain_store_handle1.clone();
     let chain_store_handle2_poll = chain_store_handle2.clone();
     let chain_store_handle3_poll = chain_store_handle3.clone();
 
@@ -389,6 +390,46 @@ async fn test_three_nodes_share_sync() {
         chain_store_handle2_poll.get_tip_height(),
         chain_store_handle3_poll.get_tip_height()
     );
+
+    // Verify all three nodes have identical confirmed chains
+    let chain1 = chain_store_handle1_poll
+        .get_confirmed_headers_in_range(0, share_count)
+        .expect("Failed to get confirmed headers from node 1");
+    let chain2 = chain_store_handle2_poll
+        .get_confirmed_headers_in_range(0, share_count)
+        .expect("Failed to get confirmed headers from node 2");
+    let chain3 = chain_store_handle3_poll
+        .get_confirmed_headers_in_range(0, share_count)
+        .expect("Failed to get confirmed headers from node 3");
+
+    assert_eq!(
+        chain1.len(),
+        chain2.len(),
+        "Node 1 and node 2 have different chain lengths"
+    );
+    assert_eq!(
+        chain1.len(),
+        chain3.len(),
+        "Node 1 and node 3 have different chain lengths"
+    );
+
+    for index in 0..chain1.len() {
+        assert_eq!(
+            chain1[index].blockhash, chain2[index].blockhash,
+            "Chain mismatch at index {index}: node1={}, node2={}",
+            chain1[index].blockhash, chain2[index].blockhash
+        );
+        assert_eq!(
+            chain1[index].blockhash, chain3[index].blockhash,
+            "Chain mismatch at index {index}: node1={}, node3={}",
+            chain1[index].blockhash, chain3[index].blockhash
+        );
+        assert_eq!(
+            chain1[index].height, chain2[index].height,
+            "Height mismatch at index {index}: node1={}, node2={}",
+            chain1[index].height, chain2[index].height
+        );
+    }
 
     // Clean up
     node1_handle
