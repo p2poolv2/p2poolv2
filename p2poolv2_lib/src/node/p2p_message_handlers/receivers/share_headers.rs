@@ -49,7 +49,7 @@ pub async fn handle_share_headers<C: Send + Sync>(
     block_fetcher_handle: BlockFetcherHandle,
     share_validator: &(dyn ShareValidator + Send + Sync),
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    info!("Received {} ShareHeaders", share_headers.len());
+    debug!("Received {} ShareHeaders", share_headers.len());
 
     for header in &share_headers {
         share_validator.validate_share_header(header, &chain_store_handle)?;
