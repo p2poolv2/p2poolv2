@@ -82,8 +82,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
         validation_tx: ValidationSender,
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
     ) -> Self {
-        let service =
-            build_service::<ResponseChannel<Message>, _>(network_config, swarm_tx.clone());
+        let service = build_service::<ResponseChannel<Message>, _>(network_config);
         Self {
             request_service: service,
             chain_store_handle,
@@ -300,7 +299,6 @@ mod tests {
     fn test_network_config() -> NetworkConfig {
         NetworkConfig {
             max_requests_per_second: 10,
-            peer_inactivity_timeout_secs: Some(60),
             ..NetworkConfig::default()
         }
     }
@@ -321,7 +319,7 @@ mod tests {
         swarm_tx: mpsc::Sender<SwarmSend<TestChannel>>,
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
     ) -> RequestResponseHandler<TestChannel> {
-        let service = build_service::<TestChannel, _>(test_network_config(), swarm_tx.clone());
+        let service = build_service::<TestChannel, _>(test_network_config());
         let (block_fetcher_tx, _block_fetcher_rx) = block_fetcher::create_block_fetcher_channel();
         let (validation_tx, _validation_rx) =
             crate::node::validation_worker::create_validation_channel();
