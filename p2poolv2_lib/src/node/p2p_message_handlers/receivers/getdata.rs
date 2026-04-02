@@ -37,7 +37,7 @@ pub async fn handle_getdata_block<C: Send + Sync>(
     response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    debug!("Handling getdata block request for {}", block_hash);
+    debug!("Received GetData::Block request for {}", block_hash);
 
     let response_message = match chain_store_handle.get_share(&block_hash) {
         Some(share_block) if chain_store_handle.is_confirmed_or_confirmed_uncle(&block_hash) => {

@@ -40,7 +40,7 @@ pub async fn handle_inventory<C: Send + Sync>(
     chain_store_handle: ChainStoreHandle,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    debug!("Received inventory update: {:?}", inventory);
+    debug!("Received Inv: {:?}", inventory);
 
     match inventory {
         InventoryMessage::BlockHashes(blockhashes) => {

@@ -49,17 +49,17 @@ pub async fn handle_share_headers<C: Send + Sync>(
     block_fetcher_handle: BlockFetcherHandle,
     share_validator: &(dyn ShareValidator + Send + Sync),
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    info!("Received {} ShareHeaders", share_headers.len());
+
     for header in &share_headers {
         share_validator.validate_share_header(header, &chain_store_handle)?;
         chain_store_handle.organise_header(header.clone()).await?;
     }
-
     if share_headers.len() < MAX_HEADERS_IN_RESPONSE {
         trigger_block_fetch(peer_id, &chain_store_handle, &block_fetcher_handle).await?;
     } else {
         request_next_headers(peer_id, &share_headers, &swarm_tx).await?;
     }
-    debug!("Received {} share headers", share_headers.len());
     Ok(())
 }
 

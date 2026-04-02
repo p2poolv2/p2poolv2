@@ -56,7 +56,7 @@ pub async fn handle_share_block(
     validation_tx: ValidationSender,
     share_validator: &(dyn ShareValidator + Send + Sync),
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    debug!("Received share block: {:?}", share_block);
+    debug!("Received ShareBlock: {:?}", share_block);
 
     let block_hash = share_block.block_hash();
 

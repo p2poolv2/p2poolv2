@@ -38,7 +38,7 @@ pub async fn handle_getheaders<C: Send + Sync>(
     response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    debug!("Received getheaders: {:?}", block_hashes);
+    debug!("Received GetHeaders: {:?}", block_hashes);
     let response_headers = chain_store_handle.get_headers_for_locator(
         &block_hashes,
         &stop_block_hash,
