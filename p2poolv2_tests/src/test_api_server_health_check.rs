@@ -41,7 +41,7 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
 
     let api_config = ApiConfig {
         hostname: "127.0.0.1".into(),
-        port: 4000,
+        port: 0,
         auth_user: None,
         auth_token: None,
         auth_password: None,
@@ -49,7 +49,7 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
 
     // Start API server with the new signature
     let node_handle = NodeHandle::new_for_test();
-    let shutdown_tx = start_api_server(
+    let (shutdown_tx, actual_port) = start_api_server(
         api_config.clone(),
         chain_store_handle,
         metrics_handle,
@@ -69,7 +69,7 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
 
     // Check /health endpoint
     let response = client
-        .get(format!("http://127.0.0.1:{}/health", api_config.port))
+        .get(format!("http://127.0.0.1:{actual_port}/health"))
         .send()
         .await
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
@@ -91,7 +91,7 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
     sleep(Duration::from_millis(200)).await;
 
     let result = client
-        .get(format!("http://127.0.0.1:{}/health", api_config.port))
+        .get(format!("http://127.0.0.1:{actual_port}/health"))
         .send()
         .await;
 
@@ -124,7 +124,7 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
 
     let api_config = ApiConfig {
         hostname: "127.0.0.1".into(),
-        port: 4001,
+        port: 0,
         auth_user: Some("testuser".to_string()),
         auth_token: Some(test_token),
         auth_password: None,
@@ -132,7 +132,7 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
 
     // Start API server with authentication
     let node_handle = NodeHandle::new_for_test();
-    let shutdown_tx = start_api_server(
+    let (shutdown_tx, actual_port) = start_api_server(
         api_config.clone(),
         chain_store_handle,
         metrics_handle,
@@ -152,7 +152,7 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
 
     // Test 1: Request without auth should fail
     let response = client
-        .get(format!("http://127.0.0.1:{}/health", api_config.port))
+        .get(format!("http://127.0.0.1:{actual_port}/health"))
         .send()
         .await
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
@@ -169,7 +169,7 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
         base64::engine::general_purpose::STANDARD.encode("testuser:wrongpassword")
     );
     let response = client
-        .get(format!("http://127.0.0.1:{}/health", api_config.port))
+        .get(format!("http://127.0.0.1:{actual_port}/health"))
         .header(header::AUTHORIZATION, invalid_auth)
         .send()
         .await
@@ -187,7 +187,7 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
         base64::engine::general_purpose::STANDARD.encode(format!("testuser:{test_password}"))
     );
     let response = client
-        .get(format!("http://127.0.0.1:{}/health", api_config.port))
+        .get(format!("http://127.0.0.1:{actual_port}/health"))
         .header(header::AUTHORIZATION, valid_auth.clone())
         .send()
         .await
@@ -205,7 +205,7 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
 
     // Test 4: Metrics endpoint should also require auth
     let response = client
-        .get(format!("http://127.0.0.1:{}/metrics", api_config.port))
+        .get(format!("http://127.0.0.1:{actual_port}/metrics"))
         .header(header::AUTHORIZATION, valid_auth)
         .send()
         .await
@@ -238,10 +238,10 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
     .await
     .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
-    // API config without auth
+    // API config without auth - port 0 lets OS assign a free port
     let api_config = p2poolv2_lib::config::ApiConfig {
         hostname: "127.0.0.1".into(),
-        port: 40002,
+        port: 0,
         auth_user: None,
         auth_token: None,
         auth_password: None,
@@ -249,7 +249,7 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
 
     // Start API server
     let node_handle = NodeHandle::new_for_test();
-    let shutdown_tx = p2poolv2_api::start_api_server(
+    let (shutdown_tx, actual_port) = p2poolv2_api::start_api_server(
         api_config.clone(),
         chain_store_handle.clone(),
         metrics_handle,
@@ -319,8 +319,7 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
     // Test: Get all shares
     let response = client
         .get(format!(
-            "http://127.0.0.1:{}/pplns_shares?start_time={}&end_time={}&limit=10",
-            api_config.port, start_iso, end_iso
+            "http://127.0.0.1:{actual_port}/pplns_shares?start_time={start_iso}&end_time={end_iso}&limit=10",
         ))
         .send()
         .await
@@ -352,10 +351,10 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
     .await
     .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
-    // API config without auth
+    // API config without auth - port 0 lets OS assign a free port
     let api_config = p2poolv2_lib::config::ApiConfig {
         hostname: "127.0.0.1".into(),
-        port: 40003,
+        port: 0,
         auth_user: None,
         auth_token: None,
         auth_password: None,
@@ -363,7 +362,7 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
 
     // Start API server
     let node_handle = NodeHandle::new_for_test();
-    let shutdown_tx = p2poolv2_api::start_api_server(
+    let (shutdown_tx, actual_port) = p2poolv2_api::start_api_server(
         api_config.clone(),
         chain_store_handle.clone(),
         metrics_handle,
@@ -430,8 +429,7 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
     // Test: Limit filtering
     let response = client
         .get(format!(
-            "http://127.0.0.1:{}/pplns_shares?limit=1",
-            api_config.port
+            "http://127.0.0.1:{actual_port}/pplns_shares?limit=1",
         ))
         .send()
         .await
@@ -461,10 +459,10 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
     .await
     .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
-    // API config without auth
+    // API config without auth - port 0 lets OS assign a free port
     let api_config = p2poolv2_lib::config::ApiConfig {
         hostname: "127.0.0.1".into(),
-        port: 40004,
+        port: 0,
         auth_user: None,
         auth_token: None,
         auth_password: None,
@@ -472,7 +470,7 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
 
     // Start API server
     let node_handle = NodeHandle::new_for_test();
-    let shutdown_tx = p2poolv2_api::start_api_server(
+    let (shutdown_tx, actual_port) = p2poolv2_api::start_api_server(
         api_config.clone(),
         chain_store_handle.clone(),
         metrics_handle,
@@ -539,8 +537,7 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
     // Test: Time filtering
     let response = client
         .get(format!(
-            "http://127.0.0.1:{}/pplns_shares?start_time=2025-10-17T19:40:01Z&end_time=2025-10-17T19:50:00Z",
-            api_config.port
+            "http://127.0.0.1:{actual_port}/pplns_shares?start_time=2025-10-17T19:40:01Z&end_time=2025-10-17T19:50:00Z",
         ))
         .send()
         .await

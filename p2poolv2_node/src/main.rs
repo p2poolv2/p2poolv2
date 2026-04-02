@@ -309,7 +309,7 @@ async fn main() -> ExitCode {
     )
     .await
     {
-        Ok(shutdown_tx) => shutdown_tx,
+        Ok((shutdown_tx, _port)) => shutdown_tx,
         Err(e) => {
             error!("Error starting API server: {e}");
             return ExitCode::FAILURE;
