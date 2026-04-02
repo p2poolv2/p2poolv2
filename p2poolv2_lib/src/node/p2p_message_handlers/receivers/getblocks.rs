@@ -40,7 +40,7 @@ pub async fn handle_getblocks<C: Send + Sync>(
     response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    debug!("Received getblocks: {:?}", locator);
+    debug!("Received GetBlocks: {:?}", locator);
     let response_block_hashes =
         chain_store_handle.get_blockhashes_for_locator(&locator, &stop_block_hash, MAX_BLOCKS)?;
     let inventory_message =
