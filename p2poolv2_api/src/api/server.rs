@@ -134,7 +134,7 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
         .with_state(app_state)
 }
 
-/// Start the API server and return a shutdown channel
+/// Start the API server and return a shutdown channel and the actual bound port.
 pub async fn start_api_server(
     config: ApiConfig,
     chain_store_handle: ChainStoreHandle,
@@ -144,7 +144,7 @@ pub async fn start_api_server(
     monitoring_event_sender: MonitoringEventSender,
     network: bitcoin::Network,
     pool_signature: Option<String>,
-) -> Result<oneshot::Sender<()>, std::io::Error> {
+) -> Result<(oneshot::Sender<()>, u16), std::io::Error> {
     let app_config = AppConfig {
         pool_signature_length: pool_signature.unwrap_or_default().len(),
         network,
@@ -173,7 +173,11 @@ pub async fn start_api_server(
         Err(e) => return Err(e),
     };
 
-    info!("API server listening on {}", addr);
+    let actual_port = listener.local_addr()?.port();
+    info!(
+        "API server listening on {}:{}",
+        config.hostname, actual_port
+    );
 
     tokio::spawn(async move {
         axum::serve(listener, app)
@@ -187,7 +191,7 @@ pub async fn start_api_server(
         info!("API server stopped");
         Ok::<(), ApiError>(())
     });
-    Ok(shutdown_tx)
+    Ok((shutdown_tx, actual_port))
 }
 
 async fn health_check() -> String {
