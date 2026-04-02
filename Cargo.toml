@@ -44,6 +44,7 @@ libp2p = { version = "0.53", features = [
     "identify",
     "macros",
     "kad",
+    "ping",
     "secp256k1",
     "request-response",
 ] }

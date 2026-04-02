@@ -361,6 +361,10 @@ impl Node {
                     self.handle_kademlia_event(kad_event);
                     Ok(())
                 }
+                P2PoolBehaviourEvent::Ping(ping_event) => {
+                    self.handle_ping_event(ping_event);
+                    Ok(())
+                }
                 P2PoolBehaviourEvent::RequestResponse(request_response_event) => {
                     self.request_response_handler
                         .handle_event(request_response_event)
@@ -397,6 +401,19 @@ impl Node {
             }
             _ => {
                 debug!("Other identify event: {:?}", event);
+            }
+        }
+    }
+
+    /// Handle ping events from the libp2p ping protocol.
+    /// Ping failures are logged; libp2p handles connection closure automatically.
+    fn handle_ping_event(&mut self, event: libp2p::ping::Event) {
+        match event.result {
+            Ok(rtt) => {
+                debug!("Ping to {} succeeded, rtt: {:?}", event.peer, rtt);
+            }
+            Err(ref error) => {
+                warn!("Ping to {} failed: {}", event.peer, error);
             }
         }
     }

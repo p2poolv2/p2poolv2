@@ -18,6 +18,7 @@ pub mod request_response;
 use crate::config::Config;
 use crate::node::messages::network_magic;
 use libp2p::connection_limits;
+use libp2p::ping;
 use libp2p::request_response::ProtocolSupport;
 use libp2p::{
     Multiaddr, PeerId, identify,
@@ -28,7 +29,11 @@ use libp2p::{
 use request_response::{ConsensusCodec, P2PoolRequestResponseProtocol};
 use request_response::{RequestResponseBehaviour, RequestResponseEvent};
 use std::error::Error;
+use std::time::Duration;
 use void;
+
+/// Interval between ping probes sent to each connected peer
+const PING_INTERVAL_SECS: u64 = 30;
 
 // Combine the behaviors we want to use
 #[derive(NetworkBehaviour)]
@@ -36,13 +41,10 @@ use void;
 pub struct P2PoolBehaviour {
     pub kademlia: kad::Behaviour<MemoryStore>,
     pub identify: identify::Behaviour,
+    pub ping: ping::Behaviour,
     pub request_response: RequestResponseBehaviour,
     pub limits: connection_limits::Behaviour,
 }
-
-/// The interval at which the node will send heartbeat messages to peers
-#[allow(dead_code)]
-const HEARTBEAT_INTERVAL: u64 = 15;
 
 // Define the events that can be emitted by our behavior
 #[derive(Debug)]
@@ -50,6 +52,7 @@ const HEARTBEAT_INTERVAL: u64 = 15;
 pub enum P2PoolBehaviourEvent {
     Kademlia(kad::Event),
     Identify(identify::Event),
+    Ping(ping::Event),
     RequestResponse(RequestResponseEvent),
 }
 
@@ -89,9 +92,14 @@ impl P2PoolBehaviour {
 
         let codec = ConsensusCodec::new(magic);
 
+        let ping_config =
+            ping::Config::new().with_interval(Duration::from_secs(PING_INTERVAL_SECS));
+        let ping_behaviour = ping::Behaviour::new(ping_config);
+
         let behaviour = P2PoolBehaviour {
             kademlia: kademlia_behaviour,
             identify: identify_behaviour,
+            ping: ping_behaviour,
             request_response: RequestResponseBehaviour::with_codec(
                 codec,
                 std::iter::once((P2PoolRequestResponseProtocol::new(), ProtocolSupport::Full)),
@@ -124,6 +132,12 @@ impl From<kad::Event> for P2PoolBehaviourEvent {
 impl From<identify::Event> for P2PoolBehaviourEvent {
     fn from(event: identify::Event) -> Self {
         P2PoolBehaviourEvent::Identify(event)
+    }
+}
+
+impl From<ping::Event> for P2PoolBehaviourEvent {
+    fn from(event: ping::Event) -> Self {
+        P2PoolBehaviourEvent::Ping(event)
     }
 }
 
