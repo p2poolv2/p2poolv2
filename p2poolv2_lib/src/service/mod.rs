@@ -336,21 +336,8 @@ mod tests {
 
         // Create a config with a low rate limit
         let network_config = NetworkConfig {
-            listen_address: "127.0.0.1:0".to_string(),
-            dial_peers: vec![],
-            max_pending_incoming: 0,
-            max_pending_outgoing: 0,
-            max_established_incoming: 0,
-            max_established_outgoing: 0,
-            max_established_per_peer: 0,
-            max_workbase_per_second: 0,
-            max_userworkbase_per_second: 0,
-            max_miningshare_per_second: 0,
-            max_inventory_per_second: 0,
-            max_transaction_per_second: 0,
-            rate_limit_window_secs: 1,
             max_requests_per_second: 1,
-            dial_timeout_secs: 30,
+            ..NetworkConfig::default()
         };
 
         let peer_id = PeerId::random();
@@ -428,21 +415,8 @@ mod tests {
 
         // Create a network_config with a low rate limit
         let network_config = NetworkConfig {
-            listen_address: "127.0.0.1:0".to_string(),
-            dial_peers: vec![],
-            max_pending_incoming: 0,
-            max_pending_outgoing: 0,
-            max_established_incoming: 0,
-            max_established_outgoing: 0,
-            max_established_per_peer: 0,
-            max_workbase_per_second: 0,
-            max_userworkbase_per_second: 0,
-            max_miningshare_per_second: 0,
-            max_inventory_per_second: 0,
-            max_transaction_per_second: 0,
-            rate_limit_window_secs: 1,
             max_requests_per_second: 1,
-            dial_timeout_secs: 30,
+            ..NetworkConfig::default()
         };
 
         let peer_id = PeerId::random();
