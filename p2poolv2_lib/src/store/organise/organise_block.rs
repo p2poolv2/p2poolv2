@@ -36,7 +36,7 @@ impl Store {
         })?;
 
         let Ok(top_candidate) = self.get_top_candidate() else {
-            return Ok(Some(top_confirmed.height));
+            return Ok(None); // no new blocks organised
         };
 
         debug!(
@@ -47,7 +47,7 @@ impl Store {
         let candidates = self.get_candidates(top_confirmed.height + 1, top_candidate.height)?;
 
         if candidates.is_empty() {
-            return Ok(Some(top_confirmed.height));
+            return Ok(None); // no new blocks organised
         }
 
         if self.should_extend_confirmed(&candidates, top_confirmed.height, top_confirmed.hash)? {
@@ -71,6 +71,58 @@ mod tests {
     use tempfile::tempdir;
 
     // -- organise_block integration tests --
+
+    #[test]
+    fn test_organise_block_returns_none_when_confirmed_caught_up() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Promote a child share so confirmed advances to height 1
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let result = store.push_to_confirmed_chain(&share, true).unwrap();
+        assert_eq!(result, Some(1));
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
+
+        // Now confirmed == candidate tip. Calling organise_block again
+        // must return None since there is nothing new to promote.
+        let mut batch = Store::get_write_batch();
+        let result = store.organise_block(&mut batch).unwrap();
+        assert_eq!(
+            result, None,
+            "organise_block should return None when confirmed has caught up to candidates"
+        );
+    }
+
+    /// When no candidate chain exists, organise_block must return
+    /// None as no new blocks got organised.
+    #[test]
+    fn test_organise_block_returns_none_when_no_candidates() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // No candidate chain exists after genesis setup
+        assert!(store.get_top_candidate().is_err());
+
+        let mut batch = Store::get_write_batch();
+        let result = store.organise_block(&mut batch).unwrap();
+        assert_eq!(
+            result, None,
+            "organise_block should return None when no candidate chain exists"
+        );
+    }
 
     #[test]
     fn test_organise_block_promotes_first_candidate_to_confirmed() {
