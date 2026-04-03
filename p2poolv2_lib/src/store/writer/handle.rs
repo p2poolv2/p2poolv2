@@ -77,6 +77,11 @@ impl StoreHandle {
         self.store.share_block_exists(blockhash)
     }
 
+    /// Return the first blockhash from the slice that has a header in the store.
+    pub fn first_existing_share_header(&self, blockhashes: &[BlockHash]) -> Option<BlockHash> {
+        self.store.first_existing_share_header(blockhashes)
+    }
+
     /// Get a share from the store.
     pub fn get_share(&self, blockhash: &BlockHash) -> Option<ShareBlock> {
         self.store.get_share(blockhash)

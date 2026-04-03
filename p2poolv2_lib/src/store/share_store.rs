@@ -239,14 +239,28 @@ impl Store {
         Ok(share_headers)
     }
 
-    /// Find the first blockhash that exists by checking the Header CF.
-    pub(crate) fn get_first_existing_blockhash(&self, locator: &[BlockHash]) -> Option<BlockHash> {
-        for blockhash in locator {
-            if self.share_header_exists(blockhash) {
+    /// Find the first blockhash from the slice that has a header in the store.
+    ///
+    /// Uses multi_get_cf for a single bulk query, then returns the first
+    /// blockhash (in slice order) that has a result.
+    pub fn first_existing_share_header(&self, blockhashes: &[BlockHash]) -> Option<BlockHash> {
+        let header_cf = self.db.cf_handle(&ColumnFamily::Header).unwrap();
+        let keys = blockhashes
+            .iter()
+            .map(|hash| (&header_cf, consensus::serialize(hash)))
+            .collect::<Vec<_>>();
+        let results = self.db.multi_get_cf(keys);
+        for (blockhash, result) in blockhashes.iter().zip(results.into_iter()) {
+            if let Ok(Some(_)) = result {
                 return Some(*blockhash);
             }
         }
         None
+    }
+
+    /// Find the first blockhash that exists by checking the Header CF.
+    pub(crate) fn get_first_existing_blockhash(&self, locator: &[BlockHash]) -> Option<BlockHash> {
+        self.first_existing_share_header(locator)
     }
 
     /// Get multiple shares from the store by reconstructing each from
@@ -816,5 +830,83 @@ mod tests {
         let missing_hash = BlockHash::all_zeros();
         let branches = store.get_template_merkle_branches(&missing_hash).unwrap();
         assert!(branches.is_empty());
+    }
+
+    #[test]
+    fn test_first_existing_share_header_returns_none_for_empty_slice() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        assert!(store.first_existing_share_header(&[]).is_none());
+    }
+
+    #[test]
+    fn test_first_existing_share_header_returns_none_when_no_match() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let hash_a = TestShareBlockBuilder::new()
+            .nonce(0xe9695791)
+            .build()
+            .block_hash();
+        let hash_b = TestShareBlockBuilder::new()
+            .nonce(0xe9695792)
+            .build()
+            .block_hash();
+
+        assert!(
+            store
+                .first_existing_share_header(&[hash_a, hash_b])
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_first_existing_share_header_returns_first_match() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block_a = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let block_b = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+        let block_c = TestShareBlockBuilder::new().nonce(0xe9695793).build();
+
+        // Store headers for block_b and block_c but not block_a
+        let mut batch = Store::get_write_batch();
+        store.add_share_header(&block_b.header, &mut batch).unwrap();
+        store.add_share_header(&block_c.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // block_a is not in store, block_b is -- block_b should be returned
+        let result = store.first_existing_share_header(&[
+            block_a.block_hash(),
+            block_b.block_hash(),
+            block_c.block_hash(),
+        ]);
+        assert_eq!(result, Some(block_b.block_hash()));
+    }
+
+    #[test]
+    fn test_first_existing_share_header_respects_slice_order() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block_a = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let block_b = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+
+        // Store both headers
+        let mut batch = Store::get_write_batch();
+        store.add_share_header(&block_a.header, &mut batch).unwrap();
+        store.add_share_header(&block_b.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // block_a appears first in the slice, so it should be returned
+        let result_a_first =
+            store.first_existing_share_header(&[block_a.block_hash(), block_b.block_hash()]);
+        assert_eq!(result_a_first, Some(block_a.block_hash()));
+
+        // block_b appears first in the slice, so it should be returned
+        let result_b_first =
+            store.first_existing_share_header(&[block_b.block_hash(), block_a.block_hash()]);
+        assert_eq!(result_b_first, Some(block_b.block_hash()));
     }
 }

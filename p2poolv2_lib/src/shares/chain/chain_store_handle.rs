@@ -122,6 +122,14 @@ impl ChainStoreHandle {
         self.store_handle.share_block_exists(blockhash)
     }
 
+    /// Return the first blockhash from the slice that has a header in the store.
+    ///
+    /// Uses a bulk query for efficiency. Returns None if no header exists
+    /// for any of the hashes.
+    pub fn first_existing_share_header(&self, blockhashes: &[BlockHash]) -> Option<BlockHash> {
+        self.store_handle.first_existing_share_header(blockhashes)
+    }
+
     /// Get a share from the chain.
     pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock> {
         self.store_handle.get_share(share_hash)
@@ -652,6 +660,7 @@ mockall::mock! {
         pub fn get_all_prevouts(&self, transaction: &bitcoin::Transaction) -> Result<Vec<(usize, bitcoin::TxOut)>, StoreError>;
         pub fn get_output(&self, txid: &bitcoin::Txid, vout: u32) -> Result<bitcoin::TxOut, StoreError>;
         pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool;
+        pub fn first_existing_share_header(&self, blockhashes: &[BlockHash]) -> Option<BlockHash>;
         pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock>;
         pub fn get_shares_at_height(&self, height: u32) -> Result<HashMap<BlockHash, ShareBlock>, StoreError>;
         pub fn get_share_headers(&self, share_hashes: &[BlockHash]) -> Result<Vec<(BlockHash, ShareHeader)>, StoreError>;
