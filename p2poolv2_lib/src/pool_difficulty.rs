@@ -19,6 +19,7 @@
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use crate::shares::share_block::MAX_POOL_TARGET;
 use bitcoin::{CompactTarget, Target};
 use std::error::Error;
 use std::fmt;
@@ -258,14 +259,14 @@ impl PoolDifficulty {
         )
     }
 
-    /// Calculate the pool target clamped so it is never harder than bitcoin difficulty.
+    /// Calculate the pool target clamped to stay within valid bounds.
     ///
-    /// On a fresh network or after a bitcoin difficulty drop, the ASERT algorithm
-    /// can produce a target smaller (harder) than the current bitcoin target. Since
-    /// no bitcoin block hash can be smaller than the bitcoin target, such a pool
-    /// target would be impossible to satisfy. This method returns the ASERT target
-    /// unless it is harder than `bitcoin_bits`, in which case it returns
-    /// `bitcoin_bits` as the floor.
+    /// The returned target is clamped in two directions:
+    /// 1. Never harder than bitcoin difficulty (floor) -- ASERT can produce a
+    ///    target smaller than the bitcoin target, which would be impossible to
+    ///    satisfy since no bitcoin block hash can beat bitcoin's own target.
+    /// 2. Never easier than MAX_POOL_TARGET (ceiling) -- ensures shares always
+    ///    meet the pool's minimum difficulty requirement.
     pub fn calculate_target_clamped(
         &self,
         block_parent_time: u32,
@@ -276,10 +277,17 @@ impl PoolDifficulty {
         let bitcoin_target = Target::from_compact(bitcoin_bits);
         let pool_target = Target::from_compact(asert_target);
 
+        let compact_pool_target = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        let max_pool_target = Target::from_compact(compact_pool_target);
+
         // A smaller Target value means harder difficulty. If the pool target is
         // harder than bitcoin, clamp to bitcoin target.
         if pool_target < bitcoin_target {
             bitcoin_bits
+        } else if pool_target > max_pool_target {
+            // If pool target is easier than the maximum allowed, clamp to
+            // MAX_POOL_TARGET so shares always meet minimum difficulty.
+            compact_pool_target
         } else {
             asert_target
         }
@@ -739,19 +747,19 @@ mod tests {
 
     #[test]
     fn test_calculate_target_clamped_returns_asert_when_easier_than_bitcoin() {
-        // Pool target is easier (larger) than bitcoin target -- no clamping needed
+        // Pool target is easier (larger) than bitcoin target -- ASERT would
+        // return a target easier than MAX_POOL_TARGET, so it gets clamped
         let anchor = CompactTarget::from_consensus(0x1b4188f5);
         let pool_diff = PoolDifficulty::new(anchor, 1700000000, 0);
         // Bitcoin difficulty is much harder (smaller target)
         let bitcoin_bits = CompactTarget::from_consensus(0x170f2e48);
 
         let result = pool_diff.calculate_target_clamped(1700000000, 0, bitcoin_bits);
-        let unclamped = pool_diff.calculate_target(1700000000, 0);
 
         assert_eq!(
             result.to_consensus(),
-            unclamped.to_consensus(),
-            "Should return ASERT target when pool target is easier than bitcoin"
+            MAX_POOL_TARGET,
+            "Should clamp to MAX_POOL_TARGET when ASERT target is easier"
         );
     }
 
@@ -774,6 +782,8 @@ mod tests {
 
     #[test]
     fn test_calculate_target_clamped_equal_targets() {
+        // When ASERT and bitcoin targets are equal but both easier than
+        // MAX_POOL_TARGET, the result is clamped to MAX_POOL_TARGET
         let anchor = CompactTarget::from_consensus(0x1b4188f5);
         let pool_diff = PoolDifficulty::new(anchor, 1700000000, 0);
         let bitcoin_bits = pool_diff.calculate_target(1700000000, 0);
@@ -782,8 +792,8 @@ mod tests {
 
         assert_eq!(
             result.to_consensus(),
-            bitcoin_bits.to_consensus(),
-            "Should return ASERT target when both targets are equal"
+            MAX_POOL_TARGET,
+            "Should clamp to MAX_POOL_TARGET when both targets are easier"
         );
     }
 
