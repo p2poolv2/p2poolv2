@@ -270,6 +270,11 @@ pub fn setup_header_chain_validation_mocks(chain_store_handle: &mut MockChainSto
                 status: Status::Confirmed,
             })
         });
+
+    // Return first parent
+    chain_store_handle
+        .expect_first_existing_share_header()
+        .returning(|hashes| hashes.first().copied());
 }
 
 #[cfg(test)]
