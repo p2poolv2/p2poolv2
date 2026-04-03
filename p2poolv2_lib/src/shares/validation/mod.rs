@@ -84,16 +84,12 @@ pub const TXS_COUNT_LIMIT: u32 = 100;
 /// pool difficulty, and timestamps. Use `DefaultShareValidator` for
 /// the production implementation.
 pub trait ShareValidator {
-    /// Validate the share header by checking proof of work and uncle count.
+    /// Validate the share header with minimum difficulty checks only.
     ///
-    /// Verifies that the number of uncles does not exceed MAX_UNCLES,
-    /// then delegates to validate_with_pool_difficulty using the stored
-    /// pool difficulty instance.
-    fn validate_share_header(
-        &self,
-        share_header: &ShareHeader,
-        chain_store_handle: &ChainStoreHandle,
-    ) -> Result<(), ValidationError>;
+    /// Verifies uncle count and that the declared target meets the pool
+    /// minimum difficulty floor. Does not require parent lookup.
+    /// Full pool difficulty validation happens in validate_share_block.
+    fn validate_share_header(&self, share_header: &ShareHeader) -> Result<(), ValidationError>;
 
     /// Validate that the bitcoin header in the share header meets the pool difficulty.
     ///
@@ -524,20 +520,8 @@ impl DefaultShareValidator {
 }
 
 impl ShareValidator for DefaultShareValidator {
-    fn validate_share_header(
-        &self,
-        share_header: &ShareHeader,
-        chain_store_handle: &ChainStoreHandle,
-    ) -> Result<(), ValidationError> {
-        if share_header.uncles.len() > MAX_UNCLES {
-            return Err(ValidationError::new(format!(
-                "Too many uncles: {} exceeds maximum of {}",
-                share_header.uncles.len(),
-                MAX_UNCLES
-            )));
-        }
-
-        self.validate_with_pool_difficulty(share_header, chain_store_handle)
+    fn validate_share_header(&self, share_header: &ShareHeader) -> Result<(), ValidationError> {
+        self.validate_header_minimum_difficulty(share_header)
     }
 
     fn validate_with_pool_difficulty(
@@ -630,6 +614,7 @@ impl ShareValidator for DefaultShareValidator {
         if chain_store_handle.has_status(&share.block_hash(), Status::BlockValid) {
             return Ok(());
         }
+        self.validate_with_pool_difficulty(&share.header, chain_store_handle)?;
         self.validate_uncles(share, chain_store_handle)?;
         self.validate_block_size(share)?;
         self.validate_share_coinbase(share)?;
@@ -702,7 +687,6 @@ mockall::mock! {
         fn validate_share_header(
             &self,
             share_header: &ShareHeader,
-            chain_store_handle: &ChainStoreHandle,
         ) -> Result<(), ValidationError>;
 
         fn validate_with_pool_difficulty(
@@ -971,10 +955,12 @@ mod tests {
             TEST_COINBASE_NSECS,
         );
 
-        // Set up mock expectations
+        // Mark as BlockValid so validate_with_pool_difficulty is skipped.
+        // The test fixture's bitcoin header doesn't have valid PoW against
+        // pool difficulty. Pool difficulty is tested in dedicated tests.
         chain_store_handle
             .expect_has_status()
-            .returning(|_, _| false);
+            .returning(|_, _| true);
         chain_store_handle
             .expect_add_share_block()
             .with(
@@ -1112,14 +1098,11 @@ mod tests {
 
     #[test]
     fn test_validate_share_header_fails_for_too_many_uncles() {
-        let chain_store_handle = ChainStoreHandle::default();
         let test_data = load_share_headers_test_data();
         let header: ShareHeader =
             serde_json::from_value(test_data["too_many_uncles_header"].clone()).unwrap();
 
-        let error = validator()
-            .validate_share_header(&header, &chain_store_handle)
-            .unwrap_err();
+        let error = validator().validate_share_header(&header).unwrap_err();
         assert!(error.to_string().contains("Too many uncles"));
     }
 

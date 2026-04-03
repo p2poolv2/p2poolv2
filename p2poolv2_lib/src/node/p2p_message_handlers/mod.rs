@@ -637,6 +637,9 @@ mod tests {
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
             .expect_validate_share_header()
+            .returning(|_| Ok(()));
+        mock_validator
+            .expect_validate_with_pool_difficulty()
             .returning(|_, _| Ok(()));
 
         // Mock storage: add block succeeds
@@ -695,6 +698,9 @@ mod tests {
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
             .expect_validate_share_header()
+            .returning(|_| Ok(()));
+        mock_validator
+            .expect_validate_with_pool_difficulty()
             .returning(|_, _| Ok(()));
 
         // Mock storage: add block fails
