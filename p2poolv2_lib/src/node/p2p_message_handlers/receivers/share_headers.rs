@@ -40,9 +40,9 @@ use tracing::{debug, error, info};
 ///
 /// Phase 1 -- Validate:
 ///   - Each header meets minimum pool difficulty (uncle count + target floor)
-///   - Headers form a chain (each prev_share_blockhash matches the previous header)
+///   - Headers form a single chain with uncles correctly interleaved
 ///   - Each header's bits matches the ASERT-computed target from its parent
-///   - Cumulative chain work exceeds confirmed tip and minimum threshold
+///   - Cumulative chain work exceeds minimum threshold
 ///
 /// Phase 2 -- Organise:
 ///   - Store validated headers via organise_header (persists metadata for later
@@ -97,8 +97,9 @@ pub async fn handle_share_headers<C: Send + Sync>(
 ///
 /// Checks performed:
 /// 1. Every header passes validate_header_minimum_difficulty
-/// 2. Confirmed chain headers have bits matching ASERT-computed target
-/// 3. Cumulative work of confirmed chain exceeds MIN_CUMULATIVE_CHAIN_WORK
+/// 2. Every header's prev_share_blockhash references the anchor or another header in the batch
+/// 3. Confirmed chain headers have bits matching ASERT-computed target
+/// 4. Cumulative work of confirmed chain exceeds MIN_CUMULATIVE_CHAIN_WORK
 fn validate_header_chain(
     share_headers: &[ShareHeader],
     chain_store_handle: &ChainStoreHandle,
@@ -111,6 +112,8 @@ fn validate_header_chain(
 
     let (anchor_hash, anchor_metadata) = find_chain_anchor(share_headers, chain_store_handle)?;
     let anchor_header = chain_store_handle.get_share_header(&anchor_hash)?;
+
+    validate_parent_links(share_headers, anchor_hash)?;
 
     let confirmed_chain = extract_confirmed_chain(share_headers, anchor_hash);
     let cumulative_chain_work = validate_asert_chain(
@@ -138,6 +141,46 @@ fn validate_all_minimum_difficulty(
     for header in share_headers {
         share_validator.validate_header_minimum_difficulty(header)?;
     }
+    Ok(())
+}
+
+/// Verify headers form a single chain with uncles correctly interleaved.
+///
+/// Uncles appear before the nephew that references them in the batch
+/// (as produced by get_descendant_blockhashes). For each header, its
+/// prev_share_blockhash must either:
+/// - equal the block_hash of the last confirmed chain header (chain link), or
+/// - equal the last confirmed chain header's prev_share_blockhash (sibling uncle)
+///
+/// The first header's prev_share_blockhash must be the anchor.
+fn validate_parent_links(
+    share_headers: &[ShareHeader],
+    anchor_hash: BlockHash,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    // Track the parent hash of the current chain position.
+    // A confirmed chain header advances this; an uncle shares it.
+    let mut chain_parent = anchor_hash;
+    let mut chain_tip = anchor_hash;
+
+    for (index, current) in share_headers.iter().enumerate() {
+        let links_to_chain_tip = current.prev_share_blockhash == chain_tip;
+        let is_sibling_uncle = current.prev_share_blockhash == chain_parent;
+        if !links_to_chain_tip && !is_sibling_uncle {
+            return Err(format!(
+                "Header {} at position {} has parent {} which is neither \
+                 the chain tip nor a sibling uncle",
+                current.block_hash(),
+                index,
+                current.prev_share_blockhash
+            )
+            .into());
+        }
+        if links_to_chain_tip {
+            chain_parent = chain_tip;
+            chain_tip = current.block_hash();
+        }
+    }
+
     Ok(())
 }
 
@@ -556,6 +599,132 @@ mod tests {
         assert!(
             result.unwrap_err().to_string().contains("ASERT mismatch"),
             "Expected ASERT mismatch error"
+        );
+    }
+
+    #[test]
+    fn test_validate_parent_links_accepts_single_header_linked_to_anchor() {
+        let anchor = TestShareBlockBuilder::new().nonce(1).build();
+        let child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(anchor.block_hash().to_string())
+            .nonce(2)
+            .build();
+
+        let result = validate_parent_links(&[child.header], anchor.block_hash());
+        assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+    }
+
+    #[test]
+    fn test_validate_parent_links_accepts_linear_chain() {
+        let anchor = TestShareBlockBuilder::new().nonce(1).build();
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(anchor.block_hash().to_string())
+            .nonce(2)
+            .build();
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .nonce(3)
+            .build();
+
+        let headers = vec![share_a.header, share_b.header];
+        let result = validate_parent_links(&headers, anchor.block_hash());
+        assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+    }
+
+    #[test]
+    fn test_validate_parent_links_accepts_uncle_before_nephew() {
+        let anchor = TestShareBlockBuilder::new().nonce(1).build();
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(anchor.block_hash().to_string())
+            .nonce(2)
+            .build();
+        // uncle is a sibling of share_a (same parent = anchor)
+        let uncle = TestShareBlockBuilder::new()
+            .prev_share_blockhash(anchor.block_hash().to_string())
+            .nonce(3)
+            .build();
+        // share_b follows share_a on the confirmed chain
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .uncles(vec![uncle.block_hash()])
+            .nonce(4)
+            .build();
+
+        // Order: share_a, uncle, share_b (as get_descendant_blockhashes produces)
+        let headers = vec![share_a.header, uncle.header, share_b.header];
+        let result = validate_parent_links(&headers, anchor.block_hash());
+        assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+    }
+
+    #[test]
+    fn test_validate_parent_links_rejects_first_header_not_linked_to_anchor() {
+        let anchor = TestShareBlockBuilder::new().nonce(1).build();
+        let unrelated = TestShareBlockBuilder::new().nonce(99).build();
+        let child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(unrelated.block_hash().to_string())
+            .nonce(2)
+            .build();
+
+        let result = validate_parent_links(&[child.header], anchor.block_hash());
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("neither the chain tip nor a sibling uncle"),
+        );
+    }
+
+    #[test]
+    fn test_validate_parent_links_rejects_forest_with_disconnected_subtree() {
+        let anchor = TestShareBlockBuilder::new().nonce(1).build();
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(anchor.block_hash().to_string())
+            .nonce(2)
+            .build();
+        // share_c has an unrelated parent, forming a disconnected subtree
+        let unrelated = TestShareBlockBuilder::new().nonce(99).build();
+        let share_c = TestShareBlockBuilder::new()
+            .prev_share_blockhash(unrelated.block_hash().to_string())
+            .nonce(3)
+            .build();
+
+        let headers = vec![share_a.header, share_c.header];
+        let result = validate_parent_links(&headers, anchor.block_hash());
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("neither the chain tip nor a sibling uncle"),
+        );
+    }
+
+    #[test]
+    fn test_validate_parent_links_rejects_header_skipping_chain_position() {
+        let anchor = TestShareBlockBuilder::new().nonce(1).build();
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(anchor.block_hash().to_string())
+            .nonce(2)
+            .build();
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .nonce(3)
+            .build();
+        // share_c links back to anchor, skipping share_a and share_b
+        let share_c = TestShareBlockBuilder::new()
+            .prev_share_blockhash(anchor.block_hash().to_string())
+            .nonce(4)
+            .build();
+
+        let headers = vec![share_a.header, share_b.header, share_c.header];
+        let result = validate_parent_links(&headers, anchor.block_hash());
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("neither the chain tip nor a sibling uncle"),
         );
     }
 }
