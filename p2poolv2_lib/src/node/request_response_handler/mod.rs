@@ -600,6 +600,9 @@ mod tests {
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
             .expect_validate_share_header()
+            .returning(|_| Ok(()));
+        mock_validator
+            .expect_validate_with_pool_difficulty()
             .returning(|_, _| Ok(()));
 
         let mut handler = build_test_handler_with_validator(

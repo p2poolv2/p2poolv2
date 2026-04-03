@@ -67,15 +67,22 @@ pub async fn handle_share_block(
         return Ok(());
     }
 
-    // Allow blocks whose header is already on the candidate chain (synced
-    // headers arrive before full blocks). Otherwise require valid proof of
-    // work to prevent peers from flooding our database with garbage headers.
+    // Allow blocks whose header is already on the candidate chain (headers were
+    // ASERT-validated and organised during share_headers). Otherwise require minimum
+    // difficulty and full pool difficulty to prevent spam and reject invalid blocks.
     if !chain_store_handle.is_candidate(&block_hash) {
-        if let Err(validation_error) =
-            share_validator.validate_share_header(&share_block.header, chain_store_handle)
-        {
+        // Since we do validate_with_pool_difficulty, this test is redundant, but we keep it.
+        if let Err(validation_error) = share_validator.validate_share_header(&share_block.header) {
             warn!("Rejecting share block {block_hash} with invalid header: {validation_error}");
             return Err(format!("Invalid share header: {validation_error}").into());
+        }
+        if let Err(validation_error) =
+            share_validator.validate_with_pool_difficulty(&share_block.header, chain_store_handle)
+        {
+            warn!(
+                "Rejecting share block {block_hash}: pool difficulty check failed: {validation_error}"
+            );
+            return Err(format!("Pool difficulty validation failed: {validation_error}").into());
         }
     }
 
@@ -229,6 +236,9 @@ mod tests {
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
             .expect_validate_share_header()
+            .returning(|_| Ok(()));
+        mock_validator
+            .expect_validate_with_pool_difficulty()
             .returning(|_, _| Ok(()));
 
         chain_store_handle
@@ -282,6 +292,9 @@ mod tests {
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
             .expect_validate_share_header()
+            .returning(|_| Ok(()));
+        mock_validator
+            .expect_validate_with_pool_difficulty()
             .returning(|_, _| Ok(()));
 
         chain_store_handle
@@ -377,7 +390,7 @@ mod tests {
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
             .expect_validate_share_header()
-            .returning(|_, _| {
+            .returning(|_| {
                 Err(ValidationError::new(
                     "Insufficient work: block hash does not meet share target",
                 ))
