@@ -238,6 +238,41 @@ pub fn setup_pool_difficulty_mocks(
 }
 
 #[cfg(test)]
+use crate::shares::share_block::MAX_POOL_TARGET;
+
+/// Set up mock expectations on a MockChainStoreHandle for
+/// validate_header_chain in handle_share_headers.
+///
+/// Configures get_genesis_header, get_share_header, and get_block_metadata
+/// to return genesis-like data at height 0 with zero chain work. This allows
+/// single-header batches with bits = MAX_POOL_TARGET to pass ASERT validation.
+#[cfg(test)]
+pub fn setup_header_chain_validation_mocks(chain_store_handle: &mut MockChainStoreHandle) {
+    let mut genesis_header = genesis_for_tests().header;
+    genesis_header.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+
+    let genesis_for_genesis = genesis_header.clone();
+    chain_store_handle
+        .expect_get_genesis_header()
+        .returning(move || Ok(genesis_for_genesis.clone()));
+
+    let genesis_for_parent = genesis_header.clone();
+    chain_store_handle
+        .expect_get_share_header()
+        .returning(move |_| Ok(genesis_for_parent.clone()));
+
+    chain_store_handle
+        .expect_get_block_metadata()
+        .returning(|_| {
+            Ok(BlockMetadata {
+                expected_height: Some(0),
+                chain_work: bitcoin::Work::from_hex("0x00").unwrap(),
+                status: Status::Confirmed,
+            })
+        });
+}
+
+#[cfg(test)]
 pub fn create_test_commitment() -> ShareCommitment {
     let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
         .parse::<CompressedPublicKey>()

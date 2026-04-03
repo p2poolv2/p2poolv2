@@ -187,12 +187,13 @@ mod tests {
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::share_block::Txids;
     use crate::shares::validation::MockDefaultShareValidator;
+    use crate::test_utils::setup_header_chain_validation_mocks;
     use crate::test_utils::{
         TestShareBlockBuilder, test_coinbase_transaction, valid_share_block_from_fixture,
     };
     use crate::utils::time_provider::TestTimeProvider;
-    use bitcoin::BlockHash;
     use bitcoin::hashes::Hash as _;
+    use bitcoin::{BlockHash, CompactTarget};
     use std::sync::Arc;
     use std::time::SystemTime;
     use tokio::sync::mpsc;
@@ -726,11 +727,10 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
 
-        // Mock share validator to accept share headers
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
-            .expect_validate_share_header()
-            .returning(|_, _| Ok(()));
+            .expect_validate_header_minimum_difficulty()
+            .returning(|_| Ok(()));
 
         chain_store_handle
             .expect_organise_header()
@@ -738,11 +738,19 @@ mod tests {
         chain_store_handle
             .expect_get_candidate_blocks_missing_data()
             .returning(|| Ok(Vec::new()));
+        setup_header_chain_validation_mocks(&mut chain_store_handle);
+
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
-        let block1 = TestShareBlockBuilder::new().with_easy_target().build();
-        let block2 = TestShareBlockBuilder::new().with_easy_target().build();
-        let share_headers = vec![block1.header.clone(), block2.header.clone()];
+        let mut header1 = TestShareBlockBuilder::new().build().header;
+        header1.bits = CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
+        let mut header2 = TestShareBlockBuilder::new()
+            .nonce(0xe9695792) // doesn't matter, as we don't compare block hash to target
+            .build()
+            .header;
+        header2.bits = CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
+        header2.prev_share_blockhash = header1.block_hash();
+        let share_headers = vec![header1, header2];
 
         let (block_fetcher_handle, validation_tx) = test_handles();
         let result = handle_response(

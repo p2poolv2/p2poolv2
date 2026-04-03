@@ -385,11 +385,9 @@ mod tests {
         );
         assert_eq!(commitment.uncles.len(), 0);
         assert_eq!(commitment.miner_bitcoin_address, btcaddress);
-        // Pool ASERT target (0x1b4188f5) is harder than bitcoin target from
-        // the template (0x1e0fffff), so the clamp returns bitcoin difficulty.
-        let expected_bitcoin_bits =
-            bitcoin::CompactTarget::from_unprefixed_hex(&template.bits).unwrap();
-        assert_eq!(commitment.bits, expected_bitcoin_bits);
+        let expected_bits =
+            bitcoin::CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
+        assert_eq!(commitment.bits, expected_bits);
         // Time should be current, so just verify it's set
         assert!(commitment.time > 0);
     }
