@@ -71,7 +71,6 @@ pub async fn handle_share_block(
     // ASERT-validated and organised during share_headers). Otherwise require minimum
     // difficulty and full pool difficulty to prevent spam and reject invalid blocks.
     if !chain_store_handle.is_candidate(&block_hash) {
-        // Since we do validate_with_pool_difficulty, this test is redundant, but we keep it.
         if let Err(validation_error) = share_validator.validate_share_header(&share_block.header) {
             warn!("Rejecting share block {block_hash} with invalid header: {validation_error}");
             return Err(format!("Invalid share header: {validation_error}").into());

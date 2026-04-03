@@ -136,7 +136,7 @@ pub trait ShareValidator {
 
     /// Validate a share header meets minimum pool difficulty without requiring parent.
     ///
-    /// Checks uncle count, that the bitcoin block hash meets the header's own
+    /// Checks uncle count, that header's meets the header's own
     /// declared bits target, and that the declared target is no easier than
     /// MAX_POOL_TARGET. This is the anti-spam gate for header sync and broadcast
     /// validation -- cheap and requires no store lookups.
@@ -590,6 +590,13 @@ impl ShareValidator for DefaultShareValidator {
         if declared_target > max_pool_target {
             return Err(ValidationError::new(format!(
                 "Share target {declared_target} is easier than maximum pool target {max_pool_target}"
+            )));
+        }
+
+        let bitcoin_block_hash = share_header.bitcoin_header.block_hash();
+        if !declared_target.is_met_by(bitcoin_block_hash) {
+            return Err(ValidationError::new(format!(
+                "Bitcoin block hash {bitcoin_block_hash} does not meet declared target {declared_target}"
             )));
         }
 
@@ -2264,11 +2271,19 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_header_minimum_difficulty_accepts_hard_target() {
+    fn test_validate_header_minimum_difficulty_rejects_invalid_pow() {
         let mut header = TestShareBlockBuilder::new().build().header;
+        // Set bits to MAX_POOL_TARGET -- the bitcoin block hash from the
+        // default test builder does not meet this target.
         header.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
         let result = validator().validate_header_minimum_difficulty(&header);
-        assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("does not meet declared target"),
+        );
     }
 
     #[test]

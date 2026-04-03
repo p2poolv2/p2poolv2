@@ -151,8 +151,6 @@ fn find_chain_anchor(
     let parent_candidates: Vec<BlockHash> = share_headers
         .iter()
         .map(|header| header.prev_share_blockhash)
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
         .collect();
     let anchor_hash = chain_store_handle
         .first_existing_share_header(&parent_candidates)
