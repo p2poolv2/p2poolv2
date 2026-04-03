@@ -752,7 +752,7 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_target_clamped_returns_asert_when_easier_than_bitcoin() {
+    fn test_calculate_target_clamped_clamps_easy_asert_to_max_pool_target() {
         // Pool target is easier (larger) than bitcoin target -- ASERT would
         // return a target easier than MAX_POOL_TARGET, so it gets clamped
         let anchor = CompactTarget::from_consensus(0x1b4188f5);
@@ -770,7 +770,7 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_target_clamped_returns_bitcoin_when_pool_is_harder() {
+    fn test_calculate_target_clamped_clamps_easy_bitcoin_to_max_pool_target() {
         // Use a very hard anchor target that is harder than bitcoin
         let hard_anchor = CompactTarget::from_consensus(0x170f2e48);
         let pool_diff = PoolDifficulty::new(hard_anchor, 1700000000, 0);
