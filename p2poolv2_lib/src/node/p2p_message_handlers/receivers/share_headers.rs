@@ -88,82 +88,151 @@ pub async fn handle_share_headers<C: Send + Sync>(
     .await
 }
 
-/// Validate the received header batch forms a valid ASERT chain.
+/// Validate the received header batch.
+///
+/// The batch may contain both confirmed chain headers and uncle headers
+/// (interleaved by get_descendant_blockhashes). All headers must pass
+/// minimum difficulty. Confirmed chain headers (those that link via
+/// prev_share_blockhash) are additionally ASERT-validated.
 ///
 /// Checks performed:
-/// 1. Each header passes validate_header_minimum_difficulty (uncle count + target floor)
-/// 2. Headers form a linked chain via prev_share_blockhash
-/// 3. First header's parent exists in the store
-/// 4. Each header's bits matches the ASERT-computed target from its parent
-/// 5. Cumulative work exceeds MIN_CUMULATIVE_CHAIN_WORK
+/// 1. Every header passes validate_header_minimum_difficulty
+/// 2. Confirmed chain headers have bits matching ASERT-computed target
+/// 3. Cumulative work of confirmed chain exceeds MIN_CUMULATIVE_CHAIN_WORK
 fn validate_header_chain(
     share_headers: &[ShareHeader],
     chain_store_handle: &ChainStoreHandle,
     share_validator: &(dyn ShareValidator + Send + Sync),
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    validate_all_minimum_difficulty(share_headers, share_validator)?;
+
     let genesis_header = chain_store_handle.get_genesis_header()?;
     let pool_difficulty = PoolDifficulty::new(genesis_header.bits, genesis_header.time, 0);
 
-    // Look up the first header's parent from the store
-    let first_parent_hash = share_headers[0].prev_share_blockhash;
-    let parent_header = chain_store_handle
-        .get_share_header(&first_parent_hash)
-        .map_err(|_| format!("First header's parent {first_parent_hash} not found in store"))?;
-    let parent_metadata = chain_store_handle
-        .get_block_metadata(&first_parent_hash)
-        .map_err(|_| format!("First header's parent {first_parent_hash} metadata not found"))?;
-    let mut parent_height = parent_metadata
-        .expected_height
-        .ok_or_else(|| format!("First header's parent {first_parent_hash} has no height"))?;
-    let mut parent_time = parent_header.time;
-    let mut previous_block_hash = first_parent_hash;
-    let zero_work = Work::from_hex("0x00").unwrap();
-    let mut cumulative_batch_work = zero_work;
+    let (anchor_hash, anchor_metadata) = find_chain_anchor(share_headers, chain_store_handle)?;
+    let anchor_header = chain_store_handle.get_share_header(&anchor_hash)?;
 
-    for (index, header) in share_headers.iter().enumerate() {
+    let confirmed_chain = extract_confirmed_chain(share_headers, anchor_hash);
+    let cumulative_chain_work = validate_asert_chain(
+        &confirmed_chain,
+        &pool_difficulty,
+        anchor_header.time,
+        anchor_metadata.expected_height.unwrap_or(0),
+    )?;
+
+    validate_cumulative_work(anchor_metadata.chain_work, cumulative_chain_work)?;
+
+    debug!(
+        "Validated {} headers ({} confirmed chain), cumulative chain work: {cumulative_chain_work}",
+        share_headers.len(),
+        confirmed_chain.len()
+    );
+    Ok(())
+}
+
+/// Validate every header in the batch meets minimum pool difficulty.
+fn validate_all_minimum_difficulty(
+    share_headers: &[ShareHeader],
+    share_validator: &(dyn ShareValidator + Send + Sync),
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    for header in share_headers {
         share_validator.validate_header_minimum_difficulty(header)?;
+    }
+    Ok(())
+}
 
-        // Verify chain linkage
-        if header.prev_share_blockhash != previous_block_hash {
-            return Err(format!(
-                "Header {} breaks chain: prev_share_blockhash {} does not match expected {}",
-                index, header.prev_share_blockhash, previous_block_hash
-            )
-            .into());
-        }
+/// Find the chain anchor: the first parent hash from the batch that exists
+/// in our store. Returns the anchor blockhash and its metadata.
+fn find_chain_anchor(
+    share_headers: &[ShareHeader],
+    chain_store_handle: &ChainStoreHandle,
+) -> Result<(BlockHash, crate::store::block_tx_metadata::BlockMetadata), Box<dyn Error + Send + Sync>>
+{
+    let parent_candidates: Vec<BlockHash> = share_headers
+        .iter()
+        .map(|header| header.prev_share_blockhash)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let anchor_hash = chain_store_handle
+        .first_existing_share_header(&parent_candidates)
+        .ok_or("No header in batch has a parent in the store")?;
+    let anchor_metadata = chain_store_handle
+        .get_block_metadata(&anchor_hash)
+        .map_err(|_| format!("Anchor {anchor_hash} metadata not found"))?;
+    Ok((anchor_hash, anchor_metadata))
+}
 
-        // Verify ASERT difficulty
+/// Extract the confirmed chain from the batch by following prev_share_blockhash
+/// links starting from the anchor. Returns headers in chain order.
+fn extract_confirmed_chain(
+    share_headers: &[ShareHeader],
+    anchor_hash: BlockHash,
+) -> Vec<&ShareHeader> {
+    let mut confirmed_chain = Vec::with_capacity(share_headers.len());
+    let mut current_parent = anchor_hash;
+    let mut remaining = share_headers;
+
+    while let Some(position) = remaining
+        .iter()
+        .position(|header| header.prev_share_blockhash == current_parent)
+    {
+        confirmed_chain.push(&remaining[position]);
+        current_parent = remaining[position].block_hash();
+        remaining = &remaining[position + 1..];
+    }
+
+    confirmed_chain
+}
+
+/// Validate ASERT difficulty for each header in the confirmed chain.
+/// Returns the cumulative work of the validated chain.
+fn validate_asert_chain(
+    confirmed_chain: &[&ShareHeader],
+    pool_difficulty: &PoolDifficulty,
+    anchor_time: u32,
+    anchor_height: u32,
+) -> Result<Work, Box<dyn Error + Send + Sync>> {
+    let zero_work = Work::from_hex("0x00").unwrap();
+    let mut cumulative_work = zero_work;
+    let mut parent_time = anchor_time;
+    let mut parent_height = anchor_height;
+
+    for header in confirmed_chain {
         let expected_bits = pool_difficulty.calculate_target_clamped(
             parent_time,
             parent_height,
             header.bitcoin_header.bits,
         );
         if header.bits != expected_bits {
+            let block_hash = header.block_hash();
             return Err(format!(
-                "Header {} ASERT mismatch: declared bits {:#010x}, expected {:#010x}",
-                index,
+                "ASERT mismatch for {block_hash}: declared bits {:#010x}, expected {:#010x}",
                 header.bits.to_consensus(),
                 expected_bits.to_consensus()
             )
             .into());
         }
 
-        cumulative_batch_work = cumulative_batch_work + header.get_work();
-
-        // Advance to next header's parent
+        cumulative_work = cumulative_work + header.get_work();
         parent_time = header.time;
         parent_height += 1;
-        previous_block_hash = header.block_hash();
     }
 
-    // Verify cumulative work meets minimum threshold
+    Ok(cumulative_work)
+}
+
+/// Verify cumulative chain work exceeds the minimum threshold.
+fn validate_cumulative_work(
+    anchor_chain_work: Work,
+    batch_chain_work: Work,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let single_share_work =
         Target::from_compact(CompactTarget::from_consensus(MAX_POOL_TARGET)).to_work();
-    let mut min_cumulative_work = zero_work;
-    for _ in 0..MIN_CUMULATIVE_CHAIN_WORK_MULTIPLIER {
-        min_cumulative_work = min_cumulative_work + single_share_work;
-    }
-    let candidate_work = parent_metadata.chain_work + cumulative_batch_work;
+    let zero_work = Work::from_hex("0x00").unwrap();
+    let min_cumulative_work = (0..MIN_CUMULATIVE_CHAIN_WORK_MULTIPLIER)
+        .fold(zero_work, |accumulated, _| accumulated + single_share_work);
+    let candidate_work = anchor_chain_work + batch_chain_work;
 
     if candidate_work < min_cumulative_work {
         return Err(format!(
@@ -171,11 +240,6 @@ fn validate_header_chain(
         )
         .into());
     }
-
-    debug!(
-        "Validated {} headers, cumulative batch work: {cumulative_batch_work}",
-        share_headers.len()
-    );
     Ok(())
 }
 
@@ -291,6 +355,9 @@ mod tests {
                     status: Status::Confirmed,
                 })
             });
+        chain_store_handle
+            .expect_first_existing_share_header()
+            .returning(|hashes| hashes.first().copied());
     }
 
     fn setup_minimum_difficulty_mock(mock_validator: &mut MockDefaultShareValidator) {
@@ -363,7 +430,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_max_headers_sends_getheaders_to_same_peer() {
+    async fn test_share_headers_sends_getheaders_to_same_peer() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle
@@ -379,7 +446,7 @@ mod tests {
         setup_minimum_difficulty_mock(&mut mock_validator);
 
         let header = build_valid_test_header();
-        let last_block_hash = header.block_hash();
+        let expected_last_hash = header.block_hash();
         let share_headers = vec![header; MAX_HEADERS_IN_RESPONSE];
 
         let result = handle_share_headers(
@@ -392,12 +459,19 @@ mod tests {
         )
         .await;
 
-        // This will fail on chain linkage for header[1] since all headers
-        // have the same prev_share_blockhash but different would-be block_hash.
-        assert!(result.is_err());
+        assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
 
-        // No getheaders should have been sent since validation failed
-        assert!(swarm_rx.try_recv().is_err());
+        let swarm_message = swarm_rx
+            .try_recv()
+            .expect("expected a follow-up getheaders request");
+        match swarm_message {
+            SwarmSend::Request(sent_peer_id, Message::GetShareHeaders(locator, stop_hash)) => {
+                assert_eq!(sent_peer_id, peer_id);
+                assert_eq!(locator, vec![expected_last_hash]);
+                assert_eq!(stop_hash, BlockHash::all_zeros());
+            }
+            other => panic!("expected SwarmSend::Request with GetShareHeaders, got: {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -450,50 +524,6 @@ mod tests {
             }
             other => panic!("expected FetchBlocks event, got: {other}"),
         }
-    }
-
-    #[tokio::test]
-    async fn test_broken_chain_linkage_rejected() {
-        let peer_id = libp2p::PeerId::random();
-        let mut chain_store_handle = ChainStoreHandle::default();
-        setup_chain_validation_mocks(&mut chain_store_handle);
-
-        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
-        let (block_fetcher_handle, _block_fetcher_rx) =
-            block_fetcher::create_block_fetcher_channel();
-
-        let mut mock_validator = MockDefaultShareValidator::default();
-        setup_minimum_difficulty_mock(&mut mock_validator);
-
-        // Two headers with different nonces produce different block_hash values.
-        // header_b.prev_share_blockhash won't match header_a.block_hash().
-        let mut header_a = TestShareBlockBuilder::new()
-            .nonce(0xe9695791)
-            .build()
-            .header;
-        header_a.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
-        let mut header_b = TestShareBlockBuilder::new()
-            .nonce(0xe9695792)
-            .build()
-            .header;
-        header_b.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
-        let share_headers = vec![header_a, header_b];
-
-        let result = handle_share_headers(
-            peer_id,
-            share_headers,
-            chain_store_handle,
-            swarm_tx,
-            block_fetcher_handle,
-            &mock_validator,
-        )
-        .await;
-
-        assert!(result.is_err());
-        assert!(
-            result.unwrap_err().to_string().contains("breaks chain"),
-            "Expected chain linkage error"
-        );
     }
 
     #[tokio::test]
