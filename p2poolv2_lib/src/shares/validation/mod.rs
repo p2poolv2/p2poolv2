@@ -16,7 +16,7 @@
 
 mod bitcoin_block_validation;
 
-use super::share_block::ShareHeader;
+use super::share_block::{MAX_POOL_TARGET, ShareHeader};
 use crate::accounting::OutputPair;
 use crate::accounting::payout::payout_distribution::{
     append_proportional_distribution, include_address_and_cut,
@@ -43,7 +43,9 @@ use crate::stratum::work::coinbase::build_coinbase_transaction;
 use crate::stratum::work::gbt::compute_merkle_root_from_branches;
 use crate::utils::time_provider::TimeProvider;
 use bitcoin::script::PushBytesBuf;
-use bitcoin::{Address, Amount, BlockHash, Target, TxMerkleNode, transaction::Version};
+use bitcoin::{
+    Address, Amount, BlockHash, CompactTarget, Target, TxMerkleNode, transaction::Version,
+};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, RwLock};
@@ -134,6 +136,17 @@ pub trait ShareValidator {
         &self,
         share: &ShareBlock,
         time_provider: &dyn TimeProvider,
+    ) -> Result<(), ValidationError>;
+
+    /// Validate a share header meets minimum pool difficulty without requiring parent.
+    ///
+    /// Checks uncle count, that the bitcoin block hash meets the header's own
+    /// declared bits target, and that the declared target is no easier than
+    /// MAX_POOL_TARGET. This is the anti-spam gate for header sync and broadcast
+    /// validation -- cheap and requires no store lookups.
+    fn validate_header_minimum_difficulty(
+        &self,
+        share_header: &ShareHeader,
     ) -> Result<(), ValidationError>;
 }
 
@@ -576,6 +589,29 @@ impl ShareValidator for DefaultShareValidator {
         Ok(())
     }
 
+    fn validate_header_minimum_difficulty(
+        &self,
+        share_header: &ShareHeader,
+    ) -> Result<(), ValidationError> {
+        if share_header.uncles.len() > MAX_UNCLES {
+            return Err(ValidationError::new(format!(
+                "Too many uncles: {} exceeds maximum of {}",
+                share_header.uncles.len(),
+                MAX_UNCLES
+            )));
+        }
+
+        let declared_target = Target::from_compact(share_header.bits);
+        let max_pool_target = Target::from_compact(CompactTarget::from_consensus(MAX_POOL_TARGET));
+        if declared_target > max_pool_target {
+            return Err(ValidationError::new(format!(
+                "Share target {declared_target} is easier than maximum pool target {max_pool_target}"
+            )));
+        }
+
+        Ok(())
+    }
+
     fn validate_share_block(
         &self,
         share: &ShareBlock,
@@ -692,6 +728,11 @@ mockall::mock! {
             &self,
             share: &ShareBlock,
             time_provider: &dyn TimeProvider,
+        ) -> Result<(), ValidationError>;
+
+        fn validate_header_minimum_difficulty(
+            &self,
+            share_header: &ShareHeader,
         ) -> Result<(), ValidationError>;
     }
 }
@@ -2222,5 +2263,38 @@ mod tests {
             "Validation should pass without bitcoin_transactions, got: {}",
             result.unwrap_err()
         );
+    }
+
+    #[test]
+    fn test_validate_header_minimum_difficulty_rejects_easy_target() {
+        let share = TestShareBlockBuilder::new().build();
+        // Default test shares use 0x1b4188f5 (genesis max target) which is
+        // easier than MAX_POOL_TARGET (0x1b384bd7)
+        let result = validator().validate_header_minimum_difficulty(&share.header);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("easier than maximum pool target"),
+        );
+    }
+
+    #[test]
+    fn test_validate_header_minimum_difficulty_accepts_hard_target() {
+        let mut header = TestShareBlockBuilder::new().build().header;
+        header.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        let result = validator().validate_header_minimum_difficulty(&header);
+        assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+    }
+
+    #[test]
+    fn test_validate_header_minimum_difficulty_rejects_too_many_uncles() {
+        let mut header = TestShareBlockBuilder::new().build().header;
+        header.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        header.uncles = vec![BlockHash::all_zeros(); MAX_UNCLES + 1];
+        let result = validator().validate_header_minimum_difficulty(&header);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Too many uncles"),);
     }
 }
