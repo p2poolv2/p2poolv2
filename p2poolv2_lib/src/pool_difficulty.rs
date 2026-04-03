@@ -277,7 +277,7 @@ impl PoolDifficulty {
         let pool_target = Target::from_compact(asert_target);
 
         // A smaller Target value means harder difficulty. If the pool target is
-        // harder than bitcoin, clamp to bitcoin difficulty.
+        // harder than bitcoin, clamp to bitcoin target.
         if pool_target < bitcoin_target {
             bitcoin_bits
         } else {

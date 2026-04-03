@@ -37,6 +37,13 @@ use serde::{Deserialize, Serialize};
 pub use share_transaction::ShareTransaction;
 use std::error::Error;
 
+/// The maximum target a share needs to have to be a valid share.
+pub const MAX_POOL_TARGET: u32 = 0x1b384bd7;
+
+/// The cumulative chain work multipler. We need at least as much work
+/// on the cummulative chain as derived from MAX_POOL_TARGET times this constant.
+pub const MIN_CUMULATIVE_CHAIN_WORK_MULTIPLIER: u64 = 1;
+
 /// Header for the share chain block.
 ///
 /// Excludes bitcoin compact block and share chain transactions.
