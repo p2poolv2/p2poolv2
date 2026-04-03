@@ -286,8 +286,8 @@ mod tests {
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::validation::MockDefaultShareValidator;
     use crate::test_utils::{TestShareBlockBuilder, valid_share_block_from_fixture};
-    use bitcoin::BlockHash;
     use bitcoin::hashes::Hash as _;
+    use bitcoin::{BlockHash, CompactTarget};
     use std::future::Future;
     use std::pin::Pin;
     use std::task::{Context, Poll};
@@ -363,13 +363,14 @@ mod tests {
             cloned
                 .expect_get_candidate_blocks_missing_data()
                 .returning(|| Ok(Vec::new()));
+            crate::test_utils::setup_header_chain_validation_mocks(&mut cloned);
             cloned
         });
 
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
-            .expect_validate_share_header()
-            .returning(|_, _| Ok(()));
+            .expect_validate_header_minimum_difficulty()
+            .returning(|_| Ok(()));
 
         let mut handler = build_test_handler_with_validator(
             chain_store_handle,
@@ -378,9 +379,15 @@ mod tests {
         );
 
         let peer_id = libp2p::PeerId::random();
-        let block1 = TestShareBlockBuilder::new().build();
-        let block2 = TestShareBlockBuilder::new().build();
-        let share_headers = vec![block1.header.clone(), block2.header.clone()];
+        let mut header1 = TestShareBlockBuilder::new().build().header;
+        header1.bits = CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
+        let mut header2 = TestShareBlockBuilder::new()
+            .nonce(0xe9695792) // doesn't matter, as we don't compare block hash to target
+            .build()
+            .header;
+        header2.bits = CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
+        header2.prev_share_blockhash = header1.block_hash();
+        let share_headers = vec![header1, header2];
 
         let result = handler
             .dispatch_response(peer_id, Message::ShareHeaders(share_headers))
