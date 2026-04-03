@@ -277,19 +277,25 @@ impl PoolDifficulty {
         let bitcoin_target = Target::from_compact(bitcoin_bits);
         let pool_target = Target::from_compact(asert_target);
 
-        let compact_pool_target = CompactTarget::from_consensus(MAX_POOL_TARGET);
-        let max_pool_target = Target::from_compact(compact_pool_target);
+        let max_pool_target_compact = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        let max_pool_target = Target::from_compact(max_pool_target_compact);
 
         // A smaller Target value means harder difficulty. If the pool target is
-        // harder than bitcoin, clamp to bitcoin target.
-        if pool_target < bitcoin_target {
+        // harder than bitcoin, use bitcoin as the floor.
+        let result = if pool_target < bitcoin_target {
             bitcoin_bits
-        } else if pool_target > max_pool_target {
-            // If pool target is easier than the maximum allowed, clamp to
-            // MAX_POOL_TARGET so shares always meet minimum difficulty.
-            compact_pool_target
         } else {
             asert_target
+        };
+
+        // Final clamp: never return a target easier than MAX_POOL_TARGET.
+        // This applies regardless of whether bitcoin clamping was used,
+        // ensuring shares always meet the pool's minimum difficulty.
+        let result_target = Target::from_compact(result);
+        if result_target > max_pool_target {
+            max_pool_target_compact
+        } else {
+            result
         }
     }
 
@@ -768,15 +774,18 @@ mod tests {
         // Use a very hard anchor target that is harder than bitcoin
         let hard_anchor = CompactTarget::from_consensus(0x170f2e48);
         let pool_diff = PoolDifficulty::new(hard_anchor, 1700000000, 0);
-        // Bitcoin difficulty is easier (signet-like)
+        // Bitcoin difficulty is easier (signet-like) but still easier than
+        // MAX_POOL_TARGET, so the final clamp kicks in
         let bitcoin_bits = CompactTarget::from_consensus(0x1b4188f5);
 
         let result = pool_diff.calculate_target_clamped(1700000000, 0, bitcoin_bits);
 
+        // Bitcoin target (0x1b4188f5) is easier than MAX_POOL_TARGET (0x1b384bd7),
+        // so the final clamp returns MAX_POOL_TARGET
         assert_eq!(
             result.to_consensus(),
-            bitcoin_bits.to_consensus(),
-            "Should clamp to bitcoin difficulty when pool target is harder"
+            MAX_POOL_TARGET,
+            "Should clamp to MAX_POOL_TARGET when bitcoin target is easier than pool max"
         );
     }
 
