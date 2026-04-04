@@ -103,6 +103,7 @@ pub struct ValidationWorker {
     pplns_window: Arc<RwLock<PplnsWindow>>,
     difficulty_multiplier: u128,
     pool_signature: Vec<u8>,
+    pool_difficulty: PoolDifficulty,
 }
 
 impl ValidationWorker {
@@ -115,6 +116,7 @@ impl ValidationWorker {
         pplns_window: Arc<RwLock<PplnsWindow>>,
         difficulty_multiplier: u128,
         pool_signature: Vec<u8>,
+        pool_difficulty: PoolDifficulty,
     ) -> Self {
         Self {
             validation_rx,
@@ -125,6 +127,7 @@ impl ValidationWorker {
             pplns_window,
             difficulty_multiplier,
             pool_signature,
+            pool_difficulty,
         }
     }
 
@@ -135,13 +138,8 @@ impl ValidationWorker {
     pub async fn run(mut self) -> Result<(), ValidationWorkerError> {
         info!("Validation worker started");
 
-        let pool_difficulty = PoolDifficulty::build(&self.chain_store_handle).map_err(|error| {
-            ValidationWorkerError {
-                message: format!("Failed to build pool difficulty: {error}"),
-            }
-        })?;
         let share_validator = Arc::new(DefaultShareValidator::new(
-            pool_difficulty,
+            self.pool_difficulty,
             self.difficulty_multiplier,
             self.pool_signature.clone(),
         ));
@@ -237,11 +235,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_worker_validates_and_sends_organise_event() {
-        let _pool_difficulty_build_ctx = PoolDifficulty::build_context();
-        _pool_difficulty_build_ctx
-            .expect()
-            .returning(|_| Ok(PoolDifficulty::default()));
-
         let (validation_tx, validation_rx) = create_validation_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
 
@@ -279,6 +272,7 @@ mod tests {
             },
             1,
             b"P2Poolv2".to_vec(),
+            PoolDifficulty::default(),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -300,11 +294,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_worker_sends_inv_on_success() {
-        let _pool_difficulty_build_ctx = PoolDifficulty::build_context();
-        _pool_difficulty_build_ctx
-            .expect()
-            .returning(|_| Ok(PoolDifficulty::default()));
-
         let (validation_tx, validation_rx) = create_validation_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
 
@@ -341,6 +330,7 @@ mod tests {
             },
             1,
             b"P2Poolv2".to_vec(),
+            PoolDifficulty::default(),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -362,11 +352,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_worker_skips_missing_block() {
-        let _pool_difficulty_build_ctx = PoolDifficulty::build_context();
-        _pool_difficulty_build_ctx
-            .expect()
-            .returning(|_| Ok(PoolDifficulty::default()));
-
         let _pplns_new_ctx = PplnsWindow::new_context();
         _pplns_new_ctx.expect().returning(|_network| {
             let mut mock = PplnsWindow::default();
@@ -407,6 +392,7 @@ mod tests {
             },
             1,
             b"P2Poolv2".to_vec(),
+            PoolDifficulty::default(),
         );
 
         let worker_handle = tokio::spawn(worker.run());
@@ -435,11 +421,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_worker_skips_invalid_block() {
-        let _pool_difficulty_build_ctx = PoolDifficulty::build_context();
-        _pool_difficulty_build_ctx
-            .expect()
-            .returning(|_| Ok(PoolDifficulty::default()));
-
         let _pplns_new_ctx = PplnsWindow::new_context();
         _pplns_new_ctx.expect().returning(|_network| {
             let mut mock = PplnsWindow::default();
@@ -497,6 +478,7 @@ mod tests {
             },
             1,
             b"P2Poolv2".to_vec(),
+            PoolDifficulty::default(),
         );
 
         let worker_handle = tokio::spawn(worker.run());

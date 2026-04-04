@@ -39,6 +39,11 @@ use crate::node::validation_worker::{
 };
 #[cfg(test)]
 #[mockall_double::double]
+use crate::pool_difficulty::PoolDifficulty;
+#[cfg(not(test))]
+use crate::pool_difficulty::PoolDifficulty;
+#[cfg(test)]
+#[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -254,12 +259,16 @@ impl NodeActor {
             .as_bytes()
             .to_vec();
 
+        let pool_difficulty = PoolDifficulty::build(&chain_store_handle)
+            .map_err(|error| -> Box<dyn Error> { Box::new(error) })?;
+
         let node = Node::new(
             config,
             chain_store_handle.clone(),
             block_fetcher_tx,
             validation_tx,
             monitoring_event_sender.clone(),
+            pool_difficulty.clone(),
         )?;
 
         // Spawn organise worker
@@ -282,6 +291,7 @@ impl NodeActor {
             pplns_window,
             difficulty_multiplier,
             pool_signature,
+            pool_difficulty,
         );
         let validation_handle = tokio::spawn(validation_worker.run());
 

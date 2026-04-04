@@ -21,6 +21,7 @@ use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::logging::setup_logging;
 use p2poolv2_lib::node::actor::NodeHandle;
+use p2poolv2_lib::pool_difficulty::PoolDifficulty;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::shares::share_block::ShareBlock;
 use p2poolv2_lib::store::Store;
@@ -196,6 +197,9 @@ async fn main() -> ExitCode {
 
     let chain_store_handle_for_notify = chain_store_handle.clone();
 
+    let pool_difficulty_for_notify =
+        PoolDifficulty::build(&chain_store_handle).expect("Failed to build pool difficulty");
+
     let cloned_stratum_config = stratum_config.clone();
     let payout = Payout::new(cloned_stratum_config.network);
     let shared_pplns_window = payout.shared_pplns_window();
@@ -209,6 +213,7 @@ async fn main() -> ExitCode {
             chain_store_handle_for_notify,
             &cloned_stratum_config,
             Box::new(payout),
+            pool_difficulty_for_notify,
         )
         .await;
         if *exit_receiver_notify.borrow() == ShutdownReason::None {
