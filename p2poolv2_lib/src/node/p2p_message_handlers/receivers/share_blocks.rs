@@ -23,6 +23,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::shares::validation::ShareValidator;
+use crate::store::block_tx_metadata::Status;
 use bitcoin::{BlockHash, hashes::Hash};
 use std::collections::HashSet;
 use std::error::Error;
@@ -60,10 +61,22 @@ pub async fn handle_share_block(
 
     let block_hash = share_block.block_hash();
 
-    // Skip blocks we already have in the store (cheap key-existence check,
-    // avoids deserializing the full share block).
+    // Block already stored: skip the add but re-trigger validation if
+    // the block has not been confirmed yet. This handles the case where
+    // the process restarted after storing a block but before validation
+    // completed.
     if chain_store_handle.share_block_exists(&block_hash) {
-        debug!("Share block {block_hash} already in store, skipping");
+        if !chain_store_handle.has_status(&block_hash, Status::Confirmed) {
+            debug!("Share block {block_hash} in store but not confirmed, re-sending to validation");
+            if let Err(send_error) = validation_tx
+                .send(ValidationEvent::ValidateBlock(block_hash))
+                .await
+            {
+                error!("Failed to re-send block to validation worker: {send_error}");
+            }
+        } else {
+            debug!("Share block {block_hash} already confirmed, skipping");
+        }
         return Ok(());
     }
 
@@ -326,7 +339,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_share_block_duplicate_skips() {
+    async fn test_handle_share_block_confirmed_duplicate_skips() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
         let test_data = load_share_headers_test_data();
@@ -335,15 +348,17 @@ mod tests {
         let share_block = empty_share_block_from_header(header);
         let block_hash = share_block.block_hash();
 
-        // Block already in store
         chain_store_handle
             .expect_share_block_exists()
             .with(eq(block_hash))
             .returning(|_| true);
+        chain_store_handle
+            .expect_has_status()
+            .with(eq(block_hash), eq(Status::Confirmed))
+            .returning(|_, _| true);
 
         let mock_validator = MockDefaultShareValidator::default();
 
-        // add_share_block should NOT be called for a duplicate
         let (block_fetcher_handle, _block_fetcher_rx, validation_tx, mut validation_rx) =
             test_handles();
         let result = handle_share_block(
@@ -357,11 +372,52 @@ mod tests {
         .await;
         assert!(result.is_ok());
 
-        // No validation event should be sent for a duplicate
         assert!(
             validation_rx.try_recv().is_err(),
-            "No validation event expected for duplicate block"
+            "No validation event expected for confirmed duplicate block"
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_share_block_unconfirmed_duplicate_triggers_validation() {
+        let peer_id = libp2p::PeerId::random();
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let test_data = load_share_headers_test_data();
+        let header: ShareHeader =
+            serde_json::from_value(test_data["valid_header"].clone()).unwrap();
+        let share_block = empty_share_block_from_header(header);
+        let block_hash = share_block.block_hash();
+
+        chain_store_handle
+            .expect_share_block_exists()
+            .with(eq(block_hash))
+            .returning(|_| true);
+        chain_store_handle
+            .expect_has_status()
+            .with(eq(block_hash), eq(Status::Confirmed))
+            .returning(|_, _| false);
+
+        let mock_validator = MockDefaultShareValidator::default();
+
+        let (block_fetcher_handle, _block_fetcher_rx, validation_tx, mut validation_rx) =
+            test_handles();
+        let result = handle_share_block(
+            peer_id,
+            share_block,
+            &chain_store_handle,
+            block_fetcher_handle,
+            validation_tx,
+            &mock_validator,
+        )
+        .await;
+        assert!(result.is_ok());
+
+        let event = validation_rx
+            .try_recv()
+            .expect("Expected validation event for unconfirmed stored block");
+        match event {
+            ValidationEvent::ValidateBlock(hash) => assert_eq!(hash, block_hash),
+        }
     }
 
     #[tokio::test]
