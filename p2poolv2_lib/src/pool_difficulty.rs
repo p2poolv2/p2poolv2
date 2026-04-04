@@ -196,6 +196,7 @@ impl Error for PoolDifficultyError {}
 /// for any given height and timestamp. The ASERT algorithm is absolute
 /// (not iterative), meaning it only needs the anchor point and the current
 /// block's parameters to compute the next target.
+#[derive(Clone, Copy)]
 pub struct PoolDifficulty {
     /// The anchor block's compact target (difficulty at the anchor point)
     anchor_target: CompactTarget,

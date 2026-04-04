@@ -173,15 +173,8 @@ pub async fn start_notify(
     chain_store_handle: ChainStoreHandle,
     config: &StratumConfig<crate::config::Parsed>,
     payout: Box<dyn PayoutDistribution + Send>,
+    pool_difficulty: pool_difficulty::PoolDifficulty,
 ) {
-    let pool_difficulty = match pool_difficulty::PoolDifficulty::build(&chain_store_handle) {
-        Ok(pool_difficulty) => pool_difficulty,
-        Err(build_error) => {
-            error!("Failed to build pool difficulty: {build_error}. Cannot start notifier.");
-            return;
-        }
-    };
-
     let pool_signature = match config.pool_signature {
         Some(ref sig) => sig.as_bytes().to_vec(),
         None => Vec::new(),
@@ -326,9 +319,8 @@ mod tests {
             .expect_get_chain_tip_and_uncles()
             .returning(move || Ok((genesis_hash, std::collections::HashSet::new())));
 
-        chain_store_handle
-            .expect_get_genesis_header()
-            .returning(move || Ok(genesis_header.clone()));
+        let pool_difficulty =
+            pool_difficulty::PoolDifficulty::new(genesis_header.bits, genesis_header.time, 0);
 
         chain_store_handle
             .expect_get_tip_height_and_time()
@@ -355,6 +347,7 @@ mod tests {
                 chain_store_handle,
                 &stratum_config,
                 Box::new(mock_payout),
+                pool_difficulty,
             )
             .await;
         });

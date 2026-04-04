@@ -118,6 +118,7 @@ impl Node {
         block_fetcher_handle: BlockFetcherHandle,
         validation_tx: ValidationSender,
         monitoring_event_sender: MonitoringEventSender,
+        pool_difficulty: PoolDifficulty,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
 
@@ -203,8 +204,6 @@ impl Node {
 
         let (swarm_tx, swarm_rx) = mpsc::channel(100);
 
-        let pool_difficulty = PoolDifficulty::build(&chain_store_handle)
-            .expect("Failed to build pool difficulty from chain store");
         let pool_signature = config
             .stratum
             .pool_signature
@@ -582,11 +581,6 @@ mod tests {
             .expect_clone()
             .returning(ChainStoreHandle::default);
 
-        let _pool_difficulty_build_ctx = PoolDifficulty::build_context();
-        _pool_difficulty_build_ctx
-            .expect()
-            .returning(|_| Ok(PoolDifficulty::default()));
-
         let (block_fetcher_tx, _block_fetcher_rx) = create_block_fetcher_channel();
         let (validation_tx, _validation_rx) = create_validation_channel();
         let (monitoring_tx, _monitoring_rx) =
@@ -597,6 +591,7 @@ mod tests {
             block_fetcher_tx,
             validation_tx,
             monitoring_tx,
+            PoolDifficulty::default(),
         )
         .expect("Node initialization failed");
 
