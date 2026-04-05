@@ -17,6 +17,10 @@
 use crate::node::p2p_message_handlers::MAX_HEADERS_IN_RESPONSE;
 use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
 use crate::node::{SwarmSend, messages::Message};
+#[cfg(test)]
+#[mockall_double::double]
+use crate::pool_difficulty::PoolDifficulty;
+#[cfg(not(test))]
 use crate::pool_difficulty::PoolDifficulty;
 #[cfg(test)]
 #[mockall_double::double]
@@ -429,6 +433,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_fewer_than_max_headers_does_not_send_getheaders() {
+        let pool_difficulty_ctx = PoolDifficulty::new_context();
+        pool_difficulty_ctx
+            .expect()
+            .returning(|_bits, _time, _height| {
+                let mut mock = PoolDifficulty::default();
+                mock.expect_calculate_target_clamped()
+                    .returning(|_, _, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
+                mock
+            });
+
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle
@@ -492,6 +506,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_share_headers_sends_getheaders_to_same_peer() {
+        let pool_difficulty_ctx = PoolDifficulty::new_context();
+        pool_difficulty_ctx
+            .expect()
+            .returning(|_bits, _time, _height| {
+                let mut mock = PoolDifficulty::default();
+                mock.expect_calculate_target_clamped()
+                    .returning(|_, _, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
+                mock
+            });
+
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle
@@ -548,6 +572,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_fewer_than_max_headers_sends_fetch_blocks_event() {
+        let pool_difficulty_ctx = PoolDifficulty::new_context();
+        pool_difficulty_ctx
+            .expect()
+            .returning(|_bits, _time, _height| {
+                let mut mock = PoolDifficulty::default();
+                mock.expect_calculate_target_clamped()
+                    .returning(|_, _, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
+                mock
+            });
+
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle
@@ -600,6 +634,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_asert_mismatch_rejected() {
+        let pool_difficulty_ctx = PoolDifficulty::new_context();
+        pool_difficulty_ctx
+            .expect()
+            .returning(|_bits, _time, _height| {
+                let mut mock = PoolDifficulty::default();
+                mock.expect_calculate_target_clamped()
+                    .returning(|_, _, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
+                mock
+            });
+
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
         setup_chain_validation_mocks(&mut chain_store_handle);

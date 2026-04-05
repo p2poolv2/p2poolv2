@@ -283,6 +283,8 @@ mod tests {
     use crate::node::SwarmSend;
     use crate::node::messages::{InventoryMessage, Message};
     #[mockall_double::double]
+    use crate::pool_difficulty::PoolDifficulty;
+    #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::validation::MockDefaultShareValidator;
     use crate::test_utils::{TestShareBlockBuilder, valid_share_block_from_fixture};
@@ -354,6 +356,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_response_share_headers() {
+        let pool_difficulty_ctx = PoolDifficulty::new_context();
+        pool_difficulty_ctx
+            .expect()
+            .returning(|_bits, _time, _height| {
+                let mut mock = PoolDifficulty::default();
+                mock.expect_calculate_target_clamped().returning(|_, _, _| {
+                    CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
+                });
+                mock
+            });
+
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let mut chain_store_handle = ChainStoreHandle::default();
 

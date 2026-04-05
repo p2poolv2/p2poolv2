@@ -184,6 +184,8 @@ mod tests {
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
     use crate::node::validation_worker::ValidationSender;
     #[mockall_double::double]
+    use crate::pool_difficulty::PoolDifficulty;
+    #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::share_block::Txids;
     use crate::shares::validation::MockDefaultShareValidator;
@@ -730,6 +732,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_response_share_headers() {
+        let pool_difficulty_ctx = PoolDifficulty::new_context();
+        pool_difficulty_ctx
+            .expect()
+            .returning(|_bits, _time, _height| {
+                let mut mock = PoolDifficulty::default();
+                mock.expect_calculate_target_clamped().returning(|_, _, _| {
+                    CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
+                });
+                mock
+            });
+
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
 
