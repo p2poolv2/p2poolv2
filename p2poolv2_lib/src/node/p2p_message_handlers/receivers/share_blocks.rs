@@ -141,7 +141,18 @@ mod tests {
             .expect_validate_share_header()
             .returning(|_| Ok(()));
 
-        let (validation_tx, _validation_rx, block_receiver_handle) = test_handles();
+        let (validation_tx, _validation_rx) = validation_worker::create_validation_channel();
+        let (block_receiver_handle, mut block_receiver_rx) = create_block_receiver_channel();
+
+        // Spawn a task to respond Ok on the oneshot
+        tokio::spawn(async move {
+            if let Some(BlockReceiverEvent::ShareBlockReceived { result_tx, .. }) =
+                block_receiver_rx.recv().await
+            {
+                let _ = result_tx.send(Ok(()));
+            }
+        });
+
         let result = handle_share_block(
             peer_id,
             share_block,
@@ -151,10 +162,7 @@ mod tests {
             &mock_validator,
         )
         .await;
-        // Block is sent to BlockReceiver actor; result depends on actor
-        // processing. With a dropped receiver, the oneshot will error.
-        // This test verifies the DoS gate passes and the send succeeds.
-        assert!(result.is_err() || result.is_ok());
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
