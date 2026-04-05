@@ -49,6 +49,8 @@ mod tests {
     use crate::config::NetworkConfig;
     use crate::node::SwarmSend;
     use crate::node::messages::Message;
+    use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
+    use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     use crate::node::request_response_handler::block_fetcher;
     use crate::node::validation_worker;
     use crate::service::p2p_service::{P2PService, RequestContext};
@@ -73,10 +75,12 @@ mod tests {
     fn fetcher_validation_handles_for_tests() -> (
         block_fetcher::BlockFetcherHandle,
         validation_worker::ValidationSender,
+        BlockReceiverHandle,
     ) {
         let (block_fetcher_tx, _) = block_fetcher::create_block_fetcher_channel();
         let (validation_tx, _) = validation_worker::create_validation_channel();
-        (block_fetcher_tx, validation_tx)
+        let (block_receiver_handle, _) = create_block_receiver_channel();
+        (block_fetcher_tx, validation_tx, block_receiver_handle)
     }
 
     // This struct simulates a service that always fails on poll_ready()
@@ -152,7 +156,7 @@ mod tests {
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle
             .expect_clone()
-            .returning(|| ChainStoreHandle::default());
+            .returning(ChainStoreHandle::default);
 
         // Create a TestTimeProvider with the current system time
         let time_provider = TestTimeProvider::new(SystemTime::now());
@@ -163,7 +167,8 @@ mod tests {
             .service(P2PService::new());
 
         // Inline RequestContext construction
-        let (block_fetcher_handle, validation_tx) = fetcher_validation_handles_for_tests();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) =
+            fetcher_validation_handles_for_tests();
         let ctx1 = RequestContext {
             peer: PeerId::random(),
             request: Message::NotFound(()),
@@ -173,6 +178,7 @@ mod tests {
             time_provider: time_provider.clone(),
             block_fetcher_handle: block_fetcher_handle.clone(),
             validation_tx: validation_tx.clone(),
+            block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
@@ -185,6 +191,7 @@ mod tests {
             time_provider: time_provider.clone(),
             block_fetcher_handle: block_fetcher_handle.clone(),
             validation_tx: validation_tx.clone(),
+            block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
@@ -197,6 +204,7 @@ mod tests {
             time_provider: time_provider.clone(),
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
@@ -267,7 +275,7 @@ mod tests {
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle
             .expect_clone()
-            .returning(|| ChainStoreHandle::default());
+            .returning(ChainStoreHandle::default);
 
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
@@ -278,7 +286,8 @@ mod tests {
 
         // Build a request context
         let peer_id = PeerId::random();
-        let (block_fetcher_handle, validation_tx) = fetcher_validation_handles_for_tests();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) =
+            fetcher_validation_handles_for_tests();
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::NotFound(()),
@@ -288,6 +297,7 @@ mod tests {
             time_provider: time_provider.clone(),
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
@@ -341,7 +351,8 @@ mod tests {
         };
 
         let peer_id = PeerId::random();
-        let (block_fetcher_handle, validation_tx) = fetcher_validation_handles_for_tests();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) =
+            fetcher_validation_handles_for_tests();
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::NotFound(()),
@@ -351,6 +362,7 @@ mod tests {
             time_provider: time_provider.clone(),
             block_fetcher_handle: block_fetcher_handle.clone(),
             validation_tx: validation_tx.clone(),
+            block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
@@ -363,6 +375,7 @@ mod tests {
             time_provider: time_provider.clone(),
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
@@ -409,7 +422,7 @@ mod tests {
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle
             .expect_clone()
-            .returning(|| ChainStoreHandle::default());
+            .returning(ChainStoreHandle::default);
 
         let time_provider = TestTimeProvider::new(SystemTime::now());
 
@@ -420,7 +433,8 @@ mod tests {
         };
 
         let peer_id = PeerId::random();
-        let (block_fetcher_handle, validation_tx) = fetcher_validation_handles_for_tests();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) =
+            fetcher_validation_handles_for_tests();
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::NotFound(()),
@@ -430,6 +444,7 @@ mod tests {
             time_provider: time_provider.clone(),
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 

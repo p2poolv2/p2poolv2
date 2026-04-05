@@ -19,6 +19,7 @@ pub mod senders;
 
 use crate::node::SwarmSend;
 use crate::node::messages::{GetData, Message};
+use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
 use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
 use crate::node::validation_worker::ValidationSender;
 use crate::service::p2p_service::RequestContext;
@@ -101,8 +102,8 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
             ctx.peer,
             share_block,
             &ctx.chain_store_handle,
-            ctx.block_fetcher_handle,
             ctx.validation_tx,
+            &ctx.block_receiver_handle,
             ctx.share_validator.as_ref(),
         )
         .await
@@ -134,6 +135,7 @@ pub async fn handle_response<C: Send + Sync>(
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     block_fetcher_handle: BlockFetcherHandle,
     validation_tx: ValidationSender,
+    block_receiver_handle: BlockReceiverHandle,
     share_validator: Arc<dyn ShareValidator + Send + Sync>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Received response {} from peer: {}", response, peer);
@@ -155,8 +157,8 @@ pub async fn handle_response<C: Send + Sync>(
             peer,
             share_block,
             &chain_store_handle,
-            block_fetcher_handle,
             validation_tx,
+            &block_receiver_handle,
             share_validator.as_ref(),
         )
         .await
@@ -180,9 +182,12 @@ mod tests {
     use super::*;
     use crate::node::SwarmSend;
     use crate::node::messages::InventoryMessage;
+    use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverEvent::ShareBlockReceived;
+    use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
     use crate::node::validation_worker::ValidationSender;
+    use crate::node::validation_worker::create_validation_channel;
     #[mockall_double::double]
     use crate::pool_difficulty::PoolDifficulty;
     #[mockall_double::double]
@@ -201,11 +206,12 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
 
-    /// Create test block fetcher and validation handles for handle_response tests.
-    fn test_handles() -> (BlockFetcherHandle, ValidationSender) {
+    /// Create test block fetcher, validation, and block receiver handles for handle_response tests.
+    fn test_handles() -> (BlockFetcherHandle, ValidationSender, BlockReceiverHandle) {
         let (block_fetcher_tx, _) = create_block_fetcher_channel();
-        let (validation_tx, _) = crate::node::validation_worker::create_validation_channel();
-        (block_fetcher_tx, validation_tx)
+        let (validation_tx, _) = create_validation_channel();
+        let (block_receiver_handle, _) = create_block_receiver_channel();
+        (block_fetcher_tx, validation_tx, block_receiver_handle)
     }
 
     #[tokio::test]
@@ -215,7 +221,7 @@ mod tests {
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
 
         // Mock the response headers
         let block1 = TestShareBlockBuilder::new().build();
@@ -239,6 +245,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
@@ -263,7 +270,7 @@ mod tests {
         let (response_channel, _response_channel_rx) = oneshot::channel::<Message>();
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
 
         // Create test blocks that will be returned
         let block1 = TestShareBlockBuilder::new().build();
@@ -286,6 +293,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
@@ -312,7 +320,7 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
 
         let block_hash1 = "0000000000000000000000000000000000000000000000000000000000000001"
             .parse::<BlockHash>()
@@ -339,6 +347,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
@@ -367,7 +376,7 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
 
         let tx_hashes: Vec<bitcoin::Txid> = vec![
             "0000000000000000000000000000000000000000000000000000000000000001"
@@ -388,6 +397,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
@@ -407,7 +417,7 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -418,6 +428,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
@@ -433,7 +444,7 @@ mod tests {
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
 
         let block = TestShareBlockBuilder::new().build();
         let block_hash = block.block_hash();
@@ -457,6 +468,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
@@ -480,7 +492,7 @@ mod tests {
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
 
         let block_hash = "0000000000000000000000000000000000000000000000000000000000000001"
             .parse::<BlockHash>()
@@ -499,6 +511,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
@@ -519,7 +532,7 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
 
         // Test GetData message with txid
         let txid = "0000000000000000000000000000000000000000000000000000000000000001"
@@ -536,6 +549,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
@@ -551,7 +565,7 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
 
         // Create a test transaction
         let transaction = test_coinbase_transaction(1);
@@ -565,6 +579,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
@@ -580,7 +595,7 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
 
         // Create test share headers
         let block1 = TestShareBlockBuilder::new().build();
@@ -602,6 +617,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
@@ -617,22 +633,15 @@ mod tests {
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_tx, _) =
-            crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel();
-        let (validation_tx, mut validation_rx) =
-            crate::node::validation_worker::create_validation_channel();
+        let (block_fetcher_tx, _) = create_block_fetcher_channel();
+        let (validation_tx, _validation_rx) = create_validation_channel();
+        let (block_receiver_handle, mut block_receiver_rx) = create_block_receiver_channel();
 
         let share_block = valid_share_block_from_fixture();
-        let block_hash = share_block.block_hash();
 
         // Block not yet in store
         chain_store_handle
             .expect_share_block_exists()
-            .returning(|_| false);
-
-        // Not on candidate chain
-        chain_store_handle
-            .expect_is_candidate()
             .returning(|_| false);
 
         // Mock share validator to accept the share header
@@ -640,14 +649,13 @@ mod tests {
         mock_validator
             .expect_validate_share_header()
             .returning(|_| Ok(()));
-        mock_validator
-            .expect_validate_with_pool_difficulty()
-            .returning(|_, _| Ok(()));
 
-        // Mock storage: add block succeeds
-        chain_store_handle
-            .expect_add_share_block()
-            .returning(|_, _| Ok(()));
+        // Spawn a task to handle the BlockReceiver event and respond Ok
+        tokio::spawn(async move {
+            if let Some(ShareBlockReceived { result_tx, .. }) = block_receiver_rx.recv().await {
+                let _ = result_tx.send(Ok(()));
+            }
+        });
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -658,21 +666,12 @@ mod tests {
             time_provider,
             block_fetcher_handle: block_fetcher_tx,
             validation_tx,
+            block_receiver_handle,
             share_validator: Arc::new(mock_validator),
         };
 
         let result = handle_request(ctx).await;
         assert!(result.is_ok());
-
-        // Verify validation event was sent after successful store
-        if let Some(crate::node::validation_worker::ValidationEvent::ValidateBlock(
-            sent_block_hash,
-        )) = validation_rx.recv().await
-        {
-            assert_eq!(sent_block_hash, block_hash);
-        } else {
-            panic!("Expected ValidationEvent::ValidateBlock after successful ShareBlock handling");
-        }
     }
 
     #[tokio::test]
@@ -682,7 +681,8 @@ mod tests {
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx, _) = test_handles();
+        let (block_receiver_handle, mut block_receiver_rx) = create_block_receiver_channel();
 
         let share_block = valid_share_block_from_fixture();
 
@@ -691,28 +691,18 @@ mod tests {
             .expect_share_block_exists()
             .returning(|_| false);
 
-        // Not on candidate chain
-        chain_store_handle
-            .expect_is_candidate()
-            .returning(|_| false);
-
         // Mock share validator to accept the share header
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
             .expect_validate_share_header()
             .returning(|_| Ok(()));
-        mock_validator
-            .expect_validate_with_pool_difficulty()
-            .returning(|_, _| Ok(()));
 
-        // Mock storage: add block fails
-        chain_store_handle
-            .expect_add_share_block()
-            .returning(|_, _| {
-                Err(crate::store::writer::StoreError::Database(
-                    "test error".to_string(),
-                ))
-            });
+        // Spawn a task to handle the BlockReceiver event and respond with error
+        tokio::spawn(async move {
+            if let Some(ShareBlockReceived { result_tx, .. }) = block_receiver_rx.recv().await {
+                let _ = result_tx.send(Err("test store error".into()));
+            }
+        });
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -723,6 +713,7 @@ mod tests {
             time_provider,
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle,
             share_validator: Arc::new(mock_validator),
         };
 
@@ -771,7 +762,7 @@ mod tests {
         header2.prev_share_blockhash = header1.block_hash();
         let share_headers = vec![header1, header2];
 
-        let (block_fetcher_handle, validation_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
         let result = handle_response(
             peer_id,
             Message::ShareHeaders(share_headers),
@@ -779,6 +770,7 @@ mod tests {
             swarm_tx,
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle,
             Arc::new(mock_validator),
         )
         .await;
@@ -792,7 +784,7 @@ mod tests {
         let chain_store_handle = ChainStoreHandle::default();
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
-        let (block_fetcher_handle, validation_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
         let result = handle_response(
             peer_id,
             Message::NotFound(()),
@@ -800,6 +792,7 @@ mod tests {
             swarm_tx,
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle,
             Arc::new(MockDefaultShareValidator::default()),
         )
         .await;
@@ -820,7 +813,7 @@ mod tests {
         ];
         let inventory = InventoryMessage::BlockHashes(block_hashes);
 
-        let (block_fetcher_handle, validation_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
         let result = handle_response(
             peer_id,
             Message::Inventory(inventory),
@@ -828,6 +821,7 @@ mod tests {
             swarm_tx,
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle,
             Arc::new(MockDefaultShareValidator::default()),
         )
         .await;
@@ -841,7 +835,7 @@ mod tests {
         let chain_store_handle = ChainStoreHandle::default();
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
-        let (block_fetcher_handle, validation_tx) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
         let result = handle_response(
             peer_id,
             Message::GetData(GetData::Block(BlockHash::all_zeros())),
@@ -849,6 +843,7 @@ mod tests {
             swarm_tx,
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle,
             Arc::new(MockDefaultShareValidator::default()),
         )
         .await;
