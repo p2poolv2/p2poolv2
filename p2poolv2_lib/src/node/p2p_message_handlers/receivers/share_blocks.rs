@@ -492,12 +492,6 @@ mod tests {
             .with(eq(block_hash))
             .returning(|_| false);
 
-        // Already on candidate chain so PoW check is skipped
-        chain_store_handle
-            .expect_is_candidate()
-            .with(eq(block_hash))
-            .returning(|_| true);
-
         chain_store_handle
             .expect_add_share_block()
             .returning(|_, _| Ok(()));
@@ -513,7 +507,10 @@ mod tests {
             .with(eq(uncle_hash_b))
             .returning(|_| false);
 
-        let mock_validator = MockDefaultShareValidator::default();
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_share_header()
+            .returning(|_| Ok(()));
         let (block_fetcher_handle, mut block_fetcher_rx, validation_tx, mut validation_rx) =
             test_handles();
         let result = handle_share_block(
@@ -575,11 +572,6 @@ mod tests {
             .returning(|_| false);
 
         chain_store_handle
-            .expect_is_candidate()
-            .with(eq(block_hash))
-            .returning(|_| true);
-
-        chain_store_handle
             .expect_add_share_block()
             .returning(|_, _| Ok(()));
 
@@ -589,7 +581,10 @@ mod tests {
             .with(eq(uncle_hash))
             .returning(|_| true);
 
-        let mock_validator = MockDefaultShareValidator::default();
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_share_header()
+            .returning(|_| Ok(()));
         let (block_fetcher_handle, mut block_fetcher_rx, validation_tx, mut validation_rx) =
             test_handles();
         let result = handle_share_block(
@@ -645,11 +640,6 @@ mod tests {
             .returning(|_| false);
 
         chain_store_handle
-            .expect_is_candidate()
-            .with(eq(block_hash))
-            .returning(|_| true);
-
-        chain_store_handle
             .expect_add_share_block()
             .returning(|_, _| Ok(()));
 
@@ -659,7 +649,10 @@ mod tests {
             .with(eq(parent_hash))
             .returning(|_| false);
 
-        let mock_validator = MockDefaultShareValidator::default();
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_share_header()
+            .returning(|_| Ok(()));
         let (block_fetcher_handle, mut block_fetcher_rx, validation_tx, mut validation_rx) =
             test_handles();
         let result = handle_share_block(

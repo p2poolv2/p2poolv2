@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::node::p2p_message_handlers::receivers::share_headers::validate_asert_chain;
 use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
 use crate::node::validation_worker::{ValidationEvent, ValidationSender};
 #[cfg(test)]
@@ -362,6 +363,176 @@ impl BlockReceiver {
         }
 
         missing
+    }
+
+    /// Look up the anchor time and height for the root block that
+    /// the ready chain is rooted at.
+    fn get_anchor_info(
+        &self,
+        ordered_hashes: &[BlockHash],
+    ) -> Result<(u32, u32), Box<dyn Error + Send + Sync>> {
+        let first_hash = ordered_hashes
+            .first()
+            .ok_or("Empty ordered hashes in commit_ready_chain")?;
+        let first_pending = self
+            .pending
+            .get(first_hash)
+            .ok_or_else(|| format!("First block {first_hash} not in pending"))?;
+        let root_hash = first_pending.share_block.header.prev_share_blockhash;
+
+        if root_hash == BlockHash::all_zeros() {
+            return Err("Genesis block should not arrive via BlockReceiver".into());
+        }
+
+        let root_header = self.chain_store_handle.get_share_header(&root_hash)?;
+        let root_metadata = self.chain_store_handle.get_block_metadata(&root_hash)?;
+        Ok((root_header.time, root_metadata.expected_height.unwrap_or(0)))
+    }
+
+    /// Validate ASERT difficulty and commit a ready chain to the store.
+    ///
+    /// Blocks are removed from pending, stored via add_share_block and
+    /// organise_header, and sent to the validation worker.
+    async fn commit_ready_chain(
+        &mut self,
+        ordered_hashes: Vec<BlockHash>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let (anchor_time, anchor_height) = self.get_anchor_info(&ordered_hashes)?;
+
+        // Collect headers for ASERT validation
+        let headers: Vec<_> = ordered_hashes
+            .iter()
+            .filter_map(|hash| {
+                self.pending
+                    .get(hash)
+                    .map(|pending_block| pending_block.share_block.header.clone())
+            })
+            .collect();
+        let header_refs: Vec<_> = headers.iter().collect();
+
+        validate_asert_chain(
+            &header_refs,
+            &self.pool_difficulty,
+            anchor_time,
+            anchor_height,
+        )?;
+
+        // Remove from pending, store, and send to validation
+        for block_hash in &ordered_hashes {
+            let share_block = self
+                .remove_from_pending(block_hash)
+                .ok_or_else(|| format!("Block {block_hash} disappeared from pending"))?;
+
+            let header = share_block.header.clone();
+
+            if let Err(error) = self
+                .chain_store_handle
+                .add_share_block(share_block, false)
+                .await
+            {
+                error!("Failed to store block {block_hash}: {error}");
+                return Err(error.into());
+            }
+
+            if let Err(error) = self.chain_store_handle.organise_header(header).await {
+                error!("Failed to organise header {block_hash}: {error}");
+                return Err(error.into());
+            }
+
+            if let Err(error) = self
+                .validation_tx
+                .send(ValidationEvent::ValidateBlock(*block_hash))
+                .await
+            {
+                error!("Failed to send ValidateBlock for {block_hash}: {error}");
+                return Err(error.into());
+            }
+
+            info!("Committed and queued validation for block {block_hash}");
+        }
+
+        Ok(())
+    }
+
+    /// Process an incoming share block: buffer or commit.
+    ///
+    /// If the block's dependency DAG is complete and rooted at valid
+    /// store blocks, validates ASERT and commits the chain. Otherwise,
+    /// buffers the block and requests missing dependencies.
+    async fn process_share_block(
+        &mut self,
+        peer_id: libp2p::PeerId,
+        share_block: ShareBlock,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let block_hash = share_block.block_hash();
+
+        if self.pending.contains_key(&block_hash) {
+            debug!("Block {block_hash} already pending, ignoring duplicate");
+            return Ok(());
+        }
+
+        // Notify block fetcher that we received this block
+        let _ = self
+            .block_fetcher_handle
+            .send(BlockFetcherEvent::BlockReceived(block_hash))
+            .await;
+
+        self.add_to_pending(block_hash, share_block);
+
+        if let Some(ordered) = self.try_build_ready_chain(&block_hash) {
+            self.commit_ready_chain(ordered).await?;
+        } else {
+            let missing = self.find_missing_dependencies(&block_hash);
+            if !missing.is_empty() {
+                let missing_vec: Vec<BlockHash> = missing.into_iter().collect();
+                debug!(
+                    "Block {block_hash} has {} missing dependencies, requesting fetch",
+                    missing_vec.len()
+                );
+                let _ = self
+                    .block_fetcher_handle
+                    .send(BlockFetcherEvent::FetchBlocks {
+                        blockhashes: missing_vec,
+                        peer_id,
+                    })
+                    .await;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Run the BlockReceiver event loop.
+    ///
+    /// Processes incoming share blocks and periodically evicts stale
+    /// pending blocks. Runs until the event channel is closed.
+    pub async fn run(mut self) {
+        let mut eviction_interval =
+            tokio::time::interval(std::time::Duration::from_secs(EVICTION_TICK_SECONDS));
+
+        loop {
+            tokio::select! {
+                event = self.event_rx.recv() => {
+                    match event {
+                        Some(BlockReceiverEvent::ShareBlockReceived {
+                            peer_id,
+                            share_block,
+                            result_tx,
+                        }) => {
+                            let result = self.process_share_block(peer_id, share_block).await;
+                            let _ = result_tx.send(result);
+                        }
+                        None => {
+                            info!("BlockReceiver channel closed, shutting down");
+                            return;
+                        }
+                    }
+                }
+                _ = eviction_interval.tick() => {
+                    self.evict_stale_pending();
+                }
+            }
+        }
     }
 }
 
@@ -740,5 +911,302 @@ mod tests {
         let result = receiver.collect_pending_subgraph(&block_hash);
         assert!(result.is_some());
         assert_eq!(result.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_get_anchor_info_returns_root_time_and_height() {
+        let root_hash = BlockHash::from_byte_array([0x11; 32]);
+        let root_header = TestShareBlockBuilder::new()
+            .nonce(0xe9695790)
+            .build()
+            .header;
+        let root_time = root_header.time;
+
+        let root_header_clone = root_header.clone();
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_share_header()
+            .with(mockall::predicate::eq(root_hash))
+            .returning(move |_| Ok(root_header_clone.clone()));
+        mock_store
+            .expect_get_block_metadata()
+            .with(mockall::predicate::eq(root_hash))
+            .returning(|_| {
+                Ok(crate::store::block_tx_metadata::BlockMetadata {
+                    expected_height: Some(5),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::Confirmed,
+                })
+            });
+
+        let mut receiver = create_block_receiver_with_mock(mock_store);
+
+        let child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(root_hash.to_string())
+            .nonce(0xe9695791)
+            .build();
+        let child_hash = child_block.block_hash();
+        receiver.add_to_pending(child_hash, child_block);
+
+        let result = receiver.get_anchor_info(&[child_hash]);
+        assert!(result.is_ok());
+        let (anchor_time, anchor_height) = result.unwrap();
+        assert_eq!(anchor_time, root_time);
+        assert_eq!(anchor_height, 5);
+    }
+
+    #[test]
+    fn test_get_anchor_info_errors_on_genesis_parent() {
+        let mock_store = ChainStoreHandle::default();
+        let mut receiver = create_block_receiver_with_mock(mock_store);
+
+        // Default TestShareBlockBuilder has all-zeros parent (genesis)
+        let genesis_child = TestShareBlockBuilder::new().build();
+        let child_hash = genesis_child.block_hash();
+        receiver.add_to_pending(child_hash, genesis_child);
+
+        let result = receiver.get_anchor_info(&[child_hash]);
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("Genesis"),
+            "Error should mention genesis"
+        );
+    }
+
+    #[test]
+    fn test_get_anchor_info_errors_on_empty_hashes() {
+        let mock_store = ChainStoreHandle::default();
+        let receiver = create_block_receiver_with_mock(mock_store);
+
+        let result = receiver.get_anchor_info(&[]);
+        assert!(result.is_err());
+    }
+
+    /// Build a BlockReceiver with full access to fetcher and validation
+    /// receivers for verifying events sent by process_share_block.
+    fn create_full_block_receiver(
+        chain_store_handle: ChainStoreHandle,
+        pool_difficulty: PoolDifficulty,
+    ) -> (
+        BlockReceiver,
+        block_fetcher::BlockFetcherReceiver,
+        validation_worker::ValidationReceiver,
+    ) {
+        let (_, event_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, block_fetcher_rx) =
+            block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, validation_rx) = validation_worker::create_validation_channel();
+        let receiver = BlockReceiver::new(
+            event_rx,
+            pool_difficulty,
+            chain_store_handle,
+            block_fetcher_handle,
+            validation_tx,
+        );
+        (receiver, block_fetcher_rx, validation_rx)
+    }
+
+    #[tokio::test]
+    async fn test_process_share_block_with_ready_deps_commits() {
+        let root_hash = BlockHash::from_byte_array([0x88; 32]);
+        let root_header = TestShareBlockBuilder::new()
+            .nonce(0xe9695790)
+            .build()
+            .header;
+        let root_header_clone = root_header.clone();
+
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_block_metadata()
+            .with(mockall::predicate::eq(root_hash))
+            .returning(|_| {
+                Ok(crate::store::block_tx_metadata::BlockMetadata {
+                    expected_height: Some(0),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::Confirmed,
+                })
+            });
+        mock_store
+            .expect_get_share_header()
+            .with(mockall::predicate::eq(root_hash))
+            .returning(move |_| Ok(root_header_clone.clone()));
+        mock_store.expect_add_share_block().returning(|_, _| Ok(()));
+        mock_store.expect_organise_header().returning(|_| Ok(None));
+
+        let mut mock_pool_difficulty = PoolDifficulty::default();
+        mock_pool_difficulty
+            .expect_calculate_target_clamped()
+            .returning(|_, _, _| {
+                bitcoin::CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
+            });
+
+        let (mut receiver, mut block_fetcher_rx, mut validation_rx) =
+            create_full_block_receiver(mock_store, mock_pool_difficulty);
+
+        let mut child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(root_hash.to_string())
+            .nonce(0xe9695791)
+            .build();
+        child_block.header.bits =
+            bitcoin::CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
+        let child_hash = child_block.block_hash();
+
+        let peer_id = libp2p::PeerId::random();
+        let result = receiver.process_share_block(peer_id, child_block).await;
+        assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+
+        // Block should be removed from pending after commit
+        assert_eq!(receiver.pending_count(), 0);
+
+        // BlockReceived event should have been sent to block fetcher
+        let fetcher_event = block_fetcher_rx.try_recv();
+        assert!(fetcher_event.is_ok());
+        match fetcher_event.unwrap() {
+            BlockFetcherEvent::BlockReceived(hash) => assert_eq!(hash, child_hash),
+            other => panic!("Expected BlockReceived, got: {other}"),
+        }
+
+        // ValidateBlock event should have been sent
+        let validation_event = validation_rx.try_recv();
+        assert!(validation_event.is_ok());
+        match validation_event.unwrap() {
+            ValidationEvent::ValidateBlock(hash) => assert_eq!(hash, child_hash),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_share_block_missing_deps_fetches() {
+        let missing_parent_hash = BlockHash::from_byte_array([0x99; 32]);
+
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store.expect_get_block_metadata().returning(|_| {
+            Err(crate::store::writer::StoreError::NotFound(
+                "not found".to_string(),
+            ))
+        });
+
+        let mock_pool_difficulty = PoolDifficulty::default();
+        let (mut receiver, mut block_fetcher_rx, _validation_rx) =
+            create_full_block_receiver(mock_store, mock_pool_difficulty);
+
+        let child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(missing_parent_hash.to_string())
+            .nonce(0xe9695791)
+            .build();
+        let child_hash = child_block.block_hash();
+
+        let peer_id = libp2p::PeerId::random();
+        let result = receiver.process_share_block(peer_id, child_block).await;
+        assert!(result.is_ok());
+
+        // Block should remain in pending
+        assert_eq!(receiver.pending_count(), 1);
+        assert!(receiver.pending.contains_key(&child_hash));
+
+        // BlockReceived sent first
+        let fetcher_event = block_fetcher_rx.try_recv().unwrap();
+        match fetcher_event {
+            BlockFetcherEvent::BlockReceived(hash) => assert_eq!(hash, child_hash),
+            other => panic!("Expected BlockReceived, got: {other}"),
+        }
+
+        // FetchBlocks should have been sent for the missing parent
+        let fetch_event = block_fetcher_rx.try_recv().unwrap();
+        match fetch_event {
+            BlockFetcherEvent::FetchBlocks {
+                blockhashes,
+                peer_id: event_peer_id,
+            } => {
+                assert_eq!(blockhashes, vec![missing_parent_hash]);
+                assert_eq!(event_peer_id, peer_id);
+            }
+            other => panic!("Expected FetchBlocks, got: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_share_block_duplicate_pending_ignored() {
+        let missing_parent_hash = BlockHash::from_byte_array([0xaa; 32]);
+
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store.expect_get_block_metadata().returning(|_| {
+            Err(crate::store::writer::StoreError::NotFound(
+                "not found".to_string(),
+            ))
+        });
+
+        let mock_pool_difficulty = PoolDifficulty::default();
+        let (mut receiver, _block_fetcher_rx, _validation_rx) =
+            create_full_block_receiver(mock_store, mock_pool_difficulty);
+
+        let child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(missing_parent_hash.to_string())
+            .nonce(0xe9695791)
+            .build();
+
+        let peer_id = libp2p::PeerId::random();
+        // First call adds to pending
+        let result = receiver
+            .process_share_block(peer_id, child_block.clone())
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(receiver.pending_count(), 1);
+
+        // Second call with same block is ignored
+        let result = receiver.process_share_block(peer_id, child_block).await;
+        assert!(result.is_ok());
+        assert_eq!(receiver.pending_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_run_processes_event_and_shuts_down() {
+        let missing_parent_hash = BlockHash::from_byte_array([0xbb; 32]);
+
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store.expect_get_block_metadata().returning(|_| {
+            Err(crate::store::writer::StoreError::NotFound(
+                "not found".to_string(),
+            ))
+        });
+
+        let mock_pool_difficulty = PoolDifficulty::default();
+
+        let (event_tx, event_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, _block_fetcher_rx) =
+            block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, _validation_rx) = validation_worker::create_validation_channel();
+        let receiver = BlockReceiver::new(
+            event_rx,
+            mock_pool_difficulty,
+            mock_store,
+            block_fetcher_handle,
+            validation_tx,
+        );
+
+        let child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(missing_parent_hash.to_string())
+            .nonce(0xe9695791)
+            .build();
+
+        let peer_id = libp2p::PeerId::random();
+        let (result_tx, result_rx) = oneshot::channel();
+        event_tx
+            .send(BlockReceiverEvent::ShareBlockReceived {
+                peer_id,
+                share_block: child_block,
+                result_tx,
+            })
+            .await
+            .unwrap();
+
+        // Drop sender to close channel and trigger shutdown
+        drop(event_tx);
+
+        // Run the actor -- it will process the event then shut down
+        receiver.run().await;
+
+        // The oneshot should have received the result
+        let result = result_rx.await.unwrap();
+        assert!(result.is_ok());
     }
 }
