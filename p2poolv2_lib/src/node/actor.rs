@@ -229,6 +229,7 @@ struct NodeActor {
     organise_handle: tokio::task::JoinHandle<Result<(), OrganiseError>>,
     block_fetcher_handle: tokio::task::JoinHandle<Result<(), BlockFetcherError>>,
     validation_handle: tokio::task::JoinHandle<Result<(), ValidationWorkerError>>,
+    block_receiver_handle: tokio::task::JoinHandle<()>,
 }
 
 impl NodeActor {
@@ -330,6 +331,7 @@ impl NodeActor {
                 organise_handle,
                 block_fetcher_handle,
                 validation_handle,
+                block_receiver_handle: block_receiver_join_handle,
             },
             stopping_rx,
         ))
@@ -532,6 +534,20 @@ impl NodeActor {
                         }
                         Err(e) => {
                             error!("Validation worker panicked: {e}");
+                            if self.stopping_tx.send(()).is_err() {
+                                error!("Failed to send stopping signal - receiver dropped");
+                            }
+                            return;
+                        }
+                    }
+                }
+                block_receiver_result = &mut self.block_receiver_handle => {
+                    match block_receiver_result {
+                        Ok(()) => {
+                            info!("Block receiver stopped cleanly");
+                        }
+                        Err(e) => {
+                            error!("Block receiver panicked: {e}");
                             if self.stopping_tx.send(()).is_err() {
                                 error!("Failed to send stopping signal - receiver dropped");
                             }
