@@ -219,6 +219,150 @@ impl BlockReceiver {
             Err(_) => false,
         }
     }
+
+    /// Collect all dependency hashes (parent + uncles) for a pending block.
+    fn dependency_hashes(&self, block_hash: &BlockHash) -> Vec<BlockHash> {
+        let pending_block = match self.pending.get(block_hash) {
+            Some(pending_block) => pending_block,
+            None => return Vec::new(),
+        };
+        let header = &pending_block.share_block.header;
+        let mut dependencies = Vec::with_capacity(1 + header.uncles.len());
+        if header.prev_share_blockhash != BlockHash::all_zeros() {
+            dependencies.push(header.prev_share_blockhash);
+        }
+        for uncle_hash in &header.uncles {
+            dependencies.push(*uncle_hash);
+        }
+        dependencies
+    }
+
+    /// Walk the pending DAG from a starting block, collecting all
+    /// reachable pending block hashes. Returns None if any leaf
+    /// dependency is neither pending nor a valid root in the store.
+    /// Stops traversal at valid roots without exploring further.
+    fn collect_pending_subgraph(&self, start_hash: &BlockHash) -> Option<Vec<BlockHash>> {
+        let mut pending_blocks = Vec::with_capacity(16);
+        let mut visited = HashSet::with_capacity(16);
+        let mut stack = Vec::with_capacity(16);
+        stack.push(*start_hash);
+
+        while let Some(current_hash) = stack.pop() {
+            if !visited.insert(current_hash) {
+                continue;
+            }
+            if !self.pending.contains_key(&current_hash) {
+                if self.is_valid_root(&current_hash) {
+                    continue;
+                }
+                return None;
+            }
+            pending_blocks.push(current_hash);
+            for dep_hash in self.dependency_hashes(&current_hash) {
+                if !visited.contains(&dep_hash) {
+                    stack.push(dep_hash);
+                }
+            }
+        }
+
+        Some(pending_blocks)
+    }
+
+    /// Topologically sort pending blocks using Kahn's algorithm.
+    ///
+    /// Produces parent/uncle-before-child ordering. Only counts edges
+    /// within the pending subgraph (edges to store roots contribute
+    /// zero in-degree). Returns None if a cycle is detected.
+    fn topological_sort(&self, pending_hashes: &[BlockHash]) -> Option<Vec<BlockHash>> {
+        let pending_set: HashSet<BlockHash> = pending_hashes.iter().copied().collect();
+        let mut in_degree: HashMap<BlockHash, usize> = HashMap::with_capacity(pending_hashes.len());
+        for hash in pending_hashes {
+            in_degree.insert(*hash, 0);
+        }
+        for hash in pending_hashes {
+            for dep_hash in self.dependency_hashes(hash) {
+                if pending_set.contains(&dep_hash) {
+                    *in_degree.entry(*hash).or_insert(0) += 1;
+                }
+            }
+        }
+
+        let mut queue: VecDeque<BlockHash> = VecDeque::with_capacity(pending_hashes.len());
+        for (hash, degree) in &in_degree {
+            if *degree == 0 {
+                queue.push_back(*hash);
+            }
+        }
+
+        let mut sorted = Vec::with_capacity(pending_hashes.len());
+        while let Some(ready_hash) = queue.pop_front() {
+            sorted.push(ready_hash);
+            if let Some(dependent_list) = self.dependents.get(&ready_hash) {
+                for dependent_hash in dependent_list {
+                    if let Some(degree) = in_degree.get_mut(dependent_hash) {
+                        *degree = degree.saturating_sub(1);
+                        if *degree == 0 {
+                            queue.push_back(*dependent_hash);
+                        }
+                    }
+                }
+            }
+        }
+
+        if sorted.len() != pending_hashes.len() {
+            warn!(
+                "Cycle detected in pending DAG, sorted {} of {} blocks",
+                sorted.len(),
+                pending_hashes.len()
+            );
+            return None;
+        }
+
+        Some(sorted)
+    }
+
+    /// Try to build a ready chain rooted at valid store blocks.
+    ///
+    /// Starting from start_hash, walks the pending DAG via parent and
+    /// uncle edges. If every leaf dependency is a valid root in the
+    /// store, returns a topologically sorted Vec of pending block
+    /// hashes (parent/uncle before child). Returns None if any leaf
+    /// dependency is missing or a cycle exists.
+    fn try_build_ready_chain(&self, start_hash: &BlockHash) -> Option<Vec<BlockHash>> {
+        let pending_hashes = self.collect_pending_subgraph(start_hash)?;
+        self.topological_sort(&pending_hashes)
+    }
+
+    /// Find dependencies missing from both the pending set and the store.
+    ///
+    /// Walks the pending DAG from start_hash, collecting any
+    /// dependency that is neither pending nor a valid root in the
+    /// store. These are the blocks that need to be fetched.
+    fn find_missing_dependencies(&self, start_hash: &BlockHash) -> HashSet<BlockHash> {
+        let mut missing = HashSet::with_capacity(4);
+        let mut visited = HashSet::with_capacity(16);
+        let mut stack = Vec::with_capacity(16);
+        stack.push(*start_hash);
+
+        while let Some(current_hash) = stack.pop() {
+            if !visited.insert(current_hash) {
+                continue;
+            }
+            if !self.pending.contains_key(&current_hash) {
+                if !self.is_valid_root(&current_hash) {
+                    missing.insert(current_hash);
+                }
+                continue;
+            }
+            for dep_hash in self.dependency_hashes(&current_hash) {
+                if !visited.contains(&dep_hash) {
+                    stack.push(dep_hash);
+                }
+            }
+        }
+
+        missing
+    }
 }
 
 #[cfg(test)]
@@ -362,5 +506,239 @@ mod tests {
 
         // All-zeros parent should not appear in dependents
         assert!(!receiver.dependents.contains_key(&BlockHash::all_zeros()));
+    }
+
+    fn create_block_receiver_with_mock(chain_store_handle: ChainStoreHandle) -> BlockReceiver {
+        let (_, event_rx) = create_block_receiver_channel();
+        let pool_difficulty = PoolDifficulty::default();
+        let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, _) = validation_worker::create_validation_channel();
+        BlockReceiver::new(
+            event_rx,
+            pool_difficulty,
+            chain_store_handle,
+            block_fetcher_handle,
+            validation_tx,
+        )
+    }
+
+    #[test]
+    fn test_try_build_ready_chain_single_block_with_valid_root() {
+        let root_hash = BlockHash::from_byte_array([0x11; 32]);
+
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_block_metadata()
+            .with(mockall::predicate::eq(root_hash))
+            .returning(|_| {
+                Ok(crate::store::block_tx_metadata::BlockMetadata {
+                    expected_height: Some(0),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::Confirmed,
+                })
+            });
+
+        let mut receiver = create_block_receiver_with_mock(mock_store);
+
+        let child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(root_hash.to_string())
+            .nonce(0xe9695791)
+            .build();
+        let child_hash = child_block.block_hash();
+
+        receiver.add_to_pending(child_hash, child_block);
+
+        let result = receiver.try_build_ready_chain(&child_hash);
+        assert!(result.is_some());
+        let sorted = result.unwrap();
+        assert_eq!(sorted.len(), 1);
+        assert_eq!(sorted[0], child_hash);
+    }
+
+    #[test]
+    fn test_try_build_ready_chain_missing_leaf_returns_none() {
+        let missing_parent_hash = BlockHash::from_byte_array([0x22; 32]);
+
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store.expect_get_block_metadata().returning(|_| {
+            Err(crate::store::writer::StoreError::NotFound(
+                "not found".to_string(),
+            ))
+        });
+
+        let mut receiver = create_block_receiver_with_mock(mock_store);
+
+        let child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(missing_parent_hash.to_string())
+            .nonce(0xe9695791)
+            .build();
+        let child_hash = child_block.block_hash();
+
+        receiver.add_to_pending(child_hash, child_block);
+
+        let result = receiver.try_build_ready_chain(&child_hash);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_try_build_ready_chain_parent_before_child_ordering() {
+        let root_hash = BlockHash::from_byte_array([0x33; 32]);
+
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_block_metadata()
+            .with(mockall::predicate::eq(root_hash))
+            .returning(|_| {
+                Ok(crate::store::block_tx_metadata::BlockMetadata {
+                    expected_height: Some(0),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::Confirmed,
+                })
+            });
+
+        let mut receiver = create_block_receiver_with_mock(mock_store);
+
+        // Build parent -> child chain, both pending
+        let parent_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(root_hash.to_string())
+            .nonce(0xe9695790)
+            .build();
+        let parent_hash = parent_block.block_hash();
+
+        let child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(parent_hash.to_string())
+            .nonce(0xe9695791)
+            .build();
+        let child_hash = child_block.block_hash();
+
+        receiver.add_to_pending(parent_hash, parent_block);
+        receiver.add_to_pending(child_hash, child_block);
+
+        let result = receiver.try_build_ready_chain(&child_hash);
+        assert!(result.is_some());
+        let sorted = result.unwrap();
+        assert_eq!(sorted.len(), 2);
+
+        let parent_pos = sorted.iter().position(|h| *h == parent_hash).unwrap();
+        let child_pos = sorted.iter().position(|h| *h == child_hash).unwrap();
+        assert!(parent_pos < child_pos, "Parent must come before child");
+    }
+
+    #[test]
+    fn test_try_build_ready_chain_uncle_before_nephew() {
+        let root_hash = BlockHash::from_byte_array([0x44; 32]);
+
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_block_metadata()
+            .with(mockall::predicate::eq(root_hash))
+            .returning(|_| {
+                Ok(crate::store::block_tx_metadata::BlockMetadata {
+                    expected_height: Some(0),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::Confirmed,
+                })
+            });
+
+        let mut receiver = create_block_receiver_with_mock(mock_store);
+
+        // Uncle block: parent is root
+        let uncle_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(root_hash.to_string())
+            .nonce(0xe9695790)
+            .build();
+        let uncle_hash = uncle_block.block_hash();
+
+        // Nephew block: parent is root, uncle is uncle_block
+        let nephew_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(root_hash.to_string())
+            .uncles(vec![uncle_hash])
+            .nonce(0xe9695791)
+            .build();
+        let nephew_hash = nephew_block.block_hash();
+
+        receiver.add_to_pending(uncle_hash, uncle_block);
+        receiver.add_to_pending(nephew_hash, nephew_block);
+
+        let result = receiver.try_build_ready_chain(&nephew_hash);
+        assert!(result.is_some());
+        let sorted = result.unwrap();
+        assert_eq!(sorted.len(), 2);
+
+        let uncle_pos = sorted.iter().position(|h| *h == uncle_hash).unwrap();
+        let nephew_pos = sorted.iter().position(|h| *h == nephew_hash).unwrap();
+        assert!(uncle_pos < nephew_pos, "Uncle must come before nephew");
+    }
+
+    #[test]
+    fn test_find_missing_dependencies_returns_missing_hashes() {
+        let missing_hash = BlockHash::from_byte_array([0x55; 32]);
+
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store.expect_get_block_metadata().returning(|_| {
+            Err(crate::store::writer::StoreError::NotFound(
+                "not found".to_string(),
+            ))
+        });
+
+        let mut receiver = create_block_receiver_with_mock(mock_store);
+
+        let child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(missing_hash.to_string())
+            .nonce(0xe9695791)
+            .build();
+        let child_hash = child_block.block_hash();
+
+        receiver.add_to_pending(child_hash, child_block);
+
+        let missing = receiver.find_missing_dependencies(&child_hash);
+        assert_eq!(missing.len(), 1);
+        assert!(missing.contains(&missing_hash));
+    }
+
+    #[test]
+    fn test_find_missing_dependencies_empty_when_all_rooted() {
+        let root_hash = BlockHash::from_byte_array([0x66; 32]);
+
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_block_metadata()
+            .with(mockall::predicate::eq(root_hash))
+            .returning(|_| {
+                Ok(crate::store::block_tx_metadata::BlockMetadata {
+                    expected_height: Some(0),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::Candidate,
+                })
+            });
+
+        let mut receiver = create_block_receiver_with_mock(mock_store);
+
+        let child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(root_hash.to_string())
+            .nonce(0xe9695791)
+            .build();
+        let child_hash = child_block.block_hash();
+
+        receiver.add_to_pending(child_hash, child_block);
+
+        let missing = receiver.find_missing_dependencies(&child_hash);
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn test_collect_pending_subgraph_genesis_parent_block() {
+        // A block with all-zeros parent (genesis) has no parent
+        // dependency to check, so it is immediately collectible.
+        let mock_store = ChainStoreHandle::default();
+        let mut receiver = create_block_receiver_with_mock(mock_store);
+
+        let genesis_child = TestShareBlockBuilder::new().build();
+        let block_hash = genesis_child.block_hash();
+        receiver.add_to_pending(block_hash, genesis_child);
+
+        let result = receiver.collect_pending_subgraph(&block_hash);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().len(), 1);
     }
 }

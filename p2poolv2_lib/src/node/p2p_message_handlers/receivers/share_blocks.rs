@@ -80,25 +80,17 @@ pub async fn handle_share_block(
         return Ok(());
     }
 
-    // Allow blocks whose header is already on the candidate chain (headers were
-    // ASERT-validated and organised during share_headers). Otherwise require minimum
-    // difficulty and full pool difficulty to prevent spam and reject invalid blocks.
-    if !chain_store_handle.is_candidate(&block_hash) {
-        if let Err(validation_error) = share_validator.validate_share_header(&share_block.header) {
-            warn!("Rejecting share block {block_hash} with invalid header: {validation_error}");
-            return Err(format!("Invalid share header: {validation_error}").into());
-        }
-        if let Err(validation_error) =
-            share_validator.validate_with_pool_difficulty(&share_block.header, chain_store_handle)
-        {
-            warn!(
-                "Rejecting share block {block_hash}: pool difficulty check failed: {validation_error}"
-            );
-            return Err(format!("Pool difficulty validation failed: {validation_error}").into());
-        }
+    // If new block not in store, run minimal PoW check for dos prevention
+    if let Err(validation_error) = share_validator.validate_share_header(&share_block.header) {
+        warn!("Rejecting share block {block_hash} with invalid header: {validation_error}");
+        return Err(format!("Invalid share header: {validation_error}").into());
     }
 
-    // TODO: Check if this will be an uncle, for now add to main chain
+    // We can't save block just after validate_share_header
+    //
+    // we buffer blocks in a queue and wait till all parents are
+    // received. we could still use missing dependencies through the
+    // block fetcher to avoid duplicate fetching.
     if let Err(store_error) = chain_store_handle
         .add_share_block(share_block.clone(), true)
         .await
