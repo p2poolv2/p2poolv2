@@ -386,7 +386,12 @@ impl BlockReceiver {
 
         let root_header = self.chain_store_handle.get_share_header(&root_hash)?;
         let root_metadata = self.chain_store_handle.get_block_metadata(&root_hash)?;
-        Ok((root_header.time, root_metadata.expected_height.unwrap_or(0)))
+        let anchor_height = root_metadata.expected_height.ok_or_else(|| {
+            std::io::Error::other(format!(
+                "Missing expected_height for anchor block {root_hash}"
+            ))
+        })?;
+        Ok((root_header.time, anchor_height))
     }
 
     /// Validate ASERT difficulty and commit a ready chain to the store.
