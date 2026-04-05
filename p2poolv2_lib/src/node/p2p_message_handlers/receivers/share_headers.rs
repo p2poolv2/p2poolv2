@@ -248,7 +248,7 @@ fn extract_confirmed_chain(
 
 /// Validate ASERT difficulty for each header in the confirmed chain.
 /// Returns the cumulative work of the validated chain.
-fn validate_asert_chain(
+pub(crate) fn validate_asert_chain(
     confirmed_chain: &[&ShareHeader],
     pool_difficulty: &PoolDifficulty,
     anchor_time: u32,
