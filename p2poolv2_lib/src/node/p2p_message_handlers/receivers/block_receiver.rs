@@ -459,6 +459,46 @@ impl BlockReceiver {
         Ok(())
     }
 
+    /// After committing blocks, collect all transitively unblocked
+    /// pending dependents and commit them. Walks the dependents index
+    /// breadth-first to find all pending blocks whose dependencies
+    /// are now satisfied, then commits them in topological order.
+    async fn cascade_committed(
+        &mut self,
+        committed_hashes: &[BlockHash],
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let mut queue: VecDeque<BlockHash> = VecDeque::with_capacity(8);
+        for committed_hash in committed_hashes {
+            if let Some(dependent_list) = self.dependents.get(committed_hash) {
+                for dependent_hash in dependent_list {
+                    if self.pending.contains_key(dependent_hash) {
+                        queue.push_back(*dependent_hash);
+                    }
+                }
+            }
+        }
+
+        while let Some(dependent_hash) = queue.pop_front() {
+            if !self.pending.contains_key(&dependent_hash) {
+                // Already committed in an earlier iteration
+                continue;
+            }
+            let ordered = vec![dependent_hash];
+            self.commit_ready_chain(ordered).await?;
+
+            // Check if this newly committed block unblocks further dependents
+            if let Some(next_dependents) = self.dependents.get(&dependent_hash) {
+                for next_hash in next_dependents {
+                    if self.pending.contains_key(next_hash) {
+                        queue.push_back(*next_hash);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Process an incoming share block: buffer or commit.
     ///
     /// If the block's dependency DAG is complete and rooted at valid
@@ -485,7 +525,9 @@ impl BlockReceiver {
         self.add_to_pending(block_hash, share_block);
 
         if let Some(ordered) = self.try_build_ready_chain(&block_hash) {
+            let committed: Vec<BlockHash> = ordered.clone();
             self.commit_ready_chain(ordered).await?;
+            self.cascade_committed(&committed).await?;
         } else {
             let missing = self.find_missing_dependencies(&block_hash);
             if !missing.is_empty() {
@@ -1161,6 +1203,127 @@ mod tests {
         let result = receiver.process_share_block(peer_id, child_block).await;
         assert!(result.is_ok());
         assert_eq!(receiver.pending_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_cascade_commits_child_when_parent_arrives() {
+        let root_hash = BlockHash::from_byte_array([0xcc; 32]);
+        let root_header = TestShareBlockBuilder::new()
+            .nonce(0xe9695790)
+            .build()
+            .header;
+        let root_header_clone = root_header.clone();
+
+        let mut mock_store = ChainStoreHandle::default();
+
+        let confirmed_metadata = crate::store::block_tx_metadata::BlockMetadata {
+            expected_height: Some(0),
+            chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+            status: Status::Confirmed,
+        };
+        let not_found = crate::store::writer::StoreError::NotFound("not found".to_string());
+
+        let mut seq = mockall::Sequence::new();
+
+        // 1. Child arrives: collect_pending_subgraph checks parent_hash -> NotFound
+        mock_store
+            .expect_get_block_metadata()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(move |_| Err(not_found.clone()));
+
+        // 2. Child: find_missing_dependencies checks parent_hash -> NotFound
+        let not_found2 = crate::store::writer::StoreError::NotFound("not found".to_string());
+        mock_store
+            .expect_get_block_metadata()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(move |_| Err(not_found2.clone()));
+
+        // 3. Parent arrives: collect_pending_subgraph checks root_hash -> Confirmed
+        let meta3 = confirmed_metadata.clone();
+        mock_store
+            .expect_get_block_metadata()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(move |_| Ok(meta3.clone()));
+
+        // 4. Parent commit: get_anchor_info checks root_hash -> Confirmed
+        let meta4 = confirmed_metadata.clone();
+        mock_store
+            .expect_get_block_metadata()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(move |_| Ok(meta4.clone()));
+
+        // 5. Cascade child: get_anchor_info checks parent_hash -> Confirmed
+        let meta5 = confirmed_metadata.clone();
+        mock_store
+            .expect_get_block_metadata()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(move |_| Ok(meta5.clone()));
+
+        mock_store
+            .expect_get_share_header()
+            .returning(move |_| Ok(root_header_clone.clone()));
+        mock_store.expect_add_share_block().returning(|_, _| Ok(()));
+        mock_store.expect_organise_header().returning(|_| Ok(None));
+
+        let mut mock_pool_difficulty = PoolDifficulty::default();
+        mock_pool_difficulty
+            .expect_calculate_target_clamped()
+            .returning(|_, _, _| {
+                bitcoin::CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
+            });
+
+        let (mut receiver, _block_fetcher_rx, mut validation_rx) =
+            create_full_block_receiver(mock_store, mock_pool_difficulty);
+
+        // Build parent -> child chain
+        let mut parent_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(root_hash.to_string())
+            .nonce(0xe9695791)
+            .build();
+        parent_block.header.bits =
+            bitcoin::CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
+        let parent_hash = parent_block.block_hash();
+
+        let mut child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(parent_hash.to_string())
+            .nonce(0xe9695792)
+            .build();
+        child_block.header.bits =
+            bitcoin::CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
+        let child_hash = child_block.block_hash();
+
+        let peer_id = libp2p::PeerId::random();
+
+        // Child arrives first -- parent is missing, goes to pending
+        let result = receiver.process_share_block(peer_id, child_block).await;
+        assert!(result.is_ok());
+        assert_eq!(receiver.pending_count(), 1);
+
+        // Parent arrives -- commits itself, then cascade commits child
+        let result = receiver.process_share_block(peer_id, parent_block).await;
+        assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+
+        // Both blocks should be committed (removed from pending)
+        assert_eq!(receiver.pending_count(), 0);
+
+        // Two ValidateBlock events should have been sent
+        let event1 = validation_rx
+            .try_recv()
+            .expect("expected first validation event");
+        match event1 {
+            ValidationEvent::ValidateBlock(hash) => assert_eq!(hash, parent_hash),
+        }
+        let event2 = validation_rx
+            .try_recv()
+            .expect("expected second validation event");
+        match event2 {
+            ValidationEvent::ValidateBlock(hash) => assert_eq!(hash, child_hash),
+        }
     }
 
     #[tokio::test]
