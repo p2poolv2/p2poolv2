@@ -365,17 +365,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_response_share_headers() {
-        let pool_difficulty_ctx = PoolDifficulty::new_context();
-        pool_difficulty_ctx
-            .expect()
-            .returning(|_bits, _time, _height| {
-                let mut mock = PoolDifficulty::default();
-                mock.expect_calculate_target_clamped().returning(|_, _, _| {
-                    CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
-                });
-                mock
-            });
-
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let mut chain_store_handle = ChainStoreHandle::default();
 
@@ -393,6 +382,15 @@ mod tests {
         mock_validator
             .expect_validate_header_minimum_difficulty()
             .returning(|_| Ok(()));
+        let mut pool_difficulty = PoolDifficulty::default();
+        pool_difficulty
+            .expect_calculate_target_clamped()
+            .returning(|_, _, _| {
+                CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
+            });
+        mock_validator
+            .expect_pool_difficulty()
+            .return_const(pool_difficulty);
 
         let mut handler = build_test_handler_with_validator(
             chain_store_handle,

@@ -113,8 +113,7 @@ fn validate_header_chain(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     validate_all_minimum_difficulty(share_headers, share_validator)?;
 
-    let genesis_header = chain_store_handle.get_genesis_header()?;
-    let pool_difficulty = PoolDifficulty::new(genesis_header.bits, genesis_header.time, 0);
+    let pool_difficulty = share_validator.pool_difficulty();
 
     let (anchor_hash, anchor_metadata) = find_chain_anchor(share_headers, chain_store_handle)?;
     let anchor_header = chain_store_handle.get_share_header(&anchor_hash)?;
@@ -124,7 +123,7 @@ fn validate_header_chain(
     let confirmed_chain = extract_confirmed_chain(share_headers, anchor_hash);
     let cumulative_chain_work = validate_asert_chain(
         &confirmed_chain,
-        &pool_difficulty,
+        pool_difficulty,
         anchor_header.time,
         anchor_metadata.expected_height.unwrap_or(0),
     )?;
@@ -429,20 +428,17 @@ mod tests {
         mock_validator
             .expect_validate_header_minimum_difficulty()
             .returning(|_| Ok(()));
+        let mut pool_difficulty = PoolDifficulty::default();
+        pool_difficulty
+            .expect_calculate_target_clamped()
+            .returning(|_, _, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
+        mock_validator
+            .expect_pool_difficulty()
+            .return_const(pool_difficulty);
     }
 
     #[tokio::test]
     async fn test_fewer_than_max_headers_does_not_send_getheaders() {
-        let pool_difficulty_ctx = PoolDifficulty::new_context();
-        pool_difficulty_ctx
-            .expect()
-            .returning(|_bits, _time, _height| {
-                let mut mock = PoolDifficulty::default();
-                mock.expect_calculate_target_clamped()
-                    .returning(|_, _, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
-                mock
-            });
-
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle
@@ -506,16 +502,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_share_headers_sends_getheaders_to_same_peer() {
-        let pool_difficulty_ctx = PoolDifficulty::new_context();
-        pool_difficulty_ctx
-            .expect()
-            .returning(|_bits, _time, _height| {
-                let mut mock = PoolDifficulty::default();
-                mock.expect_calculate_target_clamped()
-                    .returning(|_, _, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
-                mock
-            });
-
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle
@@ -572,16 +558,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_fewer_than_max_headers_sends_fetch_blocks_event() {
-        let pool_difficulty_ctx = PoolDifficulty::new_context();
-        pool_difficulty_ctx
-            .expect()
-            .returning(|_bits, _time, _height| {
-                let mut mock = PoolDifficulty::default();
-                mock.expect_calculate_target_clamped()
-                    .returning(|_, _, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
-                mock
-            });
-
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle
@@ -634,16 +610,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_asert_mismatch_rejected() {
-        let pool_difficulty_ctx = PoolDifficulty::new_context();
-        pool_difficulty_ctx
-            .expect()
-            .returning(|_bits, _time, _height| {
-                let mut mock = PoolDifficulty::default();
-                mock.expect_calculate_target_clamped()
-                    .returning(|_, _, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
-                mock
-            });
-
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
         setup_chain_validation_mocks(&mut chain_store_handle);
