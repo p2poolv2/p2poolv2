@@ -17,6 +17,10 @@
 use crate::node::p2p_message_handlers::MAX_HEADERS_IN_RESPONSE;
 use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
 use crate::node::{SwarmSend, messages::Message};
+#[cfg(test)]
+#[mockall_double::double]
+use crate::pool_difficulty::PoolDifficulty;
+#[cfg(not(test))]
 use crate::pool_difficulty::PoolDifficulty;
 #[cfg(test)]
 #[mockall_double::double]
@@ -109,8 +113,7 @@ fn validate_header_chain(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     validate_all_minimum_difficulty(share_headers, share_validator)?;
 
-    let genesis_header = chain_store_handle.get_genesis_header()?;
-    let pool_difficulty = PoolDifficulty::new(genesis_header.bits, genesis_header.time, 0);
+    let pool_difficulty = share_validator.pool_difficulty();
 
     let (anchor_hash, anchor_metadata) = find_chain_anchor(share_headers, chain_store_handle)?;
     let anchor_header = chain_store_handle.get_share_header(&anchor_hash)?;
@@ -120,7 +123,7 @@ fn validate_header_chain(
     let confirmed_chain = extract_confirmed_chain(share_headers, anchor_hash);
     let cumulative_chain_work = validate_asert_chain(
         &confirmed_chain,
-        &pool_difficulty,
+        pool_difficulty,
         anchor_header.time,
         anchor_metadata.expected_height.unwrap_or(0),
     )?;
@@ -248,7 +251,7 @@ fn extract_confirmed_chain(
 
 /// Validate ASERT difficulty for each header in the confirmed chain.
 /// Returns the cumulative work of the validated chain.
-fn validate_asert_chain(
+pub(crate) fn validate_asert_chain(
     confirmed_chain: &[&ShareHeader],
     pool_difficulty: &PoolDifficulty,
     anchor_time: u32,
@@ -425,6 +428,13 @@ mod tests {
         mock_validator
             .expect_validate_header_minimum_difficulty()
             .returning(|_| Ok(()));
+        let mut pool_difficulty = PoolDifficulty::default();
+        pool_difficulty
+            .expect_calculate_target_clamped()
+            .returning(|_, _, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
+        mock_validator
+            .expect_pool_difficulty()
+            .return_const(pool_difficulty);
     }
 
     #[tokio::test]

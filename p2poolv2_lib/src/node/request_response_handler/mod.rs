@@ -24,6 +24,7 @@ use crate::node::SwarmSend;
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::{InventoryMessage, Message};
 use crate::node::p2p_message_handlers::handle_response;
+use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
 use crate::node::validation_worker::ValidationSender;
 use crate::service::build_service;
 use crate::service::p2p_service::RequestContext;
@@ -65,6 +66,7 @@ pub struct RequestResponseHandler<C: Send + Sync> {
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     block_fetcher_handle: BlockFetcherHandle,
     validation_tx: ValidationSender,
+    block_receiver_handle: BlockReceiverHandle,
     peer_block_knowledge: PeerBlockKnowledge,
     share_validator: Arc<dyn ShareValidator + Send + Sync>,
 }
@@ -80,6 +82,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
         swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
         block_fetcher_handle: BlockFetcherHandle,
         validation_tx: ValidationSender,
+        block_receiver_handle: BlockReceiverHandle,
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
     ) -> Self {
         let service = build_service::<ResponseChannel<Message>, _>(network_config);
@@ -89,6 +92,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
             swarm_tx,
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle,
             peer_block_knowledge: PeerBlockKnowledge::default(),
             share_validator,
         }
@@ -215,6 +219,7 @@ impl<C: Send + Sync> RequestResponseHandler<C> {
             time_provider: SystemTimeProvider,
             block_fetcher_handle: self.block_fetcher_handle.clone(),
             validation_tx: self.validation_tx.clone(),
+            block_receiver_handle: self.block_receiver_handle.clone(),
             share_validator: self.share_validator.clone(),
         };
 
@@ -266,6 +271,7 @@ impl<C: Send + Sync> RequestResponseHandler<C> {
             self.swarm_tx.clone(),
             self.block_fetcher_handle.clone(),
             self.validation_tx.clone(),
+            self.block_receiver_handle.clone(),
             self.share_validator.clone(),
         )
         .await
@@ -282,6 +288,9 @@ mod tests {
     use crate::config::NetworkConfig;
     use crate::node::SwarmSend;
     use crate::node::messages::{InventoryMessage, Message};
+    use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
+    #[mockall_double::double]
+    use crate::pool_difficulty::PoolDifficulty;
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::validation::MockDefaultShareValidator;
@@ -323,12 +332,14 @@ mod tests {
         let (block_fetcher_tx, _block_fetcher_rx) = block_fetcher::create_block_fetcher_channel();
         let (validation_tx, _validation_rx) =
             crate::node::validation_worker::create_validation_channel();
+        let (block_receiver_handle, _block_receiver_rx) = create_block_receiver_channel();
         RequestResponseHandler {
             request_service: service,
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle: block_fetcher_tx,
             validation_tx,
+            block_receiver_handle,
             peer_block_knowledge: PeerBlockKnowledge::default(),
             share_validator,
         }
@@ -371,6 +382,15 @@ mod tests {
         mock_validator
             .expect_validate_header_minimum_difficulty()
             .returning(|_| Ok(()));
+        let mut pool_difficulty = PoolDifficulty::default();
+        pool_difficulty
+            .expect_calculate_target_clamped()
+            .returning(|_, _, _| {
+                CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
+            });
+        mock_validator
+            .expect_pool_difficulty()
+            .return_const(pool_difficulty);
 
         let mut handler = build_test_handler_with_validator(
             chain_store_handle,
@@ -520,12 +540,14 @@ mod tests {
         let (block_fetcher_tx, _block_fetcher_rx) = block_fetcher::create_block_fetcher_channel();
         let (validation_tx, _validation_rx) =
             crate::node::validation_worker::create_validation_channel();
+        let (block_receiver_handle, _block_receiver_rx) = create_block_receiver_channel();
         let mut handler = RequestResponseHandler {
             request_service: BoxService::new(NeverReadyService),
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle: block_fetcher_tx,
             validation_tx,
+            block_receiver_handle,
             peer_block_knowledge: PeerBlockKnowledge::default(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
         };

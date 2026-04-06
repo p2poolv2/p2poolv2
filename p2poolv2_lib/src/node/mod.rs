@@ -28,6 +28,7 @@ pub mod p2p_message_handlers;
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender, PeerResponse, PeerStatus};
 use crate::node::messages::Message;
+use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
 use crate::node::p2p_message_handlers::senders::send_getheaders;
 use crate::node::request_response_handler::RequestResponseHandler;
 use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
@@ -117,6 +118,7 @@ impl Node {
         chain_store_handle: ChainStoreHandle,
         block_fetcher_handle: BlockFetcherHandle,
         validation_tx: ValidationSender,
+        block_receiver_handle: BlockReceiverHandle,
         monitoring_event_sender: MonitoringEventSender,
         pool_difficulty: PoolDifficulty,
     ) -> Result<Self, Box<dyn std::error::Error>> {
@@ -223,6 +225,7 @@ impl Node {
             swarm_tx.clone(),
             block_fetcher_handle,
             validation_tx,
+            block_receiver_handle,
             share_validator,
         );
 
@@ -512,7 +515,9 @@ mod tests {
     use crate::config::{
         ApiConfig, Config, LoggingConfig, NetworkConfig, StoreConfig, StratumConfig,
     };
+    use crate::monitoring_events::create_monitoring_event_channel;
     use crate::node::Node;
+    use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
     use crate::node::validation_worker::create_validation_channel;
     use bitcoindrpc::BitcoinRpcConfig;
@@ -583,13 +588,14 @@ mod tests {
 
         let (block_fetcher_tx, _block_fetcher_rx) = create_block_fetcher_channel();
         let (validation_tx, _validation_rx) = create_validation_channel();
-        let (monitoring_tx, _monitoring_rx) =
-            crate::monitoring_events::create_monitoring_event_channel();
+        let (block_receiver_handle, _block_receiver_rx) = create_block_receiver_channel();
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let mut node = Node::new(
             config.clone(),
             chain_store_handle,
             block_fetcher_tx,
             validation_tx,
+            block_receiver_handle,
             monitoring_tx,
             PoolDifficulty::default(),
         )
