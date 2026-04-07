@@ -34,7 +34,7 @@ use crate::shares::validation::ShareValidator;
 use crate::store::dag_store::MAX_UNCLES_DEPTH;
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, Target, Work};
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
@@ -111,23 +111,31 @@ fn validate_header_chain(
     chain_store_handle: &ChainStoreHandle,
     share_validator: &(dyn ShareValidator + Send + Sync),
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    validate_all_minimum_difficulty(share_headers, share_validator)?;
-
     let pool_difficulty = share_validator.pool_difficulty();
 
     let (anchor_hash, anchor_metadata) = find_chain_anchor(share_headers, chain_store_handle)?;
+    debug!(
+        "Anchor hash {:?} and anchor height {:?}",
+        anchor_hash, anchor_metadata.expected_height
+    );
     let anchor_header = chain_store_handle.get_share_header(&anchor_hash)?;
 
-    validate_parent_links(share_headers, anchor_hash)?;
-
-    let confirmed_chain = extract_confirmed_chain(share_headers, anchor_hash);
-    let cumulative_chain_work = validate_asert_chain(
-        &confirmed_chain,
-        pool_difficulty,
-        anchor_header.time,
-        anchor_metadata.expected_height.unwrap_or(0),
+    let declared_uncles = collect_declared_uncles(share_headers);
+    let (recent_confirmed, parent_info) = seed_from_store(
+        anchor_hash,
+        &anchor_header,
+        &anchor_metadata,
+        chain_store_handle,
     )?;
-
+    let (confirmed_chain, cumulative_chain_work, uncle_headers_seen) = classify_link_and_validate(
+        share_headers,
+        recent_confirmed,
+        parent_info,
+        &declared_uncles,
+        share_validator,
+        pool_difficulty,
+    )?;
+    verify_have_all_uncles(&confirmed_chain, &uncle_headers_seen, chain_store_handle)?;
     validate_cumulative_work(anchor_metadata.chain_work, cumulative_chain_work)?;
 
     debug!(
@@ -138,72 +146,158 @@ fn validate_header_chain(
     Ok(())
 }
 
-/// Validate every header in the batch meets minimum pool difficulty.
-fn validate_all_minimum_difficulty(
-    share_headers: &[ShareHeader],
-    share_validator: &(dyn ShareValidator + Send + Sync),
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+/// Build the set of all blockhashes declared as uncles by any header in the batch.
+fn collect_declared_uncles(share_headers: &[ShareHeader]) -> HashSet<BlockHash> {
+    let mut declared = HashSet::with_capacity(share_headers.len() * MAX_UNCLES_DEPTH as usize);
     for header in share_headers {
-        share_validator.validate_header_minimum_difficulty(header)?;
+        for uncle_hash in &header.uncles {
+            declared.insert(*uncle_hash);
+        }
     }
-    Ok(())
+    declared
 }
 
-/// Verify headers form a valid chain with uncles correctly interleaved.
+/// Seed the recent confirmed window and parent_info map from the store.
 ///
-/// Uncles appear before the nephew that references them in the batch
-/// (as produced by get_descendant_blockhashes). For each header, its
-/// prev_share_blockhash must either:
-/// - equal the chain tip (advancing the confirmed chain), or
-/// - equal any confirmed chain hash within MAX_UNCLES_DEPTH (valid uncle)
-///
-/// Additionally, every uncle header must be referenced in the uncles
-/// field of a later confirmed chain header.
-fn validate_parent_links(
-    share_headers: &[ShareHeader],
+/// Walks up to MAX_UNCLES_DEPTH ancestors from the anchor via prev_share_blockhash,
+/// stopping early at genesis or on lookup error. The returned VecDeque contains
+/// older ancestors first with the anchor at the back. parent_info maps each
+/// seeded hash to its (time, height) so ASERT can be evaluated against any
+/// header whose parent is one of the seeded ancestors.
+fn seed_from_store(
     anchor_hash: BlockHash,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let window_size = MAX_UNCLES_DEPTH as usize;
-    let mut recent_confirmed: VecDeque<BlockHash> = VecDeque::with_capacity(window_size + 1);
+    anchor_header: &ShareHeader,
+    anchor_metadata: &crate::store::block_tx_metadata::BlockMetadata,
+    chain_store_handle: &ChainStoreHandle,
+) -> Result<(VecDeque<BlockHash>, HashMap<BlockHash, (u32, u32)>), Box<dyn Error + Send + Sync>> {
+    let capacity = MAX_UNCLES_DEPTH as usize + 1;
+    let mut recent_confirmed: VecDeque<BlockHash> = VecDeque::with_capacity(capacity);
+    let mut parent_info: HashMap<BlockHash, (u32, u32)> = HashMap::with_capacity(capacity);
+
+    let anchor_height = anchor_metadata
+        .expected_height
+        .ok_or_else(|| format!("Anchor {anchor_hash} metadata has no expected_height"))?;
     recent_confirmed.push_back(anchor_hash);
-    let mut unreferenced_uncles = std::collections::HashSet::with_capacity(share_headers.len());
+    parent_info.insert(anchor_hash, (anchor_header.time, anchor_height));
 
-    for (index, current) in share_headers.iter().enumerate() {
-        let chain_tip = *recent_confirmed.back().unwrap();
-        let links_to_chain_tip = current.prev_share_blockhash == chain_tip;
-        let is_valid_uncle =
-            !links_to_chain_tip && recent_confirmed.contains(&current.prev_share_blockhash);
+    let mut current_hash = anchor_header.prev_share_blockhash;
+    let mut current_height = anchor_height;
+    let mut iterations: u8 = 0;
+    while current_height > 0 && iterations < MAX_UNCLES_DEPTH {
+        let header = chain_store_handle
+            .get_share_header(&current_hash)
+            .map_err(|store_error| {
+                format!("Failed to load ancestor {current_hash} from store: {store_error}")
+            })?;
+        current_height -= 1;
+        recent_confirmed.push_front(current_hash);
+        parent_info.insert(current_hash, (header.time, current_height));
+        current_hash = header.prev_share_blockhash;
+        iterations += 1;
+    }
 
-        if !links_to_chain_tip && !is_valid_uncle {
+    Ok((recent_confirmed, parent_info))
+}
+
+/// Walk the batch in order, classifying each header as uncle or confirmed,
+/// validating min PoW and ASERT for every header, and enforcing chain linkage.
+///
+/// Returns the confirmed chain and the cumulative work contributed by it.
+fn classify_link_and_validate<'a>(
+    share_headers: &'a [ShareHeader],
+    mut recent_confirmed: VecDeque<BlockHash>,
+    mut parent_info: HashMap<BlockHash, (u32, u32)>,
+    declared_uncles: &HashSet<BlockHash>,
+    share_validator: &(dyn ShareValidator + Send + Sync),
+    pool_difficulty: &PoolDifficulty,
+) -> Result<(Vec<&'a ShareHeader>, Work, HashSet<BlockHash>), Box<dyn Error + Send + Sync>> {
+    let window_capacity = MAX_UNCLES_DEPTH as usize + 1;
+    let mut confirmed_chain: Vec<&ShareHeader> = Vec::with_capacity(share_headers.len());
+    let mut confirmed_tip: BlockHash = *recent_confirmed.back().unwrap();
+    let mut cumulative_chain_work = Work::from_hex("0x00").unwrap();
+    let mut uncle_headers_seen: HashSet<BlockHash> = HashSet::with_capacity(share_headers.len());
+
+    for (index, header) in share_headers.iter().enumerate() {
+        share_validator.validate_header_minimum_difficulty(header)?;
+
+        let (parent_time, parent_height) = match parent_info.get(&header.prev_share_blockhash) {
+            Some(value) => *value,
+            None => {
+                return Err(format!(
+                    "Header {} at position {} has parent {} which is not in the recent confirmed window",
+                    header.block_hash(),
+                    index,
+                    header.prev_share_blockhash
+                )
+                .into());
+            }
+        };
+
+        let expected_bits = pool_difficulty.calculate_target_clamped(
+            parent_time,
+            parent_height,
+            header.bitcoin_header.bits,
+        );
+        if header.bits != expected_bits {
+            let block_hash = header.block_hash();
             return Err(format!(
-                "Header {} at position {} has parent {} which is not \
-                 the chain tip or a recent ancestor within uncle depth",
-                current.block_hash(),
-                index,
-                current.prev_share_blockhash
+                "ASERT mismatch for {block_hash}: declared bits {:#010x}, expected {:#010x}",
+                header.bits.to_consensus(),
+                expected_bits.to_consensus()
             )
             .into());
         }
-        if links_to_chain_tip {
-            recent_confirmed.push_back(current.block_hash());
-            if recent_confirmed.len() > window_size {
-                recent_confirmed.pop_front();
+
+        let header_hash = header.block_hash();
+        if declared_uncles.contains(&header_hash) {
+            // Uncle: ASERT validated above; do not extend the confirmed chain.
+            uncle_headers_seen.insert(header_hash);
+            continue;
+        }
+
+        // Confirmed: must extend the current tip.
+        if header.prev_share_blockhash != confirmed_tip {
+            return Err(format!(
+                "Header {} at position {} has parent {} which is not the chain tip {}",
+                header_hash, index, header.prev_share_blockhash, confirmed_tip
+            )
+            .into());
+        }
+
+        confirmed_chain.push(header);
+        cumulative_chain_work = cumulative_chain_work + header.get_work();
+        confirmed_tip = header_hash;
+        recent_confirmed.push_back(header_hash);
+        if recent_confirmed.len() > window_capacity {
+            recent_confirmed.pop_front();
+        }
+        parent_info.insert(header_hash, (header.time, parent_height + 1));
+    }
+
+    Ok((confirmed_chain, cumulative_chain_work, uncle_headers_seen))
+}
+
+/// Verify every uncle hash declared by a confirmed header was either delivered
+/// in this batch (and thus already validated in classify_link_and_validate) or
+/// is already organised in the store from an earlier batch. Catches phantom
+/// uncle references that no peer ever sent.
+fn verify_have_all_uncles(
+    confirmed_chain: &[&ShareHeader],
+    uncle_headers_seen: &HashSet<BlockHash>,
+    chain_store_handle: &ChainStoreHandle,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    for confirmed in confirmed_chain {
+        for uncle_hash in &confirmed.uncles {
+            if !uncle_headers_seen.contains(uncle_hash)
+                && !chain_store_handle.share_block_exists(uncle_hash)
+            {
+                return Err(format!(
+                    "Declared uncle {uncle_hash} not delivered in batch and not in store"
+                )
+                .into());
             }
-            for uncle_hash in &current.uncles {
-                unreferenced_uncles.remove(uncle_hash);
-            }
-        } else {
-            unreferenced_uncles.insert(current.block_hash());
         }
     }
-
-    if let Some(orphan) = unreferenced_uncles.iter().next() {
-        return Err(format!(
-            "Uncle {orphan} is not referenced by any confirmed chain header in the batch"
-        )
-        .into());
-    }
-
     Ok(())
 }
 
@@ -225,65 +319,6 @@ fn find_chain_anchor(
         .get_block_metadata(&anchor_hash)
         .map_err(|_| format!("Anchor {anchor_hash} metadata not found"))?;
     Ok((anchor_hash, anchor_metadata))
-}
-
-/// Extract the confirmed chain from the batch by following prev_share_blockhash
-/// links starting from the anchor. Returns headers in chain order.
-fn extract_confirmed_chain(
-    share_headers: &[ShareHeader],
-    anchor_hash: BlockHash,
-) -> Vec<&ShareHeader> {
-    let mut confirmed_chain = Vec::with_capacity(share_headers.len());
-    let mut current_parent = anchor_hash;
-    let mut remaining = share_headers;
-
-    while let Some(position) = remaining
-        .iter()
-        .position(|header| header.prev_share_blockhash == current_parent)
-    {
-        confirmed_chain.push(&remaining[position]);
-        current_parent = remaining[position].block_hash();
-        remaining = &remaining[position + 1..];
-    }
-
-    confirmed_chain
-}
-
-/// Validate ASERT difficulty for each header in the confirmed chain.
-/// Returns the cumulative work of the validated chain.
-pub(crate) fn validate_asert_chain(
-    confirmed_chain: &[&ShareHeader],
-    pool_difficulty: &PoolDifficulty,
-    anchor_time: u32,
-    anchor_height: u32,
-) -> Result<Work, Box<dyn Error + Send + Sync>> {
-    let zero_work = Work::from_hex("0x00").unwrap();
-    let mut cumulative_work = zero_work;
-    let mut parent_time = anchor_time;
-    let mut parent_height = anchor_height;
-
-    for header in confirmed_chain {
-        let expected_bits = pool_difficulty.calculate_target_clamped(
-            parent_time,
-            parent_height,
-            header.bitcoin_header.bits,
-        );
-        if header.bits != expected_bits {
-            let block_hash = header.block_hash();
-            return Err(format!(
-                "ASERT mismatch for {block_hash}: declared bits {:#010x}, expected {:#010x}",
-                header.bits.to_consensus(),
-                expected_bits.to_consensus()
-            )
-            .into());
-        }
-
-        cumulative_work = cumulative_work + header.get_work();
-        parent_time = header.time;
-        parent_height += 1;
-    }
-
-    Ok(cumulative_work)
 }
 
 /// Verify cumulative chain work exceeds the minimum threshold.
@@ -644,195 +679,347 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_parent_links_accepts_single_header_linked_to_anchor() {
+    fn test_validate_header_chain_accepts_single_header_linked_to_anchor() {
         let anchor = TestShareBlockBuilder::new().nonce(1).build();
-        let child = TestShareBlockBuilder::new()
+        let mut child = TestShareBlockBuilder::new()
             .prev_share_blockhash(anchor.block_hash().to_string())
             .nonce(2)
-            .build();
+            .build()
+            .header;
+        child.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
 
-        let result = validate_parent_links(&[child.header], anchor.block_hash());
+        let mut chain_store_handle = ChainStoreHandle::default();
+        setup_chain_validation_mocks(&mut chain_store_handle);
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+
+        let result = validate_header_chain(&[child], &chain_store_handle, &mock_validator);
         assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
     }
 
     #[test]
-    fn test_validate_parent_links_accepts_linear_chain() {
+    fn test_validate_header_chain_accepts_linear_chain() {
         let anchor = TestShareBlockBuilder::new().nonce(1).build();
-        let share_a = TestShareBlockBuilder::new()
+        let mut share_a = TestShareBlockBuilder::new()
             .prev_share_blockhash(anchor.block_hash().to_string())
             .nonce(2)
-            .build();
-        let share_b = TestShareBlockBuilder::new()
+            .build()
+            .header;
+        share_a.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        let mut share_b = TestShareBlockBuilder::new()
             .prev_share_blockhash(share_a.block_hash().to_string())
             .nonce(3)
-            .build();
+            .build()
+            .header;
+        share_b.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
 
-        let headers = vec![share_a.header, share_b.header];
-        let result = validate_parent_links(&headers, anchor.block_hash());
+        let mut chain_store_handle = ChainStoreHandle::default();
+        setup_chain_validation_mocks(&mut chain_store_handle);
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+
+        let headers = vec![share_a, share_b];
+        let result = validate_header_chain(&headers, &chain_store_handle, &mock_validator);
         assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
     }
 
     #[test]
-    fn test_validate_parent_links_accepts_uncle_before_nephew() {
+    fn test_validate_header_chain_accepts_uncle_before_nephew() {
         let anchor = TestShareBlockBuilder::new().nonce(1).build();
-        let share_a = TestShareBlockBuilder::new()
+        let mut share_a = TestShareBlockBuilder::new()
             .prev_share_blockhash(anchor.block_hash().to_string())
             .nonce(2)
-            .build();
+            .build()
+            .header;
+        share_a.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
         // uncle is a sibling of share_a (same parent = anchor)
-        let uncle = TestShareBlockBuilder::new()
+        let mut uncle = TestShareBlockBuilder::new()
             .prev_share_blockhash(anchor.block_hash().to_string())
             .nonce(3)
-            .build();
+            .build()
+            .header;
+        uncle.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
         // share_b follows share_a on the confirmed chain
-        let share_b = TestShareBlockBuilder::new()
+        let mut share_b = TestShareBlockBuilder::new()
             .prev_share_blockhash(share_a.block_hash().to_string())
             .uncles(vec![uncle.block_hash()])
             .nonce(4)
-            .build();
+            .build()
+            .header;
+        share_b.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+        setup_chain_validation_mocks(&mut chain_store_handle);
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
 
         // Order: share_a, uncle, share_b (as get_descendant_blockhashes produces)
-        let headers = vec![share_a.header, uncle.header, share_b.header];
-        let result = validate_parent_links(&headers, anchor.block_hash());
+        let headers = vec![share_a, uncle, share_b];
+        let result = validate_header_chain(&headers, &chain_store_handle, &mock_validator);
         assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
     }
 
     #[test]
-    fn test_validate_parent_links_rejects_first_header_not_linked_to_anchor() {
-        let anchor = TestShareBlockBuilder::new().nonce(1).build();
+    fn test_validate_header_chain_rejects_first_header_not_linked_to_anchor() {
         let unrelated = TestShareBlockBuilder::new().nonce(99).build();
-        let child = TestShareBlockBuilder::new()
+        let mut child = TestShareBlockBuilder::new()
             .prev_share_blockhash(unrelated.block_hash().to_string())
             .nonce(2)
-            .build();
+            .build()
+            .header;
+        child.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
 
-        let result = validate_parent_links(&[child.header], anchor.block_hash());
+        // No header in the batch has a parent that the store recognises.
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_first_existing_share_header()
+            .returning(|_| None);
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+
+        let result = validate_header_chain(&[child], &chain_store_handle, &mock_validator);
         assert!(result.is_err());
         assert!(
             result
                 .unwrap_err()
                 .to_string()
-                .contains("not the chain tip or a recent ancestor"),
+                .contains("No header in batch has a parent in the store"),
         );
     }
 
     #[test]
-    fn test_validate_parent_links_rejects_forest_with_disconnected_subtree() {
+    fn test_validate_header_chain_rejects_forest_with_disconnected_subtree() {
         let anchor = TestShareBlockBuilder::new().nonce(1).build();
-        let share_a = TestShareBlockBuilder::new()
+        let mut share_a = TestShareBlockBuilder::new()
             .prev_share_blockhash(anchor.block_hash().to_string())
             .nonce(2)
-            .build();
+            .build()
+            .header;
+        share_a.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
         // share_c has an unrelated parent, forming a disconnected subtree
         let unrelated = TestShareBlockBuilder::new().nonce(99).build();
-        let share_c = TestShareBlockBuilder::new()
+        let mut share_c = TestShareBlockBuilder::new()
             .prev_share_blockhash(unrelated.block_hash().to_string())
             .nonce(3)
-            .build();
+            .build()
+            .header;
+        share_c.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
 
-        let headers = vec![share_a.header, share_c.header];
-        let result = validate_parent_links(&headers, anchor.block_hash());
+        let mut chain_store_handle = ChainStoreHandle::default();
+        setup_chain_validation_mocks(&mut chain_store_handle);
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+
+        let headers = vec![share_a, share_c];
+        let result = validate_header_chain(&headers, &chain_store_handle, &mock_validator);
         assert!(result.is_err());
         assert!(
             result
                 .unwrap_err()
                 .to_string()
-                .contains("not the chain tip or a recent ancestor"),
+                .contains("not in the recent confirmed window"),
         );
     }
 
     #[test]
-    fn test_validate_parent_links_rejects_uncle_beyond_max_depth() {
+    fn test_validate_header_chain_rejects_share_d_branching_off_anchor() {
         let anchor = TestShareBlockBuilder::new().nonce(1).build();
-        let share_a = TestShareBlockBuilder::new()
+        let mut share_a = TestShareBlockBuilder::new()
             .prev_share_blockhash(anchor.block_hash().to_string())
             .nonce(2)
-            .build();
-        let share_b = TestShareBlockBuilder::new()
+            .build()
+            .header;
+        share_a.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        let mut share_b = TestShareBlockBuilder::new()
             .prev_share_blockhash(share_a.block_hash().to_string())
             .nonce(3)
-            .build();
-        let share_c = TestShareBlockBuilder::new()
+            .build()
+            .header;
+        share_b.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        let mut share_c = TestShareBlockBuilder::new()
             .prev_share_blockhash(share_b.block_hash().to_string())
             .nonce(4)
-            .build();
-        // share_d links back to anchor, which is MAX_UNCLES_DEPTH+1 levels
-        // back from height 4 and has been evicted from the window
-        let share_d = TestShareBlockBuilder::new()
+            .build()
+            .header;
+        share_c.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        // share_d forks from anchor; with no header declaring it as an
+        // uncle, the classifier treats it as a confirmed candidate that
+        // does not extend the tip and rejects it.
+        let mut share_d = TestShareBlockBuilder::new()
             .prev_share_blockhash(anchor.block_hash().to_string())
             .nonce(5)
-            .build();
+            .build()
+            .header;
+        share_d.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
 
-        let headers = vec![
-            share_a.header,
-            share_b.header,
-            share_c.header,
-            share_d.header,
-        ];
-        let result = validate_parent_links(&headers, anchor.block_hash());
+        let mut chain_store_handle = ChainStoreHandle::default();
+        setup_chain_validation_mocks(&mut chain_store_handle);
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+
+        let headers = vec![share_a, share_b, share_c, share_d];
+        let result = validate_header_chain(&headers, &chain_store_handle, &mock_validator);
         assert!(result.is_err());
         assert!(
             result
                 .unwrap_err()
                 .to_string()
-                .contains("not the chain tip or a recent ancestor"),
+                .contains("not the chain tip"),
         );
     }
 
     #[test]
-    fn test_validate_parent_links_accepts_uncle_at_max_depth() {
+    fn test_validate_header_chain_accepts_uncle_referencing_anchor() {
         let anchor = TestShareBlockBuilder::new().nonce(1).build();
-        let share_a = TestShareBlockBuilder::new()
+        let mut share_a = TestShareBlockBuilder::new()
             .prev_share_blockhash(anchor.block_hash().to_string())
             .nonce(2)
-            .build();
-        let share_b = TestShareBlockBuilder::new()
+            .build()
+            .header;
+        share_a.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        let mut share_b = TestShareBlockBuilder::new()
             .prev_share_blockhash(share_a.block_hash().to_string())
             .nonce(3)
-            .build();
-        // uncle references anchor, which is exactly MAX_UNCLES_DEPTH back
-        // from the next nephew (share_c at height 3)
-        let uncle = TestShareBlockBuilder::new()
+            .build()
+            .header;
+        share_b.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        // uncle has parent=anchor, which remains in the recent_confirmed
+        // window throughout this batch.
+        let mut uncle = TestShareBlockBuilder::new()
             .prev_share_blockhash(anchor.block_hash().to_string())
             .nonce(4)
-            .build();
-        let share_c = TestShareBlockBuilder::new()
+            .build()
+            .header;
+        uncle.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        let mut share_c = TestShareBlockBuilder::new()
             .prev_share_blockhash(share_b.block_hash().to_string())
             .uncles(vec![uncle.block_hash()])
             .nonce(5)
-            .build();
+            .build()
+            .header;
+        share_c.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
 
-        let headers = vec![share_a.header, share_b.header, uncle.header, share_c.header];
-        let result = validate_parent_links(&headers, anchor.block_hash());
+        let mut chain_store_handle = ChainStoreHandle::default();
+        setup_chain_validation_mocks(&mut chain_store_handle);
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+
+        let headers = vec![share_a, share_b, uncle, share_c];
+        let result = validate_header_chain(&headers, &chain_store_handle, &mock_validator);
         assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
     }
 
     #[test]
-    fn test_validate_parent_links_rejects_unreferenced_uncle() {
+    fn test_validate_header_chain_accepts_uncle_subtree_before_nephew() {
+        // Confirmed chain is A -> E -> H. B, C, D are HeaderValid uncles
+        // (all parent=A) referenced by E. F, G are HeaderValid uncles (all
+        // parent=E) referenced by H. Sync order: B, C, D, E, F, G, H.
         let anchor = TestShareBlockBuilder::new().nonce(1).build();
-        let share_a = TestShareBlockBuilder::new()
+
+        let mut share_b = TestShareBlockBuilder::new()
             .prev_share_blockhash(anchor.block_hash().to_string())
             .nonce(2)
-            .build();
-        // uncle has a valid parent (anchor) but no confirmed header
-        // in the batch lists it in its uncles field
-        let uncle = TestShareBlockBuilder::new()
+            .build()
+            .header;
+        share_b.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        let mut share_c = TestShareBlockBuilder::new()
             .prev_share_blockhash(anchor.block_hash().to_string())
             .nonce(3)
-            .build();
-        let share_b = TestShareBlockBuilder::new()
+            .build()
+            .header;
+        share_c.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        let mut share_d = TestShareBlockBuilder::new()
+            .prev_share_blockhash(anchor.block_hash().to_string())
+            .nonce(4)
+            .build()
+            .header;
+        share_d.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+
+        let mut share_e = TestShareBlockBuilder::new()
+            .prev_share_blockhash(anchor.block_hash().to_string())
+            .uncles(vec![
+                share_b.block_hash(),
+                share_c.block_hash(),
+                share_d.block_hash(),
+            ])
+            .nonce(5)
+            .build()
+            .header;
+        share_e.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+
+        let mut share_f = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_e.block_hash().to_string())
+            .nonce(6)
+            .build()
+            .header;
+        share_f.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        let mut share_g = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_e.block_hash().to_string())
+            .nonce(7)
+            .build()
+            .header;
+        share_g.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+
+        let mut share_h = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_e.block_hash().to_string())
+            .uncles(vec![share_f.block_hash(), share_g.block_hash()])
+            .nonce(8)
+            .build()
+            .header;
+        share_h.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+        setup_chain_validation_mocks(&mut chain_store_handle);
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+
+        let headers = vec![
+            share_b, share_c, share_d, share_e, share_f, share_g, share_h,
+        ];
+        let result = validate_header_chain(&headers, &chain_store_handle, &mock_validator);
+        assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+    }
+
+    #[test]
+    fn test_validate_header_chain_rejects_unreferenced_uncle() {
+        let anchor = TestShareBlockBuilder::new().nonce(1).build();
+        let mut share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(anchor.block_hash().to_string())
+            .nonce(2)
+            .build()
+            .header;
+        share_a.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        // uncle has a valid parent (anchor) but no confirmed header
+        // in the batch lists it in its uncles field
+        let mut unreferenced_uncle = TestShareBlockBuilder::new()
+            .prev_share_blockhash(anchor.block_hash().to_string())
+            .nonce(3)
+            .build()
+            .header;
+        unreferenced_uncle.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        let mut share_b = TestShareBlockBuilder::new()
             .prev_share_blockhash(share_a.block_hash().to_string())
             .nonce(4)
-            .build();
+            .build()
+            .header;
+        share_b.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
 
-        let headers = vec![share_a.header, uncle.header, share_b.header];
-        let result = validate_parent_links(&headers, anchor.block_hash());
+        let mut chain_store_handle = ChainStoreHandle::default();
+        setup_chain_validation_mocks(&mut chain_store_handle);
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+
+        let headers = vec![share_a, unreferenced_uncle, share_b];
+        let result = validate_header_chain(&headers, &chain_store_handle, &mock_validator);
         assert!(result.is_err());
+        // With the uncles[]-driven classifier, an "uncle" that no header
+        // references is indistinguishable from a confirmed header that does
+        // not extend the tip, so it is rejected via the chain-tip check.
         assert!(
             result
                 .unwrap_err()
                 .to_string()
-                .contains("not referenced by any confirmed chain header"),
+                .contains("not the chain tip"),
         );
     }
 }
