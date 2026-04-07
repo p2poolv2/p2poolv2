@@ -50,6 +50,7 @@ use crate::pool_difficulty::PoolDifficulty;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use crate::shares::validation::{DefaultShareValidator, ShareValidator};
 use crate::stratum::emission::EmissionReceiver;
 use crate::stratum::work::notify::NotifySender;
 use libp2p::futures::StreamExt;
@@ -270,6 +271,13 @@ impl NodeActor {
         let pool_difficulty = PoolDifficulty::build(&chain_store_handle)
             .map_err(|error| -> Box<dyn Error> { Box::new(error) })?;
 
+        let share_validator: Arc<dyn ShareValidator + Send + Sync> =
+            Arc::new(DefaultShareValidator::new(
+                pool_difficulty.clone(),
+                difficulty_multiplier,
+                pool_signature.clone(),
+            ));
+
         let node = Node::new(
             config,
             chain_store_handle.clone(),
@@ -277,7 +285,7 @@ impl NodeActor {
             validation_tx,
             block_receiver_tx,
             monitoring_event_sender.clone(),
-            pool_difficulty.clone(),
+            share_validator.clone(),
         )?;
 
         // Spawn organise worker
@@ -311,7 +319,7 @@ impl NodeActor {
         // Spawn block receiver
         let block_receiver = BlockReceiver::new(
             block_receiver_rx,
-            pool_difficulty,
+            share_validator,
             chain_store_handle.clone(),
             block_fetcher_tx_for_receiver,
             validation_tx_for_worker.clone(),

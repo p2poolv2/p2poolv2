@@ -35,16 +35,11 @@ use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
 use crate::node::validation_worker::ValidationSender;
 #[cfg(test)]
 #[mockall_double::double]
-use crate::pool_difficulty::PoolDifficulty;
-#[cfg(not(test))]
-use crate::pool_difficulty::PoolDifficulty;
-#[cfg(test)]
-#[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
-use crate::shares::validation::{DefaultShareValidator, ShareValidator};
+use crate::shares::validation::ShareValidator;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use bitcoin::BlockHash;
 use libp2p::PeerId;
@@ -120,7 +115,7 @@ impl Node {
         validation_tx: ValidationSender,
         block_receiver_handle: BlockReceiverHandle,
         monitoring_event_sender: MonitoringEventSender,
-        pool_difficulty: PoolDifficulty,
+        share_validator: Arc<dyn ShareValidator + Send + Sync>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
 
@@ -206,19 +201,6 @@ impl Node {
 
         let (swarm_tx, swarm_rx) = mpsc::channel(100);
 
-        let pool_signature = config
-            .stratum
-            .pool_signature
-            .as_deref()
-            .unwrap_or("")
-            .as_bytes()
-            .to_vec();
-        let share_validator: Arc<dyn ShareValidator + Send + Sync> =
-            Arc::new(DefaultShareValidator::new(
-                pool_difficulty,
-                config.stratum.difficulty_multiplier as u128,
-                pool_signature,
-            ));
         let request_response_handler = RequestResponseHandler::new(
             config.network.clone(),
             chain_store_handle.clone(),
@@ -511,7 +493,6 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::ChainStoreHandle;
-    use super::PoolDifficulty;
     use crate::config::{
         ApiConfig, Config, LoggingConfig, NetworkConfig, StoreConfig, StratumConfig,
     };
@@ -522,6 +503,7 @@ mod tests {
     use crate::node::validation_worker::create_validation_channel;
     use bitcoindrpc::BitcoinRpcConfig;
     use futures::StreamExt;
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     #[tokio::test]
@@ -597,7 +579,7 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             monitoring_tx,
-            PoolDifficulty::default(),
+            Arc::new(crate::shares::validation::MockDefaultShareValidator::default()),
         )
         .expect("Node initialization failed");
 
