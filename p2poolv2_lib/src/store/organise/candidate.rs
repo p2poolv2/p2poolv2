@@ -324,7 +324,9 @@ impl Store {
         let branch = self
             .get_branch_to_chain(blockhash, |h| self.is_candidate(h))?
             .ok_or_else(|| {
-                StoreError::NotFound("Branch point to reorg candidate chain not found.".into())
+                StoreError::NotFound(format!(
+                    "Branch point {blockhash} to reorg candidate chain not found."
+                ))
             })?;
         let branch_point = branch.front().ok_or_else(|| {
             StoreError::NotFound("Empty branch returned from get_branch_to_chain.".into())
