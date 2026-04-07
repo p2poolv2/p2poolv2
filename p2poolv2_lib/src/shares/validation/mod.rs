@@ -144,6 +144,12 @@ pub trait ShareValidator {
         &self,
         share_header: &ShareHeader,
     ) -> Result<(), ValidationError>;
+
+    /// Return a reference to the pool difficulty anchored at the chain genesis.
+    ///
+    /// Used by header-sync validation to run ASERT checks without rebuilding a
+    /// fresh PoolDifficulty on every batch.
+    fn pool_difficulty(&self) -> &PoolDifficulty;
 }
 
 /// Production implementation of ShareValidator.
@@ -524,6 +530,10 @@ impl ShareValidator for DefaultShareValidator {
         self.validate_header_minimum_difficulty(share_header)
     }
 
+    fn pool_difficulty(&self) -> &PoolDifficulty {
+        &self.pool_difficulty
+    }
+
     fn validate_with_pool_difficulty(
         &self,
         share_header: &ShareHeader,
@@ -725,6 +735,8 @@ mockall::mock! {
             &self,
             share_header: &ShareHeader,
         ) -> Result<(), ValidationError>;
+
+        fn pool_difficulty(&self) -> &PoolDifficulty;
     }
 }
 

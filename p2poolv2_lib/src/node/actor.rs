@@ -30,6 +30,9 @@ use crate::node::emission_worker::EmissionWorker;
 use crate::node::messages::Message;
 use crate::node::organise_worker::{OrganiseError, OrganiseSender};
 use crate::node::organise_worker::{OrganiseWorker, create_organise_channel};
+use crate::node::p2p_message_handlers::receivers::block_receiver::{
+    BlockReceiver, create_block_receiver_channel,
+};
 use crate::node::p2p_message_handlers::senders::send_block_inventory;
 use crate::node::request_response_handler::block_fetcher::{
     BlockFetcher, BlockFetcherError, create_block_fetcher_channel,
@@ -47,6 +50,7 @@ use crate::pool_difficulty::PoolDifficulty;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use crate::shares::validation::{DefaultShareValidator, ShareValidator};
 use crate::stratum::emission::EmissionReceiver;
 use crate::stratum::work::notify::NotifySender;
 use libp2p::futures::StreamExt;
@@ -226,6 +230,7 @@ struct NodeActor {
     organise_handle: tokio::task::JoinHandle<Result<(), OrganiseError>>,
     block_fetcher_handle: tokio::task::JoinHandle<Result<(), BlockFetcherError>>,
     validation_handle: tokio::task::JoinHandle<Result<(), ValidationWorkerError>>,
+    block_receiver_handle: tokio::task::JoinHandle<()>,
 }
 
 impl NodeActor {
@@ -248,8 +253,12 @@ impl NodeActor {
         // Create block fetcher channel
         let (block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
 
-        // Clone validation_tx for the worker before moving it into Node::new
+        // Create block receiver channel
+        let (block_receiver_tx, block_receiver_rx) = create_block_receiver_channel();
+
+        // Clone handles for workers before moving them into Node::new
         let validation_tx_for_worker = validation_tx.clone();
+        let block_fetcher_tx_for_receiver = block_fetcher_tx.clone();
         let difficulty_multiplier = config.stratum.difficulty_multiplier as u128;
         let pool_signature = config
             .stratum
@@ -262,13 +271,21 @@ impl NodeActor {
         let pool_difficulty = PoolDifficulty::build(&chain_store_handle)
             .map_err(|error| -> Box<dyn Error> { Box::new(error) })?;
 
+        let share_validator: Arc<dyn ShareValidator + Send + Sync> =
+            Arc::new(DefaultShareValidator::new(
+                pool_difficulty.clone(),
+                difficulty_multiplier,
+                pool_signature.clone(),
+            ));
+
         let node = Node::new(
             config,
             chain_store_handle.clone(),
             block_fetcher_tx,
             validation_tx,
+            block_receiver_tx,
             monitoring_event_sender.clone(),
-            pool_difficulty.clone(),
+            share_validator.clone(),
         )?;
 
         // Spawn organise worker
@@ -291,13 +308,23 @@ impl NodeActor {
             pplns_window,
             difficulty_multiplier,
             pool_signature,
-            pool_difficulty,
+            pool_difficulty.clone(),
         );
         let validation_handle = tokio::spawn(validation_worker.run());
 
         // Spawn block fetcher
         let block_fetcher = BlockFetcher::new(block_fetcher_rx, node.swarm_tx.clone());
         let block_fetcher_handle = tokio::spawn(block_fetcher.run());
+
+        // Spawn block receiver
+        let block_receiver = BlockReceiver::new(
+            block_receiver_rx,
+            share_validator,
+            chain_store_handle.clone(),
+            block_fetcher_tx_for_receiver,
+            validation_tx_for_worker.clone(),
+        );
+        let block_receiver_join_handle = tokio::spawn(block_receiver.run());
 
         let (stopping_tx, stopping_rx) = oneshot::channel();
         Ok((
@@ -312,6 +339,7 @@ impl NodeActor {
                 organise_handle,
                 block_fetcher_handle,
                 validation_handle,
+                block_receiver_handle: block_receiver_join_handle,
             },
             stopping_rx,
         ))
@@ -514,6 +542,20 @@ impl NodeActor {
                         }
                         Err(e) => {
                             error!("Validation worker panicked: {e}");
+                            if self.stopping_tx.send(()).is_err() {
+                                error!("Failed to send stopping signal - receiver dropped");
+                            }
+                            return;
+                        }
+                    }
+                }
+                block_receiver_result = &mut self.block_receiver_handle => {
+                    match block_receiver_result {
+                        Ok(()) => {
+                            info!("Block receiver stopped cleanly");
+                        }
+                        Err(e) => {
+                            error!("Block receiver panicked: {e}");
                             if self.stopping_tx.send(()).is_err() {
                                 error!("Failed to send stopping signal - receiver dropped");
                             }

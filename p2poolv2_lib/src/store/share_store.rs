@@ -184,7 +184,6 @@ impl Store {
     ///
     /// Returns None if the header or txids are missing.
     pub fn get_share(&self, blockhash: &BlockHash) -> Option<ShareBlock> {
-        debug!("Getting share from store: {:?}", blockhash);
         let header = match self.get_share_header(blockhash) {
             Ok(Some(header)) => header,
             _ => return None,
@@ -221,7 +220,6 @@ impl Store {
         &self,
         blockhashes: &[BlockHash],
     ) -> Result<Vec<(BlockHash, ShareHeader)>, StoreError> {
-        debug!("Getting share headers from store: {:?}", blockhashes);
         let header_cf = self.db.cf_handle(&ColumnFamily::Header).unwrap();
         let keys = blockhashes
             .iter()
@@ -269,7 +267,6 @@ impl Store {
         &self,
         blockhashes: &[BlockHash],
     ) -> Result<HashMap<BlockHash, ShareBlock>, StoreError> {
-        debug!("Getting shares from store: {:?}", blockhashes);
         let found_shares = blockhashes
             .iter()
             .filter_map(|blockhash| {
@@ -404,7 +401,6 @@ impl Store {
         &self,
         blockhash: &BlockHash,
     ) -> Result<Option<ShareHeader>, StoreError> {
-        debug!("Getting share header from store: {:?}", blockhash);
         let header_cf = self.db.cf_handle(&ColumnFamily::Header).unwrap();
         match self.db.get_cf::<&[u8]>(&header_cf, blockhash.as_ref())? {
             Some(data) => {
