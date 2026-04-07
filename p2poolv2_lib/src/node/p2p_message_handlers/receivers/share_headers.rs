@@ -159,11 +159,12 @@ fn collect_declared_uncles(share_headers: &[ShareHeader]) -> HashSet<BlockHash> 
 
 /// Seed the recent confirmed window and parent_info map from the store.
 ///
-/// Walks up to MAX_UNCLES_DEPTH ancestors from the anchor via prev_share_blockhash,
-/// stopping early at genesis or on lookup error. The returned VecDeque contains
-/// older ancestors first with the anchor at the back. parent_info maps each
-/// seeded hash to its (time, height) so ASERT can be evaluated against any
-/// header whose parent is one of the seeded ancestors.
+/// Walks up to MAX_UNCLES_DEPTH ancestors from the anchor via
+/// prev_share_blockhash, stopping early at genesis. The returned
+/// VecDeque contains older ancestors first with the anchor at the
+/// back. parent_info maps each seeded hash to its (time, height) so
+/// ASERT can be evaluated against any header whose parent is one of
+/// the seeded ancestors.
 fn seed_from_store(
     anchor_hash: BlockHash,
     anchor_header: &ShareHeader,

@@ -225,7 +225,10 @@ impl BlockReceiver {
     ) -> Result<(u32, u32), Box<dyn Error + Send + Sync>> {
         let header = self.chain_store_handle.get_share_header(parent_hash)?;
         let metadata = self.chain_store_handle.get_block_metadata(parent_hash)?;
-        Ok((header.time, metadata.expected_height.unwrap_or(0)))
+        let expected_height = metadata.expected_height.ok_or_else(|| {
+            format!("Parent block {parent_hash} is missing expected_height metadata")
+        })?;
+        Ok((header.time, expected_height))
     }
 
     /// Return parent and uncle hashes that are not yet HeaderValid in
@@ -290,7 +293,7 @@ impl BlockReceiver {
 
         if let Err(error) = self
             .chain_store_handle
-            .add_share_block(share_block, false)
+            .add_share_block(share_block, true)
             .await
         {
             error!("Failed to store block {block_hash}: {error}");
@@ -955,6 +958,7 @@ mod tests {
             .returning(move |_| Ok(parent_header_clone.clone()));
         mock_store
             .expect_add_share_block()
+            .with(mockall::predicate::always(), mockall::predicate::eq(true))
             .times(1)
             .returning(|_, _| Ok(()));
         mock_store.expect_organise_header().returning(|_| Ok(None));
