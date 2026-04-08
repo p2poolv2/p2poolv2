@@ -38,6 +38,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
+use crate::shares::validation::ShareValidator;
 use crate::store::dag_store::ShareInfo;
 use crate::store::writer::StoreError;
 use crate::stratum::work::notify::{NotifyCmd, NotifySender};
@@ -99,6 +100,7 @@ pub struct OrganiseWorker {
     notify_tx: NotifySender,
     pplns_window: Arc<RwLock<PplnsWindow>>,
     validation_tx: ValidationSender,
+    share_validator: Arc<dyn ShareValidator + Send + Sync>,
 }
 
 impl OrganiseWorker {
@@ -110,6 +112,7 @@ impl OrganiseWorker {
         notify_tx: NotifySender,
         pplns_window: Arc<RwLock<PplnsWindow>>,
         validation_tx: ValidationSender,
+        share_validator: Arc<dyn ShareValidator + Send + Sync>,
     ) -> Self {
         Self {
             organise_rx,
@@ -118,6 +121,7 @@ impl OrganiseWorker {
             notify_tx,
             pplns_window,
             validation_tx,
+            share_validator,
         }
     }
 
@@ -151,43 +155,65 @@ impl OrganiseWorker {
                     }
                 }
                 OrganiseEvent::Block(share_block) => {
-                    let blockhash = share_block.block_hash();
-                    debug!("Organising block: {blockhash:?}");
-                    match self
-                        .chain_store_handle
-                        .promote_block(share_block.header.clone())
-                        .await
-                    {
-                        Ok(Some(height)) => {
-                            self.update_pplns_window();
-                            self.schedule_dependents(&blockhash);
-
-                            if let Ok(Some(candidate_tip_height)) =
-                                self.chain_store_handle.get_candidate_tip_height()
-                            {
-                                if height >= candidate_tip_height {
-                                    self.send_new_notify(height, candidate_tip_height).await;
-                                }
-                            } else {
-                                debug!("No candidate tip found");
-                            }
-                            self.emit_share_monitoring_event(&share_block, height);
-                        }
-                        Ok(None) => {}
-                        Err(StoreError::ChannelClosed) => {
-                            error!("Store writer channel closed during promote block");
-                            return Err(OrganiseError {
-                                message: "Store writer channel closed".to_string(),
-                            });
-                        }
-                        Err(error) => {
-                            error!("Error promoting block {blockhash}: {error}");
-                        }
-                    }
+                    self.handle_organise_block_event(share_block).await?;
                 }
             }
         }
         info!("Organise worker stopped - channel closed");
+        Ok(())
+    }
+
+    /// Validate, promote, and follow up on a single share block.
+    ///
+    /// Validation failures and non-fatal store errors are logged and
+    /// dropped so the worker keeps running. Only `StoreError::ChannelClosed`
+    /// during promotion is propagated as a fatal `OrganiseError`.
+    async fn handle_organise_block_event(
+        &mut self,
+        share_block: ShareBlock,
+    ) -> Result<(), OrganiseError> {
+        let blockhash = share_block.block_hash();
+        debug!("Organising block: {blockhash:?}");
+
+        if let Err(validation_error) = self
+            .share_validator
+            .validate_with_chain_context(&share_block, &self.chain_store_handle)
+        {
+            error!("Chain-context validation failed for {blockhash}: {validation_error}");
+            return Ok(());
+        }
+
+        let height = match self
+            .chain_store_handle
+            .promote_block(share_block.header.clone())
+            .await
+        {
+            Ok(Some(height)) => height,
+            Ok(None) => return Ok(()),
+            Err(StoreError::ChannelClosed) => {
+                error!("Store writer channel closed during promote block");
+                return Err(OrganiseError {
+                    message: "Store writer channel closed".to_string(),
+                });
+            }
+            Err(error) => {
+                error!("Error promoting block {blockhash}: {error}");
+                return Ok(());
+            }
+        };
+
+        self.update_pplns_window();
+        self.schedule_dependents(&blockhash);
+
+        match self.chain_store_handle.get_candidate_tip_height() {
+            Ok(Some(candidate_tip_height)) if height >= candidate_tip_height => {
+                self.send_new_notify(height, candidate_tip_height).await;
+            }
+            Ok(Some(_)) => {}
+            _ => debug!("No candidate tip found"),
+        }
+
+        self.emit_share_monitoring_event(&share_block, height);
         Ok(())
     }
 
@@ -293,6 +319,7 @@ mod tests {
     use crate::monitoring_events::create_monitoring_event_channel;
     use crate::node::validation_worker::create_validation_channel;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
+    use crate::shares::validation::MockDefaultShareValidator;
     use crate::stratum::work::notify::{NotifyCmd, NotifyReceiver};
 
     /// Create a notify channel for tests, returning the sender and receiver.
@@ -306,6 +333,15 @@ mod tests {
         let mut mock_window = PplnsWindow::default();
         mock_window.expect_update().returning(|_| Ok(false));
         Arc::new(RwLock::new(mock_window))
+    }
+
+    /// Build a stub share validator that approves every chain-context check.
+    fn stub_share_validator_with_success() -> Arc<dyn ShareValidator + Send + Sync> {
+        let mut mock_validator = MockDefaultShareValidator::new();
+        mock_validator
+            .expect_validate_with_chain_context()
+            .returning(|_, _| Ok(()));
+        Arc::new(mock_validator)
     }
 
     /// Add mock expectations for schedule_dependents: no children, no nephews.
@@ -332,6 +368,7 @@ mod tests {
             notify_tx,
             create_test_pplns_window(),
             validation_tx,
+            stub_share_validator_with_success(),
         );
 
         // Drop sender so recv() returns None immediately
@@ -362,6 +399,7 @@ mod tests {
             notify_tx,
             create_test_pplns_window(),
             validation_tx,
+            stub_share_validator_with_success(),
         );
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
@@ -398,6 +436,48 @@ mod tests {
             notify_tx,
             create_test_pplns_window(),
             validation_tx,
+            stub_share_validator_with_success(),
+        );
+
+        let share = crate::test_utils::TestShareBlockBuilder::new()
+            .nonce(0xe9695791)
+            .build();
+        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        drop(organise_tx);
+
+        let result = worker.run().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_organise_worker_skips_promote_when_validator_rejects() {
+        use crate::shares::validation::ValidationError;
+
+        let (organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_clone()
+            .return_once(MockChainStoreHandle::new);
+        // promote_block must NOT be called when chain-context validation fails.
+        mock_chain_handle.expect_promote_block().never();
+
+        let mut mock_validator = MockDefaultShareValidator::new();
+        mock_validator
+            .expect_validate_with_chain_context()
+            .returning(|_, _| Err(ValidationError::new("rejected for test")));
+        let share_validator: Arc<dyn ShareValidator + Send + Sync> = Arc::new(mock_validator);
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let (validation_tx, _validation_rx) = create_validation_channel();
+        let worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_pplns_window(),
+            validation_tx,
+            share_validator,
         );
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
@@ -431,6 +511,7 @@ mod tests {
             notify_tx,
             create_test_pplns_window(),
             validation_tx,
+            stub_share_validator_with_success(),
         );
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
@@ -464,6 +545,7 @@ mod tests {
             notify_tx,
             create_test_pplns_window(),
             validation_tx,
+            stub_share_validator_with_success(),
         );
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
@@ -505,6 +587,7 @@ mod tests {
             notify_tx,
             create_test_pplns_window(),
             validation_tx,
+            stub_share_validator_with_success(),
         );
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
@@ -551,6 +634,7 @@ mod tests {
             notify_tx,
             create_test_pplns_window(),
             validation_tx,
+            stub_share_validator_with_success(),
         );
 
         let share = crate::test_utils::TestShareBlockBuilder::new()
@@ -608,6 +692,7 @@ mod tests {
             notify_tx,
             pplns_window,
             validation_tx,
+            stub_share_validator_with_success(),
         );
 
         let share = crate::test_utils::TestShareBlockBuilder::new()

@@ -143,6 +143,17 @@ pub trait ShareValidator {
         time_provider: &dyn TimeProvider,
     ) -> Result<(), ValidationError>;
 
+    /// Run validations that depend on the confirmed-chain context.
+    ///
+    /// Called by the organise worker just before promoting a block, when the
+    /// parent is guaranteed to be confirmed and `get_confirmed_headers_in_range`
+    /// returns a stable ancestor window.
+    fn validate_with_chain_context(
+        &self,
+        share: &ShareBlock,
+        chain_store_handle: &ChainStoreHandle,
+    ) -> Result<(), ValidationError>;
+
     /// Validate a share header meets minimum pool difficulty without requiring parent.
     ///
     /// Checks uncle count, that header's meets the header's own
@@ -661,7 +672,6 @@ impl ShareValidator for DefaultShareValidator {
         }
         self.validate_with_pool_difficulty(&share.header, chain_store_handle)?;
         self.validate_uncles(share, chain_store_handle)?;
-        self.validate_timestamp(share, chain_store_handle, self.time_provider.as_ref())?;
         self.validate_block_size(share)?;
         self.validate_share_coinbase(share)?;
         self.validate_bitcoin_coinbase(share, pplns_window)?;
@@ -757,6 +767,14 @@ impl ShareValidator for DefaultShareValidator {
         }
         Ok(())
     }
+
+    fn validate_with_chain_context(
+        &self,
+        share: &ShareBlock,
+        chain_store_handle: &ChainStoreHandle,
+    ) -> Result<(), ValidationError> {
+        self.validate_timestamp(share, chain_store_handle, self.time_provider.as_ref())
+    }
 }
 
 // Mock for DefaultShareValidator using mockall.
@@ -796,6 +814,12 @@ mockall::mock! {
             share: &ShareBlock,
             chain_store_handle: &ChainStoreHandle,
             time_provider: &dyn TimeProvider,
+        ) -> Result<(), ValidationError>;
+
+        fn validate_with_chain_context(
+            &self,
+            share: &ShareBlock,
+            chain_store_handle: &ChainStoreHandle,
         ) -> Result<(), ValidationError>;
 
         fn validate_header_minimum_difficulty(
