@@ -41,7 +41,7 @@ use crate::shares::share_commitment::ShareCommitment;
 use crate::store::block_tx_metadata::Status;
 use crate::stratum::work::coinbase::build_coinbase_transaction;
 use crate::stratum::work::gbt::compute_merkle_root_from_branches;
-use crate::utils::time_provider::TimeProvider;
+use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoin::script::PushBytesBuf;
 use bitcoin::{
     Address, Amount, BlockHash, CompactTarget, Target, TxMerkleNode, transaction::Version,
@@ -71,8 +71,10 @@ impl std::error::Error for ValidationError {}
 
 /// Maximum uncles in a share block header
 pub const MAX_UNCLES: usize = 3;
-/// Maximum time difference allowed between current tip and received shares
-pub const MAX_TIME_DIFF: u64 = 60;
+/// Maximum number of seconds a share timestamp may be ahead of the local clock.
+pub const MAX_FUTURE_TIME_SECS: u64 = 120;
+/// Number of ancestor share headers used to compute median time past.
+pub const MTP_WINDOW: usize = 11;
 /// Maximum block size not counting bitcoin blocks limited to 200kB
 pub const BLOCK_TXS_SIZE_LIMIT: u32 = 200 * 1024;
 /// Maximum number of transactions allowed in a share block
@@ -127,10 +129,17 @@ pub trait ShareValidator {
         chain_store_handle: &ChainStoreHandle,
     ) -> Result<(), ValidationError>;
 
-    /// Validate the share timestamp is within the last 60 seconds.
+    /// Validate the share timestamp.
+    ///
+    /// Enforces two rules:
+    /// 1. Share `header.time` must be strictly greater than the median time
+    ///    of the previous 11 share-chain ancestors (median time past).
+    /// 2. Share `header.time` must not be more than `MAX_FUTURE_TIME_SECS`
+    ///    seconds ahead of the local clock.
     fn validate_timestamp(
         &self,
         share: &ShareBlock,
+        chain_store_handle: &ChainStoreHandle,
         time_provider: &dyn TimeProvider,
     ) -> Result<(), ValidationError>;
 
@@ -162,21 +171,40 @@ pub struct DefaultShareValidator {
     difficulty_multiplier: u128,
     /// Pool signature included in the coinbase transaction.
     pool_signature: Vec<u8>,
+    /// Time provider used to enforce the future-time bound on share timestamps.
+    time_provider: Arc<dyn TimeProvider + Send + Sync>,
 }
 
 impl DefaultShareValidator {
     /// Create a new DefaultShareValidator with the given pool difficulty,
     /// difficulty multiplier for PPLNS window walks, and pool signature
-    /// for coinbase reconstruction.
+    /// for coinbase reconstruction. Uses `SystemTimeProvider` for timestamp
+    /// validation.
     pub fn new(
         pool_difficulty: PoolDifficulty,
         difficulty_multiplier: u128,
         pool_signature: Vec<u8>,
     ) -> Self {
+        Self::with_time_provider(
+            pool_difficulty,
+            difficulty_multiplier,
+            pool_signature,
+            Arc::new(SystemTimeProvider),
+        )
+    }
+
+    /// Create a new DefaultShareValidator with an explicit time provider.
+    pub fn with_time_provider(
+        pool_difficulty: PoolDifficulty,
+        difficulty_multiplier: u128,
+        pool_signature: Vec<u8>,
+        time_provider: Arc<dyn TimeProvider + Send + Sync>,
+    ) -> Self {
         Self {
             pool_difficulty,
             difficulty_multiplier,
             pool_signature,
+            time_provider,
         }
     }
 
@@ -633,6 +661,7 @@ impl ShareValidator for DefaultShareValidator {
         }
         self.validate_with_pool_difficulty(&share.header, chain_store_handle)?;
         self.validate_uncles(share, chain_store_handle)?;
+        self.validate_timestamp(share, chain_store_handle, self.time_provider.as_ref())?;
         self.validate_block_size(share)?;
         self.validate_share_coinbase(share)?;
         self.validate_bitcoin_coinbase(share, pplns_window)?;
@@ -677,16 +706,53 @@ impl ShareValidator for DefaultShareValidator {
     fn validate_timestamp(
         &self,
         share: &ShareBlock,
+        chain_store_handle: &ChainStoreHandle,
         time_provider: &dyn TimeProvider,
     ) -> Result<(), ValidationError> {
         let current_time = time_provider.seconds_since_epoch();
-
         let share_timestamp = share.header.time as u64;
-        let time_diff = current_time.abs_diff(share_timestamp);
 
-        if time_diff > MAX_TIME_DIFF {
+        if share_timestamp > current_time + MAX_FUTURE_TIME_SECS {
             return Err(ValidationError::new(format!(
-                "Share timestamp {share_timestamp} is more than {MAX_TIME_DIFF} seconds from current time {current_time}"
+                "Share timestamp {share_timestamp} is more than {MAX_FUTURE_TIME_SECS} seconds ahead of local time {current_time}"
+            )));
+        }
+
+        let parent_hash = share.header.prev_share_blockhash;
+        let parent_metadata = chain_store_handle
+            .get_block_metadata(&parent_hash)
+            .map_err(|_| {
+                ValidationError::new(format!(
+                    "Parent share {parent_hash} metadata not found for MTP check"
+                ))
+            })?;
+        let parent_height = parent_metadata.expected_height.ok_or_else(|| {
+            ValidationError::new(format!(
+                "Parent share {parent_hash} has no expected height for MTP check"
+            ))
+        })?;
+        let from_height = parent_height.saturating_sub(MTP_WINDOW as u32 - 1);
+        let confirmed_headers = chain_store_handle
+            .get_confirmed_headers_in_range(from_height, parent_height)
+            .map_err(|err| {
+                ValidationError::new(format!(
+                    "Failed to fetch ancestor headers for MTP check: {err}"
+                ))
+            })?;
+        if confirmed_headers.is_empty() {
+            return Err(ValidationError::new(format!(
+                "No confirmed ancestor headers found for MTP check at height {parent_height}"
+            )));
+        }
+        let mut sorted_times: Vec<u32> = confirmed_headers
+            .iter()
+            .map(|entry| entry.header.time)
+            .collect();
+        sorted_times.sort_unstable();
+        let median = sorted_times[sorted_times.len() / 2];
+        if share.header.time <= median {
+            return Err(ValidationError::new(format!(
+                "Share timestamp {share_timestamp} is not greater than median time past {median}"
             )));
         }
         Ok(())
@@ -728,6 +794,7 @@ mockall::mock! {
         fn validate_timestamp(
             &self,
             share: &ShareBlock,
+            chain_store_handle: &ChainStoreHandle,
             time_provider: &dyn TimeProvider,
         ) -> Result<(), ValidationError>;
 
@@ -743,11 +810,14 @@ mockall::mock! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shares::chain::chain_store_handle::ConfirmedHeaderResult;
     use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
     use crate::shares::extranonce::Extranonce;
     use crate::shares::share_block::ShareTransaction;
     use crate::shares::share_commitment::ShareCommitment;
     use crate::shares::witness_commitment::WitnessCommitment;
+    use crate::store::block_tx_metadata::BlockMetadata;
+    use crate::store::writer::StoreError;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::stratum::work::gbt::build_merkle_branches_for_template;
     use crate::test_utils::{
@@ -756,6 +826,7 @@ mod tests {
         setup_pool_difficulty_mocks,
     };
     use crate::utils::time_provider::TestTimeProvider;
+    use bitcoin::pow::Work;
     use bitcoin::script::PushBytesBuf;
     use bitcoin::transaction::Version;
     use bitcoin::{BlockHash, ScriptBuf, TxOut, hashes::Hash};
@@ -772,26 +843,59 @@ mod tests {
         DefaultShareValidator::new(pool_difficulty, 1, b"P2Poolv2".to_vec())
     }
 
+    fn confirmed_header_with_time(time: u32, height: u32) -> ConfirmedHeaderResult {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share.header.time = time;
+        ConfirmedHeaderResult {
+            height,
+            blockhash: share.block_hash(),
+            header: share.header,
+        }
+    }
+
+    fn metadata_at_height(height: u32) -> BlockMetadata {
+        BlockMetadata {
+            expected_height: Some(height),
+            chain_work: Work::from_le_bytes([0u8; 32]),
+            status: Status::Confirmed,
+        }
+    }
+
     #[tokio::test]
-    async fn test_validate_timestamp_should_fail_for_old_timestamp() {
+    async fn test_validate_timestamp_should_fail_when_not_greater_than_mtp() {
         let share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
         let mut time_provider = TestTimeProvider::new(SystemTime::now());
-        let share_timestamp = share.header.time as u64 - 120;
+        time_provider.set_time(bitcoin::absolute::Time::from_consensus(share.header.time).unwrap());
 
-        time_provider
-            .set_time(bitcoin::absolute::Time::from_consensus(share_timestamp as u32).unwrap());
+        // 11 ancestor headers with strictly increasing times centred on
+        // share.header.time so the median equals share.header.time.
+        let share_time = share.header.time;
+        let mut headers: Vec<ConfirmedHeaderResult> = Vec::with_capacity(MTP_WINDOW);
+        for offset in 0..MTP_WINDOW as i32 {
+            let time = (share_time as i32 + offset - (MTP_WINDOW as i32 / 2)) as u32;
+            headers.push(confirmed_header_with_time(time, offset as u32));
+        }
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Ok(metadata_at_height(20)));
+        chain_store_handle
+            .expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(headers.clone()));
 
-        let result = validator().validate_timestamp(&share, &time_provider);
+        let median = share_time;
+        let result = validator().validate_timestamp(&share, &chain_store_handle, &time_provider);
         let error = result.unwrap_err();
         assert_eq!(
             error.to_string(),
             format!(
-                "Share timestamp {} is more than {MAX_TIME_DIFF} seconds from current time {}",
-                share.header.time as u64,
-                time_provider.seconds_since_epoch()
+                "Share timestamp {} is not greater than median time past {median}",
+                share.header.time as u64
             )
         );
     }
@@ -802,18 +906,17 @@ mod tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
         let mut time_provider = TestTimeProvider::new(SystemTime::now());
-        let future_time = share.header.time as u64 + 120;
-        time_provider
-            .set_time(bitcoin::absolute::Time::from_consensus(future_time as u32).unwrap());
+        let local_time = share.header.time as u64 - (MAX_FUTURE_TIME_SECS + 1);
+        time_provider.set_time(bitcoin::absolute::Time::from_consensus(local_time as u32).unwrap());
 
-        let share = TestShareBlockBuilder::new()
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .build();
-
+        let chain_store_handle = ChainStoreHandle::default();
         let error = validator()
-            .validate_timestamp(&share, &time_provider)
+            .validate_timestamp(&share, &chain_store_handle, &time_provider)
             .unwrap_err();
-        assert!(error.to_string().contains("seconds from current time"));
+        assert!(
+            error.to_string().contains("seconds ahead of local time"),
+            "unexpected error: {error}"
+        );
     }
 
     #[tokio::test]
@@ -824,13 +927,105 @@ mod tests {
         let mut time_provider = TestTimeProvider::new(SystemTime::now());
         time_provider.set_time(bitcoin::absolute::Time::from_consensus(share.header.time).unwrap());
 
-        let share = TestShareBlockBuilder::new()
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .build();
+        // 11 ancestors all strictly older than share.header.time so median < share.header.time.
+        let share_time = share.header.time;
+        let mut headers: Vec<ConfirmedHeaderResult> = Vec::with_capacity(MTP_WINDOW);
+        for offset in 1..=MTP_WINDOW as u32 {
+            headers.push(confirmed_header_with_time(share_time - offset, offset));
+        }
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Ok(metadata_at_height(20)));
+        chain_store_handle
+            .expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(headers.clone()));
 
         assert!(
             validator()
-                .validate_timestamp(&share, &time_provider)
+                .validate_timestamp(&share, &chain_store_handle, &time_provider)
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_timestamp_fails_when_parent_metadata_missing() {
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        let mut time_provider = TestTimeProvider::new(SystemTime::now());
+        time_provider.set_time(bitcoin::absolute::Time::from_consensus(share.header.time).unwrap());
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Err(StoreError::NotFound("genesis".into())));
+
+        let error = validator()
+            .validate_timestamp(&share, &chain_store_handle, &time_provider)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("metadata not found for MTP check"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_timestamp_fails_when_parent_height_missing() {
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        let mut time_provider = TestTimeProvider::new(SystemTime::now());
+        time_provider.set_time(bitcoin::absolute::Time::from_consensus(share.header.time).unwrap());
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: None,
+                    chain_work: Work::from_le_bytes([0u8; 32]),
+                    status: Status::Confirmed,
+                })
+            });
+
+        let error = validator()
+            .validate_timestamp(&share, &chain_store_handle, &time_provider)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("no expected height for MTP check"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_timestamp_succeeds_with_fewer_than_window_ancestors() {
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        let mut time_provider = TestTimeProvider::new(SystemTime::now());
+        time_provider.set_time(bitcoin::absolute::Time::from_consensus(share.header.time).unwrap());
+
+        let share_time = share.header.time;
+        let mut headers: Vec<ConfirmedHeaderResult> = Vec::with_capacity(3);
+        for offset in 1..=3u32 {
+            headers.push(confirmed_header_with_time(share_time - offset, offset));
+        }
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Ok(metadata_at_height(2)));
+        chain_store_handle
+            .expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(headers.clone()));
+
+        assert!(
+            validator()
+                .validate_timestamp(&share, &chain_store_handle, &time_provider)
                 .is_ok()
         );
     }
