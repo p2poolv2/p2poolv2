@@ -615,14 +615,13 @@ impl ChainStoreHandle {
 
     /// Add a block to the candidate chain and promote candidates to confirmed.
     ///
-    /// Combines organise_header (which places the block on the candidate
-    /// chain) with organise_block (which promotes qualifying candidates to
-    /// confirmed). This is the full promotion pipeline for a newly received
-    /// share block.
+    /// Atomically combines organise_header (which places the block on the
+    /// candidate chain) with organise_block (which promotes qualifying
+    /// candidates to confirmed) in a single RocksDB write batch, so a
+    /// crash cannot leave the header organised but not promoted.
     pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError> {
         let blockhash = header.block_hash();
-        self.organise_header(header).await?;
-        let height = self.organise_block().await?;
+        let height = self.store_handle.promote_block(header).await?;
         info!("Promoted block {blockhash} to confirmed height {height:?}");
         Ok(height)
     }

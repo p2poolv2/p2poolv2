@@ -144,6 +144,15 @@ pub enum WriteCommand {
     OrganiseBlock {
         reply: oneshot::Sender<Result<Option<u32>, StoreError>>,
     },
+
+    /// Atomically organise a header onto the candidate chain and then
+    /// promote any qualifying candidates to confirmed in a single
+    /// RocksDB write batch. Used by the organise worker so a crash
+    /// cannot leave a header organised but not promoted.
+    PromoteBlock {
+        header: ShareHeader,
+        reply: oneshot::Sender<Result<Option<u32>, StoreError>>,
+    },
 }
 
 /// Sender type for write commands (std::sync::mpsc for sync StoreWriter)
@@ -270,6 +279,19 @@ impl StoreWriter {
                     .and_then(|result| {
                         self.store.commit_batch(batch).map_err(StoreError::from)?;
                         Ok(result)
+                    });
+                let _ = reply.send(result);
+            }
+
+            WriteCommand::PromoteBlock { header, reply } => {
+                let mut batch = Store::get_write_batch();
+                let result = self
+                    .store
+                    .organise_header(&header, &mut batch)
+                    .and_then(|_| self.store.organise_block(&mut batch))
+                    .and_then(|height| {
+                        self.store.commit_batch(batch).map_err(StoreError::from)?;
+                        Ok(height)
                     });
                 let _ = reply.send(result);
             }
