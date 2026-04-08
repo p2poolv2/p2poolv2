@@ -95,6 +95,16 @@ pub enum WriteCommand {
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
 
+    /// Atomically add a share block and organise its header into the
+    /// candidate chain in a single RocksDB write batch. Used by the
+    /// block receiver so a crash cannot leave the share persisted but
+    /// not organised.
+    AddShareBlockAndOrganiseHeader {
+        share: ShareBlock,
+        confirm_txs: bool,
+        reply: oneshot::Sender<Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>>,
+    },
+
     /// Setup genesis block
     SetupGenesis {
         genesis: ShareBlock,
@@ -192,6 +202,27 @@ impl StoreWriter {
                     .store
                     .add_share_block(&share, confirm_txs, &mut batch)
                     .and_then(|_| self.store.commit_batch(batch).map_err(StoreError::from));
+                let _ = reply.send(result);
+            }
+
+            WriteCommand::AddShareBlockAndOrganiseHeader {
+                share,
+                confirm_txs,
+                reply,
+            } => {
+                debug!(
+                    "Writing share and organising header atomically: {:?}",
+                    share.block_hash()
+                );
+                let mut batch = Store::get_write_batch();
+                let result = self
+                    .store
+                    .add_share_block(&share, confirm_txs, &mut batch)
+                    .and_then(|_| self.store.organise_header(&share.header, &mut batch))
+                    .and_then(|organise_result| {
+                        self.store.commit_batch(batch).map_err(StoreError::from)?;
+                        Ok(organise_result)
+                    });
                 let _ = reply.send(result);
             }
 
