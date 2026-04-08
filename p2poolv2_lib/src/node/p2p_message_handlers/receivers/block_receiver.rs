@@ -284,24 +284,21 @@ impl BlockReceiver {
 
     /// Persist a committed block, organise its header, and queue it
     /// for full validation by the validation worker.
+    ///
+    /// The persist + organise step is performed in a single RocksDB
+    /// write batch so a crash cannot leave the share stored but not
+    /// organised on the candidate chain.
     async fn store_and_emit_validation(
         &self,
         block_hash: &BlockHash,
         share_block: ShareBlock,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let header = share_block.header.clone();
-
         if let Err(error) = self
             .chain_store_handle
-            .add_share_block(share_block, true)
+            .add_share_block_and_organise_header(share_block, true)
             .await
         {
-            error!("Failed to store block {block_hash}: {error}");
-            return Err(error.into());
-        }
-
-        if let Err(error) = self.chain_store_handle.organise_header(header).await {
-            error!("Failed to organise header {block_hash}: {error}");
+            error!("Failed to store and organise block {block_hash}: {error}");
             return Err(error.into());
         }
 
@@ -790,8 +787,9 @@ mod tests {
             .expect_get_share_header()
             .with(mockall::predicate::eq(parent_hash))
             .returning(move |_| Ok(parent_header_clone.clone()));
-        mock_store.expect_add_share_block().returning(|_, _| Ok(()));
-        mock_store.expect_organise_header().returning(|_| Ok(None));
+        mock_store
+            .expect_add_share_block_and_organise_header()
+            .returning(|_, _| Ok(None));
 
         let mut mock_validator = MockDefaultShareValidator::default();
         let mut pool_difficulty = PoolDifficulty::default();
@@ -957,11 +955,10 @@ mod tests {
             .expect_get_share_header()
             .returning(move |_| Ok(parent_header_clone.clone()));
         mock_store
-            .expect_add_share_block()
+            .expect_add_share_block_and_organise_header()
             .with(mockall::predicate::always(), mockall::predicate::eq(true))
             .times(1)
-            .returning(|_, _| Ok(()));
-        mock_store.expect_organise_header().returning(|_| Ok(None));
+            .returning(|_, _| Ok(None));
 
         let mut mock_validator = MockDefaultShareValidator::default();
         let mut pool_difficulty = PoolDifficulty::default();
@@ -1137,8 +1134,9 @@ mod tests {
         mock_store
             .expect_get_share_header()
             .returning(move |_| Ok(root_header_clone.clone()));
-        mock_store.expect_add_share_block().returning(|_, _| Ok(()));
-        mock_store.expect_organise_header().returning(|_| Ok(None));
+        mock_store
+            .expect_add_share_block_and_organise_header()
+            .returning(|_, _| Ok(None));
 
         let mut mock_validator = MockDefaultShareValidator::default();
         let mut pool_difficulty = PoolDifficulty::default();

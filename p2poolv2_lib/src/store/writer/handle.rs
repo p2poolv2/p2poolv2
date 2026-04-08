@@ -225,6 +225,24 @@ impl StoreHandle {
         reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
     }
 
+    /// Atomically persist a share block and organise its header into
+    /// the candidate chain in a single RocksDB write batch.
+    pub async fn add_share_block_and_organise_header(
+        &self,
+        share: ShareBlock,
+        confirm_txs: bool,
+    ) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.write_tx
+            .send(WriteCommand::AddShareBlockAndOrganiseHeader {
+                share,
+                confirm_txs,
+                reply: reply_tx,
+            })
+            .map_err(|_| StoreError::ChannelClosed)?;
+        reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
+    }
+
     /// Setup genesis block.
     pub async fn setup_genesis(&self, genesis: ShareBlock) -> Result<(), StoreError> {
         let (reply_tx, reply_rx) = oneshot::channel();
@@ -345,6 +363,7 @@ mockall::mock! {
         pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;
         pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
         pub async fn add_share_block(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), StoreError>;
+        pub async fn add_share_block_and_organise_header(&self, share: ShareBlock, confirm_txs: bool) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;
         pub async fn setup_genesis(&self, genesis: ShareBlock) -> Result<(), StoreError>;
         pub async fn init_chain_state_from_store(&self, genesis_hash: BlockHash) -> Result<(), StoreError>;
         pub async fn add_user(&self, btcaddress: String) -> Result<u64, StoreError>;

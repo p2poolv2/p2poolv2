@@ -560,6 +560,23 @@ impl ChainStoreHandle {
         self.store_handle.add_share_block(share, confirm_txs).await
     }
 
+    /// Atomically persist a share block and organise its header into
+    /// the candidate chain in a single RocksDB write batch.
+    ///
+    /// Used by the block receiver so a crash cannot leave the share
+    /// persisted but unorganised on the candidate chain.
+    pub async fn add_share_block_and_organise_header(
+        &self,
+        share: ShareBlock,
+        confirm_txs: bool,
+    ) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError> {
+        let blockhash = share.block_hash();
+        debug!("Adding share and organising header atomically: {blockhash:?}");
+        self.store_handle
+            .add_share_block_and_organise_header(share, confirm_txs)
+            .await
+    }
+
     /// Calculate work over PPLNS window.
     fn work_over_pplns_window(&self, start_blockhash: &BlockHash) -> Result<Work, StoreError> {
         let chain_blockhashes = self
@@ -695,6 +712,7 @@ mockall::mock! {
         pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
         pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
         pub async fn add_share_block(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), StoreError>;
+        pub async fn add_share_block_and_organise_header(&self, share: ShareBlock, confirm_txs: bool) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;
         pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError>;
         pub async fn add_user(&self, btcaddress: String) -> Result<u64, StoreError>;
     }
