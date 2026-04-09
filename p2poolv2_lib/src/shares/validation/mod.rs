@@ -780,18 +780,23 @@ impl ShareValidator for DefaultShareValidator {
 
 impl DefaultShareValidator {
     /// Validate that every input of every non-coinbase transaction in the
-    /// share block references an output that:
+    /// share block spends an output that:
     ///
-    /// 1. Belongs to a transaction on the confirmed sharechain (uncle /
-    ///    unconfirmed inclusions are ignored).
-    /// 2. Exists in the Outputs store.
+    /// 1. Exists in the `Outputs` column family.
+    /// 2. Belongs to a transaction on the confirmed sharechain *or* to
+    ///    an earlier transaction in this same share block. (Inputs that
+    ///    reference uncle / unconfirmed external inclusions are
+    ///    rejected.)
     /// 3. Has not already been spent by another transaction on the
     ///    confirmed sharechain.
+    /// 4. Is not spent by more than one input in this share block.
     ///
-    /// Inputs that reference an output produced by an earlier transaction
-    /// in the same share block are accepted without checking the store,
-    /// since the producing transaction is being introduced atomically with
-    /// the spender.
+    /// In-block prevouts (inputs whose source txid is an earlier
+    /// transaction in the same block) are exempt from the
+    /// confirmed-chain check. The producing tx is being introduced
+    /// atomically with its spender, but they are *still* checked for
+    /// existence against the `Outputs` CF, so a spender that references
+    /// a non-existent vout of an in-block producer is rejected.
     fn validate_prevouts(
         &self,
         share: &ShareBlock,
@@ -804,28 +809,34 @@ impl DefaultShareValidator {
             .map(|share_transaction| share_transaction.0.input.len())
             .sum();
         let mut all_outpoints: Vec<bitcoin::OutPoint> = Vec::with_capacity(total_inputs);
-        let mut block_txids_deduper: HashSet<bitcoin::Txid> =
+        let mut external_source_txids: HashSet<bitcoin::Txid> =
+            HashSet::with_capacity(total_inputs);
+        let mut seen_prevouts: HashSet<bitcoin::OutPoint> = HashSet::with_capacity(total_inputs);
+        let mut in_block_txids: HashSet<bitcoin::Txid> =
             HashSet::with_capacity(share.transactions.len());
         for share_transaction in &share.transactions {
             let transaction = &share_transaction.0;
             if !transaction.is_coinbase() {
                 for input in &transaction.input {
-                    if !block_txids_deduper.contains(&input.previous_output.txid) {
-                        all_outpoints.push(input.previous_output);
+                    let outpoint = input.previous_output;
+                    if !seen_prevouts.insert(outpoint) {
+                        return Err(ValidationError::new(format!(
+                            "Duplicate prevout {}:{} spent by two inputs in the same share block",
+                            outpoint.txid, outpoint.vout
+                        )));
+                    }
+                    all_outpoints.push(outpoint);
+                    if !in_block_txids.contains(&outpoint.txid) {
+                        external_source_txids.insert(outpoint.txid);
                     }
                 }
             }
-            block_txids_deduper.insert(transaction.compute_txid());
+            in_block_txids.insert(transaction.compute_txid());
         }
 
-        let source_txids: Vec<bitcoin::Txid> = all_outpoints
-            .iter()
-            .map(|outpoint| outpoint.txid)
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
+        let external_source_txids: Vec<bitcoin::Txid> = external_source_txids.into_iter().collect();
         if !chain_store_handle
-            .are_all_txids_confirmed(&source_txids)
+            .are_all_txids_confirmed(&external_source_txids)
             .map_err(|error| {
                 ValidationError::new(format!("Failed to query confirmed status: {error}"))
             })?
@@ -2082,23 +2093,31 @@ mod tests {
             }],
         };
 
-        // Only the producing tx's prevout (Txid::all_zeros) should reach the
-        // store; the in-block spend referencing producing_txid is skipped.
+        // The confirmation check sees only the producing tx's external
+        // prevout (Txid::all_zeros) — the in-block source txid is
+        // exempt. The existence and spent checks see *both* outpoints
+        // because in-block prevouts must still be checked against the
+        // Outputs CF (and harmlessly probed in SpendsIndex).
+        let producing_txid_for_check = producing_txid;
         chain_store_handle
             .expect_are_all_txids_confirmed()
             .withf(|txids| txids.len() == 1 && txids[0] == bitcoin::Txid::all_zeros())
             .returning(|_txids| Ok(true));
         chain_store_handle
             .expect_is_missing_any_prevout()
-            .withf(|outpoints| {
-                outpoints.len() == 1 && outpoints[0].txid == bitcoin::Txid::all_zeros()
+            .withf(move |outpoints| {
+                outpoints.len() == 2
+                    && outpoints
+                        .iter()
+                        .any(|outpoint| outpoint.txid == bitcoin::Txid::all_zeros())
+                    && outpoints
+                        .iter()
+                        .any(|outpoint| outpoint.txid == producing_txid_for_check)
             })
             .returning(|_outpoints| Ok(false));
         chain_store_handle
             .expect_is_any_prevout_spent()
-            .withf(|outpoints| {
-                outpoints.len() == 1 && outpoints[0].txid == bitcoin::Txid::all_zeros()
-            })
+            .withf(move |outpoints| outpoints.len() == 2)
             .returning(|_outpoints| Ok(false));
 
         let share = TestShareBlockBuilder::new()
@@ -2109,6 +2128,126 @@ mod tests {
 
         let result = validator().validate_prevouts(&share, &chain_store_handle);
         assert!(result.is_ok(), "expected Ok, got {:?}", result.err());
+    }
+
+    #[test]
+    fn test_validate_prevouts_fails_when_in_block_spend_references_missing_vout() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        let producing_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint {
+                    txid: bitcoin::Txid::all_zeros(),
+                    vout: 0,
+                },
+                script_sig: ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            // producer has only one output (vout 0).
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(50_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+        let producing_txid = producing_tx.compute_txid();
+
+        // spender references vout 5 — does not exist.
+        let in_block_spender = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint {
+                    txid: producing_txid,
+                    vout: 5,
+                },
+                script_sig: ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(49_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        // Confirmation check passes for the external prevout.
+        chain_store_handle
+            .expect_are_all_txids_confirmed()
+            .returning(|_txids| Ok(true));
+        // Existence check returns true (something missing) because the
+        // in-block spender references a non-existent vout.
+        chain_store_handle
+            .expect_is_missing_any_prevout()
+            .returning(|_outpoints| Ok(true));
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(producing_tx)
+            .add_transaction(in_block_spender)
+            .build();
+
+        let error = validator()
+            .validate_prevouts(&share, &chain_store_handle)
+            .unwrap_err();
+        assert!(error.to_string().contains("do not exist"), "got: {error}");
+    }
+
+    #[test]
+    fn test_validate_prevouts_fails_when_two_inputs_spend_same_prevout() {
+        let chain_store_handle = ChainStoreHandle::default();
+
+        let shared_prevout = bitcoin::OutPoint {
+            txid: bitcoin::Txid::all_zeros(),
+            vout: 0,
+        };
+
+        let spender_a = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: shared_prevout,
+                script_sig: ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(10_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+        let spender_b = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: shared_prevout,
+                script_sig: ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(20_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        // No store mocks set: the duplicate-prevout check rejects the
+        // share before any chain_store_handle method is called.
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spender_a)
+            .add_transaction(spender_b)
+            .build();
+
+        let error = validator()
+            .validate_prevouts(&share, &chain_store_handle)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("Duplicate prevout"),
+            "got: {error}"
+        );
     }
 
     #[test]
