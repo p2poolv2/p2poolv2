@@ -295,7 +295,7 @@ impl BlockReceiver {
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if let Err(error) = self
             .chain_store_handle
-            .add_share_block_and_organise_header(share_block, true)
+            .add_share_block_and_organise_header(share_block)
             .await
         {
             error!("Failed to store and organise block {block_hash}: {error}");
@@ -789,7 +789,7 @@ mod tests {
             .returning(move |_| Ok(parent_header_clone.clone()));
         mock_store
             .expect_add_share_block_and_organise_header()
-            .returning(|_, _| Ok(None));
+            .returning(|_| Ok(None));
 
         let mut mock_validator = MockDefaultShareValidator::default();
         let mut pool_difficulty = PoolDifficulty::default();
@@ -956,9 +956,9 @@ mod tests {
             .returning(move |_| Ok(parent_header_clone.clone()));
         mock_store
             .expect_add_share_block_and_organise_header()
-            .with(mockall::predicate::always(), mockall::predicate::eq(true))
+            .with(mockall::predicate::always())
             .times(1)
-            .returning(|_, _| Ok(None));
+            .returning(|_| Ok(None));
 
         let mut mock_validator = MockDefaultShareValidator::default();
         let mut pool_difficulty = PoolDifficulty::default();
@@ -1136,7 +1136,7 @@ mod tests {
             .returning(move |_| Ok(root_header_clone.clone()));
         mock_store
             .expect_add_share_block_and_organise_header()
-            .returning(|_, _| Ok(None));
+            .returning(|_| Ok(None));
 
         let mut mock_validator = MockDefaultShareValidator::default();
         let mut pool_difficulty = PoolDifficulty::default();

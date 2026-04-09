@@ -91,7 +91,6 @@ pub enum WriteCommand {
     /// Add a share to the store
     AddShareBlock {
         share: ShareBlock,
-        confirm_txs: bool,
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
 
@@ -101,7 +100,6 @@ pub enum WriteCommand {
     /// not organised.
     AddShareBlockAndOrganiseHeader {
         share: ShareBlock,
-        confirm_txs: bool,
         reply: oneshot::Sender<Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>>,
     },
 
@@ -191,25 +189,17 @@ impl StoreWriter {
     /// Handle a single write command
     fn handle_command(&self, cmd: WriteCommand) {
         match cmd {
-            WriteCommand::AddShareBlock {
-                share,
-                confirm_txs,
-                reply,
-            } => {
+            WriteCommand::AddShareBlock { share, reply } => {
                 debug!("Writing share: {:?}", share.block_hash());
                 let mut batch = Store::get_write_batch();
                 let result = self
                     .store
-                    .add_share_block(&share, confirm_txs, &mut batch)
+                    .add_share_block(&share, &mut batch)
                     .and_then(|_| self.store.commit_batch(batch).map_err(StoreError::from));
                 let _ = reply.send(result);
             }
 
-            WriteCommand::AddShareBlockAndOrganiseHeader {
-                share,
-                confirm_txs,
-                reply,
-            } => {
+            WriteCommand::AddShareBlockAndOrganiseHeader { share, reply } => {
                 debug!(
                     "Writing share and organising header atomically: {:?}",
                     share.block_hash()
@@ -217,7 +207,7 @@ impl StoreWriter {
                 let mut batch = Store::get_write_batch();
                 let result = self
                     .store
-                    .add_share_block(&share, confirm_txs, &mut batch)
+                    .add_share_block(&share, &mut batch)
                     .and_then(|_| self.store.organise_header(&share.header, &mut batch))
                     .and_then(|organise_result| {
                         self.store.commit_batch(batch).map_err(StoreError::from)?;

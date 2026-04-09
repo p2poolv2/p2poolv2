@@ -161,7 +161,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share, true, &mut batch).unwrap();
+        store.add_share_block(&share, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // No top candidate before organising
@@ -257,7 +257,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share1, true, &mut batch).unwrap();
+        store.add_share_block(&share1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
         store.push_to_candidate_chain(&share1).unwrap();
 
@@ -288,7 +288,7 @@ mod tests {
             let chain_work = parent_metadata.chain_work + share_work;
             let mut batch = Store::get_write_batch();
             store
-                .add_share_block(&fork_share, true, &mut batch)
+                .add_share_block(&fork_share, &mut batch)
                 .unwrap();
             store
                 .set_height_to_blockhash(&blockhash, height, &mut batch)
@@ -348,7 +348,7 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-        store.push_to_confirmed_chain(&share1, true).unwrap();
+        store.push_to_confirmed_chain(&share1).unwrap();
 
         // uncle_block: fork child of genesis (sibling of share1)
         let uncle_block = TestShareBlockBuilder::new()
@@ -367,7 +367,7 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = Store::get_write_batch();
@@ -399,7 +399,7 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-        store.push_to_confirmed_chain(&share1, true).unwrap();
+        store.push_to_confirmed_chain(&share1).unwrap();
 
         // Two fork blocks at h:1
         let uncle_a = TestShareBlockBuilder::new()
@@ -423,7 +423,7 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = Store::get_write_batch();
@@ -453,7 +453,7 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-        store.push_to_confirmed_chain(&share1, true).unwrap();
+        store.push_to_confirmed_chain(&share1).unwrap();
 
         // uncle_block: fork child of genesis at h:1 (sibling of share1)
         let uncle_block = TestShareBlockBuilder::new()
@@ -469,13 +469,13 @@ mod tests {
             .uncles(vec![uncle_block.block_hash()])
             .nonce(0xe9695793)
             .build();
-        store.push_to_confirmed_chain(&share2, true).unwrap();
+        store.push_to_confirmed_chain(&share2).unwrap();
 
         let share3 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share2.block_hash().to_string())
             .nonce(0xe9695794)
             .build();
-        store.push_to_confirmed_chain(&share3, true).unwrap();
+        store.push_to_confirmed_chain(&share3).unwrap();
 
         // find_uncles should not return uncle_block since share2
         // already included it and organise_header marked it

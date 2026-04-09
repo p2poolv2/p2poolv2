@@ -76,7 +76,7 @@ impl ChainStoreHandle {
 
         if genesis_in_store.is_none() {
             // Set up new chain with genesis
-            self.add_share_block(genesis_block, true).await?;
+            self.add_share_block(genesis_block).await?;
         } else {
             // Initialize chain state from existing store data
             self.store_handle
@@ -540,11 +540,7 @@ impl ChainStoreHandle {
     /// Add a share to the chain.
     ///
     /// Calculates height and chain work and stores the share. Reorgs are handled by OrganiseWorker
-    pub async fn add_share_block(
-        &self,
-        share: ShareBlock,
-        confirm_txs: bool,
-    ) -> Result<(), StoreError> {
+    pub async fn add_share_block(&self, share: ShareBlock) -> Result<(), StoreError> {
         debug!("Adding share to chain: {:?}", share.block_hash());
 
         let share_work = share.header.get_work();
@@ -557,7 +553,7 @@ impl ChainStoreHandle {
         }
 
         // Store the share
-        self.store_handle.add_share_block(share, confirm_txs).await
+        self.store_handle.add_share_block(share).await
     }
 
     /// Atomically persist a share block and organise its header into
@@ -568,12 +564,11 @@ impl ChainStoreHandle {
     pub async fn add_share_block_and_organise_header(
         &self,
         share: ShareBlock,
-        confirm_txs: bool,
     ) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError> {
         let blockhash = share.block_hash();
         debug!("Adding share and organising header atomically: {blockhash:?}");
         self.store_handle
-            .add_share_block_and_organise_header(share, confirm_txs)
+            .add_share_block_and_organise_header(share)
             .await
     }
 
@@ -714,8 +709,8 @@ mockall::mock! {
         pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;
         pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
         pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
-        pub async fn add_share_block(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), StoreError>;
-        pub async fn add_share_block_and_organise_header(&self, share: ShareBlock, confirm_txs: bool) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;
+        pub async fn add_share_block(&self, share: ShareBlock) -> Result<(), StoreError>;
+        pub async fn add_share_block_and_organise_header(&self, share: ShareBlock) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;
         pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError>;
         pub async fn add_user(&self, btcaddress: String) -> Result<u64, StoreError>;
     }
@@ -771,7 +766,7 @@ mod tests {
             .build();
 
         chain_handle
-            .add_share_block(share1.clone(), true)
+            .add_share_block(share1.clone())
             .await
             .unwrap();
 
@@ -829,7 +824,7 @@ mod tests {
                 .work(2)
                 .build();
             chain_handle
-                .add_share_block(share.clone(), true)
+                .add_share_block(share.clone())
                 .await
                 .unwrap();
             chain_handle
@@ -899,7 +894,7 @@ mod tests {
                 .work(2)
                 .build();
             chain_handle
-                .add_share_block(share.clone(), true)
+                .add_share_block(share.clone())
                 .await
                 .unwrap();
             chain_handle
@@ -942,7 +937,7 @@ mod tests {
             .build();
 
         chain_handle
-            .add_share_block(share1.clone(), true)
+            .add_share_block(share1.clone())
             .await
             .unwrap();
 
@@ -952,7 +947,7 @@ mod tests {
             .work(1)
             .build();
 
-        chain_handle.add_share_block(share2, true).await.unwrap();
+        chain_handle.add_share_block(share2).await.unwrap();
     }
 
     #[tokio::test]
@@ -974,7 +969,7 @@ mod tests {
                 .work(2)
                 .build();
             chain_handle
-                .add_share_block(share.clone(), true)
+                .add_share_block(share.clone())
                 .await
                 .unwrap();
             chain_handle

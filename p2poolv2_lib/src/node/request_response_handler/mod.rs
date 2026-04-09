@@ -615,7 +615,7 @@ mod tests {
             let mut cloned = ChainStoreHandle::default();
             cloned.expect_share_block_exists().returning(|_| false);
             cloned.expect_is_candidate().returning(|_| false);
-            cloned.expect_add_share_block().returning(|_, _| Ok(()));
+            cloned.expect_add_share_block().returning(|_| Ok(()));
             cloned
         });
 

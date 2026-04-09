@@ -261,7 +261,7 @@ async fn test_three_nodes_share_sync() {
     // Seed non-genesis shares from fixture into store 1
     for share_block in &fixture_blocks[1..] {
         chain_store_handle1
-            .add_share_block(share_block.clone(), true)
+            .add_share_block(share_block.clone())
             .await
             .unwrap();
         chain_store_handle1

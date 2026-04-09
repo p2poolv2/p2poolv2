@@ -357,7 +357,7 @@ mod tests {
         let share2 = TestShareBlockBuilder::new().nonce(0xe9695792).build();
 
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share1, true, &mut batch).unwrap();
+        store.add_share_block(&share1, &mut batch).unwrap();
         let mut metadata1 = BlockMetadata {
             expected_height: Some(0),
             chain_work: share1.header.get_work(),
@@ -376,7 +376,7 @@ mod tests {
         assert_eq!(confirmed, share1.block_hash());
 
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         let mut metadata2 = BlockMetadata {
             expected_height: Some(1),
             chain_work: share2.header.get_work(),
@@ -425,9 +425,9 @@ mod tests {
 
         // Add all shares first
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share1, false, &mut batch).unwrap();
-        store.add_share_block(&share2, false, &mut batch).unwrap();
-        store.add_share_block(&share3, false, &mut batch).unwrap();
+        store.add_share_block(&share1, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
+        store.add_share_block(&share3, &mut batch).unwrap();
         let mut metadata1 = BlockMetadata {
             expected_height: Some(0),
             chain_work: share1.header.get_work(),
@@ -488,8 +488,8 @@ mod tests {
 
         // Add shares first
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share0, false, &mut batch).unwrap();
-        store.add_share_block(&share2, false, &mut batch).unwrap();
+        store.add_share_block(&share0, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         let mut metadata0 = BlockMetadata {
             expected_height: Some(0),
             chain_work: share0.header.get_work(),
@@ -537,10 +537,10 @@ mod tests {
         // Add shares first
         let mut batch = Store::get_write_batch();
         store
-            .add_share_block(&candidate_share, false, &mut batch)
+            .add_share_block(&candidate_share, &mut batch)
             .unwrap();
         store
-            .add_share_block(&confirmed_share, false, &mut batch)
+            .add_share_block(&confirmed_share, &mut batch)
             .unwrap();
         let mut candidate_metadata = BlockMetadata {
             expected_height: Some(0),
@@ -665,7 +665,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Don't mark it as confirmed - is_confirmed should return false
@@ -696,7 +696,7 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share3, true, &mut batch).unwrap();
+        store.add_share_block(&share3, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Mark share2 as confirmed at height 1
@@ -744,7 +744,7 @@ mod tests {
 
         // append_to_confirmed checks top height against DB, so commit between each
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share0, false, &mut batch).unwrap();
+        store.add_share_block(&share0, &mut batch).unwrap();
         let mut m0 = BlockMetadata {
             expected_height: Some(0),
             chain_work: share0.header.get_work(),
@@ -759,7 +759,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share1, false, &mut batch).unwrap();
+        store.add_share_block(&share1, &mut batch).unwrap();
         let mut m1 = BlockMetadata {
             expected_height: Some(1),
             chain_work: share1.header.get_work(),
@@ -774,7 +774,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, false, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         let mut m2 = BlockMetadata {
             expected_height: Some(2),
             chain_work: share2.header.get_work(),
@@ -1054,7 +1054,7 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&fork, true, &mut batch).unwrap();
+        store.add_share_block(&fork, &mut batch).unwrap();
         let fork_metadata = BlockMetadata {
             expected_height: Some(1),
             chain_work: fork.header.get_work(),
@@ -1127,7 +1127,7 @@ mod tests {
             .nonce(0xe9695794)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&fork1, true, &mut batch).unwrap();
+        store.add_share_block(&fork1, &mut batch).unwrap();
         let fork1_metadata = BlockMetadata {
             expected_height: Some(1),
             chain_work: fork1.header.get_work(),
@@ -1144,7 +1144,7 @@ mod tests {
             .nonce(0xe9695795)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&fork2, true, &mut batch).unwrap();
+        store.add_share_block(&fork2, &mut batch).unwrap();
         let fork2_metadata = BlockMetadata {
             expected_height: Some(2),
             chain_work: fork1_metadata.chain_work + fork2.header.get_work(),
@@ -1184,7 +1184,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&a, true, &mut batch).unwrap();
+        store.add_share_block(&a, &mut batch).unwrap();
         let mut metadata_a = BlockMetadata {
             expected_height: Some(1),
             chain_work: a.header.get_work(),
@@ -1208,7 +1208,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share_block(&fork_share, true, &mut batch)
+            .add_share_block(&fork_share, &mut batch)
             .unwrap();
         let mut fork_metadata = BlockMetadata {
             expected_height: Some(1),
@@ -1282,7 +1282,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share_a, true, &mut batch).unwrap();
+        store.add_share_block(&share_a, &mut batch).unwrap();
         let mut metadata_a = BlockMetadata {
             expected_height: Some(1),
             chain_work: share_a.header.get_work(),
@@ -1301,7 +1301,7 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share_b, true, &mut batch).unwrap();
+        store.add_share_block(&share_b, &mut batch).unwrap();
         let mut metadata_b = BlockMetadata {
             expected_height: Some(2),
             chain_work: metadata_a.chain_work + share_b.header.get_work(),
@@ -1323,7 +1323,7 @@ mod tests {
             .nonce(0xe9695794)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&fork_1, true, &mut batch).unwrap();
+        store.add_share_block(&fork_1, &mut batch).unwrap();
         let mut fork_1_metadata = BlockMetadata {
             expected_height: Some(1),
             chain_work: fork_1.header.get_work(),
@@ -1343,7 +1343,7 @@ mod tests {
             .nonce(0xe9695795)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&fork_2, true, &mut batch).unwrap();
+        store.add_share_block(&fork_2, &mut batch).unwrap();
         let mut fork_2_metadata = BlockMetadata {
             expected_height: Some(2),
             chain_work: fork_1_metadata.chain_work + fork_2.header.get_work(),
@@ -1426,7 +1426,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share_a, true, &mut batch).unwrap();
+        store.add_share_block(&share_a, &mut batch).unwrap();
         let mut metadata_a = BlockMetadata {
             expected_height: Some(1),
             chain_work: share_a.header.get_work(),
@@ -1445,7 +1445,7 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share_b, true, &mut batch).unwrap();
+        store.add_share_block(&share_b, &mut batch).unwrap();
         let mut metadata_b = BlockMetadata {
             expected_height: Some(2),
             chain_work: metadata_a.chain_work + share_b.header.get_work(),
@@ -1464,7 +1464,7 @@ mod tests {
             .nonce(0xe9695794)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share_c, true, &mut batch).unwrap();
+        store.add_share_block(&share_c, &mut batch).unwrap();
         let mut metadata_c = BlockMetadata {
             expected_height: Some(3),
             chain_work: metadata_b.chain_work + share_c.header.get_work(),
@@ -1488,7 +1488,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share_block(&fork_share, true, &mut batch)
+            .add_share_block(&fork_share, &mut batch)
             .unwrap();
         let mut fork_metadata = BlockMetadata {
             expected_height: Some(1),
@@ -1562,7 +1562,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share_a, true, &mut batch).unwrap();
+        store.add_share_block(&share_a, &mut batch).unwrap();
         let mut metadata_a = BlockMetadata {
             expected_height: Some(1),
             chain_work: share_a.header.get_work(),
@@ -1581,7 +1581,7 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share_b, true, &mut batch).unwrap();
+        store.add_share_block(&share_b, &mut batch).unwrap();
         let mut metadata_b = BlockMetadata {
             expected_height: Some(2),
             chain_work: metadata_a.chain_work + share_b.header.get_work(),
@@ -1605,7 +1605,7 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store
-            .add_share_block(&fork_share, true, &mut batch)
+            .add_share_block(&fork_share, &mut batch)
             .unwrap();
         let mut fork_metadata = BlockMetadata {
             expected_height: Some(2),
