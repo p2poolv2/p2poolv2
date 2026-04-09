@@ -773,7 +773,84 @@ impl ShareValidator for DefaultShareValidator {
         share: &ShareBlock,
         chain_store_handle: &ChainStoreHandle,
     ) -> Result<(), ValidationError> {
-        self.validate_timestamp(share, chain_store_handle, self.time_provider.as_ref())
+        self.validate_timestamp(share, chain_store_handle, self.time_provider.as_ref())?;
+        self.validate_prevouts(share, chain_store_handle)
+    }
+}
+
+impl DefaultShareValidator {
+    /// Validate that every input of every non-coinbase transaction in the
+    /// share block references an output that:
+    ///
+    /// 1. Belongs to a transaction on the confirmed sharechain (uncle /
+    ///    unconfirmed inclusions are ignored).
+    /// 2. Exists in the Outputs store.
+    /// 3. Has not already been spent by another transaction on the
+    ///    confirmed sharechain.
+    ///
+    /// Inputs that reference an output produced by an earlier transaction
+    /// in the same share block are accepted without checking the store,
+    /// since the producing transaction is being introduced atomically with
+    /// the spender.
+    fn validate_prevouts(
+        &self,
+        share: &ShareBlock,
+        chain_store_handle: &ChainStoreHandle,
+    ) -> Result<(), ValidationError> {
+        let total_inputs: usize = share
+            .transactions
+            .iter()
+            .filter(|share_transaction| !share_transaction.0.is_coinbase())
+            .map(|share_transaction| share_transaction.0.input.len())
+            .sum();
+        let mut all_outpoints: Vec<bitcoin::OutPoint> = Vec::with_capacity(total_inputs);
+        let mut block_txids_deduper: HashSet<bitcoin::Txid> =
+            HashSet::with_capacity(share.transactions.len());
+        for share_transaction in &share.transactions {
+            let transaction = &share_transaction.0;
+            if !transaction.is_coinbase() {
+                for input in &transaction.input {
+                    if !block_txids_deduper.contains(&input.previous_output.txid) {
+                        all_outpoints.push(input.previous_output);
+                    }
+                }
+            }
+            block_txids_deduper.insert(transaction.compute_txid());
+        }
+
+        let source_txids: Vec<bitcoin::Txid> = all_outpoints
+            .iter()
+            .map(|outpoint| outpoint.txid)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        if !chain_store_handle
+            .are_all_txids_confirmed(&source_txids)
+            .map_err(|error| {
+                ValidationError::new(format!("Failed to query confirmed status: {error}"))
+            })?
+        {
+            return Err(ValidationError::new("prevout not on confirmed chain"));
+        }
+        if chain_store_handle
+            .is_missing_any_prevout(&all_outpoints)
+            .map_err(|error| ValidationError::new(format!("Failed to query Outputs: {error}")))?
+        {
+            return Err(ValidationError::new(
+                "One or more prevouts do not exist in the Outputs store",
+            ));
+        }
+        if chain_store_handle
+            .is_any_prevout_spent(&all_outpoints)
+            .map_err(|error| {
+                ValidationError::new(format!("Failed to query SpendsIndex: {error}"))
+            })?
+        {
+            return Err(ValidationError::new(
+                "One or more prevouts are already spent",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -1201,11 +1278,8 @@ mod tests {
             .returning(|_, _| true);
         chain_store_handle
             .expect_add_share_block()
-            .with(
-                mockall::predicate::eq(share_block.clone()),
-                mockall::predicate::eq(true),
-            )
-            .returning(|_, _| Ok(()));
+            .with(mockall::predicate::eq(share_block.clone()))
+            .returning(|_| Ok(()));
         chain_store_handle
             .expect_get_share()
             .with(eq(bitcoin::BlockHash::all_zeros()))
@@ -1850,6 +1924,191 @@ mod tests {
                 .contains("Failed to look up spent outputs"),
             "Expected UTXO lookup failure, got: {error}"
         );
+    }
+
+    #[test]
+    fn test_validate_prevouts_exist_succeeds_for_coinbase_only() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_are_all_txids_confirmed()
+            .returning(|_txids| Ok(true));
+        chain_store_handle
+            .expect_is_missing_any_prevout()
+            .returning(|_outpoints| Ok(false));
+        chain_store_handle
+            .expect_is_any_prevout_spent()
+            .returning(|_outpoints| Ok(false));
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        let result = validator().validate_prevouts(&share, &chain_store_handle);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_prevouts_exist_succeeds_when_confirmed_present_and_unspent() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let (_spent_output, spending_tx) = build_p2sh_op_true_spent_output_and_spending_tx();
+
+        chain_store_handle
+            .expect_are_all_txids_confirmed()
+            .returning(|_txids| Ok(true));
+        chain_store_handle
+            .expect_is_missing_any_prevout()
+            .returning(|_outpoints| Ok(false));
+        chain_store_handle
+            .expect_is_any_prevout_spent()
+            .returning(|_outpoints| Ok(false));
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spending_tx)
+            .build();
+
+        let result = validator().validate_prevouts(&share, &chain_store_handle);
+        assert!(result.is_ok(), "expected Ok, got {:?}", result.err());
+    }
+
+    #[test]
+    fn test_validate_prevouts_exist_fails_when_source_tx_not_confirmed() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let (_spent_output, spending_tx) = build_p2sh_op_true_spent_output_and_spending_tx();
+
+        chain_store_handle
+            .expect_are_all_txids_confirmed()
+            .returning(|_txids| Ok(false));
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spending_tx)
+            .build();
+
+        let error = validator()
+            .validate_prevouts(&share, &chain_store_handle)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("prevout not on confirmed chain"),
+            "got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_validate_prevouts_exist_fails_when_prevout_missing() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let (_spent_output, spending_tx) = build_p2sh_op_true_spent_output_and_spending_tx();
+
+        chain_store_handle
+            .expect_are_all_txids_confirmed()
+            .returning(|_txids| Ok(true));
+        chain_store_handle
+            .expect_is_missing_any_prevout()
+            .returning(|_outpoints| Ok(true));
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spending_tx)
+            .build();
+
+        let error = validator()
+            .validate_prevouts(&share, &chain_store_handle)
+            .unwrap_err();
+        assert!(error.to_string().contains("do not exist"), "got: {error}");
+    }
+
+    #[test]
+    fn test_validate_prevouts_exist_fails_when_prevout_already_spent() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let (_spent_output, spending_tx) = build_p2sh_op_true_spent_output_and_spending_tx();
+
+        chain_store_handle
+            .expect_are_all_txids_confirmed()
+            .returning(|_txids| Ok(true));
+        chain_store_handle
+            .expect_is_missing_any_prevout()
+            .returning(|_outpoints| Ok(false));
+        chain_store_handle
+            .expect_is_any_prevout_spent()
+            .returning(|_outpoints| Ok(true));
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spending_tx)
+            .build();
+
+        let error = validator()
+            .validate_prevouts(&share, &chain_store_handle)
+            .unwrap_err();
+        assert!(error.to_string().contains("already spent"), "got: {error}");
+    }
+
+    #[test]
+    fn test_validate_prevouts_exist_skips_in_block_source_tx() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        let producing_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint {
+                    txid: bitcoin::Txid::all_zeros(),
+                    vout: 0,
+                },
+                script_sig: ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(50_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+        let producing_txid = producing_tx.compute_txid();
+
+        let in_block_spender = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint {
+                    txid: producing_txid,
+                    vout: 0,
+                },
+                script_sig: ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(49_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        // Only the producing tx's prevout (Txid::all_zeros) should reach the
+        // store; the in-block spend referencing producing_txid is skipped.
+        chain_store_handle
+            .expect_are_all_txids_confirmed()
+            .withf(|txids| txids.len() == 1 && txids[0] == bitcoin::Txid::all_zeros())
+            .returning(|_txids| Ok(true));
+        chain_store_handle
+            .expect_is_missing_any_prevout()
+            .withf(|outpoints| {
+                outpoints.len() == 1 && outpoints[0].txid == bitcoin::Txid::all_zeros()
+            })
+            .returning(|_outpoints| Ok(false));
+        chain_store_handle
+            .expect_is_any_prevout_spent()
+            .withf(|outpoints| {
+                outpoints.len() == 1 && outpoints[0].txid == bitcoin::Txid::all_zeros()
+            })
+            .returning(|_outpoints| Ok(false));
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(producing_tx)
+            .add_transaction(in_block_spender)
+            .build();
+
+        let result = validator().validate_prevouts(&share, &chain_store_handle);
+        assert!(result.is_ok(), "expected Ok, got {:?}", result.err());
     }
 
     #[test]
