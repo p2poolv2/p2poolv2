@@ -253,12 +253,7 @@ impl Store {
             return Err(StoreError::Database("Incorrect confirmation".into()));
         }
 
-        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
-        let key = height_to_key_with_suffix(height, CONFIRMED_SUFFIX);
-
-        let serialized_blockhash = consensus::serialize(blockhash);
-        batch.put_cf(&block_height_cf, key, serialized_blockhash);
-
+        self.put_confirmed_entry(height, blockhash, batch);
         self.set_top_confirmed_height(height, batch);
 
         metadata.status = Status::Confirmed;
