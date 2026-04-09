@@ -182,19 +182,84 @@ impl Store {
     /// We need to add a transaction id -> blockhash index
     pub(crate) fn add_spend(
         &self,
-        input_txid: &Txid,
-        input_vout: u32,
+        prevout_txid: &Txid,
+        prevout_index: u32,
         spending_txid: &Txid,
         spending_index: u32,
         batch: &mut WriteBatch,
     ) -> Result<(), StoreError> {
-        let key = format!("{input_txid}:{input_vout}");
+        let key = format!("{prevout_txid}:{prevout_index}");
         let spends_index_cf = self.db.cf_handle(&ColumnFamily::SpendsIndex).unwrap();
         let mut serialized = Vec::with_capacity(OUTPOINT_SIZE);
         spending_txid.consensus_encode(&mut serialized)?;
         spending_index.consensus_encode(&mut serialized)?;
         batch.put_cf::<&[u8], Vec<u8>>(&spends_index_cf, key.as_ref(), serialized);
         Ok(())
+    }
+
+    /// Delete a `SpendsIndex` entry for `(prevout_txid, prevout_index)`.
+    ///
+    /// Used by the reorg-out path when a block that previously recorded
+    /// the spend is no longer on the confirmed sharechain. `delete_cf`
+    /// leaves a RocksDB tombstone; this is acceptable at `SpendsIndex`
+    /// cardinality (bounded by inputs in reorged blocks).
+    pub(crate) fn remove_spend(
+        &self,
+        prevout_txid: &Txid,
+        prevout_index: u32,
+        batch: &mut WriteBatch,
+    ) {
+        let key = format!("{prevout_txid}:{prevout_index}");
+        let spends_index_cf = self.db.cf_handle(&ColumnFamily::SpendsIndex).unwrap();
+        batch.delete_cf::<&[u8]>(&spends_index_cf, key.as_ref());
+    }
+
+    /// Write `SpendsIndex` entries for every non-coinbase input of every
+    /// transaction in `txs`. Intended to be called from the confirmation
+    /// path so that `SpendsIndex` presence means "spent on the confirmed
+    /// sharechain".
+    pub(crate) fn add_spends_for_block(
+        &self,
+        txs: &[ShareTransaction],
+        batch: &mut WriteBatch,
+    ) -> Result<(), StoreError> {
+        for share_transaction in txs {
+            let transaction = &share_transaction.0;
+            if !transaction.is_coinbase() {
+                let spending_txid = transaction.compute_txid();
+                for (spending_index, input) in transaction.input.iter().enumerate() {
+                    self.add_spend(
+                        &input.previous_output.txid,
+                        input.previous_output.vout,
+                        &spending_txid,
+                        spending_index as u32,
+                        batch,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Delete every `SpendsIndex` entry that `add_spends_for_block` would
+    /// have written for `txs`. Used by the reorg-out path.
+    pub(crate) fn remove_spends_for_block(
+        &self,
+        txs: &[ShareTransaction],
+        batch: &mut WriteBatch,
+    ) {
+        for share_transaction in txs {
+            let transaction = &share_transaction.0;
+            if !transaction.is_coinbase() {
+                for input in &transaction.input {
+                    self.remove_spend(
+                        &input.previous_output.txid,
+                        input.previous_output.vout,
+                        batch,
+                    );
+                }
+            }
+        }
     }
 
     /// Check if txid:vout outpoint is spent
@@ -436,8 +501,10 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::block_tx_metadata::{BlockMetadata, Status};
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::hashes::Hash;
+    use bitcoin::pow::Work;
     use tempfile::tempdir;
 
     #[test]
@@ -976,5 +1043,173 @@ mod tests {
         assert!(stored_second.is_some());
         assert_eq!(txid, stored_second.unwrap().txid);
         assert_eq!(1, stored_second.unwrap().vout);
+    }
+
+    #[test]
+    fn test_remove_spend_clears_spends_index_entry() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let prev_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([11u8; 32]).into();
+        let spending_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([12u8; 32]).into();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_spend(&prev_txid, 0, &spending_txid, 0, &mut batch)
+            .unwrap();
+        store.db.write(batch).unwrap();
+        assert!(store.is_spent(&prev_txid, 0).unwrap().is_some());
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store.remove_spend(&prev_txid, 0, &mut batch);
+        store.db.write(batch).unwrap();
+        assert!(store.is_spent(&prev_txid, 0).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_add_spends_for_block_populates_non_coinbase_inputs() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let funding_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([21u8; 32]).into();
+        let other_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([22u8; 32]).into();
+
+        let coinbase_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::null(),
+                ..Default::default()
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(5_000_000_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+
+        let spending_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![
+                bitcoin::TxIn {
+                    previous_output: bitcoin::OutPoint::new(funding_txid, 0),
+                    ..Default::default()
+                },
+                bitcoin::TxIn {
+                    previous_output: bitcoin::OutPoint::new(other_txid, 3),
+                    ..Default::default()
+                },
+            ],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(900_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let spending_txid = spending_tx.compute_txid();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_spends_for_block(
+                &[
+                    ShareTransaction(coinbase_tx),
+                    ShareTransaction(spending_tx),
+                ],
+                &mut batch,
+            )
+            .unwrap();
+        store.db.write(batch).unwrap();
+
+        let spent_a = store.is_spent(&funding_txid, 0).unwrap().unwrap();
+        assert_eq!(spent_a.txid, spending_txid);
+        assert_eq!(spent_a.vout, 0);
+
+        let spent_b = store.is_spent(&other_txid, 3).unwrap().unwrap();
+        assert_eq!(spent_b.txid, spending_txid);
+        assert_eq!(spent_b.vout, 1);
+
+        // Coinbase input's null prevout must not have been written.
+        assert!(
+            store
+                .is_spent(&bitcoin::Txid::all_zeros(), u32::MAX)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_remove_spends_for_block_clears_every_non_coinbase_input() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let funding_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([31u8; 32]).into();
+
+        let spending_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![
+                bitcoin::TxIn {
+                    previous_output: bitcoin::OutPoint::new(funding_txid, 0),
+                    ..Default::default()
+                },
+                bitcoin::TxIn {
+                    previous_output: bitcoin::OutPoint::new(funding_txid, 1),
+                    ..Default::default()
+                },
+            ],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(900_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let txs = vec![ShareTransaction(spending_tx)];
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store.add_spends_for_block(&txs, &mut batch).unwrap();
+        store.db.write(batch).unwrap();
+        assert!(store.is_spent(&funding_txid, 0).unwrap().is_some());
+        assert!(store.is_spent(&funding_txid, 1).unwrap().is_some());
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store.remove_spends_for_block(&txs, &mut batch);
+        store.db.write(batch).unwrap();
+        assert!(store.is_spent(&funding_txid, 0).unwrap().is_none());
+        assert!(store.is_spent(&funding_txid, 1).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_add_spends_for_block_is_noop_for_coinbase_only() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let coinbase_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::null(),
+                ..Default::default()
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(5_000_000_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_spends_for_block(&[ShareTransaction(coinbase_tx)], &mut batch)
+            .unwrap();
+        store.db.write(batch).unwrap();
+
+        assert!(
+            store
+                .is_spent(&bitcoin::Txid::all_zeros(), u32::MAX)
+                .unwrap()
+                .is_none()
+        );
     }
 }
