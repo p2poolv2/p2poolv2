@@ -302,6 +302,11 @@ impl Store {
 
         // Genesis is coinbase-only. No need to make sure to call
         // `add_spends_for_block`.
+        assert_eq!(
+            genesis.transactions.iter().len(),
+            1,
+            "Genesis should only have one transaction, the coinbase."
+        );
         self.append_to_confirmed(&blockhash, 0, &mut metadata, batch)?;
         Ok(())
     }

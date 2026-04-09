@@ -149,7 +149,7 @@ impl Store {
     /// "spent by a transaction on the confirmed sharechain".
     ///
     /// The tx list is loaded from the committed store via
-    /// `get_sharechain_txs_by_blockhash_index`. Callers must ensure the
+    /// `get_txs_by_blockhash_index`. Callers must ensure the
     /// block's tx data has already been committed in a prior batch - the
     /// read against a pending `WriteBatch` will not see its contents.
     pub(super) fn put_confirmed_entry(
