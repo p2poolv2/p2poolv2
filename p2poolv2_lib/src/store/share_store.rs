@@ -36,7 +36,6 @@ impl Store {
     pub fn add_share_block(
         &self,
         share: &ShareBlock,
-        confirm_txs: bool,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), StoreError> {
         let blockhash = share.block_hash();
@@ -55,7 +54,7 @@ impl Store {
         );
 
         // Store transactions and get their metadata
-        let txs_metadata = self.add_sharechain_txs(&share.transactions, confirm_txs, batch)?;
+        let txs_metadata = self.add_sharechain_txs(&share.transactions, batch)?;
 
         let txids = Txids(txs_metadata.iter().map(|t| t.txid).collect());
         // Store block -> txids index
@@ -530,7 +529,7 @@ mod tests {
             .build();
 
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share1, true, &mut batch).unwrap();
+        store.add_share_block(&share1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Create uncle (also child of genesis)
@@ -540,7 +539,7 @@ mod tests {
             .build();
 
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&uncle1, false, &mut batch).unwrap();
+        store.add_share_block(&uncle1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Create share2 referencing uncle1
@@ -551,7 +550,7 @@ mod tests {
             .build();
 
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         // Uncle block index updates are handled by organise_header, not
         // add_share_block. Manually register uncle->nephew entries here.
         for uncle_blockhash in &share2.header.uncles {
@@ -602,7 +601,7 @@ mod tests {
         let num_txs = block.transactions.len();
         let txs = block.transactions.clone();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&block, true, &mut batch).unwrap();
+        store.add_share_block(&block, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let blockhash = block.block_hash();
@@ -621,7 +620,7 @@ mod tests {
 
         let block = TestShareBlockBuilder::new().build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&block, true, &mut batch).unwrap();
+        store.add_share_block(&block, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let header = store.get_share_header(&block.block_hash()).unwrap();
@@ -668,7 +667,7 @@ mod tests {
         assert!(!store.share_block_exists(&blockhash));
 
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&block, true, &mut batch).unwrap();
+        store.add_share_block(&block, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         assert!(store.share_block_exists(&blockhash));
@@ -683,7 +682,7 @@ mod tests {
         let blockhash = block.block_hash();
 
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&block, true, &mut batch).unwrap();
+        store.add_share_block(&block, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Verify the header was written to the Header CF
@@ -780,13 +779,13 @@ mod tests {
 
         // First add succeeds and stores the block
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&block, true, &mut batch).unwrap();
+        store.add_share_block(&block, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
         assert!(store.get_share(&blockhash).is_some());
 
         // Second add of the same block returns Ok without error
         let mut batch = Store::get_write_batch();
-        let result = store.add_share_block(&block, true, &mut batch);
+        let result = store.add_share_block(&block, &mut batch);
         assert!(result.is_ok());
 
         // The batch should be empty (no writes for duplicate)
@@ -808,7 +807,7 @@ mod tests {
 
         let blockhash = block.block_hash();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&block, true, &mut batch).unwrap();
+        store.add_share_block(&block, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share = store.get_share(&blockhash).unwrap();

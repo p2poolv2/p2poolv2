@@ -803,7 +803,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share, true, &mut batch).unwrap();
+        store.add_share_block(&share, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         assert!(!store.is_candidate(&share.block_hash()));

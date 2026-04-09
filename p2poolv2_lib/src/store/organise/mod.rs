@@ -183,7 +183,7 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // share3 extends share2 and is NOT on candidate chain
@@ -192,7 +192,7 @@ mod tests {
             .nonce(0xe9695794)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share3, true, &mut batch).unwrap();
+        store.add_share_block(&share3, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Branch from share3 should be [share1, share2, share3]
@@ -228,7 +228,7 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Branch from share2 should be just [share1, share2]

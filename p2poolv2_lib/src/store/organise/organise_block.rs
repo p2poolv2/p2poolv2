@@ -87,7 +87,7 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-        let result = store.push_to_confirmed_chain(&share, true).unwrap();
+        let result = store.push_to_confirmed_chain(&share).unwrap();
         assert_eq!(result, Some(1));
         assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
 
@@ -143,7 +143,7 @@ mod tests {
         // setup_genesis does not call append_to_candidate, so no top candidate
         assert!(store.get_top_candidate().is_err());
 
-        store.push_to_confirmed_chain(&share, true).unwrap();
+        store.push_to_confirmed_chain(&share).unwrap();
 
         // Candidate coexists with confirmed
         assert!(store.get_top_candidate().is_ok());
@@ -171,7 +171,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share1, true, &mut batch).unwrap();
+        store.add_share_block(&share1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
         store.push_to_candidate_chain(&share1).unwrap();
 
@@ -194,7 +194,7 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         store
-            .push_to_confirmed_chain(&share_to_organise, true)
+            .push_to_confirmed_chain(&share_to_organise)
             .unwrap();
 
         // Candidates coexist with confirmed
@@ -282,7 +282,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share1, true, &mut batch).unwrap();
+        store.add_share_block(&share1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
         store.push_to_candidate_chain(&share1).unwrap();
 
@@ -318,7 +318,7 @@ mod tests {
         store.store_with_valid_metadata(&fork_share);
 
         // push_to_confirmed_chain reorgs candidate chain and promotes to confirmed
-        store.push_to_confirmed_chain(&fork_share, true).unwrap();
+        store.push_to_confirmed_chain(&fork_share).unwrap();
 
         // After reorg + confirmed promotion: candidate chain coexists
         assert!(store.get_top_candidate().is_ok());
@@ -360,7 +360,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share1, true, &mut batch).unwrap();
+        store.add_share_block(&share1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
         store.push_to_candidate_chain(&share1).unwrap();
 
@@ -408,7 +408,7 @@ mod tests {
         store.store_with_valid_metadata(&fork3);
 
         // push_to_confirmed_chain reorgs candidate chain and promotes to confirmed
-        store.push_to_confirmed_chain(&fork3, true).unwrap();
+        store.push_to_confirmed_chain(&fork3).unwrap();
 
         // After reorg + confirmed promotion: candidate chain coexists
         assert!(store.get_top_candidate().is_ok());
@@ -456,7 +456,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share1, true, &mut batch).unwrap();
+        store.add_share_block(&share1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
         store.push_to_candidate_chain(&share1).unwrap();
 
@@ -485,7 +485,7 @@ mod tests {
         store.store_with_valid_metadata(&fork_share);
 
         // push_to_confirmed_chain reorgs candidate chain and promotes to confirmed
-        store.push_to_confirmed_chain(&fork_share, true).unwrap();
+        store.push_to_confirmed_chain(&fork_share).unwrap();
 
         // After reorg + confirmed promotion: candidate chain coexists
         assert!(store.get_top_candidate().is_ok());
@@ -521,7 +521,7 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-        store.push_to_confirmed_chain(&share1, true).unwrap();
+        store.push_to_confirmed_chain(&share1).unwrap();
 
         // share1 promoted to confirmed, candidate chain coexists
         assert!(store.get_top_candidate().is_ok());
@@ -537,7 +537,7 @@ mod tests {
             .work(2)
             .nonce(0xe9695793)
             .build();
-        store.push_to_confirmed_chain(&share2, true).unwrap();
+        store.push_to_confirmed_chain(&share2).unwrap();
 
         // candidate chain coexists with confirmed chain
         assert!(store.get_top_candidate().is_ok());
@@ -568,7 +568,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share1, true, &mut batch).unwrap();
+        store.add_share_block(&share1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
         store.push_to_candidate_chain(&share1).unwrap();
 
@@ -591,7 +591,7 @@ mod tests {
         store.store_with_valid_metadata(&share3);
 
         // Push share2 to confirmed chain: extends candidate to h:2, forward walk picks up share3
-        store.push_to_confirmed_chain(&share2, true).unwrap();
+        store.push_to_confirmed_chain(&share2).unwrap();
 
         // All promoted to confirmed, candidate chain coexists
         assert!(store.get_top_candidate().is_ok());
@@ -633,7 +633,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share1, true, &mut batch).unwrap();
+        store.add_share_block(&share1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
         store.push_to_candidate_chain(&share1).unwrap();
 
@@ -665,7 +665,7 @@ mod tests {
         store.store_with_valid_metadata(&share4);
 
         // Push share2 to confirmed chain: extends to h:2, forward walk fills h:3 and h:4
-        store.push_to_confirmed_chain(&share2, true).unwrap();
+        store.push_to_confirmed_chain(&share2).unwrap();
 
         // All promoted to confirmed, candidate chain coexists
         assert!(store.get_top_candidate().is_ok());
@@ -710,7 +710,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share1, true, &mut batch).unwrap();
+        store.add_share_block(&share1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
         store.push_to_candidate_chain(&share1).unwrap();
 
@@ -729,7 +729,7 @@ mod tests {
             .nonce(0xe9695794)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&fork, true, &mut batch).unwrap();
+        store.add_share_block(&fork, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // fork_child: child of fork, h:3, stored as Valid with metadata.
@@ -745,7 +745,7 @@ mod tests {
         store.store_with_valid_metadata(&fork_child);
 
         // Push fork to confirmed chain: reorg replaces share2, forward walk picks up fork_child
-        store.push_to_confirmed_chain(&fork, true).unwrap();
+        store.push_to_confirmed_chain(&fork).unwrap();
 
         // All promoted to confirmed, candidate chain coexists
         assert!(store.get_top_candidate().is_ok());
@@ -815,7 +815,7 @@ mod tests {
         // candidate at h:1, forward walk discovers share2a and share2b
         // and picks share2b (higher cumulative work). Then organise_block
         // promotes candidates to confirmed.
-        store.push_to_confirmed_chain(&share1, true).unwrap();
+        store.push_to_confirmed_chain(&share1).unwrap();
 
         // share2b promoted to confirmed, candidate chain coexists
         assert!(store.get_top_candidate().is_ok());
@@ -853,7 +853,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share1, true, &mut batch).unwrap();
+        store.add_share_block(&share1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
         store.push_to_candidate_chain(&share1).unwrap();
 
@@ -865,7 +865,7 @@ mod tests {
             .build();
 
         // Push share2 to confirmed chain: extends to h:2, no children -> stops
-        store.push_to_confirmed_chain(&share2, true).unwrap();
+        store.push_to_confirmed_chain(&share2).unwrap();
 
         // All promoted to confirmed, candidate chain coexists, stops at h:2
         assert!(store.get_top_candidate().is_ok());

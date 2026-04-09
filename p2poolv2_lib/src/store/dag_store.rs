@@ -623,23 +623,23 @@ mod tests {
 
         let mut batch = rocksdb::WriteBatch::default();
         // Add all shares to store
-        store.add_share_block(&share1, true, &mut batch).unwrap();
+        store.add_share_block(&share1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share_block(&uncle1_share2, true, &mut batch)
+            .add_share_block(&uncle1_share2, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share_block(&uncle2_share2, true, &mut batch)
+            .add_share_block(&uncle2_share2, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         // Uncle block index updates are handled by organise_header, not
         // add_share_block. Manually register uncle->nephew entries here
         // since this test exercises the block index directly.
@@ -651,7 +651,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store.add_share_block(&share3, true, &mut batch).unwrap();
+        store.add_share_block(&share3, &mut batch).unwrap();
 
         store.commit_batch(batch).unwrap();
 
@@ -726,24 +726,24 @@ mod tests {
 
         let mut batch = rocksdb::WriteBatch::default();
         // Add all shares to store
-        store.add_share_block(&share1, true, &mut batch).unwrap();
+        store.add_share_block(&share1, &mut batch).unwrap();
         store
-            .add_share_block(&uncle1_share2, true, &mut batch)
+            .add_share_block(&uncle1_share2, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_share_block(&uncle2_share2, true, &mut batch)
+            .add_share_block(&uncle2_share2, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store.add_share_block(&share3, true, &mut batch).unwrap();
+        store.add_share_block(&share3, &mut batch).unwrap();
 
         store.commit_batch(batch).unwrap();
 
@@ -814,7 +814,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         for block in &blocks[1..] {
-            store.push_to_confirmed_chain(block, true).unwrap();
+            store.push_to_confirmed_chain(block).unwrap();
         }
 
         let stop_block = store.get_blockhashes_for_height(2)[0];
@@ -854,7 +854,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         for block in &blocks[1..] {
-            store.push_to_confirmed_chain(block, true).unwrap();
+            store.push_to_confirmed_chain(block).unwrap();
         }
 
         let locator = vec![blocks[0].block_hash()];
@@ -905,7 +905,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         for block in &blocks[1..] {
-            store.push_to_confirmed_chain(block, true).unwrap();
+            store.push_to_confirmed_chain(block).unwrap();
         }
 
         let stop_block = store.get_blockhashes_for_height(2)[0];
@@ -953,14 +953,14 @@ mod tests {
             .work(2)
             .nonce(1)
             .build();
-        store.push_to_confirmed_chain(&share_a, true).unwrap();
+        store.push_to_confirmed_chain(&share_a).unwrap();
 
         let share_b = TestShareBlockBuilder::new()
             .prev_share_blockhash(share_a.block_hash().to_string())
             .uncles(vec![uncle1.block_hash()])
             .nonce(2)
             .build();
-        store.push_to_confirmed_chain(&share_b, true).unwrap();
+        store.push_to_confirmed_chain(&share_b).unwrap();
 
         // Descendants from genesis: should get share_a, uncle1, share_b
         let descendants = store
@@ -1017,7 +1017,7 @@ mod tests {
                 .build();
 
             let mut batch = Store::get_write_batch();
-            store.add_share_block(&share, true, &mut batch).unwrap();
+            store.add_share_block(&share, &mut batch).unwrap();
             store.commit_batch(batch).unwrap();
 
             blocks.push(share.block_hash());
@@ -1067,7 +1067,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share1, true, &mut batch).unwrap();
+        store.add_share_block(&share1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share2 = TestShareBlockBuilder::new()
@@ -1075,7 +1075,7 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share3 = TestShareBlockBuilder::new()
@@ -1083,7 +1083,7 @@ mod tests {
             .nonce(0xe9695794)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share3, true, &mut batch).unwrap();
+        store.add_share_block(&share3, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Test common ancestor of share3 and share2
@@ -1132,7 +1132,7 @@ mod tests {
             .nonce(0xe9695792)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share1, true, &mut batch).unwrap();
+        store.add_share_block(&share1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let uncle1 = TestShareBlockBuilder::new()
@@ -1140,7 +1140,7 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&uncle1, false, &mut batch).unwrap();
+        store.add_share_block(&uncle1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share2 = TestShareBlockBuilder::new()
@@ -1148,7 +1148,7 @@ mod tests {
             .nonce(0xe9695794)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Test common ancestor of share2 and uncle1 (should be genesis)
@@ -1178,12 +1178,12 @@ mod tests {
         // Create two separate chains (only for testing - wouldn't happen in real usage)
         let genesis1 = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&genesis1, true, &mut batch).unwrap();
+        store.add_share_block(&genesis1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let genesis2 = TestShareBlockBuilder::new().nonce(0xe9695792).build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&genesis2, false, &mut batch).unwrap();
+        store.add_share_block(&genesis2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Test common ancestor of two different genesis blocks (should be None)
@@ -1226,7 +1226,7 @@ mod tests {
             .nonce(100)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&uncle1, false, &mut batch).unwrap();
+        store.add_share_block(&uncle1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Create share2 - sibling of uncle1
@@ -1234,7 +1234,7 @@ mod tests {
             .prev_share_blockhash(share1.block_hash().to_string())
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Create share3 with uncle1 as uncle (uncle1 is sibling of share3's parent)
@@ -1243,7 +1243,7 @@ mod tests {
             .uncles(vec![uncle1.block_hash()])
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share3, true, &mut batch).unwrap();
+        store.add_share_block(&share3, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Get DAG from share3 with depth 10 (more than enough to include all blocks)
@@ -1293,7 +1293,7 @@ mod tests {
             .nonce(100)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&uncle1, false, &mut batch).unwrap();
+        store.add_share_block(&uncle1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let uncle2 = TestShareBlockBuilder::new()
@@ -1301,14 +1301,14 @@ mod tests {
             .nonce(200)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&uncle2, false, &mut batch).unwrap();
+        store.add_share_block(&uncle2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share3 = TestShareBlockBuilder::new()
@@ -1316,7 +1316,7 @@ mod tests {
             .uncles(vec![uncle1.block_hash(), uncle2.block_hash()])
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share3, true, &mut batch).unwrap();
+        store.add_share_block(&share3, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let chain = store.get_dag_for_depth(&share3.block_hash(), 10).unwrap();
@@ -1367,14 +1367,14 @@ mod tests {
             .nonce(100)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&uncle1, false, &mut batch).unwrap();
+        store.add_share_block(&uncle1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // uncle2 is sibling of share3
@@ -1383,7 +1383,7 @@ mod tests {
             .nonce(200)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&uncle2, false, &mut batch).unwrap();
+        store.add_share_block(&uncle2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // share3 has uncle1 as uncle (sibling of its parent share2)
@@ -1392,7 +1392,7 @@ mod tests {
             .uncles(vec![uncle1.block_hash()])
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share3, true, &mut batch).unwrap();
+        store.add_share_block(&share3, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // share4 has uncle2 as uncle (sibling of its parent share3)
@@ -1401,7 +1401,7 @@ mod tests {
             .uncles(vec![uncle2.block_hash()])
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share4, true, &mut batch).unwrap();
+        store.add_share_block(&share4, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let chain = store.get_dag_for_depth(&share4.block_hash(), 10).unwrap();
@@ -1454,14 +1454,14 @@ mod tests {
             .nonce(100)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&uncle1, false, &mut batch).unwrap();
+        store.add_share_block(&uncle1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share3 = TestShareBlockBuilder::new()
@@ -1469,7 +1469,7 @@ mod tests {
             .uncles(vec![uncle1.block_hash()])
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share3, true, &mut batch).unwrap();
+        store.add_share_block(&share3, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // With depth=2, we should get exactly 2 main chain blocks + uncles
@@ -1534,7 +1534,7 @@ mod tests {
             .nonce(100)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&uncle1, false, &mut batch).unwrap();
+        store.add_share_block(&uncle1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let uncle2 = TestShareBlockBuilder::new()
@@ -1542,14 +1542,14 @@ mod tests {
             .nonce(200)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&uncle2, false, &mut batch).unwrap();
+        store.add_share_block(&uncle2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share3 = TestShareBlockBuilder::new()
@@ -1557,14 +1557,14 @@ mod tests {
             .uncles(vec![uncle1.block_hash(), uncle2.block_hash()])
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share3, true, &mut batch).unwrap();
+        store.add_share_block(&share3, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share4 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share3.block_hash().to_string())
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share4, true, &mut batch).unwrap();
+        store.add_share_block(&share4, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // With depth=2, we should get share4, share3 (main chain) + uncle1, uncle2
@@ -1619,14 +1619,14 @@ mod tests {
             .nonce(100)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&uncle1, false, &mut batch).unwrap();
+        store.add_share_block(&uncle1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let uncle2 = TestShareBlockBuilder::new()
@@ -1634,7 +1634,7 @@ mod tests {
             .nonce(200)
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&uncle2, false, &mut batch).unwrap();
+        store.add_share_block(&uncle2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share3 = TestShareBlockBuilder::new()
@@ -1642,7 +1642,7 @@ mod tests {
             .uncles(vec![uncle1.block_hash()])
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share3, true, &mut batch).unwrap();
+        store.add_share_block(&share3, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share4 = TestShareBlockBuilder::new()
@@ -1650,7 +1650,7 @@ mod tests {
             .uncles(vec![uncle2.block_hash()])
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share4, true, &mut batch).unwrap();
+        store.add_share_block(&share4, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // With depth=3, we should get share4, share3, share2 (main chain) + uncle2, uncle1
@@ -1694,28 +1694,28 @@ mod tests {
             .prev_share_blockhash(share1.block_hash().to_string())
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, true, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share3 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share2.block_hash().to_string())
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share3, true, &mut batch).unwrap();
+        store.add_share_block(&share3, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share4 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share3.block_hash().to_string())
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share4, true, &mut batch).unwrap();
+        store.add_share_block(&share4, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let share5 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share4.block_hash().to_string())
             .build();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&share5, true, &mut batch).unwrap();
+        store.add_share_block(&share5, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // With depth=3, should get exactly 3 main chain blocks
@@ -1740,7 +1740,7 @@ mod tests {
 
         let share = TestShareBlockBuilder::new().build();
         let mut batch = rocksdb::WriteBatch::default();
-        store.add_share_block(&share, true, &mut batch).unwrap();
+        store.add_share_block(&share, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // A share that has not been used as an uncle should return false
@@ -1756,8 +1756,8 @@ mod tests {
         let nephew = TestShareBlockBuilder::new().nonce(200).build();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store.add_share_block(&uncle, false, &mut batch).unwrap();
-        store.add_share_block(&nephew, true, &mut batch).unwrap();
+        store.add_share_block(&uncle, &mut batch).unwrap();
+        store.add_share_block(&nephew, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Before adding to uncles index
@@ -1781,7 +1781,7 @@ mod tests {
 
         let share = TestShareBlockBuilder::new().build();
         let mut batch = rocksdb::WriteBatch::default();
-        store.add_share_block(&share, true, &mut batch).unwrap();
+        store.add_share_block(&share, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // A share that has not been used as an uncle should return None
@@ -1798,9 +1798,9 @@ mod tests {
         let nephew2 = TestShareBlockBuilder::new().nonce(300).build();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store.add_share_block(&uncle, false, &mut batch).unwrap();
-        store.add_share_block(&nephew1, true, &mut batch).unwrap();
-        store.add_share_block(&nephew2, true, &mut batch).unwrap();
+        store.add_share_block(&uncle, &mut batch).unwrap();
+        store.add_share_block(&nephew1, &mut batch).unwrap();
+        store.add_share_block(&nephew2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Add uncle to uncles index with two nephews
@@ -1830,7 +1830,7 @@ mod tests {
 
         let share = TestShareBlockBuilder::new().build();
         let mut batch = rocksdb::WriteBatch::default();
-        store.add_share_block(&share, true, &mut batch).unwrap();
+        store.add_share_block(&share, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // No confirmed blocks, should return error
@@ -1859,8 +1859,8 @@ mod tests {
             .build();
 
         // Confirm all using push_to_confirmed_chain
-        store.push_to_confirmed_chain(&share1, true).unwrap();
-        store.push_to_confirmed_chain(&share2, true).unwrap();
+        store.push_to_confirmed_chain(&share1).unwrap();
+        store.push_to_confirmed_chain(&share2).unwrap();
 
         // No unconfirmed children exist, so find_uncles should return empty
         let uncles = store.find_uncles().unwrap();
@@ -1896,7 +1896,7 @@ mod tests {
         store.store_with_valid_metadata(&uncle1);
 
         // Confirm share1 using push_to_confirmed_chain
-        store.push_to_confirmed_chain(&share1, true).unwrap();
+        store.push_to_confirmed_chain(&share1).unwrap();
 
         // find_uncles should find uncle1
         let uncles = store.find_uncles().unwrap();
@@ -1956,13 +1956,13 @@ mod tests {
         // Store uncles with Valid metadata before confirming their parent levels.
         // Uncle parents must have metadata for cumulative chain_work to be correct.
         store.store_with_valid_metadata(&uncle0);
-        store.push_to_confirmed_chain(&share1, true).unwrap();
+        store.push_to_confirmed_chain(&share1).unwrap();
 
         store.store_with_valid_metadata(&uncle1);
-        store.push_to_confirmed_chain(&share2, true).unwrap();
+        store.push_to_confirmed_chain(&share2).unwrap();
 
         store.store_with_valid_metadata(&uncle2);
-        store.push_to_confirmed_chain(&share3, true).unwrap();
+        store.push_to_confirmed_chain(&share3).unwrap();
 
         // find_uncles should find uncle0, uncle1, uncle2
         // Sorted by chain_work descending: uncle2 (work=3), uncle1 (work=2), uncle0 (work=1)
@@ -2034,7 +2034,7 @@ mod tests {
 
         // Confirm main chain (share1 through share5) using push_to_confirmed_chain
         for share in [&share1, &share2, &share3, &share4, &share5] {
-            store.push_to_confirmed_chain(share, true).unwrap();
+            store.push_to_confirmed_chain(share).unwrap();
         }
 
         // find_uncles from share5 (height 5)
@@ -2088,8 +2088,8 @@ mod tests {
         store.store_with_valid_metadata(&uncle2);
 
         // Confirm main chain using push_to_confirmed_chain
-        store.push_to_confirmed_chain(&share1, true).unwrap();
-        store.push_to_confirmed_chain(&share2, true).unwrap();
+        store.push_to_confirmed_chain(&share1).unwrap();
+        store.push_to_confirmed_chain(&share2).unwrap();
 
         // Mark uncle1 as already used as uncle
         let mut batch = rocksdb::WriteBatch::default();
@@ -2132,8 +2132,8 @@ mod tests {
             .build();
 
         // Confirm all using push_to_confirmed_chain
-        store.push_to_confirmed_chain(&share1, true).unwrap();
-        store.push_to_confirmed_chain(&share2, true).unwrap();
+        store.push_to_confirmed_chain(&share1).unwrap();
+        store.push_to_confirmed_chain(&share2).unwrap();
 
         // find_uncles should return empty - share1 is child of share0 but is confirmed
         let uncles = store.find_uncles().unwrap();
@@ -2191,13 +2191,13 @@ mod tests {
         store.store_with_valid_metadata(&uncle_c);
 
         // Confirm share1 first, so uncle_d's parent has metadata
-        store.push_to_confirmed_chain(&share1, true).unwrap();
+        store.push_to_confirmed_chain(&share1).unwrap();
 
         // Now store uncle_d (its parent share1 now has metadata)
         store.store_with_valid_metadata(&uncle_d);
 
         // Confirm share2
-        store.push_to_confirmed_chain(&share2, true).unwrap();
+        store.push_to_confirmed_chain(&share2).unwrap();
 
         // find_uncles should return exactly 3 uncles, prioritizing higher chain_work
         // uncle_d has work=2, uncle_a/b/c have default work=1
@@ -2282,21 +2282,21 @@ mod tests {
         // Store uncle shares with Valid metadata so find_uncles can discover them.
         // Uncle parents must be confirmed first so metadata chain_work is correct.
         store.store_with_valid_metadata(&uncle1);
-        store.push_to_confirmed_chain(&share1, true).unwrap();
+        store.push_to_confirmed_chain(&share1).unwrap();
 
         store.store_with_valid_metadata(&uncle2);
-        store.push_to_confirmed_chain(&share2, true).unwrap();
+        store.push_to_confirmed_chain(&share2).unwrap();
 
         store.store_with_valid_metadata(&uncle3);
-        store.push_to_confirmed_chain(&share3, true).unwrap();
+        store.push_to_confirmed_chain(&share3).unwrap();
 
         store.store_with_valid_metadata(&uncle4);
-        store.push_to_confirmed_chain(&share4, true).unwrap();
+        store.push_to_confirmed_chain(&share4).unwrap();
 
         store.store_with_valid_metadata(&uncle5);
-        store.push_to_confirmed_chain(&share5, true).unwrap();
+        store.push_to_confirmed_chain(&share5).unwrap();
 
-        store.push_to_confirmed_chain(&share6, true).unwrap();
+        store.push_to_confirmed_chain(&share6).unwrap();
 
         // find_uncles from share6 (height 6) looks at confirmed blocks at heights 3, 4, 5
         // and finds their non-confirmed children.
@@ -2373,14 +2373,14 @@ mod tests {
         store.store_with_valid_metadata(&uncle_mid_b);
 
         // Confirm share1 so uncles at height 2 can compute their metadata
-        store.push_to_confirmed_chain(&share1, true).unwrap();
+        store.push_to_confirmed_chain(&share1).unwrap();
 
         // Store uncle shares at height 2 with Valid metadata
         store.store_with_valid_metadata(&uncle_high);
         store.store_with_valid_metadata(&uncle_low);
 
         // Confirm share2
-        store.push_to_confirmed_chain(&share2, true).unwrap();
+        store.push_to_confirmed_chain(&share2).unwrap();
 
         let uncles = store.find_uncles().unwrap();
         assert_eq!(uncles.len(), 3);
@@ -2420,7 +2420,7 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(1)
             .build();
-        store.push_to_confirmed_chain(&share1, true).unwrap();
+        store.push_to_confirmed_chain(&share1).unwrap();
 
         // fork_uncle: sibling of share2, child of share1
         let fork_uncle = TestShareBlockBuilder::new()
@@ -2433,7 +2433,7 @@ mod tests {
             .prev_share_blockhash(share1.block_hash().to_string())
             .nonce(2)
             .build();
-        store.push_to_confirmed_chain(&share2, true).unwrap();
+        store.push_to_confirmed_chain(&share2).unwrap();
 
         // Verify chain tip is share2
         assert_eq!(store.get_chain_tip().unwrap(), share2.block_hash());
@@ -2538,7 +2538,7 @@ mod tests {
         let shares = [&share0, &share1, &share2];
         for (height, share) in shares.iter().enumerate() {
             let mut batch = Store::get_write_batch();
-            store.add_share_block(share, true, &mut batch).unwrap();
+            store.add_share_block(share, &mut batch).unwrap();
             let mut metadata = BlockMetadata {
                 expected_height: Some(height as u32),
                 chain_work: share.header.get_work(),
@@ -2579,7 +2579,7 @@ mod tests {
         let shares = [&share0, &share1, &share2];
         for (height, share) in shares.iter().enumerate() {
             let mut batch = Store::get_write_batch();
-            store.add_share_block(share, true, &mut batch).unwrap();
+            store.add_share_block(share, &mut batch).unwrap();
             let mut metadata = BlockMetadata {
                 expected_height: Some(height as u32),
                 chain_work: share.header.get_work(),

@@ -288,7 +288,7 @@ impl Store {
         let blockhash = genesis.block_hash();
         let genesis_work = genesis.header.get_work();
         self.add_share_header(&genesis.header, batch)?;
-        self.add_share_block(genesis, true, batch)?;
+        self.add_share_block(genesis, batch)?;
 
         self.set_height_to_blockhash(&blockhash, 0, batch)?;
         let mut metadata = BlockMetadata {
@@ -340,11 +340,10 @@ impl Store {
     pub fn push_to_confirmed_chain(
         &self,
         share: &ShareBlock,
-        confirm_txs: bool,
     ) -> Result<Option<u32>, StoreError> {
         self.push_to_candidate_chain(share)?;
         let mut batch = Store::get_write_batch();
-        self.add_share_block(share, confirm_txs, &mut batch)?;
+        self.add_share_block(share, &mut batch)?;
         self.commit_batch(batch)?;
         let mut batch = Store::get_write_batch();
         let result = self.organise_block(&mut batch)?;
@@ -372,7 +371,7 @@ impl Store {
             Err(_) => (1, share_work),
         };
         let mut batch = Store::get_write_batch();
-        self.add_share_block(share, true, &mut batch).unwrap();
+        self.add_share_block(share, &mut batch).unwrap();
         self.set_height_to_blockhash(&blockhash, height, &mut batch)
             .unwrap();
         let metadata = BlockMetadata {
@@ -456,10 +455,10 @@ mod tests {
         assert_eq!(store.get_chain_tip().unwrap(), genesis_hash);
 
         // Push share2 to confirmed (extends confirmed to height 1)
-        store.push_to_confirmed_chain(&share2, true).unwrap();
+        store.push_to_confirmed_chain(&share2).unwrap();
 
         // Push share3 to confirmed (extends confirmed to height 2)
-        store.push_to_confirmed_chain(&share3, true).unwrap();
+        store.push_to_confirmed_chain(&share3).unwrap();
 
         // Test initialization from store
         store.init_chain_state_from_store(genesis_hash).unwrap();
