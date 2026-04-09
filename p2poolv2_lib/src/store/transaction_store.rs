@@ -27,7 +27,7 @@ const OUTPOINT_SIZE: usize = 36;
 
 #[allow(dead_code)]
 impl Store {
-    /// Retrieve all previous outputs spent by a transaction's inputs.
+    /// Retrieve all previous outputs being spent by a transaction's inputs.
     ///
     /// Uses a single batch query to fetch all spent outputs, avoiding
     /// N+1 lookups. Returns a vector of (input_index, TxOut) pairs in
@@ -70,6 +70,79 @@ impl Store {
         Ok(prevouts)
     }
 
+    /// Batch check the Outputs column family: returns true if any outpoint
+    /// is missing.
+    pub(crate) fn is_missing_any_prevout(
+        &self,
+        outpoints: &[OutPoint],
+    ) -> Result<bool, StoreError> {
+        if outpoints.is_empty() {
+            return Ok(false);
+        }
+        let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
+        let keys: Vec<String> = outpoints
+            .iter()
+            .map(|outpoint| format!("{}:{}", outpoint.txid, outpoint.vout))
+            .collect();
+        let cf_keys: Vec<(_, &[u8])> = keys
+            .iter()
+            .map(|key| (&outputs_cf, key.as_bytes()))
+            .collect();
+        for result in self.db.multi_get_cf(cf_keys) {
+            if result?.is_none() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Batch check the SpendsIndex column family: returns true if any
+    /// outpoint has a stored spend entry.
+    ///
+    /// `SpendsIndex` is written only from the confirmation path
+    /// (`put_confirmed_entry`) and cleared on reorg-out, so presence in
+    /// this column family means "spent by a transaction on the confirmed
+    /// sharechain". No per-hit confirmation lookup is needed.
+    pub(crate) fn is_any_prevout_spent(&self, outpoints: &[OutPoint]) -> Result<bool, StoreError> {
+        if outpoints.is_empty() {
+            return Ok(false);
+        }
+        let spends_index_cf = self.db.cf_handle(&ColumnFamily::SpendsIndex).unwrap();
+        let keys: Vec<String> = outpoints
+            .iter()
+            .map(|outpoint| format!("{}:{}", outpoint.txid, outpoint.vout))
+            .collect();
+        let cf_keys: Vec<(_, &[u8])> = keys
+            .iter()
+            .map(|key| (&spends_index_cf, key.as_bytes()))
+            .collect();
+        for result in self.db.multi_get_cf(cf_keys) {
+            if result?.is_some() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Returns true if every provided txid is included in at least one
+    /// block whose `BlockMetadata::status` is `Status::Confirmed`. Returns
+    /// false on the first txid that has no confirmed blockhash.
+    pub(crate) fn are_all_txids_confirmed(&self, txids: &[Txid]) -> Result<bool, StoreError> {
+        for txid in txids {
+            let blockhashes = self.get_blockhashes_for_txid(txid)?;
+            let mut confirmed = false;
+            for blockhash in &blockhashes {
+                if self.is_confirmed(blockhash) {
+                    confirmed = true;
+                }
+            }
+            if !confirmed {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// Retrieve a single transaction output by txid and output index.
     ///
     /// Looks up the output in the Outputs column family using the
@@ -86,29 +159,20 @@ impl Store {
         }
     }
 
-    /// Store share chain transactions in the store
+    /// Store share chain transactions in the store.
     ///
-    /// Store inputs and outputs for each transaction in separate column families
+    /// Writes transaction metadata, each input, and each output into
+    /// their respective column families. This function is pure tx
+    /// storage and does not touch the `SpendsIndex` — chain-state
+    /// bookkeeping of spends is the responsibility of the confirmation
+    /// path (`put_confirmed_entry` / `remove_spends_for_block`).
     ///
-    /// Store txid -> transaction metadata in the tx column family
-    ///
-    /// The block -> txids store is done in
-    /// add_txids_to_block_index. This function lets us store
-    /// transactions outside of a block context
-    ///
-    /// Creates entries in spend index to track inputs spending
-    /// outputs. These transactions are saved only for valid and
-    /// candidate blocks, so the spends are valid. Their confirmation
-    /// status depends on the block confirmation status they are
-    /// included in.
-    ///
-    /// On chain reorgs this should be called again, so that any
-    /// outputs spent by different txs in the new cofirmed chain are
-    /// overwritten.
+    /// The block -> txids association is stored separately via
+    /// `add_txids_to_blocks_index`, allowing this function to persist
+    /// transactions outside of a block context.
     pub(crate) fn add_sharechain_txs(
         &self,
         transactions: &[ShareTransaction],
-        on_main_chain: bool,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<Vec<TxMetadata>, StoreError> {
         let inputs_cf = self.db.cf_handle(&ColumnFamily::Inputs).unwrap();
@@ -119,26 +183,13 @@ impl Store {
             let metadata = self.add_tx_metadata(txid, tx, false, batch)?;
             txs_metadata.push(metadata);
 
-            // Store each input for the transaction
             for (i, input) in tx.input.iter().enumerate() {
                 let input_key = format!("{txid}:{i}");
                 let mut serialized = Vec::new();
                 input.consensus_encode(&mut serialized)?;
                 batch.put_cf::<&[u8], Vec<u8>>(&inputs_cf, input_key.as_ref(), serialized);
-
-                if on_main_chain {
-                    // Add spends for transaction, confirmed or not.
-                    self.add_spend(
-                        &input.previous_output.txid,
-                        input.previous_output.vout,
-                        &txid,
-                        i as u32,
-                        batch,
-                    )?;
-                }
             }
 
-            // Store each output for the transaction
             for (i, output) in tx.output.iter().enumerate() {
                 let output_key = format!("{txid}:{i}");
                 let mut serialized = Vec::new();
@@ -243,11 +294,7 @@ impl Store {
 
     /// Delete every `SpendsIndex` entry that `add_spends_for_block` would
     /// have written for `txs`. Used by the reorg-out path.
-    pub(crate) fn remove_spends_for_block(
-        &self,
-        txs: &[ShareTransaction],
-        batch: &mut WriteBatch,
-    ) {
+    pub(crate) fn remove_spends_for_block(&self, txs: &[ShareTransaction], batch: &mut WriteBatch) {
         for share_transaction in txs {
             let transaction = &share_transaction.0;
             if !transaction.is_coinbase() {
@@ -484,17 +531,164 @@ impl Store {
         Ok(transaction)
     }
 
+    /// Batch load `TxMetadata` for a list of txids via a single
+    /// `multi_get_cf` on the `Tx` column family. Result order matches
+    /// the input order. Errors on any missing txid.
+    pub(crate) fn get_metadata_for_txids(
+        &self,
+        txids: &[Txid],
+    ) -> Result<Vec<TxMetadata>, StoreError> {
+        if txids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
+        let keys: Vec<(_, &[u8])> = txids.iter().map(|txid| (&tx_cf, txid.as_ref())).collect();
+        let results = self.db.multi_get_cf(keys);
+        let mut metadatas: Vec<TxMetadata> = Vec::with_capacity(txids.len());
+        for (index, result) in results.into_iter().enumerate() {
+            let bytes = result?.ok_or_else(|| {
+                StoreError::NotFound(format!(
+                    "Transaction metadata not found for txid: {}",
+                    txids[index]
+                ))
+            })?;
+            let metadata: TxMetadata = encode::deserialize(&bytes).map_err(|_| {
+                StoreError::Serialization("Failed to deserialize tx metadata".to_string())
+            })?;
+            metadatas.push(metadata);
+        }
+        Ok(metadatas)
+    }
+
+    /// Batch load transaction inputs for every `(txid, metadata)` pair
+    /// via a single `multi_get_cf` on the `Inputs` column family. Returns
+    /// a per-tx `Vec<TxIn>` in the same order as `txids`. `txids` and
+    /// `metadatas` must have the same length.
+    pub(crate) fn get_inputs(
+        &self,
+        txids: &[Txid],
+        metadatas: &[TxMetadata],
+    ) -> Result<Vec<Vec<bitcoin::TxIn>>, StoreError> {
+        let inputs_cf = self.db.cf_handle(&ColumnFamily::Inputs).unwrap();
+        let mut keys: Vec<String> = Vec::new();
+        // Use offsets to track inputs for various txids to avoid using hashmap here
+        let mut offsets: Vec<usize> = Vec::with_capacity(txids.len() + 1);
+        offsets.push(0);
+        for (index, metadata) in metadatas.iter().enumerate() {
+            let txid = &txids[index];
+            for input_index in 0..metadata.input_count {
+                keys.push(format!("{txid}:{input_index}"));
+            }
+            offsets.push(keys.len());
+        }
+
+        let cf_keys: Vec<(_, &[u8])> = keys
+            .iter()
+            .map(|key| (&inputs_cf, key.as_bytes()))
+            .collect();
+        let results = self.db.multi_get_cf(cf_keys);
+        let mut decoded: Vec<bitcoin::TxIn> = Vec::with_capacity(keys.len());
+        for (index, result) in results.into_iter().enumerate() {
+            let bytes = result?.ok_or_else(|| {
+                StoreError::NotFound(format!("Input not found for {}", keys[index]))
+            })?;
+            decoded.push(encode::deserialize(&bytes).map_err(|_| {
+                StoreError::Serialization("Failed to deserialize input".to_string())
+            })?);
+        }
+
+        // group the offset based inputs for each txid
+        let mut grouped: Vec<Vec<bitcoin::TxIn>> = Vec::with_capacity(txids.len());
+        for index in 0..txids.len() {
+            grouped.push(decoded[offsets[index]..offsets[index + 1]].to_vec());
+        }
+        Ok(grouped)
+    }
+
+    /// Batch load transaction outputs for every `(txid, metadata)` pair
+    /// via a single `multi_get_cf` on the `Outputs` column family.
+    /// Returns a per-tx `Vec<TxOut>` in the same order as `txids`.
+    /// `txids` and `metadatas` must have the same length.
+    pub(crate) fn get_outputs(
+        &self,
+        txids: &[Txid],
+        metadatas: &[TxMetadata],
+    ) -> Result<Vec<Vec<bitcoin::TxOut>>, StoreError> {
+        let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
+        let mut keys: Vec<String> = Vec::new();
+        // Use offsets to track ouputs for various txids to avoid using hashmap here
+        let mut offsets: Vec<usize> = Vec::with_capacity(txids.len() + 1);
+        offsets.push(0);
+        for (index, metadata) in metadatas.iter().enumerate() {
+            let txid = &txids[index];
+            for output_index in 0..metadata.output_count {
+                keys.push(format!("{txid}:{output_index}"));
+            }
+            offsets.push(keys.len());
+        }
+
+        let cf_keys: Vec<(_, &[u8])> = keys
+            .iter()
+            .map(|key| (&outputs_cf, key.as_bytes()))
+            .collect();
+        let results = self.db.multi_get_cf(cf_keys);
+        let mut decoded: Vec<bitcoin::TxOut> = Vec::with_capacity(keys.len());
+        for (index, result) in results.into_iter().enumerate() {
+            let bytes = result?.ok_or_else(|| {
+                StoreError::NotFound(format!("Output not found for {}", keys[index]))
+            })?;
+            decoded.push(encode::deserialize(&bytes).map_err(|_| {
+                StoreError::Serialization("Failed to deserialize output".to_string())
+            })?);
+        }
+
+        // group the offset based outputs for each txid
+        let mut grouped: Vec<Vec<bitcoin::TxOut>> = Vec::with_capacity(txids.len());
+        for index in 0..txids.len() {
+            grouped.push(decoded[offsets[index]..offsets[index + 1]].to_vec());
+        }
+        Ok(grouped)
+    }
+
+    /// Batch load transactions for a list of txids.
+    ///
+    /// Composes `get_metadata_for_txids`, `get_inputs`, and
+    /// `get_outputs`: three `multi_get_cf` calls total, one per column
+    /// family, independent of how many transactions are requested.
+    pub(crate) fn get_txs(&self, txids: &[Txid]) -> Result<Vec<Transaction>, StoreError> {
+        if txids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let metadatas = self.get_metadata_for_txids(txids)?;
+        let inputs = self.get_inputs(txids, &metadatas)?;
+        let outputs = self.get_outputs(txids, &metadatas)?;
+        let mut txs = Vec::with_capacity(txids.len());
+        for (metadata, (tx_inputs, tx_outputs)) in metadatas
+            .into_iter()
+            .zip(inputs.into_iter().zip(outputs.into_iter()))
+        {
+            txs.push(Transaction {
+                version: metadata.version,
+                lock_time: metadata.lock_time,
+                input: tx_inputs,
+                output: tx_outputs,
+            });
+        }
+        Ok(txs)
+    }
+
     /// Get transactions by blockhash index for sharechain transactions
-    pub(crate) fn get_sharechain_txs_by_blockhash_index(
+    pub(crate) fn get_txs_by_blockhash_index(
         &self,
         blockhash: &BlockHash,
     ) -> Result<Vec<ShareTransaction>, StoreError> {
         let txids = self.get_txids_for_blockhash(blockhash);
-        let mut txs = Vec::with_capacity(txids.0.len());
-        for txid in txids.0 {
-            txs.push(ShareTransaction(self.get_tx(&txid)?));
+        let txs = self.get_txs(&txids.0)?;
+        let mut share_txs = Vec::with_capacity(txs.len());
+        for tx in txs {
+            share_txs.push(ShareTransaction(tx));
         }
-        Ok(txs)
+        Ok(share_txs)
     }
 }
 
@@ -515,7 +709,7 @@ mod tests {
         let mut batch = Store::get_write_batch();
 
         let metadata = store
-            .add_sharechain_txs(&block.transactions, false, &mut batch)
+            .add_sharechain_txs(&block.transactions, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -524,6 +718,100 @@ mod tests {
             let tx = store.get_tx(&tx_meta.txid).unwrap();
             assert_eq!(tx.compute_txid(), tx_meta.txid);
         }
+    }
+
+    #[test]
+    fn test_get_txs_returns_empty_for_empty_input() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        assert!(store.get_txs(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_get_txs_returns_every_requested_transaction() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let tx_a = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(
+                    bitcoin::hashes::sha256d::Hash::from_byte_array([0x01; 32]).into(),
+                    0,
+                ),
+                ..Default::default()
+            }],
+            output: vec![
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(100),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(200),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
+            ],
+        };
+        let tx_b = Transaction {
+            version: bitcoin::transaction::Version(2),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![
+                bitcoin::TxIn {
+                    previous_output: bitcoin::OutPoint::new(
+                        bitcoin::hashes::sha256d::Hash::from_byte_array([0x02; 32]).into(),
+                        5,
+                    ),
+                    ..Default::default()
+                },
+                bitcoin::TxIn {
+                    previous_output: bitcoin::OutPoint::new(
+                        bitcoin::hashes::sha256d::Hash::from_byte_array([0x03; 32]).into(),
+                        1,
+                    ),
+                    ..Default::default()
+                },
+            ],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(300),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let txid_a = tx_a.compute_txid();
+        let txid_b = tx_b.compute_txid();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(
+                &[
+                    ShareTransaction(tx_a.clone()),
+                    ShareTransaction(tx_b.clone()),
+                ],
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let loaded = store.get_txs(&[txid_a, txid_b]).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0], tx_a);
+        assert_eq!(loaded[1], tx_b);
+
+        // Order of the request drives the order of the result.
+        let reversed = store.get_txs(&[txid_b, txid_a]).unwrap();
+        assert_eq!(reversed[0], tx_b);
+        assert_eq!(reversed[1], tx_a);
+    }
+
+    #[test]
+    fn test_get_txs_errors_when_any_txid_unknown() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let unknown_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([0x99; 32]).into();
+        let result = store.get_txs(&[unknown_txid]);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -551,7 +839,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         store
-            .add_sharechain_txs(&[ShareTransaction(funding_tx)], false, &mut batch)
+            .add_sharechain_txs(&[ShareTransaction(funding_tx)], &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -603,6 +891,241 @@ mod tests {
     }
 
     #[test]
+    fn test_is_missing_any_prevout_returns_false_for_empty_input() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        assert!(!store.is_missing_any_prevout(&[]).unwrap());
+    }
+
+    #[test]
+    fn test_is_missing_any_prevout_returns_false_when_all_present() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let funding_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(1_000_000),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(2_000_000),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
+            ],
+        };
+        let funding_txid = funding_tx.compute_txid();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(&[ShareTransaction(funding_tx)], &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let outpoints = vec![
+            bitcoin::OutPoint::new(funding_txid, 0),
+            bitcoin::OutPoint::new(funding_txid, 1),
+        ];
+        assert!(!store.is_missing_any_prevout(&outpoints).unwrap());
+    }
+
+    #[test]
+    fn test_is_missing_any_prevout_returns_true_when_one_missing() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let funding_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1_000_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let funding_txid = funding_tx.compute_txid();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(&[ShareTransaction(funding_tx)], &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let unknown_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([7u8; 32]).into();
+        let outpoints = vec![
+            bitcoin::OutPoint::new(funding_txid, 0),
+            bitcoin::OutPoint::new(unknown_txid, 0),
+        ];
+        assert!(store.is_missing_any_prevout(&outpoints).unwrap());
+    }
+
+    #[test]
+    fn test_is_any_prevout_spent_returns_false_for_empty_input() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        assert!(!store.is_any_prevout_spent(&[]).unwrap());
+    }
+
+    #[test]
+    fn test_is_any_prevout_spent_reflects_spends_index_presence() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let funding_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([41u8; 32]).into();
+        let spending_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([42u8; 32]).into();
+
+        // No SpendsIndex entries yet.
+        assert!(
+            !store
+                .is_any_prevout_spent(&[bitcoin::OutPoint::new(funding_txid, 0)])
+                .unwrap()
+        );
+
+        // Record vout 0 as spent via the confirmation-path helper.
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_spend(&funding_txid, 0, &spending_txid, 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert!(
+            store
+                .is_any_prevout_spent(&[bitcoin::OutPoint::new(funding_txid, 0)])
+                .unwrap()
+        );
+        assert!(
+            !store
+                .is_any_prevout_spent(&[bitcoin::OutPoint::new(funding_txid, 1)])
+                .unwrap()
+        );
+        // Mixed batch with one present should report true.
+        assert!(
+            store
+                .is_any_prevout_spent(&[
+                    bitcoin::OutPoint::new(funding_txid, 1),
+                    bitcoin::OutPoint::new(funding_txid, 0),
+                ])
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_are_all_txids_confirmed_returns_true_for_empty_input() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        assert!(store.are_all_txids_confirmed(&[]).unwrap());
+    }
+
+    #[test]
+    fn test_are_all_txids_confirmed_true_when_all_confirmed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let txid_a: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([1u8; 32]).into();
+        let txid_b: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([2u8; 32]).into();
+
+        let blockhash = TestShareBlockBuilder::new().build().block_hash();
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(
+                &blockhash,
+                &BlockMetadata {
+                    expected_height: Some(1),
+                    chain_work: Work::from_le_bytes([1u8; 32]),
+                    status: Status::Confirmed,
+                },
+                &mut batch,
+            )
+            .unwrap();
+        store
+            .add_txids_to_blocks_index(&blockhash, &Txids(vec![txid_a, txid_b]), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert!(store.are_all_txids_confirmed(&[txid_a, txid_b]).unwrap());
+    }
+
+    #[test]
+    fn test_are_all_txids_confirmed_false_when_any_uncle_only() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let txid_confirmed: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([3u8; 32]).into();
+        let txid_uncle_only: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([4u8; 32]).into();
+
+        let confirmed_blockhash = TestShareBlockBuilder::new()
+            .nonce(0xaaaa0001)
+            .build()
+            .block_hash();
+        let uncle_blockhash = TestShareBlockBuilder::new()
+            .nonce(0xaaaa0002)
+            .build()
+            .block_hash();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(
+                &confirmed_blockhash,
+                &BlockMetadata {
+                    expected_height: Some(1),
+                    chain_work: Work::from_le_bytes([1u8; 32]),
+                    status: Status::Confirmed,
+                },
+                &mut batch,
+            )
+            .unwrap();
+        store
+            .update_block_metadata(
+                &uncle_blockhash,
+                &BlockMetadata {
+                    expected_height: Some(1),
+                    chain_work: Work::from_le_bytes([1u8; 32]),
+                    status: Status::Candidate,
+                },
+                &mut batch,
+            )
+            .unwrap();
+        store
+            .add_txids_to_blocks_index(
+                &confirmed_blockhash,
+                &Txids(vec![txid_confirmed]),
+                &mut batch,
+            )
+            .unwrap();
+        store
+            .add_txids_to_blocks_index(&uncle_blockhash, &Txids(vec![txid_uncle_only]), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert!(store.are_all_txids_confirmed(&[txid_confirmed]).unwrap());
+        assert!(!store.are_all_txids_confirmed(&[txid_uncle_only]).unwrap());
+        assert!(
+            !store
+                .are_all_txids_confirmed(&[txid_confirmed, txid_uncle_only])
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_are_all_txids_confirmed_false_when_unknown() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let unknown_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([9u8; 32]).into();
+        assert!(!store.are_all_txids_confirmed(&[unknown_txid]).unwrap());
+    }
+
+    #[test]
     fn test_get_output_succeeds_for_stored_output() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
@@ -626,7 +1149,7 @@ mod tests {
         let txid = tx.compute_txid();
         let mut batch = Store::get_write_batch();
         store
-            .add_sharechain_txs(&[ShareTransaction(tx)], false, &mut batch)
+            .add_sharechain_txs(&[ShareTransaction(tx)], &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -658,7 +1181,7 @@ mod tests {
         let blockhash = block.block_hash();
 
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&block, true, &mut batch).unwrap();
+        store.add_share_block(&block, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Verify block -> txids index (forward lookup)
@@ -711,7 +1234,7 @@ mod tests {
         let blockhash1 = block1.block_hash();
 
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&block1, true, &mut batch).unwrap();
+        store.add_share_block(&block1, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Verify the txid maps to the first blockhash
@@ -732,7 +1255,7 @@ mod tests {
         );
 
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&block2, false, &mut batch).unwrap();
+        store.add_share_block(&block2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Verify the txid now maps to both blockhashes
@@ -755,7 +1278,7 @@ mod tests {
         let blockhash3 = block3.block_hash();
 
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&block3, false, &mut batch).unwrap();
+        store.add_share_block(&block3, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Verify the txid now maps to all three blockhashes
@@ -896,9 +1419,7 @@ mod tests {
 
         // Add transactions to store
         let mut batch = rocksdb::WriteBatch::default();
-        store
-            .add_sharechain_txs(&transactions, true, &mut batch)
-            .unwrap();
+        store.add_sharechain_txs(&transactions, &mut batch).unwrap();
         store.db.write(batch).unwrap();
 
         // Verify transactions were stored correctly by retrieving them by txid
@@ -940,7 +1461,7 @@ mod tests {
         let txid = tx.compute_txid();
         let mut batch = rocksdb::WriteBatch::default();
         let res = store
-            .add_sharechain_txs(&[ShareTransaction(tx.clone())], true, &mut batch)
+            .add_sharechain_txs(&[ShareTransaction(tx.clone())], &mut batch)
             .unwrap();
         store.db.write(batch).unwrap();
 
@@ -963,86 +1484,6 @@ mod tests {
         assert_eq!(tx.output.len(), 1);
         assert_eq!(tx.output[0].value, bitcoin::Amount::from_sat(1000000));
         assert_eq!(tx.output[0].script_pubkey, script_true);
-    }
-
-    #[test]
-    fn test_confirm_transaction() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        // Create a previous transaction with outputs
-        let prev_tx = Transaction {
-            version: bitcoin::transaction::Version(1),
-            lock_time: bitcoin::absolute::LockTime::ZERO,
-            input: vec![],
-            output: vec![
-                bitcoin::TxOut {
-                    value: bitcoin::Amount::from_sat(1000000),
-                    script_pubkey: bitcoin::ScriptBuf::new(),
-                },
-                bitcoin::TxOut {
-                    value: bitcoin::Amount::from_sat(2000000),
-                    script_pubkey: bitcoin::ScriptBuf::new(),
-                },
-            ],
-        };
-
-        let prev_txid = prev_tx.compute_txid();
-
-        // Add the previous transaction and update spends index
-        let mut batch = rocksdb::WriteBatch::default();
-        store
-            .add_tx_metadata(prev_txid, &prev_tx, false, &mut batch)
-            .unwrap();
-        store.db.write(batch).unwrap();
-
-        // Verify outputs are not yet spent
-        assert!(store.is_spent(&prev_txid, 0).unwrap().is_none());
-        assert!(store.is_spent(&prev_txid, 1).unwrap().is_none());
-
-        // Create a new transaction that spends the previous outputs
-        let tx = Transaction {
-            version: bitcoin::transaction::Version(1),
-            lock_time: bitcoin::absolute::LockTime::ZERO,
-            input: vec![
-                bitcoin::TxIn {
-                    previous_output: bitcoin::OutPoint::new(prev_txid, 0),
-                    script_sig: bitcoin::ScriptBuf::new(),
-                    sequence: bitcoin::Sequence::MAX,
-                    witness: bitcoin::Witness::new(),
-                },
-                bitcoin::TxIn {
-                    previous_output: bitcoin::OutPoint::new(prev_txid, 1),
-                    script_sig: bitcoin::ScriptBuf::new(),
-                    sequence: bitcoin::Sequence::MAX,
-                    witness: bitcoin::Witness::new(),
-                },
-            ],
-            output: vec![bitcoin::TxOut {
-                value: bitcoin::Amount::from_sat(2900000),
-                script_pubkey: bitcoin::ScriptBuf::new(),
-            }],
-        };
-
-        let txid = tx.compute_txid();
-
-        // Confirm the transaction (should add to spend index)
-        let mut batch = rocksdb::WriteBatch::default();
-        store
-            .add_sharechain_txs(&[ShareTransaction(tx)], true, &mut batch)
-            .unwrap();
-        store.db.write(batch).unwrap();
-
-        // Verify the previous outputs are now in spends index
-        let stored = store.is_spent(&prev_txid, 0).unwrap();
-        assert!(stored.is_some());
-        assert_eq!(txid, stored.unwrap().txid);
-        assert_eq!(0, stored.unwrap().vout);
-
-        let stored_second = store.is_spent(&prev_txid, 1).unwrap();
-        assert!(stored_second.is_some());
-        assert_eq!(txid, stored_second.unwrap().txid);
-        assert_eq!(1, stored_second.unwrap().vout);
     }
 
     #[test]
@@ -1114,10 +1555,7 @@ mod tests {
         let mut batch = rocksdb::WriteBatch::default();
         store
             .add_spends_for_block(
-                &[
-                    ShareTransaction(coinbase_tx),
-                    ShareTransaction(spending_tx),
-                ],
+                &[ShareTransaction(coinbase_tx), ShareTransaction(spending_tx)],
                 &mut batch,
             )
             .unwrap();

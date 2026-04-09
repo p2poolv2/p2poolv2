@@ -106,9 +106,12 @@ impl Store {
         })?;
         let reorged_out_chain = self.get_confirmed_chain(fork_point, Some(top_confirmed))?;
 
-        // Delete old confirmed index entries and set reorged-out shares to Candidate
+        // Delete old confirmed index entries, remove their spends from
+        // SpendsIndex, and set reorged-out shares to HeaderValid.
         for (height, unconfirm) in &reorged_out_chain {
             self.delete_confirmed_entry(*height, batch);
+            let reorged_out_txs = self.get_txs_by_blockhash_index(unconfirm)?;
+            self.remove_spends_for_block(&reorged_out_txs, batch);
             let mut metadata = self.get_block_metadata(unconfirm)?;
 
             // Mark as valid, because Candidate status is limited to those on candidate chain
@@ -126,7 +129,7 @@ impl Store {
                     "Block metadata missing expected_height for confirmed reorg".into(),
                 )
             })?;
-            self.put_confirmed_entry(height, to_confirm, batch);
+            self.put_confirmed_entry(height, to_confirm, batch)?;
 
             metadata.status = Status::Confirmed;
             self.update_block_metadata(to_confirm, &metadata, batch)?;
@@ -138,17 +141,31 @@ impl Store {
         Ok(Some(new_top_height))
     }
 
-    /// Write a confirmed index entry directly into the batch.
+    /// Write a confirmed index entry and record every spend that the
+    /// block's transactions make into `SpendsIndex`.
+    ///
+    /// This is the single point where "a block just became confirmed" is
+    /// expressed. `SpendsIndex` presence therefore means exactly
+    /// "spent by a transaction on the confirmed sharechain".
+    ///
+    /// The tx list is loaded from the committed store via
+    /// `get_sharechain_txs_by_blockhash_index`. Callers must ensure the
+    /// block's tx data has already been committed in a prior batch - the
+    /// read against a pending `WriteBatch` will not see its contents.
     pub(super) fn put_confirmed_entry(
         &self,
         height: Height,
         blockhash: &BlockHash,
         batch: &mut rocksdb::WriteBatch,
-    ) {
+    ) -> Result<(), StoreError> {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let key = height_to_key_with_suffix(height, CONFIRMED_SUFFIX);
         let serialized = consensus::serialize(blockhash);
         batch.put_cf(&block_height_cf, key, serialized);
+
+        let txs = self.get_txs_by_blockhash_index(blockhash)?;
+        self.add_spends_for_block(&txs, batch)?;
+        Ok(())
     }
 
     /// Delete a confirmed index entry from the batch.
@@ -253,7 +270,7 @@ impl Store {
             return Err(StoreError::Database("Incorrect confirmation".into()));
         }
 
-        self.put_confirmed_entry(height, blockhash, batch);
+        self.put_confirmed_entry(height, blockhash, batch)?;
         self.set_top_confirmed_height(height, batch);
 
         metadata.status = Status::Confirmed;
@@ -330,7 +347,7 @@ impl Store {
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<Option<Height>, StoreError> {
         for (candidate_height, candidate_hash) in candidates {
-            self.put_confirmed_entry(*candidate_height, candidate_hash, batch);
+            self.put_confirmed_entry(*candidate_height, candidate_hash, batch)?;
             let mut metadata = self.get_block_metadata(candidate_hash)?;
             metadata.status = crate::store::block_tx_metadata::Status::Confirmed;
             self.update_block_metadata(candidate_hash, &metadata, batch)?;
@@ -536,12 +553,8 @@ mod tests {
 
         // Add shares first
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&candidate_share, &mut batch)
-            .unwrap();
-        store
-            .add_share_block(&confirmed_share, &mut batch)
-            .unwrap();
+        store.add_share_block(&candidate_share, &mut batch).unwrap();
+        store.add_share_block(&confirmed_share, &mut batch).unwrap();
         let mut candidate_metadata = BlockMetadata {
             expected_height: Some(0),
             chain_work: candidate_share.header.get_work(),
@@ -1207,9 +1220,7 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&fork_share, &mut batch)
-            .unwrap();
+        store.add_share_block(&fork_share, &mut batch).unwrap();
         let mut fork_metadata = BlockMetadata {
             expected_height: Some(1),
             chain_work: fork_share.header.get_work(),
@@ -1487,9 +1498,7 @@ mod tests {
             .nonce(0xe9695795)
             .build();
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&fork_share, &mut batch)
-            .unwrap();
+        store.add_share_block(&fork_share, &mut batch).unwrap();
         let mut fork_metadata = BlockMetadata {
             expected_height: Some(1),
             chain_work: fork_share.header.get_work(),
@@ -1604,9 +1613,7 @@ mod tests {
             .nonce(0xe9695794)
             .build();
         let mut batch = Store::get_write_batch();
-        store
-            .add_share_block(&fork_share, &mut batch)
-            .unwrap();
+        store.add_share_block(&fork_share, &mut batch).unwrap();
         let mut fork_metadata = BlockMetadata {
             expected_height: Some(2),
             chain_work: metadata_a.chain_work + fork_share.header.get_work(),
@@ -1673,5 +1680,147 @@ mod tests {
         let mut batch = Store::get_write_batch();
         let result = store.reorg_confirmed(&top_confirmed, &candidates, &mut batch);
         assert!(result.is_err());
+    }
+
+    // -- SpendsIndex confirmation-gating integration test --
+
+    /// End-to-end regression for the "SpendsIndex is gated on
+    /// confirmation" change: confirming a share writes spends, reorging
+    /// it out removes them, re-confirming a replacement re-adds them.
+    #[test]
+    fn test_spends_index_follows_confirmation_state() {
+        use bitcoin::hashes::Hash;
+
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Build a spending tx whose prevout points at a fabricated
+        // outpoint. SpendsIndex doesn't care whether the prevout
+        // actually exists as an output — it only records the spend.
+        let fabricated_prevout_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([0xaa; 32]).into();
+        let prevout = bitcoin::OutPoint::new(fabricated_prevout_txid, 0);
+        let spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: prevout,
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+
+        // Block A at height 1 containing the spender.
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .add_transaction(spending_tx.clone())
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share_a, &mut batch).unwrap();
+        let mut metadata_a = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: share_a.header.get_work(),
+            status: Status::HeaderValid,
+        };
+        store
+            .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Pre-confirmation: no SpendsIndex entry.
+        assert!(!store.is_any_prevout_spent(&[prevout]).unwrap());
+
+        // Confirm A. put_confirmed_entry should populate SpendsIndex.
+        let mut batch = Store::get_write_batch();
+        store
+            .append_to_confirmed(&share_a.block_hash(), 1, &mut metadata_a, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        assert!(store.is_any_prevout_spent(&[prevout]).unwrap());
+
+        // Build a heavier fork at height 1 that does NOT contain the
+        // spender. Reorg confirms the fork and unconfirms A; the
+        // reorg-out path should clear the SpendsIndex entry.
+        let fork_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(4)
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&fork_1, &mut batch).unwrap();
+        let mut fork_1_metadata = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: fork_1.header.get_work(),
+            status: Status::HeaderValid,
+        };
+        store
+            .update_block_metadata(&fork_1.block_hash(), &fork_1_metadata, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&fork_1.block_hash(), 1, &mut fork_1_metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+        let candidates = vec![(1, fork_1.block_hash())];
+        let mut batch = Store::get_write_batch();
+        store
+            .reorg_confirmed(&top_confirmed, &candidates, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            fork_1.block_hash()
+        );
+        assert!(!store.is_any_prevout_spent(&[prevout]).unwrap());
+
+        // Build a second fork that extends the new confirmed chain with
+        // a block containing the same spender tx, and reorg again so it
+        // becomes confirmed.
+        let fork_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_1.block_hash().to_string())
+            .work(8)
+            .nonce(0xe9695794)
+            .add_transaction(spending_tx)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&fork_2, &mut batch).unwrap();
+        let mut fork_2_metadata = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: fork_1_metadata.chain_work + fork_2.header.get_work(),
+            status: Status::HeaderValid,
+        };
+        store
+            .update_block_metadata(&fork_2.block_hash(), &fork_2_metadata, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&fork_2.block_hash(), 2, &mut fork_2_metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Extend confirmed by promoting fork_2.
+        let mut batch = Store::get_write_batch();
+        store
+            .extend_confirmed(2, &vec![(2, fork_2.block_hash())], &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(
+            store.get_confirmed_at_height(2).unwrap(),
+            fork_2.block_hash()
+        );
+        assert!(store.is_any_prevout_spent(&[prevout]).unwrap());
     }
 }

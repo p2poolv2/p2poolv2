@@ -63,6 +63,27 @@ impl StoreHandle {
         self.store.get_all_prevouts(transaction)
     }
 
+    /// Batch check the Outputs CF: true if any outpoint is missing.
+    pub fn is_missing_any_prevout(
+        &self,
+        outpoints: &[bitcoin::OutPoint],
+    ) -> Result<bool, StoreError> {
+        self.store.is_missing_any_prevout(outpoints)
+    }
+
+    /// Batch check the SpendsIndex CF: true if any outpoint is already spent.
+    pub fn is_any_prevout_spent(
+        &self,
+        outpoints: &[bitcoin::OutPoint],
+    ) -> Result<bool, StoreError> {
+        self.store.is_any_prevout_spent(outpoints)
+    }
+
+    /// Returns true if every txid is on the confirmed sharechain.
+    pub fn are_all_txids_confirmed(&self, txids: &[bitcoin::Txid]) -> Result<bool, StoreError> {
+        self.store.are_all_txids_confirmed(txids)
+    }
+
     /// Retrieve a single transaction output by txid and output index.
     pub fn get_output(
         &self,
@@ -209,16 +230,11 @@ impl StoreHandle {
     // ========================================================================
 
     /// Add a share to the store.
-    pub async fn add_share_block(
-        &self,
-        share: ShareBlock,
-        confirm_txs: bool,
-    ) -> Result<(), StoreError> {
+    pub async fn add_share_block(&self, share: ShareBlock) -> Result<(), StoreError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.write_tx
             .send(WriteCommand::AddShareBlock {
                 share,
-                confirm_txs,
                 reply: reply_tx,
             })
             .map_err(|_| StoreError::ChannelClosed)?;
@@ -230,13 +246,11 @@ impl StoreHandle {
     pub async fn add_share_block_and_organise_header(
         &self,
         share: ShareBlock,
-        confirm_txs: bool,
     ) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.write_tx
             .send(WriteCommand::AddShareBlockAndOrganiseHeader {
                 share,
-                confirm_txs,
                 reply: reply_tx,
             })
             .map_err(|_| StoreError::ChannelClosed)?;
@@ -362,8 +376,8 @@ mockall::mock! {
         // Serialized writes (async)
         pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;
         pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
-        pub async fn add_share_block(&self, share: ShareBlock, confirm_txs: bool) -> Result<(), StoreError>;
-        pub async fn add_share_block_and_organise_header(&self, share: ShareBlock, confirm_txs: bool) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;
+        pub async fn add_share_block(&self, share: ShareBlock) -> Result<(), StoreError>;
+        pub async fn add_share_block_and_organise_header(&self, share: ShareBlock) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;
         pub async fn setup_genesis(&self, genesis: ShareBlock) -> Result<(), StoreError>;
         pub async fn init_chain_state_from_store(&self, genesis_hash: BlockHash) -> Result<(), StoreError>;
         pub async fn add_user(&self, btcaddress: String) -> Result<u64, StoreError>;

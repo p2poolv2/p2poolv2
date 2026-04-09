@@ -108,6 +108,27 @@ impl ChainStoreHandle {
         self.store_handle.get_all_prevouts(transaction)
     }
 
+    /// Batch check the Outputs CF: true if any outpoint is missing.
+    pub fn is_missing_any_prevout(
+        &self,
+        outpoints: &[bitcoin::OutPoint],
+    ) -> Result<bool, StoreError> {
+        self.store_handle.is_missing_any_prevout(outpoints)
+    }
+
+    /// Batch check the SpendsIndex CF: true if any outpoint is already spent.
+    pub fn is_any_prevout_spent(
+        &self,
+        outpoints: &[bitcoin::OutPoint],
+    ) -> Result<bool, StoreError> {
+        self.store_handle.is_any_prevout_spent(outpoints)
+    }
+
+    /// Returns true if every txid is on the confirmed sharechain.
+    pub fn are_all_txids_confirmed(&self, txids: &[bitcoin::Txid]) -> Result<bool, StoreError> {
+        self.store_handle.are_all_txids_confirmed(txids)
+    }
+
     /// Retrieve a single transaction output by txid and output index.
     pub fn get_output(
         &self,
@@ -673,6 +694,9 @@ mockall::mock! {
         pub fn get_blockhashes_for_height(&self, height: u32) -> Vec<BlockHash>;
         pub fn network(&self) -> bitcoin::Network;
         pub fn get_all_prevouts(&self, transaction: &bitcoin::Transaction) -> Result<Vec<(usize, bitcoin::TxOut)>, StoreError>;
+        pub fn is_missing_any_prevout(&self, outpoints: &[bitcoin::OutPoint]) -> Result<bool, StoreError>;
+        pub fn is_any_prevout_spent(&self, outpoints: &[bitcoin::OutPoint]) -> Result<bool, StoreError>;
+        pub fn are_all_txids_confirmed(&self, txids: &[bitcoin::Txid]) -> Result<bool, StoreError>;
         pub fn get_output(&self, txid: &bitcoin::Txid, vout: u32) -> Result<bitcoin::TxOut, StoreError>;
         pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool;
         pub fn first_existing_share_header(&self, blockhashes: &[BlockHash]) -> Option<BlockHash>;
@@ -765,10 +789,7 @@ mod tests {
             .work(2)
             .build();
 
-        chain_handle
-            .add_share_block(share1.clone())
-            .await
-            .unwrap();
+        chain_handle.add_share_block(share1.clone()).await.unwrap();
 
         // Verify share is stored
         let stored_share = chain_handle.get_share(&share1.block_hash());
@@ -823,10 +844,7 @@ mod tests {
                 .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
                 .work(2)
                 .build();
-            chain_handle
-                .add_share_block(share.clone())
-                .await
-                .unwrap();
+            chain_handle.add_share_block(share.clone()).await.unwrap();
             chain_handle
                 .organise_header(share.header.clone())
                 .await
@@ -893,10 +911,7 @@ mod tests {
                 .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
                 .work(2)
                 .build();
-            chain_handle
-                .add_share_block(share.clone())
-                .await
-                .unwrap();
+            chain_handle.add_share_block(share.clone()).await.unwrap();
             chain_handle
                 .organise_header(share.header.clone())
                 .await
@@ -936,10 +951,7 @@ mod tests {
             .work(1)
             .build();
 
-        chain_handle
-            .add_share_block(share1.clone())
-            .await
-            .unwrap();
+        chain_handle.add_share_block(share1.clone()).await.unwrap();
 
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
@@ -968,10 +980,7 @@ mod tests {
                 .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
                 .work(2)
                 .build();
-            chain_handle
-                .add_share_block(share.clone())
-                .await
-                .unwrap();
+            chain_handle.add_share_block(share.clone()).await.unwrap();
             chain_handle
                 .organise_header(share.header.clone())
                 .await
