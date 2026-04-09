@@ -287,9 +287,7 @@ mod tests {
             let height = parent_height + 1;
             let chain_work = parent_metadata.chain_work + share_work;
             let mut batch = Store::get_write_batch();
-            store
-                .add_share_block(&fork_share, &mut batch)
-                .unwrap();
+            store.add_share_block(&fork_share, &mut batch).unwrap();
             store
                 .set_height_to_blockhash(&blockhash, height, &mut batch)
                 .unwrap();

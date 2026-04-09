@@ -299,6 +299,9 @@ impl Store {
         self.update_block_metadata(&blockhash, &metadata, batch)?;
 
         *self.genesis_blockhash.write().unwrap() = Some(blockhash);
+
+        // Genesis is coinbase-only. No need to make sure to call
+        // `add_spends_for_block`.
         self.append_to_confirmed(&blockhash, 0, &mut metadata, batch)?;
         Ok(())
     }
@@ -337,10 +340,7 @@ impl Store {
     /// Push a share to the confirmed chain: organise header, store
     /// the full block, then promote candidates to confirmed.
     /// Returns the new confirmed height if changed, or None.
-    pub fn push_to_confirmed_chain(
-        &self,
-        share: &ShareBlock,
-    ) -> Result<Option<u32>, StoreError> {
+    pub fn push_to_confirmed_chain(&self, share: &ShareBlock) -> Result<Option<u32>, StoreError> {
         self.push_to_candidate_chain(share)?;
         let mut batch = Store::get_write_batch();
         self.add_share_block(share, &mut batch)?;

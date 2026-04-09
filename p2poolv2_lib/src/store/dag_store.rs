@@ -627,15 +627,11 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store
-            .add_share_block(&uncle1_share2, &mut batch)
-            .unwrap();
+        store.add_share_block(&uncle1_share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store
-            .add_share_block(&uncle2_share2, &mut batch)
-            .unwrap();
+        store.add_share_block(&uncle2_share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
@@ -727,15 +723,11 @@ mod tests {
         let mut batch = rocksdb::WriteBatch::default();
         // Add all shares to store
         store.add_share_block(&share1, &mut batch).unwrap();
-        store
-            .add_share_block(&uncle1_share2, &mut batch)
-            .unwrap();
+        store.add_share_block(&uncle1_share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();
-        store
-            .add_share_block(&uncle2_share2, &mut batch)
-            .unwrap();
+        store.add_share_block(&uncle2_share2, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         let mut batch = rocksdb::WriteBatch::default();

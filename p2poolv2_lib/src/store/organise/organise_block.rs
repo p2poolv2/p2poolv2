@@ -193,9 +193,7 @@ mod tests {
             .work(2)
             .nonce(0xe9695793)
             .build();
-        store
-            .push_to_confirmed_chain(&share_to_organise)
-            .unwrap();
+        store.push_to_confirmed_chain(&share_to_organise).unwrap();
 
         // Candidates coexist with confirmed
         assert!(store.get_top_candidate().is_ok());
