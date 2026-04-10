@@ -34,22 +34,31 @@ link:p2poolv2_api/README.md[API Documentation]
 
 link:p2poolv2_cli/README.md[CLI Documentation]
 
-== Developer Setup
-
-To ease development of p2pool's rust node, there is a devcontainer setup in place. You can use it
-for IDEs supporting devcontainers and github codespaces.
-
 === MSRV and Edition
 
 MSRV 1.88 with 2024 edition is required to build p2poolv2.
 
-== Native Setup
+== Build
+
+. Install rust from link:https://rustup.rs/[rustup]
+. Install link:https://github.com/casey/just?tab=readme-ov-file#installation[Install just]
+. Build P2Poolv2
+.. Get latest source `git clone git@github.com:p2poolv2/p2poolv2.git`
+.. Build `just build-release`
+
+== Run
 
 Follow the guidelines below to setup your local p2pool node.
 
-. Setup bitcoind
-.. Use `docker/bitcoin-signet.conf` as your bitcoin.conf
-. Setup p2poolv2
-.. Use `src/config.toml` as starting point for your own `config.toml`
+. bitcoind
+.. For signet we provide a `docker/bitcoin-signet.conf` that you can use as your bitcoin.conf
+. p2poolv2
+.. copy Use `config.sample.toml` to `config.toml` and edit as required
+.. at the very least you need to provide the bitcoind rpc details under the `[bitcoinrpc]` section
+.. Run P2Poolv2 `just run config.toml`
 . Point your miners to `localhost:3333`
 
+
+== Systemd Service
+
+To setup as a systemd service, use the systemd service file link:./p2poolv2.service[p2poolv2.service]
