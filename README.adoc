@@ -46,13 +46,13 @@ MSRV 1.88 with 2024 edition is required to build p2poolv2.
 .. Get latest source `git clone git@github.com:p2poolv2/p2poolv2.git`
 .. Build `just build-release`
 
-== Run
+== Running P2Poolv2
 
 To setup your local p2pool node you need to run a bitcoin node and
 then a p2poolv2 node configured to talk to your bitcoind node to fetch
 blocktemplates and submit blocks.
 
-=== bitcoind
+=== Bitcoin Node
 
 For signet we provide a `docker/bitcoin-signet.conf` that you can use
 as your bitcoin.conf. We also provide a docker compose service that
@@ -88,7 +88,7 @@ include height using varint format, which conflicts with how these
 first 32 heights are encoded. The bitcoind docker service takes care
 of this by bootstrapping the signet with first 32 blocks.
 
-=== p2poolv2
+=== P2Poolv2 Node
 
 . Copy `config.sample.toml` to `config.toml` and edit as required
 .. At the very least you need to provide the bitcoind rpc details under the `[bitcoinrpc]` section
