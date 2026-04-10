@@ -24,42 +24,47 @@ Once you have jmeter installed and available in your PATH, you can run the load 
 
 === Run the simulated bitcoin node:
 
-```bash
+[,shell]
+----
 cargo run --release -p mock-bitcoind
-```
+----
 
 === Run the stratum server to test:
 
 ==== P2Poolv2 Stratum Server
 
-```bash
+[,shell]
+----
 cd p2poolv2
 cargo build --workspace --release
 ./target/release/p2poolv2 --config=config-testnet4.toml
-```
+----
 
 ==== CKPool Stratum Server
 
 First build CKPool's ckpool-solo branch.
 Then run the CKPool stratum server using the provided configuration file.
 
-```bash
+[,shell]
+----
 ./src/ckpool --btcsolo --config=<path to this directory>/ckpool-testnet4-solo.json
-
+----
 
 === Run the Load Test Script
 
 Replace stratum.jtl with the different jmeter test files for the P2Poolv2 and CKPool implementations.
 
-```bash
+[,shell]
+----
 cd load-tests
 jmeter -n -t stratum.jmx -l stratum.jtl
-```
+----
 
 == Modify the Load Test File
 
 Use the jmeter GUI to modify the load test file as needed. You can open the file `load-tests/stratum.jmx` in jmeter and make changes to the test parameters, such as the number of threads, ramp-up time, and other settings.
 
-```bash
+[,shell]
+----
 ./load-tests/run_jmeter.sh
-```
+----
