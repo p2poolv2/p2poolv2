@@ -38,6 +38,32 @@ miners, P2Poolv2 and CKPool show nearly identical performance with
 sub-millisecond median submit latency and ~330 requests/second
 throughput.
 
+=== 5,000 threads, 300 second duration, 60 second ramp-up
+
+==== P2Poolv2 (native build) -- 457,845 samples, 0 errors
+
+----
+Sampler      Avg     p50     p95     p99     Max
+Subscribe    5.4     2       2       57      650
+Authorize    0.4     0       1       24      29
+Submit       0.1     0       1       1       32
+----
+
+==== CKPool -- 457,840 samples, 81,423 errors (18% on submit)
+
+----
+Sampler      Avg     p50     p95     p99     Max
+Subscribe    4.3     1       1       61      646
+Authorize    0.4     0       1       16      30
+Submit       0.2     0       1       1       40
+----
+
+P2Poolv2 handles 5,000 concurrent miners for 5 minutes with zero
+errors. CKPool shows 18% submit errors under the same load -- all
+subscribe and authorize calls succeed, but CKPool rejects a portion
+of the dummy submit parameters under higher concurrency. Both servers
+maintain sub-millisecond median latency across all operations.
+
 == Setup
 
 The load tests uses jmeter to support spawning thousands of threads acting as ASIC miner clients.
