@@ -40,6 +40,8 @@ RUN cmake --build build -j$(nproc)
 FROM base AS runtime
 
 COPY --from=builder /bitcoin/build/bin/bitcoin* /usr/local/bin/
+COPY --from=builder /bitcoin/contrib/signet/miner /usr/local/bin/signet-miner
+COPY --from=builder /bitcoin/test/functional/test_framework /usr/local/lib/python3/test_framework
 
 # Install runtime dependencies
 RUN apk add --no-cache \
@@ -49,7 +51,8 @@ RUN apk add --no-cache \
     libevent \
     libzmq \
     libstdc++ \
-    sqlite-libs
+    sqlite-libs \
+    python3
 
 # Create bitcoin user
 RUN adduser -S bitcoin
@@ -71,8 +74,9 @@ EXPOSE 48332 48333
 COPY signet/bitcoin-signet.conf /etc/bitcoin/
 COPY testnet4/bitcoin-testnet4.conf /etc/bitcoin/
 COPY bcli /usr/local/bin/
+COPY bootstrap.sh /usr/local/bin/
 
-HEALTHCHECK --interval=5s --timeout=1s --start-period=3s --retries=3 \
-    CMD ["ash", "-c", "nc -z 127.0.0.1 ${BTC_P2P_PORT:-38333}"]
+HEALTHCHECK --interval=10s --timeout=5s --start-period=600s --retries=3 \
+    CMD ["ash", "-c", "HEIGHT=$(bitcoin-cli -datadir=/data/ -conf=/etc/bitcoin/bitcoin-${NETWORK:-signet}.conf getblockcount 2>/dev/null) && [ \"$HEIGHT\" -ge 32 ]"]
 
 ENTRYPOINT ["bitcoind"]
