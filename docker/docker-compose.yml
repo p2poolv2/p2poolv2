@@ -22,7 +22,29 @@ services:
         max-size: "100m"
         max-file: "3"
 
+  bitcoin-bootstrap:
+    build:
+      context: bitcoind
+    depends_on:
+      bitcoind:
+        condition: service_started
+    entrypoint: ["/usr/local/bin/bootstrap.sh"]
+    environment:
+      - NETWORK=${NETWORK:-signet}
+      - TARGET_HEIGHT=32
+    healthcheck:
+      disable: true
+    restart: "no"
+    networks:
+      - p2poolv2_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "1"
+
   mujina_minerd:
+    profiles: [developer]
     # you can change this to have multiple containers
     scale: ${MUJINA_SCALE:-1}
     image: ghcr.io/256foundation/mujina-minerd:main
