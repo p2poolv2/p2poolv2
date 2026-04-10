@@ -2,25 +2,71 @@
 
 We use jmeter to run load tests for our implmentation of the Stratum protocol.
 
-The load test is repeated with the same parameters as CKPool's stratum implementation. The goal of the comparison is to show that our implementation can handle the same load as CKPool's implementation with similar degradation in performance as the load increases, if any.
+The load test is repeated with the same parameters as CKPool's stratum
+implementation. The goal of the comparison is to show that our
+implementation can handle the same load as CKPool's implementation
+with similar degradation in performance as the load increases, if any.
+
+== Results
+
+All times are round-trip latency in milliseconds as measured by the
+jmeter client. Each thread connects, subscribes, authorizes once, then
+submits shares every 3 seconds in a loop for the duration of the test.
+
+=== 1,000 threads, 60 second duration, 10 second ramp-up
+
+==== P2Poolv2 (native build) -- 19,822 samples, 0 errors
+
+----
+Sampler      Avg     p50     p95     Max
+Subscribe    16.8    2       53      527
+Authorize    1.5     0       21      28
+Submit       0.3     0       1       27
+----
+
+==== CKPool -- 19,821 samples, 0 errors
+
+----
+Sampler      Avg     p50     p95     Max
+Subscribe    17.0    1       67      549
+Authorize    1.3     0       16      23
+Submit       0.3     0       1       41
+----
+
+Both servers handle the load with zero errors. At 1,000 concurrent
+miners, P2Poolv2 and CKPool show nearly identical performance with
+sub-millisecond median submit latency and ~330 requests/second
+throughput.
 
 == Setup
 
 The load tests uses jmeter to support spawning thousands of threads acting as ASIC miner clients.
 
-We simulate 10,000 ASIC miners, connecting over a ramp-up time period of 10 seconds. Once all clients are connected, each submits a share to the server every 15 seconds for a total of 10 minutes.
+We simulate 10,000 ASIC miners, connecting over a ramp-up time period
+of 10 seconds. Once all clients are connected, each submits a share to
+the server every 15 seconds for a total of 10 minutes.
 
 === Bitcoin Node
 
-We simulate a bitcoin node using a http server that responds with the same block template in response to the `getblocktemplate` request. The simulated bitcoin node also responds with success to all `submitblock` requests. By avoiding a mainnet bitcoin node, we avoid the complications of generating suitable work and the corresponding proof of work for all the simulated clients.
+We simulate a bitcoin node using a http server that responds with the
+same block template in response to the `getblocktemplate` request. The
+simulated bitcoin node also responds with success to all `submitblock`
+requests. By avoiding a mainnet bitcoin node, we avoid the
+complications of generating suitable work and the corresponding proof
+of work for all the simulated clients.
 
 == Running the Tests
 
-We use jmeter to build the test and the load test file can be editted by using the jmeter GUI. The load test file is located at `load-tests/stratum.jmx`.
+We use jmeter to build the test and the load test file can be editted
+by using the jmeter GUI. The load test file is located at
+`load-tests/stratum.jmx`.
 
-To run the tests, you need to have jmeter installed. You can download it from https://jmeter.apache.org/download_jmeter.cgi.
+To run the tests, you need to have jmeter installed. You can download
+it from https://jmeter.apache.org/download_jmeter.cgi.
 
-Once you have jmeter installed and available in your PATH, you can run the load tests using the provided script. But first we need to run some required services.
+Once you have jmeter installed and available in your PATH, you can run
+the load tests using the provided script. But first we need to run
+some required services.
 
 === Run the simulated bitcoin node:
 
@@ -57,8 +103,12 @@ This can also be built using `just build-release` which sets the native flag aut
 
 ==== CKPool Stratum Server
 
-First build CKPool's https://bitbucket.org/ckolivas/ckpool/src/master/[ckpool-solo] branch.
-Then run the CKPool stratum server using the provided configuration file. The configuration in `ckpool-testnet4-solo.json` points the mock bitcoind at `127.0.0.1:48332` and listens for stratum connections on `0.0.0.0:3333`.
+First build CKPool's
+https://bitbucket.org/ckolivas/ckpool/src/master/[ckpool-solo] branch.
+Then run the CKPool stratum server using the provided configuration
+file. The configuration in `ckpool-testnet4-solo.json` points the mock
+bitcoind at `127.0.0.1:48332` and listens for stratum connections on
+`0.0.0.0:3333`.
 
 [,shell]
 ----
@@ -67,7 +117,8 @@ Then run the CKPool stratum server using the provided configuration file. The co
 
 === Run the Load Test Script
 
-Run jmeter from the `load-tests/jmeter-testing` directory. Use a different output file name for each test run to keep results separate.
+Run jmeter from the `load-tests/jmeter-testing` directory. Use a
+different output file name for each test run to keep results separate.
 
 For the default P2Poolv2 build:
 
@@ -95,7 +146,10 @@ jmeter -n -t stratum.jmx -l ckpool.jtl
 
 === Automated A/B Benchmark
 
-The `benchmark.sh` script automates the full comparison between default builds, native builds, and CKPool. It starts mock-bitcoind, runs each variant with jmeter, and prints a summary with latency percentiles.
+The `benchmark.sh` script automates the full comparison between
+default builds, native builds, and CKPool. It starts mock-bitcoind,
+runs each variant with jmeter, and prints a summary with latency
+percentiles.
 
 [,shell]
 ----
@@ -122,7 +176,10 @@ Results are saved as timestamped `.jtl` files in the `results/` directory.
 
 == Modify the Load Test File
 
-Use the jmeter GUI to modify the load test file as needed. You can open the file `load-tests/stratum.jmx` in jmeter and make changes to the test parameters, such as the number of threads, ramp-up time, and other settings.
+Use the jmeter GUI to modify the load test file as needed. You can
+open the file `load-tests/stratum.jmx` in jmeter and make changes to
+the test parameters, such as the number of threads, ramp-up time, and
+other settings.
 
 [,shell]
 ----
