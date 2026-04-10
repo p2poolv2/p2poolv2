@@ -23,3 +23,31 @@ docker compose up -d
 ----
 docker compose down
 ----
+
+== Running multiple P2Poolv2 nodes
+
+First, start the shared infrastructure (bitcoind + default node):
+
+[,shell]
+----
+docker compose up -d
+----
+
+Then start additional nodes, each with its own .env and project name:
+
+[,shell]
+----
+docker compose -f docker-compose.node.yml -p node2 --env-file .env.node2 up -d
+----
+
+[,shell]
+----
+docker compose -f docker-compose.node.yml -p node3 --env-file .env.node3 up -d
+----
+
+To stop an additional node:
+
+[,shell]
+----
+docker compose -f docker-compose.node.yml -p node2 down
+----
