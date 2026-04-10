@@ -1,0 +1,25 @@
+All docker commands are run from the `docker` directory.
+
+== Copy the sample docker env file
+
+[,shell]
+----
+cp .env.sample .env
+----
+
+Edit the .env file for your choice of p2poolv2 ports etc.
+
+== Start your local p2pool node
+
+[,shell]
+----
+cd docker
+docker compose up -d
+----
+
+== Shutdown your local p2pool node
+
+[,shell]
+----
+docker compose down
+----
