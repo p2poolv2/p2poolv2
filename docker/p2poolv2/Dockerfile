@@ -42,6 +42,7 @@ COPY --parents p2poolv2_lib/ .
 COPY --parents p2poolv2_api/ .
 
 ENV RUST_LOG=info
+ENV RUSTFLAGS='-C target-cpu=native'
 
 # Build and install
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
