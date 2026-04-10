@@ -547,7 +547,7 @@ mod tests {
 
     #[test]
     fn test_config_builder() {
-        let config = Config::load("../config.toml").unwrap();
+        let config = Config::load("../config.sample.toml").unwrap();
         let config = config
             .with_listen_address("127.0.0.1:8080".to_string())
             .with_dial_peers(vec![
@@ -624,14 +624,14 @@ mod tests {
         assert_eq!(config.api.auth_user, Some("admin".to_string()));
         assert_eq!(config.api.auth_token, Some("secret_token".to_string()));
 
-        // Test values from config.toml
+        // Test values from config.sample.toml
         assert_eq!(config.store.background_task_frequency_hours, 24);
         assert_eq!(config.store.pplns_ttl_days, 7);
     }
 
     #[test]
     fn test_config_store_background_settings() {
-        let config = Config::load("../config.toml")
+        let config = Config::load("../config.sample.toml")
             .unwrap()
             .with_background_task_frequency_hours(2)
             .with_pplns_ttl_days(7);
@@ -647,7 +647,7 @@ mod tests {
             Some("http://bitcoin-from-env:8332"),
             || {
                 // Load config from file first
-                let config = Config::load("../config.toml").unwrap();
+                let config = Config::load("../config.sample.toml").unwrap();
 
                 // Check that the environment variable overrides the config file value
                 assert_eq!(config.bitcoinrpc.url, "http://bitcoin-from-env:8332");
