@@ -117,7 +117,7 @@ start_mock_bitcoind() {
     log "Starting mock-bitcoind..."
     cd "${MOCK_BITCOIND_DIR}"
     npm install --silent 2>/dev/null
-    node server.js &
+    node server.js >"${RESULTS_DIR}/mock-bitcoind-${run_ts}.log" 2>&1 &
     MOCK_PID=$!
     cd "${SCRIPT_DIR}"
     sleep 2
@@ -151,8 +151,10 @@ build_p2pool() {
 }
 
 start_p2pool() {
-    log "Starting P2Poolv2..."
-    "${PROJECT_ROOT}/target/release/p2poolv2" --config="${CONFIG}" &
+    local variant="${1:-default}"
+    local p2pool_log="${RESULTS_DIR}/p2poolv2-${variant}-${run_ts}.log"
+    log "Starting P2Poolv2 (log: ${p2pool_log})..."
+    "${PROJECT_ROOT}/target/release/p2poolv2" --config="${CONFIG}" >"${p2pool_log}" 2>&1 &
     P2POOL_PID=$!
     sleep "${SETTLE_SECONDS}"
     if ! kill -0 "${P2POOL_PID}" 2>/dev/null; then
@@ -251,7 +253,7 @@ native_jtl="${RESULTS_DIR}/p2poolv2-native-${run_ts}.jtl"
 if [[ "${SKIP_DEFAULT}" = false ]]; then
     log "--- Default build variant ---"
     build_p2pool "default"
-    start_p2pool
+    start_p2pool "default"
     run_jmeter "${default_jtl}"
     stop_p2pool
 fi
@@ -259,7 +261,7 @@ fi
 if [[ "${SKIP_NATIVE}" = false ]]; then
     log "--- Native build variant ---"
     build_p2pool "native"
-    start_p2pool
+    start_p2pool "native"
     run_jmeter "${native_jtl}"
     stop_p2pool
 fi
