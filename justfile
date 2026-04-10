@@ -55,7 +55,7 @@ build package="":
 
 # Build a release version of all packages and binaries in the workspace
 build-release:
-    cargo build --workspace --release
+    RUSTFLAGS='-C target-cpu=native' cargo build --workspace --release
 
 # For log level use RUST_LOG=<<level>> just run
 run config=target_config:
