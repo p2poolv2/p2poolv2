@@ -41,24 +41,82 @@ MSRV 1.88 with 2024 edition is required to build p2poolv2.
 == Build
 
 . Install rust from link:https://rustup.rs/[rustup]
-. Install link:https://github.com/casey/just?tab=readme-ov-file#installation[Install just]
+. Install link:https://github.com/casey/just?tab=readme-ov-file#installation[just]
 . Build P2Poolv2
 .. Get latest source `git clone git@github.com:p2poolv2/p2poolv2.git`
 .. Build `just build-release`
 
 == Run
 
-Follow the guidelines below to setup your local p2pool node.
+To setup your local p2pool node you need to run a bitcoin node and
+then a p2poolv2 node configured to talk to your bitcoind node to fetch
+blocktemplates and submit blocks.
 
-. bitcoind
-.. For signet we provide a `docker/bitcoin-signet.conf` that you can use as your bitcoin.conf
-. p2poolv2
-.. copy Use `config.sample.toml` to `config.toml` and edit as required
-.. at the very least you need to provide the bitcoind rpc details under the `[bitcoinrpc]` section
-.. Run P2Poolv2 `just run config.toml`
+=== bitcoind
+
+For signet we provide a `docker/bitcoin-signet.conf` that you can use
+as your bitcoin.conf. We also provide a docker compose service that
+will start signet bitcoind with enough blocks to start mining. If you
+just want to run a signet network run bitcoin as
+
+[,shell]
+----
+cd docker
+docker compose up -d bitcoind
+----
+
+The important details you want from your bitcoin.conf are:
+
+. rpcuser
+. rpcpassword
+
+Another important detail is to set your bitcoin config file to allow
+for 500 coinbase outputs. This is required before we ship our atomic
+swap based payout mechanism. With space to accomodate 500 miners, we
+can start running P2Poolv2 with direct payments from coinbase.
+
+For 500 P2WPKH outputs use `blockmaxweight` to 3930000.
+
+[,config]
+----
+blockmaxweight=3930000
+----
+
+Finally, you need to mine 32 blocks before you can run p2poolv2 node
+to talk to bitcoind. This is because BIP34 requires coinbase to
+include height using varint format, which conflicts with how these
+first 32 heights are encoded. The bitcoind docker service takes care
+of this by bootstrapping the signet with first 32 blocks.
+
+=== p2poolv2
+
+. Copy `config.sample.toml` to `config.toml` and edit as required
+.. At the very least you need to provide the bitcoind rpc details under the `[bitcoinrpc]` section
+. Run P2Poolv2 `just run-release config.toml`
 . Point your miners to `localhost:3333`
 
+=== Tests
+
+To run CI tests locally run `just test`.
 
 == Systemd Service
 
-To setup as a systemd service, use the systemd service file link:./p2poolv2.service[p2poolv2.service]
+To setup as a systemd service, use the systemd service file
+link:./p2poolv2.service[p2poolv2.service]. You can edit that service
+file to require your bitcoind service, if you use one.
+
+. Install p2poolv2 as `cargo install --path p2poolv2_node`.
+. Update the service file to point to where cargo installed your binary.
+. Setup `p2poolv2` user/group.
+. `/var/lib/p2poolv2`, `/var/log/p2poolv2`, `/etc/p2poolv2/` directories with permissions for p2poolv2 user.
+
+== Docker Support
+
+We also provide dockerfiles and a docker compose to run the node as a
+docker service.
+
+Our recommended way to run a node is using just or systemd
+service.
+
+If you still want to run a node using docker services, see
+link:docker/README[docker/README.adoc] for details.

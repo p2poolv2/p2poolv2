@@ -57,9 +57,12 @@ build package="":
 build-release:
     RUSTFLAGS='-C target-cpu=native' cargo build --workspace --release
 
+run-release config=target_config:
+    cargo run --release --package p2poolv2_node -- --config={{ config }}
+
 # For log level use RUST_LOG=<<level>> just run
 run config=target_config:
-    cargo run -p p2poolv2_node -- --config={{ config }}
+    cargo run --package p2poolv2_node -- --config={{ config }}
 
 # Run cargo flamegraph for detecting bottlenecks
 
