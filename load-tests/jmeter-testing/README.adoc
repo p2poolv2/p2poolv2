@@ -28,7 +28,7 @@ Once you have jmeter installed and available in your PATH, you can run the load 
 ----
 cd load-tests/jmeter-testing/mock-bitcoind
 npm install
-npm start
+node server.js
 ----
 
 === Run the stratum server to test:
@@ -95,7 +95,7 @@ jmeter -n -t stratum.jmx -l ckpool.jtl
 
 === Automated A/B Benchmark
 
-The `benchmark.sh` script automates the full comparison between default and native builds. It starts mock-bitcoind, builds each variant, runs jmeter, and prints a summary with latency percentiles.
+The `benchmark.sh` script automates the full comparison between default builds, native builds, and CKPool. It starts mock-bitcoind, runs each variant with jmeter, and prints a summary with latency percentiles.
 
 [,shell]
 ----
@@ -103,11 +103,20 @@ cd load-tests/jmeter-testing
 ./benchmark.sh
 ----
 
+To include CKPool in the comparison, pass the path to the ckpool binary:
+
+[,shell]
+----
+cd load-tests/jmeter-testing
+./benchmark.sh --ckpool /path/to/ckpool/src/ckpool
+----
+
 Options:
 
 - `--config <path>` -- path to P2Poolv2 config file (default: `config-load-test.toml`)
 - `--skip-default` -- skip the default (portable) build test
 - `--skip-native` -- skip the native (CPU-optimized) build test
+- `--ckpool <path>` -- path to ckpool binary (enables CKPool benchmark)
 
 Results are saved as timestamped `.jtl` files in the `results/` directory.
 

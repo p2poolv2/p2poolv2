@@ -10,14 +10,14 @@
     </TestPlan>
     <hashTree>
       <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Thread Group">
-        <intProp name="ThreadGroup.num_threads">10000</intProp>
+        <intProp name="ThreadGroup.num_threads">1000</intProp>
         <intProp name="ThreadGroup.ramp_time">10</intProp>
         <longProp name="ThreadGroup.duration">60</longProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">false</boolProp>
         <boolProp name="ThreadGroup.scheduler">true</boolProp>
-        <stringProp name="ThreadGroup.on_sample_error">stopthread</stringProp>
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller">
-          <stringProp name="LoopController.loops">-1</stringProp>
+          <stringProp name="LoopController.loops">1</stringProp>
           <boolProp name="LoopController.continue_forever">false</boolProp>
         </elementProp>
       </ThreadGroup>
@@ -59,66 +59,6 @@
           <stringProp name="filename"></stringProp>
         </ResultCollector>
         <hashTree/>
-        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="Subscribe Authorize Sampler" enabled="false">
-          <stringProp name="scriptLanguage">groovy</stringProp>
-          <stringProp name="parameters"></stringProp>
-          <stringProp name="filename"></stringProp>
-          <stringProp name="cacheKey">false</stringProp>
-          <stringProp name="script">import java.net.*
-import java.io.*
-import java.util.concurrent.atomic.AtomicBoolean
-
-log.info(&quot;Starting sampler&quot;)
-
-// Prevent reinitializing socket in every iteration
-
-    log.info(&quot;Starting persistent Stratum client&quot;)
-
-    thread = Thread.start {
-        try {
-            def socket = new Socket(&quot;127.0.0.1&quot;, 3333)
-
-            def out = new PrintWriter(socket.getOutputStream(), true)
-            def in = new BufferedReader(new InputStreamReader(socket.getInputStream()))
-
-            def subscribe = &quot;&quot;&quot;{&quot;id&quot;:1,&quot;method&quot;:&quot;mining.subscribe&quot;,&quot;params&quot;:[&quot;jmeter/1.0&quot;]}\n&quot;&quot;&quot;
-            def authorize = &quot;&quot;&quot;{&quot;id&quot;:1,&quot;method&quot;:&quot;mining.authorize&quot;,&quot;params&quot;:[&quot;tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk&quot;,&quot;x&quot;]}\n&quot;&quot;&quot;
-            out.print(subscribe)
-            out.flush()
-
-            log.info(&quot;Sent subscribe. Listening for responses...&quot;)
-
-           def subscribe_response = in.readLine()
-           if (subscribe_response != null) {
-               log.info(&quot;Received: ${subscribe_response}&quot;)
-               out.print(authorize)
-               out.flush()
-           }
-
-           def authorize_response = in.readLine()
-           if (authorize_response != null) {
-           	log.info(&quot;Received: ${authorize_response}&quot;)
-           }
-
-           while (true) {
-           	def message_received = in.readLine()
-           	log.info(&quot;Received: ${message_received}&quot;)
-           }
-
-            log.info(&quot;Shutting down reader&quot;)
-            in.close()
-            out.close()
-            socket.close()
-        } catch (Exception e) {
-            log.warn(&quot;Stratum client error: ${e}&quot;)
-        }
-    }
-    thread.join()
-
-log.info(&quot;Ending sampler&quot;)
-</stringProp>
-        </JSR223Sampler>
-        <hashTree/>
         <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="Subscribe Sampler">
           <stringProp name="scriptLanguage">groovy</stringProp>
           <stringProp name="parameters"></stringProp>
@@ -130,7 +70,7 @@ import java.io.*
 long startTime = System.nanoTime()
 
 def socket = new Socket(&quot;127.0.0.1&quot;, 3333)
-socket.setSoTimeout(3000)
+socket.setSoTimeout(30000)
 def writer = new PrintWriter(socket.getOutputStream(), true)
 def reader = new BufferedReader(new InputStreamReader(socket.getInputStream()))
 
@@ -170,8 +110,6 @@ writer.flush()
 def response = reader.readLine()
 long endTime = System.nanoTime()
 
-log.info(&quot;Received ${response}&quot;)
-
 SampleResult.setLatency(((endTime - startTime) / 1_000_000) as long)
 SampleResult.sampleEnd()
 SampleResult.setSuccessful(response != null)
@@ -183,21 +121,21 @@ SampleResult.setResponseCodeOK()
 </stringProp>
         </JSR223Sampler>
         <hashTree/>
-        <SyncTimer guiclass="TestBeanGUI" testclass="SyncTimer" testname="Synchronizing Timer" enabled="false">
-          <intProp name="groupSize">100</intProp>
-          <longProp name="timeoutInMs">0</longProp>
-        </SyncTimer>
-        <hashTree/>
-        <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer" testname="Submit Delay">
-          <stringProp name="ConstantTimer.delay">3000</stringProp>
-        </ConstantTimer>
-        <hashTree/>
-        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="Submit Sampler" enabled="true">
-          <stringProp name="scriptLanguage">groovy</stringProp>
-          <stringProp name="parameters"></stringProp>
-          <stringProp name="filename"></stringProp>
-          <stringProp name="cacheKey">true</stringProp>
-          <stringProp name="script">def writer = vars.getObject(&quot;writer&quot;)
+        <LoopController guiclass="LoopControlPanel" testclass="LoopController" testname="Submit Loop">
+          <stringProp name="LoopController.loops">-1</stringProp>
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+        </LoopController>
+        <hashTree>
+          <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer" testname="Submit Delay">
+            <stringProp name="ConstantTimer.delay">3000</stringProp>
+          </ConstantTimer>
+          <hashTree/>
+          <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="Submit Sampler" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters"></stringProp>
+            <stringProp name="filename"></stringProp>
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">def writer = vars.getObject(&quot;writer&quot;)
 def reader = vars.getObject(&quot;reader&quot;)
 
 def submit = [
@@ -228,8 +166,9 @@ SampleResult.setDataType(SampleResult.TEXT)
 SampleResult.setResponseCodeOK()
 
 </stringProp>
-        </JSR223Sampler>
-        <hashTree/>
+          </JSR223Sampler>
+          <hashTree/>
+        </hashTree>
         <ResultCollector guiclass="GraphVisualizer" testclass="ResultCollector" testname="Graph Results">
           <boolProp name="ResultCollector.error_logging">false</boolProp>
           <objProp>
