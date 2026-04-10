@@ -35,8 +35,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/p2poolv2/target \
     cargo fetch --locked
 
-COPY config.toml .
-
 COPY --parents bitcoindrpc/ .
 COPY --parents p2poolv2_cli/ .
 COPY --parents p2poolv2_node/ .
@@ -69,10 +67,11 @@ EXPOSE 3333 \
 ENV RUST_BACKTRACE=full \
     RUST_LOG=debug \
     P2POOL_LOGGING_CONSOLE=1 \
-    P2POOL_CONFIG=/p2poolv2/config/config.toml
+    P2POOL_CONFIG=/etc/p2poolv2/config.toml
 
 COPY --from=builder /usr/local/cargo/bin/p2poolv2 /usr/local/bin/p2poolv2
 COPY --from=builder /usr/local/cargo/bin/p2poolv2_cli /usr/local/bin/p2poolv2_cli
+COPY config-docker.sample.toml /etc/p2poolv2/config.toml
 
 # TODO: add non-root user
 
