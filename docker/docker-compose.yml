@@ -43,57 +43,22 @@ services:
         max-size: "10m"
         max-file: "1"
 
-  mujina_minerd:
-    profiles: [developer]
-    # you can change this to have multiple containers
-    scale: ${MUJINA_SCALE:-1}
-    image: ghcr.io/256foundation/mujina-minerd:main
-    depends_on:
-      p2poolv2:
-        condition: service_healthy
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      - RUST_LOG=${MUJINA_RUST_LOG:-trace}
-    networks:
-      - p2poolv2_network
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "3"
-
   p2poolv2:
-    build:
-      context: ..
-      dockerfile: docker/p2poolv2/Dockerfile
+    extends:
+      file: docker-compose.p2poolv2.yml
+      service: p2poolv2
     depends_on:
       bitcoind:
         condition: service_healthy
-    env_file: .env
-    environment:
-      - P2POOL_BITCOIN_NETWORK=${NETWORK:-signet}
-      - P2POOL_BITCOIN_URL=bitcoind:${BTC_RPC_PORT:-38332}
-      - P2POOL_STORE_PATH=/p2poolv2/data/${NETWORK:-signet}
-      - P2POOL_CONFIG=/etc/p2poolv2/config.toml
-      - P2POOL_STRATUM_PORT=${P2POOL_STRATUM_PORT:-3333}
-      - P2POOL_API_PORT=${P2POOL_API_PORT:-46884}
-      - P2POOL_NETWORK_LISTEN_ADDRESS=/ip4/${P2POOL_P2P_HOST:-0.0.0.0}/tcp/${P2POOL_P2P_PORT:-6884}
-    ports:
-      - "${P2POOL_STRATUM_PORT:-3333}:${P2POOL_STRATUM_PORT:-3333}"
-      - "${P2POOL_API_PORT:-46884}:${P2POOL_API_PORT:-46884}"
-      - "${P2POOL_P2P_PORT:-6884}:${P2POOL_P2P_PORT:-6884}"
-    volumes:
-      - p2poolv2_data:/p2poolv2
-      - ../config.toml:/etc/p2poolv2/config.toml:ro
-    restart: unless-stopped
     networks:
       - p2poolv2_network
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "3"
+
+  mujina_minerd:
+    extends:
+      file: docker-compose.p2poolv2.yml
+      service: mujina_minerd
+    networks:
+      - p2poolv2_network
 
 volumes:
   bitcoin_data:

@@ -25,49 +25,6 @@ We are tracking progress using our https://github.com/orgs/p2poolv2/projects/1[G
 See detailed https://github.com/p2poolv2/p2poolv2/wiki/Developer-Setup-Notes[Developer Setup Notes] on the wiki.
 --
 
-== Run with Docker
-
-All docker commands are run from the `docker` directory.
-
-Start your local p2pool node:
-
-[,shell]
-----
-cd docker
-docker compose up -d
-----
-
-Shutdown your local p2pool node:
-
-[,shell]
-----
-docker compose down
-----
-
-=== Run individual docker containers
-
-During development, you may want to run individual containers.
-
-Remember, all docker commands are run from the docker directory.
-
-=== Start bitcoind signet
-
-`docker compose up bitcoind`
-
-=== Start p2poolv2
-
-[,shell]
-----
-docker compose up p2pool
-----
-
-=== Start cpuminer to start producing shares
-
-[,shell]
-----
-docker compose up cpuminer
-----
-
 == API and CLI READMEs
 
 Both the API and CLI crates provide detailed documentation on how to
