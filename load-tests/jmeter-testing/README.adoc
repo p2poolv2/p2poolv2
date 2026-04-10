@@ -35,32 +35,81 @@ npm start
 
 ==== P2Poolv2 Stratum Server
 
+We test two build variants to measure the impact of CPU-specific optimizations.
+
+===== Default build (portable):
+
 [,shell]
 ----
-cd p2poolv2
 cargo build --workspace --release
-./target/release/p2poolv2 --config=config-testnet4.toml
+./target/release/p2poolv2 --config=config-load-test.toml
 ----
+
+===== Native build (CPU-optimized):
+
+[,shell]
+----
+RUSTFLAGS='-C target-cpu=native' cargo build --workspace --release
+./target/release/p2poolv2 --config=config-load-test.toml
+----
+
+This can also be built using `just build-release` which sets the native flag automatically.
 
 ==== CKPool Stratum Server
 
-First build CKPool's ckpool-solo branch.
-Then run the CKPool stratum server using the provided configuration file.
+First build CKPool's https://bitbucket.org/ckolivas/ckpool/src/master/[ckpool-solo] branch.
+Then run the CKPool stratum server using the provided configuration file. The configuration in `ckpool-testnet4-solo.json` points the mock bitcoind at `127.0.0.1:48332` and listens for stratum connections on `0.0.0.0:3333`.
 
 [,shell]
 ----
-./src/ckpool --btcsolo --config=<path to this directory>/ckpool-testnet4-solo.json
+./src/ckpool --btcsolo --config=load-tests/jmeter-testing/ckpool-testnet4-solo.json
 ----
 
 === Run the Load Test Script
 
-Replace stratum.jtl with the different jmeter test files for the P2Poolv2 and CKPool implementations.
+Run jmeter from the `load-tests/jmeter-testing` directory. Use a different output file name for each test run to keep results separate.
+
+For the default P2Poolv2 build:
 
 [,shell]
 ----
-cd load-tests
-jmeter -n -t stratum.jmx -l stratum.jtl
+cd load-tests/jmeter-testing
+jmeter -n -t stratum.jmx -l p2poolv2-default.jtl
 ----
+
+For the native P2Poolv2 build:
+
+[,shell]
+----
+cd load-tests/jmeter-testing
+jmeter -n -t stratum.jmx -l p2poolv2-native.jtl
+----
+
+For CKPool:
+
+[,shell]
+----
+cd load-tests/jmeter-testing
+jmeter -n -t stratum.jmx -l ckpool.jtl
+----
+
+=== Automated A/B Benchmark
+
+The `benchmark.sh` script automates the full comparison between default and native builds. It starts mock-bitcoind, builds each variant, runs jmeter, and prints a summary with latency percentiles.
+
+[,shell]
+----
+cd load-tests/jmeter-testing
+./benchmark.sh
+----
+
+Options:
+
+- `--config <path>` -- path to P2Poolv2 config file (default: `config-load-test.toml`)
+- `--skip-default` -- skip the default (portable) build test
+- `--skip-native` -- skip the native (CPU-optimized) build test
+
+Results are saved as timestamped `.jtl` files in the `results/` directory.
 
 == Modify the Load Test File
 
