@@ -26,7 +26,9 @@ Once you have jmeter installed and available in your PATH, you can run the load 
 
 [,shell]
 ----
-cargo run --release -p mock-bitcoind
+cd load-tests/jmeter-testing/mock-bitcoind
+npm install
+npm start
 ----
 
 === Run the stratum server to test:
