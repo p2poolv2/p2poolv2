@@ -1,0 +1,57 @@
+== Flamegraph Profiling
+
+The `flamegraph.sh` script generates a CPU flamegraph of P2Poolv2
+while it handles stratum load from jmeter. The flamegraph shows where
+CPU time is spent across all functions, making it easy to identify
+hotspots in the submit, validation, and block submission paths.
+
+=== Prerequisites
+
+- `perf` -- Linux performance counters tool
+- `cargo-flamegraph` -- install with `cargo install flamegraph`
+- `jmeter` -- load test runner (requires Java 21)
+- `node` / `npm` -- for the mock-bitcoind server
+
+=== Usage
+
+[,shell]
+----
+cd load-tests/jmeter-testing
+JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./flamegraph.sh
+----
+
+The script:
+
+1. Starts mock-bitcoind on port 48332
+2. Builds P2Poolv2 in release mode with debug symbols and frame pointers
+3. Runs P2Poolv2 under `perf record` via `cargo flamegraph`
+4. Waits for the stratum server to start listening on port 3333
+5. Runs the jmeter load test defined in `stratum.jmx`
+6. Sends SIGINT to stop perf recording
+7. Generates `flamegraph_loadtest.svg` in the project root
+
+=== Viewing the flamegraph
+
+Open the SVG in a browser for interactive exploration:
+
+[,shell]
+----
+xdg-open ../../flamegraph_loadtest.svg
+----
+
+=== Build flags
+
+The script sets these flags to ensure accurate stack traces:
+
+- `CARGO_PROFILE_RELEASE_DEBUG=true` -- includes debug symbols in the
+  release binary
+- `CARGO_PROFILE_RELEASE_STRIP=false` -- prevents stripping symbols
+- `RUSTFLAGS="-C force-frame-pointers=yes"` -- enables frame pointers
+  for accurate call graph unwinding
+
+=== Adjusting the load
+
+The jmeter test parameters (thread count, ramp-up, duration) are
+defined in `stratum.jmx`. Edit these to change the profiling
+workload. More threads and longer duration produce more samples and a
+more representative flamegraph.
