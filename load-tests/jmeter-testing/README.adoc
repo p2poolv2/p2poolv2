@@ -15,28 +15,42 @@ submits shares every 3 seconds in a loop for the duration of the test.
 
 === 1,000 threads, 60 second duration, 10 second ramp-up
 
-==== P2Poolv2 (native build) -- 19,822 samples, 0 errors
+==== P2Poolv2 (default build) -- 19,451 samples, 46 errors
 
 ----
-Sampler      Avg     p50     p95     Max
-Subscribe    16.8    2       53      527
-Authorize    1.5     0       21      28
-Submit       0.3     0       1       27
+Sampler      Avg     p50     p95     p99     Max
+Subscribe    708.3   2       280     30030   30031
+Authorize    692.1   0       23      30030   30031
+Submit       0.2     0       1       1       28
 ----
 
-==== CKPool -- 19,821 samples, 0 errors
+==== P2Poolv2 (native build) -- 19,439 samples, 48 errors
 
 ----
-Sampler      Avg     p50     p95     Max
-Subscribe    17.0    1       67      549
-Authorize    1.3     0       16      23
-Submit       0.3     0       1       41
+Sampler      Avg     p50     p95     p99     Max
+Subscribe    738.8   2       299     30031   30034
+Authorize    722.2   0       23      30030   30032
+Submit       0.2     0       1       1       32
 ----
 
-Both servers handle the load with zero errors. At 1,000 concurrent
-miners, P2Poolv2 and CKPool show nearly identical performance with
-sub-millisecond median submit latency and ~330 requests/second
-throughput.
+==== CKPool -- 18,558 samples, 158 errors
+
+----
+Sampler      Avg     p50     p95     p99     Max
+Subscribe    2387.9  1       30030   30031   30034
+Authorize    2373.7  0       30030   30030   30031
+Submit       0.3     0       1       1       33
+----
+
+About 2.3% of P2Poolv2 connections and 7.9% of CKPool connections
+time out during the 10 second ramp-up storm (the 30s socket timeout
+is visible as 30,030ms in p99). Once connected, all three servers
+perform identically with sub-millisecond median submit latency.
+Default and native P2Poolv2 builds show no measurable difference --
+the stratum workload is I/O-bound, not CPU-bound. CKPool's
+single-threaded accept loop is slower under concurrent connection
+storms, while P2Poolv2's async runtime handles them more
+efficiently.
 
 === 5,000 threads, 300 second duration, 60 second ramp-up
 

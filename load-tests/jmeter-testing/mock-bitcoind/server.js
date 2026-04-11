@@ -4,9 +4,14 @@ const path = require('path');
 
 const gbtPath = path.join(
     __dirname,
-    "../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json",
+    "../../../p2poolv2_tests/test_data/validation/stratum/b/template.json",
 );
 const gbt = JSON.parse(fs.readFileSync(gbtPath, "utf8"));
+
+// Override difficulty to be extremely easy so every submit triggers
+// submitblock, regardless of the enonce1 assigned by the stratum server.
+gbt.bits = "2100ffff";
+gbt.target = "ffff000000000000000000000000000000000000000000000000000000000000";
 
 const methods = {
     getblocktemplate: function () {
@@ -70,7 +75,6 @@ net.createServer({ noDelay: true }, (socket) => {
         const body = buffer.subarray(bodyStart, bodyStart + contentLength).toString();
         buffer = buffer.subarray(bodyStart + contentLength);
 
-        console.log(`Received request: ${body}`);
 
         let parsed;
         try {

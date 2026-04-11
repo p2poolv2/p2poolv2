@@ -10,9 +10,9 @@
     </TestPlan>
     <hashTree>
       <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Thread Group">
-        <intProp name="ThreadGroup.num_threads">5000</intProp>
+        <intProp name="ThreadGroup.num_threads">1000</intProp>
         <intProp name="ThreadGroup.ramp_time">60</intProp>
-        <longProp name="ThreadGroup.duration">300</longProp>
+        <longProp name="ThreadGroup.duration">120</longProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">false</boolProp>
         <boolProp name="ThreadGroup.scheduler">true</boolProp>
         <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
@@ -66,6 +66,7 @@
           <stringProp name="cacheKey">true</stringProp>
           <stringProp name="script">import java.net.Socket
 import java.io.*
+import groovy.json.JsonSlurper
 
 long startTime = System.nanoTime()
 
@@ -81,13 +82,29 @@ vars.putObject(&quot;writer&quot;, writer)
 writer.print(&apos;{&quot;id&quot;:1,&quot;method&quot;:&quot;mining.subscribe&quot;,&quot;params&quot;:[&quot;jmeter/1.0&quot;]}\n&apos;)
 writer.flush()
 
+// Read subscribe response (blocking).
 def response = reader.readLine()
+
+// Drain any immediately available messages (set_difficulty, notify)
+// without blocking, and capture job ID from mining.notify.
+def parser = new JsonSlurper()
+def allResponses = [response]
+Thread.sleep(100)
+while (reader.ready()) {
+    def line = reader.readLine()
+    if (line != null) {
+        allResponses.add(line)
+        def msg = parser.parseText(line)
+        if (msg.method == &quot;mining.notify&quot;) { vars.put(&quot;jobId&quot;, msg.params[0]) }
+    }
+}
+
 long endTime = System.nanoTime()
 
 SampleResult.setLatency(((endTime - startTime) / 1_000_000) as long)
 SampleResult.sampleEnd()
 SampleResult.setSuccessful(response != null)
-SampleResult.setResponseData(response ?: &quot;no response&quot;, &quot;UTF-8&quot;)
+SampleResult.setResponseData(allResponses.join(&quot;\n&quot;), &quot;UTF-8&quot;)
 SampleResult.setResponseMessage(&quot;Subscribe response&quot;)
 SampleResult.setDataType(SampleResult.TEXT)
 SampleResult.setResponseCodeOK()
@@ -99,21 +116,49 @@ SampleResult.setResponseCodeOK()
           <stringProp name="parameters"></stringProp>
           <stringProp name="filename"></stringProp>
           <stringProp name="cacheKey">true</stringProp>
-          <stringProp name="script">def writer = vars.getObject(&quot;writer&quot;)
+          <stringProp name="script">import groovy.json.JsonSlurper
+
+def writer = vars.getObject(&quot;writer&quot;)
 def reader = vars.getObject(&quot;reader&quot;)
+
+// Drain any pending messages before sending authorize
+def parser = new JsonSlurper()
+while (reader.ready()) {
+    def line = reader.readLine()
+    if (line != null) {
+        def msg = parser.parseText(line)
+        if (msg.method == &quot;mining.notify&quot;) { vars.put(&quot;jobId&quot;, msg.params[0]) }
+    }
+}
 
 long startTime = System.nanoTime()
 
 writer.print(&apos;{&quot;id&quot;:2,&quot;method&quot;:&quot;mining.authorize&quot;,&quot;params&quot;:[&quot;tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk&quot;,&quot;x&quot;]}\n&apos;)
 writer.flush()
 
-def response = reader.readLine()
+// Read the authorize response. The server may send set_difficulty
+// or notify before the authorize response, so keep reading until
+// we find id:2.
+def authorizeResponse = null
+def allResponses = []
+
+for (int i = 0; i &lt; 5 &amp;&amp; authorizeResponse == null; i++) {
+    def line = reader.readLine()
+    if (line == null) { allResponses.add(&quot;null response&quot;); }
+    else {
+        allResponses.add(line)
+        def msg = parser.parseText(line)
+        if (msg.id == 2) { authorizeResponse = line }
+        if (msg.method == &quot;mining.notify&quot;) { vars.put(&quot;jobId&quot;, msg.params[0]) }
+    }
+}
+
 long endTime = System.nanoTime()
 
 SampleResult.setLatency(((endTime - startTime) / 1_000_000) as long)
 SampleResult.sampleEnd()
-SampleResult.setSuccessful(response != null)
-SampleResult.setResponseData(response ?: &quot;no response&quot;, &quot;UTF-8&quot;)
+SampleResult.setSuccessful(authorizeResponse != null)
+SampleResult.setResponseData(allResponses.join(&quot;\n&quot;), &quot;UTF-8&quot;)
 SampleResult.setResponseMessage(&quot;Authorize response&quot;)
 SampleResult.setDataType(SampleResult.TEXT)
 SampleResult.setResponseCodeOK()
@@ -135,17 +180,32 @@ SampleResult.setResponseCodeOK()
             <stringProp name="parameters"></stringProp>
             <stringProp name="filename"></stringProp>
             <stringProp name="cacheKey">true</stringProp>
-            <stringProp name="script">def writer = vars.getObject(&quot;writer&quot;)
+            <stringProp name="script">import groovy.json.JsonSlurper
+
+def writer = vars.getObject(&quot;writer&quot;)
 def reader = vars.getObject(&quot;reader&quot;)
+def socket = vars.getObject(&quot;socket&quot;)
+
+// Drain any pending notify messages and update the job ID
+def parser = new JsonSlurper()
+while (reader.ready()) {
+    def line = reader.readLine()
+    if (line != null) {
+        def msg = parser.parseText(line)
+        if (msg.method == &quot;mining.notify&quot;) { vars.put(&quot;jobId&quot;, msg.params[0]) }
+    }
+}
+
+def jobId = vars.get(&quot;jobId&quot;) ?: &quot;0000000000000000&quot;
 
 def submit = [
     id     : 3,
     method : &quot;mining.submit&quot;,
     params : [&quot;tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk&quot;,
-        &quot;184809ff85923e7d&quot;,
+        jobId,
         &quot;0000000000000000&quot;,
-        &quot;6849afec&quot;,
-        &quot;e33674f1&quot;
+        &quot;67b6f938&quot;,
+        &quot;f15f1590&quot;
     ]
 ]
 

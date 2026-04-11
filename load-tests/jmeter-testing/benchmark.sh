@@ -206,8 +206,9 @@ start_ckpool() {
 
 run_jmeter() {
     local output_file="$1"
+    local jmeter_log="${output_file%.jtl}-jmeter.log"
     log "Running jmeter load test -> ${output_file}"
-    jmeter -n -t "${JMX_FILE}" -l "${output_file}" 2>&1
+    jmeter -n -t "${JMX_FILE}" -l "${output_file}" -j "${jmeter_log}" 2>&1 | grep "^summary"
     log "jmeter complete"
 }
 
