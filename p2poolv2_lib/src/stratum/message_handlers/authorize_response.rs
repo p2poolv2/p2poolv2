@@ -135,6 +135,7 @@ mod tests {
     use crate::stratum::server::StratumContext;
     use crate::stratum::work::tracker::start_tracker_actor;
     use crate::test_utils::setup_test_chain_store_handle;
+    use bitcoindrpc::BitcoindRpcClient;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
     use tokio::sync::mpsc;
 
@@ -160,7 +161,12 @@ mod tests {
         let ctx = StratumContext {
             notify_tx,
             tracker_handle,
-            bitcoinrpc_config,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
             start_difficulty: 1000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
@@ -253,7 +259,12 @@ mod tests {
         let ctx = StratumContext {
             notify_tx,
             tracker_handle,
-            bitcoinrpc_config,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
             start_difficulty: 1000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
@@ -385,7 +396,12 @@ mod tests {
         let ctx = StratumContext {
             notify_tx,
             tracker_handle,
-            bitcoinrpc_config,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
             start_difficulty: 1000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
@@ -479,7 +495,12 @@ mod tests {
         let ctx = StratumContext {
             notify_tx,
             tracker_handle,
-            bitcoinrpc_config,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
             start_difficulty: 1000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
