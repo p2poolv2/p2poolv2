@@ -16,7 +16,7 @@
 
 use super::ValidationError;
 use bitcoin::consensus::encode::serialize;
-use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
+use bitcoindrpc::BitcoindRpcClient;
 use serde_json::json;
 
 /// Validate the bitcoin block.
@@ -24,7 +24,7 @@ use serde_json::json;
 #[allow(dead_code)]
 pub async fn validate_bitcoin_block(
     block: &bitcoin::Block,
-    config: &BitcoinRpcConfig,
+    bitcoindrpc_client: &BitcoindRpcClient,
 ) -> Result<bool, ValidationError> {
     // Serialize block to hex string for RPC call
     let block_hex = hex::encode(serialize(block));
@@ -35,10 +35,9 @@ pub async fn validate_bitcoin_block(
         "data": block_hex
     })];
 
-    // Call getblocktemplate RPC method using config values
-    let bitcoind = BitcoindRpcClient::new(&config.url, &config.username, &config.password)
-        .map_err(|e| ValidationError::new(format!("Bitcoin block validation failed: {e}")))?;
-    let result: Result<serde_json::Value, _> = bitcoind.request("getblocktemplate", params).await;
+    // Call getblocktemplate RPC method
+    let result: Result<serde_json::Value, _> =
+        bitcoindrpc_client.request("getblocktemplate", params).await;
 
     match result {
         Ok(response) => Ok(response == "duplicate"),
@@ -53,7 +52,7 @@ mod tests {
     use super::*;
     use base64::Engine;
     use bitcoin::consensus::Decodable;
-    use bitcoindrpc::BitcoinRpcConfig;
+    use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{body_json, header, method, path},
@@ -103,7 +102,9 @@ mod tests {
         };
 
         // Test validation
-        let result = validate_bitcoin_block(&block, &config).await;
+        let client =
+            BitcoindRpcClient::new(&config.url, &config.username, &config.password).unwrap();
+        let result = validate_bitcoin_block(&block, &client).await;
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
@@ -152,7 +153,9 @@ mod tests {
         };
 
         // Test validation
-        let result = validate_bitcoin_block(&block, &config).await;
+        let client =
+            BitcoindRpcClient::new(&config.url, &config.username, &config.password).unwrap();
+        let result = validate_bitcoin_block(&block, &client).await;
         assert!(result.is_ok());
         assert!(!result.unwrap());
     }
@@ -197,7 +200,9 @@ mod tests {
         };
 
         // Test validation
-        let result = validate_bitcoin_block(&block, &config).await;
+        let client =
+            BitcoindRpcClient::new(&config.url, &config.username, &config.password).unwrap();
+        let result = validate_bitcoin_block(&block, &client).await;
         assert!(result.is_err());
     }
 }
