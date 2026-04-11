@@ -28,7 +28,7 @@ MOCK_BITCOIND_DIR="${SCRIPT_DIR}/mock-bitcoind"
 JMX_FILE="${SCRIPT_DIR}/stratum.jmx"
 CKPOOL_CONFIG="${SCRIPT_DIR}/ckpool-testnet4-solo.json"
 
-CONFIG="${PROJECT_ROOT}/config-load-test.toml"
+CONFIG="./config-load-test.toml"
 SKIP_DEFAULT=false
 SKIP_NATIVE=false
 CKPOOL_BIN=""
