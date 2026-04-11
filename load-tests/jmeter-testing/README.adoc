@@ -1,122 +1,142 @@
 == Load Tests For Stratum
 
-We use jmeter to run load tests for our implmentation of the Stratum protocol.
+We use jmeter to run load tests for our implmentation of the Stratum
+protocol.
 
 The load test is repeated with the same parameters as CKPool's stratum
 implementation. The goal of the comparison is to show that our
 implementation can handle the same load as CKPool's implementation
-with similar degradation in performance as the load increases, if any.
+with similar degradation in performance as the load increases.
+
+P2Poolv2 submit handling emits the share to share chain and handle p2p
+communication using tokio async. The submit block control flow fires
+events for handling p2p and share chare communication on an async
+tokio task. The submit loop is able to submit a share to bitcoind rpc
+and the latencies reported are as seen by the client submitting a
+share.
 
 == Results
 
 All times are round-trip latency in milliseconds as measured by the
 jmeter client. Each thread connects, subscribes, authorizes once, then
 submits shares every 3 seconds in a loop for the duration of the test.
+Every submit triggers a `submitblock` RPC call to the mock bitcoind,
+exercising the full block submission path.
 
-=== 1,000 threads, 60 second duration, 10 second ramp-up (with submitblock)
+Test machine: AMD Ryzen 7 8745H (16 cores), 13 GB RAM, Arch Linux.
 
-==== P2Poolv2 (default build) -- 19,374 samples, 52 errors
+=== 100 miners, 60 second duration, 10 second ramp-up
 
-----
-Sampler      Avg     p50     p95     p99     Max
-Subscribe    898.6   102     463     30031   30032
-Authorize    784.0   1       42      30030   30031
-Submit       0.4     0       1       2       45
-----
-
-==== P2Poolv2 (native build) -- 19,405 samples, 48 errors
+==== P2Poolv2 (default build) -- 1,977 samples, 0 errors
 
 ----
 Sampler      Avg     p50     p95     p99     Max
-Subscribe    838.0   102     423     30031   30034
-Authorize    724.1   1       44      30030   30032
-Submit       0.5     0       1       2       43
+Subscribe    115.6   103     111     450     547
+Authorize    2.8     1       2       37      37
+Submit       1.3     1       2       3       30
 ----
 
-==== CKPool -- 18,511 samples, 160 errors
-
-----
-Sampler      Avg     p50     p95     p99     Max
-Subscribe    2513.9  101     30030   30030   30033
-Authorize    2406.3  1       30030   30030   30032
-Submit       0.6     0       1       3       45
-----
-
-About 2.5% of P2Poolv2 connections and 8.0% of CKPool connections
-time out during the 10 second ramp-up storm (the 30s socket timeout
-is visible as 30,030ms in p99). Once connected, all three servers
-perform identically with sub-millisecond median submit latency.
-Default and native P2Poolv2 builds show no measurable difference --
-the stratum workload is I/O-bound, not CPU-bound. CKPool's
-single-threaded accept loop is slower under concurrent connection
-storms, while P2Poolv2's async runtime handles them more
-efficiently.
-
-=== 5,000 threads, 300 second duration, 60 second ramp-up
-
-==== P2Poolv2 (native build) -- 457,845 samples, 0 errors
+==== P2Poolv2 (native build) -- 1,977 samples, 0 errors
 
 ----
 Sampler      Avg     p50     p95     p99     Max
-Subscribe    5.4     2       2       57      650
-Authorize    0.4     0       1       24      29
-Submit       0.1     0       1       1       32
+Subscribe    115.9   103     110     454     550
+Authorize    3.0     1       2       38      38
+Submit       1.3     1       2       3       28
 ----
 
-==== CKPool -- 457,840 samples, 81,423 errors (18% on submit)
+==== CKPool -- 1,977 samples, 0 errors
 
 ----
 Sampler      Avg     p50     p95     p99     Max
-Subscribe    4.3     1       1       61      646
-Authorize    0.4     0       1       16      30
-Submit       0.2     0       1       1       40
+Subscribe    114.3   102     110     444     541
+Authorize    2.9     1       2       40      40
+Submit       1.3     1       2       2       27
+----
+
+All three servers perform identically at 100 concurrent miners with
+zero errors. Submit latency is 1.3ms avg across the board with
+`submitblock` exercised on every share.
+
+=== 1,000 miners, 60 second duration, 10 second ramp-up
+
+==== P2Poolv2 (default build) -- 19,452 samples, 42 errors
+
+----
+Sampler      Avg     p50     p95     p99     Max
+Subscribe    748.1   102     401     30030   30031
+Authorize    633.7   1       42      30030   30031
+Submit       0.4     0       1       1       61
+----
+
+==== P2Poolv2 (native build) -- 19,436 samples, 44 errors
+
+----
+Sampler      Avg     p50     p95     p99     Max
+Subscribe    773.8   102     333     30030   30031
+Authorize    664.2   1       56      30030   30031
+Submit       0.4     0       1       2       57
+----
+
+==== CKPool -- 18,523 samples, 158 errors
+
+----
+Sampler      Avg     p50     p95     p99     Max
+Subscribe    2478.4  101     30026   30031   30032
+Authorize    2375.5  1       30030   30031   30032
+Submit       0.4     0       1       2       41
+----
+
+About 2% of P2Poolv2 connections and 8% of CKPool connections time
+out during the 10 second ramp-up storm (the 30s socket timeout is
+visible as 30,030ms in p99). Once connected, all three servers perform
+identically with sub-millisecond median submit latency. Default and
+native P2Poolv2 builds show no measurable difference -- the stratum
+workload is I/O-bound, not CPU-bound. CKPool's single-threaded accept
+loop is slower under concurrent connection storms, while P2Poolv2's
+async runtime handles them more efficiently.
+
+=== 5,000 miners, 300 second duration, 90 second ramp-up
+
+==== P2Poolv2 (default build) -- 432,710 samples, 0 errors
+
+----
+Sampler      Avg     p50     p95     p99     Max
+Subscribe    104.5   101     103     112     818
+Authorize    0.6     0       1       2       44
+Submit       0.3     0       1       1       39
+----
+
+==== P2Poolv2 (native build) -- 432,712 samples, 0 errors
+
+----
+Sampler      Avg     p50     p95     p99     Max
+Subscribe    104.0   101     103     112     754
+Authorize    0.9     0       1       3       87
+Submit       0.3     0       1       2       92
+----
+
+==== CKPool -- 432,694 samples, 112,865 errors (27% on submit)
+
+----
+Sampler      Avg     p50     p95     p99     Max
+Subscribe    103.4   100     102     110     799
+Authorize    0.7     0       1       2       49
+Submit       0.4     0       1       2       35
 ----
 
 P2Poolv2 handles 5,000 concurrent miners for 5 minutes with zero
-errors. CKPool shows 18% submit errors under the same load -- all
-subscribe and authorize calls succeed, but CKPool rejects a portion
-of the dummy submit parameters under higher concurrency. Both servers
-maintain sub-millisecond median latency across all operations.
-
-=== 100 threads, 30 second duration, 10 second ramp-up (with submitblock)
-
-This test uses a block template with very low difficulty so every
-submit triggers a `submitblock` RPC call to the mock bitcoind,
-exercising the full block submission path.
-
-==== P2Poolv2 (default build) -- 977 samples, 0 errors
-
-----
-Sampler      Avg     p50     p95     p99     Max
-Subscribe    118.5   103     131     507     606
-Authorize    2.9     1       33      33      34
-Submit       1.4     1       2       11      38
-----
-
-==== P2Poolv2 (native build) -- 978 samples, 0 errors
-
-----
-Sampler      Avg     p50     p95     p99     Max
-Subscribe    116.8   103     140     476     572
-Authorize    3.4     1       13      45      45
-Submit       1.4     1       2       9       30
-----
-
-==== CKPool -- 979 samples, 0 errors
-
-----
-Sampler      Avg     p50     p95     p99     Max
-Subscribe    117.2   102     133     500     597
-Authorize    3.8     1       49      49      49
-Submit       1.2     1       2       11      30
-----
-
-With `submitblock` exercised on every share, P2Poolv2 and CKPool show
-nearly identical submit latency (1.2-1.4ms avg, p50=1ms).
+errors across 430K+ samples. All three servers show identical
+subscribe and authorize performance. CKPool rejects 27% of submits
+due to stale job IDs -- under load with 5,000 miners, some submits
+race with new `mining.notify` messages. The client drains pending
+notifies before each submit, but some arrive between the drain and
+the send. P2Poolv2 is more tolerant of slightly stale job IDs.
 
 == Setup
 
-The load tests uses jmeter to support spawning thousands of threads acting as ASIC miner clients.
+The load tests uses jmeter to support spawning thousands of threads
+acting as ASIC miner clients.
 
 We simulate 10,000 ASIC miners, connecting over a ramp-up time period
 of 10 seconds. Once all clients are connected, each submits a share to
@@ -254,10 +274,5 @@ Results are saved as timestamped `.jtl` files in the `results/` directory.
 
 Use the jmeter GUI to modify the load test file as needed. You can
 open the file `load-tests/stratum.jmx` in jmeter and make changes to
-the test parameters, such as the number of threads, ramp-up time, and
-other settings.
-
-[,shell]
-----
-./load-tests/run_jmeter.sh
-----
+the test parameters, such as the number of threads (miners), ramp-up
+time, and other settings.
