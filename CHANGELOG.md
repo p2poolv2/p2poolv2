@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.8.0] - 2026-04-12
+
+### Added
+
+- Sharechain PPLNS accounting with running payout distribution,
+  reorg handling, fork buffer, and u128 difficulty (#402, #422, #425,
+  #426, #429, #430, #433, #434)
+- Share validation pipeline: context-free checks, header validation
+  during sync, script validation via libbitcoinconsensus, coinbase
+  commitment verification, coinbase payout validation, timestamp
+  validation, and transaction prevout spend validation (#414, #417,
+  #418, #419, #443, #454, #455, #468, #469)
+- WebSocket API support and simple dashboard (#399, #400)
+- Batch queries for API requests and API request tracing (#445, #453)
+- Donation fees in share commitment with required pairing of
+  donation/amount config (#438, #439)
+- Prepared notify params as first step toward remote mode (#406, #407)
+- Solo mode stratum support (#408)
+
+### Changed
+
+- Switched to address-based identification instead of pubkey (#403)
+- Improved header and block storage layout (#415)
+- Shared PPLNS window with notifier and validation workers (#436)
+- Simplified uncles emissions and payout distribution trait (#401, #428)
+- Optimised address map and payout distribution collection (#431)
+- Changed coinbase nsecs to u64 and network magic (#456, #435)
+- Extracted height computation and subsidy calculation (#442)
+- Send notify when chain is extended (#421)
+- Build system switched to just; brought back jmeter load testing
+  (#471, #472)
+
+### Fixed
+
+- Write atomicity during sync (#466)
+- Chain sync reliability and block fetching on reconnects (#459, #463)
+- Wait for parent share blocks during normal runs (#464)
+- Connection health monitoring improvements (#460)
+- Docker setup fixes (#470)
+- Task failure handling in main.rs (#437)
+- Integration test compatibility with validation (#457)
+
+### Removed
+
+- Unused build_notify and extraneous config files (#440, #458)
+
 ## [v0.7.0] - 2026-01-24
 
 ### Changed
