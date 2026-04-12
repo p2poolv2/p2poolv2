@@ -3352,6 +3352,7 @@ dependencies = [
  "mockall",
  "mockall_double",
  "p2poolv2_api",
+ "p2poolv2_cli",
  "p2poolv2_lib",
  "serde",
  "tempfile",

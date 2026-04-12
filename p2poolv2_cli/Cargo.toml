@@ -11,6 +11,7 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 rust-version.workspace = true
+autobins = false
 
 [lib]
 name = "p2poolv2_cli"
@@ -38,6 +39,3 @@ chrono = { workspace = true }
 wiremock = "0.6.2"
 tokio = { version = "1.0", features = ["full", "test-util"] }
 
-[[bin]]
-name = "p2poolv2_cli"
-path = "src/main.rs"

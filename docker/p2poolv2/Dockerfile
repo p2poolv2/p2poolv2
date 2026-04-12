@@ -49,8 +49,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/usr/local/rustup \
     --mount=type=cache,target=/p2poolv2/target \
-    cargo install --locked --offline --path ./p2poolv2_node && \
-    cargo install --locked --offline --path ./p2poolv2_cli
+    cargo install --locked --offline --path ./p2poolv2_node
 
 FROM debian:bullseye-slim AS runner
 
