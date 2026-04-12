@@ -22,11 +22,16 @@ serde = { workspace = true }
 bitcoin = { workspace = true }
 bitcoindrpc = { workspace = true }
 p2poolv2_api = { workspace = true }
+p2poolv2_cli = { path = "../p2poolv2_cli" }
 p2poolv2_lib = { workspace = true }
 
 [[bin]]
 name = "p2poolv2"
 path = "src/main.rs"
+
+[[bin]]
+name = "p2poolv2_cli"
+path = "src/cli_main.rs"
 
 [dev-dependencies]
 p2poolv2_lib = { workspace = true, features = ["test-utils"] }
