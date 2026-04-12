@@ -25,34 +25,13 @@ We are tracking progress using our https://github.com/orgs/p2poolv2/projects/1[G
 See detailed https://github.com/p2poolv2/p2poolv2/wiki/Developer-Setup-Notes[Developer Setup Notes] on the wiki.
 --
 
-== API and CLI READMEs
-
-Both the API and CLI crates provide detailed documentation on how to
-use them in their individual crates.
-
-link:p2poolv2_api/README.md[API Documentation]
-
-link:p2poolv2_cli/README.md[CLI Documentation]
-
-=== MSRV and Edition
-
-MSRV 1.88 with 2024 edition is required to build p2poolv2.
-
-== Build
-
-. Install rust from link:https://rustup.rs/[rustup]
-. Install link:https://github.com/casey/just?tab=readme-ov-file#installation[just]
-. Build P2Poolv2
-.. Get latest source `git clone git@github.com:p2poolv2/p2poolv2.git`
-.. Build `just build-release`
-
 == Running P2Poolv2
 
-To setup your local p2pool node you need to run a bitcoin node and
-then a p2poolv2 node configured to talk to your bitcoind node to fetch
-blocktemplates and submit blocks.
+=== Setup Bitcoin Node
 
-=== Bitcoin Node
+To run your local p2pool node you need to run a bitcoin node and then
+a p2poolv2 node configured to talk to your bitcoind node to fetch
+blocktemplates and submit blocks.
 
 For signet we provide a `docker/bitcoin-signet.conf` that you can use
 as your bitcoin.conf. We also provide a docker compose service that
@@ -88,35 +67,75 @@ include height using varint format, which conflicts with how these
 first 32 heights are encoded. The bitcoind docker service takes care
 of this by bootstrapping the signet with first 32 blocks.
 
-=== P2Poolv2 Node
+=== Install P2Poolv2
 
-. Copy `config.sample.toml` to `config.toml` and edit as required
-.. At the very least you need to provide the bitcoind rpc details under the `[bitcoinrpc]` section
-. Run P2Poolv2 `just run-release config.toml`
-. Point your miners to `localhost:3333`
+[,shell]
+----
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/p2poolv2/p2poolv2/releases/latest/download/p2poolv2_node-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf -o config.toml https://github.com/p2poolv2/p2poolv2/releases/latest/download/config.sample.toml
+----
 
-=== Tests
+The above will install `p2poolv2` and `p2poolv2_cli` in your PATH and download a `config.toml` for you to edit as required.
 
-To run CI tests locally run `just test`.
+The location where the binaries are installed will be echoed by the installer.
 
-== Systemd Service
+[,shell]
+----
+p2poolv2 --help
+p2poolv2_cli --help
+----
 
-To setup as a systemd service, use the systemd service file
+=== Run P2Poolv2
+
+. Edit the `config.toml` as required.
+.. At the very least you need to provide the bitcoind rpc details under the `[bitcoinrpc]` section.
+. Run P2Poolv2 `p2poolv2 config.toml`
+. Point your miners to `<yourhost>:<your stratum port in config.toml>`
+
+=== Setup Systemd Service
+
+To setup as a systemd service, use the systemd service file provided
 link:./p2poolv2.service[p2poolv2.service]. You can edit that service
 file to require your bitcoind service, if you use one.
 
-. Install p2poolv2 as `cargo install --path p2poolv2_node`.
-. Update the service file to point to where cargo installed your binary.
+. Update the service file to point to where you installed your binaries. Use `which p2poolv2` to find where it is installed.
 . Setup `p2poolv2` user/group.
 . `/var/lib/p2poolv2`, `/var/log/p2poolv2`, `/etc/p2poolv2/` directories with permissions for p2poolv2 user.
 
-== Docker Support
+=== Build From Source
+
+==== MSRV and Edition
+
+MSRV 1.88 with 2024 edition is required to build p2poolv2.
+
+==== Build
+
+. Install rust from link:https://rustup.rs/[rustup]
+. Install link:https://github.com/casey/just?tab=readme-ov-file#installation[just]
+. Build P2Poolv2
+.. Get latest source `git clone git@github.com:p2poolv2/p2poolv2.git`
+.. Build `just build-release`
+
+==== Tests
+
+To run CI tests locally run `just test`.
+
+=== Docker Support
 
 We also provide dockerfiles and a docker compose to run the node as a
 docker service.
 
-Our recommended way to run a node is using just or systemd
-service.
+Our recommended way to run a node is using the provided installer and
+using the systemd service.
 
 If you still want to run a node using docker services, see
-link:docker/README[docker/README.adoc] for details.
+link:docker/README.adoc[docker/README.adoc] for details.
+
+== API and CLI READMEs
+
+Both the API and CLI crates provide detailed documentation on how to
+use them in their individual crates.
+
+link:p2poolv2_api/README.md[API Documentation]
+
+link:p2poolv2_cli/README.md[CLI Documentation]
