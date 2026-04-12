@@ -30,3 +30,5 @@ spec/**/states
 .zed/
 .vscode/
 .idea/
+
+perf.data
