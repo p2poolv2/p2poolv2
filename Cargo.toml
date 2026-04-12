@@ -11,10 +11,10 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.8.0"
 edition = "2024"
 authors = ["Kulpreet Singh<kp@opdup.com>"]
-license = "AGPLv3"
+license = "AGPL-3.0-or-later"
 description = "Peer to peer mining pool for bitcoin"
 readme = "README.adoc"
 homepage = "https://github.com/p2poolv2/p2poolv2"
@@ -33,6 +33,10 @@ panic = "abort"
 
 [profile.bench]
 debug = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
 
 [workspace.dependencies]
 libp2p = { version = "0.53", features = [
