@@ -16,7 +16,7 @@ install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
 # Temporarily run dist on github CI for each PR
-pr-run-mode = "upload"
+# pr-run-mode = "upload"
 
 [[dist.extra-artifacts]]
 artifacts = ["config.sample.toml"]
