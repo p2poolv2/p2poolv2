@@ -72,6 +72,17 @@ impl StoreHandle {
         self.store.check_prevouts_and_find_coinbase(outpoints)
     }
 
+    /// Return the first coinbase outpoint that is not yet mature, or None.
+    pub fn find_immature_coinbase_prevout(
+        &self,
+        coinbase_outpoints: &[bitcoin::OutPoint],
+        min_depth: usize,
+        tip_height: u32,
+    ) -> Result<Option<bitcoin::OutPoint>, StoreError> {
+        self.store
+            .find_immature_coinbase_prevout(coinbase_outpoints, min_depth, tip_height)
+    }
+
     /// Batch check the SpendsIndex CF: true if any outpoint is already spent.
     pub fn is_any_prevout_spent(
         &self,
