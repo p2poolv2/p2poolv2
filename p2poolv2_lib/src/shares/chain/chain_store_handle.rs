@@ -108,12 +108,14 @@ impl ChainStoreHandle {
         self.store_handle.get_all_prevouts(transaction)
     }
 
-    /// Batch check the Outputs CF: true if any outpoint is missing.
-    pub fn is_missing_any_prevout(
+    /// Batch-read all outpoints from the Outputs CF.
+    /// Returns an error if any is missing, otherwise returns coinbase outpoints.
+    pub fn check_prevouts_and_find_coinbase(
         &self,
         outpoints: &[bitcoin::OutPoint],
-    ) -> Result<bool, StoreError> {
-        self.store_handle.is_missing_any_prevout(outpoints)
+    ) -> Result<Vec<bitcoin::OutPoint>, StoreError> {
+        self.store_handle
+            .check_prevouts_and_find_coinbase(outpoints)
     }
 
     /// Batch check the SpendsIndex CF: true if any outpoint is already spent.
@@ -694,7 +696,7 @@ mockall::mock! {
         pub fn get_blockhashes_for_height(&self, height: u32) -> Vec<BlockHash>;
         pub fn network(&self) -> bitcoin::Network;
         pub fn get_all_prevouts(&self, transaction: &bitcoin::Transaction) -> Result<Vec<(usize, bitcoin::TxOut)>, StoreError>;
-        pub fn is_missing_any_prevout(&self, outpoints: &[bitcoin::OutPoint]) -> Result<bool, StoreError>;
+        pub fn check_prevouts_and_find_coinbase(&self, outpoints: &[bitcoin::OutPoint]) -> Result<Vec<bitcoin::OutPoint>, StoreError>;
         pub fn is_any_prevout_spent(&self, outpoints: &[bitcoin::OutPoint]) -> Result<bool, StoreError>;
         pub fn are_all_txids_confirmed(&self, txids: &[bitcoin::Txid]) -> Result<bool, StoreError>;
         pub fn get_output(&self, txid: &bitcoin::Txid, vout: u32) -> Result<bitcoin::TxOut, StoreError>;

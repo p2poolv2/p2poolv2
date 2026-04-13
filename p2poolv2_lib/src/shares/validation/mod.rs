@@ -843,14 +843,13 @@ impl DefaultShareValidator {
         {
             return Err(ValidationError::new("prevout not on confirmed chain"));
         }
-        if chain_store_handle
-            .is_missing_any_prevout(&all_outpoints)
-            .map_err(|error| ValidationError::new(format!("Failed to query Outputs: {error}")))?
-        {
-            return Err(ValidationError::new(
-                "One or more prevouts do not exist in the Outputs store",
-            ));
-        }
+        let _coinbase_outpoints = chain_store_handle
+            .check_prevouts_and_find_coinbase(&all_outpoints)
+            .map_err(|error| {
+                ValidationError::new(format!(
+                    "One or more prevouts do not exist in the Outputs store: {error}"
+                ))
+            })?;
         if chain_store_handle
             .is_any_prevout_spent(&all_outpoints)
             .map_err(|error| {
@@ -1944,8 +1943,8 @@ mod tests {
             .expect_are_all_txids_confirmed()
             .returning(|_txids| Ok(true));
         chain_store_handle
-            .expect_is_missing_any_prevout()
-            .returning(|_outpoints| Ok(false));
+            .expect_check_prevouts_and_find_coinbase()
+            .returning(|_outpoints| Ok(Vec::new()));
         chain_store_handle
             .expect_is_any_prevout_spent()
             .returning(|_outpoints| Ok(false));
@@ -1965,8 +1964,8 @@ mod tests {
             .expect_are_all_txids_confirmed()
             .returning(|_txids| Ok(true));
         chain_store_handle
-            .expect_is_missing_any_prevout()
-            .returning(|_outpoints| Ok(false));
+            .expect_check_prevouts_and_find_coinbase()
+            .returning(|_outpoints| Ok(Vec::new()));
         chain_store_handle
             .expect_is_any_prevout_spent()
             .returning(|_outpoints| Ok(false));
@@ -2012,8 +2011,8 @@ mod tests {
             .expect_are_all_txids_confirmed()
             .returning(|_txids| Ok(true));
         chain_store_handle
-            .expect_is_missing_any_prevout()
-            .returning(|_outpoints| Ok(true));
+            .expect_check_prevouts_and_find_coinbase()
+            .returning(|_outpoints| Err(StoreError::NotFound("Output not found".to_string())));
 
         let share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
@@ -2035,8 +2034,8 @@ mod tests {
             .expect_are_all_txids_confirmed()
             .returning(|_txids| Ok(true));
         chain_store_handle
-            .expect_is_missing_any_prevout()
-            .returning(|_outpoints| Ok(false));
+            .expect_check_prevouts_and_find_coinbase()
+            .returning(|_outpoints| Ok(Vec::new()));
         chain_store_handle
             .expect_is_any_prevout_spent()
             .returning(|_outpoints| Ok(true));
@@ -2104,7 +2103,7 @@ mod tests {
             .withf(|txids| txids.len() == 1 && txids[0] == bitcoin::Txid::all_zeros())
             .returning(|_txids| Ok(true));
         chain_store_handle
-            .expect_is_missing_any_prevout()
+            .expect_check_prevouts_and_find_coinbase()
             .withf(move |outpoints| {
                 outpoints.len() == 2
                     && outpoints
@@ -2114,7 +2113,7 @@ mod tests {
                         .iter()
                         .any(|outpoint| outpoint.txid == producing_txid_for_check)
             })
-            .returning(|_outpoints| Ok(false));
+            .returning(|_outpoints| Ok(Vec::new()));
         chain_store_handle
             .expect_is_any_prevout_spent()
             .withf(move |outpoints| outpoints.len() == 2)
@@ -2177,11 +2176,11 @@ mod tests {
         chain_store_handle
             .expect_are_all_txids_confirmed()
             .returning(|_txids| Ok(true));
-        // Existence check returns true (something missing) because the
-        // in-block spender references a non-existent vout.
+        // Existence check fails because the in-block spender references
+        // a non-existent vout.
         chain_store_handle
-            .expect_is_missing_any_prevout()
-            .returning(|_outpoints| Ok(true));
+            .expect_check_prevouts_and_find_coinbase()
+            .returning(|_outpoints| Err(StoreError::NotFound("Output not found".to_string())));
 
         let share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")

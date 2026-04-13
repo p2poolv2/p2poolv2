@@ -63,12 +63,13 @@ impl StoreHandle {
         self.store.get_all_prevouts(transaction)
     }
 
-    /// Batch check the Outputs CF: true if any outpoint is missing.
-    pub fn is_missing_any_prevout(
+    /// Batch-read all outpoints from the Outputs CF.
+    /// Returns an error if any is missing, otherwise returns coinbase outpoints.
+    pub fn check_prevouts_and_find_coinbase(
         &self,
         outpoints: &[bitcoin::OutPoint],
-    ) -> Result<bool, StoreError> {
-        self.store.is_missing_any_prevout(outpoints)
+    ) -> Result<Vec<bitcoin::OutPoint>, StoreError> {
+        self.store.check_prevouts_and_find_coinbase(outpoints)
     }
 
     /// Batch check the SpendsIndex CF: true if any outpoint is already spent.

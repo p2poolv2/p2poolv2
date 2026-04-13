@@ -103,14 +103,16 @@ impl Store {
         Ok(prevouts)
     }
 
-    /// Batch check the Outputs column family: returns true if any outpoint
-    /// is missing.
-    pub(crate) fn is_missing_any_prevout(
+    /// Batch-read all outpoints from the Outputs CF in a single multi_get.
+    ///
+    /// Returns an error if any outpoint is missing. On success, returns
+    /// the subset of outpoints that belong to coinbase transactions.
+    pub(crate) fn check_prevouts_and_find_coinbase(
         &self,
         outpoints: &[OutPoint],
-    ) -> Result<bool, StoreError> {
+    ) -> Result<Vec<OutPoint>, StoreError> {
         if outpoints.is_empty() {
-            return Ok(false);
+            return Ok(Vec::new());
         }
         let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
         let keys: Vec<String> = outpoints
@@ -121,12 +123,22 @@ impl Store {
             .iter()
             .map(|key| (&outputs_cf, key.as_bytes()))
             .collect();
-        for result in self.db.multi_get_cf(cf_keys) {
-            if result?.is_none() {
-                return Ok(true);
+        let mut coinbase_outpoints = Vec::new();
+        for (index, result) in self.db.multi_get_cf(cf_keys).into_iter().enumerate() {
+            let data = result?.ok_or_else(|| {
+                StoreError::NotFound(format!(
+                    "Output not found for {}:{}",
+                    outpoints[index].txid, outpoints[index].vout
+                ))
+            })?;
+            let stored: StoredTxOut = encode::deserialize(&data).map_err(|_| {
+                StoreError::Serialization("Failed to deserialize output".to_string())
+            })?;
+            if stored.is_coinbase {
+                coinbase_outpoints.push(outpoints[index]);
             }
         }
-        Ok(false)
+        Ok(coinbase_outpoints)
     }
 
     /// Batch check the SpendsIndex column family: returns true if any
@@ -982,14 +994,15 @@ mod tests {
     }
 
     #[test]
-    fn test_is_missing_any_prevout_returns_false_for_empty_input() {
+    fn test_check_prevouts_and_find_coinbase_returns_empty_for_empty_input() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        assert!(!store.is_missing_any_prevout(&[]).unwrap());
+        let result = store.check_prevouts_and_find_coinbase(&[]).unwrap();
+        assert!(result.is_empty());
     }
 
     #[test]
-    fn test_is_missing_any_prevout_returns_false_when_all_present() {
+    fn test_check_prevouts_and_find_coinbase_succeeds_when_all_present() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -1020,11 +1033,12 @@ mod tests {
             bitcoin::OutPoint::new(funding_txid, 0),
             bitcoin::OutPoint::new(funding_txid, 1),
         ];
-        assert!(!store.is_missing_any_prevout(&outpoints).unwrap());
+        let coinbase_outpoints = store.check_prevouts_and_find_coinbase(&outpoints).unwrap();
+        assert!(coinbase_outpoints.is_empty());
     }
 
     #[test]
-    fn test_is_missing_any_prevout_returns_true_when_one_missing() {
+    fn test_check_prevouts_and_find_coinbase_errors_when_one_missing() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -1051,7 +1065,58 @@ mod tests {
             bitcoin::OutPoint::new(funding_txid, 0),
             bitcoin::OutPoint::new(unknown_txid, 0),
         ];
-        assert!(store.is_missing_any_prevout(&outpoints).unwrap());
+        let result = store.check_prevouts_and_find_coinbase(&outpoints);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_check_prevouts_and_find_coinbase_returns_coinbase_outpoints() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let coinbase_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::default(),
+                script_sig: bitcoin::ScriptBuf::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(5_000_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let coinbase_txid = coinbase_tx.compute_txid();
+
+        let regular_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1_000_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let regular_txid = regular_tx.compute_txid();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(
+                &[ShareTransaction(coinbase_tx), ShareTransaction(regular_tx)],
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let outpoints = vec![
+            bitcoin::OutPoint::new(coinbase_txid, 0),
+            bitcoin::OutPoint::new(regular_txid, 0),
+        ];
+        let coinbase_outpoints = store.check_prevouts_and_find_coinbase(&outpoints).unwrap();
+        assert_eq!(coinbase_outpoints.len(), 1);
+        assert_eq!(coinbase_outpoints[0].txid, coinbase_txid);
     }
 
     #[test]
