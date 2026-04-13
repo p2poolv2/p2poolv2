@@ -22,7 +22,7 @@ use crate::shares::share_block::{
 use bitcoin::BlockHash;
 use bitcoin::TxMerkleNode;
 use bitcoin::consensus::{self, Encodable, encode};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tracing::debug;
 
 impl Store {
@@ -346,18 +346,28 @@ impl Store {
     ///
     /// Returns (BlockHash, BlockMetadata) pairs, silently skipping any
     /// blockhashes whose metadata is not found or fails to deserialize.
+    /// Batch-fetch block metadata for the given blockhashes.
+    ///
+    /// Deduplicates the input so each blockhash is looked up at most once.
     pub(crate) fn get_block_metadata_batch(
         &self,
         blockhashes: &[BlockHash],
     ) -> Vec<(BlockHash, BlockMetadata)> {
+        let mut seen = HashSet::with_capacity(blockhashes.len());
+        let unique_blockhashes: Vec<BlockHash> = blockhashes
+            .iter()
+            .copied()
+            .filter(|hash| seen.insert(*hash))
+            .collect();
+
         let block_metadata_cf = self.db.cf_handle(&ColumnFamily::BlockMetadata).unwrap();
-        let keys: Vec<_> = blockhashes
+        let keys: Vec<_> = unique_blockhashes
             .iter()
             .map(|hash| (&block_metadata_cf, consensus::serialize(hash)))
             .collect();
         let results = self.db.multi_get_cf(keys);
-        let mut metadata_results = Vec::with_capacity(blockhashes.len());
-        for (blockhash, result) in blockhashes.iter().zip(results.into_iter()) {
+        let mut metadata_results = Vec::with_capacity(unique_blockhashes.len());
+        for (blockhash, result) in unique_blockhashes.iter().zip(results.into_iter()) {
             if let Ok(Some(data)) = result {
                 if let Ok(metadata) = encode::deserialize::<BlockMetadata>(&data) {
                     metadata_results.push((*blockhash, metadata));
