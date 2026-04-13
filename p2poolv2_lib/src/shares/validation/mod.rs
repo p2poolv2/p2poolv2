@@ -79,6 +79,9 @@ pub const MTP_WINDOW: usize = 11;
 pub const BLOCK_TXS_SIZE_LIMIT: u32 = 200 * 1024;
 /// Maximum number of transactions allowed in a share block
 pub const TXS_COUNT_LIMIT: u32 = 100;
+/// Coinbase outputs cannot be spent until the containing block is this
+/// many blocks deep. 70% of blocks-per-day at 10s block time (0.70 * 86400 / 10).
+pub const COINBASE_MATURITY: usize = 6048;
 
 /// Trait for share validation operations.
 ///

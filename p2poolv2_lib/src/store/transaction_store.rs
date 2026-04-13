@@ -20,7 +20,7 @@ use crate::store::block_tx_metadata::{Status, TxMetadata};
 use bitcoin::consensus::{self, Decodable, Encodable, encode};
 use bitcoin::{BlockHash, OutPoint, Transaction, Txid};
 use rocksdb::WriteBatch;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tracing::debug;
 
 /// Serialized outpoint size: 32B for Txid hash, 4B for index
@@ -167,6 +167,68 @@ impl Store {
             }
         }
         Ok(false)
+    }
+
+    /// Given coinbase outpoints (already known to be on the confirmed chain),
+    /// return the first outpoint whose confirmed block is shallower than
+    /// `min_depth`. Returns `Ok(None)` if all coinbase outpoints are mature.
+    ///
+    /// Each coinbase tx has exactly one output and appears in exactly one
+    /// confirmed block, so txids are already unique and each has a single
+    /// confirmed height.
+    ///
+    /// Uses two batch calls: `get_blockhashes_for_all_txids` for txid-to-block
+    /// lookups, then `get_block_metadata_batch` for all referenced blockhashes.
+    pub(crate) fn find_immature_coinbase_prevout(
+        &self,
+        coinbase_outpoints: &[OutPoint],
+        min_depth: usize,
+        tip_height: u32,
+    ) -> Result<Option<OutPoint>, StoreError> {
+        if coinbase_outpoints.is_empty() {
+            return Ok(None);
+        }
+
+        let txids: Vec<Txid> = coinbase_outpoints
+            .iter()
+            .map(|outpoint| outpoint.txid)
+            .collect();
+
+        let per_txid_blockhashes = self.get_blockhashes_for_all_txids(&txids)?;
+
+        let all_blockhashes: Vec<BlockHash> = per_txid_blockhashes
+            .iter()
+            .flat_map(|blockhashes| blockhashes.iter().copied())
+            .collect();
+
+        let blockhash_to_metadata = self.get_block_metadata_batch(&all_blockhashes);
+
+        // Map blockhash -> confirmed height
+        let confirmed_block_heights: HashMap<BlockHash, u32> = blockhash_to_metadata
+            .into_iter()
+            .filter(|(_, metadata)| metadata.status == Status::Confirmed)
+            .filter_map(|(blockhash, metadata)| {
+                metadata.expected_height.map(|height| (blockhash, height))
+            })
+            .collect();
+
+        for (index, outpoint) in coinbase_outpoints.iter().enumerate() {
+            let confirmed_height = per_txid_blockhashes[index]
+                .iter()
+                .find_map(|blockhash| confirmed_block_heights.get(blockhash).copied());
+            match confirmed_height {
+                Some(height) => {
+                    if tip_height < height || (tip_height - height) < min_depth as u32 {
+                        return Ok(Some(*outpoint));
+                    }
+                }
+                None => {
+                    return Ok(Some(*outpoint));
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     /// Returns true if every provided txid is included in at least one
@@ -1923,5 +1985,153 @@ mod tests {
         assert_eq!(result[0].len(), 2);
         assert!(result[0].contains(&blockhash1));
         assert!(result[0].contains(&blockhash2));
+    }
+
+    #[test]
+    fn test_find_immature_coinbase_prevout_returns_none_for_empty_input() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let result = store
+            .find_immature_coinbase_prevout(&[], 6048, 10000)
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_immature_coinbase_prevout_returns_none_when_mature() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let coinbase_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([10u8; 32]).into();
+
+        let blockhash = TestShareBlockBuilder::new()
+            .nonce(0xbb000001)
+            .build()
+            .block_hash();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(
+                &blockhash,
+                &BlockMetadata {
+                    expected_height: Some(1000),
+                    chain_work: Work::from_le_bytes([1u8; 32]),
+                    status: Status::Confirmed,
+                },
+                &mut batch,
+            )
+            .unwrap();
+        store
+            .add_txids_to_blocks_index(&blockhash, &Txids(vec![coinbase_txid]), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let outpoint = bitcoin::OutPoint::new(coinbase_txid, 0);
+        // tip_height=8000, block_height=1000, depth=7000 >= 6048
+        let result = store
+            .find_immature_coinbase_prevout(&[outpoint], 6048, 8000)
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_immature_coinbase_prevout_returns_outpoint_when_immature() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let coinbase_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([11u8; 32]).into();
+
+        let blockhash = TestShareBlockBuilder::new()
+            .nonce(0xbb000002)
+            .build()
+            .block_hash();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(
+                &blockhash,
+                &BlockMetadata {
+                    expected_height: Some(5000),
+                    chain_work: Work::from_le_bytes([1u8; 32]),
+                    status: Status::Confirmed,
+                },
+                &mut batch,
+            )
+            .unwrap();
+        store
+            .add_txids_to_blocks_index(&blockhash, &Txids(vec![coinbase_txid]), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let outpoint = bitcoin::OutPoint::new(coinbase_txid, 0);
+        // tip_height=8000, block_height=5000, depth=3000 < 6048
+        let result = store
+            .find_immature_coinbase_prevout(&[outpoint], 6048, 8000)
+            .unwrap();
+        assert_eq!(result, Some(outpoint));
+    }
+
+    #[test]
+    fn test_find_immature_coinbase_prevout_non_coinbase_unaffected() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let mature_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([12u8; 32]).into();
+        let immature_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([13u8; 32]).into();
+
+        let block_old = TestShareBlockBuilder::new()
+            .nonce(0xbb000003)
+            .build()
+            .block_hash();
+        let block_new = TestShareBlockBuilder::new()
+            .nonce(0xbb000004)
+            .build()
+            .block_hash();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(
+                &block_old,
+                &BlockMetadata {
+                    expected_height: Some(100),
+                    chain_work: Work::from_le_bytes([1u8; 32]),
+                    status: Status::Confirmed,
+                },
+                &mut batch,
+            )
+            .unwrap();
+        store
+            .update_block_metadata(
+                &block_new,
+                &BlockMetadata {
+                    expected_height: Some(9000),
+                    chain_work: Work::from_le_bytes([2u8; 32]),
+                    status: Status::Confirmed,
+                },
+                &mut batch,
+            )
+            .unwrap();
+        store
+            .add_txids_to_blocks_index(&block_old, &Txids(vec![mature_txid]), &mut batch)
+            .unwrap();
+        store
+            .add_txids_to_blocks_index(&block_new, &Txids(vec![immature_txid]), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Only the immature one should be returned
+        let outpoints = vec![
+            bitcoin::OutPoint::new(mature_txid, 0),
+            bitcoin::OutPoint::new(immature_txid, 0),
+        ];
+        // tip=10000: mature depth=9900 >= 6048, immature depth=1000 < 6048
+        let result = store
+            .find_immature_coinbase_prevout(&outpoints, 6048, 10000)
+            .unwrap();
+        assert_eq!(result, Some(bitcoin::OutPoint::new(immature_txid, 0)));
     }
 }

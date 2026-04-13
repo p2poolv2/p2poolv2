@@ -118,6 +118,20 @@ impl ChainStoreHandle {
             .check_prevouts_and_find_coinbase(outpoints)
     }
 
+    /// Return the first coinbase outpoint that is not yet mature, or None.
+    /// Fetches the current tip height internally.
+    pub fn find_immature_coinbase_prevout(
+        &self,
+        coinbase_outpoints: &[bitcoin::OutPoint],
+        min_depth: usize,
+    ) -> Result<Option<bitcoin::OutPoint>, StoreError> {
+        let tip_height = self.get_tip_height()?.ok_or_else(|| {
+            StoreError::NotFound("No tip height available for maturity check".to_string())
+        })?;
+        self.store_handle
+            .find_immature_coinbase_prevout(coinbase_outpoints, min_depth, tip_height)
+    }
+
     /// Batch check the SpendsIndex CF: true if any outpoint is already spent.
     pub fn is_any_prevout_spent(
         &self,
@@ -697,6 +711,7 @@ mockall::mock! {
         pub fn network(&self) -> bitcoin::Network;
         pub fn get_all_prevouts(&self, transaction: &bitcoin::Transaction) -> Result<Vec<(usize, bitcoin::TxOut)>, StoreError>;
         pub fn check_prevouts_and_find_coinbase(&self, outpoints: &[bitcoin::OutPoint]) -> Result<Vec<bitcoin::OutPoint>, StoreError>;
+        pub fn find_immature_coinbase_prevout(&self, coinbase_outpoints: &[bitcoin::OutPoint], min_depth: usize) -> Result<Option<bitcoin::OutPoint>, StoreError>;
         pub fn is_any_prevout_spent(&self, outpoints: &[bitcoin::OutPoint]) -> Result<bool, StoreError>;
         pub fn are_all_txids_confirmed(&self, txids: &[bitcoin::Txid]) -> Result<bool, StoreError>;
         pub fn get_output(&self, txid: &bitcoin::Txid, vout: u32) -> Result<bitcoin::TxOut, StoreError>;
