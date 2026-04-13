@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Coinbase maturity validation: prevouts spending coinbase outputs are
+  rejected unless the containing block is at least 6048 blocks deep
+  (70% of blocks-per-day at 10s block time)
+
+- StoredTxOut struct marking outputs with `is_coinbase` flag in Outputs
+  CF
+
+- Batch txid-to-blockhash lookups via `get_blockhashes_for_all_txids`
+
+### Changed
+
+- Replaced `is_missing_any_prevout` with
+  `check_prevouts_and_find_coinbase` combining existence check and
+  coinbase detection in a single batch read
+
+- Optimised `are_all_txids_confirmed` to use two batch calls instead
+  of per-txid individual lookups
+
 ## [v0.8.0] - 2026-04-12
 
 ### Added
