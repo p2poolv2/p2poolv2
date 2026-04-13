@@ -846,7 +846,7 @@ impl DefaultShareValidator {
         {
             return Err(ValidationError::new("prevout not on confirmed chain"));
         }
-        let _coinbase_outpoints = chain_store_handle
+        let coinbase_outpoints = chain_store_handle
             .check_prevouts_and_find_coinbase(&all_outpoints)
             .map_err(|error| {
                 ValidationError::new(format!(
@@ -862,6 +862,19 @@ impl DefaultShareValidator {
             return Err(ValidationError::new(
                 "One or more prevouts are already spent",
             ));
+        }
+        if !coinbase_outpoints.is_empty() {
+            if let Some(immature) = chain_store_handle
+                .find_immature_coinbase_prevout(&coinbase_outpoints, COINBASE_MATURITY)
+                .map_err(|error| {
+                    ValidationError::new(format!("Failed to check coinbase maturity: {error}"))
+                })?
+            {
+                return Err(ValidationError::new(format!(
+                    "Coinbase output {}:{} is not yet mature (requires {} confirmations)",
+                    immature.txid, immature.vout, COINBASE_MATURITY
+                )));
+            }
         }
         Ok(())
     }
@@ -2250,6 +2263,92 @@ mod tests {
             error.to_string().contains("Duplicate prevout"),
             "got: {error}"
         );
+    }
+
+    #[test]
+    fn test_validate_prevouts_rejects_immature_coinbase_spend() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_are_all_txids_confirmed()
+            .returning(|_txids| Ok(true));
+
+        let coinbase_outpoint = bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), 0);
+        chain_store_handle
+            .expect_check_prevouts_and_find_coinbase()
+            .returning(move |_outpoints| Ok(vec![coinbase_outpoint]));
+        chain_store_handle
+            .expect_is_any_prevout_spent()
+            .returning(|_outpoints| Ok(false));
+        chain_store_handle
+            .expect_find_immature_coinbase_prevout()
+            .returning(move |_outpoints, _min_depth| Ok(Some(coinbase_outpoint)));
+
+        let spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), 0),
+                script_sig: ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(10_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spending_tx)
+            .build();
+
+        let error = validator()
+            .validate_prevouts(&share, &chain_store_handle)
+            .unwrap_err();
+        assert!(error.to_string().contains("not yet mature"), "got: {error}");
+    }
+
+    #[test]
+    fn test_validate_prevouts_accepts_mature_coinbase_spend() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_are_all_txids_confirmed()
+            .returning(|_txids| Ok(true));
+
+        let coinbase_outpoint = bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), 0);
+        chain_store_handle
+            .expect_check_prevouts_and_find_coinbase()
+            .returning(move |_outpoints| Ok(vec![coinbase_outpoint]));
+        chain_store_handle
+            .expect_is_any_prevout_spent()
+            .returning(|_outpoints| Ok(false));
+        chain_store_handle
+            .expect_find_immature_coinbase_prevout()
+            .returning(|_outpoints, _min_depth| Ok(None));
+
+        let spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), 0),
+                script_sig: ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(10_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spending_tx)
+            .build();
+
+        let result = validator().validate_prevouts(&share, &chain_store_handle);
+        assert!(result.is_ok());
     }
 
     #[test]
