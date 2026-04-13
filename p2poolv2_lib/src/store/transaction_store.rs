@@ -16,10 +16,11 @@
 
 use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::share_block::{ShareTransaction, Txids};
-use crate::store::block_tx_metadata::TxMetadata;
+use crate::store::block_tx_metadata::{Status, TxMetadata};
 use bitcoin::consensus::{self, Encodable, encode};
 use bitcoin::{BlockHash, OutPoint, Transaction, Txid};
 use rocksdb::WriteBatch;
+use std::collections::HashSet;
 use tracing::debug;
 
 /// Serialized outpoint size: 32B for Txid hash, 4B for index
@@ -128,18 +129,29 @@ impl Store {
     /// block whose `BlockMetadata::status` is `Status::Confirmed`. Returns
     /// false on the first txid that has no confirmed blockhash.
     pub(crate) fn are_all_txids_confirmed(&self, txids: &[Txid]) -> Result<bool, StoreError> {
-        for txid in txids {
-            let blockhashes = self.get_blockhashes_for_txid(txid)?;
-            let mut confirmed = false;
-            for blockhash in &blockhashes {
-                if self.is_confirmed(blockhash) {
-                    confirmed = true;
-                }
-            }
-            if !confirmed {
+        let per_txid_blockhashes = self.get_blockhashes_for_all_txids(txids)?;
+
+        let all_blockhashes: Vec<BlockHash> = per_txid_blockhashes
+            .iter()
+            .flat_map(|blockhashes| blockhashes.iter().copied())
+            .collect();
+
+        let metadata_pairs = self.get_block_metadata_batch(&all_blockhashes);
+        let confirmed_set: HashSet<BlockHash> = metadata_pairs
+            .into_iter()
+            .filter(|(_, metadata)| metadata.status == Status::Confirmed)
+            .map(|(blockhash, _)| blockhash)
+            .collect();
+
+        for blockhashes in &per_txid_blockhashes {
+            let has_confirmed = blockhashes
+                .iter()
+                .any(|blockhash| confirmed_set.contains(blockhash));
+            if !has_confirmed {
                 return Ok(false);
             }
         }
+
         Ok(true)
     }
 
@@ -409,6 +421,44 @@ impl Store {
             }
             None => Ok(Vec::new()),
         }
+    }
+
+    /// Batch-fetch blockhashes for all provided txids in a single multi_get_cf call.
+    ///
+    /// Returns a Vec parallel to the input: each entry is the list of
+    /// blockhashes that contain that txid (empty if none found).
+    pub(crate) fn get_blockhashes_for_all_txids(
+        &self,
+        txids: &[Txid],
+    ) -> Result<Vec<Vec<BlockHash>>, StoreError> {
+        if txids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let txids_blocks_cf = self.db.cf_handle(&ColumnFamily::TxidsBlocks).unwrap();
+        let cf_keys: Vec<(_, &[u8])> = txids
+            .iter()
+            .map(|txid| (&txids_blocks_cf, txid.as_ref()))
+            .collect();
+        let results = self.db.multi_get_cf(cf_keys);
+        let mut all_blockhashes: Vec<Vec<BlockHash>> = Vec::with_capacity(txids.len());
+        for result in results {
+            match result? {
+                Some(blockhash_bytes) => {
+                    let blockhashes: Vec<BlockHash> = encode::deserialize(&blockhash_bytes)
+                        .map_err(|_| {
+                            StoreError::Serialization(
+                                "Failed to deserialize blockhashes from txids_blocks index"
+                                    .to_string(),
+                            )
+                        })?;
+                    all_blockhashes.push(blockhashes);
+                }
+                None => {
+                    all_blockhashes.push(Vec::new());
+                }
+            }
+        }
+        Ok(all_blockhashes)
     }
 
     /// Add the list of transaction IDs to the batch
@@ -1649,5 +1699,123 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn test_get_blockhashes_for_all_txids_returns_empty_for_empty_input() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let result = store.get_blockhashes_for_all_txids(&[]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_get_blockhashes_for_all_txids_returns_blockhashes_for_known_txids() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block = TestShareBlockBuilder::new().build();
+        let blockhash = block.block_hash();
+
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&block, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let txids: Vec<Txid> = block
+            .transactions
+            .iter()
+            .map(|tx| tx.compute_txid())
+            .collect();
+        let result = store.get_blockhashes_for_all_txids(&txids).unwrap();
+
+        assert_eq!(result.len(), txids.len());
+        for blockhashes in &result {
+            assert_eq!(blockhashes.len(), 1);
+            assert_eq!(blockhashes[0], blockhash);
+        }
+    }
+
+    #[test]
+    fn test_get_blockhashes_for_all_txids_returns_empty_vec_for_unknown_txids() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let unknown_txid_a = Txid::all_zeros();
+        let unknown_txid_b = Txid::from_byte_array([1u8; 32]);
+        let result = store
+            .get_blockhashes_for_all_txids(&[unknown_txid_a, unknown_txid_b])
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert!(result[0].is_empty());
+        assert!(result[1].is_empty());
+    }
+
+    #[test]
+    fn test_get_blockhashes_for_all_txids_mixed_known_and_unknown() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block = TestShareBlockBuilder::new().build();
+        let blockhash = block.block_hash();
+        let known_txid = block.transactions[0].compute_txid();
+
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&block, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let unknown_txid = Txid::from_byte_array([0xffu8; 32]);
+        let result = store
+            .get_blockhashes_for_all_txids(&[known_txid, unknown_txid])
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].len(), 1);
+        assert_eq!(result[0][0], blockhash);
+        assert!(result[1].is_empty());
+    }
+
+    #[test]
+    fn test_get_blockhashes_for_all_txids_txid_in_multiple_blocks() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let shared_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1000000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let shared_txid = shared_tx.compute_txid();
+
+        let block1 = TestShareBlockBuilder::new()
+            .nonce(0xe9695791)
+            .add_transaction(shared_tx.clone())
+            .build();
+        let blockhash1 = block1.block_hash();
+
+        let block2 = TestShareBlockBuilder::new()
+            .nonce(0xe9695792)
+            .add_transaction(shared_tx.clone())
+            .build();
+        let blockhash2 = block2.block_hash();
+
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&block1, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&block2, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let result = store.get_blockhashes_for_all_txids(&[shared_txid]).unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].len(), 2);
+        assert!(result[0].contains(&blockhash1));
+        assert!(result[0].contains(&blockhash2));
     }
 }
