@@ -871,7 +871,7 @@ impl DefaultShareValidator {
                 })?
             {
                 return Err(ValidationError::new(format!(
-                    "Coinbase output {}:{} is not yet mature (requires {} confirmations)",
+                    "Coinbase output {}:{} is not yet mature (requires at least {} blocks of depth)",
                     immature.txid, immature.vout, COINBASE_MATURITY
                 )));
             }

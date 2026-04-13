@@ -173,9 +173,9 @@ impl Store {
     /// return the first outpoint whose confirmed block is shallower than
     /// `min_depth`. Returns `Ok(None)` if all coinbase outpoints are mature.
     ///
-    /// Each coinbase tx has exactly one output and appears in exactly one
-    /// confirmed block, so txids are already unique and each has a single
-    /// confirmed height.
+    /// Each coinbase tx appears in exactly one confirmed block, so
+    /// txids are already unique and each has a single confirmed
+    /// height.
     ///
     /// Uses two batch calls: `get_blockhashes_for_all_txids` for txid-to-block
     /// lookups, then `get_block_metadata_batch` for all referenced blockhashes.
