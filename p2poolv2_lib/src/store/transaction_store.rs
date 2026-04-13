@@ -17,7 +17,7 @@
 use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::share_block::{ShareTransaction, Txids};
 use crate::store::block_tx_metadata::{Status, TxMetadata};
-use bitcoin::consensus::{self, Encodable, encode};
+use bitcoin::consensus::{self, Decodable, Encodable, encode};
 use bitcoin::{BlockHash, OutPoint, Transaction, Txid};
 use rocksdb::WriteBatch;
 use std::collections::HashSet;
@@ -25,6 +25,38 @@ use tracing::debug;
 
 /// Serialized outpoint size: 32B for Txid hash, 4B for index
 const OUTPOINT_SIZE: usize = 36;
+
+/// A TxOut stored in the Outputs CF together with a flag indicating
+/// whether it belongs to a coinbase transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredTxOut {
+    pub tx_out: bitcoin::TxOut,
+    pub is_coinbase: bool,
+}
+
+impl Encodable for StoredTxOut {
+    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+        &self,
+        writer: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        let mut length = self.tx_out.consensus_encode(writer)?;
+        length += self.is_coinbase.consensus_encode(writer)?;
+        Ok(length)
+    }
+}
+
+impl Decodable for StoredTxOut {
+    fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
+        reader: &mut R,
+    ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        let tx_out = bitcoin::TxOut::consensus_decode(reader)?;
+        let is_coinbase = bool::consensus_decode(reader)?;
+        Ok(StoredTxOut {
+            tx_out,
+            is_coinbase,
+        })
+    }
+}
 
 #[allow(dead_code)]
 impl Store {
@@ -63,10 +95,10 @@ impl Store {
                     outpoint.txid, outpoint.vout
                 ))
             })?;
-            let txout: bitcoin::TxOut = encode::deserialize(&data).map_err(|_| {
+            let stored: StoredTxOut = encode::deserialize(&data).map_err(|_| {
                 StoreError::Serialization("Failed to deserialize output".to_string())
             })?;
-            prevouts.push((input_index, txout));
+            prevouts.push((input_index, stored.tx_out));
         }
         Ok(prevouts)
     }
@@ -163,8 +195,12 @@ impl Store {
         let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
         let output_key = format!("{txid}:{vout}");
         match self.db.get_cf::<&[u8]>(&outputs_cf, output_key.as_ref())? {
-            Some(data) => encode::deserialize(&data)
-                .map_err(|_| StoreError::Serialization("Failed to deserialize output".to_string())),
+            Some(data) => {
+                let stored: StoredTxOut = encode::deserialize(&data).map_err(|_| {
+                    StoreError::Serialization("Failed to deserialize output".to_string())
+                })?;
+                Ok(stored.tx_out)
+            }
             None => Err(StoreError::NotFound(format!(
                 "Output not found for {txid}:{vout}"
             ))),
@@ -202,10 +238,14 @@ impl Store {
                 batch.put_cf::<&[u8], Vec<u8>>(&inputs_cf, input_key.as_ref(), serialized);
             }
 
+            let is_coinbase = tx.0.is_coinbase();
             for (i, output) in tx.output.iter().enumerate() {
                 let output_key = format!("{txid}:{i}");
-                let mut serialized = Vec::new();
-                output.consensus_encode(&mut serialized)?;
+                let stored = StoredTxOut {
+                    tx_out: output.clone(),
+                    is_coinbase,
+                };
+                let serialized = consensus::serialize(&stored);
                 batch.put_cf::<&[u8], Vec<u8>>(&outputs_cf, output_key.as_ref(), serialized);
             }
         }
@@ -563,8 +603,8 @@ impl Store {
                 .get_cf::<&[u8]>(&outputs_cf, output_key.as_ref())
                 .unwrap()
                 .unwrap();
-            let output: bitcoin::TxOut = match encode::deserialize(&output) {
-                Ok(output) => output,
+            let output = match encode::deserialize::<StoredTxOut>(&output) {
+                Ok(stored) => stored.tx_out,
                 Err(e) => {
                     tracing::error!("Error deserializing output: {e:?}");
                     return Err(e.into());
@@ -687,9 +727,10 @@ impl Store {
             let bytes = result?.ok_or_else(|| {
                 StoreError::NotFound(format!("Output not found for {}", keys[index]))
             })?;
-            decoded.push(encode::deserialize(&bytes).map_err(|_| {
+            let stored: StoredTxOut = encode::deserialize(&bytes).map_err(|_| {
                 StoreError::Serialization("Failed to deserialize output".to_string())
-            })?);
+            })?;
+            decoded.push(stored.tx_out);
         }
 
         // group the offset based outputs for each txid
