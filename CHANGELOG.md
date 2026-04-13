@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.9.0] - 2026-04-13
+
 ### Added
 
 - Coinbase maturity validation: prevouts spending coinbase outputs are
@@ -18,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Batch txid-to-blockhash lookups via `get_blockhashes_for_all_txids`
 
+- Updated setup instructions to use prebuilt binaries
+
 ### Changed
 
 - Replaced `is_missing_any_prevout` with
@@ -26,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Optimised `are_all_txids_confirmed` to use two batch calls instead
   of per-txid individual lookups
+
+- Deduplicate blockhashes before looking up metadata
 
 ## [v0.8.0] - 2026-04-12
 
