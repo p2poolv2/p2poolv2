@@ -82,6 +82,8 @@ pub const TXS_COUNT_LIMIT: u32 = 100;
 /// Coinbase outputs cannot be spent until the containing block is this
 /// many blocks deep. 70% of blocks-per-day at 10s block time (0.70 * 86400 / 10).
 pub const COINBASE_MATURITY: usize = 6048;
+/// Maximum total sigop cost allowed in a share block (matches Bitcoin consensus).
+pub const MAX_BLOCK_SIGOPS_COST: usize = 80_000;
 
 /// Trait for share validation operations.
 ///
@@ -267,19 +269,40 @@ impl DefaultShareValidator {
     /// from the chain store, and verifies each input script using
     /// libbitcoinconsensus. Coinbase transactions are skipped since they
     /// have no inputs to validate.
-    fn validate_scripts(
+    /// Validate scripts, input/output values, and sigop cost for all
+    /// transactions in the share block.
+    ///
+    /// Collects spent outputs once per non-coinbase transaction and runs
+    /// script verification, input-vs-output value checks, and sigop cost
+    /// accumulation in a single pass. The coinbase contributes sigop cost
+    /// but is exempt from script and value validation.
+    fn validate_scripts_values_and_sigops(
         &self,
         share: &ShareBlock,
         chain_store_handle: &ChainStoreHandle,
     ) -> Result<(), ValidationError> {
+        let mut total_sigop_cost: usize = 0;
+
         for (index, transaction) in share.transactions.iter().enumerate() {
             if index == 0 {
-                continue;
+                let coinbase_sigop_cost = transaction.0.total_sigop_cost(|_outpoint| None);
+                total_sigop_cost = total_sigop_cost.saturating_add(coinbase_sigop_cost);
+            } else {
+                let txid = transaction.compute_txid();
+                let spent_outputs =
+                    Self::collect_spent_outputs(transaction, chain_store_handle, &txid)?;
+                Self::validate_scripts_for_tx(transaction, &spent_outputs, &txid)?;
+                Self::validate_input_output_values(transaction, &spent_outputs, &txid)?;
+                let tx_sigop_cost =
+                    Self::compute_transaction_sigop_cost(transaction, &spent_outputs);
+                total_sigop_cost = total_sigop_cost.saturating_add(tx_sigop_cost);
             }
-            let txid = transaction.compute_txid();
-            let spent_outputs =
-                Self::collect_spent_outputs(transaction, chain_store_handle, &txid)?;
-            Self::validate_scripts_for_tx(transaction, &spent_outputs, &txid)?;
+        }
+
+        if total_sigop_cost > MAX_BLOCK_SIGOPS_COST {
+            return Err(ValidationError::new(format!(
+                "Block sigop cost {total_sigop_cost} exceeds maximum {MAX_BLOCK_SIGOPS_COST}"
+            )));
         }
         Ok(())
     }
@@ -341,6 +364,53 @@ impl DefaultShareValidator {
             })?;
         }
         Ok(())
+    }
+
+    /// Check that total input value is at least total output value for a
+    /// single non-coinbase transaction.
+    fn validate_input_output_values(
+        transaction: &ShareTransaction,
+        spent_outputs: &[(usize, bitcoin::TxOut)],
+        txid: &bitcoin::Txid,
+    ) -> Result<(), ValidationError> {
+        let mut total_input = Amount::ZERO;
+        for (_index, txout) in spent_outputs {
+            total_input = total_input.checked_add(txout.value).ok_or_else(|| {
+                ValidationError::new(format!("Transaction {txid} total input value overflow"))
+            })?;
+        }
+
+        let mut total_output = Amount::ZERO;
+        for output in &transaction.output {
+            total_output = total_output.checked_add(output.value).ok_or_else(|| {
+                ValidationError::new(format!("Transaction {txid} total output value overflow"))
+            })?;
+        }
+
+        if total_input < total_output {
+            return Err(ValidationError::new(format!(
+                "Transaction {txid} outputs {total_output} exceed inputs {total_input}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Compute the BIP141 sigop cost for a single transaction given its
+    /// spent outputs. Uses `Transaction::total_sigop_cost` which applies
+    /// the correct weighting (legacy sigops * 4, witness sigops * 1).
+    fn compute_transaction_sigop_cost(
+        transaction: &ShareTransaction,
+        spent_outputs: &[(usize, bitcoin::TxOut)],
+    ) -> usize {
+        let mut lookup: HashMap<bitcoin::OutPoint, &bitcoin::TxOut> =
+            HashMap::with_capacity(spent_outputs.len());
+        for (position, (_input_index, txout)) in spent_outputs.iter().enumerate() {
+            let outpoint = transaction.input[position].previous_output;
+            lookup.insert(outpoint, txout);
+        }
+        transaction
+            .0
+            .total_sigop_cost(|outpoint| lookup.get(outpoint).map(|txout| (*txout).clone()))
     }
 
     /// Validate each transaction in the share block (context-free checks).
@@ -681,7 +751,7 @@ impl ShareValidator for DefaultShareValidator {
         self.validate_merkle_root(share)?;
         self.validate_transaction_count(share)?;
         self.validate_transactions(share)?;
-        self.validate_scripts(share, chain_store_handle)?;
+        self.validate_scripts_values_and_sigops(share, chain_store_handle)?;
         Ok(())
     }
 
@@ -1775,7 +1845,7 @@ mod tests {
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
-        let result = validator().validate_scripts(&share, &chain_store_handle);
+        let result = validator().validate_scripts_values_and_sigops(&share, &chain_store_handle);
         assert!(
             result.is_ok(),
             "Coinbase-only block should pass script validation"
@@ -1845,7 +1915,7 @@ mod tests {
             .add_transaction(spending_tx)
             .build();
 
-        let result = validator().validate_scripts(&share, &chain_store_handle);
+        let result = validator().validate_scripts_values_and_sigops(&share, &chain_store_handle);
         assert!(
             result.is_ok(),
             "Valid P2SH OP_TRUE spend should pass: {:?}",
@@ -1898,7 +1968,7 @@ mod tests {
             .build();
 
         let error = validator()
-            .validate_scripts(&share, &chain_store_handle)
+            .validate_scripts_values_and_sigops(&share, &chain_store_handle)
             .unwrap_err();
         assert!(
             error.to_string().contains("Script verification failed"),
@@ -1942,7 +2012,7 @@ mod tests {
             .build();
 
         let error = validator()
-            .validate_scripts(&share, &chain_store_handle)
+            .validate_scripts_values_and_sigops(&share, &chain_store_handle)
             .unwrap_err();
         assert!(
             error
@@ -3024,5 +3094,129 @@ mod tests {
         let result = validator().validate_header_minimum_difficulty(&header);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Too many uncles"),);
+    }
+
+    #[test]
+    fn test_validate_input_output_values_fails_when_outputs_exceed_inputs() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        let redeem_script = bitcoin::Script::builder()
+            .push_opcode(bitcoin::opcodes::all::OP_PUSHNUM_1)
+            .into_script();
+        let mut script_sig_bytes = Vec::with_capacity(1 + redeem_script.len());
+        script_sig_bytes.push(redeem_script.len() as u8);
+        script_sig_bytes.extend_from_slice(redeem_script.as_bytes());
+        let script_sig = ScriptBuf::from(script_sig_bytes);
+
+        let spent_output = bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(50_000),
+            script_pubkey: redeem_script.to_p2sh(),
+        };
+
+        // Output (100_000) exceeds the input (50_000)
+        let overspending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint {
+                    txid: bitcoin::Txid::all_zeros(),
+                    vout: 0,
+                },
+                script_sig,
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(100_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        let spent_output_clone = spent_output.clone();
+        chain_store_handle
+            .expect_get_all_prevouts()
+            .returning(move |_tx| Ok(vec![(0, spent_output_clone.clone())]));
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(overspending_tx)
+            .build();
+
+        let error = validator()
+            .validate_scripts_values_and_sigops(&share, &chain_store_handle)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("outputs") && error.to_string().contains("exceed inputs"),
+            "Expected output-exceeds-input error, got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_validate_sigop_cost_fails_when_exceeding_limit() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        // Build a non-coinbase transaction whose outputs contain enough
+        // OP_CHECKSIG opcodes to exceed MAX_BLOCK_SIGOPS_COST.
+        // Each OP_CHECKSIG in an output scriptPubKey costs 4 sigop units
+        // (legacy weight). MAX_BLOCK_SIGOPS_COST = 80_000, so
+        // 20_001 OP_CHECKSIGs = 80_004 cost.
+        let sigop_count = (MAX_BLOCK_SIGOPS_COST / 4) + 1;
+        let mut script_bytes = Vec::with_capacity(sigop_count);
+        for _ in 0..sigop_count {
+            script_bytes.push(bitcoin::opcodes::all::OP_CHECKSIG.to_u8());
+        }
+        let heavy_script = ScriptBuf::from(script_bytes);
+
+        // Use P2SH OP_TRUE so script validation passes; the heavy sigops
+        // are in the output scriptPubKey, not the spending script.
+        let redeem_script = bitcoin::Script::builder()
+            .push_opcode(bitcoin::opcodes::all::OP_PUSHNUM_1)
+            .into_script();
+        let mut script_sig_bytes = Vec::with_capacity(1 + redeem_script.len());
+        script_sig_bytes.push(redeem_script.len() as u8);
+        script_sig_bytes.extend_from_slice(redeem_script.as_bytes());
+        let script_sig = ScriptBuf::from(script_sig_bytes);
+
+        let spent_output = bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(5_000_000_000),
+            script_pubkey: redeem_script.to_p2sh(),
+        };
+
+        let heavy_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint {
+                    txid: bitcoin::Txid::all_zeros(),
+                    vout: 0,
+                },
+                script_sig,
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(4_999_000_000),
+                script_pubkey: heavy_script,
+            }],
+        };
+
+        let spent_output_clone = spent_output.clone();
+        chain_store_handle
+            .expect_get_all_prevouts()
+            .returning(move |_tx| Ok(vec![(0, spent_output_clone.clone())]));
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(heavy_tx)
+            .build();
+
+        let error = validator()
+            .validate_scripts_values_and_sigops(&share, &chain_store_handle)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("sigop cost")
+                && error.to_string().contains("exceeds maximum"),
+            "Expected sigop cost exceeded error, got: {error}"
+        );
     }
 }
