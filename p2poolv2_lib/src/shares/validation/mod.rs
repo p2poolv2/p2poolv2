@@ -379,6 +379,11 @@ impl DefaultShareValidator {
                 ValidationError::new(format!("Transaction {txid} total input value overflow"))
             })?;
         }
+        if total_input > Amount::MAX_MONEY {
+            return Err(ValidationError::new(format!(
+                "Transaction {txid} total input value {total_input} exceeds maximum"
+            )));
+        }
 
         let mut total_output = Amount::ZERO;
         for output in &transaction.output {
@@ -3148,6 +3153,84 @@ mod tests {
         assert!(
             error.to_string().contains("outputs") && error.to_string().contains("exceed inputs"),
             "Expected output-exceeds-input error, got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_validate_input_output_values_fails_when_total_input_exceeds_max_money() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        let redeem_script = bitcoin::Script::builder()
+            .push_opcode(bitcoin::opcodes::all::OP_PUSHNUM_1)
+            .into_script();
+        let mut script_sig_bytes = Vec::with_capacity(1 + redeem_script.len());
+        script_sig_bytes.push(redeem_script.len() as u8);
+        script_sig_bytes.extend_from_slice(redeem_script.as_bytes());
+        let script_sig = ScriptBuf::from(script_sig_bytes);
+
+        // Two inputs each worth MAX_MONEY, so total input exceeds MAX_MONEY
+        let prevout_value = Amount::MAX_MONEY;
+        let spent_output_a = bitcoin::TxOut {
+            value: prevout_value,
+            script_pubkey: redeem_script.to_p2sh(),
+        };
+        let spent_output_b = bitcoin::TxOut {
+            value: Amount::from_sat(1),
+            script_pubkey: redeem_script.to_p2sh(),
+        };
+
+        let spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![
+                bitcoin::TxIn {
+                    previous_output: bitcoin::OutPoint {
+                        txid: bitcoin::Txid::all_zeros(),
+                        vout: 0,
+                    },
+                    script_sig: script_sig.clone(),
+                    sequence: bitcoin::Sequence::MAX,
+                    witness: bitcoin::Witness::new(),
+                },
+                bitcoin::TxIn {
+                    previous_output: bitcoin::OutPoint {
+                        txid: bitcoin::Txid::all_zeros(),
+                        vout: 1,
+                    },
+                    script_sig,
+                    sequence: bitcoin::Sequence::MAX,
+                    witness: bitcoin::Witness::new(),
+                },
+            ],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        let spent_output_a_clone = spent_output_a.clone();
+        let spent_output_b_clone = spent_output_b.clone();
+        chain_store_handle
+            .expect_get_all_prevouts()
+            .returning(move |_tx| {
+                Ok(vec![
+                    (0, spent_output_a_clone.clone()),
+                    (1, spent_output_b_clone.clone()),
+                ])
+            });
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spending_tx)
+            .build();
+
+        let error = validator()
+            .validate_scripts_values_and_sigops(&share, &chain_store_handle)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("total input value")
+                && error.to_string().contains("exceeds maximum"),
+            "Expected MAX_MONEY input error, got: {error}"
         );
     }
 
