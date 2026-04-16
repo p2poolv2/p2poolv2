@@ -531,6 +531,51 @@ impl DefaultShareValidator {
         Ok(())
     }
 
+    /// Validate the BIP141 witness commitment in the share coinbase.
+    ///
+    /// The share coinbase must carry a 32-byte witness reserved value on
+    /// its input witness stack and a witness commitment output whose
+    /// 32-byte hash matches `SHA256d(witness_root || reserved_value)`,
+    /// where `witness_root` is the merkle root of share transaction
+    /// wtxids with the coinbase slot replaced by all-zeros (BIP141).
+    fn validate_share_witness_commitment(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        let coinbase = share
+            .transactions
+            .first()
+            .ok_or_else(|| ValidationError::new("Share block has no transactions"))?;
+
+        let witness_stack: Vec<&[u8]> = coinbase.input[0].witness.iter().collect();
+        if witness_stack.len() != 1 || witness_stack[0].len() != 32 {
+            return Err(ValidationError::new(
+                "Share coinbase input witness must be a single 32-byte reserved value",
+            ));
+        }
+        let witness_reserved_value = witness_stack[0];
+
+        // share coinbase has two outputs - a single miner output and
+        // then a witnesscommitment output
+        let commitment_script = coinbase.output[1].script_pubkey.as_bytes();
+        if commitment_script.len() != WITNESS_COMMITMENT_LENGTH
+            || commitment_script[..6] != [0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed]
+        {
+            return Err(ValidationError::new(
+                "Share coinbase witness commitment output has invalid BIP141 header",
+            ));
+        }
+
+        let other_share_transactions = &share.transactions[1..];
+        let witness_root = compute_witness_root(other_share_transactions);
+        let expected_commitment = compute_commitment_hash(&witness_root, witness_reserved_value);
+
+        if commitment_script[6..] != expected_commitment.as_byte_array()[..] {
+            return Err(ValidationError::new(
+                "Share coinbase witness commitment does not match recomputed witness root",
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Validate the bitcoin coinbase by reconstructing it from the share header
     /// fields and verifying the merkle root matches the bitcoin header.
     fn validate_bitcoin_coinbase(
@@ -758,6 +803,7 @@ impl ShareValidator for DefaultShareValidator {
         self.validate_share_coinbase(share)?;
         self.validate_bitcoin_coinbase(share, pplns_window)?;
         self.validate_merkle_root(share)?;
+        self.validate_share_witness_commitment(share)?;
         self.validate_transaction_count(share)?;
         self.validate_transactions(share)?;
         self.validate_scripts_values_and_sigops(share, chain_store_handle)?;
@@ -3304,6 +3350,87 @@ mod tests {
             error.to_string().contains("sigop cost")
                 && error.to_string().contains("exceeds maximum"),
             "Expected sigop cost exceeded error, got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_validate_share_witness_commitment_succeeds_for_valid_block() {
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        let result = validator().validate_share_witness_commitment(&share);
+        assert!(
+            result.is_ok(),
+            "Expected valid witness commitment, got: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_validate_share_witness_commitment_fails_for_tampered_commitment() {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+
+        // Flip a byte inside the 32-byte commitment hash (after the 6-byte header).
+        let mut script_bytes = share.transactions[0].output[1]
+            .script_pubkey
+            .as_bytes()
+            .to_vec();
+        script_bytes[10] ^= 0xFF;
+        share.transactions[0].0.output[1].script_pubkey = ScriptBuf::from(script_bytes);
+
+        let error = validator()
+            .validate_share_witness_commitment(&share)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not match recomputed witness root"),
+            "Expected commitment mismatch error, got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_validate_share_witness_commitment_fails_for_bad_bip141_header() {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+
+        // Corrupt the BIP141 magic bytes in the commitment output.
+        let mut script_bytes = share.transactions[0].output[1]
+            .script_pubkey
+            .as_bytes()
+            .to_vec();
+        script_bytes[2] = 0x00;
+        share.transactions[0].0.output[1].script_pubkey = ScriptBuf::from(script_bytes);
+
+        let error = validator()
+            .validate_share_witness_commitment(&share)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("invalid BIP141 header"),
+            "Expected BIP141 header error, got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_validate_share_witness_commitment_fails_for_bad_reserved_value() {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+
+        // Replace the 32-byte reserved value with a 16-byte value.
+        let mut witness = bitcoin::Witness::new();
+        witness.push([0u8; 16]);
+        share.transactions[0].0.input[0].witness = witness;
+
+        let error = validator()
+            .validate_share_witness_commitment(&share)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("single 32-byte reserved value"),
+            "Expected reserved value error, got: {error}"
         );
     }
 }
