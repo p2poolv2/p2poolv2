@@ -504,7 +504,7 @@ impl DefaultShareValidator {
             ));
         }
 
-        // Two coinbase outputs: first to the miner and second a witness commitment ouput
+        // Two coinbase outputs: first to the miner and second a witness commitment output
         if coinbase.output.len() != 2 {
             return Err(ValidationError::new(format!(
                 "Share coinbase has {} outputs, expected 2",
@@ -554,7 +554,14 @@ impl DefaultShareValidator {
 
         // share coinbase has two outputs - a single miner output and
         // then a witnesscommitment output
-        let commitment_script = coinbase.output[1].script_pubkey.as_bytes();
+        let commitment_output = &coinbase.output[1];
+        if commitment_output.value != Amount::ZERO {
+            return Err(ValidationError::new(format!(
+                "Share coinbase witness commitment output must have zero value, got {}",
+                commitment_output.value
+            )));
+        }
+        let commitment_script = commitment_output.script_pubkey.as_bytes();
         if commitment_script.len() != WITNESS_COMMITMENT_LENGTH
             || commitment_script[..6] != [0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed]
         {
@@ -3431,6 +3438,25 @@ mod tests {
         assert!(
             error.to_string().contains("single 32-byte reserved value"),
             "Expected reserved value error, got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_validate_share_witness_commitment_fails_for_non_zero_commitment_value() {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+
+        // Set a non-zero value on the commitment output (BIP141 requires
+        // zero value so miners cannot burn funds into an unspendable output).
+        share.transactions[0].0.output[1].value = bitcoin::Amount::from_sat(1);
+
+        let error = validator()
+            .validate_share_witness_commitment(&share)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("must have zero value"),
+            "Expected zero-value error, got: {error}"
         );
     }
 }
