@@ -96,6 +96,11 @@ pub struct StratumConfig<State = Raw> {
     pub difficulty_multiplier: f64,
     /// Test config to ignore difficulty
     pub ignore_difficulty: Option<bool>,
+    /// Enable testnet4 min-difficulty block filtering. Only used when
+    /// `network` is `bitcoin::Network::Testnet4` and is used to fork
+    /// off mindifff attacker blocks mined under the 20-minute rule
+    /// during the timing attack.
+    pub testnet4_block_filtering_enabled: Option<bool>,
     /// Optional pool signature to include in coinbase
     pub pool_signature: Option<String>,
 
@@ -165,6 +170,7 @@ impl StratumConfig<Raw> {
             version_mask: self.version_mask,
             difficulty_multiplier: self.difficulty_multiplier,
             ignore_difficulty: self.ignore_difficulty,
+            testnet4_block_filtering_enabled: self.testnet4_block_filtering_enabled,
             pool_signature: self.pool_signature,
             bootstrap_address_parsed: Some(bootstrap_address_parsed),
             donation_address_parsed,
@@ -215,6 +221,7 @@ impl StratumConfig<Raw> {
             version_mask: 0x1fffe000,
             difficulty_multiplier: 1.0,
             ignore_difficulty: None,
+            testnet4_block_filtering_enabled: None,
             pool_signature: None,
             bootstrap_address_parsed: None,
             donation_address_parsed: None,
@@ -480,6 +487,11 @@ impl Config {
 
     pub fn with_ignore_difficulty(mut self, ignore_difficulty: Option<bool>) -> Self {
         self.stratum.ignore_difficulty = ignore_difficulty;
+        self
+    }
+
+    pub fn with_testnet4_block_filtering_enabled(mut self, enabled: Option<bool>) -> Self {
+        self.stratum.testnet4_block_filtering_enabled = enabled;
         self
     }
 
