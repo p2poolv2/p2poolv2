@@ -171,6 +171,13 @@ async fn main() -> ExitCode {
         }
     };
 
+    let testnet4_filtering_enabled = stratum_config
+        .testnet4_block_filtering_enabled
+        .unwrap_or(false);
+    if testnet4_filtering_enabled && stratum_config.network == bitcoin::Network::Testnet4 {
+        info!("Testnet4 min-difficulty block filtering ENABLED");
+    }
+
     let exit_sender_gbt = exit_sender.clone();
     let exit_receiver_gbt = exit_sender.subscribe();
     tokio::spawn(async move {
@@ -180,6 +187,7 @@ async fn main() -> ExitCode {
             GBT_POLL_INTERVAL,
             stratum_config.network,
             zmq_trigger_rx,
+            testnet4_filtering_enabled,
         )
         .await
         {

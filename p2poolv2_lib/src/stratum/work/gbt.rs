@@ -17,6 +17,7 @@
 use crate::stratum::work::block_template::BlockTemplate;
 use crate::stratum::work::error::WorkError;
 use crate::stratum::work::notify::{NotifyCmd, NotifySender};
+use crate::stratum::work::testnet4_mitigation::fetch_block_template_with_filtering;
 use bitcoin::hashes::{Hash, sha256d};
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use std::sync::Arc;
@@ -106,26 +107,39 @@ pub(crate) async fn fetch_template_directly(
     }
 }
 
-/// Get a new blocktemplate from the bitcoind server
-/// Parse the received JSON into a BlockTemplate struct and return it.
-#[allow(dead_code)]
+/// Get a new blocktemplate from the bitcoind server.
+///
+/// When `testnet4_filtering_enabled` is set and the active network is
+/// testnet4, this dispatches through the testnet4 mitigation entry point
+/// which invalidates min-difficulty ancestor blocks before fetching the
+/// template. In every other case it goes straight to bitcoind.
 async fn get_block_template(
     bitcoind: &BitcoindRpcClient,
     network: bitcoin::Network,
+    testnet4_filtering_enabled: bool,
 ) -> Result<BlockTemplate, Box<dyn std::error::Error + Send + Sync>> {
-    fetch_template_directly(bitcoind, network).await
+    if testnet4_filtering_enabled && network == bitcoin::Network::Testnet4 {
+        fetch_block_template_with_filtering(bitcoind, network).await
+    } else {
+        fetch_template_directly(bitcoind, network).await
+    }
 }
 
 /// Start a task to fetch block templates from bitcoind
 ///
 /// Listen to zmqpubhashblock from bitcoind.
 /// Otherwise, poll for new block templates every poll_interval seconds.
+///
+/// When `testnet4_filtering_enabled` is true and the network is testnet4,
+/// every template fetch routes through the testnet4 mitigation, which
+/// invalidates min-difficulty ancestors at the tip before fetching.
 pub async fn start_gbt(
     bitcoin_config: BitcoinRpcConfig,
     result_tx: NotifySender,
     poll_interval: u64,
     network: bitcoin::Network,
     mut zmq_trigger_rx: tokio::sync::mpsc::Receiver<()>,
+    testnet4_filtering_enabled: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Create the RPC client once and reuse it for all requests
     let bitcoind = match BitcoindRpcClient::new(
@@ -147,7 +161,7 @@ pub async fn start_gbt(
         info!("Bitcoin network difficulty: {}", difficulty);
     }
 
-    let template = match get_block_template(&bitcoind, network).await {
+    let template = match get_block_template(&bitcoind, network, testnet4_filtering_enabled).await {
         Ok(template) => template,
         Err(e) => {
             info!("Error getting block template: {}", e);
@@ -174,7 +188,7 @@ pub async fn start_gbt(
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    match get_block_template(&bitcoind, network).await {
+                    match get_block_template(&bitcoind, network, testnet4_filtering_enabled).await {
                         Ok(template) => {
                             if result_tx
                                 .send(NotifyCmd::SendToAll {
@@ -195,7 +209,7 @@ pub async fn start_gbt(
                     match result {
                         Some(_) => {
                             debug!("Received ZMQ block notification");
-                            match get_block_template(&bitcoind, network).await {
+                            match get_block_template(&bitcoind, network, testnet4_filtering_enabled).await {
                                 Ok(template) => {
                                     if result_tx
                                         .send(NotifyCmd::SendToAll {
@@ -257,7 +271,7 @@ mod gbt_load_tests {
             &bitcoinrpc_config.password,
         )
         .unwrap();
-        let result = get_block_template(&bitcoind, bitcoin::Network::Signet).await;
+        let result = get_block_template(&bitcoind, bitcoin::Network::Signet, false).await;
 
         assert!(result.is_ok());
         let template = result.unwrap();
@@ -275,6 +289,172 @@ mod gbt_load_tests {
                     .to_string()
             )
         )
+    }
+
+    /// When the flag is on AND the network is Testnet4, get_block_template
+    /// must route through the mitigation entry point. We verify this by
+    /// observing that getbestblockhash is called (which the mitigation does
+    /// before fetching the template, and the direct path never does).
+    #[tokio::test]
+    async fn test_get_block_template_dispatches_to_filtering_when_enabled_on_testnet4() {
+        let template_fixture = GBT_NO_TRANSACTIONS_FIXTURE;
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+
+        // Mitigation path: tip lookup + header lookup that immediately exits
+        // the loop (non-min-diff bits) so we don't need an invalidate mock.
+        let tip_hash = "0000000000000000000000000000000000000000000000000000000000000001";
+        mock_method(
+            &mock_server,
+            "getbestblockhash",
+            serde_json::json!([]),
+            format!("\"{tip_hash}\""),
+        )
+        .await;
+        let header_response = serde_json::json!({
+            "hash": tip_hash,
+            "height": 100,
+            "bits": "1a01f56e",
+            "version": 1,
+            "time": 1610000000,
+        });
+        mock_method(
+            &mock_server,
+            "getblockheader",
+            serde_json::json!([tip_hash, true]),
+            header_response.to_string(),
+        )
+        .await;
+
+        // Final template fetch uses the testnet4 (non-signet) rules.
+        mock_method(
+            &mock_server,
+            "getblocktemplate",
+            serde_json::json!([{
+                "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+                "rules": ["segwit"],
+            }]),
+            template_fixture.to_string(),
+        )
+        .await;
+
+        let bitcoind = BitcoindRpcClient::new(
+            &bitcoinrpc_config.url,
+            &bitcoinrpc_config.username,
+            &bitcoinrpc_config.password,
+        )
+        .unwrap();
+        let result = get_block_template(&bitcoind, bitcoin::Network::Testnet4, true).await;
+        assert!(result.is_ok());
+
+        // Confirm the mitigation path actually ran: getbestblockhash was hit.
+        let received = mock_server.received_requests().await.unwrap();
+        let saw_getbestblockhash = received.iter().any(|request| {
+            request
+                .body_json::<serde_json::Value>()
+                .ok()
+                .and_then(|body| {
+                    body.get("method")
+                        .and_then(|method| method.as_str())
+                        .map(str::to_string)
+                })
+                .as_deref()
+                == Some("getbestblockhash")
+        });
+        assert!(
+            saw_getbestblockhash,
+            "expected mitigation to call getbestblockhash"
+        );
+    }
+
+    /// When the flag is OFF, get_block_template must skip the mitigation even
+    /// on Testnet4. We verify by mocking only getblocktemplate and confirming
+    /// no getbestblockhash request reached bitcoind.
+    #[tokio::test]
+    async fn test_get_block_template_skips_filtering_when_disabled() {
+        let template_fixture = GBT_NO_TRANSACTIONS_FIXTURE;
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        mock_method(
+            &mock_server,
+            "getblocktemplate",
+            serde_json::json!([{
+                "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+                "rules": ["segwit"],
+            }]),
+            template_fixture.to_string(),
+        )
+        .await;
+
+        let bitcoind = BitcoindRpcClient::new(
+            &bitcoinrpc_config.url,
+            &bitcoinrpc_config.username,
+            &bitcoinrpc_config.password,
+        )
+        .unwrap();
+        let result = get_block_template(&bitcoind, bitcoin::Network::Testnet4, false).await;
+        assert!(result.is_ok());
+
+        let received = mock_server.received_requests().await.unwrap();
+        let saw_getbestblockhash = received.iter().any(|request| {
+            request
+                .body_json::<serde_json::Value>()
+                .ok()
+                .and_then(|body| {
+                    body.get("method")
+                        .and_then(|method| method.as_str())
+                        .map(str::to_string)
+                })
+                .as_deref()
+                == Some("getbestblockhash")
+        });
+        assert!(
+            !saw_getbestblockhash,
+            "mitigation should not run when flag is off"
+        );
+    }
+
+    /// Even with the flag ON, get_block_template must skip mitigation on a
+    /// non-Testnet4 network.
+    #[tokio::test]
+    async fn test_get_block_template_skips_filtering_off_testnet4() {
+        let template_fixture = GBT_NO_TRANSACTIONS_FIXTURE;
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        mock_method(
+            &mock_server,
+            "getblocktemplate",
+            serde_json::json!([{
+                "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+                "rules": ["segwit", "signet"],
+            }]),
+            template_fixture.to_string(),
+        )
+        .await;
+
+        let bitcoind = BitcoindRpcClient::new(
+            &bitcoinrpc_config.url,
+            &bitcoinrpc_config.username,
+            &bitcoinrpc_config.password,
+        )
+        .unwrap();
+        let result = get_block_template(&bitcoind, bitcoin::Network::Signet, true).await;
+        assert!(result.is_ok());
+
+        let received = mock_server.received_requests().await.unwrap();
+        let saw_getbestblockhash = received.iter().any(|request| {
+            request
+                .body_json::<serde_json::Value>()
+                .ok()
+                .and_then(|body| {
+                    body.get("method")
+                        .and_then(|method| method.as_str())
+                        .map(str::to_string)
+                })
+                .as_deref()
+                == Some("getbestblockhash")
+        });
+        assert!(
+            !saw_getbestblockhash,
+            "mitigation should not run off testnet4"
+        );
     }
 
     // The test data comes from tests/test_data/gbt/regtest/ckpool/one-txn dir
@@ -481,6 +661,7 @@ mod gbt_server_tests {
             1,
             bitcoin::Network::Signet,
             zmq_trigger_rx,
+            false,
         )
         .await;
 
@@ -535,6 +716,7 @@ mod gbt_server_tests {
             60,
             bitcoin::Network::Signet,
             zmq_trigger_rx,
+            false,
         )
         .await;
 
