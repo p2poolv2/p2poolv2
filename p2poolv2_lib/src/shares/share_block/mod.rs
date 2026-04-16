@@ -359,7 +359,7 @@ impl ShareBlock {
             .parse::<CompressedPublicKey>()
             .unwrap();
         let btcaddress = Address::p2wpkh(&public_key, network);
-        let coinbase = transactions::coinbase::create_coinbase_transaction(&btcaddress);
+        let coinbase = transactions::coinbase::create_coinbase_transaction(&btcaddress, &[]);
         let coinbase_value = coinbase
             .output
             .iter()
@@ -589,7 +589,8 @@ mod tests {
         assert_eq!(share.header.miner_bitcoin_address, expected_address);
         assert_eq!(share.transactions.len(), 1);
         assert!(share.transactions[0].is_coinbase());
-        assert_eq!(share.transactions[0].output.len(), 1);
+        // payout output + BIP141 witness commitment output
+        assert_eq!(share.transactions[0].output.len(), 2);
         assert_eq!(share.transactions[0].input.len(), 1);
 
         let output = &share.transactions[0].output[0];
@@ -606,9 +607,11 @@ mod tests {
     fn test_share_block_new_includes_coinbase_transaction() {
         let share_block = TestShareBlockBuilder::new().build();
 
-        // Verify the coinbase transaction exists and has expected properties
+        // Verify the coinbase transaction exists and has expected properties.
+        // The share coinbase has two outputs: the payout and the BIP141
+        // witness commitment.
         assert!(share_block.transactions[0].is_coinbase());
-        assert_eq!(share_block.transactions[0].output.len(), 1);
+        assert_eq!(share_block.transactions[0].output.len(), 2);
         assert_eq!(share_block.transactions[0].input.len(), 1);
 
         let output = &share_block.transactions[0].output[0];

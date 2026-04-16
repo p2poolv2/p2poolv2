@@ -49,10 +49,19 @@ pub async fn handle_stratum_share(
 
     // Send share to peers only in p2p mode, i.e. if the pool is run with a miner address that results in a commitment
     if let Some(share_commitment) = share_commitment {
-        let share_coinbase = create_coinbase_transaction(&share_commitment.miner_bitcoin_address);
+        // TODO: Get share chain transactions and use them here. When
+        // non-coinbase share transactions are added, pass them to
+        // create_coinbase_transaction so the BIP141 witness commitment
+        // covers their wtxids.
+        let other_share_transactions: Vec<ShareTransaction> = Vec::new();
+        let share_coinbase = create_coinbase_transaction(
+            &share_commitment.miner_bitcoin_address,
+            &other_share_transactions,
+        );
 
-        // TODO: Get share chain transactions and use them here.
-        let share_transactions = vec![ShareTransaction(share_coinbase)];
+        let mut share_transactions = Vec::with_capacity(1 + other_share_transactions.len());
+        share_transactions.push(ShareTransaction(share_coinbase));
+        share_transactions.extend(other_share_transactions);
 
         let txids = share_transactions
             .iter()

@@ -38,10 +38,13 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::{ShareBlock, ShareTransaction};
 use crate::shares::share_commitment::ShareCommitment;
+use crate::shares::transactions::coinbase::{compute_commitment_hash, compute_witness_root};
+use crate::shares::witness_commitment::WITNESS_COMMITMENT_LENGTH;
 use crate::store::block_tx_metadata::Status;
 use crate::stratum::work::coinbase::build_coinbase_transaction;
 use crate::stratum::work::gbt::compute_merkle_root_from_branches;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
+use bitcoin::hashes::Hash as HashTrait;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::{
     Address, Amount, BlockHash, CompactTarget, Target, TxMerkleNode, transaction::Version,
@@ -488,7 +491,7 @@ impl DefaultShareValidator {
     }
 
     /// Validate the share coinbase creates an output with 1 share
-    /// unit to the miner address in the header.
+    /// unit to the miner address in the header and second a witness commitment output
     fn validate_share_coinbase(&self, share: &ShareBlock) -> Result<(), ValidationError> {
         let coinbase = share
             .transactions
@@ -501,9 +504,10 @@ impl DefaultShareValidator {
             ));
         }
 
-        if coinbase.output.len() != 1 {
+        // Two coinbase outputs: first to the miner and second a witness commitment ouput
+        if coinbase.output.len() != 2 {
             return Err(ValidationError::new(format!(
-                "Share coinbase has {} outputs, expected 1",
+                "Share coinbase has {} outputs, expected 2",
                 coinbase.output.len()
             )));
         }
