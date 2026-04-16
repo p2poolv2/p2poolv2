@@ -335,10 +335,11 @@ impl ShareBlock {
     pub fn build_genesis_for_network(
         network: bitcoin::Network,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        tracing::debug!("USING NETWORK {network}");
         assert!(
             network == bitcoin::Network::Signet
-                || network == bitcoin::Network::Testnet4
-                || network == bitcoin::Network::Bitcoin,
+                || network == bitcoin::Network::Bitcoin
+                || network == bitcoin::Network::Testnet4,
             "Network Testnet and Regtest not yet supported"
         );
         let genesis_data = genesis::genesis_data(network).unwrap();
