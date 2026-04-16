@@ -21,4 +21,5 @@ pub(crate) mod error;
 pub mod gbt;
 pub mod notify;
 pub mod prepared_notify;
+pub mod testnet4_mitigation;
 pub mod tracker;

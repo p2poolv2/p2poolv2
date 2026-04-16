@@ -82,10 +82,12 @@ fn compute_merkle_branches(input_txids: Vec<sha256d::Hash>) -> Vec<sha256d::Hash
     merkle_branches
 }
 
-/// Get a new blocktemplate from the bitcoind server
+/// Get a new blocktemplate directly from bitcoind without any filtering.
 /// Parse the received JSON into a BlockTemplate struct and return it.
-#[allow(dead_code)]
-async fn get_block_template(
+///
+/// Used by both the production path and the testnet4 mitigation entry
+/// point (after it has invalidated min-difficulty ancestors).
+pub(crate) async fn fetch_template_directly(
     bitcoind: &BitcoindRpcClient,
     network: bitcoin::Network,
 ) -> Result<BlockTemplate, Box<dyn std::error::Error + Send + Sync>> {
@@ -102,6 +104,16 @@ async fn get_block_template(
             message: e.to_string(),
         })),
     }
+}
+
+/// Get a new blocktemplate from the bitcoind server
+/// Parse the received JSON into a BlockTemplate struct and return it.
+#[allow(dead_code)]
+async fn get_block_template(
+    bitcoind: &BitcoindRpcClient,
+    network: bitcoin::Network,
+) -> Result<BlockTemplate, Box<dyn std::error::Error + Send + Sync>> {
+    fetch_template_directly(bitcoind, network).await
 }
 
 /// Start a task to fetch block templates from bitcoind
