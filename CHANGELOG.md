@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Input value sufficiency validation: non-coinbase share transactions
+  are rejected if total input value is less than total output value,
+  and total input value must not exceed `Amount::MAX_MONEY`
+  
+- Sigop cost validation: share blocks are rejected when the aggregate
+  BIP141 sigop cost exceeds `MAX_BLOCK_SIGOPS_COST` (80000), using
+  `Transaction::total_sigop_cost` with the collected spent outputs
+
+- BIP141 witness commitment on the share coinbase: the coinbase now
+  carries a second output containing `SHA256d(witness_root ||
+  reserved_value)` over wtxids of the share transactions (coinbase
+  wtxid replaced with all-zeros per BIP141), and the coinbase input
+  carries the 32-byte witness reserved value on its witness stack
+
+- `validate_share_witness_commitment` validator recomputes the
+  witness root and compares it against the embedded commitment
+
+- `StoredTxIn` wrapper persists TxIn witness data in the Inputs CF
+  (bitcoin's `TxIn::consensus_encode` does not include witness, since
+  BIP144 serializes witnesses at the Transaction level)
+
+### Changed
+
+- **Breaking database change**: the Inputs CF now stores TxIn bytes
+  followed by the witness encoding via `StoredTxIn`. Existing
+  databases populated by earlier versions cannot be read; users must
+  resync from genesis. `rm -rf store.db` and then start again.
+
+- `create_coinbase_transaction` now takes the other share
+  transactions so it can compute the BIP141 witness commitment
+
+- `validate_share_coinbase` expects two coinbase outputs (payout +
+  witness commitment) instead of one
+
+- `validate_scripts` refactored to `validate_scripts_values_and_sigops`
+  which collects spent outputs once per transaction and runs script,
+  value, and sigop validation in a single pass
+
+### Fixed
+
+- `test_three_nodes_share_sync` ignored: the
+  `test_data/share_sync/share_blocks.json` fixture predates the
+  BIP141 share coinbase format and needs regeneration
+
 ## [v0.9.1] - 2026-04-13
 
 ### Changed
