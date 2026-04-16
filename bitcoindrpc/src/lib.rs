@@ -327,6 +327,51 @@ impl BitcoindRpcClient {
         let result: serde_json::Value = self.request("submitblock", params).await?;
         Ok(result.to_string())
     }
+
+    /// Get the hash of the current best (tip) block from bitcoind.
+    pub async fn getbestblockhash(&self) -> Result<bitcoin::BlockHash, BitcoindRpcError> {
+        let result: String = self.request("getbestblockhash", vec![]).await?;
+        result
+            .parse::<bitcoin::BlockHash>()
+            .map_err(|e| BitcoindRpcError::ParseError {
+                message: format!("Failed to parse best block hash: {e}"),
+            })
+    }
+
+    /// Get the compact `bits` field for a block header from bitcoind.
+    ///
+    /// Calls `getblockheader <hash> true` and parses the hex `bits` field into
+    /// a `u32`. Only the bits are returned because the testnet4 mitigation
+    /// only needs to compare the compact target to the pow_limit constant.
+    pub async fn getblockheader_bits(
+        &self,
+        hash: &bitcoin::BlockHash,
+    ) -> Result<u32, BitcoindRpcError> {
+        let params = vec![
+            serde_json::Value::String(hash.to_string()),
+            serde_json::Value::Bool(true),
+        ];
+        let result: serde_json::Value = self.request("getblockheader", params).await?;
+        let bits_hex = result
+            .get("bits")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| BitcoindRpcError::ParseError {
+                message: "getblockheader response missing 'bits' string field".to_string(),
+            })?;
+        u32::from_str_radix(bits_hex, 16).map_err(|e| BitcoindRpcError::ParseError {
+            message: format!("Failed to parse bits hex '{bits_hex}': {e}"),
+        })
+    }
+
+    /// Mark a block as invalid in bitcoind, forcing a reorg off it.
+    ///
+    /// Used by the testnet4 mitigation to fork off attacker-mined
+    /// min-difficulty blocks before requesting a new template.
+    pub async fn invalidateblock(&self, hash: &bitcoin::BlockHash) -> Result<(), BitcoindRpcError> {
+        let params = vec![serde_json::Value::String(hash.to_string())];
+        let _: serde_json::Value = self.request("invalidateblock", params).await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -672,6 +717,96 @@ mod tests {
         assert!(result.is_ok());
         let result_value = serde_json::from_str::<serde_json::Value>(&result.unwrap()).unwrap();
         assert_eq!(result_value.get("height").unwrap(), 1000000);
+    }
+
+    #[tokio::test]
+    async fn test_getbestblockhash() {
+        let mock_server = MockServer::start().await;
+        let expected_hash =
+            "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054".to_string();
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getbestblockhash",
+                "params": [],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": expected_hash,
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let hash = client.getbestblockhash().await.unwrap();
+        assert_eq!(hash.to_string(), expected_hash);
+    }
+
+    #[tokio::test]
+    async fn test_getblockheader_bits() {
+        let mock_server = MockServer::start().await;
+        let block_hash: bitcoin::BlockHash =
+            "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054"
+                .parse()
+                .unwrap();
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getblockheader",
+                "params": [block_hash.to_string(), true],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "hash": block_hash.to_string(),
+                    "height": 100,
+                    "bits": "1d00ffff",
+                    "version": 1,
+                    "time": 1610000000,
+                },
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let bits = client.getblockheader_bits(&block_hash).await.unwrap();
+        assert_eq!(bits, 0x1d00ffff);
+    }
+
+    #[tokio::test]
+    async fn test_invalidateblock() {
+        let mock_server = MockServer::start().await;
+        let block_hash: bitcoin::BlockHash =
+            "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054"
+                .parse()
+                .unwrap();
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "invalidateblock",
+                "params": [block_hash.to_string()],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": null,
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        client.invalidateblock(&block_hash).await.unwrap();
     }
 
     #[tokio::test]
