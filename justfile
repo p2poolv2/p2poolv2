@@ -76,7 +76,7 @@ check:
 
 # Run cli commands using p2poolv2-cli - e.g. just cli info
 cli *args:
-    cargo run -p p2poolv2_cli -- {{ args }}
+    cargo run -p p2poolv2_node --bin p2poolv2_cli -- {{ args }}
 
 # Format source code
 fmt:

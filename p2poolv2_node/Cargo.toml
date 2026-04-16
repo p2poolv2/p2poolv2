@@ -11,6 +11,7 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 rust-version.workspace = true
+default-run = "p2poolv2"
 
 [dependencies]
 tokio = { workspace = true }
