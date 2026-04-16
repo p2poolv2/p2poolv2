@@ -109,7 +109,7 @@ pub fn make_test_address(index: usize) -> Address {
 #[cfg(any(test, feature = "test-utils"))]
 pub fn test_coinbase_transaction(index: usize) -> bitcoin::Transaction {
     let address = make_test_address(index);
-    create_coinbase_transaction(&address)
+    create_coinbase_transaction(&address, &[])
 }
 
 /// Setup returns both chain handle and tempdir (tempdir must stay alive)
@@ -551,10 +551,16 @@ impl TestShareBlockBuilder {
         let pubkey = CompressedPublicKey::from_str(pubkey_hex).unwrap();
         let btcaddress = Address::p2wpkh(&pubkey, bitcoin::Network::Signet);
 
-        let coinbase = create_coinbase_transaction(&btcaddress);
+        let other_share_transactions: Vec<ShareTransaction> = self
+            .transactions
+            .into_iter()
+            .map(ShareTransaction)
+            .collect();
+        let coinbase = create_coinbase_transaction(&btcaddress, &other_share_transactions);
         let all_transactions: Vec<ShareTransaction> = {
-            let mut txs = vec![ShareTransaction(coinbase)];
-            txs.extend(self.transactions.into_iter().map(ShareTransaction));
+            let mut txs = Vec::with_capacity(1 + other_share_transactions.len());
+            txs.push(ShareTransaction(coinbase));
+            txs.extend(other_share_transactions);
             txs
         };
         test_share_block(

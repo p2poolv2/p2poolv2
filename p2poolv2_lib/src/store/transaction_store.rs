@@ -58,6 +58,39 @@ impl Decodable for StoredTxOut {
     }
 }
 
+/// A TxIn stored in the Inputs CF together with its witness.
+///
+/// `bitcoin::TxIn::consensus_encode` does not include the witness
+/// (witness data lives at the Transaction level under BIP144).
+/// Storing the witness alongside the TxIn ensures segwit share
+/// transactions survive a store roundtrip and can be relayed to peers
+/// with their witness intact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredTxIn {
+    pub tx_in: bitcoin::TxIn,
+}
+
+impl Encodable for StoredTxIn {
+    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+        &self,
+        writer: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        let mut length = self.tx_in.consensus_encode(writer)?;
+        length += self.tx_in.witness.consensus_encode(writer)?;
+        Ok(length)
+    }
+}
+
+impl Decodable for StoredTxIn {
+    fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
+        reader: &mut R,
+    ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        let mut tx_in = bitcoin::TxIn::consensus_decode(reader)?;
+        tx_in.witness = bitcoin::Witness::consensus_decode(reader)?;
+        Ok(StoredTxIn { tx_in })
+    }
+}
+
 #[allow(dead_code)]
 impl Store {
     /// Retrieve all previous outputs being spent by a transaction's inputs.
@@ -307,8 +340,10 @@ impl Store {
 
             for (i, input) in tx.input.iter().enumerate() {
                 let input_key = format!("{txid}:{i}");
-                let mut serialized = Vec::new();
-                input.consensus_encode(&mut serialized)?;
+                let stored = StoredTxIn {
+                    tx_in: input.clone(),
+                };
+                let serialized = consensus::serialize(&stored);
                 batch.put_cf::<&[u8], Vec<u8>>(&inputs_cf, input_key.as_ref(), serialized);
             }
 
@@ -661,8 +696,8 @@ impl Store {
                 .get_cf::<&[u8]>(&inputs_cf, input_key.as_ref())
                 .unwrap()
                 .unwrap();
-            let input: bitcoin::TxIn = match encode::deserialize(&input) {
-                Ok(input) => input,
+            let input: bitcoin::TxIn = match encode::deserialize::<StoredTxIn>(&input) {
+                Ok(stored) => stored.tx_in,
                 Err(e) => {
                     tracing::error!("Error deserializing input: {e:?}");
                     return Err(e.into());
@@ -756,9 +791,10 @@ impl Store {
             let bytes = result?.ok_or_else(|| {
                 StoreError::NotFound(format!("Input not found for {}", keys[index]))
             })?;
-            decoded.push(encode::deserialize(&bytes).map_err(|_| {
+            let stored: StoredTxIn = encode::deserialize(&bytes).map_err(|_| {
                 StoreError::Serialization("Failed to deserialize input".to_string())
-            })?);
+            })?;
+            decoded.push(stored.tx_in);
         }
 
         // group the offset based inputs for each txid
