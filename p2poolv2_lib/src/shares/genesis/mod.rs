@@ -44,9 +44,9 @@ const SIGNET_GENESIS_DATA: GenesisData = GenesisData {
 
 const TESTNET4_GENESIS_DATA: GenesisData = GenesisData {
     public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
-    // for bitcoin blockhash 000000003fba69400bbc385acd52b07dbe7779ea5f8995dd4aadf4a86b74cc55
-    bitcoin_block_hex: "",
-    bitcoin_height: 0,
+    // for bitcoin blockhash 00000000000000013c0a1f4152b458118ed666282e6235d744bf2a5d66ecf022
+    bitcoin_block_hex: include!("testnet4.rs"),
+    bitcoin_height: 130754,
 };
 
 // Using the following JSON data for the genesis block
