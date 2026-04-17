@@ -372,6 +372,17 @@ impl BitcoindRpcClient {
         let _: serde_json::Value = self.request("invalidateblock", params).await?;
         Ok(())
     }
+
+    /// Remove the invalid-block mark from a block and all its descendants,
+    /// letting bitcoind re-evaluate and potentially reorg to the restored chain.
+    ///
+    /// Used by the testnet4 mitigation's periodic reconsider task to let the
+    /// chain catch up after invalidating min-difficulty blocks.
+    pub async fn reconsiderblock(&self, hash: &bitcoin::BlockHash) -> Result<(), BitcoindRpcError> {
+        let params = vec![serde_json::Value::String(hash.to_string())];
+        let _: serde_json::Value = self.request("reconsiderblock", params).await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -807,6 +818,34 @@ mod tests {
 
         let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
         client.invalidateblock(&block_hash).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_reconsiderblock() {
+        let mock_server = MockServer::start().await;
+        let block_hash: bitcoin::BlockHash =
+            "00000000000000000002a7c4c1e48d76c5a37902165a270156b7a8d72728a054"
+                .parse()
+                .unwrap();
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "reconsiderblock",
+                "params": [block_hash.to_string()],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": null,
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        client.reconsiderblock(&block_hash).await.unwrap();
     }
 
     #[tokio::test]
