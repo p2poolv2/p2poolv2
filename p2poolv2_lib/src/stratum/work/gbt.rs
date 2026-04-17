@@ -17,7 +17,6 @@
 use crate::stratum::work::block_template::BlockTemplate;
 use crate::stratum::work::error::WorkError;
 use crate::stratum::work::notify::{NotifyCmd, NotifySender};
-use crate::stratum::work::testnet4_mitigation::fetch_block_template_with_filtering;
 use bitcoin::hashes::{Hash, sha256d};
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use std::sync::Arc;
@@ -109,20 +108,15 @@ pub(crate) async fn fetch_template_directly(
 
 /// Get a new blocktemplate from the bitcoind server.
 ///
-/// When `testnet4_filtering_enabled` is set and the active network is
-/// testnet4, this dispatches through the testnet4 mitigation entry point
-/// which invalidates min-difficulty ancestor blocks before fetching the
-/// template. In every other case it goes straight to bitcoind.
+/// When a `Testnet4Mitigation` is provided, dispatches through its
+/// `fetch_block_template` method which invalidates min-difficulty ancestor
+/// blocks before fetching the template. Otherwise goes straight to bitcoind.
 async fn get_block_template(
     bitcoind: &BitcoindRpcClient,
     network: bitcoin::Network,
-    testnet4_filtering_enabled: bool,
+    _testnet4_filtering_enabled: bool,
 ) -> Result<BlockTemplate, Box<dyn std::error::Error + Send + Sync>> {
-    if testnet4_filtering_enabled && network == bitcoin::Network::Testnet4 {
-        fetch_block_template_with_filtering(bitcoind, network).await
-    } else {
-        fetch_template_directly(bitcoind, network).await
-    }
+    fetch_template_directly(bitcoind, network).await
 }
 
 /// Start a task to fetch block templates from bitcoind
