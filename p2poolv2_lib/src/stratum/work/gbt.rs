@@ -17,6 +17,7 @@
 use crate::stratum::work::block_template::BlockTemplate;
 use crate::stratum::work::error::WorkError;
 use crate::stratum::work::notify::{NotifyCmd, NotifySender};
+use crate::stratum::work::testnet4_mitigation::Testnet4Mitigation;
 use bitcoin::hashes::{Hash, sha256d};
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use std::sync::Arc;
@@ -114,9 +115,12 @@ pub(crate) async fn fetch_template_directly(
 async fn get_block_template(
     bitcoind: &BitcoindRpcClient,
     network: bitcoin::Network,
-    _testnet4_filtering_enabled: bool,
+    mitigation: &Option<Arc<Testnet4Mitigation>>,
 ) -> Result<BlockTemplate, Box<dyn std::error::Error + Send + Sync>> {
-    fetch_template_directly(bitcoind, network).await
+    match mitigation.as_ref() {
+        Some(m) => m.fetch_block_template().await,
+        None => fetch_template_directly(bitcoind, network).await,
+    }
 }
 
 /// Start a task to fetch block templates from bitcoind
@@ -124,16 +128,16 @@ async fn get_block_template(
 /// Listen to zmqpubhashblock from bitcoind.
 /// Otherwise, poll for new block templates every poll_interval seconds.
 ///
-/// When `testnet4_filtering_enabled` is true and the network is testnet4,
-/// every template fetch routes through the testnet4 mitigation, which
-/// invalidates min-difficulty ancestors at the tip before fetching.
+/// When a `Testnet4Mitigation` is provided, every template fetch routes
+/// through its invalidation logic before fetching. Otherwise goes directly
+/// to bitcoind.
 pub async fn start_gbt(
     bitcoin_config: BitcoinRpcConfig,
     result_tx: NotifySender,
     poll_interval: u64,
     network: bitcoin::Network,
     mut zmq_trigger_rx: tokio::sync::mpsc::Receiver<()>,
-    testnet4_filtering_enabled: bool,
+    mitigation: Option<Arc<Testnet4Mitigation>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Create the RPC client once and reuse it for all requests
     let bitcoind = match BitcoindRpcClient::new(
@@ -155,7 +159,7 @@ pub async fn start_gbt(
         info!("Bitcoin network difficulty: {}", difficulty);
     }
 
-    let template = match get_block_template(&bitcoind, network, testnet4_filtering_enabled).await {
+    let template = match get_block_template(&bitcoind, network, &mitigation).await {
         Ok(template) => template,
         Err(e) => {
             info!("Error getting block template: {}", e);
@@ -182,7 +186,7 @@ pub async fn start_gbt(
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    match get_block_template(&bitcoind, network, testnet4_filtering_enabled).await {
+                    match get_block_template(&bitcoind, network, &mitigation).await {
                         Ok(template) => {
                             if result_tx
                                 .send(NotifyCmd::SendToAll {
@@ -203,7 +207,7 @@ pub async fn start_gbt(
                     match result {
                         Some(_) => {
                             debug!("Received ZMQ block notification");
-                            match get_block_template(&bitcoind, network, testnet4_filtering_enabled).await {
+                            match get_block_template(&bitcoind, network, &mitigation).await {
                                 Ok(template) => {
                                     if result_tx
                                         .send(NotifyCmd::SendToAll {
@@ -265,7 +269,7 @@ mod gbt_load_tests {
             &bitcoinrpc_config.password,
         )
         .unwrap();
-        let result = get_block_template(&bitcoind, bitcoin::Network::Signet, false).await;
+        let result = get_block_template(&bitcoind, bitcoin::Network::Signet, &None).await;
 
         assert!(result.is_ok());
         let template = result.unwrap();
@@ -337,7 +341,11 @@ mod gbt_load_tests {
             &bitcoinrpc_config.password,
         )
         .unwrap();
-        let result = get_block_template(&bitcoind, bitcoin::Network::Testnet4, true).await;
+        let mitigation = Some(Arc::new(Testnet4Mitigation::new(
+            bitcoind.clone(),
+            bitcoin::Network::Testnet4,
+        )));
+        let result = get_block_template(&bitcoind, bitcoin::Network::Testnet4, &mitigation).await;
         assert!(result.is_ok());
 
         // Confirm the mitigation path actually ran: getbestblockhash was hit.
@@ -384,7 +392,7 @@ mod gbt_load_tests {
             &bitcoinrpc_config.password,
         )
         .unwrap();
-        let result = get_block_template(&bitcoind, bitcoin::Network::Testnet4, false).await;
+        let result = get_block_template(&bitcoind, bitcoin::Network::Testnet4, &None).await;
         assert!(result.is_ok());
 
         let received = mock_server.received_requests().await.unwrap();
@@ -406,8 +414,8 @@ mod gbt_load_tests {
         );
     }
 
-    /// Even with the flag ON, get_block_template must skip mitigation on a
-    /// non-Testnet4 network.
+    /// When no mitigation is provided, get_block_template skips filtering
+    /// regardless of network.
     #[tokio::test]
     async fn test_get_block_template_skips_filtering_off_testnet4() {
         let template_fixture = GBT_NO_TRANSACTIONS_FIXTURE;
@@ -429,7 +437,7 @@ mod gbt_load_tests {
             &bitcoinrpc_config.password,
         )
         .unwrap();
-        let result = get_block_template(&bitcoind, bitcoin::Network::Signet, true).await;
+        let result = get_block_template(&bitcoind, bitcoin::Network::Signet, &None).await;
         assert!(result.is_ok());
 
         let received = mock_server.received_requests().await.unwrap();
@@ -655,7 +663,7 @@ mod gbt_server_tests {
             1,
             bitcoin::Network::Signet,
             zmq_trigger_rx,
-            false,
+            None,
         )
         .await;
 
@@ -710,7 +718,7 @@ mod gbt_server_tests {
             60,
             bitcoin::Network::Signet,
             zmq_trigger_rx,
-            false,
+            None,
         )
         .await;
 
