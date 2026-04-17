@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use bitcoindrpc::BitcoindRpcClient;
 use clap::Parser;
 use p2poolv2_api::start_api_server;
 use p2poolv2_lib::accounting::payout::sharechain_pplns::Payout;
@@ -31,6 +32,7 @@ use p2poolv2_lib::stratum::emission::Emission;
 use p2poolv2_lib::stratum::server::StratumServerBuilder;
 use p2poolv2_lib::stratum::work::gbt::start_gbt;
 use p2poolv2_lib::stratum::work::notify::start_notify;
+use p2poolv2_lib::stratum::work::testnet4_mitigation::Testnet4Mitigation;
 use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
 use p2poolv2_lib::stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
 use std::process::ExitCode;
@@ -171,12 +173,27 @@ async fn main() -> ExitCode {
         }
     };
 
-    let testnet4_filtering_enabled = stratum_config
-        .testnet4_block_filtering_enabled
-        .unwrap_or(false);
-    if testnet4_filtering_enabled && stratum_config.network == bitcoin::Network::Testnet4 {
+    let mitigation = if stratum_config.network == bitcoin::Network::Testnet4
+        && stratum_config
+            .testnet4_block_filtering_enabled
+            .unwrap_or(false)
+    {
         info!("Testnet4 min-difficulty block filtering ENABLED");
-    }
+        let mitigation_client = BitcoindRpcClient::new(
+            &bitcoinrpc_config.url,
+            &bitcoinrpc_config.username,
+            &bitcoinrpc_config.password,
+        )
+        .expect("bitcoinrpc client for testnet4 mitigation");
+        let m = Arc::new(Testnet4Mitigation::new(
+            mitigation_client,
+            stratum_config.network,
+        ));
+        m.start_reconsider_task();
+        Some(m)
+    } else {
+        None
+    };
 
     let exit_sender_gbt = exit_sender.clone();
     let exit_receiver_gbt = exit_sender.subscribe();
@@ -187,7 +204,7 @@ async fn main() -> ExitCode {
             GBT_POLL_INTERVAL,
             stratum_config.network,
             zmq_trigger_rx,
-            testnet4_filtering_enabled,
+            mitigation,
         )
         .await
         {
