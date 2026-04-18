@@ -95,12 +95,21 @@ p2poolv2_cli --help
 === Setup Systemd Service
 
 To setup as a systemd service, use the systemd service file provided
-link:./p2poolv2.service[p2poolv2.service]. You can edit that service
+link:./p2poolv2@.service[p2poolv2@.service]. You can edit that service
 file to require your bitcoind service, if you use one.
 
 . Update the service file to point to where you installed your binaries. Use `which p2poolv2` to find where it is installed.
 . Setup `p2poolv2` user/group.
 . `/var/lib/p2poolv2`, `/var/log/p2poolv2`, `/etc/p2poolv2/` directories with permissions for p2poolv2 user.
+
+The above service file can be used for different networks, like so:
+
+[,shell]
+----
+sudo systemctl daemon-reload
+sudo systemctl enable --now p2poolv2@testnet4
+sudo systemctl enable --now p2poolv2@mainnet
+----
 
 === Build From Source
 
