@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.10.4] - 2026-04-18
+
+## Added
+
+- cargo dist artefact for dashboard static files
+
 ## [v0.10.3] - 2026-04-18
 
 - Dashboard: add favicon
