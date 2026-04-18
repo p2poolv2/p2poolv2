@@ -92,6 +92,31 @@ p2poolv2_cli --help
 . Run P2Poolv2 `p2poolv2 config.toml`
 . Point your miners to `<yourhost>:<your stratum port in config.toml>`
 
+=== Enable Dashboard
+
+P2Poolv2 includes a web dashboard for monitoring your node. The static
+assets are distributed as a separate `dashboard.tar.gz` archive.
+
+. Download and extract the dashboard assets:
++
+[,shell]
+----
+curl --proto '=https' --tlsv1.2 -LsSf -o dashboard.tar.gz https://github.com/p2poolv2/p2poolv2/releases/latest/download/dashboard.tar.gz
+tar xzf dashboard.tar.gz
+----
+
+. Set the `P2POOL_STATIC_DIR` environment variable to point to the extracted directory:
++
+[,shell]
+----
+export P2POOL_STATIC_DIR=/path/to/static
+----
+
+. Access the dashboard at `http://<your api hostname>:<your api port>/dashboard`
+
+If `P2POOL_STATIC_DIR` is not set, the dashboard is not available when
+running from a release binary.
+
 === Setup Systemd Service
 
 To setup as a systemd service, use the systemd service file provided
