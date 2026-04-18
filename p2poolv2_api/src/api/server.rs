@@ -22,7 +22,6 @@ use axum::{
     extract::{FromRef, Query, Request, State},
     http::StatusCode,
     middleware::{self, Next},
-    response::Html,
     response::Response,
     routing::get,
 };
@@ -36,8 +35,10 @@ use p2poolv2_lib::{
     shares::chain::chain_store_handle::ChainStoreHandle,
 };
 use serde::Deserialize;
+use std::path::PathBuf;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
+use tower_http::services::{ServeDir, ServeFile};
 use tracing::{info, trace};
 
 #[derive(Clone)]
@@ -119,13 +120,18 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
 
     // Routes that handle their own auth or need none.
     // WebSocket validates credentials via query param in its handler.
-    // Dashboard serves a static page that authenticates client-side.
+    // Dashboard and static assets are served from disk via tower-http.
+    let static_dir = std::env::var("P2POOL_STATIC_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"));
+
     let unauthenticated_routes = Router::new()
         .route("/ws", get(websocket_handler))
-        .route("/dashboard", get(dashboard))
-        .route("/static/pico.min.css", get(pico_css))
-        .route("/static/alpine.min.js", get(alpine_js))
-        .route("/static/dashboard.js", get(dashboard_js));
+        .route_service(
+            "/dashboard",
+            ServeFile::new(static_dir.join("dashboard.html")),
+        )
+        .nest_service("/static", ServeDir::new(&static_dir));
 
     authenticated_routes
         .merge(unauthenticated_routes)
@@ -196,35 +202,6 @@ pub async fn start_api_server(
 
 async fn health_check() -> String {
     "OK".into()
-}
-
-/// Serves the static monitoring dashboard HTML page.
-async fn dashboard() -> Html<&'static str> {
-    Html(include_str!("../../static/dashboard.html"))
-}
-
-/// Serves the vendored Pico CSS stylesheet.
-async fn pico_css() -> ([(&'static str, &'static str); 1], &'static str) {
-    (
-        [("content-type", "text/css")],
-        include_str!("../../static/pico.min.css"),
-    )
-}
-
-/// Serves the vendored Alpine.js script.
-async fn alpine_js() -> ([(&'static str, &'static str); 1], &'static str) {
-    (
-        [("content-type", "application/javascript")],
-        include_str!("../../static/alpine.min.js"),
-    )
-}
-
-/// Serves the dashboard application script.
-async fn dashboard_js() -> ([(&'static str, &'static str); 1], &'static str) {
-    (
-        [("content-type", "application/javascript")],
-        include_str!("../../static/dashboard.js"),
-    )
 }
 
 /// Returns pool metrics in grafana exposition format
