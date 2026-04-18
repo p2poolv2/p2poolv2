@@ -8,9 +8,6 @@
     <link rel="stylesheet" href="/static/pico.min.css" />
     <script defer src="/static/alpine.min.js"></script>
     <style>
-      :root {
-        --pico-font-size: 87.5%;
-      }
     </style>
   </head>
   <body>
@@ -60,19 +57,17 @@
                 <img
                   src="/static/p2poolv2-logo.png"
                   alt="P2Poolv2 Dashboard"
-                  style="height: 8rem"
+                  style="height: 2.5rem"
                 />
+                <small><em>Replace pool operators with miners</em></small>
               </li>
             </ul>
             <ul>
               <li>
-                <button
-                  class="outline secondary"
-                  @click="logout"
-                  x-show="credentials !== ''"
-                >
-                  Logout
-                </button>
+                <a href="https://p2poolv2.org" target="_blank">Mine on P2Poolv2</a>
+              </li>
+              <li>
+                <a href="#" @click.prevent="logout" x-show="credentials !== ''">Logout</a>
               </li>
             </ul>
           </nav>
