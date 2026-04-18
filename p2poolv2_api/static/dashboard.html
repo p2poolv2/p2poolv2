@@ -18,8 +18,13 @@
       x-data="dashboard()"
       @keydown.escape.window="selectedShare = null; selectedUncle = null"
     >
+      <!-- Loading state while checking auth -->
+      <template x-if="checking">
+        <p aria-busy="true">Connecting to P2Poolv2...</p>
+      </template>
+
       <!-- Login dialog -->
-      <template x-if="!authenticated">
+      <template x-if="!authenticated && !checking">
         <article>
           <header>
             <h2>P2Poolv2 - Login</h2>
@@ -46,7 +51,7 @@
       </template>
 
       <!-- Dashboard -->
-      <template x-if="authenticated">
+      <template x-if="authenticated && !checking">
         <div>
           <nav>
             <ul>
@@ -54,7 +59,11 @@
             </ul>
             <ul>
               <li>
-                <button class="outline secondary" @click="logout">
+                <button
+                  class="outline secondary"
+                  @click="logout"
+                  x-show="credentials !== ''"
+                >
                   Logout
                 </button>
               </li>
