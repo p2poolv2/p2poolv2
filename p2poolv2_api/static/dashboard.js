@@ -16,6 +16,7 @@ function dashboard() {
         password: "",
         error: "",
         loading: false,
+        checking: true,
         authenticated: false,
         credentials: "",
         chainInfo: null,
@@ -28,6 +29,23 @@ function dashboard() {
         selectedUncle: null,
         websocket: null,
         wsConnected: false,
+
+        async init() {
+            try {
+                var response = await fetch("/chain_info");
+                if (response.ok) {
+                    this.chainInfo = await response.json();
+                    this.authenticated = true;
+                    this.checking = false;
+                    this.fetchShares();
+                    this.connectWebSocket();
+                    return;
+                }
+            } catch (err) {
+                this.error = "Connection failed: " + err.message;
+            }
+            this.checking = false;
+        },
 
         async login() {
             this.error = "";
