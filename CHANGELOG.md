@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.10.2] - 2026-04-18
+
+- Add testnet4 genesis block
+
+## [v0.10.1] - 2026-04-16
+
+### Changed
+
+- Update version in Cargo.toml
+
 ## [v0.10.0] - 2026-04-16
 
 ### Added
