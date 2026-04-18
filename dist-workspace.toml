@@ -21,3 +21,7 @@ install-updater = false
 [[dist.extra-artifacts]]
 artifacts = ["config.sample.toml"]
 build = ["true"]
+
+[[dist.extra-artifacts]]
+artifacts = ["dashboard.tar.gz"]
+build = ["tar", "czf", "dashboard.tar.gz", "-C", "p2poolv2_api", "static"]
