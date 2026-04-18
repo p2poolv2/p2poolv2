@@ -10,6 +10,21 @@ function workFromBits(bits) {
     return two256 / (target + 1n);
 }
 
+// Convert Bitcoin compact target (bits) to difficulty.
+// Difficulty = target_at_difficulty_1 / target_from_bits
+// where target_at_difficulty_1 = 0x00000000FFFF << 208 (the "pool difficulty 1" target).
+function difficultyFromBits(bits) {
+    var exponent = bits >> 24;
+    var mantissa = BigInt(bits & 0x7fffff);
+    var shift = 8 * (exponent - 3);
+    var target =
+        shift >= 0 ? mantissa << BigInt(shift) : mantissa >> BigInt(-shift);
+    if (target === 0n) return "0";
+    var diff1Target = 0xFFFFn << 208n;
+    var difficulty = diff1Target / target;
+    return difficulty.toLocaleString();
+}
+
 function dashboard() {
     return {
         username: "",
