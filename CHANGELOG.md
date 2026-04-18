@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.10.3] - 2026-04-18
+
+- Dashboard: add favicon
+- Dashboard: switch to pico dark mode
+- Dashboard: add P2Poolv2 logo in nav bar with mission tagline
+- Dashboard: add link to p2poolv2.org landing page
+- Dashboard: change logout to link style for consistency
+- Dashboard: show difficulty alongside bits in share details
+
 ## [v0.10.2] - 2026-04-18
 
 - Add testnet4 genesis block
