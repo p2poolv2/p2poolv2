@@ -271,7 +271,7 @@
               <tr>
                 <th scope="row">Bits</th>
                 <td>
-                  <code x-text="selectedShare ? selectedShare.bits : ''"></code>
+                  <code x-text="selectedShare ? selectedShare.bits + ' (Difficulty: ' + difficultyFromBits(selectedShare.bits) + ')' : ''"></code>
                 </td>
               </tr>
               <tr>
