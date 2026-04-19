@@ -227,19 +227,18 @@ impl Store {
         while height <= top_confirmed_height && blockhashes.len() < limit {
             let confirmed_hash = self.get_confirmed_at_height(height)?;
 
-            // Insert uncle blockhashes before the confirmed block
+            // Insert uncle blockhashes before the confirmed block.
+            // We only check the limit at the top of the loop so that a
+            // confirmed block and its uncles are never split across batches.
             if let Ok(Some(header)) = self.get_share_header(&confirmed_hash) {
                 for uncle_blockhash in &header.uncles {
-                    if blockhashes.len() >= limit {
-                        return Ok(blockhashes);
-                    }
                     if seen.insert(*uncle_blockhash) {
                         blockhashes.push(*uncle_blockhash);
                     }
                 }
             }
 
-            if blockhashes.len() < limit && seen.insert(confirmed_hash) {
+            if seen.insert(confirmed_hash) {
                 blockhashes.push(confirmed_hash);
             }
 

@@ -972,13 +972,15 @@ mod tests {
         assert_eq!(descendants[0], uncle1.block_hash());
         assert_eq!(descendants[1], share_b.block_hash());
 
-        // Test with limit
+        // Test with limit: limit=2 stops after height 1 (share_a) but height 2
+        // adds uncle1 + share_b atomically so the batch contains all 3
         let descendants = store
             .get_descendant_blockhashes(&genesis.block_hash(), &BlockHash::all_zeros(), 2)
             .unwrap();
-        assert_eq!(descendants.len(), 2);
+        assert_eq!(descendants.len(), 3);
         assert_eq!(descendants[0], share_a.block_hash());
         assert_eq!(descendants[1], uncle1.block_hash());
+        assert_eq!(descendants[2], share_b.block_hash());
 
         // Test with stop_blockhash - stop at share_a includes share_a
         let descendants = store
