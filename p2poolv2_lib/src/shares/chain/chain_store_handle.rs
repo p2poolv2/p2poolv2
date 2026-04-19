@@ -275,14 +275,28 @@ impl ChainStoreHandle {
             .ok_or_else(|| StoreError::NotFound("No header found for chain tip".into()))
     }
 
-    /// Check whether the top confirmed header is current.
+    /// Get the ShareHeader at the candidate chain tip.
     ///
-    /// Returns true when the confirmed chain tip timestamp is within
-    /// 60 seconds of the current system time. Returns false when the
-    /// tip is stale or when any store lookup fails (e.g. no confirmed
-    /// chain yet).
+    /// Returns the header of the highest-work block on the candidate
+    /// chain. Falls back to the confirmed tip if no candidate exists
+    /// (e.g. fresh node before first header sync).
+    pub fn get_candidate_tip_header(&self) -> Result<ShareHeader, StoreError> {
+        let top_candidate = self.store_handle.store().get_top_candidate();
+        match top_candidate {
+            Ok(top) => self.get_share_header(&top.hash),
+            Err(_) => self.get_chain_tip_header(),
+        }
+    }
+
+    /// Check whether the candidate chain tip is current.
+    ///
+    /// Returns true when the candidate chain tip timestamp is within
+    /// MAX_TIP_AGE_SECS seconds of the current system time. Returns
+    /// false when the tip is stale or when any store lookup fails
+    /// (e.g. no chain yet). Falls back to the confirmed tip if no
+    /// candidate exists.
     pub fn is_current(&self) -> bool {
-        let tip_header = match self.get_chain_tip_header() {
+        let tip_header = match self.get_candidate_tip_header() {
             Ok(header) => header,
             Err(_) => return false,
         };
@@ -752,6 +766,7 @@ mockall::mock! {
         pub fn build_locator(&self) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_chain_tip(&self) -> Result<BlockHash, StoreError>;
         pub fn get_chain_tip_header(&self) -> Result<ShareHeader, StoreError>;
+        pub fn get_candidate_tip_header(&self) -> Result<ShareHeader, StoreError>;
         pub fn is_current(&self) -> bool;
         pub fn get_chain_tip_and_uncles(&self) -> Result<(BlockHash, HashSet<BlockHash>), StoreError>;
         pub fn get_tip_height_and_time(&self) -> Result<(u32, u32), StoreError>;
