@@ -27,6 +27,7 @@ use crate::store::dag_store::{ShareDag, UncleInfo};
 use crate::store::writer::{StoreError, StoreHandle};
 use bitcoin::{BlockHash, Work};
 use std::collections::{HashMap, HashSet};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
 
 /// A confirmed header with its height, blockhash, and share header.
@@ -43,6 +44,10 @@ pub(crate) const COMMON_ANCESTOR_DEPTH: usize = 2160; // 6 shares per minute * 6
 
 /// PPLNS window in shares
 const PPLNS_WINDOW: usize = 2160; // 6 shares per minute * 60 * 6 hours.
+
+/// Maximum age in seconds for the confirmed chain tip to be considered
+/// current. Used to suppress block fetching during initial header sync.
+const MAX_TIP_AGE_SECS: u64 = 60;
 
 /// Handle for chain-level store operations.
 ///
@@ -268,6 +273,25 @@ impl ChainStoreHandle {
             .next()
             .map(|(_, header)| header)
             .ok_or_else(|| StoreError::NotFound("No header found for chain tip".into()))
+    }
+
+    /// Check whether the top confirmed header is current.
+    ///
+    /// Returns true when the confirmed chain tip timestamp is within
+    /// 60 seconds of the current system time. Returns false when the
+    /// tip is stale or when any store lookup fails (e.g. no confirmed
+    /// chain yet).
+    pub fn is_current(&self) -> bool {
+        let tip_header = match self.get_chain_tip_header() {
+            Ok(header) => header,
+            Err(_) => return false,
+        };
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let tip_time = tip_header.time as u64;
+        now_secs.saturating_sub(tip_time) <= MAX_TIP_AGE_SECS
     }
 
     /// Get the confirmed tip height and parent time for ASERT target
@@ -728,6 +752,7 @@ mockall::mock! {
         pub fn build_locator(&self) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_chain_tip(&self) -> Result<BlockHash, StoreError>;
         pub fn get_chain_tip_header(&self) -> Result<ShareHeader, StoreError>;
+        pub fn is_current(&self) -> bool;
         pub fn get_chain_tip_and_uncles(&self) -> Result<(BlockHash, HashSet<BlockHash>), StoreError>;
         pub fn get_tip_height_and_time(&self) -> Result<(u32, u32), StoreError>;
         pub fn get_genesis_blockhash(&self) -> Option<BlockHash>;
@@ -1033,5 +1058,64 @@ mod tests {
         // No genesis, no confirmed shares -- range query returns empty
         let headers = chain_handle.get_confirmed_headers_in_range(0, 10).unwrap();
         assert!(headers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_is_current_returns_false_when_no_chain_tip() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        // No genesis initialised, so get_chain_tip_header will fail
+        assert!(!chain_handle.is_current());
+    }
+
+    #[tokio::test]
+    async fn test_is_current_returns_true_when_tip_is_recent() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as u32;
+
+        let genesis = TestShareBlockBuilder::new().time(now_secs).build();
+
+        chain_handle.init_or_setup_genesis(genesis).await.unwrap();
+
+        assert!(chain_handle.is_current());
+    }
+
+    #[tokio::test]
+    async fn test_is_current_returns_false_when_tip_is_stale() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as u32;
+        // Set the tip timestamp 120 seconds in the past, well beyond the 60s threshold
+        let stale_time = now_secs.saturating_sub(120);
+
+        let genesis = TestShareBlockBuilder::new().time(stale_time).build();
+
+        chain_handle.init_or_setup_genesis(genesis).await.unwrap();
+
+        assert!(!chain_handle.is_current());
+    }
+
+    #[tokio::test]
+    async fn test_is_current_returns_true_at_boundary() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as u32;
+        // Set the tip timestamp exactly at the MAX_TIP_AGE_SECS boundary
+        let boundary_time = now_secs.saturating_sub(super::MAX_TIP_AGE_SECS as u32);
+
+        let genesis = TestShareBlockBuilder::new().time(boundary_time).build();
+
+        chain_handle.init_or_setup_genesis(genesis).await.unwrap();
+
+        assert!(chain_handle.is_current());
     }
 }
