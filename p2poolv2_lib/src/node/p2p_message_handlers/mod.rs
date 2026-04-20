@@ -332,9 +332,13 @@ mod tests {
         let block_hashes = vec![block_hash1, block_hash2];
         let missing = vec![block_hash1];
 
+        chain_store_handle.expect_is_current().returning(|| true);
         chain_store_handle
             .expect_get_missing_blockhashes()
             .returning(move |_| missing.clone());
+        chain_store_handle
+            .expect_build_locator()
+            .return_once(|| Ok(vec![BlockHash::all_zeros()]));
 
         let inventory = InventoryMessage::BlockHashes(block_hashes);
 
@@ -354,13 +358,12 @@ mod tests {
         let result = handle_request(ctx).await;
         assert!(result.is_ok());
 
-        if let Some(SwarmSend::Request(sent_peer, Message::GetData(GetData::Block(hash)))) =
+        if let Some(SwarmSend::Request(sent_peer, Message::GetShareHeaders(_, _))) =
             swarm_rx.recv().await
         {
             assert_eq!(sent_peer, peer_id);
-            assert_eq!(hash, block_hash1);
         } else {
-            panic!("Expected SwarmSend::Request with GetData::Block message");
+            panic!("Expected SwarmSend::Request with GetShareHeaders message");
         }
 
         assert!(

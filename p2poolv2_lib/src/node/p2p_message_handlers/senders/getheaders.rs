@@ -29,7 +29,7 @@ use tracing::{debug, error};
 
 /// Handle outbound connection established events
 /// Send a getheaders request to the peer
-pub async fn send_getheaders<C: 'static>(
+pub async fn send_getheaders<C>(
     peer_id: libp2p::PeerId,
     chain_store_handle: ChainStoreHandle,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
