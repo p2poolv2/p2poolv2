@@ -323,11 +323,11 @@ impl BlockReceiver {
     /// Otherwise, if the block's direct parent and all uncles are at
     /// HeaderValid+, validate ASERT, persist, then drive any
     /// descendants buffered in pending. If the parent or uncles are
-    /// not yet ready, buffer in pending and request the missing
-    /// hashes from the block fetcher.
+    /// not yet ready, buffer in pending. The headers-first pipeline
+    /// will supply ancestors via header sync and block fetch.
     async fn process_share_block(
         &mut self,
-        peer_id: libp2p::PeerId,
+        _peer_id: libp2p::PeerId,
         share_block: ShareBlock,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let block_hash = share_block.block_hash();
@@ -370,13 +370,6 @@ impl BlockReceiver {
                 ancestors_not_ready.len()
             );
             self.add_to_pending(block_hash, share_block);
-            let _ = self
-                .block_fetcher_handle
-                .send(BlockFetcherEvent::FetchBlocks {
-                    blockhashes: ancestors_not_ready,
-                    peer_id,
-                })
-                .await;
             return Ok(());
         }
 
@@ -841,7 +834,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_process_share_block_missing_parent_buffers_and_fetches() {
+    async fn test_process_share_block_missing_parent_buffers_without_fetching() {
         let missing_parent_hash = BlockHash::from_byte_array([0x99; 32]);
 
         let mut mock_store = ChainStoreHandle::default();
@@ -880,17 +873,10 @@ mod tests {
             other => panic!("Expected BlockReceived, got: {other}"),
         }
 
-        let fetch_event = block_fetcher_rx.try_recv().unwrap();
-        match fetch_event {
-            BlockFetcherEvent::FetchBlocks {
-                blockhashes,
-                peer_id: event_peer_id,
-            } => {
-                assert_eq!(blockhashes, vec![missing_parent_hash]);
-                assert_eq!(event_peer_id, peer_id);
-            }
-            other => panic!("Expected FetchBlocks, got: {other}"),
-        }
+        assert!(
+            block_fetcher_rx.try_recv().is_err(),
+            "No FetchBlocks should be sent; headers-first pipeline supplies ancestors"
+        );
     }
 
     #[tokio::test]
