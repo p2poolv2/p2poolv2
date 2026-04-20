@@ -278,13 +278,13 @@ impl ChainStoreHandle {
     /// Get the ShareHeader at the candidate chain tip.
     ///
     /// Returns the header of the highest-work block on the candidate
-    /// chain. Falls back to the confirmed tip if no candidate exists
-    /// (e.g. fresh node before first header sync).
+    /// chain. Falls back to the confirmed tip if no candidate is found.
     pub fn get_candidate_tip_header(&self) -> Result<ShareHeader, StoreError> {
         let top_candidate = self.store_handle.store().get_top_candidate();
         match top_candidate {
             Ok(top) => self.get_share_header(&top.hash),
-            Err(_) => self.get_chain_tip_header(),
+            Err(StoreError::NotFound(_)) => self.get_chain_tip_header(),
+            Err(error) => Err(error),
         }
     }
 
