@@ -99,7 +99,6 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
             Ok(())
         }
         Message::ShareBlock(share_block) => handle_share_block(
-            ctx.peer,
             share_block,
             &ctx.chain_store_handle,
             ctx.validation_tx,
@@ -154,7 +153,6 @@ pub async fn handle_response<C: Send + Sync>(
             e
         }),
         Message::ShareBlock(share_block) => handle_share_block(
-            peer,
             share_block,
             &chain_store_handle,
             validation_tx,

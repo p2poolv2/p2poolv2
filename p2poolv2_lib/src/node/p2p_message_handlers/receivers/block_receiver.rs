@@ -50,7 +50,6 @@ pub enum BlockReceiverEvent {
     /// A new share block arrived from a peer, after passing DoS
     /// validation (validate_share_header) in handle_share_block.
     ShareBlockReceived {
-        peer_id: libp2p::PeerId,
         share_block: ShareBlock,
         result_tx: oneshot::Sender<Result<(), Box<dyn Error + Send + Sync>>>,
     },
@@ -327,7 +326,6 @@ impl BlockReceiver {
     /// will supply ancestors via header sync and block fetch.
     async fn process_share_block(
         &mut self,
-        _peer_id: libp2p::PeerId,
         share_block: ShareBlock,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let block_hash = share_block.block_hash();
@@ -444,11 +442,10 @@ impl BlockReceiver {
                 event = self.event_rx.recv() => {
                     match event {
                         Some(BlockReceiverEvent::ShareBlockReceived {
-                            peer_id,
                             share_block,
                             result_tx,
                         }) => {
-                            let result = self.process_share_block(peer_id, share_block).await;
+                            let result = self.process_share_block(share_block).await;
                             let _ = result_tx.send(result);
                         }
                         None => {
@@ -815,8 +812,7 @@ mod tests {
             CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
         let child_hash = child_block.block_hash();
 
-        let peer_id = libp2p::PeerId::random();
-        let result = receiver.process_share_block(peer_id, child_block).await;
+        let result = receiver.process_share_block(child_block).await;
         assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
 
         assert_eq!(receiver.pending_count(), 0);
@@ -860,8 +856,7 @@ mod tests {
             .build();
         let child_hash = child_block.block_hash();
 
-        let peer_id = libp2p::PeerId::random();
-        let result = receiver.process_share_block(peer_id, child_block).await;
+        let result = receiver.process_share_block(child_block).await;
         assert!(result.is_ok());
 
         assert_eq!(receiver.pending_count(), 1);
@@ -903,9 +898,7 @@ mod tests {
         );
 
         let block = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        let result = receiver
-            .process_share_block(libp2p::PeerId::random(), block)
-            .await;
+        let result = receiver.process_share_block(block).await;
         assert!(result.is_ok());
 
         assert!(block_fetcher_rx.try_recv().is_err());
@@ -977,9 +970,7 @@ mod tests {
             CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
         let child_hash = child_block.block_hash();
 
-        let result = receiver
-            .process_share_block(libp2p::PeerId::random(), child_block)
-            .await;
+        let result = receiver.process_share_block(child_block).await;
         assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
 
         let event = validation_rx.try_recv().unwrap();
@@ -1043,9 +1034,7 @@ mod tests {
         child_block.header.bits =
             CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
 
-        let result = receiver
-            .process_share_block(libp2p::PeerId::random(), child_block)
-            .await;
+        let result = receiver.process_share_block(child_block).await;
         assert!(result.is_ok());
 
         // Block must NOT enter the store and validation must NOT be emitted.
@@ -1147,17 +1136,15 @@ mod tests {
             validation_tx,
         );
 
-        let peer_id = libp2p::PeerId::random();
-
         // Child arrives first -- parent is missing in store, so child
         // is buffered.
-        let result = receiver.process_share_block(peer_id, child_block).await;
+        let result = receiver.process_share_block(child_block).await;
         assert!(result.is_ok());
         assert_eq!(receiver.pending_count(), 1);
 
         // Parent arrives -- commits itself, then cascade commits the
         // buffered child.
-        let result = receiver.process_share_block(peer_id, parent_block).await;
+        let result = receiver.process_share_block(parent_block).await;
         assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
 
         assert_eq!(receiver.pending_count(), 0);
@@ -1202,11 +1189,9 @@ mod tests {
             .nonce(0xe9695791)
             .build();
 
-        let peer_id = libp2p::PeerId::random();
         let (result_tx, result_rx) = oneshot::channel();
         event_tx
             .send(BlockReceiverEvent::ShareBlockReceived {
-                peer_id,
                 share_block: child_block,
                 result_tx,
             })

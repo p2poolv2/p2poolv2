@@ -42,7 +42,6 @@ use tracing::{debug, error, warn};
 /// complete, validates ASERT difficulty, stores them, and sends them to
 /// the validation worker.
 pub async fn handle_share_block(
-    peer_id: libp2p::PeerId,
     share_block: ShareBlock,
     chain_store_handle: &ChainStoreHandle,
     validation_tx: ValidationSender,
@@ -83,7 +82,6 @@ pub async fn handle_share_block(
     let (result_tx, result_rx) = oneshot::channel();
     if let Err(send_error) = block_receiver_handle
         .send(BlockReceiverEvent::ShareBlockReceived {
-            peer_id,
             share_block,
             result_tx,
         })
@@ -122,7 +120,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_share_block_success() {
-        let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
         let test_data = load_share_headers_test_data();
         let header: ShareHeader =
@@ -154,7 +151,6 @@ mod tests {
         });
 
         let result = handle_share_block(
-            peer_id,
             share_block,
             &chain_store_handle,
             validation_tx,
@@ -167,7 +163,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_share_block_confirmed_duplicate_skips() {
-        let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
         let test_data = load_share_headers_test_data();
         let header: ShareHeader =
@@ -188,7 +183,6 @@ mod tests {
 
         let (validation_tx, mut validation_rx, block_receiver_handle) = test_handles();
         let result = handle_share_block(
-            peer_id,
             share_block,
             &chain_store_handle,
             validation_tx,
@@ -206,7 +200,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_share_block_unconfirmed_duplicate_triggers_validation() {
-        let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
         let test_data = load_share_headers_test_data();
         let header: ShareHeader =
@@ -227,7 +220,6 @@ mod tests {
 
         let (validation_tx, mut validation_rx, block_receiver_handle) = test_handles();
         let result = handle_share_block(
-            peer_id,
             share_block,
             &chain_store_handle,
             validation_tx,
@@ -247,7 +239,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_share_block_invalid_header_rejected() {
-        let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
         let test_data = load_share_headers_test_data();
         let header: ShareHeader =
@@ -272,7 +263,6 @@ mod tests {
 
         let (validation_tx, mut validation_rx, block_receiver_handle) = test_handles();
         let result = handle_share_block(
-            peer_id,
             share_block,
             &chain_store_handle,
             validation_tx,
