@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.10.5] - 2026-04-20
+
+### Fixed
+
+- Fix shared headers to always include uncles at chain boundary. This
+  bug was causing sync to fail when this corner case was reached.
+
+- Send getheaders in response to Inv blockhash for proper sync. We do
+  not immediately send ShareBlock now, instead we let getheaders and
+  headers sync drive the chain sync.
+
+- Don't emit BlockFetch for ancestors on BlockReceive, reducing
+  redundant fetches. Related to the fix in the previous point.
+
+- Fallback to confirmed tip only on NotFound, propagating real store
+  errors instead of silently masking them.
+
+### Changed
+
+- Check candidate chain (not just confirmed) for is_current
+
+- Send Inv messages with peer block knowledge for protocol correctness
+
+- Remove bitcoin transactions from ShareBlock to reduce message
+  size. We will deal with building bitcoin blocks for submitting from
+  other pool peers in a later version.
+
+- Ignore Request ShareBlock messages during sync. This avoids block
+  fetch storms during initial sync from both sides of the chain,
+  genesis and tip.
+
+- Clean up unused peer id from ShareBlockReceived as we don't respond
+  to share block received to the same peer now.
+
 ## [v0.10.4] - 2026-04-18
 
 ## Added
